@@ -76,7 +76,7 @@ explain_doc_server() {
     echo ""
     echo "    Why you might skip it:"
     echo "      • The GTK GUI already includes a built-in documentation viewer"
-    echo "      • A pre-built static site/ directory is included in the repository"
+    echo "      • The static site/ is built automatically during installation"
     echo "      • It is not required for backup, snapshot, or retention operations"
     echo ""
     echo "    Steps the installer will take to install it:"
