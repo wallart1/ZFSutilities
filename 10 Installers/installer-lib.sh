@@ -64,27 +64,23 @@ explain_prerequisite() {
 
 explain_doc_server() {
     echo ""
-    echo "  Optional documentation server (MkDocs)"
+    echo "  Documentation (MkDocs)"
     echo "    What it provides:"
-    echo "      • A live local documentation site on http://localhost:8000"
-    echo "      • Automatic page rebuilds while you edit the docs source files"
-    echo "      • The ability to preview documentation changes before deployment"
+    echo "      • The HTML documentation site used by the GUI viewer"
+    echo "      • A readable, searchable local copy of all guides and reference"
+    echo "      • Automatic rebuilding of the site during installation"
     echo ""
-    echo "    Why you might want it:"
-    echo "      • You plan to edit or contribute to ZFSutilities documentation"
-    echo "      • You prefer reading docs in a browser with live search/navigation"
+    echo "    Why it is required:"
+    echo "      • The GUI documentation viewer and local browser docs need the"
+    echo "        built site/ directory"
+    echo "      • It is part of a complete ZFSutilities installation"
     echo ""
-    echo "    Why you might skip it:"
-    echo "      • The GTK GUI already includes a built-in documentation viewer"
-    echo "      • The static site/ is built automatically during installation"
-    echo "      • It is not required for backup, snapshot, or retention operations"
-    echo ""
-    echo "    Steps the installer will take to install it:"
+    echo "    Steps the installer will take:"
     echo "      1. Try to install MkDocs and the Material theme from apt:"
     echo "         apt-get install mkdocs mkdocs-material"
-    echo "      2. If apt packages are unavailable, ask whether to use pip3 with"
+    echo "      2. If apt packages are unavailable, use pip3 with"
     echo "         --break-system-packages (required on modern Debian/Ubuntu)."
-    echo "      3. Verify that the mkdocs command is available"
+    echo "      3. Verify that mkdocs and the Material theme are available"
 }
 
 # ------------------------------------------------------------------
@@ -201,6 +197,9 @@ prerequisite_description() {
         "libwebkit2gtk-4.1-0") echo "WebKit2 runtime library" ;;
         ssh)                  echo "OpenSSH client for remote two-node commands" ;;
         scp)                  echo "OpenSSH secure copy for remote two-node file transfer" ;;
+        pip3)                 echo "Python package installer used to install MkDocs if apt packages are unavailable" ;;
+        mkdocs)               echo "Static site generator that builds the ZFSutilities documentation" ;;
+        mkdocs-material)      echo "Material theme for MkDocs, required by the documentation configuration" ;;
         *)                    echo "$name" ;;
     esac
 }
@@ -216,6 +215,9 @@ prerequisite_why_needed() {
             ;;
         ssh|scp)
             echo "Required for two-node mode to communicate between storage and compute hosts"
+            ;;
+        pip3|mkdocs|mkdocs-material)
+            echo "Required to build the ZFSutilities documentation site"
             ;;
         *)
             echo "Required by ZFSutilities"
@@ -340,31 +342,30 @@ run_interactive_prerequisites() {
     fi
 }
 
-# Prompt the user about installing the optional documentation server.
-# Returns 0 if installed or already present, 1 if user declined or install failed.
-run_interactive_doc_server() {
-    echo "=== Optional Documentation Server ==="
+# Ensure the documentation server (MkDocs) is installed.
+# Installs without prompting. Returns 0 on success, non-zero on failure.
+ensure_doc_server() {
+    echo "=== Documentation (MkDocs) ==="
     explain_doc_server
 
-    echo ""
-    if ! ask_yn "Install the optional documentation server (MkDocs) now?" "N"; then
+    if command -v mkdocs >/dev/null 2>&1 && python3 -c "import material" >/dev/null 2>&1; then
         echo ""
-        echo "Skipped. To install later, run:"
-        echo "  sudo apt-get install python3-pip"
-        echo "  sudo pip3 install mkdocs mkdocs-material"
+        echo "  ✓ mkdocs and mkdocs-material are already available."
         return 0
     fi
 
+    echo ""
+    echo "  Installing mkdocs and mkdocs-material..."
     if install_doc_server; then
         echo ""
-        echo "✓ Documentation server is ready."
+        echo "  ✓ Documentation server is ready."
         return 0
     else
         echo ""
-        echo "⚠ Documentation server could not be installed. Continuing without it."
-        echo "   To try later, run:"
-        echo "     sudo apt-get install python3-pip"
-        echo "     sudo pip3 install mkdocs mkdocs-material"
+        echo "  ✗ Documentation server could not be installed." >&2
+        echo "    Install manually and re-run the installer:" >&2
+        echo "      sudo apt-get install python3-pip" >&2
+        echo "      sudo pip3 install --break-system-packages mkdocs mkdocs-material" >&2
         return 1
     fi
 }

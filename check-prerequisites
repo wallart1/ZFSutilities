@@ -15,7 +15,7 @@
 #   proxmox  — pveversion (warn if absent; optional for single-node)
 #   gui      — python3, python3-gi, gir1.2-gtk-3.0, DISPLAY
 #   two-node — ssh, scp, open-iscsi (only in --two-node mode)
-#   docs     — pip3, mkdocs, mkdocs-material (optional)
+#   docs     — pip3, mkdocs, mkdocs-material (required)
 #
 # Exit codes:
 #   0  All required prerequisites are present
@@ -210,22 +210,18 @@ if [[ "$CHECK_MODE" == "two-node" ]]; then
 fi
 
 # ------------------------------------------------------------------
-# Documentation server
+# Documentation
 # ------------------------------------------------------------------
 
 if [[ -z "$LIST_FAILURES" ]]; then
-    echo "=== Documentation Server (optional) ==="
+    echo "=== Documentation ==="
 fi
-if command -v pip3 >/dev/null 2>&1; then
-    pass "pip3"
+check_cmd "docs" "pip3" "python3-pip"
+check_cmd "docs" "mkdocs" "mkdocs"
+if python3 -c "import material" >/dev/null 2>&1; then
+    pass "mkdocs-material"
 else
-    warn "pip3 not found — documentation server (mkdocs) will not be installable"
-fi
-
-if command -v mkdocs >/dev/null 2>&1; then
-    pass "mkdocs: $(mkdocs --version 2>/dev/null | head -1)"
-else
-    warn "mkdocs not found — doc server will not be available (try: pip3 install mkdocs mkdocs-material)"
+    fail "docs" "mkdocs-material" "mkdocs-material" "theme package not installed"
 fi
 if [[ -z "$LIST_FAILURES" ]]; then
     echo ""

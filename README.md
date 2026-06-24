@@ -37,13 +37,13 @@ administrators. It is designed for small and medium-sized installations.
 - `rsync`
 - Root privileges for all ZFS operations
 - ZFS pools already set up and running
+- MkDocs and the Material theme (installed automatically by the installer):
+  ```bash
+  pip install mkdocs mkdocs-material
+  ```
 - For the GUI:
   ```bash
   apt install gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0
-  ```
-- For the documentation site:
-  ```bash
-  pip install mkdocs
   ```
 - For a **two-node** setup:
   - Passwordless SSH root access in **both directions** between the storage

@@ -96,9 +96,9 @@ if [[ -f "$CHECK_PREREQS" ]]; then
 fi
 
 # ------------------------------------------------------------------
-# Step 1: Optional documentation server
+# Step 1: Documentation server (MkDocs)
 # ------------------------------------------------------------------
-run_interactive_doc_server || true
+ensure_doc_server || exit 1
 
 echo ""
 
