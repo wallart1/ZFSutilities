@@ -1,0 +1,8 @@
+#!/usr/bin/bash
+#
+# Example: continuously display zpool list/status.
+#
+# Assumes `watchall` is in PATH (see the Watchall/ directory). Adjust the
+# refresh interval and command as needed for your environment.
+
+watchall -n 60 'zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health; echo; zpool status'

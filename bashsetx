@@ -1,0 +1,18 @@
+#!/usr/bin/bash
+
+function setx {
+    if [[ $(set -o | grep xtrace | awk '{print $2}') = 'on' ]]; then  # Is "set -x" on, or off?
+        local setxtrace='on'
+    else
+        local setxtrace='off'
+    fi
+    if [[ $setxtrace = 'on' ]]; then    # Set the command to restore the set -x value.
+        bashrestorex='set -x'
+    else
+        bashrestorex='set +x'
+    fi
+    PS4='>${BASH_SOURCE}:${LINENO}--> '
+    export BASH_XTRACEFD=2              # Send xTrace messages to STDERR
+    set -x
+}
+

@@ -1,0 +1,141 @@
+#!/usr/bin/bash
+
+# Remove a snapshot
+#
+# $1    Full dataset@snapshot name to be removed.
+# $2    Minimum age in days. If the snapshot is younger than this, deletion is refused.
+#       Use 0 to skip the age check.
+# $3    (Optional) "releaseholds" means to remove all holds on the snapshot before destroying it.
+# $4    (Optional) 'nocheckagainst' means bypass counterpart snap checking.
+
+source ~/bashinit
+bashinit
+
+function delsnap {
+    source ~/bashinit
+    bashinit
+    source $mydir/zfscheckagainst
+    source $mydir/zfsdelallholds
+    source $mydir/zfslockmanager
+    if [[ ! -f "$mydir/zfs-diagnose-busy" ]]; then
+        log_msg "FATAL: Required helper $mydir/zfs-diagnose-busy is missing."
+        source $mydir/bashfatal 8
+    fi
+    source $mydir/zfs-diagnose-busy
+
+    if [[ "$1" != '' ]]; then
+        snaptoremove=$1
+    else
+        log_msg "FATAL: A snapshot to be removed must be given."
+        source $mydir/bashfatal 8
+    fi
+
+    # Extract parent dataset from snapshot name (everything before @)
+    local parent_dataset="${snaptoremove%%@*}"
+
+    # Initialize lock manager and acquire write lock on parent dataset
+    zfslock_init
+    local lock_rc
+    zfslock_wait_or_resolve "$parent_dataset" "w" "deleting snapshot $snaptoremove"
+    lock_rc=$?
+    if [[ $lock_rc -eq 1 ]]; then
+        log_msg "WARN: Lock acquisition aborted by user."
+        return 1
+    elif [[ $lock_rc -eq 2 ]]; then
+        log_msg "INFO: Skipping $snaptoremove (lock conflict)."
+        return 0
+    fi
+    local delsnap_lock="$ZFSLOCK_ID"
+
+    if [[ "$2" != '' ]]; then
+        minage=$2
+    else
+        log_msg "FATAL: A minimum age (in days) must be specified. Use 0 to skip age check."
+        zfslock_release "$delsnap_lock"
+        source $mydir/bashfatal 8
+    fi
+
+    if [[ $3 = 'releaseholds' ]]; then
+        releaseholds='Y'
+    else
+        releaseholds='N'
+    fi
+
+    if ! zfs list -t snapshot "$snaptoremove" >/dev/null; then
+        log_msg "FATAL: Snapshot $snaptoremove does not exist."
+        zfslock_release "$delsnap_lock"
+        source $mydir/bashfatal 8
+    fi
+
+    # Check minimum age if minage > 0
+    if [[ $minage -gt 0 ]]; then
+        # Get the snapshot's creation date in seconds since epoch
+        snap_creation=$(zfs get -Hp -o value creation "$snaptoremove")
+        now=$(date +%s)
+        age_seconds=$((now - snap_creation))
+        age_days=$((age_seconds / 86400))
+
+        if [[ $age_days -lt $minage ]]; then
+            log_msg "WARN: Snapshot $snaptoremove is only $age_days days old." \
+                "Minimum age is $minage days."
+            zfslock_release "$delsnap_lock"
+            return 1
+        fi
+    fi
+
+    if [[ $4 != 'nocheckagainst' ]]; then
+        exec 3>&1  # Save stdout to fd 3
+        message=$(checkagainst "$snaptoremove" >&3)
+        rc=$?
+        exec 3>&-  # Close fd 3
+        if [[ $rc -ne 0 ]]; then
+#            log_msg $message   # There never seems to be a message here.
+            if [[ $rc = 6 ]]; then
+                # Counterpart pool offline - block deletion for safety
+                log_msg "WARN: Deletion blocked - counterpart pool(s) offline."
+                zfslock_release "$delsnap_lock"
+                return $rc
+            elif [[ $rc = 7 ]]; then
+                log_msg "WARN: Deletion blocked - this is the last remaining common snapshot."
+                zfslock_release "$delsnap_lock"
+                return $rc
+            elif [[ $rc = 5 ]]; then
+                if ! ask_yn 'Do you want to remove this snapshot?'; then
+                    zfslock_release "$delsnap_lock"
+                    return $rc
+                fi
+            fi
+        fi
+    fi
+
+    if [[ $releaseholds = 'Y' ]]; then
+        delallholds $snaptoremove
+    fi
+
+    # Check for clone dependents before attempting destruction
+    local _clone_deps
+    _clone_deps=$(zfs list -H -o clones "$snaptoremove" 2>/dev/null)
+    if [[ "$_clone_deps" != "-" && -n "$_clone_deps" ]]; then
+        log_msg "WARN: Snapshot $snaptoremove has clone dependents. Skipping deletion."
+        zfslock_release "$delsnap_lock"
+        return 1
+    fi
+
+    if ! zfs destroy $snaptoremove; then
+        rc=$?
+        diagnose_dataset_busy "$snaptoremove"
+        if [[ $skipbusy = 'Y' ]]; then
+            log_msg "WARN: Unable to remove snapshot $snaptoremove (rc=$rc). Skipping."
+            zfslock_release "$delsnap_lock"
+            return 1
+        else
+            log_msg "FATAL: Unable to remove snapshot $snaptoremove. rc=$rc."
+            zfslock_release "$delsnap_lock"
+            source $mydir/bashfatal 8
+        fi
+    fi
+
+    zfslock_release "$delsnap_lock"
+    return 0
+}
+if calledbybash; then delsnap "$1" "$2" "$3" "$4"; fi

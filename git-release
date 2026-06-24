@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# release <version> <commit-message>
+# Bumps VERSION, commits all staged changes, and creates a git tag.
+#
+# Example:
+#   ./release 0.1.4 "Fix bashinit mydir handling and symlink resolution"
+
+set -e
+
+usage() {
+    echo "Usage: ./release <version> <commit-message>"
+    echo ""
+    echo "  version         New version string (e.g. 0.1.4)"
+    echo "  commit-message  Message for the git commit and tag"
+    echo ""
+    echo "Example:"
+    echo '  ./release 0.1.4 "Fix bashinit mydir handling"'
+    exit 1
+}
+
+[[ $# -ge 2 ]] || usage
+
+VERSION="$1"
+shift
+MSG="$*"
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$REPO_ROOT"
+
+# Validate we're in a git repo
+if [[ ! -d .git ]]; then
+    echo "✗ ERROR: Not a git repository" >&2
+    exit 1
+fi
+
+# Check for uncommitted changes before touching VERSION
+if ! git diff --quiet HEAD || ! git diff --cached --quiet HEAD; then
+    echo "Changes detected:"
+    git status --short
+fi
+
+echo "Bumping VERSION to $VERSION"
+echo "$VERSION" > VERSION
+
+echo "Committing with message: $MSG"
+git add -A
+git commit -m "$MSG"
+
+echo "Tagging as v$VERSION"
+git tag -a "v$VERSION" -m "$MSG"
+
+echo ""
+echo "=== Done ==="
+echo "  Version: $VERSION"
+echo "  Commit:  $(git rev-parse --short HEAD)"
+echo "  Tag:     v$VERSION"
+echo ""
+echo "To push:   git push && git push --tags"

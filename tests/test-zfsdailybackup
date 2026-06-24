@@ -1,0 +1,104 @@
+#!/usr/bin/bash
+# tests/test-zfsdailybackup — Verify pull-step failure handling in zfsdailybackup.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+# zfsdailybackup / zfssnapbuild stores its nextsnap file under the caller script
+# name.  Ensure stale files are gone so zfssnapbuild does not prompt.
+rm -f /tmp/zfsnextsnap_zfsdailybackup /tmp/zfsnextsnap_zfssnapbuild
+
+# Disable everything except the Rocky remote pull step.
+readonly DISABLE_ALL_BUT_ROCKY="pull_tweety='N'; pull_stewie='N'; backup_threeamigos_proxmox='N'; backup_NVME1='N'; prune='N'"
+
+# Disable all backup steps so helper functions can be exercised in isolation.
+readonly DISABLE_ALL_STEPS="pull_rocky='N'; pull_tweety='N'; pull_stewie='N'; backup_threeamigos_proxmox='N'; backup_NVME1='N'; prune='N'"
+
+# Common mocks used inside every subshell that sources zfsdailybackup.
+_mock_interactive() {
+    # Bypass rootcheck so tests run as the current (non-root) user.
+    id() { echo 0; }
+    # Bypass the "press enter" prompt and, if a stale snapfile exists, make
+    # ask_yn treat the response as yes.
+    read() {
+        local last="${!#}"
+        if [[ $# -gt 0 && "$last" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            printf -v "$last" "y"
+        fi
+        return 0
+    }
+}
+
+# Run zfsdailybackup in a subshell with the given mocks and overrides.
+# Stderr is captured so WARN/INFO log lines can be inspected.
+_run_dailybackup() {
+    local overrides="$1"
+    shift
+    local output
+    output=$({
+        msg_level="INFO"
+        _mock_interactive
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                scp) shift; eval "scp() { $1; }"; shift ;;
+                ssh) shift; eval "ssh() { $1; }"; shift ;;
+                *) break ;;
+            esac
+        done
+        source "$mydir/zfsdailybackup" "$overrides"
+    } 2>&1)
+    echo "$output"
+}
+
+test_remote_pull_push_failure_continues() {
+    test_start "Failed remote push logs WARN and backup continues"
+    local output
+    output=$(_run_dailybackup "$DISABLE_ALL_BUT_ROCKY" scp 'return 1' ssh 'return 255')
+    assert_contains "$output" "WARN:"
+    assert_contains "$output" "zfsdailybackup completed"
+}
+
+test_remote_pull_ssh_failure_continues() {
+    test_start "Failed remote ssh pull logs WARN and backup continues"
+    local output
+    output=$(_run_dailybackup "$DISABLE_ALL_BUT_ROCKY" scp 'return 0' ssh 'return 24')
+    assert_contains "$output" "WARN: Pull from Rocky failed"
+    assert_contains "$output" "zfsdailybackup completed"
+}
+
+test_local_pull_failure_continues() {
+    test_start "Failed local pull logs WARN and continues"
+    local output
+    output=$({
+        msg_level="INFO"
+        _mock_interactive
+        source "$mydir/zfsdailybackup" "$DISABLE_ALL_STEPS"
+        backup-installed-programs() { return 5; }
+        rsync-dailybackup() { return 6; }
+        _run_local_pull
+    } 2>&1)
+    assert_contains "$output" "WARN: Local pull failed"
+}
+
+test_dry_run_pull_does_not_execute() {
+    test_start "Dry-run mode logs intent and does not execute pull helpers"
+    local output
+    output=$(_run_dailybackup "dryrun='Y'; $DISABLE_ALL_BUT_ROCKY" ssh 'return 255')
+    assert_contains "$output" "Dry-run: Would push rsync scripts to rocky"
+    assert_contains "$output" "zfsdailybackup completed"
+    # No ssh should have been called in dry-run mode.
+    if [[ "$output" == *"Pull from Rocky failed"* ]]; then
+        test_fail "Dry-run unexpectedly executed pull helper"
+    else
+        test_pass
+    fi
+}
+
+test_remote_pull_push_failure_continues
+test_remote_pull_ssh_failure_continues
+test_local_pull_failure_continues
+test_dry_run_pull_does_not_execute
+
+rm -f /tmp/zfsnextsnap_zfsdailybackup /tmp/zfsnextsnap_zfssnapbuild
+teardown_test_env
+test_summary

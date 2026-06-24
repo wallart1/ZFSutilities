@@ -1,0 +1,785 @@
+#!/usr/bin/bash
+# test-zfs-send-receive-dryrun — Tests dry-run behaviour and helper logic in
+# zfs-send-receive.  Inner functions become available only after send-receive
+# has been executed once, so the first test bootstraps the function and the
+# remaining tests exercise the helpers directly.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+# Prevent re-sourcing bashinit / rootcheck / zfslockmanager / bashsetx inside
+# send-receive from overwriting our mocks or enabling xtrace.
+source() {
+    local expanded="${1/#\~/$HOME}"
+    [[ "$expanded" == "$HOME/bashinit" ]] && return 0
+    [[ "$expanded" == *"rootcheck" ]] && return 0
+    [[ "$expanded" == *"zfslockmanager" ]] && return 0
+    [[ "$expanded" == *"bashsetx" ]] && return 0
+    builtin source "$@"
+}
+
+# Auto-answer 'y' to any interactive read prompt (rollback, resume token, etc.)
+read() {
+    response="y"
+    return 0
+}
+
+_TEST_LOG="$_mock_zfs_state_dir/sendrecv.log"
+
+set_msg_level() {
+    msg_level="$1"
+}
+
+capture_stderr() {
+    exec 2>"$_TEST_LOG"
+}
+
+restore_stderr() {
+    exec 2>&1
+}
+
+get_stderr_log() {
+    # log_msg is redirected to the per-test log file by test-lib.sh.
+    cat "$(get_test_log_file)" 2>/dev/null
+}
+
+clear_log() {
+    : > "$_TEST_LOG"
+    : > "$(get_test_log_file)"
+}
+
+reset_mocks() {
+    _mock_zfs_fs_list=""
+    _mock_zfs_snap_list=""
+    _mock_zfs_props=()
+    _mock_zfs_snaps=()
+    _mock_zfs_datasets=()
+    _mock_zfs_snap_lists=()
+    _mock_zfs_guid_lists=()
+    _mock_zfs_send_size="0"
+    _mock_zpool_list=""
+    _mock_ask_yn_rc=0
+    clear_log
+}
+
+# ---------------------------------------------------------------------------
+# Bootstrap — run send-receive once with dryrun=Y so inner functions exist.
+# ---------------------------------------------------------------------------
+
+test_bootstrap_inner_functions() {
+    test_start "Bootstrap: send-receive completes in dry-run mode"
+
+    source "$mydir/zfs-send-receive"
+
+    reset_mocks
+    set_msg_level INFO
+
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/data"]="guid1"
+    _mock_zfs_send_size="1000000"
+
+    # Prevent zfssnapbuild from creating a real snapfile
+    nextsnap="@test-2025-06-15T10:00-04:00-d"
+
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2" || true
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+
+    if [[ "$log" == *"Dry-run: Would create snapshot"* && \
+          "$log" == *"Dry-run: Would send"* ]]; then
+        test_pass
+    else
+        test_fail "Missing expected dry-run log lines"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test autoproceed='N' prompts once for the dataset list then continues
+# ---------------------------------------------------------------------------
+
+test_autoproceed_n_prompts_once() {
+    test_start "autoproceed='N' prompts once then processes all datasets"
+
+    reset_mocks
+    set_msg_level INFO
+
+    _mock_zfs_fs_list="pool/src/data1
+pool/src/data2"
+    _mock_zfs_props["pool/src/data1:origin"]="-"
+    _mock_zfs_props["pool/src/data2:origin"]="-"
+    _mock_zfs_props["pool/dest/data1:origin"]="-"
+    _mock_zfs_props["pool/dest/data2:origin"]="-"
+    _mock_zfs_props["pool/dest/data1:receive_resume_token"]="-"
+    _mock_zfs_props["pool/dest/data2:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data1@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/src/data2@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data1@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data2@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/data1"]=1
+    _mock_zfs_datasets["pool/dest/data2"]=1
+    _mock_zfs_snap_lists["pool/src/data1"]="pool/src/data1@snap1"
+    _mock_zfs_snap_lists["pool/src/data2"]="pool/src/data2@snap1"
+    _mock_zfs_snap_lists["pool/dest/data1"]="pool/dest/data1@snap1"
+    _mock_zfs_snap_lists["pool/dest/data2"]="pool/dest/data2@snap1"
+    _mock_zfs_guid_lists["pool/src/data1"]="guid1"
+    _mock_zfs_guid_lists["pool/src/data2"]="guid2"
+    _mock_zfs_guid_lists["pool/dest/data1"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/data2"]="guid2"
+    _mock_zfs_send_size="1000000"
+
+    nextsnap="@test-2025-06-15T10:00-04:00-d"
+
+    # Count how many times `read` is invoked.  The global override is restored
+    # after send-receive so later tests are unaffected.
+    local read_calls=0
+    read() {
+        ((read_calls++))
+        response="y"
+        return 0
+    }
+
+    clear_log
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='N'; sourcefsremovequalifiers=2" || true
+    restore_stderr
+
+    # Restore the test harness read override.
+    read() {
+        response="y"
+        return 0
+    }
+
+    local log
+    log=$(get_stderr_log)
+
+    if [[ "$read_calls" -ne 1 ]]; then
+        test_fail "Expected read to be called once, got $read_calls"
+        return
+    fi
+    if [[ "$log" != *"Processing pool/src/data1"* || "$log" != *"Processing pool/src/data2"* ]]; then
+        test_fail "Not all datasets were processed; log='$log'"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Test do_transfer dry-run logging
+# ---------------------------------------------------------------------------
+
+test_do_transfer_dryrun() {
+    test_start "do_transfer logs size and description in dry-run mode"
+
+    set_msg_level INFO
+    dryrun='Y'
+    fs="pool/src/data"
+    nextsnap="@snap-d"
+    destfs="pool/dest"
+    restorefs="/data"
+    clear_log
+    capture_stderr
+    do_transfer "-cw -i @snap" "-uv" "Y" "5000000" "Send/receive"
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$log" == *"Would Send/receive"* && "$log" == *"~4.8M"* ]]; then
+        test_pass
+    else
+        test_fail "log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test check_space_available passes with ample space
+# ---------------------------------------------------------------------------
+
+test_check_space_passes() {
+    test_start "check_space_available returns 0 when space is ample"
+
+    reset_mocks
+    set_msg_level FATAL
+    _mock_zfs_props["pool:available"]="100000000000"  # 100 GB
+    fs="pool/src/data"
+    autoproceed='Y'
+    capture_stderr
+    local rc
+    check_space_available "1000000000" "pool"  # 1 GB
+    rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Test check_space_available skips when space is low
+# ---------------------------------------------------------------------------
+
+test_check_space_skips() {
+    test_start "check_space_available returns 1 when space is insufficient"
+
+    reset_mocks
+    set_msg_level FATAL
+    _mock_zfs_props["pool:available"]="1000000"  # 1 MB
+    fs="pool/src/data"
+    autoproceed='Y'
+    capture_stderr
+    local rc
+    check_space_available "1000000000" "pool"  # 1 GB
+    rc=$?
+    restore_stderr
+
+    assert_rc 1 "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Test check_space_available allows override via ask_yn
+# ---------------------------------------------------------------------------
+
+test_check_space_ask_yn_override() {
+    test_start "check_space_available proceeds when ask_yn returns yes"
+
+    reset_mocks
+    set_msg_level FATAL
+    _mock_zfs_props["pool:available"]="1000000"
+    fs="pool/src/data"
+    autoproceed='N'
+    _mock_ask_yn_rc=0   # user says yes
+    capture_stderr
+    local rc
+    check_space_available "1000000000" "pool"
+    rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Test prepare_destination_for_full_copy in dry-run mode (force path)
+# ---------------------------------------------------------------------------
+
+test_prepare_dest_dryrun_force() {
+    test_start "prepare_destination_for_full_copy logs dry-run destruction"
+
+    set_msg_level INFO
+    dryrun='Y'
+    force='Y'
+    autoproceed='Y'
+    allow_destructive='N'
+    clear_log
+    capture_stderr
+    prepare_destination_for_full_copy "pool/dest/data" "pool/src/data"
+    local rc=$?
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$rc" -eq 0 && "$log" == *"Dry-run: Would destroy destination dataset"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test prepare_destination_for_full_copy in dry-run mode (non-force path)
+# ---------------------------------------------------------------------------
+
+test_prepare_dest_dryrun_nonforce() {
+    test_start "prepare_destination_for_full_copy logs dry-run snap deletion"
+
+    set_msg_level INFO
+    dryrun='Y'
+    force='N'
+    autoproceed='Y'
+    allow_destructive='N'
+    clear_log
+    capture_stderr
+    prepare_destination_for_full_copy "pool/dest/data" "pool/src/data"
+    local rc=$?
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$rc" -eq 0 && "$log" == *"Dry-run: Would delete all snapshots"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test abort_resume_token in dry-run mode
+# ---------------------------------------------------------------------------
+
+test_abort_resume_token_dryrun() {
+    test_start "abort_resume_token logs dry-run abort"
+
+    set_msg_level INFO
+    dryrun='Y'
+    lock_source="/tmp/mock_lock_src"
+    lock_dest="/tmp/mock_lock_dst"
+    clear_log
+    capture_stderr
+    abort_resume_token "pool/dest/data"
+    local rc=$?
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$rc" -eq 0 && "$log" == *"Dry-run: Would abort resume token"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test handle_commsnap_rc for rc=4 (no common snap)
+# ---------------------------------------------------------------------------
+
+test_handle_commsnap_rc4() {
+    test_start "handle_commsnap_rc rc=4 prompts for full copy"
+
+    commsnap=""
+    autoproceed='N'
+    _mock_ask_yn_rc=0   # user says yes to full copy
+    doincrementals="Y"
+    fs="pool/src/data"
+    capture_stderr
+    handle_commsnap_rc 4 "$fs" "pool/dest/data"
+    local rc=$?
+    restore_stderr
+
+    if [[ "$rc" -eq 0 && "$doincrementals" == "N" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc doincrementals='$doincrementals'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test handle_commsnap_rc rc=4 destination-exists message
+# ---------------------------------------------------------------------------
+
+test_handle_commsnap_rc4_existing_dest() {
+    test_start "handle_commsnap_rc rc=4 warns when destination exists"
+
+    reset_mocks
+    local fs="pool/src/data"
+    _mock_zfs_datasets["pool/dest/data"]=1
+
+    local log rc
+    log=$(
+        # Save the original mock zfs under a different name, then override it
+        # inside this subshell so the parent shell is unaffected.
+        __zfs_orig_file="$_mock_zfs_state_dir/zfs_orig_$$"
+        declare -f zfs > "$__zfs_orig_file"
+        sed 's/^zfs ()/_zfs_orig ()/' "$__zfs_orig_file" > "${__zfs_orig_file}.2"
+        source "${__zfs_orig_file}.2"
+        rm -f "$__zfs_orig_file" "${__zfs_orig_file}.2"
+
+        zfs() {
+            if [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" && "$4" == "name" && -n "$5" ]]; then
+                if [[ -n "${_mock_zfs_datasets[$5]+x}" ]]; then
+                    echo "$5"
+                    return 0
+                fi
+                return 1
+            fi
+            _zfs_orig "$@"
+        }
+        export -f zfs _zfs_orig
+
+        commsnap="@common"
+        autoproceed='Y'
+        doincrementals="Y"
+        msg_level="INFO"
+        clear_log
+        handle_commsnap_rc 4 "$fs" "pool/dest/data" >/dev/null 2>&1
+        rc=$?
+        echo "EXITCODE:$rc"
+        cat "$(get_test_log_file)"
+    )
+    rc=$(echo "$log" | grep -o 'EXITCODE:[0-9]*' | cut -d: -f2)
+    log=$(echo "$log" | grep -v '^EXITCODE:')
+
+    if [[ "$rc" -eq 0 && "$log" == *"WARN: No common snapshot found between $fs and pool/dest/data."* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test handle_commsnap_rc rc=4 new-destination message
+# ---------------------------------------------------------------------------
+
+test_handle_commsnap_rc4_new_dest() {
+    test_start "handle_commsnap_rc rc=4 informs when destination is new"
+
+    reset_mocks
+    local fs="pool/src/data"
+    # pool/dest/data intentionally absent from _mock_zfs_datasets
+
+    local log rc
+    log=$(
+        __zfs_orig_file="$_mock_zfs_state_dir/zfs_orig_$$"
+        declare -f zfs > "$__zfs_orig_file"
+        sed 's/^zfs ()/_zfs_orig ()/' "$__zfs_orig_file" > "${__zfs_orig_file}.2"
+        source "${__zfs_orig_file}.2"
+        rm -f "$__zfs_orig_file" "${__zfs_orig_file}.2"
+
+        zfs() {
+            if [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" && "$4" == "name" && -n "$5" ]]; then
+                if [[ -n "${_mock_zfs_datasets[$5]+x}" ]]; then
+                    echo "$5"
+                    return 0
+                fi
+                return 1
+            fi
+            _zfs_orig "$@"
+        }
+        export -f zfs _zfs_orig
+
+        commsnap="@common"
+        autoproceed='Y'
+        doincrementals="Y"
+        msg_level="INFO"
+        clear_log
+        handle_commsnap_rc 4 "$fs" "pool/dest/data" >/dev/null 2>&1
+        rc=$?
+        echo "EXITCODE:$rc"
+        cat "$(get_test_log_file)"
+    )
+    rc=$(echo "$log" | grep -o 'EXITCODE:[0-9]*' | cut -d: -f2)
+    log=$(echo "$log" | grep -v '^EXITCODE:')
+
+    if [[ "$rc" -eq 0 && "$log" == *"INFO: Destination pool/dest/data does not exist; creating new dataset from $fs."* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test dry-run size-estimate failure is INFO, not WARN
+# ---------------------------------------------------------------------------
+
+test_dryrun_size_estimate_info_not_warn() {
+    test_start "Dry-run size estimate unavailability logs INFO not WARN"
+
+    reset_mocks
+    set_msg_level INFO
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/data"]="guid1"
+    # Simulate zfs send -nP producing no size line (snapshot does not exist yet)
+    _mock_zfs_send_size=""
+    nextsnap="@test-2025-06-15T10:00-04:00-d"
+
+    clear_log
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2" || true
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$log" == *"INFO: Dry-run: stream size estimate not available"* && \
+          "$log" != *"WARN: Unable to get stream size estimate"* ]]; then
+        test_pass
+    else
+        test_fail "log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test full-copy resumable message is logged at VERB level
+# ---------------------------------------------------------------------------
+
+test_full_copy_resumable_verb() {
+    test_start "Full copy resumable message is VERB level"
+
+    reset_mocks
+    commsnap=""
+    doincrementals="N"
+    dryrun='Y'
+    autoproceed='Y'
+    fs="pool/src/data"
+    destfs="pool/dest"
+    restorefs="/data"
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_datasets["pool/src/data"]=1
+    nextsnap="@test-2025-06-15T10:00-04:00-d"
+
+    set_msg_level VERB
+    clear_log
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2; doincrementals='N'" || true
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$log" == *"VERB: Full copy — transfer of pool/dest will be resumable."* ]]; then
+        test_pass
+    else
+        test_fail "log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test handle_commsnap_rc for rc=16 (rollback required)
+# ---------------------------------------------------------------------------
+
+test_handle_commsnap_rc16() {
+    test_start "handle_commsnap_rc rc=16 sets receive_F_option"
+
+    commsnap="@common"
+    autoproceed='Y'
+    doincrementals="Y"
+    dointermediates="Y"
+    dryrun='Y'
+    fs="pool/src/data"
+    destfs="pool/dest"
+    restorefs="/data"
+    _mock_zfs_snap_lists["pool/dest/data"]=\
+"pool/dest/data@snap3\npool/dest/data@snap2\npool/dest/data@common"
+    capture_stderr
+    handle_commsnap_rc 16 "$fs" "pool/dest/data"
+    local rc=$?
+    restore_stderr
+
+    if [[ "$rc" -eq 0 && "$receive_F_option" == "F" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc receive_F_option='$receive_F_option'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test clone dataset message is logged at VERB level
+# ---------------------------------------------------------------------------
+
+test_clone_dataset_message_verb() {
+    test_start "Clone dataset message is VERB level"
+
+    reset_mocks
+    _mock_zfs_fs_list="pool/src/clone"
+    _mock_zfs_props["pool/src/clone:origin"]="pool/src/origin@snap"
+    _mock_zfs_props["pool/dest/clone:origin"]="-"
+    _mock_zfs_props["pool/dest/clone:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/clone@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/clone@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/clone"]=1
+    _mock_zfs_snap_lists["pool/src/clone"]="pool/src/clone@snap1"
+    _mock_zfs_snap_lists["pool/dest/clone"]="pool/dest/clone@snap1"
+    _mock_zfs_guid_lists["pool/src/clone"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/clone"]="guid1"
+    _mock_zfs_send_size="1000000"
+    nextsnap="@test-2025-06-15T10:00-04:00-d"
+
+    set_msg_level VERB
+    clear_log
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2" || true
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$log" == *"VERB: Dataset pool/src/clone is a ZFS clone. It will be backed up as a regular dataset."* ]]; then
+        test_pass
+    else
+        test_fail "log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test END trailer respects ZFSUTILITIES_LOG_INHERIT
+# ---------------------------------------------------------------------------
+
+test_trailer_written_without_inherit() {
+    test_start "send-receive writes # END trailer when not inheriting log"
+
+    reset_mocks
+    set_msg_level FATAL
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/data"]="guid1"
+    _mock_zfs_send_size="1000000"
+    nextsnap="@test-2025-06-15T10:00-04:00-d"
+
+    local logfile="$_mock_zfs_state_dir/trailer.log"
+    : > "$logfile"
+    ZFSUTILITIES_LOG_FILE="$logfile"
+    unset ZFSUTILITIES_LOG_INHERIT
+
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2" || true
+    restore_stderr
+
+    if [[ -f "$logfile" && "$(cat "$logfile")" == *"# END:"* ]]; then
+        test_pass
+    else
+        test_fail "Trailer missing from '$logfile'"
+    fi
+}
+
+test_trailer_suppressed_with_inherit() {
+    test_start "send-receive suppresses # END trailer when ZFSUTILITIES_LOG_INHERIT=Y"
+
+    reset_mocks
+    set_msg_level FATAL
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/data"]="guid1"
+    _mock_zfs_send_size="1000000"
+    nextsnap="@test-2025-06-15T10:00-04:00-d"
+
+    local logfile="$_mock_zfs_state_dir/trailer-inherit.log"
+    : > "$logfile"
+    ZFSUTILITIES_LOG_FILE="$logfile"
+    ZFSUTILITIES_LOG_INHERIT="Y"
+
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2" || true
+    restore_stderr
+
+    if [[ ! -f "$logfile" || "$(cat "$logfile")" != *"# END:"* ]]; then
+        test_pass
+    else
+        test_fail "Trailer should not have been written when inheriting log"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test zfsdailybackup EXIT trailer respects ZFSUTILITIES_LOG_INHERIT
+# ---------------------------------------------------------------------------
+
+_extract_dailybackup_trailer() {
+    local outfile="$1"
+    awk '/^_write_trailer\(\) \{/,/^}$/' "$mydir/zfsdailybackup" > "$outfile"
+}
+
+_run_dailybackup_trailer() {
+    local inherit_flag="$1"
+    local logfile="$2"
+    local funcfile="$_mock_zfs_state_dir/dailybackup_trailer.sh"
+    _extract_dailybackup_trailer "$funcfile"
+    (
+        ZFSUTILITIES_LOG_FILE="$logfile"
+        if [[ "$inherit_flag" == "Y" ]]; then
+            ZFSUTILITIES_LOG_INHERIT="Y"
+        else
+            unset ZFSUTILITIES_LOG_INHERIT
+        fi
+        SECONDS=42
+        source "$funcfile"
+        (exit 5)   # set $? to a known value
+        _write_trailer
+    )
+}
+
+test_dailybackup_trailer_written_without_inherit() {
+    test_start "zfsdailybackup writes # END trailer when not inheriting log"
+
+    local logfile="$_mock_zfs_state_dir/daily-trailer.log"
+    : > "$logfile"
+    _run_dailybackup_trailer "N" "$logfile"
+
+    if [[ -f "$logfile" && "$(cat "$logfile")" == *"# END: rc=5, duration=42s"* ]]; then
+        test_pass
+    else
+        test_fail "log='$(cat "$logfile" 2>/dev/null)'"
+    fi
+}
+
+test_dailybackup_trailer_suppressed_with_inherit() {
+    test_start "zfsdailybackup suppresses # END trailer when ZFSUTILITIES_LOG_INHERIT=Y"
+
+    local logfile="$_mock_zfs_state_dir/daily-trailer-inherit.log"
+    : > "$logfile"
+    _run_dailybackup_trailer "Y" "$logfile"
+
+    if [[ ! -f "$logfile" || "$(cat "$logfile")" != *"# END:"* ]]; then
+        test_pass
+    else
+        test_fail "Trailer should not have been written when inheriting log"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+test_bootstrap_inner_functions
+test_autoproceed_n_prompts_once
+test_do_transfer_dryrun
+test_check_space_passes
+test_check_space_skips
+test_check_space_ask_yn_override
+test_prepare_dest_dryrun_force
+test_prepare_dest_dryrun_nonforce
+test_abort_resume_token_dryrun
+test_handle_commsnap_rc4
+test_handle_commsnap_rc4_existing_dest
+test_handle_commsnap_rc4_new_dest
+test_dryrun_size_estimate_info_not_warn
+test_full_copy_resumable_verb
+test_clone_dataset_message_verb
+test_handle_commsnap_rc16
+test_trailer_written_without_inherit
+test_trailer_suppressed_with_inherit
+test_dailybackup_trailer_written_without_inherit
+test_dailybackup_trailer_suppressed_with_inherit
+
+test_summary

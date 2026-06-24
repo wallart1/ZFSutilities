@@ -1,0 +1,193 @@
+#!/usr/bin/bash
+# test-zfsbuildfsarray — Unit tests for zfsbuildfsarray
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+source "$mydir/zfsbuildfsarray"
+
+# =============================================================================
+# Tests
+# =============================================================================
+
+test_basic_listing() {
+    echo "=== Basic Listing ==="
+    mock_zfs_fs_list "pool/fs1\npool/fs2\npool/fs3"
+    sourcefs="pool"
+    includes=()
+    excludes=()
+    startwith=""
+    endwith=""
+    depth=""
+    skipclones=""
+    buildfsarray "pool"
+    test_start "Basic listing returns all datasets"
+    assert_array_len 3 "${fsarray[@]}"
+}
+
+test_bottomup_sort() {
+    rm -f "$_mock_zfs_state_dir/sequence"
+    mock_zfs_fs_list "pool/fs1\npool/fs2\npool/fs3"
+    sourcefs="pool"
+    includes=()
+    excludes=()
+    startwith=""
+    endwith=""
+    depth=""
+    skipclones=""
+    buildfsarray "pool" "bottomup"
+    test_start "Bottomup sort passes -S to zfs list"
+    local seq
+    seq=$(cat "$_mock_zfs_state_dir/sequence" 2>/dev/null)
+    assert_equals "S" "$seq"
+}
+
+test_include_substring() {
+    mock_zfs_fs_list "pool/app1\npool/app2\npool/data"
+    sourcefs="pool"
+    includes=("app")
+    excludes=()
+    startwith=""
+    endwith=""
+    depth=""
+    skipclones=""
+    buildfsarray "pool"
+    test_start "Include substring filters datasets"
+    assert_array_len 2 "${fsarray[@]}"
+}
+
+test_include_exact() {
+    mock_zfs_fs_list "pool/app1\npool/app2\npool/data"
+    sourcefs="pool"
+    includes=("=pool/app1")
+    excludes=()
+    startwith=""
+    endwith=""
+    depth=""
+    skipclones=""
+    buildfsarray "pool"
+    test_start "Exact include with = prefix"
+    assert_array_len 1 "${fsarray[@]}"
+    assert_equals "pool/app1" "${fsarray[0]}"
+}
+
+test_exclude_substring() {
+    mock_zfs_fs_list "pool/app1\npool/app2\npool/data"
+    sourcefs="pool"
+    includes=()
+    excludes=("app")
+    startwith=""
+    endwith=""
+    depth=""
+    skipclones=""
+    buildfsarray "pool"
+    test_start "Exclude substring filters datasets"
+    assert_array_len 1 "${fsarray[@]}"
+    assert_equals "pool/data" "${fsarray[0]}"
+}
+
+test_exclude_exact() {
+    mock_zfs_fs_list "pool/app1\npool/app2\npool/data"
+    sourcefs="pool"
+    includes=()
+    excludes=("=pool/app2")
+    startwith=""
+    endwith=""
+    depth=""
+    skipclones=""
+    buildfsarray "pool"
+    test_start "Exact exclude with = prefix"
+    if [[ "${#fsarray[@]}" -eq 2 && "${fsarray[*]}" == *"pool/app1"* && "${fsarray[*]}" == *"pool/data"* ]]; then
+        test_pass
+    else
+        test_fail "Expected [pool/app1 pool/data], got [${fsarray[*]}]"
+    fi
+}
+
+test_startwith() {
+    mock_zfs_fs_list "pool/a\npool/b\npool/c"
+    sourcefs="pool"
+    includes=()
+    excludes=()
+    startwith="b"
+    endwith=""
+    depth=""
+    skipclones=""
+    buildfsarray "pool"
+    test_start "startwith removes items before match"
+    assert_array_len 2 "${fsarray[@]}"
+    assert_equals "pool/b" "${fsarray[0]}"
+}
+
+test_endwith() {
+    mock_zfs_fs_list "pool/a\npool/b\npool/c"
+    sourcefs="pool"
+    includes=()
+    excludes=()
+    startwith=""
+    endwith="b"
+    depth=""
+    skipclones=""
+    buildfsarray "pool"
+    test_start "endwith removes items after match"
+    assert_array_len 2 "${fsarray[@]}"
+    assert_equals "pool/b" "${fsarray[1]}"
+}
+
+test_startwith_exact() {
+    mock_zfs_fs_list "pool/a\npool/bb\npool/b"
+    sourcefs="pool"
+    includes=()
+    excludes=()
+    startwith="=pool/b"
+    endwith=""
+    depth=""
+    skipclones=""
+    buildfsarray "pool"
+    test_start "Exact startwith with = prefix"
+    assert_array_len 1 "${fsarray[@]}"
+    assert_equals "pool/b" "${fsarray[0]}"
+}
+
+test_clone_skip() {
+    mock_zfs_fs_list "pool/fs1\npool/fs2\npool/fs3"
+    mock_zfs_prop "pool/fs2" "origin" "pool/fs1@snap"
+    mock_zfs_prop "pool/fs1" "origin" "-"
+    mock_zfs_prop "pool/fs3" "origin" "-"
+    sourcefs="pool"
+    includes=()
+    excludes=()
+    startwith=""
+    endwith=""
+    depth=""
+    skipclones="Y"
+    buildfsarray "pool"
+    test_start "Clone skipping removes clone origins"
+    assert_array_len 2 "${fsarray[@]}"
+    if [[ "${fsarray[*]}" == *"pool/fs1"* && "${fsarray[*]}" == *"pool/fs3"* && "${fsarray[*]}" != *"pool/fs2"* ]]; then
+        test_pass
+    else
+        test_fail "Expected [pool/fs1 pool/fs3], got [${fsarray[*]}]"
+    fi
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+
+main() {
+    test_basic_listing
+    test_bottomup_sort
+    test_include_substring
+    test_include_exact
+    test_exclude_substring
+    test_exclude_exact
+    test_startwith
+    test_endwith
+    test_startwith_exact
+    test_clone_skip
+    teardown_test_env
+    test_summary
+}
+
+main "$@"

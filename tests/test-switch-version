@@ -1,0 +1,434 @@
+#!/usr/bin/bash
+# test-switch-version — Verify version switching and production wiring.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+SWITCH_VERSION="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../switch-version"
+[[ -f "$SWITCH_VERSION" ]] || die "Missing: $SWITCH_VERSION"
+
+# Source the real switch-version for direct function tests.  rootcheck is
+# already mocked by test-lib.sh, so the root check is bypassed.
+source "$SWITCH_VERSION"
+
+# Mock visudo so setup_path_config does not require the real tool.
+visudo() { return 0; }
+
+# Helper: build a minimal fake version directory with a switch-version script.
+_make_fake_version() {
+    local version_base="$1"
+    local version="$2"
+    local switch_script="$3"
+
+    mkdir -p "$version_base/versions/$version/bin"
+    mkdir -p "$version_base/versions/$version/lib"
+    touch "$version_base/versions/$version/lib/node-lib.sh"
+
+    # Default fake switch-version does nothing.  A custom body can be supplied
+    # to simulate behaviour such as writing an uninstall marker.
+    if [[ -n "$switch_script" ]]; then
+        cat > "$version_base/versions/$version/bin/switch-version" <<< "$switch_script"
+    else
+        printf '#!/bin/bash\nexit 0\n' > "$version_base/versions/$version/bin/switch-version"
+    fi
+    chmod +x "$version_base/versions/$version/bin/switch-version"
+}
+
+# Helper: set up a temp environment and configure switch-version paths.
+# The temp directory is assigned to the caller variable named by $1.
+_setup_switch_env() {
+    local _varname="$1"
+    local _tmpdir
+    _tmpdir=$(mktemp -d)
+
+    export ZFSUTILITIES_VERSION_BASE="$_tmpdir"
+    export ZFSUTILITIES_BASHINIT_LINK="$_tmpdir/root/bashinit"
+    export ZFSUTILITIES_PROFILE_FILE="$_tmpdir/etc/profile.d/zfsutilities.sh"
+    export ZFSUTILITIES_SUDOERS_FILE="$_tmpdir/etc/sudoers.d/zfsutilities"
+    export ZFSUTILITIES_NODE_LIB_LINK="$_tmpdir/usr/local/lib/node-lib.sh"
+    export ZFSUTILITIES_TWO_NODE_LIB_LINK="$_tmpdir/usr/local/lib/two-node-lib.sh"
+    export ZFSUTILITIES_LOCAL_BIN_DIR="$_tmpdir/usr/local/bin"
+
+    mkdir -p "$_tmpdir/root" "$_tmpdir/etc/profile.d" "$_tmpdir/etc/sudoers.d" \
+        "$_tmpdir/usr/local/lib" "$_tmpdir/usr/local/bin"
+
+    printf -v "$_varname" '%s' "$_tmpdir"
+}
+
+# Helper: clean up a temp environment.
+_teardown_switch_env() {
+    local tmpdir="$1"
+    unset ZFSUTILITIES_VERSION_BASE
+    unset ZFSUTILITIES_BASHINIT_LINK
+    unset ZFSUTILITIES_PROFILE_FILE
+    unset ZFSUTILITIES_SUDOERS_FILE
+    unset ZFSUTILITIES_NODE_LIB_LINK
+    unset ZFSUTILITIES_TWO_NODE_LIB_LINK
+    unset ZFSUTILITIES_LOCAL_BIN_DIR
+    rm -rf "$tmpdir"
+}
+
+test_switch_creates_wiring() {
+    test_start "switch-version creates all production wiring"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fake_version "$tmpdir" "A" ""
+    _make_fake_version "$tmpdir" "B" ""
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    # Mock exec so the wiring code in the current shell runs after the switch.
+    exec() { echo "MOCK_EXEC: $*"; }
+
+    local output
+    output=$(switch_version_main "B" 2>&1)
+    local rc=$?
+    unset -f getent chown exec 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc"
+    fi
+    if [[ "$(readlink "$tmpdir/current")" != "versions/B" ]]; then
+        failed=1
+        echo "    current symlink did not point to versions/B: $(readlink "$tmpdir/current")"
+    fi
+    if [[ ! -L "$tmpdir/root/bashinit" ]]; then
+        failed=1
+        echo "    /root/bashinit symlink missing"
+    fi
+    if [[ ! -f "$tmpdir/etc/profile.d/zfsutilities.sh" ]]; then
+        failed=1
+        echo "    profile.d config missing"
+    fi
+    if [[ ! -f "$tmpdir/etc/sudoers.d/zfsutilities" ]]; then
+        failed=1
+        echo "    sudoers config missing"
+    fi
+    if [[ ! -L "$tmpdir/usr/local/lib/node-lib.sh" ]]; then
+        failed=1
+        echo "    node-lib.sh symlink missing"
+    fi
+    if [[ ! -L "$tmpdir/home/testuser/ZFSutilities GUI" ]]; then
+        failed=1
+        echo "    GUI desktop shortcut missing"
+    fi
+    if [[ ! -L "$tmpdir/home/testuser/ZFSutilities Documentation" ]]; then
+        failed=1
+        echo "    Docs desktop shortcut missing"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Wiring was not created as expected"
+    fi
+}
+
+test_switch_calls_prior_uninstall() {
+    test_start "switch-version calls prior version's --uninstall"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    local prior_script
+    prior_script=$(cat <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "--uninstall" ]]; then
+    echo "uninstalled-A" > "$ZFSUTILITIES_VERSION_BASE/uninstall-A.marker"
+    exit 0
+fi
+exit 0
+EOF
+)
+    _make_fake_version "$tmpdir" "A" "$prior_script"
+    _make_fake_version "$tmpdir" "B" ""
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    # Mock exec so the re-executed target does not replace the test shell.
+    exec() { echo "MOCK_EXEC: $*"; }
+
+    switch_version_main "B" >/dev/null 2>&1
+    local rc=$?
+    unset -f getent chown exec 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc"
+    fi
+    if [[ ! -f "$tmpdir/uninstall-A.marker" ]]; then
+        failed=1
+        echo "    Prior version uninstall marker missing"
+    fi
+    if [[ "$(cat "$tmpdir/uninstall-A.marker" 2>/dev/null)" != "uninstalled-A" ]]; then
+        failed=1
+        echo "    Prior version uninstall marker has wrong content"
+    fi
+    if [[ "$(readlink "$tmpdir/current")" != "versions/B" ]]; then
+        failed=1
+        echo "    current symlink did not point to versions/B"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Prior version uninstall was not invoked"
+    fi
+}
+
+test_switch_previous_rolls_back() {
+    test_start "switch-version previous rolls back and rewires"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    local b_uninstall
+    b_uninstall=$(cat <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "--uninstall" ]]; then
+    echo "uninstalled-B" > "$ZFSUTILITIES_VERSION_BASE/uninstall-B.marker"
+    exit 0
+fi
+exit 0
+EOF
+)
+    _make_fake_version "$tmpdir" "A" ""
+    _make_fake_version "$tmpdir" "B" "$b_uninstall"
+    ln -sfn "versions/B" "$tmpdir/current"
+    ln -sfn "versions/A" "$tmpdir/previous"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    exec() { echo "MOCK_EXEC: $*"; }
+
+    switch_version_main "previous" >/dev/null 2>&1
+    local rc=$?
+    unset -f getent chown exec 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc"
+    fi
+    if [[ ! -f "$tmpdir/uninstall-B.marker" ]]; then
+        failed=1
+        echo "    Current version uninstall marker missing"
+    fi
+    if [[ "$(readlink "$tmpdir/current")" != "versions/A" ]]; then
+        failed=1
+        echo "    current symlink did not roll back to versions/A"
+    fi
+    if [[ ! -L "$tmpdir/root/bashinit" ]]; then
+        failed=1
+        echo "    Rolled-back version wiring missing"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Previous rollback did not work as expected"
+    fi
+}
+
+test_uninstall_removes_wiring() {
+    test_start "switch-version --uninstall removes per-version wiring"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fake_version "$tmpdir" "A" ""
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    # First install wiring, then uninstall it.
+    install_wiring >/dev/null 2>&1
+    switch_version_main "--uninstall" >/dev/null 2>&1
+    local rc=$?
+    unset -f getent chown 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc"
+    fi
+    if [[ -L "$tmpdir/root/bashinit" ]]; then
+        failed=1
+        echo "    /root/bashinit symlink still present"
+    fi
+    if [[ -L "$tmpdir/usr/local/lib/node-lib.sh" ]]; then
+        failed=1
+        echo "    node-lib.sh symlink still present"
+    fi
+    if [[ -L "$tmpdir/home/testuser/ZFSutilities GUI" ]]; then
+        failed=1
+        echo "    GUI desktop shortcut still present"
+    fi
+    if [[ -L "$tmpdir/home/testuser/ZFSutilities Documentation" ]]; then
+        failed=1
+        echo "    Docs desktop shortcut still present"
+    fi
+    # One-time system config must remain
+    if [[ ! -f "$tmpdir/etc/profile.d/zfsutilities.sh" ]]; then
+        failed=1
+        echo "    profile.d config was incorrectly removed"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Uninstall did not remove expected wiring"
+    fi
+}
+
+test_switch_handles_missing_prior_switch() {
+    test_start "switch-version warns but continues when prior switch-version is missing"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fake_version "$tmpdir" "A" ""
+    _make_fake_version "$tmpdir" "B" ""
+    ln -sfn "versions/A" "$tmpdir/current"
+    rm -f "$tmpdir/versions/A/bin/switch-version"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    exec() { echo "MOCK_EXEC: $*"; }
+
+    local output
+    output=$(switch_version_main "B" 2>&1)
+    local rc=$?
+    unset -f getent chown exec 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc"
+    fi
+    if [[ "$output" != *"previous version switch-version not found"* ]]; then
+        failed=1
+        echo "    Expected warning about missing prior switch-version"
+    fi
+    if [[ "$(readlink "$tmpdir/current")" != "versions/B" ]]; then
+        failed=1
+        echo "    current symlink did not point to versions/B"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Missing prior switch-version was not handled gracefully"
+    fi
+}
+
+test_switch_creates_wiring
+test_switch_calls_prior_uninstall
+test_switch_previous_rolls_back
+test_uninstall_removes_wiring
+test_switch_handles_missing_prior_switch
+
+test_list_shows_versions() {
+    test_start "switch-version --list shows installed versions and markers"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fake_version "$tmpdir" "0.9.0" ""
+    _make_fake_version "$tmpdir" "1.0.0" ""
+    _make_fake_version "$tmpdir" "1.1.0" ""
+    ln -sfn "versions/1.0.0" "$tmpdir/current"
+    ln -sfn "versions/0.9.0" "$tmpdir/previous"
+
+    local output
+    output=$(switch_version_main "--list" 2>&1)
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc"
+    fi
+    if [[ "$output" != *"0.9.0"*"<-- previous"* ]]; then
+        failed=1
+        echo "    Expected previous marker for 0.9.0"
+    fi
+    if [[ "$output" != *"1.0.0"*"<-- current"* ]]; then
+        failed=1
+        echo "    Expected current marker for 1.0.0"
+    fi
+    if [[ "$output" != *"1.1.0"* ]]; then
+        failed=1
+        echo "    Expected 1.1.0 in list"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "--list did not show versions as expected"
+    fi
+}
+
+test_list_shows_versions
+
+test_summary
+teardown_test_env

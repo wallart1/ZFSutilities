@@ -1,0 +1,49 @@
+#!/usr/bin/bash
+# Run any ZFS command recursively
+# $1    The command, enclosed in quotes.
+#           DS      Replace "DS" with dataset name within $1.
+# $2    The head of the dataset tree.
+# $3    Dataset type(s) to process; 'filesystem,volume,snapshot' or any subset. Required
+source ~/bashinit
+bashinit
+log_msg "FATAL: WIP!"
+exit 8
+
+source $mydir/rootcheck
+source $mydir/zfsbuildfsarray
+rootcheck
+
+autoproceed='N'
+releaseholds='N'
+
+command="$1"
+sourcefs="$2"
+buildfsarraytype="$3"   # Types of datasets to pull. 'filesystem,volume,snapshot' or subset
+depth=''
+includes=()
+excludes=()
+startwith=''
+
+log_msg "INFO: Command:   $command"
+log_msg "INFO: DS:        $sourcefs"
+read -p 'Press enter to continue.'
+
+buildfsarray $sourcefs 'bottomup'
+
+if [[ ${#fsarray[@]} -gt 0 ]] then
+    log_msg 'INFO: Commands to be issued.'
+    for fs in ${fsarray[@]}; do
+        echo "$command $fs"
+    done
+    
+    if [[ $autoproceed != 'Y' ]]; then
+        read -p 'Press enter to proceed.'
+    fi
+
+    for fs in ${fsarray[@]}; do
+        eval "$command $fs"
+    done
+else
+    log_msg 'WARN: No qualifying datasets were found.'
+fi
+

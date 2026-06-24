@@ -1,0 +1,225 @@
+#!/usr/bin/bash
+# test-zfsdelfs — Unit tests for iSCSI teardown/rebuild and manifest cleanup.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Create a minimal node configuration for the script to source.
+# ------------------------------------------------------------------
+NODE_CONF_FILE="$_mock_zfs_state_dir/node.conf"
+cat > "$NODE_CONF_FILE" << 'EOF'
+NODE_MODE=two-node
+STORAGE_HOST=stewie
+COMPUTE_HOST=tweety
+STORAGE_IP=10.0.0.1
+IQN_PREFIX=iqn.2026-02.local.stewie
+POOL_TARGET=(
+    [threeamigos]="threeamigos"
+    [NVME1]="nvme1"
+)
+EOF
+NODE_CONF="$NODE_CONF_FILE"
+
+# ------------------------------------------------------------------
+# Source zfsdelfs (it will not run delfs because it is being sourced).
+# ------------------------------------------------------------------
+source "$mydir/zfsdelfs"
+
+# ------------------------------------------------------------------
+# Mock targetcli
+# ------------------------------------------------------------------
+targetcli() {
+    case "$*" in
+        "/backstores/block ls")
+            if [[ "$_mock_backstores" == "empty" ]]; then
+                true
+            else
+                printf '%s\n' "$_mock_backstores"
+            fi
+            ;;
+        "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns ls")
+            if [[ "$_mock_luns" == "empty" ]]; then
+                true
+            else
+                printf '%s\n' "$_mock_luns"
+            fi
+            ;;
+        "/iscsi ls")
+            if [[ "$_mock_targets" == "empty" ]]; then
+                true
+            else
+                printf '%s\n' "$_mock_targets"
+            fi
+            ;;
+        "/backstores/block/vm-100-disk-0 info")
+            echo "  UDev path: /dev/zvol/threeamigos/proxmox/vm-100-disk-0"
+            ;;
+        "/backstores/block/vm-100-disk-0"*"delete")
+            _mock_targetcli_calls+=("delete:$1:$2")
+            ;;
+        "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns"*"delete")
+            _mock_targetcli_calls+=("delete_lun:$3")
+            ;;
+        "/backstores/block"*"create")
+            _mock_targetcli_calls+=("create:$2:$3")
+            ;;
+        "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns"*"create")
+            _mock_targetcli_calls+=("create_lun:$3:$4")
+            ;;
+        *)
+            _mock_targetcli_calls+=("other:$*")
+            ;;
+    esac
+}
+
+# ------------------------------------------------------------------
+# Mock ssh and qm
+# ------------------------------------------------------------------
+ssh() {
+    local cmd="${!#}"
+    if [[ "$cmd" == *"qm status"* ]]; then
+        echo "status: stopped"
+    fi
+    return 0
+}
+
+qm() { echo "status: stopped"; }
+
+# ------------------------------------------------------------------
+# Manifest temp files
+# ------------------------------------------------------------------
+setup_manifests() {
+    ISCSI_MANIFEST="$_mock_zfs_state_dir/expected-backstores.txt"
+    ISCSI_ENCRYPTED_CONF="$_mock_zfs_state_dir/iscsi-encrypted-luns.conf"
+    echo "vm-100-disk-0" > "$ISCSI_MANIFEST"
+    echo "vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos" > "$ISCSI_ENCRYPTED_CONF"
+}
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+reset_mocks() {
+    _mock_backstores="  vm-100-disk-0     /dev/zvol/threeamigos/proxmox/vm-100-disk-0   50G"
+    _mock_luns="  | o- lun0 ................................... [block/vm-100-disk-0]"
+    _mock_targets="  iqn.2026-02.local.stewie:threeamigos"
+    _mock_targetcli_calls=()
+    setup_manifests
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_teardown_removes_expected_backstore() {
+    reset_mocks
+    test_start "Teardown removes backstore from expected-backstores manifest"
+
+    iscsi_teardown_zvol "threeamigos/proxmox/vm-100-disk-0"
+    local rc=$?
+
+    if [[ $rc -eq 0 ]] && ! grep -q "^vm-100-disk-0$" "$ISCSI_MANIFEST"; then
+        test_pass
+    else
+        test_fail "Backstore still in expected-backstores manifest"
+    fi
+}
+
+test_teardown_removes_encrypted_conf() {
+    reset_mocks
+    test_start "Teardown removes backstore from encrypted-luns config"
+
+    iscsi_teardown_zvol "threeamigos/proxmox/vm-100-disk-0"
+    local rc=$?
+
+    if [[ $rc -eq 0 ]] && ! grep -q "^vm-100-disk-0:" "$ISCSI_ENCRYPTED_CONF"; then
+        test_pass
+    else
+        test_fail "Backstore still in encrypted-luns config"
+    fi
+}
+
+test_teardown_records_encrypted_flag() {
+    reset_mocks
+    test_start "Teardown records encrypted flag in ISCSI_TEARDOWN"
+
+    iscsi_teardown_zvol "threeamigos/proxmox/vm-100-disk-0"
+
+    local value="${ISCSI_TEARDOWN["threeamigos/proxmox/vm-100-disk-0"]}"
+    if [[ "$value" == *":Y" ]]; then
+        test_pass
+    else
+        test_fail "Expected ISCSI_TEARDOWN value ending in :Y, got '$value'"
+    fi
+}
+
+test_teardown_records_unencrypted_flag() {
+    reset_mocks
+    echo "" > "$ISCSI_ENCRYPTED_CONF"  # no encrypted entry
+    test_start "Teardown records unencrypted flag when not in encrypted config"
+
+    iscsi_teardown_zvol "threeamigos/proxmox/vm-100-disk-0"
+
+    local value="${ISCSI_TEARDOWN["threeamigos/proxmox/vm-100-disk-0"]}"
+    if [[ "$value" == *":N" ]]; then
+        test_pass
+    else
+        test_fail "Expected ISCSI_TEARDOWN value ending in :N, got '$value'"
+    fi
+}
+
+test_manifest_add_backstore() {
+    reset_mocks
+    # Empty the manifest so we can verify the add.
+    echo "" > "$ISCSI_MANIFEST"
+    test_start "manifest_add_backstore adds backstore to expected-backstores manifest"
+
+    manifest_add_backstore "vm-100-disk-0"
+
+    if grep -q "^vm-100-disk-0$" "$ISCSI_MANIFEST"; then
+        test_pass
+    else
+        test_fail "Backstore not added to expected-backstores manifest"
+    fi
+}
+
+test_encrypted_conf_add_backstore() {
+    reset_mocks
+    echo "" > "$ISCSI_ENCRYPTED_CONF"
+    test_start "encrypted_conf_add_backstore adds backstore to encrypted-luns config"
+
+    encrypted_conf_add_backstore "vm-100-disk-0" "/dev/zvol/threeamigos/proxmox/vm-100-disk-0" "threeamigos"
+
+    if grep -q "^vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos" "$ISCSI_ENCRYPTED_CONF"; then
+        test_pass
+    else
+        test_fail "Backstore not added to encrypted-luns config"
+    fi
+}
+
+test_teardown_skips_non_vm_disk() {
+    reset_mocks
+    test_start "Teardown skips datasets not matching vm-<N>-disk-<N>"
+
+    iscsi_teardown_zvol "threeamigos/data"
+    local rc=$?
+
+    if [[ $rc -eq 0 && -z "${_mock_targetcli_calls[*]}" ]]; then
+        test_pass
+    else
+        test_fail "Should not touch non-VM datasets"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_teardown_removes_expected_backstore
+test_teardown_removes_encrypted_conf
+test_teardown_records_encrypted_flag
+test_teardown_records_unencrypted_flag
+test_manifest_add_backstore
+test_encrypted_conf_add_backstore
+test_teardown_skips_non_vm_disk
+
+test_summary

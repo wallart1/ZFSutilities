@@ -1,0 +1,185 @@
+#!/bin/bash
+# remove-vm-disk <pool> <vmid> <disk-num>
+# Removes an iSCSI LUN and destroys the backing zvol.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/remove-vm-disk on BOTH the storage and compute hosts
+# Run from:   the compute host (or the storage host directly — delegates via SSH)
+#
+# WARNING: Stop the VM and detach the disk in Proxmox BEFORE running this script.
+
+source /usr/local/lib/node-lib.sh
+
+MY_HOST=$(hostname -s)
+
+usage() {
+    local pool_choices
+    if is_two_node; then
+        pool_choices=$(pool_list | paste -sd '|' -)
+    else
+        pool_choices=$(zpool list -H -o name 2>/dev/null | paste -sd '|' -)
+    fi
+    echo "Usage: remove-vm-disk <pool> <vmid> <disk-num>"
+    echo ""
+    echo "  pool      ZFS pool name (${pool_choices})"
+    echo "  vmid      Proxmox VM ID"
+    echo "  disk-num  Disk number"
+    echo ""
+    echo "  WARNING: Stop the VM and detach the disk in Proxmox GUI before running."
+    echo ""
+    echo "Example: remove-vm-disk threeamigos 300 0"
+    exit 1
+}
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+# Filter --skip-rescan from args
+SKIP_RESCAN=false
+CLEAN_ARGS=()
+for arg in "$@"; do
+    [[ "$arg" == "--skip-rescan" ]] && SKIP_RESCAN=true || CLEAN_ARGS+=("$arg")
+done
+set -- "${CLEAN_ARGS[@]}"
+
+# --- Argument validation ---
+[[ $# -eq 3 ]] || usage
+
+POOL="$1"
+VMID="$2"
+DISKNUM="$3"
+
+if is_two_node; then
+    is_known_pool "$POOL" || \
+        die "Pool must be one of: $(pool_list | paste -sd ' ' -). Got: $POOL"
+else
+    zpool list -H -o name "$POOL" >/dev/null 2>&1 || \
+        die "Pool '$POOL' not found. Available pools: $(zpool list -H -o name 2>/dev/null | paste -sd ' ' -)"
+fi
+[[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be a number, got: $VMID"
+[[ "$DISKNUM" =~ ^[0-9]+$ ]] || die "disk-num must be a number, got: $DISKNUM"
+
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+
+# --- If not on the storage host, delegate storage work via SSH (two-node only) ---
+if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
+    echo "Connecting to $STORAGE_HOST for storage operations..."
+    ssh -t root@"$STORAGE_HOST" "/usr/local/lib/zfsutilities/bin/remove-vm-disk '$POOL' '$VMID' '$DISKNUM' --skip-rescan" \
+        || die "Storage operations failed on $STORAGE_HOST"
+    echo ""
+    echo "Rescanning iSCSI on $(hostname)..."
+    if [[ "$MY_HOST" == "$COMPUTE_HOST" ]]; then
+        /usr/local/lib/zfsutilities/bin/rescan-storage
+    else
+        ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/rescan-storage" 2>&1 \
+            || echo "⚠ Could not rescan $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+    fi
+    exit 0
+fi
+
+# === Running on the storage host ===
+
+ZVOL_NAME="$POOL/proxmox/vm-${VMID}-disk-${DISKNUM}"
+BACKSTORE_NAME="vm-${VMID}-disk-${DISKNUM}"
+
+TARGET=""
+if is_two_node; then
+    TARGET=$(pool_to_target "$POOL") || die "Failed to map pool to target: $POOL"
+fi
+
+echo "=== remove-vm-disk ==="
+echo "  Zvol:      $ZVOL_NAME"
+echo "  Backstore: $BACKSTORE_NAME"
+if is_two_node; then
+    echo "  Target:    $TARGET"
+fi
+echo ""
+
+# --- Check zvol exists ---
+if ! zfs list -H -o name "$ZVOL_NAME" 2>/dev/null | grep -q .; then
+    die "Zvol does not exist: $ZVOL_NAME"
+fi
+
+ZVOL_SIZE=$(zfs get -H -o value volsize "$ZVOL_NAME" 2>/dev/null || echo "unknown")
+echo "  Zvol size: $ZVOL_SIZE"
+echo ""
+
+# --- Confirm before destruction ---
+echo "⚠ This will PERMANENTLY DESTROY the following:"
+echo "  - iSCSI LUN for $BACKSTORE_NAME"
+echo "  - Zvol $ZVOL_NAME (all data lost)"
+echo ""
+read -rp "  Have you stopped the VM and removed the disk from Proxmox? (y/N): " response
+[[ "$response" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+
+read -rp "  Are you sure you want to destroy $ZVOL_NAME? (y/N): " response2
+[[ "$response2" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+
+# --- iSCSI teardown (two-node only) ---
+if is_two_node; then
+    # --- Find and remove LUN from target ---
+    LUN_NUM=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
+        | grep "$BACKSTORE_NAME" \
+        | grep -oP 'lun\K[0-9]+' \
+        | head -1)
+
+    if [[ -n "$LUN_NUM" ]]; then
+        echo "Removing LUN $LUN_NUM from target..."
+        targetcli "/iscsi/${TARGET}/tpg1/luns" delete "lun${LUN_NUM}"
+        echo "✓ LUN removed from target"
+    else
+        echo "⚠ LUN not found in target — skipping LUN removal"
+    fi
+
+    # --- Remove backstore ---
+    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${BACKSTORE_NAME} "; then
+        echo "Removing backstore $BACKSTORE_NAME..."
+        targetcli /backstores/block delete "$BACKSTORE_NAME"
+        echo "✓ Backstore removed"
+    else
+        echo "⚠ Backstore $BACKSTORE_NAME not found — skipping"
+    fi
+
+    # --- Remove from expected-backstores manifest ---
+    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+    if [[ -f "$MANIFEST" ]] && grep -q "^${BACKSTORE_NAME}$" "$MANIFEST"; then
+        sed -i "/^${BACKSTORE_NAME}$/d" "$MANIFEST"
+        echo "✓ Removed from expected-backstores manifest"
+    fi
+
+    # --- Remove from encrypted LUNs conf if present ---
+    ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+    if [[ -f "$ENCRYPTED_CONF" ]] && grep -q "^${BACKSTORE_NAME}:" "$ENCRYPTED_CONF"; then
+        sed -i "/^${BACKSTORE_NAME}:/d" "$ENCRYPTED_CONF"
+        echo "✓ Removed from encrypted LUNs config"
+    fi
+
+    # --- Save targetcli config ---
+    echo "Saving iSCSI configuration..."
+    /usr/local/lib/zfsutilities/bin/safe-iscsi-save
+    echo "✓ Configuration saved"
+
+    # --- Trigger rescan on the compute host (unless called remotely) ---
+    if [[ "$SKIP_RESCAN" == false ]]; then
+        echo "Triggering iSCSI rescan on $COMPUTE_HOST..."
+        if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/rescan-storage" 2>&1; then
+            echo "✓ Rescan triggered"
+        else
+            echo "⚠ Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+        fi
+    fi
+fi
+
+# --- Destroy zvol ---
+echo "Destroying zvol $ZVOL_NAME..."
+if ! zfs destroy "$ZVOL_NAME"; then
+    source /usr/local/lib/zfsutilities/current/bin/zfs-diagnose-busy
+    diagnose_dataset_busy "$ZVOL_NAME"
+    die "Could not destroy zvol $ZVOL_NAME"
+fi
+echo "✓ Zvol destroyed"
+
+echo ""
+echo "=== Done ==="
+echo "  Removed: $ZVOL_NAME"

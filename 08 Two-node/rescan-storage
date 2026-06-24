@@ -1,0 +1,58 @@
+#!/bin/bash
+# rescan-storage
+# Rescans iSCSI sessions so the compute host discovers new/changed/removed LUNs.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/rescan-storage on BOTH the storage and compute hosts
+# Run from:   the compute host (or the storage host directly — delegates via SSH)
+
+source /usr/local/lib/node-lib.sh
+
+MY_HOST=$(hostname -s)
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+
+if is_single_node; then
+    echo "rescan-storage: not applicable in single-node mode (no iSCSI)"
+    exit 0
+fi
+
+# --- If not on the compute host, delegate via SSH ---
+if [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    exec ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/rescan-storage"
+fi
+
+# === Running on the compute host ===
+
+echo "=== rescan-storage ==="
+
+# --- Check iSCSI sessions ---
+SESSION_COUNT=$(iscsiadm -m session 2>/dev/null | wc -l)
+if [[ "$SESSION_COUNT" -eq 0 ]]; then
+    echo "✗ No active iSCSI sessions — storage network may be down"
+    echo "  Run: sudo diagnose-storage"
+    exit 1
+fi
+
+echo "Active iSCSI sessions: $SESSION_COUNT"
+iscsiadm -m session 2>/dev/null | sed 's/^/  /'
+echo ""
+
+# --- Rescan all sessions ---
+echo "Rescanning iSCSI sessions..."
+iscsiadm -m session --rescan 2>&1 | sed 's/^/  /'
+echo "✓ Rescan complete"
+
+# --- Show device count ---
+DEVICE_COUNT=$(ls /dev/disk/by-path/ip-${STORAGE_IP}* 2>/dev/null | wc -l)
+echo ""
+echo "Total iSCSI devices visible: $DEVICE_COUNT"
+
+if [[ "$DEVICE_COUNT" -lt 31 ]]; then
+    echo "⚠ Expected at least 31 devices (29 threeamigos + 2 nvme1)"
+    echo "  Current count ($DEVICE_COUNT) is low — some LUNs may be missing"
+fi

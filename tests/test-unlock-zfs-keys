@@ -1,0 +1,472 @@
+#!/usr/bin/bash
+# test-unlock-zfs-keys — Verify LUKS/ZFS key unlock scripts behavior.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+repo_root="$mydir"
+
+# Create a temporary mock environment for a single test run.
+# Sets global variables: MOCKDIR, TEST_MOUNT, TEST_MAPPER, KEYFILE, ENCRYPTED_CONF
+make_mock_env() {
+    MOCKDIR=$(mktemp -d)
+    TEST_MOUNT=$(mktemp -d)
+    TEST_MAPPER=$(mktemp -d)
+    KEYFILE="$MOCKDIR/root.luks-key"
+    ENCRYPTED_CONF="$MOCKDIR/iscsi-encrypted-luns.conf"
+    mkdir -p "$MOCKDIR/bin"
+
+    cat > "$MOCKDIR/bin/blkid" <<EOF
+#!/bin/bash
+if [[ "\$*" == *"PARTLABEL=ZFSkeys"* ]]; then
+    echo "/dev/sdz1"
+fi
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/blkid"
+
+    cat > "$MOCKDIR/bin/cryptsetup" <<EOF
+#!/bin/bash
+mkdir -p "$MOCKDIR/cryptsetup-calls"
+echo "\$*" >> "$MOCKDIR/cryptsetup-calls/calls"
+if [[ "\$1" == "luksOpen" ]]; then
+    touch "$TEST_MAPPER/keys"
+elif [[ "\$1" == "luksClose" ]]; then
+    rm -f "$TEST_MAPPER/keys"
+fi
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/cryptsetup"
+
+    cat > "$MOCKDIR/bin/mount" <<EOF
+#!/bin/bash
+mkdir -p "$MOCKDIR/mount-calls"
+echo "\$*" >> "$MOCKDIR/mount-calls/calls"
+if [[ "\$1" == "LABEL=ZFSkeys" ]]; then
+    mkdir -p "\$2"
+    touch "\$2/.mounted"
+fi
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/mount"
+
+    cat > "$MOCKDIR/bin/umount" <<EOF
+#!/bin/bash
+rm -f "$TEST_MOUNT/.mounted"
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/umount"
+
+    cat > "$MOCKDIR/bin/mountpoint" <<EOF
+#!/bin/bash
+if [[ -f "$TEST_MOUNT/.mounted" ]]; then
+    exit 0
+fi
+exit 1
+EOF
+    chmod +x "$MOCKDIR/bin/mountpoint"
+
+    cat > "$MOCKDIR/bin/findmnt" <<EOF
+#!/bin/bash
+if [[ -f "$TEST_MOUNT/.mounted" ]]; then
+    echo "$TEST_MAPPER/keys"
+fi
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/findmnt"
+
+    cat > "$MOCKDIR/bin/sleep" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/sleep"
+
+    cat > "$MOCKDIR/bin/systemctl" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/systemctl"
+
+    cat > "$MOCKDIR/bin/targetcli" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/targetcli"
+
+    cat > "$MOCKDIR/bin/iscsi-add-encrypted-luns" <<EOF
+#!/bin/bash
+echo "called" > "$MOCKDIR/add-encrypted-luns-called"
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/iscsi-add-encrypted-luns"
+
+    cat > "$MOCKDIR/bin/lock-zfs-keys" <<EOF
+#!/bin/bash
+rm -f "$TEST_MOUNT/.mounted"
+rm -f "$TEST_MAPPER/keys"
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/lock-zfs-keys"
+}
+
+# Make a script copy with paths replaced to point into temp dirs.
+prepare_script() {
+    local src="$1"
+    local dst="$2"
+    sed -e "s|/root/.luks-key|$KEYFILE|g" \
+        -e "s|/etc/iscsi-encrypted-luns.conf|$ENCRYPTED_CONF|g" \
+        -e "s|/mnt/ZFSkeys|$TEST_MOUNT|g" \
+        -e "s|/dev/mapper/keys|$TEST_MAPPER/keys|g" \
+        -e "s|/usr/local/lib/zfsutilities/bin/lock-zfs-keys|lock-zfs-keys|g" \
+        -e "s|/usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns|iscsi-add-encrypted-luns|g" \
+        "$src" > "$dst"
+}
+
+# Run a script under the mock PATH in a subshell.
+run_under_mocks() {
+    local script="$1"
+    shift
+    (
+        export PATH="$MOCKDIR/bin:$PATH"
+        export ZFSUTILITIES_LOG_FILE=""
+        export mydir="$repo_root/08 Two-node"
+        cd "$repo_root"
+        bash "$script" "$@"
+    )
+}
+
+# Return the number of cryptsetup luksOpen calls seen.
+cryptsetup_open_count() {
+    if [[ -f "$MOCKDIR/cryptsetup-calls/calls" ]]; then
+        grep -c "^luksOpen" "$MOCKDIR/cryptsetup-calls/calls" || true
+    else
+        echo 0
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# auto-unlock: exits cleanly when USB is absent
+# ---------------------------------------------------------------------------
+test_auto_unlock_exits_cleanly_when_usb_absent() {
+    test_start "auto-unlock exits 0 when USB absent and keyfile present"
+    make_mock_env
+    touch "$KEYFILE"
+
+    cat > "$MOCKDIR/bin/blkid" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/blkid"
+
+    local script_copy
+    script_copy=$(mktemp)
+    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys-auto" "$script_copy"
+
+    local rc=0
+    run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
+
+    if [[ "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "expected rc=0, got rc=$rc"
+    fi
+
+    rm -rf "$MOCKDIR" "$TEST_MOUNT" "$TEST_MAPPER" "$script_copy"
+}
+
+# ---------------------------------------------------------------------------
+# auto-unlock: exits cleanly when keyfile is absent
+# ---------------------------------------------------------------------------
+test_auto_unlock_exits_cleanly_when_keyfile_absent() {
+    test_start "auto-unlock exits 0 when /root/.luks-key missing"
+    make_mock_env
+
+    local script_copy
+    script_copy=$(mktemp)
+    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys-auto" "$script_copy"
+
+    local rc=0
+    run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
+
+    if [[ "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "expected rc=0, got rc=$rc"
+    fi
+
+    rm -rf "$MOCKDIR" "$TEST_MOUNT" "$TEST_MAPPER" "$script_copy"
+}
+
+# ---------------------------------------------------------------------------
+# auto-unlock: succeeds when USB and keyfile present
+# ---------------------------------------------------------------------------
+test_auto_unlock_succeeds_with_usb_and_keyfile() {
+    test_start "auto-unlock loads keys when USB and keyfile present"
+    make_mock_env
+    touch "$KEYFILE"
+
+    cat > "$ENCRYPTED_CONF" <<'EOF'
+vm-101-disk-1:/dev/zvol/threeamigos/proxmox/vm-101-disk-1:threeamigos
+EOF
+
+    cat > "$MOCKDIR/bin/zfs" <<EOF
+#!/bin/bash
+if [[ "\$1" == "get" && "\$2" == "keystatus" ]]; then
+    if [[ -f "$MOCKDIR/keys-loaded" ]]; then
+        echo "available"
+    else
+        echo "unavailable"
+    fi
+elif [[ "\$1" == "load-key" ]]; then
+    touch "$MOCKDIR/keys-loaded"
+fi
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/zfs"
+
+    local script_copy
+    script_copy=$(mktemp)
+    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys-auto" "$script_copy"
+
+    local rc=0
+    run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
+
+    if [[ "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "expected rc=0, got rc=$rc"
+    fi
+
+    rm -rf "$MOCKDIR" "$TEST_MOUNT" "$TEST_MAPPER" "$script_copy"
+}
+
+# ---------------------------------------------------------------------------
+# auto-unlock: reuses already-mounted /mnt/ZFSkeys
+# ---------------------------------------------------------------------------
+test_auto_unlock_reuses_existing_mount() {
+    test_start "auto-unlock reuses already-mounted /mnt/ZFSkeys"
+    make_mock_env
+    touch "$KEYFILE"
+    touch "$TEST_MOUNT/.mounted"
+    touch "$TEST_MOUNT/key1"
+
+    cat > "$ENCRYPTED_CONF" <<'EOF'
+vm-101-disk-1:/dev/zvol/threeamigos/proxmox/vm-101-disk-1:threeamigos
+EOF
+
+    cat > "$MOCKDIR/bin/zfs" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "get" && "$2" == "keystatus" ]]; then
+    echo "unavailable"
+elif [[ "$1" == "load-key" ]]; then
+    true
+fi
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/zfs"
+
+    local script_copy
+    script_copy=$(mktemp)
+    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys-auto" "$script_copy"
+
+    local rc=0
+    run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
+
+    if [[ "$rc" -ne 0 ]]; then
+        test_fail "expected rc=0, got rc=$rc"
+    elif [[ "$(cryptsetup_open_count)" -ne 0 ]]; then
+        test_fail "cryptsetup luksOpen was called despite existing mount"
+    else
+        test_pass
+    fi
+
+    rm -rf "$MOCKDIR" "$TEST_MOUNT" "$TEST_MAPPER" "$script_copy"
+}
+
+# ---------------------------------------------------------------------------
+# manual unlock: reuses already-mounted /mnt/ZFSkeys
+# ---------------------------------------------------------------------------
+test_manual_unlock_reuses_existing_mount() {
+    test_start "manual unlock reuses already-mounted /mnt/ZFSkeys"
+    make_mock_env
+    touch "$TEST_MOUNT/.mounted"
+    touch "$TEST_MOUNT/key1"
+
+    cat > "$ENCRYPTED_CONF" <<'EOF'
+vm-101-disk-1:/dev/zvol/threeamigos/proxmox/vm-101-disk-1:threeamigos
+EOF
+
+    cat > "$MOCKDIR/bin/zfs" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "get" && "$2" == "keystatus" ]]; then
+    echo "unavailable"
+elif [[ "$1" == "load-key" ]]; then
+    true
+fi
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/zfs"
+
+    local script_copy
+    script_copy=$(mktemp)
+    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys" "$script_copy"
+
+    local rc=0
+    run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
+
+    if [[ "$rc" -ne 0 ]]; then
+        test_fail "expected rc=0, got rc=$rc"
+    elif [[ "$(cryptsetup_open_count)" -ne 0 ]]; then
+        test_fail "cryptsetup luksOpen was called despite existing mount"
+    else
+        test_pass
+    fi
+
+    rm -rf "$MOCKDIR" "$TEST_MOUNT" "$TEST_MAPPER" "$script_copy"
+}
+
+# ---------------------------------------------------------------------------
+# manual unlock: leaves non-empty /mnt/ZFSkeys untouched
+# ---------------------------------------------------------------------------
+test_manual_unlock_leaves_nonempty_zfskeys() {
+    test_start "manual unlock leaves non-empty /mnt/ZFSkeys untouched"
+    make_mock_env
+    echo "user-data" > "$TEST_MOUNT/keepme.txt"
+
+    cat > "$ENCRYPTED_CONF" <<'EOF'
+vm-101-disk-1:/dev/zvol/threeamigos/proxmox/vm-101-disk-1:threeamigos
+EOF
+
+    cat > "$MOCKDIR/bin/zfs" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "get" && "$2" == "keystatus" ]]; then
+    echo "unavailable"
+elif [[ "$1" == "load-key" ]]; then
+    true
+fi
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/zfs"
+
+    local script_copy
+    script_copy=$(mktemp)
+    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys" "$script_copy"
+
+    local rc=0
+    run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
+
+    if [[ "$rc" -ne 0 ]]; then
+        test_fail "expected rc=0, got rc=$rc"
+    elif [[ ! -f "$TEST_MOUNT/keepme.txt" ]]; then
+        test_fail "/mnt/ZFSkeys/keepme.txt was removed"
+    else
+        test_pass
+    fi
+
+    rm -rf "$MOCKDIR" "$TEST_MOUNT" "$TEST_MAPPER" "$script_copy"
+}
+
+# ---------------------------------------------------------------------------
+# manual unlock: calls iscsi-add-encrypted-luns after loading keys
+# ---------------------------------------------------------------------------
+test_manual_unlock_calls_add_encrypted_luns() {
+    test_start "manual unlock calls iscsi-add-encrypted-luns without restart"
+    make_mock_env
+    touch "$TEST_MOUNT/.mounted"
+
+    cat > "$ENCRYPTED_CONF" <<'EOF'
+vm-101-disk-1:/dev/zvol/threeamigos/proxmox/vm-101-disk-1:threeamigos
+EOF
+
+    cat > "$MOCKDIR/bin/zfs" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "get" && "$2" == "keystatus" ]]; then
+    echo "unavailable"
+elif [[ "$1" == "load-key" ]]; then
+    true
+fi
+exit 0
+EOF
+    chmod +x "$MOCKDIR/bin/zfs"
+
+    local script_copy
+    script_copy=$(mktemp)
+    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys" "$script_copy"
+
+    local rc=0
+    run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
+
+    if [[ "$rc" -ne 0 ]]; then
+        test_fail "expected rc=0, got rc=$rc"
+    elif [[ ! -f "$MOCKDIR/add-encrypted-luns-called" ]]; then
+        test_fail "iscsi-add-encrypted-luns was not called"
+    else
+        test_pass
+    fi
+
+    rm -rf "$MOCKDIR" "$TEST_MOUNT" "$TEST_MAPPER" "$script_copy"
+}
+
+# ---------------------------------------------------------------------------
+# lock-zfs-keys: closes /dev/mapper/keys and unmounts /mnt/ZFSkeys
+# ---------------------------------------------------------------------------
+test_lock_zfs_keys_closes_mapper() {
+    test_start "lock-zfs-keys closes /dev/mapper/keys and unmounts /mnt/ZFSkeys"
+    make_mock_env
+    touch "$TEST_MOUNT/.mounted"
+    touch "$TEST_MAPPER/keys"
+
+    local script_copy
+    script_copy=$(mktemp)
+    prepare_script "$repo_root/08 Two-node/lock-zfs-keys" "$script_copy"
+
+    run_under_mocks "$script_copy" >/dev/null 2>&1
+
+    if [[ -e "$TEST_MAPPER/keys" ]]; then
+        test_fail "mapper still present"
+    elif [[ -f "$TEST_MOUNT/.mounted" ]]; then
+        test_fail "mount marker still present"
+    else
+        test_pass
+    fi
+
+    rm -rf "$MOCKDIR" "$TEST_MOUNT" "$TEST_MAPPER" "$script_copy"
+}
+
+# ---------------------------------------------------------------------------
+# lock-zfs-keys: leaves a different udisksd mapper alone
+# ---------------------------------------------------------------------------
+test_lock_zfs_keys_leaves_udisksd_mapper() {
+    test_start "lock-zfs-keys leaves non-/dev/mapper/keys mapper alone"
+    make_mock_env
+    touch "$TEST_MOUNT/.mounted"
+    # Simulate udisksd using a different mapper name
+    touch "$TEST_MAPPER/udisks-luks"
+
+    local script_copy
+    script_copy=$(mktemp)
+    prepare_script "$repo_root/08 Two-node/lock-zfs-keys" "$script_copy"
+
+    run_under_mocks "$script_copy" >/dev/null 2>&1
+
+    if [[ -e "$TEST_MAPPER/udisks-luks" ]]; then
+        test_pass
+    else
+        test_fail "udisks mapper was incorrectly closed"
+    fi
+
+    rm -rf "$MOCKDIR" "$TEST_MOUNT" "$TEST_MAPPER" "$script_copy"
+}
+
+# Run tests
+test_auto_unlock_exits_cleanly_when_usb_absent
+test_auto_unlock_exits_cleanly_when_keyfile_absent
+test_auto_unlock_succeeds_with_usb_and_keyfile
+test_auto_unlock_reuses_existing_mount
+test_manual_unlock_reuses_existing_mount
+test_manual_unlock_leaves_nonempty_zfskeys
+test_manual_unlock_calls_add_encrypted_luns
+test_lock_zfs_keys_closes_mapper
+test_lock_zfs_keys_leaves_udisksd_mapper
+
+test_summary

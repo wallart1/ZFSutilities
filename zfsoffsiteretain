@@ -1,0 +1,46 @@
+#!/usr/bin/bash
+
+# Prune @offsite snapshots from all pools that contain them, respecting
+# retention policies and protecting snapshots that offline offsite pools
+# still need.
+#
+# Safety is provided by zfscheckagainst: when an offsite pool is offline,
+# hold tags ("offsite-<pool>" on source snapshots) are used to verify that
+# another common snapshot exists before allowing deletion.
+#
+# Pools are discovered dynamically from existing @offsite snapshots rather
+# than hardcoded, so new pools are automatically included.
+#
+# $1    Optional parameter overrides (e.g. "dryrun='Y'").
+
+source ~/bashinit
+bashinit
+source $mydir/rootcheck
+rootcheck
+source $mydir/zfscleanup
+source $mydir/zfsoverrides
+
+if [[ $autoproceed = '' ]]; then autoproceed='Y'; fi
+if [[ $releaseholds = '' ]]; then releaseholds='Y'; fi
+
+if [[ $1 != '' ]]; then overrides "$1"; fi
+
+log_msg "INFO: zfsoffsiteretain starting."
+
+# ── Discover all online pools that contain @offsite snapshots ────────────────
+readarray -t offsite_pools < <(
+    zfs list -t snapshot -H -o name 2>/dev/null \
+    | awk '/@offsite-/ { split($0,a,"/"); print a[1] }' \
+    | sort -u
+)
+
+for pool in "${offsite_pools[@]}"; do
+    if zpool list "$pool" >/dev/null 2>&1; then
+        log_msg "INFO: Pruning offsite snapshots from $pool."
+        cleanup "$pool" '' 'offsite'
+    else
+        log_msg "INFO: Pool $pool is offline — skipping."
+    fi
+done
+
+log_msg "INFO: zfsoffsiteretain completed."

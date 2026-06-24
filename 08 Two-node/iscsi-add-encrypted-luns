@@ -1,0 +1,80 @@
+#!/bin/bash
+# iscsi-add-encrypted-luns
+# Add encrypted LUNs to the iSCSI target if they are missing (e.g., after keys loaded).
+# Called as ExecStartPost by rtslib-fb-targetctl.service (via drop-in) and also by
+# restart-iscsi-services.
+#
+# Preserves original LUN numbers by reading them from saveconfig.json (the full config).
+# This is important because the compute host's by-path device symlinks depend on
+# stable LUN indexes.
+#
+# Reads encrypted zvol list from /etc/iscsi-encrypted-luns.conf (plain text, one per line).
+# Format: backstore_name:device_path:target_short_name
+#
+# Install to: /usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns on the storage host
+
+source /usr/local/lib/node-lib.sh
+
+# iSCSI-only script — exit silently in single-node mode
+is_single_node && exit 0
+
+sleep 2  # Brief wait for device nodes to appear after zfs load-key
+
+CONF="/etc/iscsi-encrypted-luns.conf"
+SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
+
+if [[ ! -f "$CONF" ]]; then
+    exit 0
+fi
+
+# Look up the original LUN index for a backstore name from saveconfig.json.
+# Returns the index on stdout, or empty string if not found.
+lookup_lun_number() {
+    local bsname="$1"
+    [[ -f "$SAVEFILE" ]] || return
+    BSNAME="$bsname" python3 - "$SAVEFILE" << 'PYEOF' 2>/dev/null
+import json, os, sys
+name = os.environ["BSNAME"]
+with open(sys.argv[1]) as f:
+    config = json.load(f)
+for target in config.get("targets", []):
+    for tpg in target.get("tpgs", []):
+        for lun in tpg.get("luns", []):
+            if lun.get("storage_object", "").endswith("/" + name):
+                print(lun["index"])
+                exit()
+PYEOF
+}
+
+ADDED=0
+while IFS=: read -r name device target; do
+    [[ -z "$name" || "$name" == \#* ]] && continue
+
+    if [[ ! -e "$device" ]]; then
+        continue
+    fi
+
+    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
+        continue
+    fi
+
+    # Look up original LUN number to preserve stable device paths on the compute host
+    lun_num=$(lookup_lun_number "$name")
+
+    targetcli /backstores/block create "$name" "$device" >/dev/null 2>&1
+    if [[ -n "$lun_num" ]]; then
+        targetcli /iscsi/"${IQN_PREFIX}":"${target}"/tpg1/luns \
+            create /backstores/block/"$name" "$lun_num" >/dev/null 2>&1
+        echo "  ✓ Added $name (LUN $lun_num)"
+    else
+        targetcli /iscsi/"${IQN_PREFIX}":"${target}"/tpg1/luns \
+            create /backstores/block/"$name" >/dev/null 2>&1
+        echo "  ✓ Added $name (auto LUN)"
+    fi
+    ADDED=$((ADDED + 1))
+done < "$CONF"
+
+# Save only if all expected LUNs are active
+/usr/local/lib/zfsutilities/bin/safe-iscsi-save
+
+exit 0

@@ -1,0 +1,41 @@
+#!/usr/bin/bash
+# Copy a dataset
+
+source ~/bashinit
+bashinit
+
+send function {
+    source $mydir/rootcheck
+    rootcheck
+    source $mydir/zfssnapbuild
+    source $mydir/zfs-send-receive
+    source $mydir/zfsoverrides
+
+    autoproceed='N'         # "Y" = Don't ask user to approve key steps before executing them.
+
+    nextsnap=$(zfssnapbuild)
+    #nextsnap='@initial'
+    log_msg "INFO: Next snap: $nextsnap"
+    if [[ $autoproceed != 'Y' ]]; then read -p 'Press enter to continue.'; fi
+
+    sourcefs="notgiven"
+    sourcefsremovequalifiers='0'
+    destfs="notgiven"
+    includes=()
+    excludes=()
+    depth=''
+    doincrementals='Y'      # Whether to do full copies (N) or incrementals (Y).
+        # NOTE: If you need a full copy AND all the snapshots, use the zfsrestore script.
+    dointermediates='N'     # If $doincrementals = 'N', this has no effect.
+    force='N'               # Whether full copy is done even if one was already done.
+    releaseholds='N'        # If $doincrementals = 'Y', this has no effect.
+    receive_F_option=''     # "F" = Roll back modifications on destination.
+
+    if [[ $1 != '' ]]; then overrides $1; fi
+
+    send-receive
+
+    log_msg "INFO: ***  Copy completed.  ***"
+}
+if calledbybash; then send $1; fi
+

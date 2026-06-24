@@ -1,0 +1,199 @@
+#!/usr/bin/bash
+#
+# Example daily backup orchestration.
+#
+# This script is intentionally opinionated and contains example hostnames,
+# pool names, and paths from the original deployment. Before using it in a
+# new environment, edit the variables and paths below (for example,
+# `pull_rocky`, `pull_tweety`, `pull_stewie`, and the `/home/dan/` remote
+# paths) to match your own infrastructure, or use it as a template for a
+# custom daily-backup script.
+#
+# $1    (Optional) Overrides
+
+source ~/bashinit
+bashinit
+source $mydir/rootcheck
+rootcheck
+
+# Node configuration (single-node or two-node)
+: "${NODE_CONF:=/etc/zfsutilities-node.conf}"
+if [[ ! -r "$NODE_CONF" ]]; then
+    # Backward compat: fall back to legacy two-node.conf
+    if [[ -r /etc/two-node.conf ]]; then
+        NODE_CONF="/etc/two-node.conf"
+    else
+        echo "✗ Missing $NODE_CONF — install via: 10 Installers/install-single-node" >&2
+        exit 1
+    fi
+fi
+source "$NODE_CONF"
+: "${NODE_MODE:=two-node}"
+if [[ "$NODE_MODE" == "single-node" ]]; then
+    STORAGE_HOST="${THIS_HOST:-$(hostname -s)}"
+    COMPUTE_HOST="$STORAGE_HOST"
+fi
+
+source $mydir/zfssnapbuild
+source $mydir/zfs-send-receive
+source $mydir/zfsoverrides
+
+SECONDS=0
+
+_write_trailer() {
+    local rc=$?
+    if [[ -n "${ZFSUTILITIES_LOG_FILE:-}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
+        echo "# END: rc=${rc}, duration=${SECONDS}s" >> "$ZFSUTILITIES_LOG_FILE"
+    fi
+}
+trap _write_trailer EXIT
+source $mydir/zfscleanup
+source $mydir/backup-installed-programs
+source $mydir/rsync-dailybackup
+
+autoresume='Y'
+includes=()
+excludes=()
+startwith=''
+receive_F_option='F'        # See 'man zfs-receive' for an explaination of the -F option.
+                            # Used here to help ensure a faithful backups.
+releaseholds='N'
+pull_rocky='Y'
+pull_tweety='Y'
+pull_stewie='Y'
+backup_threeamigos_proxmox='Y'
+backup_NVME1='Y'
+prune='Y'
+dryrun='N'
+pre_backup_script_enabled='N'
+pre_backup_script=''
+run_installed_programs='Y'
+
+nextsnap=$(zfssnapbuild)
+
+# Overrides are any quoted sequence of shell commands separated by semicolons. This provides
+# a way to adjust parameters from the command line without having to modify the script.
+if [[ "$1" != '' ]]; then overrides "$1"; fi
+if [[ ${nextsnap:0:1} != '@' ]]; then nextsnap='@'$nextsnap; fi
+
+log_msg "INFO: New snapshot: $nextsnap."
+read -p 'Press enter to continue.'
+
+# Pre-backup script
+if [[ $pre_backup_script_enabled = 'Y' && $pre_backup_script != '' ]]; then
+    if [[ $dryrun != 'N' ]]; then
+        log_msg "INFO: Dry-run: Would run pre-backup script"
+    else
+        log_msg "INFO: Running pre-backup script..."
+        if bash -c "$pre_backup_script"; then
+            log_msg "INFO: Pre-backup script completed successfully."
+        else
+            log_msg "FATAL: Pre-backup script failed (rc=$?). Aborting backup."
+            exit 1
+        fi
+    fi
+fi
+
+push_rsync_scripts() {
+    local host="$1"
+    log_msg "INFO: Pushing rsync scripts and node config to ${host}..."
+    scp -q "$mydir/rsync-dailybackup" "$mydir/backup-installed-programs" "root@${host}:/home/dan/" \
+        || { log_msg "WARN: Failed to push scripts to ${host}"; return 1; }
+    scp -q ~/bashinit "root@${host}:/root/bashinit" \
+        || log_msg "WARN: could not push bashinit to ${host}"
+    # Push the node config so rsync-dailybackup can find STORAGE_HOST on remote hosts
+    scp -q "$NODE_CONF" "root@${host}:/etc/zfsutilities-node.conf" \
+        || log_msg "WARN: could not push node config to ${host}"
+}
+
+_run_remote_pull() {
+    local host="$1"
+    local label="$2"
+    local rc=0
+    if ! push_rsync_scripts "$host"; then
+        rc=1
+    fi
+    if [[ $rc -eq 0 && $run_installed_programs = 'Y' ]]; then
+        ssh root@"$host" /home/dan/backup-installed-programs || rc=$?
+    fi
+    if [[ $rc -eq 0 ]]; then
+        ssh root@"$host" /home/dan/rsync-dailybackup || rc=$?
+    fi
+    if [[ $rc -ne 0 ]]; then
+        log_msg "WARN: Pull from ${label} failed (rc=${rc}); continuing to next step."
+    fi
+    return 0
+}
+
+_run_local_pull() {
+    local rc=0
+    if [[ $run_installed_programs = 'Y' ]]; then
+        ( backup-installed-programs ) || rc=$?
+    fi
+    if [[ $rc -eq 0 ]]; then
+        ( rsync-dailybackup ) || rc=$?
+    fi
+    if [[ $rc -ne 0 ]]; then
+        log_msg "WARN: Local pull failed (rc=${rc}); continuing to next step."
+    fi
+    return 0
+}
+
+if [[ $pull_rocky = 'Y' ]]; then
+    log_msg "INFO: ***  Pulling rsync backup from Rocky  ***"
+    if [[ $dryrun != 'N' ]]; then
+        log_msg "INFO: Dry-run: Would push rsync scripts to rocky and run remote backup"
+    else
+        _run_remote_pull rocky "Rocky"
+    fi
+fi
+
+if [[ $pull_tweety = 'Y' && "$NODE_MODE" == "two-node" ]]; then
+    log_msg "INFO: ***  Pulling rsync backup from ${COMPUTE_HOST}  ***"
+    if [[ $dryrun != 'N' ]]; then
+        log_msg "INFO: Dry-run: Would push rsync scripts to ${COMPUTE_HOST} and run remote backup"
+    else
+        _run_remote_pull "$COMPUTE_HOST" "$COMPUTE_HOST"
+    fi
+fi
+
+if [[ $pull_stewie = 'Y' ]]; then
+    log_msg "INFO: ***  Pulling rsync backup from ${STORAGE_HOST} (local)  ***"
+    if [[ $dryrun != 'N' ]]; then
+        log_msg "INFO: Dry-run: Would run local rsync and package backup"
+    else
+        _run_local_pull
+    fi
+fi
+
+if [[ $backup_threeamigos_proxmox = 'Y' ]]; then
+    log_msg "INFO: ***  Backing up threeamigos/proxmox to fivebays/threeamigos/proxmox  ***"
+    sourcefs="threeamigos/proxmox"
+    destfs="fivebays"
+    send-receive
+fi
+
+if [[ $backup_NVME1 = 'Y' ]]; then
+    log_msg "INFO: ***  Backing up NVME1 to fivebays/NVME1  ***"
+    sourcefs="NVME1"
+    destfs="fivebays"
+    send-receive
+fi
+
+if [[ $dryrun != 'N' ]]; then
+    log_msg "INFO: Dry-run: Skipping snapfile cleanup (preserved for real run)"
+else
+    removesnapfile
+fi
+
+if [[ $prune = 'Y' ]]; then
+    if [[ $dryrun != 'N' ]]; then
+        log_msg "INFO: Dry-run: Would prune snapshots."
+    else
+        log_msg "INFO: ***  Pruning snapshots.  ***"
+        cleanup '' '' 'dailybackup'
+    fi
+fi
+
+log_msg "INFO: ***  zfsdailybackup completed.  ***"
+

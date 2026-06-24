@@ -1,0 +1,260 @@
+#!/usr/bin/bash
+# test-zfsretain — Unit tests for zfsretain
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+# =============================================================================
+# Setup mock mydir with stubbed dependencies
+# =============================================================================
+
+old_mydir="$mydir"
+mock_mydir=$(mktemp -d)
+mydir="$mock_mydir"
+
+cat > "$mock_mydir/zfsconfig" << 'EOF'
+zfsconfig_get_retention() {
+    mock_retention_policy
+}
+EOF
+
+cat > "$mock_mydir/zfsdelsnap" << 'EOF'
+delsnap() {
+    _mock_delsnap_calls+=("$1")
+    return 0
+}
+EOF
+
+cp "$old_mydir/zfsremoveleadingqualifiers" "$mock_mydir/zfsremoveleadingqualifiers"
+
+source "$old_mydir/zfsretain"
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+# Reset mocks between tests
+reset_mocks() {
+    _mock_delsnap_calls=()
+    _mock_zfs_snap_list_creation=""
+    _mock_zfs_snap_list=""
+    _mock_zfs_props=()
+    dryrun="N"
+    autoproceed="Y"
+    skipbusy="Y"
+    releaseholds="N"
+}
+
+# =============================================================================
+# Tests
+# =============================================================================
+
+test_phase1_same_day() {
+    echo "=== Phase 1: Same-day dedup ==="
+    reset_mocks
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-30T12:00-04:00-d\tSun Mar 30 12:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T12:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    retain "pool/fs" "dailybackup"
+    test_start "Removes older same-day snapshot, keeps newer"
+    if [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@dailybackup-2025-03-30T10:00-04:00-d"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2025-03-30T12:00-04:00-d"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2025-03-31T10:00-04:00-d"* ]]; then
+        test_pass
+    else
+        test_fail "Unexpected deletions: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_phase2_bucket_overflow() {
+    echo "=== Phase 2: Bucket overflow ==="
+    reset_mocks
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-31T10:00-04:00-d" "written" "1024"
+    retain "pool/fs" "dailybackup"
+    test_start "Deletes oldest daily when bucket overflows"
+    if [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@dailybackup-2025-03-28T10:00-04:00-d"* ]]; then
+        test_pass
+    else
+        test_fail "Expected oldest daily deleted, got: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_phase2_oldest_first() {
+    echo "=== Phase 2: Oldest snapshot deleted first ==="
+    reset_mocks
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "0"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-31T10:00-04:00-d" "written" "1024"
+    retain "pool/fs" "dailybackup"
+    test_start "Deletes oldest snapshot even when a newer empty snapshot exists"
+    if [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@dailybackup-2025-03-28T10:00-04:00-d"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2025-03-29T10:00-04:00-d"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2025-03-31T10:00-04:00-d"* ]]; then
+        test_pass
+    else
+        test_fail "Expected oldest non-empty snap deleted, got: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_phase2_protect_most_recent() {
+    echo "=== Phase 2: Protect most recent ==="
+    reset_mocks
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-31T10:00-04:00-d" "written" "1024"
+    retain "pool/fs" "dailybackup"
+    test_start "Never deletes the most recent snapshot in a bucket"
+    if [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2025-03-31T10:00-04:00-d"* ]]; then
+        test_pass
+    else
+        test_fail "Most recent snap was incorrectly deleted"
+    fi
+}
+
+test_skip_clone_and_c_bucket() {
+    echo "=== Skip clone and 'c' bucket ==="
+    reset_mocks
+    mock_zfs_snap_list_creation $'pool/fs@clone-2025-03-28T10:00-04:00-c\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@clone-2025-03-28T10:00-04:00-c\npool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
+    retain "pool/fs" "dailybackup"
+    test_start "Skips clone label and bucket 'c' snapshots"
+    if [[ "${_mock_delsnap_calls[*]}" != *"clone"* ]]; then
+        test_pass
+    else
+        test_fail "Clone snapshot was incorrectly deleted"
+    fi
+}
+
+test_phase2_old_nonempty_weekly() {
+    echo "=== Phase 2: Old non-empty weekly deleted before newer empty weekly ==="
+    reset_mocks
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2026-02-28T09:18-05:00-w\tSat Feb 28 09:18 2026\npool/fs@dailybackup-2026-06-07T07:48-04:00-w\tSun Jun  7 07:48 2026\npool/fs@dailybackup-2026-06-14T07:48-04:00-w\tSun Jun 14 07:48 2026'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2026-02-28T09:18-05:00-w\npool/fs@dailybackup-2026-06-07T07:48-04:00-w\npool/fs@dailybackup-2026-06-14T07:48-04:00-w'
+    mock_zfs_prop "pool/fs@dailybackup-2026-02-28T09:18-05:00-w" "written" "102400"
+    mock_zfs_prop "pool/fs@dailybackup-2026-06-07T07:48-04:00-w" "written" "0"
+    mock_zfs_prop "pool/fs@dailybackup-2026-06-14T07:48-04:00-w" "written" "0"
+    retain "pool/fs" "dailybackup"
+    test_start "Old non-empty weekly is deleted; most recent weekly is protected"
+    if [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@dailybackup-2026-02-28T09:18-05:00-w"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2026-06-14T07:48-04:00-w"* ]]; then
+        test_pass
+    else
+        test_fail "Expected old weekly deleted, got: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_phase2_empty_tag_logged() {
+    echo "=== Phase 2: Empty snapshot log tag ==="
+    reset_mocks
+    local _logfile
+    _logfile=$(mktemp)
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "0"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-31T10:00-04:00-d" "written" "1024"
+    msg_level="INFO"
+    retain "pool/fs" "dailybackup" 2>"$_logfile"
+    msg_level="FATAL"
+    test_start "Logs (empty) tag when deleting an empty snapshot"
+    if grep -q -- "--- Bucket (empty)" "$_logfile"; then
+        test_pass
+    else
+        test_fail "Expected '(empty)' tag in log, got: $(cat "$_logfile")"
+    fi
+    rm -f "$_logfile"
+}
+
+test_phase2_retain_zero_deletes_most_recent() {
+    echo "=== Phase 2: retain=0 deletes most recent ==="
+    reset_mocks
+    mock_retention_policy() {
+        echo "bktname[0]='d'; bktretain[0]=0; minage[0]=0"
+    }
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d'
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
+    retain "pool/fs" "dailybackup"
+    test_start "Deletes all daily snapshots including the most recent when retain=0"
+    if [[ "${#_mock_delsnap_calls[@]}" -eq 3 ]] \
+        && [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@dailybackup-2025-03-30T10:00-04:00-d"* ]]; then
+        test_pass
+    else
+        test_fail "Expected all three daily snaps deleted, got: ${_mock_delsnap_calls[*]}"
+    fi
+    mock_retention_policy() {
+        echo "bktname[0]='d'; bktretain[0]=3; minage[0]=0"
+        echo "bktname[1]='w'; bktretain[1]=2; minage[1]=7"
+        echo "bktname[2]='m'; bktretain[2]=2; minage[2]=30"
+    }
+}
+
+test_phase0_offsite_monthly() {
+    echo "=== Phase 0: Offsite monthly dedup ==="
+    reset_mocks
+    mock_zfs_snap_list_creation $'pool/fs@offsite-2025-03-15T10:00-04:00-s\tSun Mar 15 10:00 2025\npool/fs@offsite-2025-03-20T10:00-04:00-s\tThu Mar 20 10:00 2025\npool/fs@offsite-2025-04-01T10:00-04:00-s\tTue Apr  1 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@offsite-2025-03-15T10:00-04:00-s\npool/fs@offsite-2025-03-20T10:00-04:00-s\npool/fs@offsite-2025-04-01T10:00-04:00-s'
+    retain "pool/fs" "offsite"
+    test_start "Keeps only most recent offsite per month"
+    if [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@offsite-2025-03-15T10:00-04:00-s"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@offsite-2025-03-20T10:00-04:00-s"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@offsite-2025-04-01T10:00-04:00-s"* ]]; then
+        test_pass
+    else
+        test_fail "Unexpected deletions: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_wrong_label_skipped() {
+    echo "=== Wrong label skipped ==="
+    reset_mocks
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@weeklybackup-2025-03-28T10:00-04:00-w\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@weeklybackup-2025-03-28T10:00-04:00-w\npool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
+    retain "pool/fs" "dailybackup"
+    test_start "Snapshots with different label are ignored"
+    if [[ "${_mock_delsnap_calls[*]}" != *"weeklybackup"* ]]; then
+        test_pass
+    else
+        test_fail "Weekly snapshot was incorrectly deleted"
+    fi
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+
+main() {
+    test_phase1_same_day
+    test_phase2_bucket_overflow
+    test_phase2_oldest_first
+    test_phase2_protect_most_recent
+    test_phase2_old_nonempty_weekly
+    test_phase2_empty_tag_logged
+    test_phase2_retain_zero_deletes_most_recent
+    test_skip_clone_and_c_bucket
+    test_phase0_offsite_monthly
+    test_wrong_label_skipped
+    mydir="$old_mydir"
+    rm -rf "$mock_mydir"
+    teardown_test_env
+    test_summary
+}
+
+main "$@"

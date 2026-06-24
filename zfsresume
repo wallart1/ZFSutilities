@@ -1,0 +1,34 @@
+#!/usr/bin/bash
+# Resume an interrupted ZFS send/receive operation.
+# $1    (Required) Fully-qualified name of ZFS dataset that has a receive_resume_token.
+
+set -x
+source ~/bashinit
+bashinit
+if [[ $1 = '' ]]; then
+    log_msg 'FATAL: A resumable destination dataset must be given in $1.'
+    source $mydir/bashreturn 8
+else
+    resumeds=$1
+    # Inline: list datasets with a non-empty receive_resume_token and extract the token
+    if ! resumetoken=$(zfs list -Hrt filesystem,volume -o name "$resumeds" \
+        | xargs -n1 zfs get -H receive_resume_token \
+        | awk '$3 != "-" {print $1 "\t" $3}' | awk '{print $2}'); then
+        log_msg "FATAL: Unable to retrive receive_resume_token for $resumeds."
+        source $mydir/bashreturn 8
+    else
+        if ! resumedata=$(zfs send -nP -t $resumetoken 2>&1); then
+            if [[ $resumedata == *"no longer exists"* ]] \
+              || [[ $resumedata == *"@--head--"* ]] \
+              || [[ $resumedata == *"Invalid argument"* ]]; then
+                log_msg "WARN: Resume token is invalid or stale. Deleting resume token."
+                log_msg "WARN: $resumedata"
+                zfs receive -A "$resumeds"
+            else
+                log_msg "INFO: Resume token for $resumeds seems valid."
+                log_msg "INFO: $resumedata"
+            fi
+        fi
+    fi
+fi
+        

@@ -1,0 +1,210 @@
+#!/usr/bin/bash
+# zfs-diagnose-busy
+# Diagnose why a ZFS dataset or snapshot is busy / cannot be destroyed.
+#
+# Source this file (do not execute directly) and call:
+#   diagnose_dataset_busy <dataset_or_snapshot> [stderr_from_destroy]
+#
+# Checks performed:
+#   - Clone dependents (snapshots)
+#   - ZFS holds (snapshots)
+#   - Mounted / open files
+#   - Active send / receive
+#   - Bookmarks referencing the snapshot
+#   - iSCSI LUN exposure (zvols)
+#   - Running VM using the zvol
+#   - NFS / SMB shares
+
+function diagnose_dataset_busy {
+    local target="$1"
+    local destroy_stderr="${2:-}"
+    local found_cause=false
+
+    # Log the raw stderr from the failed destroy if provided
+    if [[ -n "$destroy_stderr" ]]; then
+        log_msg "WARN: ZFS reported: ${destroy_stderr}"
+    fi
+
+    log_msg "WARN: Diagnosing why ${target} cannot be destroyed..."
+
+    # ------------------------------------------------------------------
+    # Determine if target is a snapshot
+    # ------------------------------------------------------------------
+    local is_snapshot=false
+    if [[ "$target" == *"@"* ]]; then
+        is_snapshot=true
+    fi
+
+    # ------------------------------------------------------------------
+    # 1. Clone dependents
+    # ------------------------------------------------------------------
+    if [[ "$is_snapshot" == true ]]; then
+        local clones
+        clones=$(zfs list -H -o clones "$target" 2>/dev/null)
+        if [[ -n "$clones" && "$clones" != "-" ]]; then
+            log_msg "WARN:   → Snapshot has clone dependents: ${clones}"
+            log_msg "WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
+            found_cause=true
+        fi
+    else
+        # Dataset: check if any snapshot in its tree has clones
+        local clone_snaps
+        clone_snaps=$(zfs list -H -t snapshot -o clones -r "$target" 2>/dev/null | grep -v '^-$' || true)
+        if [[ -n "$clone_snaps" ]]; then
+            log_msg "WARN:   → One or more snapshots of ${target} have clone dependents."
+            log_msg "WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
+            found_cause=true
+        fi
+    fi
+
+    # ------------------------------------------------------------------
+    # 2. ZFS holds
+    # ------------------------------------------------------------------
+    if [[ "$is_snapshot" == true ]]; then
+        local holds
+        holds=$(zfs holds -H "$target" 2>/dev/null)
+        if [[ -n "$holds" ]]; then
+            local hold_tags
+            hold_tags=$(echo "$holds" | awk '{print $2}' | sort -u | tr '\n' ' ')
+            log_msg "WARN:   → Snapshot has holds: ${hold_tags}"
+            log_msg "WARN:     Use 'releaseholds' option or 'zfs release <tag> ${target}'."
+            found_cause=true
+        fi
+    fi
+
+    # ------------------------------------------------------------------
+    # 3. Mounted / open files
+    # ------------------------------------------------------------------
+    local mounted
+    mounted=$(zfs get -H -o value mounted "$target" 2>/dev/null)
+    if [[ "$mounted" == "yes" ]]; then
+        local mountpoint
+        mountpoint=$(zfs get -H -o value mountpoint "$target" 2>/dev/null)
+        log_msg "WARN:   → Dataset is mounted at ${mountpoint}."
+
+        local procs=""
+        if command -v fuser >/dev/null 2>&1; then
+            procs=$(fuser -m "$mountpoint" 2>/dev/null | sed 's/.*://' | tr -s ' ' '\n' | while read -r pid; do
+                [[ -n "$pid" ]] || continue
+                ps -p "$pid" -o comm= 2>/dev/null
+            done | sort -u | tr '\n' ' ' | sed 's/ *$//')
+        fi
+        if [[ -z "$procs" ]] && command -v lsof >/dev/null 2>&1; then
+            procs=$(lsof +D "$mountpoint" 2>/dev/null | tail -n +2 | awk '{print $1}' | sort -u | tr '\n' ' ' | sed 's/ *$//')
+        fi
+
+        if [[ -n "$procs" ]]; then
+            log_msg "WARN:     Open processes: ${procs}"
+            log_msg "WARN:     Stop the processes or unmount before destroying."
+        else
+            log_msg "WARN:     No open processes detected (try unmounting first)."
+        fi
+        found_cause=true
+    fi
+
+    # ------------------------------------------------------------------
+    # 4. Active send / receive
+    # ------------------------------------------------------------------
+    local recv_token
+    recv_token=$(zfs get -H -o value receive_resume_token "$target" 2>/dev/null)
+    if [[ -n "$recv_token" && "$recv_token" != "-" ]]; then
+        log_msg "WARN:   → Dataset has an active or interrupted receive (resume token present)."
+        log_msg "WARN:     Abort with 'zfs receive -A ${target}' or allow it to complete."
+        found_cause=true
+    fi
+
+    # Check for ongoing sends more broadly by looking at any send streams
+    # involving this dataset (best-effort, not foolproof)
+    if pgrep -f "zfs send.*${target}" >/dev/null 2>&1; then
+        log_msg "WARN:   → An active 'zfs send' involving ${target} is running."
+        log_msg "WARN:     Wait for it to complete before destroying."
+        found_cause=true
+    fi
+
+    # ------------------------------------------------------------------
+    # 5. Bookmarks
+    # ------------------------------------------------------------------
+    if [[ "$is_snapshot" == true ]]; then
+        local bmarks
+        bmarks=$(zfs list -t bookmark -H -o name -r "${target%%@*}" 2>/dev/null | grep "#${target#*@}" || true)
+        if [[ -n "$bmarks" ]]; then
+            log_msg "WARN:   → Snapshot is referenced by bookmark(s): ${bmarks}"
+            log_msg "WARN:     Destroy the bookmark(s) first with 'zfs destroy <bookmark>'."
+            found_cause=true
+        fi
+    fi
+
+    # ------------------------------------------------------------------
+    # 6. iSCSI LUN exposure (zvols only)
+    # ------------------------------------------------------------------
+    local bsname="${target##*/}"
+    if [[ "$bsname" =~ ^vm-[0-9]+-disk-[0-9]+$ ]]; then
+        if command -v targetcli >/dev/null 2>&1; then
+            if targetcli /backstores/block ls 2>/dev/null | grep -q " ${bsname} "; then
+                local lun_info=""
+                local t
+                while IFS= read -r t; do
+                    local lun_num
+                    lun_num=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
+                        | grep "$bsname" | grep -oP 'lun\K[0-9]+' | head -1)
+                    if [[ -n "$lun_num" ]]; then
+                        lun_info="${t} (LUN ${lun_num})"
+                        break
+                    fi
+                done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+')
+
+                if [[ -n "$lun_info" ]]; then
+                    log_msg "WARN:   → Zvol is exposed as an iSCSI LUN on ${lun_info}."
+                else
+                    log_msg "WARN:   → Zvol has an iSCSI backstore (${bsname}) but no LUN mapping."
+                fi
+                log_msg "WARN:     Use 'remove-vm-disk' or targetcli to tear down iSCSI first."
+                found_cause=true
+            fi
+        fi
+    fi
+
+    # ------------------------------------------------------------------
+    # 7. Running VM using the zvol
+    # ------------------------------------------------------------------
+    if [[ "$bsname" =~ ^vm-([0-9]+)-disk-[0-9]+$ ]]; then
+        local vmid="${BASH_REMATCH[1]}"
+        if command -v qm >/dev/null 2>&1; then
+            local vm_status
+            vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
+            if [[ "$vm_status" == "running" ]]; then
+                log_msg "WARN:   → VM ${vmid} is RUNNING and may be using ${target}."
+                log_msg "WARN:     Stop the VM before destroying this zvol."
+                found_cause=true
+            fi
+        fi
+    fi
+
+    # ------------------------------------------------------------------
+    # 8. NFS / SMB shares
+    # ------------------------------------------------------------------
+    local sharenfs sharesmb
+    sharenfs=$(zfs get -H -o value sharenfs "$target" 2>/dev/null)
+    sharesmb=$(zfs get -H -o value sharesmb "$target" 2>/dev/null)
+    if [[ -n "$sharenfs" && "$sharenfs" != "off" && "$sharenfs" != "-" ]]; then
+        log_msg "WARN:   → Dataset is shared via NFS (${sharenfs})."
+        log_msg "WARN:     Unshare with 'zfs set sharenfs=off ${target}' before destroying."
+        found_cause=true
+    fi
+    if [[ -n "$sharesmb" && "$sharesmb" != "off" && "$sharesmb" != "-" ]]; then
+        log_msg "WARN:   → Dataset is shared via SMB (${sharesmb})."
+        log_msg "WARN:     Unshare with 'zfs set sharesmb=off ${target}' before destroying."
+        found_cause=true
+    fi
+
+    # ------------------------------------------------------------------
+    # Fallback
+    # ------------------------------------------------------------------
+    if [[ "$found_cause" == false ]]; then
+        log_msg "WARN:   → No specific cause identified. Common remaining reasons:"
+        log_msg "WARN:       • The dataset is referenced by a child snapshot that is busy."
+        log_msg "WARN:       • A process has the dataset open through a different path."
+        log_msg "WARN:       • The pool is undergoing a scrub or resilver."
+        log_msg "WARN:     Try: fuser -m <mountpoint>  or  lsof +D <mountpoint>"
+    fi
+}

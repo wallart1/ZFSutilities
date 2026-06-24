@@ -1,0 +1,384 @@
+#!/bin/bash
+# deploy-version [version] [group ...]
+# Deploys the current repository state as a new versioned installation.
+#
+# Run from the repository root. Copies scripts and project directories into
+# /usr/local/lib/zfsutilities/versions/<version>/. Does not touch active
+# production wiring — run switch-version for that.
+#
+# Remote deployment targets are read from /etc/zfsutilities-deploy.conf
+# (see DEPLOY_GROUP_* variables below). If that file does not exist, the
+# script falls back to the legacy two-node node-config behaviour.
+
+set -e
+
+MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+
+# ------------------------------------------------------------------
+# Argument parsing
+# ------------------------------------------------------------------
+VERSION=""
+DEPLOY_GROUPS=()
+
+usage() {
+    echo "Usage: deploy-version [version] [group ...]"
+    echo ""
+    echo "  version  Version string (default: read from ./VERSION)"
+    echo "  group    One or more deployment-group names defined in"
+    echo "           /etc/zfsutilities-deploy.conf. If omitted, all"
+    echo "           groups are deployed."
+    echo ""
+    echo "Examples:"
+    echo "  sudo ./deploy-version                  # deploy current VERSION to all groups"
+    echo "  sudo ./deploy-version 1.2.0            # deploy specific version to all groups"
+    echo "  sudo ./deploy-version 1.2.0 production # deploy only 'production' group"
+    echo ""
+    if [[ -f /etc/zfsutilities-deploy.conf ]]; then
+        echo "Available groups from /etc/zfsutilities-deploy.conf:"
+        # shellcheck source=/dev/null
+        source /etc/zfsutilities-deploy.conf
+        local var
+        for var in ${!DEPLOY_GROUP_*}; do
+            local name="${var#DEPLOY_GROUP_}"
+            local hosts="${!var}"
+            echo "  $name -> $hosts"
+        done
+    else
+        echo "No /etc/zfsutilities-deploy.conf found."
+        echo "Remote deployment falls back to legacy node-config behaviour."
+    fi
+    exit 0
+}
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+
+# Guard: must be run from the repo root, not a deployed path
+if [[ ! -d "$MYDIR/08 Two-node" ]]; then
+    die "deploy-version must be run from the repository root.\n" \
+        "  Wrong:  sudo deploy-version  (runs from deployed PATH)\n" \
+        "  Right:  cd /path/to/zfsutilities-dev && sudo ./deploy-version"
+fi
+
+# ------------------------------------------------------------------
+# Argument parsing
+# ------------------------------------------------------------------
+for arg in "$@"; do
+    if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+        usage
+    fi
+done
+
+if [[ $# -eq 0 ]]; then
+    VERSION=$(cat "$MYDIR/VERSION")
+elif [[ $# -ge 1 ]]; then
+    VERSION="$1"
+    shift
+    DEPLOY_GROUPS=("$@")
+fi
+
+VERSION_BASE="/usr/local/lib/zfsutilities"
+VERSION_DIR="$VERSION_BASE/versions/$VERSION"
+
+# ------------------------------------------------------------------
+# Load deployment-group configuration
+# ------------------------------------------------------------------
+DEPLOY_CONF="/etc/zfsutilities-deploy.conf"
+DEPLOY_GROUP_NAMES=()
+DEPLOY_GROUP_HOSTS=()
+
+if [[ -f "$DEPLOY_CONF" ]]; then
+    # shellcheck source=/dev/null
+    source "$DEPLOY_CONF"
+    # Collect all defined DEPLOY_GROUP_* variables
+    for var in ${!DEPLOY_GROUP_*}; do
+        # Skip our own internal arrays — they match the same prefix
+        [[ "$var" == "DEPLOY_GROUP_HOSTS" || "$var" == "DEPLOY_GROUP_NAMES" ]] && continue
+        DEPLOY_GROUP_NAMES+=("${var#DEPLOY_GROUP_}")
+        DEPLOY_GROUP_HOSTS+=("${!var}")
+    done
+fi
+
+# ------------------------------------------------------------------
+# Load node configuration (legacy fallback)
+# ------------------------------------------------------------------
+NODE_MODE="single-node"
+STORAGE_HOST=""
+COMPUTE_HOST=""
+
+if [[ -f /etc/zfsutilities-node.conf ]]; then
+    source /etc/zfsutilities-node.conf
+elif [[ -f /etc/two-node.conf ]]; then
+    source /etc/two-node.conf
+    NODE_MODE="two-node"
+fi
+
+MY_HOST=$(hostname -s)
+
+# ------------------------------------------------------------------
+# Define file sets to deploy
+# ------------------------------------------------------------------
+TWO_NODE_SCRIPTS=(
+    new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk
+    rescan-storage show-lun-map clone-vm move-vm-disk
+    safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns
+    unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys
+    install-scripts
+)
+
+CLONE_SCRIPTS=(zfsclone-vm promote-vm-clone retire-vm)
+INSTALLERS=(install-single-node install-two-node)
+VERSIONING_SCRIPTS=(deploy-version switch-version uninstall-version)
+
+# Directories to copy into the versioned deployment (source name -> dest name)
+DEPLOY_DIRS=(
+    "06 Docs"
+    "07 GTK + Python"
+    "08 Two-node"
+    "09 ZFS clone support"
+    "10 Installers"
+    "Cache-warm"
+    "Watchall"
+)
+
+# Directories to exclude entirely (not copied to versioned dir)
+EXCLUDE_TOP_DIRS=(
+    ".git"
+    ".claude"
+    "00 Active Development"
+    "02 History"
+    "03 Stash"
+    "04 Old and Obsolete"
+    "05 ZFS IO rate tuning"
+)
+
+# ------------------------------------------------------------------
+# Helper: verify critical scripts were deployed
+# ------------------------------------------------------------------
+validate_critical_scripts() {
+    local missing=0
+    for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive; do
+        if [[ ! -f "$VERSION_DIR/bin/$script" ]]; then
+            echo "  Missing: $VERSION_DIR/bin/$script" >&2
+            ((++missing))
+        fi
+    done
+    if [[ $missing -gt 0 ]]; then
+        echo "  ⚠ WARNING: $missing critical script(s) missing from deployment." >&2
+        echo "             Ensure deploy-version is run from the repository root." >&2
+    fi
+}
+
+# ------------------------------------------------------------------
+# Deploy to a single host
+# ------------------------------------------------------------------
+deploy_to_host() {
+    local host_label="$1"
+
+    echo ""
+    echo "=== Deploying to $host_label ==="
+
+    # Create version directory structure
+    mkdir -p "$VERSION_DIR/bin" "$VERSION_DIR/lib"
+
+    # Symlink Two-node scripts into bin/ (canonical copy stays in 08 Two-node/)
+    for script in "${TWO_NODE_SCRIPTS[@]}"; do
+        src="$MYDIR/08 Two-node/$script"
+        if [[ -f "$src" ]]; then
+            ln -sfn "../08 Two-node/$script" "$VERSION_DIR/bin/$script"
+        else
+            echo "  ⚠ Missing: $src"
+        fi
+    done
+
+    # Symlink clone support scripts into bin/
+    for script in "${CLONE_SCRIPTS[@]}"; do
+        src="$MYDIR/09 ZFS clone support/$script"
+        if [[ -f "$src" ]]; then
+            ln -sfn "../09 ZFS clone support/$script" "$VERSION_DIR/bin/$script"
+        fi
+    done
+
+    # Symlink installers into bin/
+    for script in "${INSTALLERS[@]}"; do
+        src="$MYDIR/10 Installers/$script"
+        if [[ -f "$src" ]]; then
+            ln -sfn "../10 Installers/$script" "$VERSION_DIR/bin/$script"
+        fi
+    done
+
+    # Copy root-level scripts (executable OR shebang)
+    for script in "$MYDIR/"*; do
+        [[ -f "$script" ]] || continue
+        local name
+        name=$(basename "$script")
+        [[ "$name" == *.md ]] && continue
+        [[ "$name" == .gitignore ]] && continue
+        [[ "$name" == installed-programs ]] && continue
+        [[ "$name" == PROMPT* ]] && continue
+        [[ "$name" == VERSION ]] && continue
+        # Accept executable files OR files with a shebang
+        if [[ -x "$script" ]]; then
+            install -m 0755 "$script" "$VERSION_DIR/bin/"
+            continue
+        fi
+        if head -c2 "$script" | grep -q '^#!'; then
+            install -m 0755 "$script" "$VERSION_DIR/bin/"
+        fi
+    done
+
+    # Copy versioning scripts
+    for script in "${VERSIONING_SCRIPTS[@]}"; do
+        src="$MYDIR/$script"
+        if [[ -f "$src" ]]; then
+            install -m 0755 "$src" "$VERSION_DIR/bin/"
+        fi
+    done
+
+    # Symlink GUI launcher to Python script (replaces old bash wrapper)
+    rm -f "$VERSION_DIR/bin/zfsutilities-gui"
+    ln -sfn "../07 GTK + Python/zfsutilities_gui.py" "$VERSION_DIR/bin/zfsutilities-gui"
+
+    # Symlink documentation-viewer launcher to Python script
+    rm -f "$VERSION_DIR/bin/zfsutilities-docs"
+    ln -sfn "../07 GTK + Python/docs_viewer.py" "$VERSION_DIR/bin/zfsutilities-docs"
+
+    # Copy VERSION file for reference
+    if [[ -f "$MYDIR/VERSION" ]]; then
+        install -m 0644 "$MYDIR/VERSION" "$VERSION_DIR/"
+    fi
+
+    # Copy libraries
+    if [[ -f "$MYDIR/08 Two-node/node-lib.sh" ]]; then
+        install -m 0644 "$MYDIR/08 Two-node/node-lib.sh" "$VERSION_DIR/lib/"
+    fi
+    if [[ -f "$MYDIR/08 Two-node/two-node-lib.sh" ]]; then
+        install -m 0644 "$MYDIR/08 Two-node/two-node-lib.sh" "$VERSION_DIR/lib/"
+    fi
+
+    # Copy project subdirectories
+    for dir in "${DEPLOY_DIRS[@]}"; do
+        src="$MYDIR/$dir"
+        if [[ -d "$src" ]]; then
+            local dest_name
+            dest_name=$(basename "$dir")
+            # Use rsync to preserve structure and exclude ephemeral files
+            rsync -a --delete \
+                --exclude='__pycache__/' \
+                --exclude='*.pyc' \
+                --exclude='.nfs*' \
+                "$src/" "$VERSION_DIR/$dest_name/"
+        fi
+    done
+
+    # Rebuild static documentation site so fallback is version-correct
+    if command -v mkdocs &>/dev/null && [[ -f "$VERSION_DIR/06 Docs/mkdocs.yml" ]]; then
+        (cd "$VERSION_DIR/06 Docs" && mkdocs build >/dev/null 2>&1) || \
+            echo "  ⚠ Documentation build failed (static fallback may be stale)"
+    fi
+
+    # Verify critical root-level scripts were copied
+    validate_critical_scripts
+
+    echo "  ✓ $host_label complete"
+}
+
+# ------------------------------------------------------------------
+# Helper: sync version dir to a remote host (no wiring — run switch-version
+# on the remote host to wire the version into active production).
+# ------------------------------------------------------------------
+_sync_to_host() {
+    local host="$1"
+
+    [[ "$MY_HOST" == "$host" ]] && return
+
+    echo ""
+    echo "Syncing to $host..."
+    local ssh_ctrl="/tmp/.deploy-version-ssh-${host}-$$"
+    local ssh_opts="-o ControlMaster=auto -o ControlPath=${ssh_ctrl} -o ControlPersist=60"
+
+    ssh $ssh_opts root@"$host" "mkdir -p '$VERSION_DIR'"
+    rsync -az --delete -e "ssh $ssh_opts" "$VERSION_DIR/" "root@$host:$VERSION_DIR/"
+    ssh -O exit -o ControlPath="$ssh_ctrl" root@"$host" 2>/dev/null || true
+    rm -f "$ssh_ctrl"
+    echo "  ✓ $host files synced (run switch-version on $host to activate)"
+}
+
+# ------------------------------------------------------------------
+# Main: local deployment
+# ------------------------------------------------------------------
+echo "=== deploy-version ==="
+echo "  Version: $VERSION"
+echo "  Source:  $MYDIR"
+echo ""
+
+deploy_to_host "local host ($MY_HOST)"
+
+# ------------------------------------------------------------------
+# Remote deployments
+# ------------------------------------------------------------------
+REMOTE_HOSTS=()
+
+if [[ ${#DEPLOY_GROUP_NAMES[@]} -gt 0 ]]; then
+    # --- Modern: deploy.conf groups ---
+    selected_indices=()
+
+    if [[ ${#DEPLOY_GROUPS[@]} -gt 0 ]]; then
+        # User specified one or more groups on the command line
+        for group in "${DEPLOY_GROUPS[@]}"; do
+            found=0
+            for i in "${!DEPLOY_GROUP_NAMES[@]}"; do
+                if [[ "${DEPLOY_GROUP_NAMES[$i]}" == "$group" ]]; then
+                    selected_indices+=("$i")
+                    found=1
+                    break
+                fi
+            done
+            if [[ $found -eq 0 ]]; then
+                die "Unknown deployment group: '$group'. Run with --help to list groups."
+            fi
+        done
+    else
+        # No groups specified — deploy to all groups
+        for i in "${!DEPLOY_GROUP_NAMES[@]}"; do
+            selected_indices+=("$i")
+        done
+    fi
+
+    # Collect unique hosts from selected groups
+    for i in "${selected_indices[@]}"; do
+        for host in ${DEPLOY_GROUP_HOSTS[$i]}; do
+            dup=0
+            for h in "${REMOTE_HOSTS[@]}"; do
+                if [[ "$h" == "$host" ]]; then
+                    dup=1
+                    break
+                fi
+            done
+            [[ $dup -eq 0 ]] && REMOTE_HOSTS+=("$host")
+        done
+    done
+else
+    # --- Legacy: node-config fallback ---
+    if [[ "$NODE_MODE" == "two-node" ]]; then
+        [[ -n "$STORAGE_HOST" && "$MY_HOST" != "$STORAGE_HOST" ]] && REMOTE_HOSTS+=("$STORAGE_HOST")
+        [[ -n "$COMPUTE_HOST" && "$MY_HOST" != "$COMPUTE_HOST" ]] && REMOTE_HOSTS+=("$COMPUTE_HOST")
+    fi
+fi
+
+for host in "${REMOTE_HOSTS[@]}"; do
+    _sync_to_host "$host"
+done
+
+echo ""
+echo "=== Done ==="
+echo "  Deployed: $VERSION"
+echo "  Location: $VERSION_DIR"
+echo ""
+echo "  Scripts are available via PATH: /usr/local/lib/zfsutilities/bin"
+echo "  To activate:   sudo switch-version $VERSION"
+echo "  To list all:   sudo switch-version --list"

@@ -1,0 +1,26 @@
+#!/usr/bin/bash
+# Find an online offsite pool.
+
+source ~/bashinit
+
+function findoffsitepool {
+
+    bashinit
+    local offsitepools=('z22tb' 'z40tb')
+    local onlinepools
+    local onlineoffsitepool=''
+    local onlinepool
+    local offsitepool
+
+    readarray -t onlinepools < <(zpool list -Ho name)
+    for onlinepool in "${onlinepools[@]}"; do
+        for offsitepool in "${offsitepools[@]}"; do
+            if [[ $onlinepool = $offsitepool ]]; then
+                onlineoffsitepool="$onlinepool"
+                break 2
+            fi
+        done
+    done
+    echo $onlineoffsitepool
+}
+if calledbybash; then findoffsitepool; fi

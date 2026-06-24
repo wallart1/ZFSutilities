@@ -1,0 +1,151 @@
+#!/bin/bash
+# unlock-zfs-keys
+# Manual LUKS unlock and ZFS key loading.
+# Adds encrypted LUNs to the iSCSI target without restarting it, so running
+# VMs are not disconnected.
+# Usage: unlock-zfs-keys [/dev/sdX1]
+#
+# Reads encrypted zvol list from /etc/iscsi-encrypted-luns.conf (plain text, one per line).
+# Format: backstore_name:device_path:target_short_name
+# The dataset name is derived from device_path by stripping /dev/zvol/.
+#
+# Keys are expected at /mnt/ZFSkeys. If /mnt/ZFSkeys is already a mount point
+# (e.g. Cinnamon/udisksd auto-mounted the USB), it is reused. If it contains
+# files already, it is left untouched and keys are loaded from there.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/unlock-zfs-keys on the storage host
+
+set -e
+
+CONF="/etc/iscsi-encrypted-luns.conf"
+KEY_MOUNT="/mnt/ZFSkeys"
+
+echo "=== ZFS Keys USB Unlock Script ==="
+
+# ---------------------------------------------------------------------------
+# Determine whether /mnt/ZFSkeys is already usable.
+# ---------------------------------------------------------------------------
+keys_already_available=false
+if mountpoint -q "$KEY_MOUNT" 2>/dev/null; then
+    echo "Using already-mounted keys at $KEY_MOUNT"
+    keys_already_available=true
+elif [[ -d "$KEY_MOUNT" ]] && [[ -n "$(ls -A "$KEY_MOUNT" 2>/dev/null)" ]]; then
+    echo "$KEY_MOUNT already contains files; leaving them untouched and attempting to load keys"
+    keys_already_available=true
+fi
+
+# ---------------------------------------------------------------------------
+# If not already available, unlock the LUKS USB device and mount it.
+# ---------------------------------------------------------------------------
+if [[ "$keys_already_available" != true ]]; then
+    # Find or use specified device
+    if [[ -n "$1" ]]; then
+        DEVICE="$1"
+        echo "Using specified device: $DEVICE"
+    else
+        DEVICE=$(blkid -t PARTLABEL=ZFSkeys -o device 2>/dev/null | head -1 || true)
+        if [[ -z "$DEVICE" ]]; then
+            echo "ERROR: No USB drive found with PARTLABEL=ZFSkeys"
+            echo "Plug in the key USB drive and try again, or specify device manually: unlock-zfs-keys /dev/sdX1"
+            exit 1
+        fi
+        echo "Found key USB: $DEVICE"
+    fi
+
+    [[ -b "$DEVICE" ]] || { echo "ERROR: Device $DEVICE is not a block device"; exit 1; }
+
+    # Unlock LUKS partition
+    if [[ -e /dev/mapper/keys ]]; then
+        echo "LUKS volume already unlocked at /dev/mapper/keys"
+    else
+        echo "Unlocking LUKS partition..."
+        if [[ -f /root/.luks-key ]]; then
+            cryptsetup luksOpen "$DEVICE" keys --key-file /root/.luks-key
+        else
+            cryptsetup luksOpen "$DEVICE" keys
+        fi
+        echo "Unlocked successfully"
+    fi
+
+    # Prepare mount point
+    if [[ -L "$KEY_MOUNT" ]]; then
+        rm "$KEY_MOUNT"
+        echo "Removed legacy symlink $KEY_MOUNT"
+    fi
+    mkdir -p "$KEY_MOUNT"
+
+    # Mount
+    if ! mountpoint -q "$KEY_MOUNT"; then
+        mount LABEL=ZFSkeys "$KEY_MOUNT"
+        echo "Mounted at $KEY_MOUNT"
+    else
+        echo "Already mounted at $KEY_MOUNT"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Load ZFS encryption keys
+# ---------------------------------------------------------------------------
+echo ""
+echo "Loading ZFS encryption keys..."
+
+LOADED=0
+ALREADY_LOADED=0
+FAILED=0
+
+if [[ ! -f "$CONF" ]]; then
+    echo "  No encrypted LUNs config at $CONF — nothing to load"
+else
+    while IFS=: read -r name device target; do
+        [[ -z "$name" || "$name" == \#* ]] && continue
+        # Derive dataset name from device path: /dev/zvol/pool/path → pool/path
+        dataset="${device#/dev/zvol/}"
+        STATUS=$(zfs get keystatus "$dataset" -H -o value 2>/dev/null || echo "unknown")
+        if [[ "$STATUS" == "available" ]]; then
+            echo "  ✓ $dataset — already loaded"
+            ALREADY_LOADED=$((ALREADY_LOADED + 1))
+        elif [[ "$STATUS" == "unavailable" ]]; then
+            echo "  → Loading $dataset..."
+            if zfs load-key "$dataset" 2>/dev/null; then
+                echo "    ✓ Loaded"
+                LOADED=$((LOADED + 1))
+            else
+                echo "    ✗ Failed"
+                FAILED=$((FAILED + 1))
+            fi
+        else
+            echo "  ⚠ $dataset — status: $STATUS (dataset may not exist)"
+        fi
+    done < "$CONF"
+fi
+
+echo ""
+echo "Keys loaded: $LOADED  Already loaded: $ALREADY_LOADED  Failed: $FAILED"
+
+# ---------------------------------------------------------------------------
+# Unmount keys immediately — they're in ZFS kernel memory now, files no longer needed
+# ---------------------------------------------------------------------------
+echo ""
+echo "Securing keys..."
+/usr/local/lib/zfsutilities/bin/lock-zfs-keys
+
+# ---------------------------------------------------------------------------
+# Add encrypted LUNs to the iSCSI target without restarting the service.
+# The zvols are already accessible now that keys are loaded, so only missing
+# backstores/LUNs need to be created. This avoids disconnecting running VMs.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Adding encrypted LUNs to iSCSI target ==="
+if /usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns; then
+    echo ""
+    echo "=== Complete ==="
+else
+    echo ""
+    echo "=== Encrypted LUNs could not be added ==="
+    echo "Check that all encrypted zvols are available and try:"
+    echo "    sudo iscsi-add-encrypted-luns"
+    echo "or, if a full target restart is acceptable (stops all VM disks):"
+    echo "    sudo restart-iscsi-services"
+    echo ""
+    exit 1
+fi

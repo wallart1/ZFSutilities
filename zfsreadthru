@@ -1,0 +1,120 @@
+#!/usr/bin/bash
+
+# Read all the snapshots at the provided dataset.
+# This can be used to help determine where an unrecovered data error resides
+# in cases where the "zpool status -v" command refuses to say.
+# $1    (Required) Head of tree to be considered
+# $2    (Optional) Overrides (see zfsoverrides) You may use all the variables accepted by
+#       zfsbuildfsarray to select subsets. Be careful to properly use quotes.
+# $3    (Optional) First snapshot to read. Default: Oldest available snapshot.
+# $4    (Optional) Last snapshot to read. Default: Newest available snapshot.
+
+source ~/bashinit
+bashinit
+source $mydir/rootcheck
+rootcheck
+source $mydir/zfsbuildfsarray
+source $mydir/zfsoverrides
+export BASH_XTRACEFD=2
+source $mydir/bashsetx
+
+if [[ $1 != '' ]]; then
+    sourcefs=$1
+else
+    log_msg 'FATAL: A dataset must be given as $1.'
+    exit 8
+fi
+
+function editsize {
+    # Input string
+    local input="$1"
+    # Extract the number with its unit
+    local size=$(echo "$input" | grep -o '[0-9]\+\(\.[0-9]\+\)\?[KMGTPEZY]')
+    # Handle cases where grep finds no match
+    if [[ -z "$size" ]]; then
+        log_msg "FATAL: Unable to find <size> in the input: $input."
+        exit 8
+    fi
+    # Separate the number from its unit and round
+    # Note: awk will correctly handle integers like "385G" as a number
+    local number=$(echo "$size" | awk '{print int($1 + 0.5)}')
+    local unit=$(echo "$size" | grep -o '[KMGTPEZY]')
+    # Combine the rounded number and the unit
+    local rounded_size="${number}${unit}"
+    # Output the result
+    echo "$rounded_size"
+}
+
+autoproceed='N'
+if [[ $1 != '' ]]; then sourcefs=$1; fi
+if [[ $sourcefs = '' ]]; then log_msg 'FATAL: A dataset must be given as $1 or $sourcefs.'; exit 8; fi
+depth=''
+includes=()
+excludes=()
+startwith=''
+endwith=''
+buildfsarraytype='snapshot'
+sortby='creation'
+bottomup='N'
+
+if [[ "$2" != '' ]]; then overrides "$2"; fi
+if [[ "$3" != '' ]]; then startwith="$3"; fi
+if [[ "$4" != '' ]]; then endwith="$4"; fi
+
+buildfsarray "$sourcefs"
+
+log_msg 'INFO: About to read the following:'
+for fs in ${fsarray[@]}; do
+    log_msg "INFO: $fs"
+done
+if [[ $autoproceed != 'Y' ]]; then
+    read -p 'Press enter to continue.'
+fi
+
+firstsnap=${fsarray[0]}
+lastsnap=${fsarray[fsarraylen-1]}
+
+# Part 1: Full read-through to $firstsnap/oldest snapshot.
+log_msg 'INFO: Part one: Full read-through to then $firstsnap/oldest snapshot.'
+force='Y'                       # Do full copy even if common snapshots are found.
+doincrementals='N'              # 'N' means do full copies.
+dointermediates='N'             # Don't try to do any other shapshots.
+nextsnap=$nextsnapsave          # Just in case it gets clobbered.
+
+size=$(sudo zfs send -wnvc $firstsnap 2>/dev/null | tail -1 | awk '{print $5}')
+edited_size=$(editsize $size)
+log_msg "INFO: Reading $firstsnap.\n\tEstimated amount of data to read: $size bytes."
+log_msg "INFO: zfs send -wc $firstsnap"
+if [[ $autoproceed != 'Y' ]]; then
+    read -p "Press enter to proceed."
+fi
+
+if ! sudo zfs send -wc $firstsnap \
+    | pv -s $edited_size -pterb \
+    | cat > /dev/null; then
+        exit 8
+fi
+
+# Part 2: Read-through to $lastsnap/newest snapshot.
+autoproceed='Y'
+log_msg 'INFO: Part two: Read-through from the above snapshot to the $lastsnap/newest snapshot.'
+force='N'
+releaseholds='N'
+doincrementals='Y'              # Do incremental copies.
+dointermediates='Y'             # Do intermediate snapshots.
+
+size=$(sudo zfs send -wnvc -I $firstsnap $lastsnap 2>/dev/null | tail -1 | awk '{print $5}')
+edited_size=$(editsize $size)
+log_msg "INFO: Reading $firstsnap to $lastsnap.\n\tEstimated amount of data to read: $size bytes."
+log_msg "INFO: zfs send -wc -I $firstsnap $lastsnap"
+if [[ $autoproceed != 'Y' ]]; then
+    read -p "Press enter to proceed."
+fi
+
+if ! sudo zfs send -wc -I $firstsnap $lastsnap\
+    | pv -s $edited_size -pterb \
+    | cat > /dev/null; then
+        exit 8
+fi
+
+

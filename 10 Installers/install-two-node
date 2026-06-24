@@ -1,0 +1,545 @@
+#!/bin/bash
+# install-two-node
+# Interactive installer for two-node ZFSutilities configuration.
+#
+# Two-node means a separate storage host (ZFS pools, iSCSI target) and
+# compute host (Proxmox VMs, iSCSI initiator). ZFS clone support is included.
+#
+# This installer:
+#   1. Checks prerequisites interactively and offers to install missing items
+#   2. Optionally installs the documentation server (MkDocs)
+#   3. Prompts for the required information (hostnames, IPs, pools)
+#   4. Generates /etc/zfsutilities-node.conf
+#   5. Installs scripts on both hosts via SSH
+#
+# Can also upgrade an existing single-node installation to two-node mode.
+#
+# Run as root on the STORAGE host.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+DOCS_DIR="$REPO_DIR/06 Docs"
+TWO_NODE_DIR="$REPO_DIR/08 Two-node"
+CLONE_DIR="$REPO_DIR/09 ZFS clone support"
+
+NODE_CONF="/etc/zfsutilities-node.conf"
+NODE_LIB_SRC="$TWO_NODE_DIR/node-lib.sh"
+NODE_LIB_DST="/usr/local/lib/node-lib.sh"
+COMPAT_LINK="/usr/local/lib/two-node-lib.sh"
+
+# Scripts installed on BOTH hosts
+BOTH_SCRIPTS="new-vm-disk remove-vm-disk detach-vm-disk attach-vm-disk list-vm-disks resize-vm-disk rescan-storage show-lun-map clone-vm move-vm-disk"
+
+# Scripts installed on the storage host ONLY
+STORAGE_ONLY_SCRIPTS="safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys"
+
+ALL_SCRIPTS="$BOTH_SCRIPTS $STORAGE_ONLY_SCRIPTS"
+
+CLONE_SCRIPTS="zfsclone-vm promote-vm-clone"
+
+INSTALLER_LIB="$SCRIPT_DIR/installer-lib.sh"
+[[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
+source "$INSTALLER_LIB"
+
+# systemd drop-in configs
+DROPIN_DIR="/etc/systemd/system/rtslib-fb-targetctl.service.d"
+DROPINS=(
+    "rtslib-fb-targetctl-pre-start-backup.conf:pre-start-backup.conf"
+    "rtslib-fb-targetctl-boot-config.conf:boot-config.conf"
+    "rtslib-fb-targetctl-wait-for-zfs-keys.conf:wait-for-zfs-keys.conf"
+)
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+_check_zfs_root() {
+    local root_fs_type
+    root_fs_type=$(findmnt -n -o FSTYPE / 2>/dev/null || true)
+    if [[ "$root_fs_type" == "zfs" ]]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  ⚠  WARNING: ZFS root filesystem detected"
+        echo ""
+        echo "  ZFS Utilities has NOT been tested on systems where the root"
+        echo "  filesystem (/) is stored on a ZFS dataset."
+        echo ""
+        echo "  Pool operations, snapshot retention, and iSCSI lifecycle"
+        echo "  scripts may interact with the root pool in unexpected ways."
+        echo ""
+        echo "  Proceed at your own risk."
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        read -rp "Press Enter to continue, or Ctrl-C to abort..."
+    fi
+}
+
+[[ $EUID -eq 0 ]] || die "Must run as root"
+_check_zfs_root
+
+echo "=========================================="
+echo "  ZFSutilities — Two-Node Installer"
+echo "=========================================="
+echo ""
+
+# ------------------------------------------------------------------
+# Prerequisites check (interactive)
+# ------------------------------------------------------------------
+CHECK_PREREQS="$REPO_DIR/check-prerequisites"
+if [[ -f "$CHECK_PREREQS" ]]; then
+    if ! run_interactive_prerequisites --two-node "$CHECK_PREREQS"; then
+        exit 1
+    fi
+fi
+
+# ------------------------------------------------------------------
+# Step 1: Optional documentation server
+# ------------------------------------------------------------------
+run_interactive_doc_server || true
+
+echo ""
+
+# ------------------------------------------------------------------
+# Step 2: Detect existing configuration
+# ------------------------------------------------------------------
+echo "=== Step 2: Configuration ==="
+echo ""
+
+EXISTING_MODE=""
+if [[ -f "$NODE_CONF" ]]; then
+    source "$NODE_CONF"
+    EXISTING_MODE="${NODE_MODE:-two-node}"
+    if [[ "$EXISTING_MODE" == "two-node" ]]; then
+        echo "Existing two-node configuration found."
+        echo "  Storage host: ${STORAGE_HOST:-?}"
+        echo "  Compute host: ${COMPUTE_HOST:-?}"
+        echo ""
+        read -rp "Reconfigure? (y/N): " reconf
+        if [[ ! "$reconf" =~ ^[Yy]$ ]]; then
+            echo "Keeping existing configuration. Proceeding to script installation."
+            # Source the conf for install steps below
+            source "$NODE_CONF"
+            SKIP_CONFIG=true
+        fi
+    elif [[ "$EXISTING_MODE" == "single-node" ]]; then
+        echo "Existing SINGLE-NODE configuration found."
+        echo "  Hostname: ${THIS_HOST:-?}"
+        echo ""
+        echo "Upgrading to two-node mode. You will be prompted for the additional settings."
+        echo ""
+    fi
+elif [[ -f /etc/two-node.conf ]]; then
+    echo "Legacy /etc/two-node.conf found. Migrating to new config format."
+    source /etc/two-node.conf
+    EXISTING_MODE="two-node"
+fi
+
+if [[ "${SKIP_CONFIG:-}" != "true" ]]; then
+    # ------------------------------------------------------------------
+    # Step 2: Prompt for two-node settings
+    # ------------------------------------------------------------------
+
+    default_storage=$(hostname -s)
+    echo "Two-node mode: separate storage host (ZFS/iSCSI) and compute host (Proxmox VMs)."
+    echo ""
+
+    read -rp "Storage host short name [${default_storage}]: " input_storage
+    STORAGE_HOST="${input_storage:-$default_storage}"
+
+    read -rp "Compute host short name: " COMPUTE_HOST
+    [[ -n "$COMPUTE_HOST" ]] || die "Compute host name is required"
+
+    read -rp "Storage network IP (iSCSI portal) [192.168.100.1]: " input_ip
+    STORAGE_IP="${input_ip:-192.168.100.1}"
+
+    default_iqn="iqn.$(date +%Y-%m).local.${STORAGE_HOST}"
+    echo ""
+    echo "  The iSCSI Qualified Name (IQN) prefix becomes part of every iSCSI"
+    echo "  target's persistent on-disk name. It is baked into the target when"
+    echo "  the LUN is first created; changing it later requires recreating"
+    echo "  Proxmox iSCSI storage entries and re-mapping LUNs, so choose once."
+    echo "  The default (iqn.YYYY-MM.local.<storage-host>) is fine unless your"
+    echo "  site uses a registered naming convention such as"
+    echo "  iqn.YYYY-MM.com.vendor.host."
+    read -rp "iSCSI IQN prefix [${default_iqn}]: " input_iqn
+    IQN_PREFIX="${input_iqn:-$default_iqn}"
+
+    echo ""
+    echo "Pool → iSCSI target mapping"
+    echo "  For each ZFS pool exported via iSCSI, enter the target short name."
+    echo "  (The full target IQN will be: ${IQN_PREFIX}:<short-name>)"
+    echo ""
+
+    # Auto-detect online pools
+    declare -A POOL_TARGET=()
+    online_pools=$(zpool list -H -o name 2>/dev/null || true)
+    if [[ -n "$online_pools" ]]; then
+        echo "  Detected online pools: $(echo $online_pools | tr '\n' ' ')"
+        echo ""
+    fi
+
+    while true; do
+        read -rp "  Pool name (or Enter to finish): " pool_name
+        [[ -n "$pool_name" ]] || break
+        default_short=$(echo "$pool_name" | tr '[:upper:]' '[:lower:]')
+        read -rp "  Target short name [${default_short}]: " target_short
+        POOL_TARGET["$pool_name"]="${target_short:-$default_short}"
+        echo "  ✓ ${pool_name} → ${POOL_TARGET[$pool_name]}"
+        echo ""
+    done
+
+    if [[ ${#POOL_TARGET[@]} -eq 0 ]]; then
+        echo "  ⚠ No pools configured. You can add them to $NODE_CONF later."
+    fi
+
+    echo ""
+    echo "Generating configuration..."
+
+    # Write the config file
+    cat > "$NODE_CONF" << CONFEOF
+# /etc/zfsutilities-node.conf
+# Generated by install-two-node on $(date -Iseconds)
+
+NODE_MODE="two-node"
+
+# --- Hosts (short hostnames as returned by \`hostname -s\`) ---
+STORAGE_HOST="${STORAGE_HOST}"
+COMPUTE_HOST="${COMPUTE_HOST}"
+
+# --- Storage network ---
+STORAGE_IP="${STORAGE_IP}"
+
+# --- iSCSI naming ---
+IQN_PREFIX="${IQN_PREFIX}"
+
+# --- Pool → iSCSI target short-name map ---
+declare -A POOL_TARGET=(
+CONFEOF
+
+    for pool in "${!POOL_TARGET[@]}"; do
+        echo "    [${pool}]=\"${POOL_TARGET[$pool]}\"" >> "$NODE_CONF"
+    done
+    echo ")" >> "$NODE_CONF"
+
+    chmod 0644 "$NODE_CONF"
+
+    echo ""
+    echo "=== Generated configuration ==="
+    cat "$NODE_CONF"
+    echo "=== End ==="
+    echo ""
+
+    read -rp "Edit this file now? (y/N): " edit_conf
+    if [[ "$edit_conf" =~ ^[Yy]$ ]]; then
+        "${EDITOR:-nano}" "$NODE_CONF"
+    fi
+
+    # Re-source to pick up any edits
+    source "$NODE_CONF"
+
+    echo ""
+    echo "✓ Configuration saved to $NODE_CONF"
+fi
+
+# ------------------------------------------------------------------
+# Step 2b: Generate deployment config
+# ------------------------------------------------------------------
+DEPLOY_CONF="/etc/zfsutilities-deploy.conf"
+DEPLOY_TEMPLATE="$SCRIPT_DIR/deploy.conf.template"
+
+if [[ ! -f "$DEPLOY_CONF" && -f "$DEPLOY_TEMPLATE" ]]; then
+    echo ""
+    echo "Generating deployment configuration..."
+    sed \
+        -e "s/@@STORAGE_HOST@@/${STORAGE_HOST}/g" \
+        -e "s/@@COMPUTE_HOST@@/${COMPUTE_HOST}/g" \
+        "$DEPLOY_TEMPLATE" > "$DEPLOY_CONF"
+    chmod 0644 "$DEPLOY_CONF"
+    echo "✓ Deployment config saved to $DEPLOY_CONF"
+else
+    echo ""
+    echo "· $DEPLOY_CONF already present (left unchanged)"
+fi
+
+echo ""
+
+# ------------------------------------------------------------------
+# Step 3: Set up iSCSI targets
+# ------------------------------------------------------------------
+echo "=== Setting up iSCSI targets ==="
+echo ""
+SETUP_TARGETS="$REPO_DIR/08\ Two-node/setup-iscsi-targets"
+if [[ -f "$SETUP_TARGETS" ]]; then
+    "$SETUP_TARGETS"
+else
+    echo "⚠ setup-iscsi-targets not found — you must create iSCSI targets manually"
+    echo "  See: targetcli /iscsi create ${IQN_PREFIX}:<target-short>"
+fi
+
+echo ""
+
+# ------------------------------------------------------------------
+# Verify we're on the storage host
+# ------------------------------------------------------------------
+[[ "$(hostname -s)" == "$STORAGE_HOST" ]] || \
+    die "Run this script on the storage host ($STORAGE_HOST), not $(hostname -s)"
+
+# ------------------------------------------------------------------
+# Step 4: Verify SSH prerequisites
+# ------------------------------------------------------------------
+echo "=== Verifying SSH Prerequisites ==="
+echo ""
+
+if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${COMPUTE_HOST}" true 2>/dev/null; then
+    die "Cannot SSH from $(hostname -s) to root@${COMPUTE_HOST}.\n" \
+        "  Fix: ssh-copy-id root@${COMPUTE_HOST}"
+fi
+echo "  ✓ root@$(hostname -s) → root@${COMPUTE_HOST}"
+
+if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${COMPUTE_HOST}" \
+    "ssh -o ConnectTimeout=5 -o BatchMode=yes root@${STORAGE_HOST} true" 2>/dev/null; then
+    die "Cannot SSH from ${COMPUTE_HOST} back to root@${STORAGE_HOST}.\n" \
+        "  Fix: on ${COMPUTE_HOST}, run: ssh-copy-id root@${STORAGE_HOST}"
+fi
+echo "  ✓ root@${COMPUTE_HOST} → root@${STORAGE_HOST}"
+
+echo ""
+
+# ------------------------------------------------------------------
+# Step 5: Deploy versioned installation
+# ------------------------------------------------------------------
+echo "=== Step 5: Deploying Versioned Installation ==="
+echo ""
+
+DEPLOY_VERSION="$REPO_DIR/deploy-version"
+[[ -f "$DEPLOY_VERSION" ]] || die "Missing: $DEPLOY_VERSION"
+"$DEPLOY_VERSION"
+
+# Activate the deployed version on the storage host.  switch-version creates
+# all production wiring, including the desktop shortcuts.
+VERSION=$(cat "$REPO_DIR/VERSION")
+"$REPO_DIR/switch-version" "$VERSION"
+
+# Activate the deployed version on the compute host
+if [[ -n "${COMPUTE_HOST:-}" ]]; then
+    echo ""
+    echo "Activating version on $COMPUTE_HOST..."
+    ssh "root@${COMPUTE_HOST}" \
+        "/usr/local/lib/zfsutilities/versions/${VERSION}/bin/switch-version" "${VERSION}"
+    echo "  ✓ $COMPUTE_HOST activated"
+fi
+
+# Install systemd drop-ins (not versioned — system config)
+echo ""
+echo "Installing systemd drop-ins for rtslib-fb-targetctl..."
+mkdir -p "$DROPIN_DIR"
+for dropin_entry in "${DROPINS[@]}"; do
+    IFS=':' read -r src_name dst_name <<< "$dropin_entry"
+    install -m 0644 "${TWO_NODE_DIR}/${src_name}" "${DROPIN_DIR}/${dst_name}"
+    echo "  ✓ ${DROPIN_DIR}/${dst_name}"
+done
+systemctl daemon-reload
+
+# Install zfs-keys-unlock.service on the storage host
+ZFS_KEYS_SERVICE="zfs-keys-unlock.service"
+ZFS_KEYS_SERVICE_SRC="${TWO_NODE_DIR}/${ZFS_KEYS_SERVICE}"
+if [[ -f "$ZFS_KEYS_SERVICE_SRC" ]]; then
+    echo ""
+    echo "Installing $ZFS_KEYS_SERVICE on $STORAGE_HOST..."
+    install -m 0644 "$ZFS_KEYS_SERVICE_SRC" "/etc/systemd/system/${ZFS_KEYS_SERVICE}"
+    echo "  ✓ /etc/systemd/system/${ZFS_KEYS_SERVICE}"
+    systemctl daemon-reload
+    systemctl enable "$ZFS_KEYS_SERVICE"
+    echo "  ✓ Enabled $ZFS_KEYS_SERVICE"
+fi
+
+# Install encrypted LUNs conf if not already present
+ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+ENCRYPTED_CONF_SRC="${TWO_NODE_DIR}/iscsi-encrypted-luns.conf"
+if [[ ! -f "$ENCRYPTED_CONF" ]]; then
+    if [[ -f "$ENCRYPTED_CONF_SRC" ]]; then
+        install -m 0644 "$ENCRYPTED_CONF_SRC" "$ENCRYPTED_CONF"
+        echo ""
+        echo "  ✓ Installed $ENCRYPTED_CONF"
+    fi
+elif grep -q 'ENCRYPTED_LUNS=' "$ENCRYPTED_CONF" 2>/dev/null; then
+    echo ""
+    echo "  ⚠ $ENCRYPTED_CONF uses old bash array format."
+    echo "    Replace with: ${ENCRYPTED_CONF_SRC}"
+fi
+
+echo ""
+
+# ------------------------------------------------------------------
+# Optional: configure /root/.luks-key for unattended boot unlocking
+# ------------------------------------------------------------------
+if [[ -f "$ENCRYPTED_CONF" ]] && grep -qvE '^\s*(#|$)' "$ENCRYPTED_CONF" 2>/dev/null; then
+    echo "=== Encrypted LUNs detected ==="
+    echo ""
+    echo "You can enable unattended boot unlocking by creating a root-owned"
+    echo "LUKS keyfile (/root/.luks-key). The boot service will then unlock the"
+    echo "ZFS keys USB automatically when it is inserted at boot."
+    echo ""
+    read -rp "Create /root/.luks-key now? [y/N]: " setup_luks_key
+    if [[ "$setup_luks_key" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "Please insert the ZFS keys USB drive(s)."
+        read -rp "Press Enter when ready..."
+        echo ""
+
+        # Find all ZFSkeys LUKS partitions
+        mapfile -t key_devices < <(blkid -t PARTLABEL=ZFSkeys -o device 2>/dev/null || true)
+
+        if [[ ${#key_devices[@]} -eq 0 ]]; then
+            echo "⚠ No USB drive found with PARTLABEL=ZFSkeys. Skipping keyfile setup."
+        else
+            echo "Found ZFS keys device(s):"
+            for i in "${!key_devices[@]}"; do
+                echo "  $((i + 1)). ${key_devices[$i]}"
+            done
+            echo ""
+            read -rp "Add keyfile to all devices? [Y/n]: " add_to_all
+
+            selected_devices=()
+            if [[ "$add_to_all" =~ ^[Nn]$ ]]; then
+                read -rp "Enter device number(s) to use (e.g. 1 3): " selections
+                for n in $selections; do
+                    idx=$((n - 1))
+                    if [[ $idx -ge 0 && $idx -lt ${#key_devices[@]} ]]; then
+                        selected_devices+=("${key_devices[$idx]}")
+                    else
+                        echo "⚠ Invalid selection: $n"
+                    fi
+                done
+            else
+                selected_devices=("${key_devices[@]}")
+            fi
+
+            if [[ ${#selected_devices[@]} -gt 0 ]]; then
+                # Generate keyfile once
+                mkdir -p /root
+                chmod 700 /root
+                dd if=/dev/urandom of=/root/.luks-key bs=4096 count=1 status=none
+                chmod 400 /root/.luks-key
+                echo "✓ Created /root/.luks-key"
+
+                for dev in "${selected_devices[@]}"; do
+                    echo ""
+                    echo "Adding keyfile to $dev..."
+                    cryptsetup luksAddKey "$dev" /root/.luks-key
+                    echo "  ✓ $dev"
+                done
+
+                # Verify on the first selected device
+                echo ""
+                echo "Verifying keyfile works..."
+                verify_dev="${selected_devices[0]}"
+                if cryptsetup luksOpen "$verify_dev" keys --key-file /root/.luks-key; then
+                    cryptsetup luksClose keys
+                    echo "✓ Keyfile verified on $verify_dev"
+                else
+                    echo "⚠ Keyfile verification failed on $verify_dev"
+                fi
+            else
+                echo "⚠ No devices selected. Keyfile not created."
+            fi
+        fi
+    else
+        echo ""
+        echo "Skipped /root/.luks-key setup. To enable unattended boot later, run:"
+        echo ""
+        echo "  # Generate a random keyfile"
+        echo "  sudo dd if=/dev/urandom of=/root/.luks-key bs=4096 count=1"
+        echo "  sudo chmod 400 /root/.luks-key"
+        echo ""
+        echo "  # Add it to each ZFS keys USB device"
+        echo "  for dev in \$(sudo blkid -t PARTLABEL=ZFSkeys -o device); do"
+        echo "      sudo cryptsetup luksAddKey \"\$dev\" /root/.luks-key"
+        echo "  done"
+        echo ""
+        echo "  # To remove the keyfile later"
+        echo "  for dev in \$(sudo blkid -t PARTLABEL=ZFSkeys -o device); do"
+        echo "      sudo cryptsetup luksRemoveKey \"\$dev\" /root/.luks-key"
+        echo "  done"
+        echo "  sudo rm -f /root/.luks-key"
+        echo ""
+    fi
+    echo ""
+fi
+
+# ------------------------------------------------------------------
+# Step 6: Copy node config to compute host if missing
+# ------------------------------------------------------------------
+echo "Checking node config on $COMPUTE_HOST..."
+if ssh "root@${COMPUTE_HOST}" "[[ ! -f ${NODE_CONF} ]]"; then
+    scp -q "$NODE_CONF" "root@${COMPUTE_HOST}:${NODE_CONF}"
+    ssh "root@${COMPUTE_HOST}" "chmod 0644 ${NODE_CONF}"
+    echo "  ✓ ${COMPUTE_HOST}:${NODE_CONF}"
+else
+    echo "  · ${COMPUTE_HOST}:${NODE_CONF} already present (left unchanged)"
+fi
+
+echo ""
+
+# ------------------------------------------------------------------
+# Step 7: Patch PVE iSCSI rescan rate limit on compute host
+# ------------------------------------------------------------------
+echo "=== Step 7: PVE iSCSI Rescan Rate Limit ==="
+echo ""
+
+PVE_ISCSI_PLUGIN="/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm"
+
+if ssh -o ConnectTimeout=5 "root@${COMPUTE_HOST}" "[[ -f '${PVE_ISCSI_PLUGIN}' ]]" 2>/dev/null; then
+    echo "PVE detected on $COMPUTE_HOST. Patching iSCSI rescan rate limit..."
+
+    # Apply the 86400-second (24-hour) rate limit via sed
+    # (avoids $ escaping by matching only the numeric part)
+    ssh -o ConnectTimeout=5 "root@${COMPUTE_HOST}" \
+        "sed -i 's/tdiff > 10)/tdiff > 86400)/' '${PVE_ISCSI_PLUGIN}' && grep -q 'tdiff > 86400' '${PVE_ISCSI_PLUGIN}'" \
+        && echo "  ✓ Patched ${PVE_ISCSI_PLUGIN} (86400 s rate limit)" \
+        || echo "  ⚠ Patch may already be applied or file differs from expected"
+
+    # Restart pvestatd so the change takes effect
+    ssh -o ConnectTimeout=5 "root@${COMPUTE_HOST}" "systemctl restart pvestatd" 2>/dev/null \
+        && echo "  ✓ Restarted pvestatd" \
+        || echo "  ⚠ Could not restart pvestatd on $COMPUTE_HOST"
+else
+    echo "  · PVE not detected on $COMPUTE_HOST (skipping patch)"
+fi
+
+echo ""
+
+# ------------------------------------------------------------------
+# Summary
+# ------------------------------------------------------------------
+echo "=========================================="
+echo "  Installation Complete"
+echo "=========================================="
+echo ""
+echo "  Mode:         two-node"
+echo "  Storage host: $STORAGE_HOST"
+echo "  Compute host: $COMPUTE_HOST"
+echo "  Storage IP:   $STORAGE_IP"
+echo "  Node config:  $NODE_CONF"
+echo "  Deploy config: $DEPLOY_CONF"
+echo "  Version:      $(cat "$REPO_DIR/VERSION")"
+echo ""
+echo "  Installed versions:"
+sudo /usr/local/lib/zfsutilities/bin/switch-version --list
+echo ""
+echo "Next Steps:"
+echo "  • Launch the GUI from the 'ZFSutilities GUI' shortcut in your home folder."
+echo "  • Launch the documentation viewer from the 'ZFSutilities Documentation' shortcut."
+echo "  • Add panel or desktop launchers by pointing them at those shortcuts."
+echo ""
+echo "Post-install steps:"
+echo "  1. Run: safe-iscsi-save    (generates saveconfig-boot.json)"
+echo "  2. Run all scripts from $COMPUTE_HOST as: sudo <script-name> [args]"
+echo ""
+echo "  To switch to single-node mode later:"
+echo "    sudo $REPO_DIR/10 Installers/install-single-node"
+echo ""
+

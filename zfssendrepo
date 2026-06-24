@@ -1,0 +1,16 @@
+#!/usr/bin/bash
+#
+# Example: rsync the local repository to a remote host.
+#
+# Usage: zfssendrepo <host> [<source-dir> [<dest-dir>]]
+#
+# Defaults below are from the original deployment. Adjust them for your
+# environment, or pass arguments on the command line.
+
+set -x
+
+host="${1:?Usage: $0 <host> [source-dir] [dest-dir]}"
+source_dir="${2:-/path/to/local/zfsutilities}"
+dest_dir="${3:-/home/admin/ZFSutilities}"
+
+rsync -rav "$source_dir/" "admin@${host}:${dest_dir}"

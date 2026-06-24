@@ -1,0 +1,140 @@
+#!/usr/bin/bash
+# test-zfscommsnap — Unit tests for zfscommsnap
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+source "$mydir/zfscommsnap"
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+reset_mocks() {
+    _mock_zfs_snap_list=""
+    _mock_zfs_guid_list=""
+    _mock_zfs_snap_lists=()
+    _mock_zfs_guid_lists=()
+    _mock_zfs_props=()
+    commsnap_mostrecent=""
+    commsnap_find_another=""
+}
+
+# =============================================================================
+# Tests
+# =============================================================================
+
+test_most_recent() {
+    echo "=== Most Recent Mode ==="
+    reset_mocks
+    mock_zfs_snap_list "pool/src@snap3\npool/src@snap2\npool/src@snap1"
+    mock_zfs_guid_list "guid3\nguid2\nguid1"
+    mock_zfs_prop "pool/src@snap3" "type" "snapshot"
+    commsnap_mostrecent="Y"
+    local result
+    result=$(getcommonsnap "pool/src" "pool/dest")
+    test_start "Returns most recent source snapshot"
+    assert_equals "@snap3" "$result"
+}
+
+test_oldest() {
+    reset_mocks
+    mock_zfs_snap_list "pool/src@snap3\npool/src@snap2\npool/src@snap1"
+    mock_zfs_guid_list "guid3\nguid2\nguid1"
+    mock_zfs_prop "pool/src@snap1" "type" "snapshot"
+    commsnap_mostrecent="OLDEST"
+    local result
+    result=$(getcommonsnap "pool/src" "pool/dest")
+    test_start "Returns oldest source snapshot"
+    assert_equals "@snap1" "$result"
+}
+
+test_common_found_most_recent() {
+    reset_mocks
+    mock_zfs_snap_list_for "pool/src" "pool/src@snap3\npool/src@snap2\npool/src@snap1"
+    mock_zfs_guid_list_for "pool/src" "guid3\nguid2\nguid1"
+    mock_zfs_snap_list_for "pool/dest" "pool/dest@snap2\npool/dest@snap1"
+    mock_zfs_guid_list_for "pool/dest" "guid2\nguid1"
+    mock_zfs_prop "pool/src@snap2" "type" "snapshot"
+    commsnap_mostrecent=""
+    local result
+    result=$(getcommonsnap "pool/src" "pool/dest")
+    rc=$?
+    test_start "Common snap found and is most recent in dest (rc=0)"
+    if [[ "$result" == "@snap2" && "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "result='$result' rc=$rc"
+    fi
+}
+
+test_common_found_not_most_recent() {
+    reset_mocks
+    mock_zfs_snap_list_for "pool/src" "pool/src@snap3\npool/src@snap2\npool/src@snap1"
+    mock_zfs_guid_list_for "pool/src" "guid3\nguid2\nguid1"
+    mock_zfs_snap_list_for "pool/dest" "pool/dest@snap4\npool/dest@snap2\npool/dest@snap1"
+    mock_zfs_guid_list_for "pool/dest" "guid4\nguid2\nguid1"
+    mock_zfs_prop "pool/src@snap2" "type" "snapshot"
+    commsnap_mostrecent=""
+    local result
+    result=$(getcommonsnap "pool/src" "pool/dest")
+    rc=$?
+    test_start "Common snap found but not most recent in dest (rc=16)"
+    if [[ "$result" == "@snap2" && "$rc" -eq 16 ]]; then
+        test_pass
+    else
+        test_fail "result='$result' rc=$rc"
+    fi
+}
+
+test_no_common() {
+    reset_mocks
+    mock_zfs_snap_list_for "pool/src" "pool/src@snap3\npool/src@snap2\npool/src@snap1"
+    mock_zfs_guid_list_for "pool/src" "guid3\nguid2\nguid1"
+    mock_zfs_snap_list_for "pool/dest" "pool/dest@snapA\npool/dest@snapB"
+    mock_zfs_guid_list_for "pool/dest" "guidA\nguidB"
+    mock_zfs_prop "pool/src@snap3" "type" "snapshot"
+    commsnap_mostrecent=""
+    local result
+    result=$(getcommonsnap "pool/src" "pool/dest")
+    rc=$?
+    test_start "No common snap returns most recent source (rc=4)"
+    if [[ "$result" == "@snap3" && "$rc" -eq 4 ]]; then
+        test_pass
+    else
+        test_fail "result='$result' rc=$rc"
+    fi
+}
+
+test_empty_source() {
+    reset_mocks
+    mock_zfs_snap_list ""
+    mock_zfs_guid_list ""
+    commsnap_mostrecent=""
+    local result
+    result=$(getcommonsnap "pool/src" "pool/dest")
+    rc=$?
+    test_start "Empty source returns empty and rc=8"
+    if [[ -z "$result" && "$rc" -eq 8 ]]; then
+        test_pass
+    else
+        test_fail "result='$result' rc=$rc"
+    fi
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+
+main() {
+    test_most_recent
+    test_oldest
+    test_common_found_most_recent
+    test_common_found_not_most_recent
+    test_no_common
+    test_empty_source
+    teardown_test_env
+    test_summary
+}
+
+main "$@"

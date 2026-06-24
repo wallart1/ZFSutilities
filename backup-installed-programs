@@ -1,0 +1,35 @@
+#!/usr/bin/bash
+source ~/bashinit
+bashinit
+
+function backup-installed-programs {
+    output='installed-programs'
+    initial='/var/log/installer/initial-status.gz'
+
+    if [[ -r $initial ]]; then
+        comm -23 \
+            <(apt-mark showmanual | sort -u) \
+            # sed -n 's/^Package: //p'  —  Extract package names from dpkg --status output.
+            #   Only lines starting with "Package: " are processed; the prefix is removed
+            #   and the result printed. -n suppresses default output; p prints substitutions.
+            <(gzip -dc "$initial" | sed -n 's/^Package: //p' | sort -u) \
+            > $output
+        rc=$?
+        source_desc="manual installs (excluding distro base from $initial)"
+    else
+        log_msg "INFO: $initial not found; listing all manually-marked packages."
+        apt-mark showmanual > $output
+        rc=$?
+        source_desc="all manually-marked packages"
+    fi
+
+    if [[ $rc -eq 0 ]]; then
+        log_msg "INFO: Installed programs ($source_desc) are listed in '$output'."
+    else
+        log_msg "FATAL: Failed. rc=$rc"
+        if [ -e $output ]; then rm $output; fi
+        exit 8
+    fi
+}
+
+if calledbybash; then backup-installed-programs; fi

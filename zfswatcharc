@@ -1,0 +1,73 @@
+#!/bin/bash
+# ARC statistics monitor with rates and percentages
+
+INTERVAL=${1:-2}
+
+# Get initial values
+get_stats() {
+    # awk pattern-action blocks  —  /proc/spl/kstat/zfs/arcstats contains lines like:
+    #   "hits                           4    12345678"
+    # Each block matches a keyword at the start of a line (^) and stores the 3rd field.
+    # END prints all four accumulated values as a single space-separated line.
+    awk '/^hits/ {hits=$3}
+         /^misses/ {misses=$3}
+         /^c / {arc_c=$3}
+         /^size/ {arc_size=$3}
+         END {print hits, misses, arc_c, arc_size}' /proc/spl/kstat/zfs/arcstats
+}
+
+# Initial read
+read hits1 misses1 arc_c arc_size < <(get_stats)
+# awk '/^c_max/ {print $3}'  —  Extract the c_max (ARC max size) counter from arcstats.
+arc_max=$(awk '/^c_max/ {print $3}' /proc/spl/kstat/zfs/arcstats)
+
+sleep "$INTERVAL"
+
+while true; do
+    # Second read
+    read hits2 misses2 arc_c arc_size < <(get_stats)
+    
+    # Calculate deltas
+    hits_delta=$((hits2 - hits1))
+    misses_delta=$((misses2 - misses1))
+    total_delta=$((hits_delta + misses_delta))
+    
+    # Calculate rates (per second)
+    hits_rate=$((hits_delta / INTERVAL))
+    misses_rate=$((misses_delta / INTERVAL))
+    total_rate=$((total_delta / INTERVAL))
+    
+    # Calculate hit percentage
+    if [ $total_delta -gt 0 ]; then
+        hit_pct=$((hits_delta * 100 / total_delta))
+    else
+        hit_pct=0
+    fi
+    
+    # Convert sizes to GB
+    arc_size_gb=$(echo "scale=2; $arc_size / 1024 / 1024 / 1024" | bc)
+    arc_c_gb=$(echo "scale=2; $arc_c / 1024 / 1024 / 1024" | bc)
+    arc_max_gb=$(echo "scale=2; $arc_max / 1024 / 1024 / 1024" | bc)
+    arc_usage_pct=$(echo "scale=1; $arc_size * 100 / $arc_max" | bc)
+    
+    # Clear screen and display
+    clear
+    echo "==================================================================="
+    echo "ZFS ARC Statistics (${INTERVAL}s interval)                $(date +%H:%M:%S)"
+    echo "==================================================================="
+    printf "%-20s %15s %15s %15s\n" "Metric" "Total" "Rate/sec" "Percentage"
+    echo "-------------------------------------------------------------------"
+    printf "%-20s %15s %15s %14s%%\n" "Hits" "$hits2" "$hits_rate" "$hit_pct"
+    printf "%-20s %15s %15s %14s%%\n" "Misses" "$misses2" "$misses_rate" "$((100 - hit_pct))"
+    printf "%-20s %15s %15s\n" "Total I/Os" "$((hits2 + misses2))" "$total_rate"
+    echo "-------------------------------------------------------------------"
+    printf "%-20s %12s GB %12s GB %11s GB (max)\n" "ARC Size" "$arc_size_gb" "$arc_c_gb" "$arc_max_gb"
+    printf "%-20s %46s%%\n" "ARC Usage" "$arc_usage_pct"
+    echo "==================================================================="
+    
+    # Save for next iteration
+    hits1=$hits2
+    misses1=$misses2
+    
+    sleep "$INTERVAL"
+done

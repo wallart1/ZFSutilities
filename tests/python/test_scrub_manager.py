@@ -1,0 +1,258 @@
+"""Tests for scrub_manager.py — scrub parsing, queue logic, system timers."""
+
+import json
+import os
+import tempfile
+import unittest
+from unittest.mock import patch, MagicMock
+
+import sys
+
+REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
+PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
+if PYTHON_SRC not in sys.path:
+    sys.path.insert(0, PYTHON_SRC)
+
+from test_support import temp_config_dir, capture_logs
+
+import scrub_manager as sm
+
+
+class TestParseScrubStatus(unittest.TestCase):
+
+    def test_none_requested(self):
+        raw = "  scan: none requested\n"
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.state, sm.ScrubState.NONE)
+
+    def test_in_progress(self):
+        raw = (
+            "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
+            "    1.23T scanned at 123M/s, 456G issued at 45M/s\n"
+            "    0B repaired, 12.34% done, 01:23:45 to go\n"
+        )
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.state, sm.ScrubState.SCANNING)
+        self.assertAlmostEqual(info.progress_percent, 12.34)
+        self.assertEqual(info.last_scrub, "Sun May 10 00:24:03 2026")
+
+    def test_paused(self):
+        raw = (
+            "  scan: scrub paused since Sun May 10 00:24:03 2026\n"
+            "    1.23T scanned at 123M/s, 456G issued at 45M/s\n"
+            "    0B repaired, 50.00% done\n"
+        )
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.state, sm.ScrubState.PAUSED)
+        self.assertAlmostEqual(info.progress_percent, 50.0)
+
+    def test_finished(self):
+        raw = "  scan: scrub repaired 0B in 00:00:02 with 0 errors on Sun May 10 00:24:03 2026\n"
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.state, sm.ScrubState.FINISHED)
+        self.assertEqual(info.errors, 0)
+        self.assertEqual(info.last_scrub, "Sun May 10 00:24:03 2026")
+
+    def test_canceled(self):
+        raw = "  scan: scrub canceled on Sun May 10 00:24:03 2026\n"
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.state, sm.ScrubState.CANCELED)
+        self.assertEqual(info.last_scrub, "Sun May 10 00:24:03 2026")
+
+    def test_resilver_treated_as_finished(self):
+        raw = "  scan: resilvered 10G in 01:23:45 with 0 errors on Mon Jan  1 12:00:00 2026\n"
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.state, sm.ScrubState.FINISHED)
+
+    def test_empty_raw(self):
+        info = sm.parse_scrub_status("")
+        self.assertEqual(info.state, sm.ScrubState.UNKNOWN)
+
+    def test_finished_with_days_duration(self):
+        raw = "  scan: scrub repaired 0B in 1 days 01:35:48 with 0 errors on Wed Jun  3 20:50:19 2026\n"
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.state, sm.ScrubState.FINISHED)
+        self.assertEqual(info.errors, 0)
+        self.assertEqual(info.last_scrub, "Wed Jun  3 20:50:19 2026")
+
+
+class TestScrubQueue(unittest.TestCase):
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.state_path = os.path.join(self.tmpdir.name, "scrub_state.json")
+        self._orig_path = sm.SCRUB_STATE_PATH
+        sm.SCRUB_STATE_PATH = self.state_path
+
+    def tearDown(self):
+        sm.SCRUB_STATE_PATH = self._orig_path
+        self.tmpdir.cleanup()
+
+    def test_add_pending_and_target(self):
+        q = sm.ScrubQueue(target=1)
+        q.add_pending(["tank"])
+        self.assertIn("tank", q.pending)
+        self.assertEqual(q.target, 1)
+
+    def test_set_target(self):
+        q = sm.ScrubQueue(target=1)
+        q.set_target(3)
+        self.assertEqual(q.target, 3)
+
+    def test_tick_moves_pending_to_active(self):
+        q = sm.ScrubQueue(target=1)
+        q.add_pending(["tank"])
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.NONE)}
+        with patch.object(sm, "start_scrub", return_value=True):
+            q.tick(states)
+        self.assertIn("tank", q.active)
+        self.assertNotIn("tank", q.pending)
+
+    def test_tick_starts_scrub_when_pending_state_is_finished(self):
+        """A queued scrub must start even if zpool status shows a prior finished scrub."""
+        q = sm.ScrubQueue(target=1)
+        q.add_pending(["tank"])
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.FINISHED)}
+        with patch.object(sm, "start_scrub", return_value=True) as mock_start:
+            q.tick(states)
+        mock_start.assert_called_once_with("tank")
+        self.assertIn("tank", q.active)
+        self.assertNotIn("tank", q.pending)
+        self.assertNotIn("tank", q.finished)
+
+    def test_tick_detects_finished(self):
+        q = sm.ScrubQueue(target=1)
+        q.active.add("tank")
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.FINISHED)}
+        q.tick(states)
+        self.assertIn("tank", q.finished)
+        self.assertNotIn("tank", q.active)
+
+    def test_tick_detects_external_pause(self):
+        q = sm.ScrubQueue(target=1)
+        q.active.add("tank")
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)}
+        q.tick(states)
+        self.assertIn("tank", q.paused)
+        self.assertNotIn("tank", q.active)
+
+    def test_remove_pools(self):
+        q = sm.ScrubQueue(target=1)
+        q.pending.add("tank")
+        q.active.add("data")
+        q.remove_pools(["tank", "data"])
+        self.assertNotIn("tank", q.pending)
+        self.assertNotIn("data", q.active)
+
+    def test_persistence(self):
+        q = sm.ScrubQueue(target=2)
+        q.add_pending(["tank", "data"])
+        q._save()
+
+        q2 = sm.ScrubQueue(target=1)
+        self.assertEqual(q2.target, 2)
+        self.assertIn("tank", q2.pending)
+        self.assertIn("data", q2.pending)
+
+    def test_resume_pools(self):
+        q = sm.ScrubQueue(target=1)
+        q.paused.add("tank")
+        q.paused_by_user.add("tank")
+        q.resume_pools(["tank"])
+        self.assertIn("tank", q.pending)
+        self.assertNotIn("tank", q.paused)
+        self.assertNotIn("tank", q.paused_by_user)
+
+    def test_pause_pools_marks_user_paused(self):
+        q = sm.ScrubQueue(target=1)
+        q.active.add("tank")
+        q.pause_pools(["tank"])
+        self.assertIn("tank", q.paused)
+        self.assertIn("tank", q.paused_by_user)
+
+    def test_user_paused_pool_not_auto_resumed(self):
+        """A pool paused by the user must stay paused when below target."""
+        q = sm.ScrubQueue(target=1)
+        q.active.add("tank")
+        q.pause_pools(["tank"])
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)}
+        with patch.object(sm, "resume_scrub") as mock_resume:
+            q.tick(states)
+        self.assertIn("tank", q.paused)
+        self.assertIn("tank", q.paused_by_user)
+        mock_resume.assert_not_called()
+
+    def test_target_paused_pool_auto_resumed_when_target_raised(self):
+        """Pools paused by lowering the target resume when target is raised."""
+        q = sm.ScrubQueue(target=2)
+        q.active.add("tank")
+        q.active.add("data")
+        states = {
+            "tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING),
+            "data": sm.ScrubInfo(state=sm.ScrubState.SCANNING),
+        }
+        q.set_target(1)
+        with patch.object(sm, "pause_scrub", return_value=True) as mock_pause:
+            q.tick(states)
+        self.assertEqual(mock_pause.call_count, 1)
+        paused_pool = next(iter(q.paused))
+        self.assertNotIn(paused_pool, q.paused_by_user)
+
+        q.set_target(2)
+        states[paused_pool] = sm.ScrubInfo(state=sm.ScrubState.PAUSED)
+        with patch.object(sm, "resume_scrub", return_value=True) as mock_resume:
+            q.tick(states)
+        self.assertIn(paused_pool, q.active)
+        mock_resume.assert_called_once_with(paused_pool)
+
+    def test_tick_detects_external_scrub(self):
+        q = sm.ScrubQueue(target=1)
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}
+        q.tick(states)
+        self.assertIn("tank", q.active)
+
+    def test_tick_grace_period_for_none(self):
+        q = sm.ScrubQueue(target=1)
+        q.active.add("tank")
+        q._start_times["tank"] = sm.time.time()
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.NONE)}
+        q.tick(states)
+        self.assertIn("tank", q.active)
+        # After grace period expires
+        q._start_times["tank"] = sm.time.time() - 60
+        q.tick(states)
+        self.assertIn("tank", q.finished)
+        self.assertNotIn("tank", q.active)
+
+
+class TestSystemScrubHelpers(unittest.TestCase):
+
+    def test_get_system_scrub_state_parses_enabled(self):
+        with patch("subprocess.run") as mock_run:
+            def side_effect(cmd, **kwargs):
+                result = MagicMock()
+                if "weekly" in cmd[-1]:
+                    result.returncode = 0
+                    result.stdout = "enabled\n"
+                else:
+                    result.returncode = 1
+                    result.stdout = "disabled\n"
+                return result
+            mock_run.side_effect = side_effect
+            state = sm.get_system_scrub_state("tank")
+        self.assertTrue(state["weekly"])
+        self.assertFalse(state["monthly"])
+
+    def test_set_system_scrub_enabled(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            ok = sm.set_system_scrub_enabled("tank", weekly=True, monthly=False)
+        self.assertTrue(ok)
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        cmd_strs = [" ".join(str(a) for a in c) for c in calls]
+        self.assertTrue(any("enable" in s and "weekly" in s for s in cmd_strs))
+        self.assertTrue(any("disable" in s and "monthly" in s for s in cmd_strs))
+
+
+if __name__ == "__main__":
+    unittest.main()

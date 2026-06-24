@@ -1,0 +1,128 @@
+#!/bin/bash
+# safe-iscsi-save
+# Save iSCSI target configuration ONLY if all expected LUNs are currently active.
+#
+# Protects saveconfig.json from being overwritten with a degraded (partial) config,
+# which can happen when zvols are temporarily inaccessible (e.g., encryption keys not
+# yet loaded, ZFS pool not imported, device nodes not yet visible after zfs load-key).
+#
+# Also generates saveconfig-boot.json — a copy of the config with encrypted backstores
+# stripped out. This is used at boot time (via systemd drop-in) so that targetctl restore
+# does not encounter missing device nodes for encrypted zvols whose keys haven't been
+# loaded yet.
+#
+# IMPORTANT: Expected LUN count is derived from the authoritative manifest file,
+# NOT from saveconfig.json or ZFS. This prevents a corrupted config from becoming
+# the "expected" baseline.
+#
+# Manifest file: /etc/rtslib-fb-target/expected-backstores.txt
+# Format: one backstore name per line (vm-<vmid>-disk-<N>)
+# Maintained by: new-vm-disk (adds), remove-vm-disk (removes), zfsdelfs (removes),
+#                zfs-send-receive rebuild (re-adds), move-vm-disk (source removes / dest adds)
+#
+# Usage: safe-iscsi-save
+# Returns: 0 if config was saved, 1 if save was skipped (degraded state)
+#
+# Install to: /usr/local/lib/zfsutilities/bin/safe-iscsi-save on the storage host
+
+SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
+BOOTFILE="/etc/rtslib-fb-target/saveconfig-boot.json"
+MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+
+# Generate saveconfig-boot.json by stripping encrypted backstores from saveconfig.json.
+# This config is safe to restore at boot when encryption keys haven't been loaded.
+generate_boot_config() {
+    if [[ ! -f "$ENCRYPTED_CONF" ]]; then
+        cp -f "$SAVEFILE" "$BOOTFILE"
+        return
+    fi
+
+    # Read encrypted backstore names from conf (skip comments and blank lines)
+    local csv=""
+    local count=0
+    while IFS=: read -r name _dev _tgt; do
+        [[ -z "$name" || "$name" == \#* ]] && continue
+        [[ -n "$csv" ]] && csv+=",$name" || csv="$name"
+        count=$((count + 1))
+    done < "$ENCRYPTED_CONF"
+
+    if [[ -z "$csv" ]]; then
+        cp -f "$SAVEFILE" "$BOOTFILE"
+        return
+    fi
+
+    SKIP_NAMES="$csv" python3 - "$SAVEFILE" "$BOOTFILE" << 'PYEOF'
+import json, os, sys
+
+skip = set(os.environ["SKIP_NAMES"].split(","))
+src, dst = sys.argv[1], sys.argv[2]
+
+with open(src) as f:
+    config = json.load(f)
+
+# Remove encrypted storage objects
+config["storage_objects"] = [
+    so for so in config.get("storage_objects", [])
+    if so.get("name") not in skip
+]
+
+# Remove LUN references to encrypted backstores from all targets
+for target in config.get("targets", []):
+    for tpg in target.get("tpgs", []):
+        tpg["luns"] = [
+            lun for lun in tpg.get("luns", [])
+            if not any(n in lun.get("storage_object", "") for n in skip)
+        ]
+
+with open(dst, "w") as f:
+    json.dump(config, f, indent=2)
+PYEOF
+
+    if [[ $? -eq 0 ]]; then
+        echo "✓ Boot config generated ($count encrypted backstores excluded)"
+    else
+        echo "⚠ Failed to generate boot config" >&2
+    fi
+}
+
+[[ -f "$SAVEFILE" ]] || {
+    echo "✗ safe-iscsi-save: Config not found: $SAVEFILE" >&2
+    exit 1
+}
+
+[[ -f "$MANIFEST" ]] || {
+    echo "✗ safe-iscsi-save: Manifest not found: $MANIFEST" >&2
+    echo "  Create it with one backstore name per line (vm-N-disk-N format)." >&2
+    exit 1
+}
+
+# Count expected backstores from manifest (ignore comments and blank lines)
+expected=$(grep -cE '^vm-[0-9]+-disk-[0-9]+$' "$MANIFEST")
+
+if [[ "${expected:-0}" -eq 0 ]]; then
+    echo "✗ safe-iscsi-save: Manifest is empty or has no valid entries" >&2
+    echo "  File: $MANIFEST" >&2
+    exit 1
+fi
+
+# Count active block backstores — each /dev/zvol/ path = one accessible backstore
+active=$(targetcli /backstores/block ls 2>/dev/null | grep -c '/dev/zvol/' || echo "0")
+
+if [[ "$active" -lt "$expected" ]]; then
+    echo "✗ safe-iscsi-save: iSCSI target is degraded ($active of $expected LUNs active)" >&2
+    echo "  Some backstores in manifest are not active." >&2
+    echo "  saveconfig.json NOT overwritten. To force save: targetcli saveconfig" >&2
+    exit 1
+fi
+
+# Additional check: active should not greatly exceed expected (catches orphaned backstores)
+if [[ "$active" -gt "$expected" ]]; then
+    echo "⚠ safe-iscsi-save: More backstores ($active) than manifest ($expected)" >&2
+    echo "  This may indicate orphaned backstores or manifest out of date. Saving anyway." >&2
+fi
+
+targetcli saveconfig >/dev/null 2>&1
+echo "✓ iSCSI configuration saved ($active/$expected LUNs active)"
+
+generate_boot_config

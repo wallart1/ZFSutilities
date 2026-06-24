@@ -1,0 +1,360 @@
+#!/usr/bin/bash
+# test-zfs-diagnose-busy — Unit tests for zfs-diagnose-busy
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+# Set msg_level to INFO so diagnostic messages are captured
+export msg_level="INFO"
+
+old_mydir="$mydir"
+source "$old_mydir/zfs-diagnose-busy"
+
+# Capture log_msg output to a file for assertions
+_DIAG_LOG=""
+_DIAG_CAPTURE=""
+
+start_capture() {
+    _DIAG_CAPTURE=$(mktemp)
+    _DIAG_LOG="$_DIAG_CAPTURE"
+}
+
+stop_capture() {
+    local content=""
+    if [[ -f "$_DIAG_LOG" ]]; then
+        content=$(cat "$_DIAG_LOG")
+        rm -f "$_DIAG_LOG"
+    fi
+    _DIAG_LOG=""
+    _DIAG_CAPTURE=""
+    echo "$content"
+}
+
+# Redirect log_msg to our capture file by overriding it locally.
+# The real log_msg writes to stderr; we tee it.
+log_msg() {
+    if [[ -n "$_DIAG_LOG" ]]; then
+        echo "$*" >> "$_DIAG_LOG"
+    fi
+    # Also call the real log_msg so tests see output normally
+    command log_msg "$@" 2>/dev/null || true
+}
+
+# ------------------------------------------------------------------
+# Mock helpers
+# ------------------------------------------------------------------
+
+declare -A _mock_zfs_get_values=()
+declare -A _mock_zfs_list_values=()
+_mock_zfs_holds=""
+_mock_targetcli_backstores=""
+_mock_targetcli_iscsi=""
+_mock_targetcli_luns=""
+_mock_qm_status=""
+_mock_fuser_out=""
+_mock_lsof_out=""
+_mock_pgrep_out=""
+
+reset_mocks() {
+    _mock_zfs_get_values=()
+    _mock_zfs_list_values=()
+    # Re-declare as associative in case bash lost the type
+    declare -A _mock_zfs_get_values
+    declare -A _mock_zfs_list_values
+    _mock_zfs_holds=""
+    _mock_targetcli_backstores=""
+    _mock_targetcli_iscsi=""
+    _mock_targetcli_luns=""
+    _mock_qm_status=""
+    _mock_fuser_out=""
+    _mock_lsof_out=""
+    _mock_pgrep_out=""
+}
+
+# Override zfs locally for the diagnostics we care about
+zfs() {
+    local subcmd="$1"
+    shift
+    case "$subcmd" in
+        get)
+            local prop="" dataset=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    -H*|-p*) shift ;;
+                    -o)
+                        if [[ "$2" == "value" ]]; then
+                            shift 2
+                            continue
+                        fi
+                        shift 2
+                        ;;
+                    *)
+                        if [[ -z "$prop" ]]; then
+                            prop="$1"
+                        else
+                            dataset="$1"
+                        fi
+                        shift
+                        ;;
+                esac
+            done
+            local key="${dataset}:${prop}"
+            if [[ -n "${_mock_zfs_get_values[$key]+x}" ]]; then
+                echo "${_mock_zfs_get_values[$key]}"
+            else
+                echo "-"
+            fi
+            return 0
+            ;;
+        list)
+            local type="" outcols="" have_listing_opt=0 specific_arg=""
+            local arg_idx=1
+            while [[ $arg_idx -le $# ]]; do
+                local a="${*:$arg_idx:1}"
+                case "$a" in
+                    -t) type="${*:$((arg_idx+1)):1}"; have_listing_opt=1; ((arg_idx+=2)); continue ;;
+                    -o) outcols="${*:$((arg_idx+1)):1}"; have_listing_opt=1; ((arg_idx+=2)); continue ;;
+                    -H*|-d*|-r) have_listing_opt=1; ((arg_idx++)); continue ;;
+                    -*) have_listing_opt=1; ((arg_idx++)); continue ;;
+                    *) specific_arg="$a"; ((arg_idx++)); continue ;;
+                esac
+                ((arg_idx++))
+            done
+            if [[ "$type" == *"bookmark"* ]]; then
+                if [[ -n "${_mock_zfs_list_values[bookmarks]+x}" ]]; then
+                    echo -e "${_mock_zfs_list_values[bookmarks]}"
+                fi
+                return 0
+            fi
+            if [[ "$outcols" == "clones" ]]; then
+                if [[ -n "${_mock_zfs_list_values[${specific_arg}:clones]+x}" ]]; then
+                    echo -e "${_mock_zfs_list_values[${specific_arg}:clones]}"
+                fi
+                return 0
+            fi
+            if [[ "$have_listing_opt" -eq 0 && -n "$specific_arg" && "$specific_arg" != -* ]]; then
+                if [[ -n "${_mock_zfs_list_values[${specific_arg}:exists]+x}" ]]; then
+                    echo "$specific_arg"
+                    return 0
+                fi
+                return 1
+            fi
+            return 0
+            ;;
+        holds)
+            if [[ -n "$_mock_zfs_holds" ]]; then
+                echo -e "$_mock_zfs_holds"
+            fi
+            return 0
+            ;;
+    esac
+    return 0
+}
+
+targetcli() {
+    local path="$1"
+    shift
+    case "$path" in
+        /backstores/block)
+            if [[ "$1" == "ls" ]]; then
+                echo "$_mock_targetcli_backstores"
+            fi
+            ;;
+        /iscsi)
+            if [[ "$1" == "ls" ]]; then
+                echo "$_mock_targetcli_iscsi"
+            fi
+            ;;
+        *)
+            if [[ "$path" == /iscsi/*/tpg1/luns ]]; then
+                echo "$_mock_targetcli_luns"
+            fi
+            ;;
+    esac
+    return 0
+}
+
+qm() {
+    if [[ "$1" == "status" ]]; then
+        echo "status: $_mock_qm_status"
+    fi
+    return 0
+}
+
+fuser() {
+    if [[ -n "$_mock_fuser_out" ]]; then
+        echo "$_mock_fuser_out"
+        return 0
+    fi
+    return 1
+}
+
+lsof() {
+    if [[ -n "$_mock_lsof_out" ]]; then
+        echo "$_mock_lsof_out"
+        return 0
+    fi
+    return 1
+}
+
+pgrep() {
+    if [[ -n "$_mock_pgrep_out" ]]; then
+        echo "$_mock_pgrep_out"
+        return 0
+    fi
+    return 1
+}
+
+ps() {
+    echo "mockproc"
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_diagnose_clone_dependents_snapshot() {
+    test_start "Detects clone dependents on snapshot"
+    reset_mocks
+    _mock_zfs_list_values["pool/fs@snap1:clones"]="pool/fs/clone1"
+    _mock_zfs_get_values["pool/fs@snap1:mounted"]="no"
+    _mock_zfs_get_values["pool/fs@snap1:receive_resume_token"]="-"
+    start_capture
+    diagnose_dataset_busy "pool/fs@snap1"
+    local out=$(stop_capture)
+    if [[ "$out" == *"clone dependents"* ]]; then
+        test_pass
+    else
+        test_fail "Expected 'clone dependents' in output, got: $out"
+    fi
+}
+
+test_diagnose_holds() {
+    test_start "Detects holds on snapshot"
+    reset_mocks
+    _mock_zfs_holds="pool/fs@snap1\toffsite\t2025-01-01"
+    _mock_zfs_get_values["pool/fs@snap1:mounted"]="no"
+    _mock_zfs_get_values["pool/fs@snap1:receive_resume_token"]="-"
+    start_capture
+    diagnose_dataset_busy "pool/fs@snap1"
+    local out=$(stop_capture)
+    if [[ "$out" == *"has holds"* && "$out" == *"offsite"* ]]; then
+        test_pass
+    else
+        test_fail "Expected 'has holds: offsite' in output, got: $out"
+    fi
+}
+
+test_diagnose_mounted_open_files() {
+    test_start "Detects mounted dataset with open processes"
+    reset_mocks
+    _mock_zfs_get_values["pool/fs:mounted"]="yes"
+    _mock_zfs_get_values["pool/fs:mountpoint"]="/mnt/pool/fs"
+    _mock_zfs_get_values["pool/fs:receive_resume_token"]="-"
+    _mock_fuser_out="/mnt/pool/fs: 1234 5678"
+    start_capture
+    diagnose_dataset_busy "pool/fs"
+    local out=$(stop_capture)
+    if [[ "$out" == *"mounted at /mnt/pool/fs"* && "$out" == *"Open processes"* ]]; then
+        test_pass
+    else
+        test_fail "Expected mount/process info, got: $out"
+    fi
+}
+
+test_diagnose_resume_token() {
+    test_start "Detects active receive (resume token)"
+    reset_mocks
+    _mock_zfs_get_values["pool/fs:mounted"]="no"
+    _mock_zfs_get_values["pool/fs:receive_resume_token"]="1-8e3b9c1e2-100"
+    start_capture
+    diagnose_dataset_busy "pool/fs"
+    local out=$(stop_capture)
+    if [[ "$out" == *"resume token"* ]]; then
+        test_pass
+    else
+        test_fail "Expected 'resume token' in output, got: $out"
+    fi
+}
+
+test_diagnose_iscsi_lun() {
+    test_start "Detects iSCSI LUN on zvol"
+    reset_mocks
+    _mock_zfs_get_values["pool/proxmox/vm-105-disk-0:mounted"]="no"
+    _mock_zfs_get_values["pool/proxmox/vm-105-disk-0:receive_resume_token"]="-"
+    _mock_targetcli_backstores="  | o- vm-105-disk-0  [block/vm-105-disk-0]"
+    _mock_targetcli_iscsi="iqn.2025-01.local.storage"
+    _mock_targetcli_luns="  | o- lun0  [block/vm-105-disk-0]"
+    start_capture
+    diagnose_dataset_busy "pool/proxmox/vm-105-disk-0"
+    local out=$(stop_capture)
+    if [[ "$out" == *"iSCSI LUN"* ]]; then
+        test_pass
+    else
+        test_fail "Expected 'iSCSI LUN' in output, got: $out"
+    fi
+}
+
+test_diagnose_running_vm() {
+    test_start "Detects running VM using zvol"
+    reset_mocks
+    _mock_zfs_get_values["pool/proxmox/vm-105-disk-0:mounted"]="no"
+    _mock_zfs_get_values["pool/proxmox/vm-105-disk-0:receive_resume_token"]="-"
+    _mock_qm_status="running"
+    start_capture
+    diagnose_dataset_busy "pool/proxmox/vm-105-disk-0"
+    local out=$(stop_capture)
+    if [[ "$out" == *"VM 105 is RUNNING"* ]]; then
+        test_pass
+    else
+        test_fail "Expected 'VM 105 is RUNNING' in output, got: $out"
+    fi
+}
+
+test_diagnose_nfs_share() {
+    test_start "Detects NFS share"
+    reset_mocks
+    _mock_zfs_get_values["pool/fs:mounted"]="no"
+    _mock_zfs_get_values["pool/fs:receive_resume_token"]="-"
+    _mock_zfs_get_values["pool/fs:sharenfs"]="rw=@192.168.1.0/24"
+    _mock_zfs_get_values["pool/fs:sharesmb"]="off"
+    start_capture
+    diagnose_dataset_busy "pool/fs"
+    local out=$(stop_capture)
+    if [[ "$out" == *"shared via NFS"* ]]; then
+        test_pass
+    else
+        test_fail "Expected 'shared via NFS' in output, got: $out"
+    fi
+}
+
+test_diagnose_fallback() {
+    test_start "Fallback message when no cause found"
+    reset_mocks
+    _mock_zfs_get_values["pool/fs:mounted"]="no"
+    _mock_zfs_get_values["pool/fs:receive_resume_token"]="-"
+    start_capture
+    diagnose_dataset_busy "pool/fs"
+    local out=$(stop_capture)
+    if [[ "$out" == *"No specific cause identified"* ]]; then
+        test_pass
+    else
+        test_fail "Expected fallback message, got: $out"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------
+
+test_diagnose_clone_dependents_snapshot
+test_diagnose_holds
+test_diagnose_mounted_open_files
+test_diagnose_resume_token
+test_diagnose_iscsi_lun
+test_diagnose_running_vm
+test_diagnose_nfs_share
+test_diagnose_fallback
+
+test_summary

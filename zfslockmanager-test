@@ -1,0 +1,517 @@
+#!/usr/bin/bash
+# zfslockmanager-test - Test suite for ZFS Lock Manager
+#
+# Usage: sudo ./zfslockmanager-test
+#
+# Tests:
+#   1. Basic lock acquire/release
+#   2. Lock type conflicts (same dataset)
+#   3. Hierarchy conflicts (ancestor/descendant)
+#   4. Stale lock detection
+#   5. Concurrent access (background processes)
+#   6. Cleanup functions
+
+source ~/bashinit
+bashinit
+source $mydir/zfslockmanager
+
+# Test counters
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+# Test helper functions
+test_start() { ((TESTS_RUN++)); echo -n "  Test $TESTS_RUN: $1... "; }
+test_pass() { ((TESTS_PASSED++)); echo -e "${GREEN}PASS${NC}"; }
+test_fail() { ((TESTS_FAILED++)); echo -e "${RED}FAIL${NC}"; [[ -n "$1" ]] && echo "    Reason: $1"; }
+
+# Clean up test locks
+cleanup_test_locks() {
+    rm -rf "$ZFSLOCK_DIR" 2>/dev/null
+    mkdir -p "$ZFSLOCK_LOCKS_DIR" "$ZFSLOCK_PIDS_DIR" 2>/dev/null
+}
+
+# ==============================================================================
+# Test Groups
+# ==============================================================================
+
+test_basic_acquire_release() {
+    echo ""
+    echo "=== Basic Acquire/Release Tests ==="
+
+    cleanup_test_locks
+
+    test_start "Acquire lock on test/dataset"
+    if zfslock_acquire "test/dataset" "w" "test description" && [[ -n "$ZFSLOCK_ID" && -f "$ZFSLOCK_ID" ]]; then
+        test_pass
+    else
+        test_fail "ZFSLOCK_ID not set or file not created"
+    fi
+    local lock1="$ZFSLOCK_ID"
+
+    # Test 2: Verify lock file contents
+    test_start "Lock file contains correct data"
+    local lock_dataset=$(_zfslock_read_field "$lock1" "dataset")
+    local lock_type=$(_zfslock_read_field "$lock1" "type")
+    local lock_pid=$(_zfslock_read_field "$lock1" "pid")
+    if [[ "$lock_dataset" == "test/dataset" && "$lock_type" == "w" && "$lock_pid" == "$$" ]]; then
+        test_pass
+    else
+        test_fail "Expected dataset=test/dataset type=w pid=$$, got dataset=$lock_dataset type=$lock_type pid=$lock_pid"
+    fi
+
+    test_start "Release lock"
+    if zfslock_release "$lock1" && [[ ! -f "$lock1" ]]; then
+        test_pass
+    else
+        test_fail "Lock file still exists after release"
+    fi
+
+    test_start "Acquire multiple locks"
+    zfslock_acquire "test/dataset1" "r" "first lock"; local multi_lock1="$ZFSLOCK_ID"
+    zfslock_acquire "test/dataset2" "r" "second lock"; local multi_lock2="$ZFSLOCK_ID"
+    [[ -f "$multi_lock1" && -f "$multi_lock2" ]] && test_pass || test_fail "Not all lock files created"
+
+    test_start "Release all locks"
+    zfslock_release_all
+    [[ ! -f "$multi_lock1" && ! -f "$multi_lock2" ]] && test_pass || test_fail "Lock files still exist after release_all"
+}
+
+test_same_dataset_conflicts() {
+    echo ""
+    echo "=== Same Dataset Conflict Tests ==="
+
+    cleanup_test_locks
+
+    # Acquire a write lock
+    zfslock_acquire "test/data" "w" "holding write lock"
+    local write_lock="$ZFSLOCK_ID"
+
+    test_start "Read conflicts with existing Write"
+    ! zfslock_acquire "test/data" "r" "trying read" && test_pass || { test_fail "Read lock should conflict with write lock"; zfslock_release "$ZFSLOCK_ID"; }
+
+    test_start "Write conflicts with existing Write"
+    ! zfslock_acquire "test/data" "w" "trying write" && test_pass || { test_fail "Write lock should conflict with write lock"; zfslock_release "$ZFSLOCK_ID"; }
+
+    test_start "Destroy conflicts with existing Write"
+    ! zfslock_acquire "test/data" "x" "trying destroy" && test_pass || { test_fail "Destroy lock should conflict with write lock"; zfslock_release "$ZFSLOCK_ID"; }
+
+    zfslock_release "$write_lock"
+
+    # Now test with read lock
+    zfslock_acquire "test/data" "r" "holding read lock"
+    local read_lock="$ZFSLOCK_ID"
+
+    test_start "Read does NOT conflict with existing Read"
+    if zfslock_acquire "test/data2" "r" "first read on data2"; then
+        local read_lock2="$ZFSLOCK_ID"
+        zfslock_acquire "test/data2" "r" "second read on data2" && test_pass || test_fail "Read lock should not conflict with read lock"
+        zfslock_release "$read_lock2"
+    else
+        test_fail "Could not acquire first read lock"
+    fi
+
+    test_start "Write conflicts with existing Read"
+    ! zfslock_acquire "test/data" "w" "trying write" && test_pass || { test_fail "Write lock should conflict with read lock"; zfslock_release "$ZFSLOCK_ID"; }
+
+    zfslock_release_all
+}
+
+test_hierarchy_conflicts() {
+    echo ""
+    echo "=== Hierarchy Conflict Tests ==="
+
+    cleanup_test_locks
+
+    zfslock_acquire "pool/parent" "x" "destroy parent"; local parent_lock="$ZFSLOCK_ID"
+    test_start "Destroy on parent blocks write on child"
+    ! zfslock_acquire "pool/parent/child" "w" "write child" && test_pass || { test_fail "Parent destroy should block child write"; zfslock_release "$ZFSLOCK_ID"; }
+    zfslock_release "$parent_lock"
+
+    zfslock_acquire "pool/parent" "w" "write parent"; parent_lock="$ZFSLOCK_ID"
+    test_start "Write on parent blocks write on child"
+    ! zfslock_acquire "pool/parent/child" "w" "write child" && test_pass || { test_fail "Parent write should block child write"; zfslock_release "$ZFSLOCK_ID"; }
+    zfslock_release "$parent_lock"
+
+    zfslock_acquire "pool/parent" "r" "read parent"; parent_lock="$ZFSLOCK_ID"
+    test_start "Read on parent does NOT block read on child"
+    zfslock_acquire "pool/parent/child" "r" "read child" && test_pass || test_fail "Parent read should not block child read"
+    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release "$parent_lock"
+
+    zfslock_acquire "pool/parent/child" "r" "read child"; local child_lock="$ZFSLOCK_ID"
+    test_start "Any lock on child blocks destroy on parent"
+    ! zfslock_acquire "pool/parent" "x" "destroy parent" && test_pass || { test_fail "Child lock should block parent destroy"; zfslock_release "$ZFSLOCK_ID"; }
+    zfslock_release "$child_lock"
+
+    zfslock_acquire "pool/parent/child" "w" "write child"; child_lock="$ZFSLOCK_ID"
+    test_start "Write on child blocks write on parent"
+    ! zfslock_acquire "pool/parent" "w" "write parent" && test_pass || { test_fail "Child write should block parent write"; zfslock_release "$ZFSLOCK_ID"; }
+    zfslock_release "$child_lock"
+
+    zfslock_acquire "pool/parent/child" "r" "read child"; child_lock="$ZFSLOCK_ID"
+    test_start "Read on child does NOT block read on parent"
+    zfslock_acquire "pool/parent" "r" "read parent" && test_pass || test_fail "Child read should not block parent read"
+    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release_all
+}
+
+test_stale_detection() {
+    echo ""
+    echo "=== Stale Lock Detection Tests ==="
+
+    cleanup_test_locks
+
+    # Create a lock file with a non-existent PID
+    test_start "Detect stale lock (dead PID)"
+    local fake_lockfile="$ZFSLOCK_LOCKS_DIR/test%2Fstale.lock"
+    printf '{"dataset":"test/stale","type":"w","pid":99999999,"script":"fake_script","acquired":"2026-01-01T00:00:00-05:00","description":"stale lock"}\n' > "$fake_lockfile"
+    if zfslock_is_stale "$fake_lockfile"; then
+        test_pass
+    else
+        test_fail "Lock with dead PID should be detected as stale"
+    fi
+
+    test_start "Active lock is not stale"
+    zfslock_acquire "test/active" "w" "active lock"
+    local active_lock="$ZFSLOCK_ID"
+    ! zfslock_is_stale "$active_lock" && test_pass || test_fail "Lock held by current process should not be stale"
+
+    # Test: Cleanup removes stale locks
+    test_start "Cleanup removes stale locks"
+    printf '{"dataset":"test/stale","type":"w","pid":99999999,"script":"fake_script","acquired":"2026-01-01T00:00:00-05:00","description":"stale lock"}\n' > "$fake_lockfile"
+    zfslock_cleanup_stale > /dev/null
+    if [[ ! -f "$fake_lockfile" ]]; then
+        test_pass
+    else
+        test_fail "Stale lock file should be removed by cleanup"
+    fi
+
+    test_start "Cleanup preserves active locks"
+    [[ -f "$active_lock" ]] && test_pass || test_fail "Active lock should not be removed by cleanup"
+
+    zfslock_release_all
+}
+
+test_concurrent_access() {
+    echo ""
+    echo "=== Concurrent Access Tests ==="
+
+    cleanup_test_locks
+
+    # Test: Background process lock blocks foreground
+    test_start "Background process lock blocks foreground"
+
+    # Start a background process that holds a lock
+    (
+        source ~/bashinit
+        bashinit
+        source $mydir/zfslockmanager
+        zfslock_init
+        zfslock_acquire "test/concurrent" "w" "background lock"
+        sleep 5
+    ) &
+    local bg_pid=$!
+
+    # Give background process time to acquire lock
+    sleep 1
+
+    if ! zfslock_acquire "test/concurrent" "w" "foreground attempt"; then
+        test_pass
+    else
+        test_fail "Background lock should block foreground acquire"
+        zfslock_release "$ZFSLOCK_ID"
+    fi
+
+    # Clean up background process
+    kill $bg_pid 2>/dev/null
+    wait $bg_pid 2>/dev/null
+
+    # Test: Lock released when background process exits
+    test_start "Lock released when process exits"
+    sleep 1  # Give time for EXIT trap to run
+    zfslock_cleanup_stale > /dev/null
+    if zfslock_acquire "test/concurrent" "w" "after bg exit"; then
+        test_pass; zfslock_release "$ZFSLOCK_ID"
+    else
+        test_fail "Should be able to acquire lock after background process exits"
+    fi
+
+    zfslock_release_all
+}
+
+test_path_encoding() {
+    echo ""
+    echo "=== Path Encoding Tests ==="
+
+    cleanup_test_locks
+
+    test_start "Lock dataset with multiple path segments"
+    if zfslock_acquire "pool/parent/child/grandchild" "w" "deep path"; then
+        local lockfile="$ZFSLOCK_ID"
+        [[ "$lockfile" == *"%2F"* ]] && test_pass || test_fail "Path should be encoded with %2F"
+        zfslock_release "$lockfile"
+    else
+        test_fail "Failed to acquire lock on deep path"
+    fi
+
+    test_start "Lock snapshot path"
+    if zfslock_acquire "pool/dataset@snapshot" "r" "snapshot lock"; then
+        local lockfile="$ZFSLOCK_ID"
+        [[ "$lockfile" == *"%40"* ]] && test_pass || test_fail "Snapshot @ should be encoded as %40"
+        zfslock_release "$lockfile"
+    else
+        test_fail "Failed to acquire lock on snapshot"
+    fi
+
+    zfslock_release_all
+}
+
+test_zfslockctl() {
+    echo ""
+    echo "=== zfslockctl CLI Tests ==="
+
+    cleanup_test_locks
+
+    # Create some locks for testing
+    zfslock_acquire "test/ctl1" "w" "ctl test 1"
+    zfslock_acquire "test/ctl2" "r" "ctl test 2"
+
+    # Test: list command
+    test_start "zfslockctl list shows locks"
+    local list_output=$($mydir/zfslockctl list 2>/dev/null)
+    [[ "$list_output" == *"test/ctl1"* && "$list_output" == *"test/ctl2"* ]] && test_pass || test_fail "List output should contain test locks"
+
+    # Test: status command
+    test_start "zfslockctl status shows lock details"
+    local status_output=$($mydir/zfslockctl status "test/ctl1" 2>/dev/null)
+    [[ "$status_output" == *"LOCKED"* && "$status_output" == *"write"* ]] && test_pass || test_fail "Status should show locked and type"
+
+    # Test: status on unlocked dataset
+    test_start "zfslockctl status on unlocked dataset"
+    status_output=$($mydir/zfslockctl status "test/notlocked" 2>/dev/null)
+    [[ "$status_output" == *"not locked"* ]] && test_pass || test_fail "Status should indicate not locked"
+
+    # Test: cleanup command
+    test_start "zfslockctl cleanup runs"
+    local cleanup_output=$($mydir/zfslockctl cleanup 2>/dev/null)
+    [[ "$cleanup_output" == *"Cleanup complete"* ]] && test_pass || test_fail "Cleanup should report completion"
+
+    zfslock_release_all
+}
+
+# ---------------------------------------------------------------------------
+# Interactive conflict resolution helpers
+# ---------------------------------------------------------------------------
+
+_enable_interactive() {
+    _orig_zfslock_is_interactive=$(declare -f _zfslock_is_interactive)
+    _zfslock_is_interactive() { return 0; }
+}
+
+_disable_interactive() {
+    eval "$_orig_zfslock_is_interactive"
+}
+
+# ---------------------------------------------------------------------------
+# Non-interactive / headless mode
+# ---------------------------------------------------------------------------
+
+test_noninteractive_abort() {
+    echo ""
+    echo "=== Non-Interactive Conflict Tests ==="
+    cleanup_test_locks
+
+    local sleep_pid
+    sleep 5 &
+    sleep_pid=$!
+    local lockfile=$(_zfslock_file "test/noninteractive")
+    printf '{"dataset":"test/noninteractive","type":"w","pid":%s,"script":"sleep",\
+"acquired":"2026-01-01T00:00:00-05:00","description":"bg"}\n' \
+        "$sleep_pid" > "$lockfile"
+
+    test_start "Headless mode aborts immediately with FATAL"
+    local rcfile="/tmp/zfslockmanager_test_headless_rc_$$"
+    local output
+    output=$(
+        ZFSUTILITIES_HEADLESS=Y zfslock_wait_or_resolve \
+            "test/noninteractive" "w" "test" </dev/null 2>&1
+        echo $? > "$rcfile"
+    )
+    local rc
+    rc=$(cat "$rcfile")
+    kill $sleep_pid 2>/dev/null
+    wait $sleep_pid 2>/dev/null
+    if [[ "$rc" -eq 1 && "$output" == *"FATAL:"* ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=1 and FATAL message, got rc=$rc"
+    fi
+
+    rm -f "$rcfile"
+    cleanup_test_locks
+}
+
+# ---------------------------------------------------------------------------
+# Retry option
+# ---------------------------------------------------------------------------
+
+test_retry_option() {
+    echo ""
+    echo "=== Retry Option Tests ==="
+    cleanup_test_locks
+
+    _enable_interactive
+
+    test_start "Retry option re-prompts and eventually acquires lock"
+    local sleep_pid
+    sleep 3 &
+    sleep_pid=$!
+    local lockfile=$(_zfslock_file "test/retry")
+    printf '{"dataset":"test/retry","type":"w","pid":%s,"script":"sleep",\
+"acquired":"2026-01-01T00:00:00-05:00","description":"bg"}\n' \
+        "$sleep_pid" > "$lockfile"
+    sleep 0.2
+
+    local rc
+    rc=$(ZFSLOCK_WAIT_INTERVAL=1 zfslock_wait_or_resolve \
+        "test/retry" "w" "test" <<< $'r\nw\n' >/dev/null 2>&1; echo $?)
+    kill $sleep_pid 2>/dev/null
+    wait $sleep_pid 2>/dev/null
+    if [[ "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 after retry/wait, got rc=$rc"
+    fi
+    cleanup_test_locks
+
+    _disable_interactive
+}
+
+# ---------------------------------------------------------------------------
+# Conflict message
+# ---------------------------------------------------------------------------
+
+test_conflict_message() {
+    echo ""
+    echo "=== Conflict Message Tests ==="
+    cleanup_test_locks
+
+    _enable_interactive
+
+    local sleep_pid
+    sleep 5 &
+    sleep_pid=$!
+    local lockfile=$(_zfslock_file "test/message")
+    printf '{"dataset":"test/message","type":"w","pid":%s,"script":"sleep",\
+"acquired":"2026-01-01T00:00:00-05:00","description":"bg"}\n' \
+        "$sleep_pid" > "$lockfile"
+    sleep 0.2
+
+    test_start "CONFLICT banner explains dataset is in use and shows retry"
+    local output
+    output=$(zfslock_wait_or_resolve "test/message" "w" "test" <<< "a" 2>&1)
+    kill $sleep_pid 2>/dev/null
+    wait $sleep_pid 2>/dev/null
+    if [[ "$output" == *"A lock could not be acquired for 'test/message'"* && \
+          "$output" == *"[R] Retry now"* ]]; then
+        test_pass
+    else
+        test_fail "Expected improved CONFLICT message and retry option"
+    fi
+
+    _disable_interactive
+    cleanup_test_locks
+}
+
+# ---------------------------------------------------------------------------
+# Wait-interval guard
+# ---------------------------------------------------------------------------
+
+test_wait_interval_minimum() {
+    echo ""
+    echo "=== Wait Interval Minimum Tests ==="
+    cleanup_test_locks
+
+    _enable_interactive
+
+    test_start "Zero wait interval is clamped to at least 1 second"
+    local sleep_pid
+    sleep 2 &
+    sleep_pid=$!
+    local lockfile=$(_zfslock_file "test/zerowait")
+    printf '{"dataset":"test/zerowait","type":"w","pid":%s,"script":"sleep",\
+"acquired":"2026-01-01T00:00:00-05:00","description":"bg"}\n' \
+        "$sleep_pid" > "$lockfile"
+    sleep 0.2
+
+    local start end elapsed rc
+    start=$(date +%s)
+    rc=$(ZFSLOCK_WAIT_INTERVAL=0 zfslock_wait_or_resolve \
+        "test/zerowait" "w" "test" <<< "w" >/dev/null 2>&1; echo $?)
+    end=$(date +%s)
+    elapsed=$((end - start))
+    kill $sleep_pid 2>/dev/null
+    wait $sleep_pid 2>/dev/null
+    if [[ "$rc" -eq 0 && "$elapsed" -ge 1 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 and elapsed>=1s, got rc=$rc elapsed=${elapsed}s"
+    fi
+    cleanup_test_locks
+
+    _disable_interactive
+}
+
+# ==============================================================================
+# Main
+# ==============================================================================
+
+main() {
+    echo "========================================"
+    echo "ZFS Lock Manager Test Suite"
+    echo "========================================"
+
+    # Initialize lock manager
+    zfslock_init
+
+    # Run test groups
+    test_basic_acquire_release
+    test_same_dataset_conflicts
+    test_hierarchy_conflicts
+    test_stale_detection
+    test_concurrent_access
+    test_path_encoding
+    test_zfslockctl
+    test_noninteractive_abort
+    test_conflict_message
+    test_retry_option
+    test_wait_interval_minimum
+
+    # Clean up
+    cleanup_test_locks
+
+    # Summary
+    echo ""
+    echo "========================================"
+    echo "Test Summary"
+    echo "========================================"
+    echo "  Total:  $TESTS_RUN"
+    echo -e "  Passed: ${GREEN}$TESTS_PASSED${NC}"
+    [[ $TESTS_FAILED -gt 0 ]] && echo -e "  Failed: ${RED}$TESTS_FAILED${NC}" || echo "  Failed: 0"
+    echo ""
+
+    if [[ $TESTS_FAILED -eq 0 ]]; then
+        echo -e "${GREEN}All tests passed!${NC}"; return 0
+    fi
+    echo -e "${RED}Some tests failed.${NC}"
+    return 1
+}
+
+main "$@"

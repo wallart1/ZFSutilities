@@ -1,0 +1,36 @@
+# Editor / OS
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Test / coverage artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated documentation site
+06 Docs/site/
+
+# Large / working files not meant for version control
+*.png
+*.pdf
+*.zip
+PROMPT
+PROMPT2
+CLAUDE-SESSIONS.md
+ROADMAP
+bashcodingpolicy
+pythoncodingpolicy
+
+# NFS
+.nfs*

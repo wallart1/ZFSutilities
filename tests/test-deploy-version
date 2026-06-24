@@ -1,0 +1,383 @@
+#!/usr/bin/bash
+# test-deploy-version — Verify root-level script selection logic.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+# Replicate the selection logic from deploy-version (lines 266–284)
+_test_copy_logic() {
+    local src_dir="$1"
+    local dest_dir="$2"
+    mkdir -p "$dest_dir"
+
+    for script in "$src_dir/"*; do
+        [[ -f "$script" ]] || continue
+        local name
+        name=$(basename "$script")
+        [[ "$name" == *.md ]] && continue
+        [[ "$name" == .gitignore ]] && continue
+        [[ "$name" == installed-programs ]] && continue
+        [[ "$name" == PROMPT* ]] && continue
+        [[ "$name" == VERSION ]] && continue
+        if [[ -x "$script" ]]; then
+            install -m 0755 "$script" "$dest_dir/"
+            continue
+        fi
+        if head -c2 "$script" | grep -q '^#!'; then
+            install -m 0755 "$script" "$dest_dir/"
+        fi
+    done
+}
+
+test_executable_script_copied() {
+    test_start "Executable script is copied"
+    local tmpdir=$(mktemp -d)
+    echo '#!/bin/bash' > "$tmpdir/myscript"
+    chmod +x "$tmpdir/myscript"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ -f "$destdir/myscript" && -x "$destdir/myscript" ]]; then
+        test_pass
+    else
+        test_fail "myscript was not copied or not executable"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_shebang_non_executable_copied() {
+    test_start "Shebang file without exec bit is copied"
+    local tmpdir=$(mktemp -d)
+    echo '#!/bin/bash' > "$tmpdir/noxscript"
+    chmod -x "$tmpdir/noxscript"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ -f "$destdir/noxscript" && -x "$destdir/noxscript" ]]; then
+        test_pass
+    else
+        test_fail "noxscript was not copied or not made executable"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_plain_file_skipped() {
+    test_start "Plain file without shebang or exec is skipped"
+    local tmpdir=$(mktemp -d)
+    echo 'just data' > "$tmpdir/plainfile"
+    chmod -x "$tmpdir/plainfile"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ ! -f "$destdir/plainfile" ]]; then
+        test_pass
+    else
+        test_fail "plainfile should have been skipped"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_md_file_skipped() {
+    test_start ".md file is skipped"
+    local tmpdir=$(mktemp -d)
+    echo '# Title' > "$tmpdir/README.md"
+    chmod +x "$tmpdir/README.md"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ ! -f "$destdir/README.md" ]]; then
+        test_pass
+    else
+        test_fail "README.md should have been skipped"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_gitignore_skipped() {
+    test_start ".gitignore is skipped"
+    local tmpdir=$(mktemp -d)
+    echo '*.pyc' > "$tmpdir/.gitignore"
+    chmod +x "$tmpdir/.gitignore"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ ! -f "$destdir/.gitignore" ]]; then
+        test_pass
+    else
+        test_fail ".gitignore should have been skipped"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_PROMPT_files_skipped() {
+    test_start "PROMPT files are skipped"
+    local tmpdir=$(mktemp -d)
+    echo 'prompt text' > "$tmpdir/PROMPT2"
+    chmod +x "$tmpdir/PROMPT2"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ ! -f "$destdir/PROMPT2" ]]; then
+        test_pass
+    else
+        test_fail "PROMPT2 should have been skipped"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_VERSION_skipped() {
+    test_start "VERSION file is skipped"
+    local tmpdir=$(mktemp -d)
+    echo '1.0.0' > "$tmpdir/VERSION"
+    chmod +x "$tmpdir/VERSION"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ ! -f "$destdir/VERSION" ]]; then
+        test_pass
+    else
+        test_fail "VERSION should have been skipped"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_installed_programs_skipped() {
+    test_start "installed-programs is skipped"
+    local tmpdir=$(mktemp -d)
+    echo 'pkg list' > "$tmpdir/installed-programs"
+    chmod +x "$tmpdir/installed-programs"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ ! -f "$destdir/installed-programs" ]]; then
+        test_pass
+    else
+        test_fail "installed-programs should have been skipped"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_directories_skipped() {
+    test_start "Directories are skipped"
+    local tmpdir=$(mktemp -d)
+    mkdir "$tmpdir/subdir"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ ! -e "$destdir/subdir" ]]; then
+        test_pass
+    else
+        test_fail "subdir should have been skipped"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_data_file_executable_copied() {
+    test_start "Executable data file (no shebang) is copied"
+    local tmpdir=$(mktemp -d)
+    echo "bktname[0]='d'" > "$tmpdir/zfsretainpol-test"
+    chmod +x "$tmpdir/zfsretainpol-test"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ -f "$destdir/zfsretainpol-test" ]]; then
+        test_pass
+    else
+        test_fail "zfsretainpol-test should have been copied"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_multiple_mixed_files() {
+    test_start "Mixed directory copies correct files"
+    local tmpdir=$(mktemp -d)
+    echo '#!/bin/bash' > "$tmpdir/script-exec" && chmod +x "$tmpdir/script-exec"
+    echo '#!/bin/bash' > "$tmpdir/script-nox" && chmod -x "$tmpdir/script-nox"
+    echo 'plain' > "$tmpdir/plain" && chmod -x "$tmpdir/plain"
+    echo '# doc' > "$tmpdir/doc.md" && chmod +x "$tmpdir/doc.md"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    local ok=1
+    [[ -f "$destdir/script-exec" ]] || ok=0
+    [[ -f "$destdir/script-nox" ]] || ok=0
+    [[ ! -f "$destdir/plain" ]] || ok=0
+    [[ ! -f "$destdir/doc.md" ]] || ok=0
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Unexpected files in destination"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_executable_script_copied
+test_shebang_non_executable_copied
+test_plain_file_skipped
+test_md_file_skipped
+test_gitignore_skipped
+test_PROMPT_files_skipped
+test_VERSION_skipped
+test_installed_programs_skipped
+test_directories_skipped
+test_data_file_executable_copied
+test_multiple_mixed_files
+
+# ------------------------------------------------------------------
+# Replicate the validation logic from deploy-version (lines 228–244)
+# ------------------------------------------------------------------
+_test_validate_logic() {
+    local version_dir="$1"
+    local missing=0
+    for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive; do
+        if [[ ! -f "$version_dir/bin/$script" ]]; then
+            echo "  Missing: $version_dir/bin/$script"
+            ((++missing))
+        fi
+    done
+    if [[ $missing -gt 0 ]]; then
+        echo "  WARNING: $missing critical script(s) missing from deployment."
+    fi
+    return $missing
+}
+
+test_validate_all_present() {
+    test_start "Validation passes when all critical scripts present"
+    local tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/bin"
+    for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive; do
+        touch "$tmpdir/bin/$script"
+    done
+    local output
+    output=$(_test_validate_logic "$tmpdir" 2>&1)
+    if [[ -z "$output" ]]; then
+        test_pass
+    else
+        test_fail "Expected no output, got: $output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_validate_missing_scripts_warns() {
+    test_start "Validation warns when critical scripts are missing"
+    local tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/bin"
+    # Only create two of the five required scripts
+    touch "$tmpdir/bin/zfsdelsnap"
+    touch "$tmpdir/bin/zfscleanup"
+    local output
+    output=$(_test_validate_logic "$tmpdir" 2>&1)
+    if [[ "$output" == *"Missing:"* && "$output" == *"WARNING:"* ]]; then
+        test_pass
+    else
+        test_fail "Expected missing-script warnings, got: $output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_validate_all_present
+test_validate_missing_scripts_warns
+
+# ------------------------------------------------------------------
+# Launcher symlinks (from deploy-version deploy_to_host)
+# ------------------------------------------------------------------
+_test_symlink_logic() {
+    local version_dir="$1"
+    mkdir -p "$version_dir/bin"
+
+    rm -f "$version_dir/bin/zfsutilities-gui"
+    ln -sfn "../07 GTK + Python/zfsutilities_gui.py" "$version_dir/bin/zfsutilities-gui"
+
+    rm -f "$version_dir/bin/zfsutilities-docs"
+    ln -sfn "../07 GTK + Python/docs_viewer.py" "$version_dir/bin/zfsutilities-docs"
+}
+
+test_launcher_symlinks_created() {
+    test_start "deploy-version creates GUI and docs launcher symlinks"
+    local tmpdir=$(mktemp -d)
+    _test_symlink_logic "$tmpdir"
+
+    local gui_target docs_target ok=1
+    gui_target=$(readlink "$tmpdir/bin/zfsutilities-gui" 2>/dev/null || true)
+    docs_target=$(readlink "$tmpdir/bin/zfsutilities-docs" 2>/dev/null || true)
+
+    if [[ ! -L "$tmpdir/bin/zfsutilities-gui" ]]; then
+        ok=0
+        echo "    zfsutilities-gui symlink missing"
+    fi
+    if [[ ! -L "$tmpdir/bin/zfsutilities-docs" ]]; then
+        ok=0
+        echo "    zfsutilities-docs symlink missing"
+    fi
+    if [[ "$gui_target" != "../07 GTK + Python/zfsutilities_gui.py" ]]; then
+        ok=0
+        echo "    zfsutilities-gui target wrong: $gui_target"
+    fi
+    if [[ "$docs_target" != "../07 GTK + Python/docs_viewer.py" ]]; then
+        ok=0
+        echo "    zfsutilities-docs target wrong: $docs_target"
+    fi
+
+    rm -rf "$tmpdir"
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Launcher symlinks were not created correctly"
+    fi
+}
+
+test_launcher_symlinks_replace_existing() {
+    test_start "deploy-version replaces existing launcher symlinks"
+    local tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/bin"
+    ln -s "old-target" "$tmpdir/bin/zfsutilities-gui"
+    ln -s "old-target" "$tmpdir/bin/zfsutilities-docs"
+
+    _test_symlink_logic "$tmpdir"
+
+    local gui_target docs_target ok=1
+    gui_target=$(readlink "$tmpdir/bin/zfsutilities-gui" 2>/dev/null || true)
+    docs_target=$(readlink "$tmpdir/bin/zfsutilities-docs" 2>/dev/null || true)
+
+    if [[ "$gui_target" != "../07 GTK + Python/zfsutilities_gui.py" ]]; then
+        ok=0
+        echo "    zfsutilities-gui target wrong: $gui_target"
+    fi
+    if [[ "$docs_target" != "../07 GTK + Python/docs_viewer.py" ]]; then
+        ok=0
+        echo "    zfsutilities-docs target wrong: $docs_target"
+    fi
+
+    rm -rf "$tmpdir"
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Existing launcher symlinks were not replaced"
+    fi
+}
+
+test_launcher_symlinks_created
+test_launcher_symlinks_replace_existing
+
+# ------------------------------------------------------------------
+# Production wiring must be handled by switch-version, not deploy-version
+# ------------------------------------------------------------------
+test_deploy_version_does_not_wire() {
+    test_start "deploy-version does not create production wiring"
+    local deploy_script
+    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+
+    local fail_reason=""
+    if grep -qE "setup_bashinit_symlink|setup_path_config|cleanup_old_symlinks" "$deploy_script"; then
+        fail_reason="deploy-version still defines/calls wiring helpers"
+    elif grep -q "/etc/profile.d/zfsutilities.sh" "$deploy_script"; then
+        fail_reason="deploy-version still references profile.d config"
+    elif grep -q "/etc/sudoers.d/zfsutilities" "$deploy_script"; then
+        fail_reason="deploy-version still references sudoers config"
+    elif grep -qE "ln -s[^\n]*(/root/bashinit|/usr/local/lib/node-lib\.sh|/usr/local/lib/two-node-lib\.sh|/usr/local/lib/zfsutilities/bin)" "$deploy_script"; then
+        fail_reason="deploy-version still creates production symlinks"
+    fi
+
+    if [[ -n "$fail_reason" ]]; then
+        test_fail "$fail_reason"
+    else
+        test_pass
+    fi
+}
+
+test_deploy_version_does_not_wire
+
+test_summary
+teardown_test_env

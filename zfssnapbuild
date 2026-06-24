@@ -1,0 +1,66 @@
+#!/usr/bin/bash
+
+# Build a snapshot name for zfsdailybackup utilities
+# @<label>-<yyyy-mm-dd>T<hh:mm><timezone>-<bucket>
+# For example: @dailybackup-2025-06-28T11:58-04:00-d
+
+# $1 = Optional label value, with or without a leading "@". $label may also be set before sourcing this script. Default = "@dailybackup". Empty label is not allowed.
+
+function buildsnapfilename {
+    local caller="${BASH_SOURCE[1]}"        # Who called?
+    local caller_sanitized
+    caller_sanitized=$(basename "$caller" | tr -c 'A-Za-z0-9_' '_')  # Sanitize for valid filename
+    echo "/tmp/zfsnextsnap_$caller_sanitized"
+}
+
+zfssnapbuild() {
+    # First, look to see if a nextsnap was saved from a prior incomplete run of the caller.
+    # This implies that a job was not completed, and we probably want to reuse the previous
+    # $nextsnap.
+    # The snapshot name is stored in a file: /tmp/zfsnextsnap_<caller>
+    # If the user chooses not to use the $snapfile, it is deleted here.
+    # Otherwise, the caller is responsible for deleting the $snapfile upon successful completion.
+    snapfile=$(buildsnapfilename)
+    local nextsnap=""
+    if [[ -f "$snapfile" ]]; then   # Look for previously-saved snapshot name.
+        nextsnap=$(cat "$snapfile")
+    fi
+    if [[ $nextsnap != '' ]]; then          # If $nextsnap contains something
+        # Depending on subsequent processing, reusing an existing snapshot name will generally
+        # cause a processing step to be skipped if the snapshot already exists.
+        log_msg "INFO: A prior nextsnap was found: $nextsnap (from $snapfile)."
+        if ask_yn "Do you want to use it instead of a new one?"; then
+            echo "$nextsnap"
+            return 0
+        else
+            rm $snapfile
+        fi
+    fi
+    # Generate a new snapshot name
+    if [[ $1 != "" ]];              then local label=$1; fi
+    if [[ $label = "" ]];           then local label="@dailybackup"; fi
+    if [[ ${label:0:1} != '@' ]];   then local label='@'$label; fi
+    local currdate=$(date -Iminutes)
+    if [[ $bucket = "" ]]; then
+        # Determine backup bucket: d=daily, w=weekly, m=monthly
+        # Monthly takes precedence if the 1st falls on a Sunday.
+        testdate="$currdate"
+        bucket='d'
+        x=$(date -d "$testdate" +%a)
+        if [[ $x = "Sun" ]]; then
+            bucket='w'
+        fi
+        x=$(date -d "$testdate" +%d)
+        if [[ $x = "01" ]]; then
+            bucket='m'
+        fi
+    fi
+    if [[ $label = '@offsite' ]];   then bucket='s'; fi
+    local nextsnap="$label-$currdate-$bucket"
+    echo "$nextsnap" > "$snapfile"      # Save snapshot name for possible later reuse.
+    echo "$nextsnap"
+}
+function removesnapfile {
+    rm -f $(buildsnapfilename)
+}
+

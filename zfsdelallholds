@@ -1,0 +1,50 @@
+#!/usr/bin/bash
+
+function delallholds {
+    # Release all holds on a given ZFS snapshot
+    # $1 Snapshot
+    # $2 Optional. Only this tag will be realeased.
+
+    source ~/bashinit
+    bashinit
+
+    local zfsdelallholds_snap="$1"
+    local zfsdelallholds_hold="$2"
+    local hold i holdtag
+    declare -a holdtags holdarray
+
+    # Read each line from zfs holds -H into holdarray
+    IFS=$'\n' readarray -t holdarray < <(zfs holds -H "$zfsdelallholds_snap")
+
+    if [[ ${#holdarray[@]} = 0 ]]; then
+        return 0
+    else
+        if [[ $zfsdelallholds_hold != "" ]]; then # If removing a single hold
+            holdtags[0]="$zfsdelallholds_hold"
+        else
+            i=0
+            for hold in "${holdarray[@]}"; do # Process each line
+                # Extract the hold tag (second field) from the line
+                holdtags[i]=$(echo "$hold" | awk '{print $2}')
+                ((i=i+1))
+            done
+
+            log_msg "INFO: About to release the following ${#holdtags[@]} holds from $zfsdelallholds_snap."
+            for holdtag in "${holdtags[@]}"; do
+                echo "$holdtag"
+            done
+            if [[ $autoproceed != "Y" ]]; then
+                read -p "Press enter to continue."
+            fi
+        fi
+    fi
+
+    for holdtag in "${holdtags[@]}"; do
+        if ! zfs release "$holdtag" "$zfsdelallholds_snap"; then
+            rc=$?
+            log_msg "FATAL: Release of hold $holdtag on $zfsdelallholds_snap failed rc=$rc."
+            exit 8
+        fi
+    done
+}
+

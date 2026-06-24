@@ -1,0 +1,14 @@
+#!/usr/bin/bash
+# Overrides are any sequence of shell commands separated by semicolons. This provides a way to
+# adjust parameters from the command line without having to modify the script.
+
+overrides() {
+    source ~/bashinit
+    bashinit
+    if [[ $# -gt 0 ]]; then     # Check if any arguments were passed
+        local overrides="$*"    # "$*" joins all arguments into a single string
+        log_msg "INFO: Running with overrides: $overrides"
+        eval "$overrides"
+    fi
+}
+

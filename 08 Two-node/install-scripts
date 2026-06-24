@@ -1,0 +1,204 @@
+#!/bin/bash
+# install-scripts
+#
+# DEPRECATED: Use the new installers instead:
+#   10 Installers/install-single-node  — for single-node (no iSCSI)
+#   10 Installers/install-two-node     — for two-node (storage + compute)
+#
+# The new installers prompt for settings interactively, support both
+# single-node and two-node modes, and start the documentation server.
+#
+# This script is kept for backward compatibility only.
+#
+# Installs all VM disk management scripts to /usr/local/bin/ on BOTH the
+# storage host and the compute host (as defined by /etc/two-node.conf).
+#
+# Run on the storage host as root. It copies scripts locally and to the
+# compute host via SSH.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Scripts installed on BOTH hosts
+BOTH_SCRIPTS="new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk rescan-storage show-lun-map clone-vm move-vm-disk"
+
+# Scripts installed on the storage host ONLY (storage/key management)
+STORAGE_ONLY_SCRIPTS="safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns iscsi-restore-luns unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys"
+
+ALL_SCRIPTS="$BOTH_SCRIPTS $STORAGE_ONLY_SCRIPTS"
+
+# Two-node config file (single source of truth for hosts/IPs/IQNs)
+TWO_NODE_CONF="/etc/two-node.conf"
+TWO_NODE_CONF_SRC="${SCRIPT_DIR}/two-node.conf.template"
+
+# Helper library sourced by the two-node scripts
+TWO_NODE_LIB_SRC="${SCRIPT_DIR}/two-node-lib.sh"
+TWO_NODE_LIB_DST="/usr/local/lib/two-node-lib.sh"
+
+# systemd drop-in configs
+DROPIN_DIR="/etc/systemd/system/rtslib-fb-targetctl.service.d"
+DROPINS=(
+    "rtslib-fb-targetctl-pre-start-backup.conf:pre-start-backup.conf"
+    "rtslib-fb-targetctl-boot-config.conf:boot-config.conf"
+    "rtslib-fb-targetctl-wait-for-zfs-keys.conf:wait-for-zfs-keys.conf"
+)
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+[[ $EUID -eq 0 ]] || die "Must run as root"
+
+echo "=== install-scripts ==="
+echo ""
+
+# --- Install /etc/two-node.conf from template if not already present ---
+# This MUST happen before we source the conf below (chicken-and-egg on first
+# install). Existing /etc/two-node.conf is never overwritten — site config
+# wins.
+[[ -f "$TWO_NODE_CONF_SRC" ]] || die "Missing template: $TWO_NODE_CONF_SRC"
+if [[ ! -f "$TWO_NODE_CONF" ]]; then
+    install -m 0644 "$TWO_NODE_CONF_SRC" "$TWO_NODE_CONF"
+    echo "  ✓ Installed $TWO_NODE_CONF (from template)"
+    echo "    Edit this file if your hosts/IPs/pools differ from the defaults,"
+    echo "    then re-run install-scripts."
+    echo ""
+fi
+
+# shellcheck source=two-node.conf.template
+source "$TWO_NODE_CONF"
+
+# Verify the conf defines what we need
+for _v in STORAGE_HOST COMPUTE_HOST STORAGE_IP IQN_PREFIX; do
+    [[ -n "${!_v:-}" ]] || die "$TWO_NODE_CONF: $_v is empty or unset"
+done
+unset _v
+
+[[ "$(hostname -s)" == "$STORAGE_HOST" ]] || \
+    die "Run this script on the storage host ($STORAGE_HOST), not $(hostname -s)"
+
+# --- Verify all scripts exist ---
+for script in $ALL_SCRIPTS; do
+    [[ -f "${SCRIPT_DIR}/${script}" ]] || die "Missing: ${SCRIPT_DIR}/${script}"
+done
+[[ -f "$TWO_NODE_LIB_SRC" ]] || die "Missing: $TWO_NODE_LIB_SRC"
+
+# --- Install on the storage host ---
+echo "Installing on $STORAGE_HOST (/usr/local/bin/)..."
+for script in $ALL_SCRIPTS; do
+    install -m 0755 "${SCRIPT_DIR}/${script}" /usr/local/bin/
+    echo "  ✓ /usr/local/bin/${script}"
+done
+
+# Install the two-node helper library
+install -d -m 0755 "$(dirname "$TWO_NODE_LIB_DST")"
+install -m 0644 "$TWO_NODE_LIB_SRC" "$TWO_NODE_LIB_DST"
+echo "  ✓ $TWO_NODE_LIB_DST"
+
+# --- Install systemd drop-ins ---
+echo ""
+echo "Installing systemd drop-ins for rtslib-fb-targetctl..."
+mkdir -p "$DROPIN_DIR"
+for dropin_entry in "${DROPINS[@]}"; do
+    IFS=':' read -r src_name dst_name <<< "$dropin_entry"
+    install -m 0644 "${SCRIPT_DIR}/${src_name}" "${DROPIN_DIR}/${dst_name}"
+    echo "  ✓ ${DROPIN_DIR}/${dst_name}"
+done
+systemctl daemon-reload
+
+# --- Install encrypted LUNs conf if not already present ---
+ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+ENCRYPTED_CONF_SRC="${SCRIPT_DIR}/iscsi-encrypted-luns.conf"
+if [[ ! -f "$ENCRYPTED_CONF" ]]; then
+    if [[ -f "$ENCRYPTED_CONF_SRC" ]]; then
+        install -m 0644 "$ENCRYPTED_CONF_SRC" "$ENCRYPTED_CONF"
+        echo ""
+        echo "  ✓ Installed $ENCRYPTED_CONF (new plain-text format)"
+    fi
+else
+    # Warn if the existing file uses the old bash array format
+    if grep -q 'ENCRYPTED_LUNS=' "$ENCRYPTED_CONF" 2>/dev/null; then
+        echo ""
+        echo "  ⚠ $ENCRYPTED_CONF uses old bash array format."
+        echo "    Replace with: ${ENCRYPTED_CONF_SRC}"
+        echo "    New format: one entry per line — backstore_name:device_path:target_short_name"
+    fi
+fi
+
+echo ""
+
+# --- Install on the compute host via SSH (BOTH_SCRIPTS + lib + conf) ---
+echo "Installing on $COMPUTE_HOST (/usr/local/bin/) via SSH..."
+for script in $BOTH_SCRIPTS; do
+    scp -q "${SCRIPT_DIR}/${script}" "root@${COMPUTE_HOST}:/usr/local/bin/${script}"
+    ssh "root@${COMPUTE_HOST}" "chmod 0755 /usr/local/bin/${script}"
+    echo "  ✓ ${COMPUTE_HOST}:/usr/local/bin/${script}"
+done
+
+# Install the two-node helper library on the compute host
+ssh "root@${COMPUTE_HOST}" "install -d -m 0755 $(dirname "$TWO_NODE_LIB_DST")"
+scp -q "$TWO_NODE_LIB_SRC" "root@${COMPUTE_HOST}:${TWO_NODE_LIB_DST}"
+ssh "root@${COMPUTE_HOST}" "chmod 0644 ${TWO_NODE_LIB_DST}"
+echo "  ✓ ${COMPUTE_HOST}:${TWO_NODE_LIB_DST}"
+
+# Install /etc/two-node.conf on the compute host if missing (never overwrite)
+if ssh "root@${COMPUTE_HOST}" "[[ ! -f ${TWO_NODE_CONF} ]]"; then
+    scp -q "$TWO_NODE_CONF_SRC" "root@${COMPUTE_HOST}:${TWO_NODE_CONF}"
+    ssh "root@${COMPUTE_HOST}" "chmod 0644 ${TWO_NODE_CONF}"
+    echo "  ✓ ${COMPUTE_HOST}:${TWO_NODE_CONF} (from template)"
+else
+    echo "  · ${COMPUTE_HOST}:${TWO_NODE_CONF} already present (left unchanged)"
+fi
+
+echo ""
+
+# --- Check SSH key setup ---
+echo "=== Checking SSH key authorization ==="
+
+# Check that root@$STORAGE_HOST can SSH to $COMPUTE_HOST as dan (for rescan)
+if ssh -o ConnectTimeout=5 -o BatchMode=yes root@"$COMPUTE_HOST" true 2>/dev/null; then
+    echo "  ✓ root@$STORAGE_HOST → root@$COMPUTE_HOST SSH works"
+else
+    echo "  ⚠ root@$STORAGE_HOST cannot SSH to root@$COMPUTE_HOST"
+    echo "    Fix: copy root@$STORAGE_HOST's public key to root@$COMPUTE_HOST's authorized_keys"
+    echo "    Run on $STORAGE_HOST: ssh-copy-id root@$COMPUTE_HOST"
+fi
+
+# Check that $COMPUTE_HOST can SSH to $STORAGE_HOST as root (for the delegation path)
+if ssh -o ConnectTimeout=5 root@"$COMPUTE_HOST" \
+    "ssh -o ConnectTimeout=5 -o BatchMode=yes root@$STORAGE_HOST true" 2>/dev/null; then
+    echo "  ✓ root@$COMPUTE_HOST → root@$STORAGE_HOST SSH works"
+else
+    echo "  ⚠ root@$COMPUTE_HOST cannot SSH to root@$STORAGE_HOST"
+    echo "    Fix: on $COMPUTE_HOST, copy root's key to $STORAGE_HOST's root authorized_keys:"
+    echo "      sudo ssh-copy-id root@$STORAGE_HOST"
+fi
+
+# Check passwordless sudo for rescan-storage on $COMPUTE_HOST
+if ssh -o ConnectTimeout=5 root@"$COMPUTE_HOST" \
+    "sudo -n /usr/local/bin/rescan-storage --check 2>/dev/null; sudo -n true 2>/dev/null" 2>/dev/null; then
+    echo "  ✓ dan can sudo rescan-storage on $COMPUTE_HOST (passwordless)"
+else
+    echo "  ⚠ dan may need passwordless sudo for rescan-storage on $COMPUTE_HOST"
+    echo "    Fix: on $COMPUTE_HOST, create /etc/sudoers.d/vm-disk-scripts:"
+    echo "      dan ALL=(root) NOPASSWD: /usr/local/bin/rescan-storage"
+    echo "      dan ALL=(root) NOPASSWD: /usr/local/bin/show-lun-map"
+    echo "      dan ALL=(root) NOPASSWD: /usr/local/bin/new-vm-disk"
+    echo "      dan ALL=(root) NOPASSWD: /usr/local/bin/remove-vm-disk"
+    echo "      dan ALL=(root) NOPASSWD: /usr/local/bin/list-vm-disks"
+    echo "      dan ALL=(root) NOPASSWD: /usr/local/bin/resize-vm-disk"
+    echo "      dan ALL=(root) NOPASSWD: /usr/local/bin/clone-vm"
+    echo "      dan ALL=(root) NOPASSWD: /usr/local/bin/move-vm-disk"
+fi
+
+echo ""
+echo "=== Installation complete ==="
+echo ""
+echo "Post-install steps:"
+echo "  1. If $ENCRYPTED_CONF uses the old bash array format, replace it with the new plain-text format"
+echo "  2. Run: safe-iscsi-save    (generates saveconfig-boot.json for safe boot)"
+echo "  3. Run: systemctl daemon-reload   (if not already done)"
+echo ""
+echo "Run all scripts from $COMPUTE_HOST as: sudo <script-name> [args]"

@@ -1,0 +1,53 @@
+#!/usr/bin/bash
+# ZFS unmount all filesystems in a subtree
+# $1    = "mount" or "unmount"
+# $2    = Filesystem subtree to unmount
+
+source ~/bashinit
+bashinit
+source $mydir/rootcheck
+
+if [[ $1 != 'mount' ]] && [[ $1 != 'unmount' ]]; then
+    log_msg 'FATAL: $1 must be either "mount" or "unmount"'
+    exit 8
+fi
+command=$1
+if [[ $command = "mount" ]]; then
+    mountedcondition='no'
+    dstype='filesystem'
+else
+    mountedcondition='yes'
+    dstype='all'
+fi
+if [[ $2 = "" ]]; then log_msg "FATAL: A subtree must be specified."; exit 8; fi
+subtree=$2
+rootcheck
+
+readarray -t mountarray < <(zfs list -Hrt $dstype -o name $subtree)
+
+if [[ ${#mountarray} > 0 ]]; then
+    log_msg "INFO: About to $command the following datasets:"
+    declare -i x=0
+    for fs in ${mountarray[@]}; do
+        if [[ $(zfs get -H mounted $fs | awk '{print $3}') = "$mountedcondition" ]]; then
+            echo $fs
+            x=$(($x+1))
+        fi
+    done
+    if [[ $x > 0 ]]; then
+        read -p "Press enter to proceed."
+    else
+        log_msg "WARN: No eligible datasets were found in $subtree."
+        exit 4
+    fi
+
+    for fs in ${mountarray[@]}; do
+        if [[ $(zfs get -H mounted $fs | awk '{print $3}') = "$mountedcondition" ]]; then
+            zfs $command $fs
+        fi
+    done
+else
+    log_msg "WARN: No elibigle datasets found in $subtree."
+    exit 4
+fi
+

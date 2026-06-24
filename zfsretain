@@ -1,0 +1,331 @@
+#!/usr/bin/bash
+# Apply retension policies (aka "prune")
+#
+# Policies live in the shared JSON config at /root/.config/zfsutilities.json
+# under the `retention` key, accessed via `zfsconfig_get_retention <pool>`.
+# If a pool has no entry, the 'default' entry is used. If the JSON config has
+# no retention data at all, the helper falls back to reading legacy
+# zfsretainpol-<pool> files from this script's directory. If nothing can be
+# found, the job is aborted.
+
+function retain {
+    source ~/bashinit
+    bashinit
+    source $mydir/zfsconfig
+    source $mydir/zfsdelsnap
+    source $mydir/zfsremoveleadingqualifiers
+
+    if [[ "$skipbusy" = '' ]]; then skipbusy='Y'; fi
+
+    if [[ "$1" != '' ]]; then retainfs="$1"; fi
+    # awk '{print $2}'  —  retainfs may contain "pool/fs qualifiers"; grab the second token (qualifiers).
+    leadingqualifiestodelete=$(echo "$retainfs" | awk '{print $2}')
+    # awk -F'[/ ]' '{print $1}'  —  Split on slash or space; get the pool name (first token).
+    retainfspool=$(echo $retainfs | awk -F'[/ ]' '{print $1}')
+    # awk '{print $1}'  —  Get the first whitespace-delimited token (the dataset path).
+    retainfs=$(echo "$retainfs" | awk '{print $1}')
+    if [[ $leadingqualifiestodelete = '' ]]; then 
+        leadingqualifiestodelete='0'
+    fi
+
+    if [[ $2 != '' ]]; then label=$2; fi
+    if [[ $label = '' ]]; then label='@dailybackup'; fi
+    if [[ ${label:0:1} != '@' ]]; then label="@$label"; fi
+    if [[ $originlabel = '' ]]; then originlabel=$label; fi
+    if [[ $targetlabel = '' ]]; then targetlabel=$label; fi
+    if [[ $releaseholds = 'Y' ]]; then relholds='releaseholds'; else relholds='N'; fi
+
+    # =========================================================================
+    # Load the retention policy from the JSON config (needed for minage in both
+    # Phase 1 and 2). zfsconfig_get_retention falls back to 'default' if the
+    # pool has no entry, and to legacy zfsretainpol-<pool> files if the JSON
+    # has no retention data at all.
+    # =========================================================================
+    bktname=(); bktretain=(); minage=()
+    _retention_fragment=$(ZFSCONFIG_LEGACY_DIR="$mydir" zfsconfig_get_retention "$retainfspool")
+    if [[ -z "$_retention_fragment" ]]; then
+        log_msg "FATAL: No retention policy found for pool '$retainfspool' (JSON config or" \
+            "legacy zfsretainpol-* file). Aborting."
+        sleep 5
+        exit 8
+    fi
+    if ! eval "$_retention_fragment"; then
+        log_msg "FATAL: Unable to evaluate retention policy fragment for '$retainfspool'."
+        sleep 5
+        exit 8
+    fi
+    unset _retention_fragment
+    bktlen=${#bktname[@]}
+
+    # Helper function to look up minage by bucket name
+    get_minage_for_bucket() {
+        local bucket=$1
+        local idx
+        for ((idx=0; idx<bktlen; idx++)); do
+            if [[ ${bktname[$idx]} = "$bucket" ]]; then
+                echo "${minage[$idx]:-0}"
+                return
+            fi
+        done
+        echo "0"  # Default to 0 if bucket not found
+    }
+
+    local set_save=$-
+    local -i i_save=$i j_save=$j k_save=$k l_save=$l
+    local -i i j k l
+
+    #zfs list -Ht snapshot -o name,creation threeamigos/proxmox
+    #threeamigos/proxmox@dailybackup-2025-03-30T11:11-04:00-w	Sun Mar 30 11:11 2025
+    #threeamigos/proxmox@dailybackup-2025-04-01T10:34-04:00-m	Tue Apr  1 10:34 2025
+    #threeamigos/proxmox@dailybackup-2025-04-06T11:10-04:00-w	Sun Apr  6 11:10 2025
+    #threeamigos/proxmox@dailybackup-2025-04-09T06:57-04:00-d	Wed Apr  9  6:57 2025
+    #threeamigos/proxmox@dailybackup-2025-04-10T19:22-04:00-d	Thu Apr 10 19:51 2025
+    #threeamigos/proxmox@dailybackup-2025-04-11T10:41-04:00-d	Fri Apr 11 10:41 2025
+    #threeamigos/proxmox@dailybackup-2025-04-12T11:29-04:00-d	Sat Apr 12 11:30 2025
+    #
+    #   Phase 1
+    #       If related snapshots were taken on the same day, remove all but the most recent one.
+    #
+    #   Phase 2
+    #       Remove snapshots that fall outside of their buckets.
+    #
+    # Get the snapshot array, sorted. For the current fs only - NOT RECURSIVE.
+    # Be sure to sort by creation timestamp in ascending order (oldest ones first).
+    readarray -t snaparray < <(zfs list -Ht snapshot -o name,creation -s creation $retainfs)
+    snaparraylen=${#snaparray[@]}           # Get number of items in the source array
+
+    # ========================================================================
+    # Phase 0 - For offsite snapshots, keep only the most recent per month
+    # ========================================================================
+    declare -A phase0_removed=()
+    if [[ $label == '@offsite' ]]; then
+        declare -A _month_latest
+        for ((i_retain=0; i_retain<snaparraylen; i_retain++)); do
+            i=$i_retain
+            # snaparray entries come from "zfs list -Ht snapshot -o name,creation".
+            # Each line is: <snapshot_name>TAB<creation_date>
+            # awk '{print $1}'  —  Extract the snapshot name (field before the tab).
+            _snapsnap=$(echo ${snaparray[$i]} | awk '{print $1}')
+            # awk -F'@' '{print $1}'  —  Extract the dataset path (before @).
+            _snapfs=$(echo ${snaparray[$i]} | awk -F'@' '{print $1}')
+            # awk -F'@' '{print $2}' | awk -F'-' '{print $1}'  —  Extract the label from the snapshot name.
+            #   Example: "threeamigos/proxmox@daily-2026-05-11T12:00-04:00-d" -> "daily"
+            _snaplabel=$(echo ${snaparray[$i]} | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
+            # awk '{print $1}' | awk -F'-' '{print $NF}'  —  Extract the bucket letter (last dash-delimited field).
+            #   Example: "threeamigos/proxmox@daily-2026-05-11T12:00-04:00-d" -> "d"
+            _snapbucket=$(echo ${snaparray[$i]} | awk '{print $1}' | awk -F'-' '{print $NF}')
+
+            if [[ $_snaplabel == 'clone' ]] || [[ $_snapbucket == 'c' ]]; then
+                continue
+            fi
+
+            if [[ $_snapfs != $retainfs ]] || [[ $_snaplabel != ${label:1} ]]; then
+                continue
+            fi
+
+            # awk '{print $6"-"$3}'  —  From the creation date (e.g. "Mon May 11 12:00 2026"),
+            #   build a "Year-Month" string for monthly de-duplication.
+            #   Example: "Mon May 11 12:00 2026" -> "2026-May"
+            _snapym=$(echo ${snaparray[$i]} | awk '{print $6"-"$3}')
+
+            _key="$_snapfs|$_snapym"
+            if [[ -n "${_month_latest[$_key]}" ]]; then
+                _prev_snap="${_month_latest[$_key]}"
+                phase0_removed["$_prev_snap"]=1
+                dstocheck=$(remove_leading_qualifiers $leadingqualifiestodelete $_snapfs)
+                if [[ $dryrun != "N" ]]; then
+                    log_msg "INFO: Would remove $_prev_snap --- Offsite same-month."
+                else
+                    log_msg "INFO: Removing $_prev_snap --- Offsite same-month."
+                    if [[ $autoproceed != 'Y' ]]; then
+                        read -p 'Press enter to continue.'
+                    fi
+                    delsnap "$_prev_snap" "0" "$relholds"
+                fi
+            fi
+            _month_latest[$_key]="$_snapsnap"
+        done
+    fi
+
+    # These variables are used to compare values between two snapshots.
+    # NOTE: The older item is <x>1, and the newer item is <x>2.
+    #   OLDER               NEWER
+    snapsnap1="";    snapsnap2=""
+    snapfs1="";      snapfs2=""
+    snaplabel1="";   snaplabel2=""
+    snapbucket1="";  snapbucket2=""
+    snapymd1="";     snapymd2=""
+
+    # Phase 1 - Remove excess same-day snapshots
+    declare -A phase1_removed=()    # Track snapshots removed (or would be removed) in Phase 1
+    declare -i i_retain
+    for ((i_retain=0; i_retain<snaparraylen; i_retain++))
+    do
+        i=$i_retain
+        # Same field-extraction logic as Phase 0 (see comments above).
+        snapsnap2=$(echo ${snaparray[$i]}   | awk '{print $1}')
+        snapfs2=$(echo ${snaparray[$i]}     | awk -F'@' '{print $1}')
+        snaplabel2=$(echo ${snaparray[$i]}  | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
+        snapbucket2=$(echo ${snaparray[$i]} | awk '{print $1}'       | awk -F'-' '{print $NF}')
+        # awk '{print $6 $3 $4}'  —  Build a compact "YearMonthDay" string from creation date.
+        #   Example: "Mon May 11 12:00 2026" -> "2026May11"
+        snapymd2=$(echo ${snaparray[$i]}    | awk '{print $6 $3 $4}')
+
+        # Skip clone snapshots and bucket 'c' snapshots entirely
+        if [[ $snaplabel2 == 'clone' ]] || [[ $snapbucket2 == 'c' ]]; then
+            snapsnap1=""; snaplabel1=""; snapfs1=""; snapbucket1=""; snapymd1=""
+            continue
+        fi
+
+        # Skip snapshots that don't match the specified label
+        if [[ $snaplabel2 != ${label:1} ]]; then
+            # Reset comparison values so we don't compare across label boundaries
+            snapsnap1=""; snaplabel1=""; snapfs1=""; snapbucket1=""; snapymd1=""
+            continue
+        fi
+
+        # Skip snapshots that were removed (or would be removed) in Phase 0
+        if [[ -n "${phase0_removed[$snapsnap2]}" ]]; then
+            snapsnap1=""; snaplabel1=""; snapfs1=""; snapbucket1=""; snapymd1=""
+            continue
+        fi
+
+        # Determine whether two snapshots are related and were taken on the same day.
+        # If so, remove the older snapshot.
+        if [[ $snapfs1 = $snapfs2 ]] \
+          && [[ $snaplabel1 = $snaplabel2 ]] \
+          && [[ $snapbucket1 = $snapbucket2 ]] \
+          && [[ $snapymd1 = $snapymd2 ]]; then
+            dstocheck=$(remove_leading_qualifiers $leadingqualifiestodelete $snapfs1)
+            phase1_removed["$snapsnap1"]=1    # Track for Phase 2 exclusion
+            if [[ $dryrun != "N" ]]; then
+                log_msg "INFO: Would remove $snapsnap1 ---Same-day."
+            else
+                log_msg "INFO: Removing $snapsnap1 --- Same-day."
+                if [[ $autoproceed != 'Y' ]]; then
+                    read -p 'Press enter to continue.'
+                fi
+                delsnap "$snapsnap1" "0" "$relholds"
+            fi
+        fi
+
+        # Rotate comparison values and proceed with the next snapshot
+        snapsnap1=$snapsnap2
+        snaplabel1=$snaplabel2
+        snapfs1=$snapfs2
+        snapbucket1=$snapbucket2
+        snapymd1=$snapymd2
+    done
+
+    # =============================================================
+    # Phase 2 - Remove snapshots that fall outside of their buckets
+    # =============================================================
+    # Policy file was already loaded above Phase 1 for minage support.
+
+    declare -i j=0
+    for ((j=0; j<bktlen; j++))               # Set up the snapshot buckets as arrays
+    do                                       # NOTE: Indirect reference cannot be used as a target of an assignment
+        x="snapbucket_${bktname[$j]}"        # Set the array name as a variable
+        declare -a "$x=()"                   # Initialize an array for this bucket (indirect reference)
+        x="snapbucketlen_${bktname[$j]}"     # Set the length variable name as a variable
+        declare "$x=0"                       # Initialize array length (indirect reference)
+    done
+
+    # Get an array of the snapshots in the current filesystem
+    declare -i k=0                           # Index for the bktsnaparray array that holds the data from zfs
+    readarray -t bktsnaparray < <(zfs list -Ht snapshot -o name -s creation $retainfs)
+    bktsnaparraylen=${#bktsnaparray[@]}           # Get number of items in the snapshot array
+
+    # Put each snapshot into its corresponding array
+    declare -i i=0 j=0 k=0 l=0
+    for ((k=0; k<bktsnaparraylen; k++))      # for each snapshot
+    do
+        # Skip snapshots that were removed (or would be removed) in Phase 0 or Phase 1
+        if [[ -n "${phase0_removed[${bktsnaparray[$k]}]}" ]] \
+          || [[ -n "${phase1_removed[${bktsnaparray[$k]}]}" ]]; then
+            continue
+        fi
+
+        # Get the snapshot's label from its name
+        snaplabel=$(echo ${bktsnaparray[$k]} | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
+        if [[ $snaplabel != ${originlabel:1} ]] \
+          && [[ $snaplabel != ${targetlabel:1} ]]; then # Wrong label for this run. Do not consider this snapshot.
+            continue
+        fi
+
+        # Get the snapshot's bucket from its name
+        snapbkt=$(echo ${bktsnaparray[$k]} | awk -F'-' '{print $NF}')
+
+        # Skip clone snapshots and bucket 'c' snapshots entirely
+        if [[ $snaplabel == 'clone' ]] || [[ $snapbkt == 'c' ]]; then
+            continue
+        fi
+
+        # Put the snapshot into its appropriate bucket array
+        bucketfound=false
+        for ((i=0; i<bktlen; i++)); do                      # for each bucket
+            if [[ $snapbkt = ${bktname[$i]} ]]; then        # Find the right bucket array for the snapshot
+                bucketfound=true
+                x="snapbucketlen_${bktname[$i]}"            # Get the length of the current bucket array
+                declare l=${!x}
+                x="snapbucket_${bktname[$i]}[$l]"
+                declare $x=${bktsnaparray[$k]}              # Put the snapshot into the bucket array
+                # Increment the bucket array length
+                declare -i snapbucketlen_${bktname[$i]}=$((snapbucketlen_${bktname[$i]} + 1))
+                break
+            fi
+        done
+        if [[ $bucketfound = false ]]; then
+            log_msg "WARN: No bucket was found for ${bktsnaparray[$k]}. Skipping."
+            if [[ $autoproceed != 'Y' ]]; then
+                read -p "Press enter to continue."
+            fi
+        fi
+    done
+
+    # Remove the excess snapshots.
+    # The snapshot list for each bucket is sorted oldest to newest. When a bucket
+    # overflows its retention count, delete the oldest snapshots first until only
+    # the retention count remains. The most recent snapshot in each bucket is
+    # always protected as the incremental backup base.
+
+    for ((j=0; j < bktlen; j++)); do # Run through each bucket defined in the policy
+        len_var_name="snapbucketlen_${bktname[$j]}"
+        num_in_bucket="${!len_var_name}"
+        num_to_retain="${bktretain[$j]}"
+
+        # We only need to do something if we have more snapshots than we are supposed to retain.
+        if (( num_in_bucket > num_to_retain )); then
+            num_to_delete=$(( num_in_bucket - num_to_retain ))
+
+            # Build the candidate list in bucket order (oldest to newest), protecting
+            # the most recent snapshot when retain > 0.
+            _candidates=()
+            _last_idx=$(( num_in_bucket - 1 ))
+            for ((l=0; l < num_in_bucket; l++)); do
+                if (( num_to_retain > 0 && l == _last_idx )); then
+                    continue   # protect most recent as incremental base
+                fi
+                snap_var_name="snapbucket_${bktname[$j]}[$l]"
+                _candidates+=("${!snap_var_name}")
+            done
+
+            # Delete the oldest num_to_delete candidates.
+            for ((l=0; l < num_to_delete && l < ${#_candidates[@]}; l++)); do
+                _snap="${_candidates[$l]}"
+                _written=$(zfs get -H -p -o value written "$_snap" 2>/dev/null)
+                if [[ "$_written" == "0" ]]; then
+                    _tag=" (empty)"
+                else
+                    _tag=""
+                fi
+                if [[ $dryrun = "N" ]]; then
+                    log_msg "INFO: Removing ${_snap} --- Bucket${_tag}."
+                    delsnap "${_snap}" "${minage[$j]:-0}" $relholds
+                else
+                    log_msg "INFO: Would: Remove ${_snap} --- Bucket${_tag}."
+                fi
+            done
+        fi
+    done
+}

@@ -1,0 +1,37 @@
+#!/usr/bin/bash
+#
+# Example: Get file count and line count for selected subdirectories.
+#
+# Edit the dirs array below to point to the locations you want to measure.
+
+source ~/bashinit
+bashinit
+
+dirs=( \
+    "$mydir" \
+    "$mydir/07 GTK + Python" \
+    "$mydir/08 Two-node" \
+    "$mydir/09 ZFS clone support" \
+    "$mydir/10 Installers" \
+    "$mydir/Cache-warm" \
+    "$mydir/Watchall" \
+     )
+
+grandtotal_files=0
+grandtotal_lines=0
+for dir in "${dirs[@]}"; do
+    if cd "$dir"; then
+        line_count=$(find . -maxdepth 1 -type f -exec wc -l {} + | tail -1 | awk '{print $1}')
+        line_count=${line_count:-0}
+        file_count=$(find . -maxdepth 1 -type f | wc -l)
+        log_msg "INFO: $dir\tFile count = $file_count." \
+            "\tLine count = $line_count."
+        grandtotal_lines=$(( grandtotal_lines + line_count ))
+        grandtotal_files=$(( grandtotal_files + file_count ))
+    else
+        log_msg "FATAL: Could not cd to $dir."
+        bashfatal 8
+    fi
+done
+log_msg "\tINFO: Grand total files: $grandtotal_files" \
+    "Grand total lines: $grandtotal_lines"

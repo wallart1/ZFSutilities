@@ -1,0 +1,86 @@
+#!/usr/bin/bash
+
+# Copy a dataset subtree from a backup copy.
+# In order to get all the snapshots in the backup,
+# we must do the restore in two steps. First, a
+# full copy is performed using the oldest available
+# snapshot. Then an incremental copy is performed
+# to get the remaining snapshots.
+
+# $1    (Required) Overrides for Part 1.
+# $2    (Optional) Overrides for Part 2. Part 1 overrides carry over to Part 2.
+
+# Required overrides:
+# 'restoresourcefs=<source dataset>; sourcefsremovequalifiers=<n>; destfs=<destination dataset>'
+
+source ~/bashinit
+bashinit
+source $mydir/zfssnapbuild
+source $mydir/zfs-send-receive
+source $mydir/zfsoverrides
+
+autoproceed='N'
+
+# ========================== Global arguments ===============================
+restoresourcefs="notgiven"
+sourcefsremovequalifiers='0'    # '0' = Keep the full sourcefs name in the destfs name.
+destfs="notgiven"               # Add the dest pool name and '/' at the beginning of the sourcefs
+                                # name, giving the destination filesystem.
+
+# Parameters for zfsbuildfsarray                                
+depth=''
+label=''
+includes=()
+excludes=()
+startwith=''
+endwith=''
+
+nextsnap='notneeded'            # Inhibit creation of a new snapshot name.
+dopart1='Y'
+dopart2='Y'
+
+if [[ $1 != '' ]]; then overrides "$1"; fi
+
+if [[ $dopart1 = 'Y' ]]; then
+    # Part 1: do a full copy using the oldest available snapshot.
+    log_msg "INFO: Part one: Full copy using the oldest available snapshot."
+    force='Y'                       # Do full copy even if common snapshots are found.
+    releaseholds='Y'                # Allow all of destfs to be deleted, unconditionally, before
+                                    # restoring.
+    doincrementals='N'              # 'N' means do full copies.
+    dointermediates='N'             # Don't try to do any other shapshots.
+    commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
+
+    if [[ $1 != '' ]]; then overrides "$1"; fi
+
+    send-receive $restoresourcefs
+fi
+
+if [[ $dopart2 = 'Y' ]]; then
+    # Part 2: do the rest of the snapshots incrementally.
+    log_msg "INFO: Part two: The rest of the snapshots incrementally."
+    autoproceed='Y'
+    force='N'
+    releaseholds='N'
+    doincrementals='Y'              # Do incremental copies.
+    dointermediates='Y'             # Do all the remaining snapshots.
+    commsnap_mostrecent=''          # Finish by copying the remaining snapshots.
+
+    # Re-apply $1 overrides so that includes, excludes, and other caller-specified
+    # parameters are restored after Part One's delfs calls may have clobbered them.
+    if [[ $1 != '' ]]; then overrides "$1"; fi
+    if [[ $2 != '' ]]; then overrides "$2"; fi
+    if [[ $autoproceed != 'Y' ]]; then
+        while :; do
+            overrides=''
+            read -p 'Press enter to continue with part two. Or enter overrides.: ' overrides
+            if [[ $overrides != '' ]]; then overrides "$overrides"
+            else break
+            fi
+        done
+    fi
+
+    send-receive $restoresourcefs
+fi
+
+echo "***  zfsrestore completed.  ***"

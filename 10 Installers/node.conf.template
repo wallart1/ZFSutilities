@@ -1,0 +1,49 @@
+# /etc/zfsutilities-node.conf
+#
+# Single source of truth for node configuration. Sourced by
+# /usr/local/lib/node-lib.sh and by repo-root scripts that need host identity.
+#
+# NODE_MODE controls whether the system operates as a standalone node
+# (single-node) or as part of a storage+compute pair (two-node with iSCSI).
+#
+# Edit this file when:
+#   - switching between single-node and two-node mode
+#   - a host is renamed
+#   - the storage network IP changes
+#   - the iSCSI target is recreated under a different IQN prefix
+#   - a new ZFS pool is added to the iSCSI target
+#
+# Installed by: 10 Installers/install-single-node or install-two-node
+# Never overwritten by the installer if this file already exists.
+
+# --- Mode: "single-node" or "two-node" ---
+NODE_MODE="single-node"
+
+# --- Single-node settings ---
+# THIS_HOST is the short hostname of this machine (as returned by `hostname -s`).
+# In single-node mode, this host owns the ZFS pools and runs the VMs.
+THIS_HOST="@@THIS_HOST@@"
+
+# --- Two-node settings (only used when NODE_MODE="two-node") ---
+# Uncomment and fill these in when switching to two-node mode.
+#
+# STORAGE_HOST="storage-host"     # owns the ZFS pools, runs the iSCSI target
+# COMPUTE_HOST="compute-host"     # runs the Proxmox VMs, iSCSI initiator
+#
+# STORAGE_IP="192.0.2.1"        # iSCSI portal IP (= STORAGE_HOST on storage net)
+#
+# # IQN_PREFIX is part of the iSCSI target's persistent on-disk name. It is
+# # baked into each target when the LUN is first created; renaming the host
+# # does NOT rename the target. Changing it later requires recreating Proxmox
+# # iSCSI storage entries and re-mapping LUNs, so set it once.
+# # The conventional form is iqn.YYYY-MM.com.vendor.host; the generated default
+# # uses iqn.YYYY-MM.local.<storage-host>.
+# IQN_PREFIX="iqn.YYYY-MM.local.storage-host"
+#
+# # Pool -> iSCSI target short-name map
+# # Key   = ZFS pool name as it appears in `zpool list`
+# # Value = target short name (the part after the colon in IQN_PREFIX)
+# declare -A POOL_TARGET=(
+#     [pool1]="pool1"
+#     [pool2]="pool2"
+# )

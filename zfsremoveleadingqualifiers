@@ -1,0 +1,89 @@
+#!/bin/bash
+
+# Remove the first i leading qualifiers from a ZFS fully-qualified dataset name, where the pool name is included in the qualifier count. For a dataset like poolname/qualifier1/qualifier2/.../qualifierN, the pool name counts as the first qualifier, and the script removes the first i qualifiers (including the pool name if i ≥ 1).
+
+# For example:
+# sourcefs="threeamigos/proxmox"
+# sourcefsremovequalifiers=0
+# destfs="fivebays"
+# Results in a destination fs of "fivebays/threeamigos/proxmox".
+# -----
+# To reverse the above example:
+# sourcefs="fivebays/threeamigos/proxmox"
+# sourcefsremovequalifiers=2
+# destfs="threeamigos"
+# Results in a destination fs of "threeamigos/proxmox".
+# -----
+# To create the same subpool on a different pool:
+# sourcefs="threeamigos/proxmox"
+# sourcefsremovequalifiers=1
+# destfs="fivebays"
+# Results in a destination fs of "fivebays/proxmox".
+
+remove_leading_qualifiers() {
+    source ~/bashinit
+    bashinit
+
+    # Check if correct number of arguments is provided
+    if [ "$#" -ne 2 ]; then
+        log_msg "FATAL: Usage: $0 <number_of_qualifiers_to_remove> <dataset_name>"
+        exit 1
+    fi
+
+    # Assign arguments to variables
+    local i="$1" \
+        j \
+        dataset="$2" \
+        result \
+        num="$1" \
+        ds="$2"
+
+    # Regex: ^[0-9]+$
+    # Purpose: Validate that the number of qualifiers to remove is a non-negative integer.
+    # Example: "2" -> match; "-1" -> no match; "abc" -> no match
+    if ! [[ "$i" =~ ^[0-9]+$ ]]; then
+        log_msg "FATAL: Number of qualifiers to remove must be a non-negative integer"
+        exit 1
+    fi
+
+    # Check if dataset name is empty
+    if [ -z "$dataset" ]; then
+        log_msg "FATAL: Dataset name cannot be empty"
+        exit 1
+    fi
+
+    # If num is 0, return the dataset as is
+    if [ "$num" -eq 0 ]; then
+        echo "$ds"
+        return
+    fi
+
+    # grep -o "/" | wc -l  —  Count the number of path separators in the dataset name.
+    #   Adding 1 gives the total number of path components (pool + nested datasets).
+    #   Example: "threeamigos/proxmox/data" has 2 slashes -> 3 qualifiers.
+    local qualifier_count=$(($(echo "$ds" | grep -o "/" | wc -l) + 1))
+
+    # If num is greater than or equal to the number of qualifiers,
+    # return empty string (all qualifiers removed)
+    if [ "$num" -ge "$qualifier_count" ]; then
+        echo ""
+        return
+    fi
+
+    # Split dataset into components
+    IFS='/' read -ra components <<< "$ds"
+
+    # Start from the i-th component (0-based index)
+    local new_ds=""
+    for ((j=num; j<qualifier_count; j++)); do
+        if [ -z "$new_ds" ]; then
+            new_ds="${components[j]}"
+        else
+            new_ds="$new_ds/${components[j]}"
+        fi
+    done
+
+    # Output the result (will be empty if no components remain)
+    echo "$new_ds"
+}
+

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# run-python-tests — Python test harness for ZFS Utilities.
+#
+# Usage:
+#   ./tests/run-python-tests              # Run all Python tests
+#   ./tests/run-python-tests test-foo     # Run specific test(s)
+
+set -euo pipefail
+
+mydir="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "$mydir/.." && pwd)"
+cd "$repo_root"
+
+python3 "$mydir/python/runner.py" "$@"

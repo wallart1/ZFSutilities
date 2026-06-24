@@ -1,0 +1,75 @@
+#!/usr/bin/bash
+# Remove incorrect offsite holds where the hold name references the same pool as the dataset.
+# For example: z22tb/temp@snap with hold "offsite-z22tb" is wrong - the hold should reference
+# the origin pool (e.g., "offsite-temp"), not the pool the snapshot is on.
+#
+# $1    Pool to scan (required)
+# $2    Optional: "dryrun" to just list what would be removed without removing
+
+source ~/bashinit
+bashinit
+source $mydir/rootcheck
+rootcheck
+
+function cleanupbadoffsiteholds {
+    local pool=$1
+    local dryrun=$2
+    local snap holdtag snappool count=0
+
+    if [[ -z $pool ]]; then
+        log_msg "FATAL: Pool name required."
+        log_msg "FATAL: Usage: $0 <pool> [dryrun]"
+        source $mydir/bashreturn 1
+    fi
+
+    if ! zpool list "$pool" >/dev/null 2>&1; then
+        log_msg "FATAL: Pool '$pool' not found."
+        source $mydir/bashreturn 1
+    fi
+
+    log_msg "INFO: Scanning $pool for self-referencing offsite holds..."
+    if [[ $dryrun = "dryrun" ]]; then
+        log_msg "INFO: (Dry run - no changes will be made)"
+    fi
+
+    # Get all holds on all snapshots in the pool
+    # zfs holds needs snapshot names, not pool names, so we list snapshots first
+    while IFS=$'\t' read -r snap holdtag _timestamp; do
+        # Skip empty lines
+        [[ -z $snap ]] && continue
+
+        # Skip if not an offsite hold
+        [[ $holdtag != offsite-* ]] && continue
+
+        # Get the pool name from the snapshot (first component before /)
+        snappool=${snap%%/*}
+
+        # Extract the pool name from the hold tag (after "offsite-")
+        local holdpool=${holdtag#offsite-}
+
+        # If the hold references the same pool as the snapshot, it's wrong
+        if [[ $holdpool = $snappool ]]; then
+            ((count++))
+            if [[ $dryrun = "dryrun" ]]; then
+                echo "Would remove: $snap  hold=$holdtag"
+            else
+                echo "Removing: $snap  hold=$holdtag"
+                if ! zfs release "$holdtag" "$snap"; then
+                    log_msg "WARN: Failed to release hold $holdtag on $snap"
+                fi
+            fi
+        fi
+    done < <(zfs list -Hrt snapshot -o name "$pool" | xargs -r -n1 zfs holds -H)
+
+    if [[ $count -eq 0 ]]; then
+        log_msg "INFO: No self-referencing offsite holds found on $pool."
+    else
+        if [[ $dryrun = "dryrun" ]]; then
+            log_msg "INFO: Found $count self-referencing holds. Run without 'dryrun' to remove them."
+        else
+            log_msg "INFO: Removed $count self-referencing holds from $pool."
+        fi
+    fi
+}
+
+if calledbybash; then cleanupbadoffsiteholds "$1" "$2"; fi

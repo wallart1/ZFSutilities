@@ -1,0 +1,76 @@
+ZFS Cache Warming Toolkit - Quick Start
+========================================
+
+FILES CREATED:
+--------------
+1. warm-cache.sh              - Main cache warming script
+2. identify-hot-vms.sh        - Helper to identify hot VMs
+3. monitor-cache.sh           - Real-time monitoring
+4. cache-status.sh            - Quick status check
+5. zfs-cache-warm.service     - Systemd service (optional)
+6. README.md                  - Full documentation
+
+INSTALLATION (5 minutes):
+------------------------
+
+1. Copy files to your storage node:
+   scp *.sh *.service README.md storage-node:/tmp/
+
+2. On storage node, install:
+   sudo cp /tmp/warm-cache.sh /usr/local/bin/
+   sudo cp /tmp/identify-hot-vms.sh /usr/local/bin/
+   sudo cp /tmp/monitor-cache.sh /usr/local/bin/
+   sudo cp /tmp/cache-status.sh /usr/local/bin/
+   sudo chmod +x /usr/local/bin/*.sh
+
+3. Identify your hot VMs:
+   sudo /usr/local/bin/identify-hot-vms.sh
+
+4. Configure hot VMs:
+   sudo nano /usr/local/bin/warm-cache.sh
+   
+   Find and edit:
+   HOT_VMS=(
+       "vm-100-disk-0"  # Your database VM
+       "vm-101-disk-0"  # Your web VM
+   )
+
+5. Test run:
+   sudo /usr/local/bin/warm-cache.sh
+
+OPTIONAL - Enable automatic warming on boot:
+--------------------------------------------
+   sudo cp /tmp/zfs-cache-warm.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable zfs-cache-warm.service
+
+USAGE:
+------
+
+After monthly reboot:
+  sudo /usr/local/bin/warm-cache.sh
+
+Check status anytime:
+  sudo /usr/local/bin/cache-status.sh
+
+Monitor live:
+  sudo /usr/local/bin/monitor-cache.sh
+
+View logs:
+  tail -f /var/log/zfs-cache-warm.log
+
+EXPECTED RESULTS:
+----------------
+
+Without warming:
+  Day 0: 0GB L2ARC
+  Day 1: 400GB
+  Day 7: 1.2TB
+  
+With warming:
+  Hour 0: 0GB
+  Hour 1: 200-300GB
+  Hour 4: 600-800GB
+  Day 1: 1.0-1.2TB
+
+For full documentation, see README.md

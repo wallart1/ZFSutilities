@@ -1,0 +1,186 @@
+#!/usr/bin/bash
+# Check if any Proxmox VMs/containers are running on datasets under a given path
+#
+# Usage: source zfscheckrunningvms
+#        checkrunningvms "pool/dataset"
+#
+# Returns: 0 if no running VMs found (safe to proceed)
+#          1 if running VMs found (sets $RUNNING_VMS with list)
+#          2 if Proxmox tools not available (can't check)
+#
+# Sets: $RUNNING_VMS - newline-separated list of "VMID:type:dataset" entries
+#
+# This function uses 'qm config' and 'pct config' to verify that a running VM
+# is actually using storage on the target pool. A dataset like
+# z40tb/fivebays/NVME1/proxmox/vm-201-disk-3 won't be flagged just because
+# VM 201 is running - it checks if VM 201's disks are configured on z40tb storage.
+
+function checkrunningvms {
+    local target_dataset="$1"
+    RUNNING_VMS=""
+
+    if [[ -z "$target_dataset" ]]; then
+        log_msg "WARN: checkrunningvms requires a dataset argument"
+        return 2
+    fi
+
+    # Check if Proxmox tools are available
+    if ! command -v qm &>/dev/null && ! command -v pct &>/dev/null; then
+        # Not a Proxmox system, can't check
+        return 2
+    fi
+
+    # Extract the pool name from target dataset (first path component)
+    local target_pool="${target_dataset%%/*}"
+
+    # Get list of all zvols and datasets under target
+    local datasets
+    datasets=$(zfs list -H -o name -r -t all "$target_dataset" 2>/dev/null)
+    if [[ -z "$datasets" ]]; then
+        return 0  # No datasets found, nothing to check
+    fi
+
+    local running_qemu=""
+    local running_lxc=""
+
+    # Get list of running QEMU VMs
+    if command -v qm &>/dev/null; then
+        # awk '$3 == "running" {print $1}'  —  qm list outputs VMID, name, status, etc.
+        #   Filter rows where the 3rd column is "running" and print the VMID (1st column).
+        running_qemu=$(qm list 2>/dev/null | awk '$3 == "running" {print $1}')
+    fi
+
+    # Get list of running LXC containers
+    if command -v pct &>/dev/null; then
+        # awk '$2 == "running" {print $1}'  —  pct list outputs VMID, status, etc.
+        #   Filter rows where the 2nd column is "running" and print the VMID (1st column).
+        running_lxc=$(pct list 2>/dev/null | awk '$2 == "running" {print $1}')
+    fi
+
+    if [[ -z "$running_qemu" && -z "$running_lxc" ]]; then
+        return 0  # No running VMs at all
+    fi
+
+    # Track which VMs we've already checked for this pool
+    local -A checked_vms
+
+    # Check each dataset for VM patterns
+    local found_running=0
+    while IFS= read -r ds; do
+        # Extract just the dataset name (last component)
+        local dsname="${ds##*/}"
+
+        # Regex: ^vm-([0-9]+)-disk-([0-9]+)$
+        # Purpose: Match QEMU VM disk dataset names to extract the VM ID and disk number.
+        # Group 1: VM ID   e.g. "105"
+        # Group 2: Disk #  e.g. "0"
+        # Example: "vm-105-disk-0" -> match; "threeamigos/data" -> no match
+        if [[ "$dsname" =~ ^vm-([0-9]+)-disk-([0-9]+)$ ]]; then
+            local vmid="${BASH_REMATCH[1]}"
+            if echo "$running_qemu" | grep -q "^${vmid}$"; then
+                # VM is running - check if it actually uses this pool (once per VM)
+                if [[ -z "${checked_vms[$vmid]}" ]]; then
+                    checked_vms[$vmid]=1
+                    if vm_uses_storage "$vmid" "qemu" "$target_pool"; then
+                        RUNNING_VMS+="$vmid:qemu:$ds"$'\n'
+                        found_running=1
+                    fi
+                elif [[ $found_running -eq 1 ]]; then
+                    # Already found this VM uses the pool, add this dataset too
+                    RUNNING_VMS+="$vmid:qemu:$ds"$'\n'
+                fi
+            fi
+        fi
+
+        # Regex: ^subvol-([0-9]+)-disk-([0-9]+)$
+        # Purpose: Match LXC container subvolume dataset names to extract the container ID.
+        # Group 1: Container ID  e.g. "205"
+        # Example: "subvol-205-disk-0" -> match; "vm-105-disk-0" -> no match
+        if [[ "$dsname" =~ ^subvol-([0-9]+)-disk-([0-9]+)$ ]]; then
+            local vmid="${BASH_REMATCH[1]}"
+            if echo "$running_lxc" | grep -q "^${vmid}$"; then
+                # Container is running - check if it actually uses this pool
+                if [[ -z "${checked_vms[lxc$vmid]}" ]]; then
+                    checked_vms[lxc$vmid]=1
+                    if vm_uses_storage "$vmid" "lxc" "$target_pool"; then
+                        RUNNING_VMS+="$vmid:lxc:$ds"$'\n'
+                        found_running=1
+                    fi
+                elif [[ $found_running -eq 1 ]]; then
+                    RUNNING_VMS+="$vmid:lxc:$ds"$'\n'
+                fi
+            fi
+        fi
+    done <<< "$datasets"
+
+    # Remove trailing newline
+    RUNNING_VMS="${RUNNING_VMS%$'\n'}"
+
+    if [[ $found_running -eq 1 ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# Check if a VM uses the specified storage for any of its disks
+# Uses 'qm config' or 'pct config' to get the actual disk configuration
+# Args: vmid, vmtype (qemu/lxc), target_pool
+# Returns: 0 if VM uses this storage, 1 if not
+function vm_uses_storage {
+    local vmid="$1"
+    local vmtype="$2"
+    local target_pool="$3"
+
+    local config_output
+    if [[ "$vmtype" == "qemu" ]]; then
+        config_output=$(qm config "$vmid" 2>/dev/null)
+    else
+        config_output=$(pct config "$vmid" 2>/dev/null)
+    fi
+
+    if [[ -z "$config_output" ]]; then
+        # Can't get config - assume unsafe (return true)
+        return 0
+    fi
+
+    # Look for disk lines that reference the target pool as storage
+    # QEMU format: scsi0: storagename:vm-123-disk-0,size=32G
+    # LXC format:  rootfs: storagename:subvol-123-disk-0,size=8G
+    # The storage name appears after the colon-space and before the next colon
+
+    # Extract all storage names from disk lines.
+    # Regex: ^[a-z]+[0-9]*:\ ([^:]+):
+    # Purpose: Match Proxmox config lines that define a disk or mount point.
+    #          Keys like scsi0, virtio0, efidisk0, rootfs, mp0 are followed by
+    #          "storage:volume". Group 1 captures the storage pool name.
+    # Group 1: Storage pool name  e.g. "threeamigos", "fivebays"
+    # Example: "scsi0: threeamigos:vm-105-disk-0,size=32G" -> match ("threeamigos")
+    #          "memory: 4096" -> no match
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^[a-z]+[0-9]*:\ ([^:]+): ]]; then
+            local storage_name="${BASH_REMATCH[1]}"
+            if [[ "$storage_name" == "$target_pool" ]]; then
+                return 0  # VM uses this pool
+            fi
+        fi
+    done <<< "$config_output"
+
+    return 1  # VM doesn't use this pool
+}
+
+# Pretty-print the running VMs list
+function printrunningvms {
+    if [[ -z "$RUNNING_VMS" ]]; then
+        echo "  (none)"
+        return
+    fi
+
+    while IFS= read -r entry; do
+        local vmid="${entry%%:*}"
+        local rest="${entry#*:}"
+        local vmtype="${rest%%:*}"
+        local dataset="${rest#*:}"
+        printf "  %-6s %-5s %s\n" "$vmid" "$vmtype" "$dataset"
+    done <<< "$RUNNING_VMS"
+}

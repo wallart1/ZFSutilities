@@ -1,0 +1,17 @@
+#!/usr/bin/bash
+# Relinquish root privilages if root.
+
+source ~/bashinit
+bashinit
+
+function unroot {
+    if [[ $1 != '' ]]; then suuser=$1; fi
+    if [[ $suuser = '' ]]; then suuser='dan'; fi        # New user to switch to
+
+    userid=$(echo $(id) | awk -F'(' '{print $1}')       # Current uid
+
+    if [[ $userid = 'uid=0' ]]; then        # Are we root?
+        su $suuser
+    fi
+}
+if calledbybash; then unroot $1

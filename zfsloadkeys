@@ -1,0 +1,35 @@
+#!/usr/bin/bash
+
+source ~/bashinit
+bashinit
+source $mydir/rootcheck
+rootcheck
+
+log_msg "INFO: Will attempt to load keys for the following datasets:"
+zfs list -o name,keystatus,keylocation | grep unavailable | grep -v prompt
+read -p "Press enter to continue."
+
+if ! mount /dev/disk/by-label/ZFSkeys /mnt/ZFSkeys; then
+    log_msg "FATAL: Unable to mount ZFSkeys."
+    exit 8
+fi
+systemctl daemon-reload
+zfs load-key -a
+zfs mount -a
+if umount /mnt/ZFSkeys; then
+    if ! cryptsetup luksClose \
+            $(lsblk -l -p -o NAME,LABEL,TYPE \
+            | grep ZFSkeys \
+            | awk '{print $1}' \
+            ); then
+        log_msg "FATAL: Unable to lock ZFSkeys."
+        exit 8
+    fi
+else log_msg "FATAL: Unable to unmount ZFSkeys."; exit 8
+fi
+exit 0
+
+#    mapperid=$(ls -lash /dev/disk/by-label/ZFSkeys | awk -F'/' '{print $NF}')
+#    uuid=$(ls -lash /dev/disk/by-uuid | grep $mapperid | awk '{print $10}')
+#    udisksctl lock -b /dev/disk/by-uuid/$uuid
+

@@ -1,0 +1,8 @@
+#!/usr/bin/bash
+# $1    The subtree to work with
+
+source ~/bashinit
+bashinit
+
+zfs list -Hrt filesystem -o name "$1" | xargs -rt -n1 zfs unmount
+

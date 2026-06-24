@@ -1,0 +1,177 @@
+"""Tests for zfs_repository.py — ZFS/zpool subprocess isolation."""
+
+import os
+import subprocess
+import unittest
+from unittest.mock import patch
+
+import sys
+
+REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
+PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
+if PYTHON_SRC not in sys.path:
+    sys.path.insert(0, PYTHON_SRC)
+
+from zfs_repository import (
+    ZfsRepository,
+    PoolRow,
+    DatasetRow,
+    SnapshotRow,
+    HoldRow,
+)
+
+
+class TestZfsRepositoryReads(unittest.TestCase):
+    """Read methods parse tab-separated zfs/zpool output."""
+
+    def _repo(self, stdout, rc=0):
+        result = subprocess.CompletedProcess(
+            args=[], returncode=rc, stdout=stdout, stderr=""
+        )
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: result
+        return repo
+
+    def test_list_pools_parses_six_columns(self):
+        repo = self._repo("tank\tONLINE\t10T\t5T\t5T\t75%\n")
+        pools = repo.list_pools()
+        self.assertEqual(len(pools), 1)
+        self.assertEqual(pools[0], PoolRow("tank", "ONLINE", "10T", "5T", "5T", "75%"))
+
+    def test_list_pools_ignores_blank_lines(self):
+        repo = self._repo("\ntank\tONLINE\t10T\t5T\t5T\t75%\n\n")
+        self.assertEqual(len(repo.list_pools()), 1)
+
+    def test_list_pools_full_parses_nine_columns(self):
+        stdout = "tank\t10T\t5T\t5T\t0B\t-\t5%\t75%\tONLINE\n"
+        repo = self._repo(stdout)
+        pools = repo.list_pools_full()
+        self.assertEqual(len(pools), 1)
+        self.assertEqual(pools[0]["name"], "tank")
+        self.assertEqual(pools[0]["health"], "ONLINE")
+        self.assertEqual(pools[0]["frag"], "5%")
+
+    def test_list_datasets_parses_eight_columns(self):
+        stdout = "tank/data\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
+        repo = self._repo(stdout)
+        rows = repo.list_datasets(pool="tank")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].name, "tank/data")
+        self.assertEqual(rows[0].ds_type, "filesystem")
+
+    def test_list_snapshots_parses_eight_columns(self):
+        stdout = (
+            "tank/data@snap1\t2025-01-01\tsnapshot\t100K\t-\t50G\t-\t-\n"
+        )
+        repo = self._repo(stdout)
+        rows = repo.list_snapshots("tank/data", depth=1)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0],
+            SnapshotRow("tank/data@snap1", "2025-01-01", "snapshot", "100K", "-", "50G", "-", "-")
+        )
+
+    def test_list_holds_parses_three_columns(self):
+        stdout = "tank/data@snap1\toffsite\t2025-01-01\n"
+        repo = self._repo(stdout)
+        holds = repo.list_holds("tank/data@snap1")
+        self.assertEqual(len(holds), 1)
+        self.assertEqual(holds[0], HoldRow("tank/data@snap1", "offsite", "2025-01-01"))
+
+    def test_get_property_returns_stripped_value(self):
+        repo = self._repo("/mnt/data\n")
+        self.assertEqual(repo.get_property("tank/data", "mountpoint"), "/mnt/data")
+
+    def test_get_clones_delegates_to_get_property(self):
+        repo = self._repo("tank/data/clone1\n")
+        self.assertEqual(repo.get_clones("tank/data@snap1"), "tank/data/clone1")
+
+    def test_get_recursive_snapshot_clones_filters_dashes(self):
+        stdout = "-\n-\ntank/data/clone1\n"
+        repo = self._repo(stdout)
+        clones = repo.get_recursive_snapshot_clones("tank/data")
+        self.assertEqual(clones, ["tank/data/clone1"])
+
+
+class TestZfsRepositoryWrites(unittest.TestCase):
+    """Write methods return True on success and False on failure."""
+
+    def _repo(self, rc):
+        result = subprocess.CompletedProcess(
+            args=[], returncode=rc, stdout="", stderr="boom"
+        )
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: result
+        return repo
+
+    def test_snapshot_returns_true_on_success(self):
+        self.assertTrue(self._repo(0).snapshot("tank/data@snap"))
+
+    def test_snapshot_returns_false_on_failure(self):
+        self.assertFalse(self._repo(1).snapshot("tank/data@snap"))
+
+    def test_destroy_returns_true_on_success(self):
+        self.assertTrue(self._repo(0).destroy("tank/data@snap"))
+
+    def test_destroy_returns_false_on_failure(self):
+        self.assertFalse(self._repo(1).destroy("tank/data@snap"))
+
+    def test_hold_returns_true_on_success(self):
+        self.assertTrue(self._repo(0).hold("keep", "tank/data@snap"))
+
+    def test_release_returns_false_on_failure(self):
+        self.assertFalse(self._repo(1).release("keep", "tank/data@snap"))
+
+    def test_rollback_returns_true_on_success(self):
+        self.assertTrue(self._repo(0).rollback("tank/data@snap"))
+
+    def test_import_pool_returns_true_on_success(self):
+        self.assertTrue(self._repo(0).import_pool("tank"))
+
+    def test_export_pool_returns_false_on_failure(self):
+        self.assertFalse(self._repo(1).export_pool("tank"))
+
+    def test_start_scrub_returns_true_on_success(self):
+        self.assertTrue(self._repo(0).start_scrub("tank"))
+
+    def test_pause_scrub_returns_false_on_failure(self):
+        self.assertFalse(self._repo(1).pause_scrub("tank"))
+
+    def test_resume_scrub_returns_true_on_success(self):
+        self.assertTrue(self._repo(0).resume_scrub("tank"))
+
+    def test_stop_scrub_returns_false_on_failure(self):
+        self.assertFalse(self._repo(1).stop_scrub("tank"))
+
+    def test_pool_status_returns_stdout(self):
+        result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="status text", stderr=""
+        )
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: result
+        self.assertEqual(repo.pool_status("tank"), "status text")
+
+
+class TestZfsRepositorySudo(unittest.TestCase):
+    """sudo=True prefixes commands with 'sudo'."""
+
+    def test_sudo_prefix(self):
+        repo = ZfsRepository(sudo=True)
+        self.assertEqual(repo._zfs("list"), ["sudo", "zfs", "list"])
+        self.assertEqual(repo._zpool("list"), ["sudo", "zpool", "list"])
+
+
+class TestZfsRepositoryErrors(unittest.TestCase):
+    """Read methods propagate subprocess errors to callers."""
+
+    def test_list_pools_raises_on_subprocess_error(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, "zpool list")
+        )
+        with self.assertRaises(subprocess.CalledProcessError):
+            repo.list_pools()
+
+
+if __name__ == "__main__":
+    unittest.main()

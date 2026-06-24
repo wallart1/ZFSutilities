@@ -1,0 +1,148 @@
+#!/usr/bin/bash
+
+# Start the documentation server (if not already running).  An optional path
+# argument is accepted for compatibility but ignored:
+#
+#   ./startdocserver
+#   ./startdocserver user-guide/restore/
+#   ./startdocserver developer-guide/coding-policies/
+
+source ~/bashinit
+bashinit
+
+set -euo pipefail
+
+# Find docs directory: in repo root ($mydir/06 Docs) or deployed bin/ ($mydir/../06 Docs)
+if [[ -d "$mydir/06 Docs" ]]; then
+    docs_dir="$mydir/06 Docs"
+elif [[ -d "$mydir/../06 Docs" ]]; then
+    docs_dir="$mydir/../06 Docs"
+else
+    log_msg "FATAL: Could not find 06 Docs directory."
+    exit 1
+fi
+url_base="http://localhost:8000"
+logfile=~/docserver.log
+max_wait=30
+
+function is_server_running {
+    local http_code
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" "${url_base}/" 2>/dev/null || true)
+    [[ "${http_code}" == "200" ]]
+}
+
+function _get_server_pid {
+    local pid
+    # Try lsof first, then fuser, then pgrep
+    if command -v lsof &>/dev/null; then
+        pid=$(lsof -t -i :8000 2>/dev/null | head -1)
+    fi
+    if [[ -z "${pid}" ]] && command -v fuser &>/dev/null; then
+        pid=$(fuser 8000/tcp 2>/dev/null | tr -d ' ' | head -1)
+    fi
+    if [[ -z "${pid}" ]]; then
+        pid=$(pgrep -f 'mkdocs serve' | head -1)
+    fi
+    if [[ -z "${pid}" ]]; then
+        pid=$(pgrep -f 'http.server 8000' | head -1)
+    fi
+    [[ -n "${pid}" ]] && echo "${pid}"
+}
+
+function _get_server_cwd {
+    local pid="$1"
+    if [[ -L "/proc/${pid}/cwd" ]]; then
+        readlink "/proc/${pid}/cwd" 2>/dev/null || true
+    fi
+}
+
+function _is_server_serving_expected_dir {
+    local pid="$1"
+    local expected_dir="$2"
+    local running_cwd resolved_expected resolved_running
+    resolved_expected=$(readlink -f "${expected_dir}" 2>/dev/null || true)
+    [[ -n "${resolved_expected}" ]] || return 1
+    running_cwd=$(_get_server_cwd "${pid}")
+    [[ -n "${running_cwd}" ]] || return 1
+    resolved_running=$(readlink -f "${running_cwd}" 2>/dev/null || true)
+    [[ -n "${resolved_running}" ]] || return 1
+    [[ "${resolved_running}" == "${resolved_expected}" || "${resolved_running}" == "${resolved_expected}/site" ]]
+}
+
+function _stop_server {
+    local pid="$1"
+    log_msg "INFO: Stopping old documentation server (pid ${pid})..."
+    kill "${pid}" 2>/dev/null || true
+    local waited=0
+    while (( waited < max_wait )); do
+        if ! is_server_running; then
+            return 0
+        fi
+        sleep 1
+        ((++waited))
+    done
+    log_msg "WARN: Server did not stop gracefully, forcing..."
+    kill -9 "${pid}" 2>/dev/null || true
+    sleep 1
+}
+
+function start_server {
+    log_msg "INFO: Starting documentation server..."
+    cd "${docs_dir}"
+    if python3 -m mkdocs --version &>/dev/null; then
+        log_msg "INFO: Documentation server running in mkdocs live-reload mode"
+        # --livereload is the default in recent MkDocs, but passing it explicitly
+        # makes the intent clear and guards against environments where the
+        # default might differ. The livereload WebSocket auto-refreshes the
+        # browser when any docs/ source file changes.
+        nohup python3 -m mkdocs serve --livereload -a 0.0.0.0:8000 > "${logfile}" 2>&1 &
+    else
+        log_msg "INFO: Documentation server running in static site fallback mode"
+        log_msg "INFO: mkdocs not available; serving pre-built static site/"
+        # In fallback mode, edits to .md source files do not appear until the
+        # static site is rebuilt with 'mkdocs build'. The --restart flag can be
+        # used after rebuilding to refresh the server.
+        cd "${docs_dir}/site"
+        nohup python3 -m http.server 8000 --bind 0.0.0.0 > "${logfile}" 2>&1 &
+    fi
+    local pid=$!
+    log_msg "INFO: Documentation server started in background (pid ${pid})"
+}
+
+function main {
+    local force_restart=0
+    if [[ "${1:-}" == "--restart" ]]; then
+        force_restart=1
+    fi
+
+    if (( force_restart )); then
+        local pid
+        pid=$(_get_server_pid)
+        if [[ -n "${pid}" ]]; then
+            log_msg "INFO: Restart requested; stopping existing server (pid ${pid})..."
+            _stop_server "${pid}"
+        fi
+        start_server
+        return
+    fi
+
+    if is_server_running; then
+        local pid
+        pid=$(_get_server_pid)
+        if [[ -n "${pid}" ]] && _is_server_serving_expected_dir "${pid}" "${docs_dir}"; then
+            log_msg "INFO: Documentation server already running at ${url_base}"
+        else
+            if [[ -n "${pid}" ]]; then
+                log_msg "WARN: Documentation server running from wrong directory; restarting..."
+                _stop_server "${pid}"
+            else
+                log_msg "WARN: Server responding but PID not found; attempting restart..."
+            fi
+            start_server
+        fi
+    else
+        start_server
+    fi
+}
+
+if calledbybash; then main "$@"; fi

@@ -1,0 +1,435 @@
+#!/usr/bin/bash
+# zfslockctl - CLI tool for managing ZFS dataset locks
+#
+# Usage:
+#   zfslockctl list [dataset]        # List active locks (optionally filter by dataset)
+#   zfslockctl status <dataset>      # Check lock status for a dataset
+#   zfslockctl release <lock_id>     # Force release a lock (by lock file path or dataset)
+#   zfslockctl cleanup               # Remove stale locks
+#   zfslockctl wait <dataset> <type> # Wait for lock availability
+#   zfslockctl help                  # Show this help
+
+source ~/bashinit
+bashinit
+source $mydir/rootcheck
+rootcheck
+source $mydir/zfslockmanager
+
+# ==============================================================================
+# Command Implementations
+# ==============================================================================
+
+# List active locks
+cmd_list() {
+    local filter="$1"
+    local lockfile
+    local found=0
+
+    if [[ ! -d "$ZFSLOCK_LOCKS_DIR" ]]; then
+        echo "No locks directory found."
+        return 0
+    fi
+
+    # Clean up stale locks first
+    zfslock_cleanup_stale 2>/dev/null
+
+    printf "%-40s %-6s %-8s %-20s %s\n" "DATASET" "TYPE" "PID" "SCRIPT" "ACQUIRED"
+    printf "%-40s %-6s %-8s %-20s %s\n" "-------" "----" "---" "------" "--------"
+
+    for lockfile in "$ZFSLOCK_LOCKS_DIR"/*.lock ; do
+        [[ -f "$lockfile" ]] || continue
+
+        local dataset type pid script acquired
+
+        dataset=$(_zfslock_read_field "$lockfile" "dataset")
+        type=$(_zfslock_read_field "$lockfile" "type")
+        pid=$(_zfslock_read_field "$lockfile" "pid")
+        script=$(_zfslock_read_field "$lockfile" "script")
+        acquired=$(_zfslock_read_field "$lockfile" "acquired")
+
+        # Apply filter if specified
+        if [[ -n "$filter" && "$dataset" != *"$filter"* ]]; then
+            continue
+        fi
+
+        local type_name
+        case "$type" in
+            r) type_name="read" ;;
+            w) type_name="write" ;;
+            x) type_name="destroy" ;;
+            *) type_name="$type" ;;
+        esac
+
+        # Format timestamp for display
+        local display_time
+        display_time=$(date -d "$acquired" "+%Y-%m-%d %H:%M" 2>/dev/null) || display_time="$acquired"
+
+        printf "%-40s %-6s %-8s %-20s %s\n" "$dataset" "$type_name" "$pid" "$script" "$display_time"
+        ((found++))
+    done
+
+    if [[ $found -eq 0 ]]; then
+        echo "No active locks found."
+    else
+        echo ""
+        echo "$found active lock(s)"
+    fi
+
+    return 0
+}
+
+# Check lock status for a dataset
+cmd_status() {
+    local dataset="$1"
+
+    if [[ -z "$dataset" ]]; then
+        echo "ERROR: Dataset required."
+        echo "Usage: zfslockctl status <dataset>"
+        return 1
+    fi
+
+    # Clean up stale locks first
+    zfslock_cleanup_stale 2>/dev/null
+
+    local lockfile=$(_zfslock_file "$dataset")
+
+    if [[ -f "$lockfile" ]]; then
+        local type pid script acquired description
+        local relative_time
+
+        type=$(_zfslock_read_field "$lockfile" "type")
+        pid=$(_zfslock_read_field "$lockfile" "pid")
+        script=$(_zfslock_read_field "$lockfile" "script")
+        acquired=$(_zfslock_read_field "$lockfile" "acquired")
+        description=$(_zfslock_read_field "$lockfile" "description")
+        relative_time=$(_zfslock_relative_time "$acquired")
+
+        local type_name
+        case "$type" in
+            r) type_name="read" ;;
+            w) type_name="write" ;;
+            x) type_name="destroy" ;;
+            *) type_name="$type" ;;
+        esac
+
+        echo "Dataset '$dataset' is LOCKED"
+        echo "  Type: $type_name"
+        echo "  PID: $pid"
+        echo "  Script: $script"
+        echo "  Acquired: $acquired ($relative_time)"
+        if [[ -n "$description" ]]; then
+            echo "  Description: $description"
+        fi
+        echo "  Lock file: $lockfile"
+
+        # Check hierarchy conflicts
+        echo ""
+        echo "Checking for related locks..."
+
+        # Check ancestors
+        local parent="$dataset"
+        local ancestor_locks=0
+        while [[ "$parent" == */* ]]; do
+            parent="${parent%/*}"
+            local parent_lock=$(_zfslock_file "$parent")
+            if [[ -f "$parent_lock" ]]; then
+                local p_type=$(_zfslock_read_field "$parent_lock" "type")
+                local p_script=$(_zfslock_read_field "$parent_lock" "script")
+                echo "  Ancestor lock: $parent (type=$p_type, script=$p_script)"
+                ((ancestor_locks++))
+            fi
+        done
+
+        # Check descendants
+        local dataset_encoded=$(_zfslock_encode "$dataset")
+        local descendant_locks=0
+        for desc_lock in "$ZFSLOCK_LOCKS_DIR"/"${dataset_encoded}%2F"*.lock ; do
+            [[ -f "$desc_lock" ]] || continue
+            local d_dataset=$(_zfslock_read_field "$desc_lock" "dataset")
+            local d_type=$(_zfslock_read_field "$desc_lock" "type")
+            local d_script=$(_zfslock_read_field "$desc_lock" "script")
+            echo "  Descendant lock: $d_dataset (type=$d_type, script=$d_script)"
+            ((descendant_locks++))
+        done
+
+        if [[ $ancestor_locks -eq 0 && $descendant_locks -eq 0 ]]; then
+            echo "  No related locks found."
+        fi
+
+        return 1  # Return 1 to indicate locked
+    else
+        echo "Dataset '$dataset' is not locked"
+
+        # Check if any lock would conflict
+        echo ""
+        echo "Conflict check:"
+        for check_type in r w x; do
+            if zfslock_check "$dataset" "$check_type" 2>/dev/null; then
+                echo "  Type '$check_type': available"
+            else
+                local conflict_dataset=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "dataset")
+                local conflict_type=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "type")
+                echo "  Type '$check_type': BLOCKED by $conflict_dataset ($conflict_type)"
+            fi
+        done
+
+        return 0  # Return 0 to indicate not locked
+    fi
+}
+
+# Force release a lock
+cmd_release() {
+    local target="$1"
+
+    if [[ -z "$target" ]]; then
+        echo "ERROR: Lock ID or dataset required."
+        echo "Usage: zfslockctl release <lock_id|dataset>"
+        return 1
+    fi
+
+    local lockfile
+
+    # Check if target is a lock file path or a dataset name
+    if [[ -f "$target" ]]; then
+        lockfile="$target"
+    else
+        # Assume it's a dataset name
+        lockfile=$(_zfslock_file "$target")
+    fi
+
+    if [[ ! -f "$lockfile" ]]; then
+        echo "No lock found for '$target'"
+        return 0
+    fi
+
+    # Show lock info before releasing
+    local dataset pid script acquired
+    dataset=$(_zfslock_read_field "$lockfile" "dataset")
+    pid=$(_zfslock_read_field "$lockfile" "pid")
+    script=$(_zfslock_read_field "$lockfile" "script")
+    acquired=$(_zfslock_read_field "$lockfile" "acquired")
+
+    echo "About to force-release lock:"
+    echo "  Dataset: $dataset"
+    echo "  PID: $pid"
+    echo "  Script: $script"
+    echo "  Acquired: $acquired"
+    echo ""
+    echo "WARNING: Force-releasing a lock held by an active process may cause data corruption!"
+
+    # Check if the process is still running
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "WARNING: PID $pid is still running!"
+    else
+        echo "Note: PID $pid is no longer running (safe to release)"
+    fi
+
+    read -p "Are you sure you want to release this lock? [y/N]: " confirm
+
+    if [[ "${confirm,,}" == "y" ]]; then
+        rm -f "$lockfile"
+
+        # Also remove from PID tracking if exists
+        local pidfile="$ZFSLOCK_PIDS_DIR/$pid"
+        if [[ -f "$pidfile" ]]; then
+            local temp
+            temp=$(grep -v "^${lockfile}$" "$pidfile" 2>/dev/null)
+            if [[ -n "$temp" ]]; then
+                echo "$temp" > "$pidfile"
+            else
+                rm -f "$pidfile"
+            fi
+        fi
+
+        echo "Lock released."
+        log_msg "WARN: Force-released lock on $dataset (was held by $script PID $pid)"
+        return 0
+    else
+        echo "Release cancelled."
+        return 1
+    fi
+}
+
+# Remove stale locks
+cmd_cleanup() {
+    echo "Scanning for stale locks..."
+
+    local lockfile
+    local removed=0
+    local active=0
+
+    if [[ ! -d "$ZFSLOCK_LOCKS_DIR" ]]; then
+        echo "No locks directory found."
+        return 0
+    fi
+
+    for lockfile in "$ZFSLOCK_LOCKS_DIR"/*.lock ; do
+        [[ -f "$lockfile" ]] || continue
+
+        local dataset pid script
+        dataset=$(_zfslock_read_field "$lockfile" "dataset")
+        pid=$(_zfslock_read_field "$lockfile" "pid")
+        script=$(_zfslock_read_field "$lockfile" "script")
+
+        if zfslock_is_stale "$lockfile"; then
+            echo "  Removing stale lock: $dataset (was $script PID $pid)"
+            rm -f "$lockfile"
+            ((removed++))
+        else
+            ((active++))
+        fi
+    done
+
+    # Clean up stale PID files
+    local pidfile
+    local pid_removed=0
+    for pidfile in "$ZFSLOCK_PIDS_DIR"/* ; do
+        [[ -f "$pidfile" ]] || continue
+
+        local pid
+        pid=$(basename "$pidfile")
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$pidfile"
+            ((pid_removed++))
+        fi
+    done
+
+    echo ""
+    echo "Cleanup complete:"
+    echo "  Stale locks removed: $removed"
+    echo "  Active locks: $active"
+    if [[ $pid_removed -gt 0 ]]; then
+        echo "  Stale PID files removed: $pid_removed"
+    fi
+
+    return 0
+}
+
+# Wait for lock availability
+cmd_wait() {
+    local dataset="$1"
+    local type="$2"
+
+    if [[ -z "$dataset" || -z "$type" ]]; then
+        echo "ERROR: Dataset and type required."
+        echo "Usage: zfslockctl wait <dataset> <type>"
+        echo "Types: r (read), w (write), x (destroy)"
+        return 1
+    fi
+
+    # Regex: ^[rwx]$
+    # Purpose: Validate that the lock type is one of the allowed single-letter codes.
+    # Examples: "r" -> match; "w" -> match; "x" -> match; "rw" -> no match
+    if [[ ! "$type" =~ ^[rwx]$ ]]; then
+        echo "ERROR: Invalid lock type '$type'. Must be r, w, or x."
+        return 1
+    fi
+
+    echo "Waiting for lock availability on '$dataset' (type=$type)..."
+    echo "Press Ctrl+C to cancel."
+    echo ""
+
+    local attempts=0
+    local _wait_interval="${ZFSLOCK_WAIT_INTERVAL:-30}"
+    [[ "$_wait_interval" =~ ^[0-9]+$ && $_wait_interval -ge 1 ]] || _wait_interval=1
+
+    while true; do
+        ((attempts++))
+
+        if zfslock_check "$dataset" "$type"; then
+            echo "Lock is now available! (after $attempts attempt(s))"
+            return 0
+        fi
+
+        local conflict_dataset=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "dataset")
+        local conflict_type=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "type")
+        local conflict_script=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "script")
+        local conflict_pid=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "pid")
+
+        echo "[$attempts] Blocked by: $conflict_dataset ($conflict_type) - $conflict_script (PID $conflict_pid)"
+        echo "    Retrying in $_wait_interval seconds..."
+
+        sleep "$_wait_interval"
+    done
+}
+
+# Show help
+cmd_help() {
+    cat << 'EOF'
+zfslockctl - CLI tool for managing ZFS dataset locks
+
+Usage:
+  zfslockctl <command> [arguments]
+
+Commands:
+  list [dataset]        List active locks. Optionally filter by dataset substring.
+
+  status <dataset>      Check lock status for a specific dataset. Shows lock details
+                        and any related ancestor/descendant locks.
+
+  release <target>      Force release a lock. Target can be a lock file path or
+                        dataset name. WARNING: May cause data corruption if the
+                        holding process is still active.
+
+  cleanup               Scan for and remove stale locks (locks held by processes
+                        that no longer exist).
+
+  wait <dataset> <type> Wait until a lock can be acquired on the dataset.
+                        Types: r (read), w (write), x (destroy)
+
+  help                  Show this help message.
+
+Lock Types:
+  r - Shared Read       For reading metadata, listing. Conflicts with w, x.
+  w - Exclusive Write   For creating/modifying snapshots. Conflicts with r, w, x.
+  x - Exclusive Destroy For destroying datasets/snapshots. Conflicts with all.
+
+Examples:
+  zfslockctl list                       # List all locks
+  zfslockctl list threeamigos           # List locks on threeamigos pool
+  zfslockctl status pool/dataset        # Check if dataset is locked
+  zfslockctl cleanup                    # Remove stale locks
+  zfslockctl wait pool/dataset w        # Wait for write lock availability
+  zfslockctl release pool/dataset       # Force release lock on dataset
+
+Lock Storage:
+  Locks are stored in /run/lock/zfs/.locks/ and are automatically cleared on reboot.
+EOF
+}
+
+# ==============================================================================
+# Main Entry Point
+# ==============================================================================
+
+main() {
+    local command="$1"
+    shift
+
+    case "$command" in
+        list)
+            cmd_list "$@"
+            ;;
+        status)
+            cmd_status "$@"
+            ;;
+        release)
+            cmd_release "$@"
+            ;;
+        cleanup)
+            cmd_cleanup "$@"
+            ;;
+        wait)
+            cmd_wait "$@"
+            ;;
+        help|--help|-h|"")
+            cmd_help
+            ;;
+        *)
+            echo "Unknown command: $command"
+            echo "Run 'zfslockctl help' for usage."
+            return 1
+            ;;
+    esac
+}
+
+main "$@"
