@@ -1,0 +1,12 @@
+#!/usr/bin/bash
+
+# DEPRECATED: the pool list has moved to the JSON config at
+# /root/.config/zfsutilities.json (managed by the GUI and by the
+# zfsconfig helper). This file is kept as a compatibility shim so that
+# scripts which still `source zfsallthepools` continue to work.
+#
+# New scripts should source zfsconfig directly:
+#   source $mydir/zfsconfig
+#   poolarray    # fills $zfspoolarray
+
+source "$(dirname "${BASH_SOURCE[0]}")/zfsconfig"

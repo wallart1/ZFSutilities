@@ -1,0 +1,267 @@
+#!/usr/bin/bash
+# test-installer-checks — Verify installer safety checks.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+# Replicate the _check_zfs_root function from install-single-node / install-two-node
+_check_zfs_root() {
+    local root_fs_type
+    root_fs_type=$(findmnt -n -o FSTYPE / 2>/dev/null || true)
+    if [[ "$root_fs_type" == "zfs" ]]; then
+        echo "WARNING: ZFS root filesystem detected"
+        return 0
+    fi
+    return 1
+}
+
+test_warns_on_zfs_root() {
+    test_start "ZFS root produces warning"
+    findmnt() { echo "zfs"; }
+    local output
+    output=$(_check_zfs_root 2>&1)
+    unset -f findmnt 2>/dev/null || true
+    if [[ "$output" == *"WARNING: ZFS root filesystem detected"* ]]; then
+        test_pass
+    else
+        test_fail "Expected ZFS root warning, got: $output"
+    fi
+}
+
+test_silent_on_ext4_root() {
+    test_start "ext4 root produces no warning"
+    findmnt() { echo "ext4"; }
+    local output
+    output=$(_check_zfs_root 2>&1)
+    unset -f findmnt 2>/dev/null || true
+    if [[ "$output" != *"WARNING"* ]]; then
+        test_pass
+    else
+        test_fail "Unexpected warning on ext4 root"
+    fi
+}
+
+test_silent_on_xfs_root() {
+    test_start "xfs root produces no warning"
+    findmnt() { echo "xfs"; }
+    local output
+    output=$(_check_zfs_root 2>&1)
+    unset -f findmnt 2>/dev/null || true
+    if [[ "$output" != *"WARNING"* ]]; then
+        test_pass
+    else
+        test_fail "Unexpected warning on xfs root"
+    fi
+}
+
+test_silent_on_findmnt_failure() {
+    test_start "findmnt failure produces no warning"
+    findmnt() { return 1; }
+    local output
+    output=$(_check_zfs_root 2>&1)
+    unset -f findmnt 2>/dev/null || true
+    if [[ "$output" != *"WARNING"* ]]; then
+        test_pass
+    else
+        test_fail "Unexpected warning when findmnt fails"
+    fi
+}
+
+test_warns_on_zfs_root
+test_silent_on_ext4_root
+test_silent_on_xfs_root
+test_silent_on_findmnt_failure
+
+# ------------------------------------------------------------------
+# Desktop launcher helpers (from desktop-launcher-lib.sh)
+# ------------------------------------------------------------------
+
+DESKTOP_LAUNCHER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../10 Installers/desktop-launcher-lib.sh"
+[[ -f "$DESKTOP_LAUNCHER_LIB" ]] || die "Missing: $DESKTOP_LAUNCHER_LIB"
+source "$DESKTOP_LAUNCHER_LIB"
+
+saved_sudo_user="${SUDO_USER:-}"
+
+restore_sudo_user() {
+    if [[ -n "$saved_sudo_user" ]]; then
+        export SUDO_USER="$saved_sudo_user"
+    else
+        unset SUDO_USER
+    fi
+}
+
+test_get_desktop_user_prefers_sudo_user() {
+    test_start "get_desktop_user prefers SUDO_USER"
+    export SUDO_USER="alice"
+    local result
+    result=$(get_desktop_user)
+    restore_sudo_user
+    assert_equals "alice" "$result"
+}
+
+test_get_desktop_user_falls_back_to_x11_owner() {
+    test_start "get_desktop_user falls back to X11 socket owner"
+    unset SUDO_USER
+    mkdir -p /tmp/.X11-unix
+    touch /tmp/.X11-unix/X99
+    # Mock stat to return a non-root UID and id to map it to a user
+    stat() { echo "1000"; }
+    id() {
+        if [[ "$1" == "-un" && "$2" == "1000" ]]; then
+            echo "bob"
+        else
+            command id "$@"
+        fi
+    }
+    DISPLAY=":99"
+    local result
+    result=$(get_desktop_user)
+    unset -f stat id 2>/dev/null || true
+    rm -f /tmp/.X11-unix/X99
+    assert_equals "bob" "$result"
+}
+
+test_get_desktop_user_returns_empty_when_unknown() {
+    test_start "get_desktop_user returns empty when unknown"
+    unset SUDO_USER
+    mkdir -p /tmp/.X11-unix
+    touch /tmp/.X11-unix/X99
+    stat() { echo "0"; }
+    local result
+    result=$(get_desktop_user)
+    unset -f stat 2>/dev/null || true
+    rm -f /tmp/.X11-unix/X99
+    assert_equals "" "$result"
+}
+
+test_get_user_home_uses_getent() {
+    test_start "get_user_home reads passwd entry"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "carol" ]]; then
+            echo "carol:x:1001:1001:Carol:/home/carol:/bin/bash"
+        fi
+    }
+    local result
+    result=$(get_user_home "carol")
+    unset -f getent 2>/dev/null || true
+    assert_equals "/home/carol" "$result"
+}
+
+test_create_desktop_symlinks_creates_links() {
+    test_start "create_desktop_symlinks creates GUI and docs links"
+    local tmp_home
+    tmp_home=$(mktemp -d)
+    get_user_home() { echo "$tmp_home"; }
+    chown() { true; }
+    local output
+    output=$(create_desktop_symlinks "dave" 2>&1)
+    local rc=$?
+    unset -f get_user_home chown 2>/dev/null || true
+
+    local gui_link="${tmp_home}/ZFSutilities GUI"
+    local docs_link="${tmp_home}/ZFSutilities Documentation"
+    local failed=0
+
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc"
+    fi
+    if [[ ! -L "$gui_link" ]]; then
+        failed=1
+        echo "    GUI symlink missing"
+    fi
+    if [[ ! -L "$docs_link" ]]; then
+        failed=1
+        echo "    Docs symlink missing"
+    fi
+    if [[ -L "$gui_link" && "$(readlink "$gui_link")" != "/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui" ]]; then
+        failed=1
+        echo "    GUI symlink target wrong: $(readlink "$gui_link")"
+    fi
+    if [[ -L "$docs_link" && "$(readlink "$docs_link")" != "/usr/local/lib/zfsutilities/current/bin/zfsutilities-docs" ]]; then
+        failed=1
+        echo "    Docs symlink target wrong: $(readlink "$docs_link")"
+    fi
+
+    rm -rf "$tmp_home"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Symlink creation did not produce expected results"
+    fi
+}
+
+test_create_desktop_symlinks_handles_missing_user() {
+    test_start "create_desktop_symlinks warns when user is empty"
+    local output
+    output=$(create_desktop_symlinks "" 2>&1)
+    local rc=$?
+    if [[ $rc -ne 0 && "$output" == *"Cannot determine desktop user"* ]]; then
+        test_pass
+    else
+        test_fail "Expected warning for missing user"
+    fi
+}
+
+test_create_desktop_symlinks_handles_missing_home() {
+    test_start "create_desktop_symlinks warns when home is missing"
+    get_user_home() { echo ""; }
+    local output
+    output=$(create_desktop_symlinks "erin" 2>&1)
+    local rc=$?
+    unset -f get_user_home 2>/dev/null || true
+    if [[ $rc -ne 0 && "$output" == *"Home directory for 'erin' not found"* ]]; then
+        test_pass
+    else
+        test_fail "Expected warning for missing home directory"
+    fi
+}
+
+test_remove_desktop_symlinks_removes_links() {
+    test_start "remove_desktop_symlinks removes GUI and docs links"
+    local tmp_home
+    tmp_home=$(mktemp -d)
+    ln -s "old-gui" "${tmp_home}/ZFSutilities GUI"
+    ln -s "old-docs" "${tmp_home}/ZFSutilities Documentation"
+    get_user_home() { echo "$tmp_home"; }
+    local rc
+    remove_desktop_symlinks "dave" >/dev/null 2>&1
+    rc=$?
+    unset -f get_user_home 2>/dev/null || true
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc"
+    fi
+    if [[ -L "${tmp_home}/ZFSutilities GUI" ]]; then
+        failed=1
+        echo "    GUI symlink still present"
+    fi
+    if [[ -L "${tmp_home}/ZFSutilities Documentation" ]]; then
+        failed=1
+        echo "    Docs symlink still present"
+    fi
+
+    rm -rf "$tmp_home"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Symlink removal did not produce expected results"
+    fi
+}
+
+test_get_desktop_user_prefers_sudo_user
+test_get_desktop_user_falls_back_to_x11_owner
+test_get_desktop_user_returns_empty_when_unknown
+test_get_user_home_uses_getent
+test_create_desktop_symlinks_creates_links
+test_create_desktop_symlinks_handles_missing_user
+test_create_desktop_symlinks_handles_missing_home
+test_remove_desktop_symlinks_removes_links
+
+test_summary
+teardown_test_env

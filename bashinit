@@ -1,0 +1,106 @@
+#!/usr/bin/bash
+# Bash script initial processing
+# NOTE: This script must be in your home directory and in (or linked from) /root.
+# Note: This script must be sourced from another script. Running it independently
+#       is not supported.
+
+# Directory where per-session log files are stored.
+ZFSUTILITIES_LOG_DIR="/var/log/zfsutilities/sessions"
+
+function bashinit {
+    # Get the directory that we were invoked from.
+    # Only set mydir if it is not already set and BASH_SOURCE[1] is available.
+    # This preserves mydir when called from contexts like bash -c (Python GUI).
+    if [[ -z "${mydir}" && -n "${BASH_SOURCE[1]}" ]]; then
+        mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")")
+    fi
+
+    # Auto-create a session log file for directly-executed scripts.
+    # Subshells and sourced function scripts inherit ZFSUTILITIES_LOG_FILE
+    # so they do not create duplicate logs.
+    # When a Python runner explicitly sets ZFSUTILITIES_LOG_INHERIT=Y, the
+    # child bash process reuses the runner's session log instead of creating
+    # its own (prevents concurrent runners from colliding on the same file).
+    if [[ "${BASH_SOURCE[1]}" = "${0}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
+        local script_name
+        script_name=$(basename "${0}")
+        # Sanitize name to alphanumeric, hyphens, underscores
+        script_name="${script_name//[^A-Za-z0-9_-]/}"
+        local ts
+        ts=$(date +%Y-%m-%d_%H-%M-%S)
+        local logfile="${ZFSUTILITIES_LOG_DIR}/${ts}_cli_${script_name}.log"
+        if mkdir -p "${ZFSUTILITIES_LOG_DIR}" 2>/dev/null; then
+            # Touch the file so it exists even if no messages are written
+            touch "${logfile}" 2>/dev/null || true
+            export ZFSUTILITIES_LOG_FILE="${logfile}"
+        fi
+    fi
+}
+
+# Logging function with automatic prefix.
+# Usage:
+# log_msg "This is a message"
+# log_msg "DEBUG: verbose diagnostic"
+# All messages are always emitted to stderr and appended to the session log
+# file when one is configured and owned by this process. Message-level
+# filtering is performed by the GUI log viewers, not by this function.
+function log_msg {
+    local caller_file="${BASH_SOURCE[1]}"
+    local caller_line="${BASH_LINENO[0]}"
+    if [[ -n "$caller_file" ]]; then
+        local prefix="$(realpath "$caller_file"):$caller_line:"
+    else
+        local prefix="zfsutilities:"
+    fi
+    local full="${prefix} $*"
+    # Colorize stderr output when connected to a terminal.
+    if [[ -t 2 && "${TERM}" != "dumb" ]]; then
+        local colored="${full}"
+        case "$*" in
+            WARN:*) colored="\033[38;5;208m${full}\033[0m" ;;
+            FATAL:*) colored="\033[1;31m${full}\033[0m" ;;
+        esac
+        echo -e "${colored}" >&2
+    else
+        echo -e "${full}" >&2
+    fi
+    # Append to session log file if one is configured and we own it.
+    if [[ -n "${ZFSUTILITIES_LOG_FILE}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
+        local _ts
+        _ts=$(date '+%Y-%m-%d %H:%M:%S')
+        echo -e "${_ts}  ${full}" >> "${ZFSUTILITIES_LOG_FILE}" 2>/dev/null || true
+    fi
+}
+
+# Generate message prefix for when you don't want to use log_msg.
+function msg_prefix {
+    local caller_file="${BASH_SOURCE[1]}"
+    local caller_line="${BASH_LINENO[0]}"
+    local msgprefix
+    if [[ -n "$caller_file" ]]; then
+        msgprefix="$(realpath "$caller_file"):$caller_line:"
+    else
+        msgprefix="zfsutilities:"
+    fi
+    echo -n "$msgprefix" >&2
+}
+
+function calledbybash {
+    if [[ "${BASH_SOURCE[1]}" = "${0}" ]]; then return 0; else return 1; fi
+}
+
+# Prompt user for yes/no response with input validation.
+# Usage: if ask_yn "Do you want to continue?"; then ...
+# Returns 0 for yes, 1 for no
+function ask_yn {
+    local prompt="${1:-Continue?}"
+    local response
+    while true; do
+        read -p "$prompt (y/n): " response
+        case "${response,,}" in
+            y|yes) return 0 ;;
+            n|no)  return 1 ;;
+            *)     echo "Please enter 'y' or 'n'." ;;
+        esac
+    done
+}

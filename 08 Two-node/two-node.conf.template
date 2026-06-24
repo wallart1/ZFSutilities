@@ -1,0 +1,38 @@
+# /etc/two-node.conf
+#
+# Single source of truth for the two-node infrastructure that the scripts in
+# 08 Two-node/ and 09 ZFS clone support/ operate against. This file is sourced
+# by /usr/local/lib/two-node-lib.sh and (on the storage host) directly by the
+# ZFSutilities repo-root scripts that cross the host boundary.
+#
+# Edit this file when:
+#   - a host is renamed
+#   - the storage network IP changes
+#   - the iSCSI target is recreated under a different IQN prefix
+#   - a new ZFS pool is added to the iSCSI target
+#
+# This file is installed by 08 Two-node/install-scripts from
+# two-node.conf.template if it does not already exist. install-scripts
+# never overwrites an existing /etc/two-node.conf.
+
+# --- Hosts (short hostnames as returned by `hostname -s`) ---
+STORAGE_HOST="storage-host"     # owns the ZFS pools, runs the iSCSI target
+COMPUTE_HOST="compute-host"     # runs the Proxmox VMs, iSCSI initiator
+
+# --- Storage network ---
+STORAGE_IP="192.0.2.1"        # iSCSI portal IP (= STORAGE_HOST on storage net)
+
+# --- iSCSI naming ---
+# IQN_PREFIX is part of the iSCSI target's persistent on-disk name. Renaming
+# STORAGE_HOST does NOT rename the target — the literal "storage-host" below is
+# the name baked into the target when it was first created and is independent
+# of the host's current short hostname.
+IQN_PREFIX="iqn.YYYY-MM.local.storage-host"
+
+# --- Pool → iSCSI target short-name map ---
+# Key   = ZFS pool name as it appears in `zpool list`
+# Value = target short name (the part after the colon in IQN_PREFIX)
+declare -A POOL_TARGET=(
+    [pool1]="pool1"
+    [pool2]="pool2"
+)

@@ -1,0 +1,41 @@
+#!/usr/bin/bash
+
+source ~/bashinit
+bashinit
+source $mydir/bashdebug
+bashdebugon
+
+if [[ $1 != '' ]]; then
+    zfs list -r -o name,keystatus,keylocation $1 | grep available | grep -v prompt
+else
+    readarray -t importedpoolarray < <(zpool list -Ho name)
+    for pool in ${importedpoolarray[@]}; do
+        echo "Keys for pool: $pool."
+        zfs list -r -o name,keystatus,keylocation $pool | grep available | grep -v prompt
+    done        
+fi        
+
+#if ! sudo mount /dev/disk/by-label/ZFSkeys /mnt/ZFSkeys; then
+#    echo "Unable to mount ZFSkeys."
+#    exit 8
+#fi
+#sudo systemctl daemon-reload
+#sudo zfs load-key -a
+#sudo zfs mount -a
+#if sudo umount /mnt/ZFSkeys; then
+#    if ! sudo cryptsetup luksClose \
+#            $(lsblk -l -p -o NAME,LABEL,TYPE \
+#            | grep ZFSkeys \
+#            | awk '{print $1}' \
+#            ); then
+#        echo "Unable to lock ZFSkeys."
+#        exit 8
+#    fi
+#else echo "Unable to unmount ZFSkeys."; exit 8
+#fi
+#exit 0
+
+#    mapperid=$(ls -lash /dev/disk/by-label/ZFSkeys | awk -F'/' '{print $NF}')
+#    uuid=$(ls -lash /dev/disk/by-uuid | grep $mapperid | awk '{print $10}')
+#    udisksctl lock -b /dev/disk/by-uuid/$uuid
+

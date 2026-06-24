@@ -1,0 +1,15 @@
+#!/usr/bin/bash
+# Find the number of days between two dates
+
+
+start_date=$(date -d "$1" +%s)
+end_date=$(date -d "$2" +%s)
+numberofdays=$(( (end_date - start_date) / 86400 ))
+echo "Between $1 and $2, there are $numberofdays days."
+
+numberofmonths=$(printf "%.2f\n" "$(echo "$numberofdays / (365 / 12)" | bc -l )")
+echo "... or $numberofmonths months."
+
+numberofyears=$(printf "%.2f\n" "$(echo "$numberofdays / 365" | bc -l )")
+echo "... or $numberofyears years."
+

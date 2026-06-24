@@ -1,0 +1,95 @@
+#!/usr/bin/bash
+# Bash debug trap functions.
+
+# This trap runs BEFORE every command.
+# It provides the "pre-exec" prompt and lets the shell do the actual execution.
+function _trap_DEBUG {
+    local cmd="$BASH_COMMAND"
+    local line func filename expanded_cmd
+
+    # Do not step into the trap function itself or commands run from its prompt.
+    if [[ "${BASH_SOURCE[1]}" == "${BASH_SOURCE[0]}" ]]; then
+        return
+    fi
+
+    # Retrieve the call stack information
+    read -r line func filename <<< "$(caller 0)"
+
+    local expanded_cmd="$cmd" # Default to unexpanded
+
+    # Regex: ^[[:space:]]*\(\(
+    # Purpose: Detect arithmetic expressions (( ... )) so we skip eval expansion
+    #          on them (eval would misinterpret the parentheses).
+    # Example: "(( 1 + 1 ))" -> match; "echo hello" -> no match
+    if [[ ! "$cmd" =~ ^[[:space:]]*\(\( ]]; then
+        expanded_cmd=$(eval echo "$cmd" 2>/dev/null) || expanded_cmd="$cmd"
+    fi
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # Provide the "pre-execution" prompt
+    while read -rep "--> ${filename}:${func}:${line}: $cmd --> $expanded_cmd (pre-exec)> " _command;
+    do
+        if [ -n "$_command" ];
+        then
+            eval "$_command";
+            echo "RC=$?"
+        else
+            break
+        fi
+    done
+    
+    # By just returning here, we let the shell execute the command ONE time,
+    # which fixes both the "double execution" and "broken pipe" bugs.
+}
+
+# This trap runs AFTER a command, but ONLY IF it fails (returns non-zero).
+function _trap_ERR {
+    local rc=$? # Capture the return code of the failed command
+    local line func filename
+    
+    # Get the location of the failure
+    read -r line func filename <<< "$(caller 0)"
+
+    echo "--- ERROR DETECTED ---"
+    echo "Command at ${filename}:${func}:${line} failed with RC=$rc"
+    
+    # Offer a post-failure interactive prompt
+    while read -rep "--> ${filename}:${func}:${line}: DEBUG (post-failure)> " _command;
+    do
+        if [ -n "$_command" ];
+        then
+            eval "$_command";
+            echo "RC=$?"
+        else
+            break
+        fi
+    done
+}
+
+
+# Enable/disable the traps for debugging purposes
+function bashdebugon {
+    trap '_trap_DEBUG' DEBUG  # Your pre-exec prompt
+    trap '_trap_ERR' ERR      # Your post-failure prompt
+}
+function bashdebugoff {
+    trap - DEBUG
+    trap - ERR
+}

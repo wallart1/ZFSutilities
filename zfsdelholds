@@ -1,0 +1,67 @@
+#!/usr/bin/bash
+# Delete all zfs snapshot holds in a subtree
+# $1    Subtree
+# $2    Optional leading substring of snapshot names to be affected
+# $3    Optional depth of the subtree
+
+source ~/bashinit
+bashinit
+source $mydir/zfsdelallholds
+
+function delholds {
+    local zfsdelholds_subtree zfsdelholds_match zfsdelholds_depth
+    local snap i l snapsnap
+    local autoproceed="Y"
+    declare -a snaparray
+
+    if [[ $1 = "" ]]; then
+        log_msg "FATAL: A subtree must be specified."
+        source $mydir/bashfatal
+    else
+        zfsdelholds_subtree=$1
+    fi
+    zfsdelholds_match=$2
+    if [[ $3 = '' ]]; then
+        zfsdelholds_depth=""
+    else
+        zfsdelholds_depth="-d$3"
+    fi
+
+    readarray -t snaparray < <(zfs list $zfsdelholds_depth -Ho name -rt snapshot "$zfsdelholds_subtree")
+
+    if [[ ${#snaparray[@]} = 0 ]]; then
+        log_msg "INFO: $zfsdelholds_subtree has no snapshots and therefore no holds."
+        return 0
+    fi
+
+    if [[ $zfsdelholds_match != "" ]]; then
+        for ((i=0; i<${#snaparray[@]}; i++)); do  # Remove the snaps that don't match the substring.
+            snapsnap=${snaparray[$i]#*@}  # Get part after @
+            l=${#zfsdelholds_match}
+            if [[ ${snapsnap:0:$l} != $zfsdelholds_match ]]; then
+                unset snaparray[$i]
+            fi
+        done
+        # Re-index the array to remove gaps
+        snaparray=("${snaparray[@]}")
+    fi
+
+    if [[ ${#snaparray[@]} = 0 ]]; then
+        log_msg "INFO: No snapshots matched pattern '$zfsdelholds_match' in $zfsdelholds_subtree."
+        return 0
+    fi
+
+    if [[ $autoproceed != "Y" ]]; then
+        log_msg "INFO: About to release holds for the following ${#snaparray[@]} snapshots in $zfsdelholds_subtree."
+        for snap in "${snaparray[@]}"; do
+            echo "$snap"
+        done
+        read -p "Press enter to continue."
+    fi
+
+    for snap in "${snaparray[@]}"; do
+        delallholds "$snap"
+    done
+}
+
+if calledbybash; then delholds "$1" "$2" "$3"; fi

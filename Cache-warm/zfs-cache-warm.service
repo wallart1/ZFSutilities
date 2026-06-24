@@ -1,0 +1,23 @@
+[Unit]
+Description=ZFS Cache Warming Service
+After=zfs-import.target zfs-mount.service
+Wants=zfs-mount.service
+# Wait for system to be fully up before warming cache
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/warm-cache.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits (prevent cache warming from overwhelming system)
+Nice=19
+IOSchedulingClass=idle
+
+# Timeout (cache warming could take hours for large datasets)
+TimeoutStartSec=4h
+
+[Install]
+WantedBy=multi-user.target

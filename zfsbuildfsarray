@@ -1,0 +1,215 @@
+#!/usr/bin/bash
+# Build a filesystem array and process $includes, $excludes and $startwith
+
+# $1            or $sourcefs Specifies the ZFS subtree to be considered. (Required)
+# $2            "bottomup" or $bottomup = "Y" means to sort fsarray descending. Otherwise, sort
+#               ascending. Defaults to ascending.
+# $3            "pools" = return a list of pools rather than datasets.
+# $depth        Optionally specify how deep into the subtree to go during the initial subtree
+#               expansion. "0" means to list only the given directory. "1" means to additionally
+#               list the next levels of directories. And, so on. "" means to not limit depth.
+# $includes     An optional array of substrings identifying datasets to be included that are
+#               within the subtree. If no includes are specified, then all datasets withing the
+#               subtree will be included. Otherwise, only datasets that match an include substring
+#               are included. If an item in the $includes array starts with "=", then the item
+#               is not a substring, but rather, the item (without the "=") must match the dataset
+#               name exactly in order to be included.
+# $excludes     An optional array of substrings identifying datasets to be excluded that are
+#               within the subtree. If no excludes are specified, then no datasets will be excluded.
+#               If an item in the $excludes array starts with "=", then the item is not a substring,
+#               but rather, the item (without the "=") must match the dataset name exactly in order
+#               to be excluded.
+# $startwith    An optional substring that, when specified, identifies the first dataset in the
+#               filesystem array that will be included. Any items before it will be removed from
+#               the array. Note that the array will be traversed from index [0]. If the array is
+#               sorted "bottomup", then the removal of items will effectively go from bottom to top.
+#               A leading "=" may be used to indicate an exact match is needed. If no matches are
+#               found, an error message is issued, and the script is terminated.
+# $endwith      An optional substring that, when specified, identifies the last dataset in the
+#               filesystem array that will be included. Any items after it will be removed from
+#               the array. A leading "=" may be used to indicate an exact match is needed. If no
+#               matches are found, an error message is issued, and the script is terminated.
+# $buildfsarraytype
+#               Optional, defaults to "filesystem,volume". Specify the type(s) of datasets to be
+#               included in the array. May be any combination of "filesystem,volume,snapshot", or
+#               "pool" by itself.
+# $sortby       Optional, defaults to "name". Specify the property to sort by. Common values are
+#               "name" (alphabetical) or "creation" (chronological). See "zfs list -o" for other
+#               valid properties.
+# $skipclones   Optional, defaults to unset (include clones). When set to 'Y', datasets that
+#               are ZFS clones (origin property != '-') are filtered out of fsarray.
+#               WARNING: Clones are writable datasets with their own unique data. Skipping them
+#               from backup WILL cause data loss. Only use this for transient test clones that
+#               you genuinely do not need to back up.
+
+function buildfsarray {
+    source ~/bashinit
+    bashinit
+
+    declare -i i=0
+    if [[ $1 != '' ]]; then sourcefs=$1; fi
+    if [[ $sourcefs = '' ]]; then
+        log_msg "FATAL: A dataset must be specified."
+        exit 8
+    fi
+
+    if [[ $2 = 'bottomup' ]]; then local bottomup='Y'; fi
+    if [[ $bottomup != 'Y' ]]; then local bottomup='N'; fi
+    if [[ $bottomup != 'Y' ]]; then
+        local sequence='-s' 
+    else local sequence='-S'  # Whether to reverse sort sequence
+    fi
+
+    if [[ $3 = 'pool' ]]; then local buildfsarraytype='pool'; fi
+    if [[ $buildfsarraytype = '' ]]; then
+        local buildfsarraytype='filesystem,volume'
+    fi
+
+    if [[ $sortby = '' ]]; then
+        local sortby='name'
+    fi
+
+    if [[ $depth != "" ]]; then
+        # Regex: ^[0-9]+$
+        # Purpose: Validate that the depth parameter is a non-negative integer.
+        # Example: "2" -> match; "-1" -> no match; "all" -> no match
+        if [[ $depth =~ ^[0-9]+$ ]]; then
+            local depth="-d$depth"
+        else
+            log_msg "FATAL: Invalid depth = $depth."
+            exit 8
+        fi
+    else
+        unset depth
+    fi
+
+    if [[ $buildfsarraytype != 'pool' ]]; then
+        readarray -t fsarray < <(zfs list $depth -Hrt $buildfsarraytype -o name \
+            $sequence $sortby "$sourcefs")
+
+        # Optionally filter out ZFS clones
+        if [[ $skipclones = 'Y' ]]; then
+            for (( i=0; i<${#fsarray[@]}; i++ )); do
+                local _origin
+                _origin=$(zfs list -H -o origin "${fsarray[$i]}" 2>/dev/null)
+                if [[ "$_origin" != "-" && -n "$_origin" ]]; then
+                    fsarray=("${fsarray[@]:0:$i}" "${fsarray[@]:$((i+1))}")
+                    ((i--))
+                fi
+            done
+        fi
+    else
+        local poolarray
+        readarray -t poolarray < <(zpool list -Ho name)
+        echo "${poolarray[@]}"
+        source $mydir/bashreturn 0
+    fi
+
+    # If any includes are specified, and the fs name does not contain one of them,
+    # remove the fs from the fsarray.
+    for (( i=0; i<${#fsarray[@]}; i++ )); do     # Process includes
+        local fs=${fsarray[i]}
+        if [[ ${#includes[@]} < 1 ]]; then      # If no includes were specified, all datasets are
+                                                # included.
+            break
+        fi
+        # If includes were specified, and any are in the fs name, then include the fs.
+        # Otherwise, remove the fs from the array.
+        if [[ ${#includes[@]} > 0 ]]; then
+            local include
+            for include in ${includes[@]}; do
+                if [[ ${include:0:1} = '=' ]]; then     # Include string must match the fs name
+                                                        # exactly.
+                    local anywhereinfs=''
+                    include=${include:1}
+                else
+                    local anywhereinfs='*'
+                fi
+                if [[ $fs == $anywhereinfs"$include"$anywhereinfs ]]; then # Note pattern-matching
+                                                                           # syntax
+                    continue 2
+                fi
+            done
+            fsarray=("${fsarray[@]:0:$i}" "${fsarray[@]:$((i+1))}") # Remove the item at i.
+            ((i--))                        # Adjust i to point to the entry before the removed one.
+            continue
+        fi
+    done
+
+    # If an fs is excluded, remove it from the fsarray.
+    if [[ ${#excludes[@]} < 1 ]]; then
+        true
+    else
+        for (( i=0; i<${#fsarray[@]}; i++)); do     # Process excludes
+            fs=${fsarray[i]}
+            # See if fs is in the excludes list
+            local exclude
+            for exclude in ${excludes[@]}; do       # Is this fs excluded?.
+                if [[ ${exclude:0:1} = '=' ]]; then # Exclude string must begin at the beginning
+                                                    # of the fs name.
+                    anywhereinfs=''
+                    exclude=${exclude:1}
+                else
+                    anywhereinfs='*'
+                fi
+                if [[ $fs == $anywhereinfs"$exclude"$anywhereinfs ]]; then  # Note pattern-matching
+                                                                            # syntax
+                    fsarray=("${fsarray[@]:0:$i}" "${fsarray[@]:$((i+1))}") # Remove the item at i.
+                    ((i--))                # Adjust i to point to the entry before the removed one.
+                    break
+                fi
+            done
+        done
+    fi
+
+    if [[ $startwith != '' ]]; then
+        if [[ ${startwith:0:1} = '=' ]]; then # "=": String must exactly match the fs name.
+            local anywhereinfs=''
+            local startwith=${startwith:1}          # Get rid of the leading '='.
+        else
+            local anywhereinfs='*'
+        fi
+
+        for (( i=0; i<${#fsarray[@]}; i++)); do     # Look for "startwith" substring in fsarray
+            fs=${fsarray[i]}
+
+            if ! [[ $fs == $anywhereinfs"$startwith"$anywhereinfs ]]; then # Note pattern-matching
+                                                                           # syntax
+                fsarray=("${fsarray[@]:0:$i}" "${fsarray[@]:$((i+1))}") # Remove the item at i.
+                ((i--))                         # Adjust i to point to the entry before the removed
+                continue
+            else
+                break                           # Found a match. Stop deleting array items.
+            fi
+        done
+        if [[ ${#fsarray[@]} = 0 ]]; then       # All the array items were deleted!
+            log_msg "FATAL: startwith: \"$startwith\" was not found in any of the eligible dataset names."
+            exit 8
+        fi
+    fi
+
+    if [[ $endwith != '' ]]; then
+        if [[ ${endwith:0:1} = '=' ]]; then   # "=": String must exactly match the fs name.
+            local anywhereinfs=''
+            local endwith=${endwith:1}              # Get rid of the leading '='.
+        else
+            local anywhereinfs='*'
+        fi
+
+        local found=0
+        for (( i=0; i<${#fsarray[@]}; i++)); do     # Look for "endwith" substring in fsarray
+            fs=${fsarray[i]}
+
+            if [[ $fs == $anywhereinfs"$endwith"$anywhereinfs ]]; then   # Note pattern-matching syntax
+                fsarray=("${fsarray[@]:0:$((i+1))}")  # Keep items 0 through i (inclusive).
+                found=1
+                break
+            fi
+        done
+        if [[ $found = 0 ]]; then
+            log_msg "FATAL: endwith: \"$endwith\" was not found in any of the eligible dataset names."
+            exit 8
+        fi
+    fi
+fsarraylen=${#fsarray[@]}
+}

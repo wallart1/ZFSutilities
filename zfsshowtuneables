@@ -1,0 +1,69 @@
+#!/bin/bash
+# Checks whether /etc/modprobe.d/zfs.conf is active and applied at boot.
+# Works with Proxmox VE 8.x + OpenZFS 2.x
+
+set -e
+
+ZFS_CONF="/etc/modprobe.d/zfs.conf"
+INITRAMFS="/boot/initrd.img-$(uname -r)"
+PARAMS_PATTERN="zfs_vdev_scrub_"
+
+echo "=== ZFS Tunable Verification Script ==="
+echo "Kernel: $(uname -r)"
+# awk '/^version:/{print $2}'  —  modinfo prints lines like "version:        2.2.4".
+#   Match the "version:" line and extract the version string (second field).
+echo "ZFS version: $(modinfo zfs | awk '/^version:/{print $2}')"
+echo
+
+# 1. Check configuration file
+if [[ -f "$ZFS_CONF" ]]; then
+  echo "[OK] Found $ZFS_CONF:"
+  # grep -E '^options zfs'  —  Find kernel module option lines in /etc/modprobe.d/zfs.conf.
+  #   Only lines beginning with "options zfs" are matched (comments and blank lines ignored).
+  grep -E '^options zfs' "$ZFS_CONF" || echo "  (no 'options zfs' lines found)"
+else
+  echo "[WARN] $ZFS_CONF not found."
+  exit 1
+fi
+echo
+
+# 2. Verify it's embedded in initramfs
+if lsinitramfs "$INITRAMFS" 2>/dev/null | grep -q "etc/modprobe.d/zfs.conf"; then
+  echo "[OK] zfs.conf is included in initramfs image ($INITRAMFS)"
+else
+  echo "[FAIL] zfs.conf not found in initramfs!"
+  echo "→ Run: sudo update-initramfs -u -k all"
+  exit 1
+fi
+echo
+
+# 3. Verify parameters at runtime
+echo "[INFO] Current ZFS scrub parameters:"
+PARAMS_FOUND=false
+shopt -s nullglob
+for p in /sys/module/zfs/parameters/${PARAMS_PATTERN}*; do
+  if [[ -f "$p" ]]; then
+    PARAMS_FOUND=true
+    printf "  %-40s %s\n" "$(basename "$p"):" "$(cat "$p")"
+  fi
+done
+shopt -u nullglob
+
+if ! $PARAMS_FOUND; then
+  echo "  (No matching $PARAMS_PATTERN parameters found — possibly renamed or unsupported)"
+fi
+echo
+
+# 4. Optional: dmesg verification
+if dmesg | grep -qi "zfs"; then
+  echo "[INFO] ZFS module load messages in dmesg:"
+  # grep -i "zfs" | grep -E "module|loaded|vdev_scrub"
+  # Purpose: Filter dmesg for ZFS-related lines that mention module loading,
+  #          "loaded", or scrub events. The -E pattern is an OR of three keywords.
+  dmesg | grep -i "zfs" | grep -E "module|loaded|vdev_scrub" | tail -n 5
+else
+  echo "[WARN] No ZFS load messages found in dmesg."
+fi
+echo
+echo "=== Verification Complete ==="
+

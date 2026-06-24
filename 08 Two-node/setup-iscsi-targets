@@ -1,0 +1,100 @@
+#!/bin/bash
+# setup-iscsi-targets
+# Create iSCSI targets, TPGs, and portals from the pool-to-target mappings
+# defined in /etc/zfsutilities-node.conf.
+#
+# Idempotent — safe to run multiple times. Skips targets that already exist.
+# Adds missing portals to existing targets.
+#
+# Usage: setup-iscsi-targets
+# Run on the storage host.
+
+source /usr/local/lib/node-lib.sh
+
+# Exit silently in single-node mode
+is_single_node && exit 0
+
+# Verify we're on the storage host
+MY_HOST=$(hostname -s)
+if [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
+    echo "✗ ERROR: Must run on the storage host ($STORAGE_HOST), not $MY_HOST" >&2
+    exit 1
+fi
+
+# Check prerequisite
+if ! command -v targetcli >/dev/null 2>&1; then
+    echo "✗ ERROR: targetcli not found. Install rtslib-fb-targetctl first." >&2
+    exit 1
+fi
+
+echo "=== Setting up iSCSI targets ==="
+echo ""
+
+CREATED=0
+EXISTING=0
+PORTALS_ADDED=0
+
+# Iterate over POOL_TARGET values (target short names)
+for pool in "${!POOL_TARGET[@]}"; do
+    target_short="${POOL_TARGET[$pool]}"
+    target_iqn="${IQN_PREFIX}:${target_short}"
+
+    echo "  Pool: $pool → Target: $target_iqn"
+
+    # Check if target already exists
+    if targetcli /iscsi ls 2>/dev/null | grep -q "${target_iqn}"; then
+        EXISTING=$((EXISTING + 1))
+        echo "    ✓ Target already exists"
+    else
+        # Create the target
+        if targetcli /iscsi create "$target_iqn" >/dev/null 2>&1; then
+            CREATED=$((CREATED + 1))
+            echo "    ✓ Target created"
+        else
+            echo "    ✗ Failed to create target" >&2
+            continue
+        fi
+    fi
+
+    # Ensure TPG1 exists (created automatically with target, but verify)
+    tpg_path="/iscsi/${target_iqn}/tpg1"
+
+    # Disable authentication (demo mode)
+    targetcli "${tpg_path}" set attribute authentication=0 >/dev/null 2>&1
+    targetcli "${tpg_path}" set attribute demo_mode_write_protect=0 >/dev/null 2>&1
+
+    # Check if portal already exists
+    portal_exists=false
+    if targetcli "${tpg_path}/portals" ls 2>/dev/null | grep -q "${STORAGE_IP}:3260"; then
+        portal_exists=true
+    fi
+
+    if [[ "$portal_exists" == true ]]; then
+        echo "    ✓ Portal ${STORAGE_IP}:3260 already exists"
+    else
+        # Create the portal
+        if targetcli "${tpg_path}/portals" create "${STORAGE_IP}:3260" >/dev/null 2>&1; then
+            PORTALS_ADDED=$((PORTALS_ADDED + 1))
+            echo "    ✓ Portal ${STORAGE_IP}:3260 added"
+        else
+            echo "    ⚠ Could not add portal ${STORAGE_IP}:3260" >&2
+        fi
+    fi
+done
+
+echo ""
+
+# Save config if anything changed
+if [[ $CREATED -gt 0 || $PORTALS_ADDED -gt 0 ]]; then
+    targetcli saveconfig >/dev/null 2>&1
+    echo "✓ iSCSI configuration saved"
+else
+    echo "✓ No changes needed (all targets already configured)"
+fi
+
+echo ""
+echo "  Targets created:   $CREATED"
+echo "  Targets existing:  $EXISTING"
+echo "  Portals added:     $PORTALS_ADDED"
+echo ""
+echo "=== Done ==="

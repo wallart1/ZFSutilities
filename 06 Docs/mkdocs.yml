@@ -1,0 +1,79 @@
+site_name: ZFS Utilities
+site_description: Documentation for ZFS backup, snapshot, and retention management utilities
+docs_dir: 'docs'
+
+hooks:
+  - hooks/edit_links.py
+  - hooks/version_stamp.py
+
+theme:
+  name: material
+  custom_dir: overrides
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - toc.integrate
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - scheme: default
+      primary: blue-grey
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue-grey
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Changelog: changelog.md
+  - Installation:
+    - Overview: 'installation/index.md'
+    - ZFS Key Handling: 'installation/zfs-keys.md'
+  - User Guide:
+    - Overview: 'user-guide/index.md'
+    - Concepts and Terminology: 'user-guide/concepts.md'
+    - Daily Backup: 'user-guide/daily-backup.md'
+    - Offsite Backup: 'user-guide/offsite-backup.md'
+    - Restore Operations: 'user-guide/restore.md'
+    - Retention Policies: 'user-guide/retention.md'
+    - Proxmox Integration: 'user-guide/proxmox-integration.md'
+    - GTK GUI Reference: 'user-guide/gtk-gui.md'
+  - Developer Guide:
+    - Overview: 'developer-guide/index.md'
+    - Architecture: 'developer-guide/architecture.md'
+    - Conventions: 'developer-guide/conventions.md'
+    - Coding Policies: 'developer-guide/coding-policies.md'
+    - Testing: 'developer-guide/testing.md'
+    - Lock Manager: 'developer-guide/lock-manager.md'
+    - Node Configuration: 'developer-guide/two-node-config.md'
+    - Global Variables: 'developer-guide/global-variables.md'
+    - Data Structures: 'developer-guide/data-structures.md'
+    - Documentation Server: 'developer-guide/doc-server.md'
+    - Development Provenance: 'developer-guide/provenance.md'
+  - Commands & Modules:
+    - Overview: 'commands-and-modules/index.md'
+    - Two-Node Infrastructure: 'commands-and-modules/two-node.md'
+    - Commands: 'commands-and-modules/commands.md'
+    - Modules: 'commands-and-modules/modules.md'
+  - Messages:
+    - Overview: 'messages/index.md'
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - tables
+  - toc:
+      permalink: true

@@ -1,0 +1,100 @@
+#!/bin/bash
+# iscsi-restore-luns
+# Idempotent restore of all iSCSI backstores and LUN mappings from saveconfig.json.
+# Handles both encrypted and non-encrypted LUNs.
+#
+# Only creates backstores/LUNs that are actually missing. Preserves original
+# LUN indexes so compute-host /dev/disk/by-path device symlinks remain stable.
+#
+# Usage: sudo iscsi-restore-luns
+# Install to: /usr/local/lib/zfsutilities/bin/iscsi-restore-luns on the storage host
+
+source /usr/local/lib/node-lib.sh
+
+# iSCSI-only script — exit silently in single-node mode
+is_single_node && exit 0
+
+SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
+
+if [[ ! -f "$SAVEFILE" ]]; then
+    echo "✗ saveconfig.json not found: $SAVEFILE" >&2
+    exit 1
+fi
+
+echo "=== Restoring missing iSCSI LUNs ==="
+echo ""
+
+ADDED_BS=0
+ADDED_LUNS=0
+
+# ------------------------------------------------------------------
+# Restore missing backstores
+# ------------------------------------------------------------------
+while IFS=: read -r name dev; do
+    [[ -z "$name" ]] && continue
+    if [[ ! -e "$dev" ]]; then
+        echo "  ⚠ $name — device not available ($dev)"
+        continue
+    fi
+    if targetcli /backstores/block create "$name" "$dev" >/dev/null 2>&1; then
+        echo "  ✓ Added backstore $name"
+        ((ADDED_BS++))
+    fi
+done < <(python3 - "$SAVEFILE" << 'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    config = json.load(f)
+for so in config.get("storage_objects", []):
+    name = so.get("name", "")
+    dev = so.get("dev", "")
+    if name and dev:
+        print(f"{name}:{dev}")
+PYEOF
+)
+
+# ------------------------------------------------------------------
+# Restore missing LUN mappings
+# ------------------------------------------------------------------
+while IFS=: read -r iqn tag idx bs_name; do
+    [[ -z "$iqn" ]] && continue
+    if targetcli "/iscsi/${iqn}/tpg${tag}/luns" \
+            create "/backstores/block/${bs_name}" "$idx" >/dev/null 2>&1; then
+        echo "  ✓ Added LUN $idx ($bs_name) to ${iqn}"
+        ((ADDED_LUNS++))
+    fi
+done < <(python3 - "$SAVEFILE" << 'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    config = json.load(f)
+for target in config.get("targets", []):
+    iqn = target.get("wwn", "")
+    if not iqn:
+        continue
+    for tpg in target.get("tpgs", []):
+        tag = tpg.get("tag", 1)
+        for lun in tpg.get("luns", []):
+            idx = lun.get("index")
+            so = lun.get("storage_object", "")
+            if idx is not None and so:
+                bs_name = so.split("/")[-1]
+                print(f"{iqn}:{tag}:{idx}:{bs_name}")
+PYEOF
+)
+
+if [[ $ADDED_BS -eq 0 && $ADDED_LUNS -eq 0 ]]; then
+    echo "  ✓ All LUNs present — nothing to restore"
+else
+    echo ""
+    echo "  ✓ Restored $ADDED_BS backstore(s), $ADDED_LUNS LUN mapping(s)"
+fi
+
+echo ""
+
+# Save only if all expected LUNs are active
+/usr/local/lib/zfsutilities/bin/safe-iscsi-save
+
+# Rescan compute host so it discovers any newly restored LUNs
+if [[ $ADDED_BS -gt 0 || $ADDED_LUNS -gt 0 ]]; then
+    echo "=== Rescanning compute host ==="
+    /usr/local/lib/zfsutilities/bin/rescan-storage
+fi

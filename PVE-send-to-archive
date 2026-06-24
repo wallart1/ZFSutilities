@@ -1,0 +1,78 @@
+#!/usr/bin/bash
+#
+# Example: Send a single Proxmox VM to an archive directory.
+#
+# The variables below (paths, pool names, VM ID, etc.) are from the original
+# deployment. Copy and edit this script for your own environment.
+#
+# Send a single Proxmox VM to archive
+
+# These variables must be set:
+#  $subtrees        List of ZFS pools or filesystems where the Proxmox VM resides
+#  $includes        Substring list to match against the dataset name.
+#  $destinationdir  Fully-qualified Linux directory where the archive will be placed.
+#  $archivename     The name of the archive file that will be created.
+#  $proxmoxconfig   Fully-qualified Linux file containing the Proxmox VM configuration.
+
+source ~/bashinit
+bashinit
+#set -x
+extrasourcedir="${mydir}"  # or set to the absolute path of this repo
+source $extrasourcedir/bashsetx
+source $extrasourcedir/zfsbuildfsarray
+source $extrasourcedir/zfscommsnap
+
+autoproceed='N'
+subtrees=('threeamigos/proxmox')
+destinationdir='/temp/archive/proxmox'
+archivename='tari-vm-205'
+proxmoxconfig='/etc/pve/qemu-server/205.conf'
+includes=('vm-205')        # Put only one VM here
+excludes=()
+startwith=''
+
+for sourcefs in "${subtrees[@]}"; do
+    buildfsarray
+    for fs in "${fsarray[@]}"; do
+        commsnap_mostrecent="Y"
+        if ! snap=$(getcommonsnap $fs); then
+            log_msg "FATAL: Could not get name of most recent snapshot for $fs."
+            source $mydir/bashreturn 8
+        fi
+        log_msg "INFO: About to send $fs$snap to $destinationdir/$archivename/$fs.zfssendstream"
+        if [[ $autoproceed != 'Y' ]]; then
+            read -p "Press enter to continue."
+        fi
+        # Create the destination directory if needed.
+        if ! [ -x "$destinationdir/$archivename/$(dirname $fs)" ]; then
+            if ! mkdir -p "$destinationdir/$archivename/$(dirname $fs)"; then
+                log_msg "FATAL: Directory creation for $destinationdir/$archivename failed."
+                source $mydir/bashreturn 8
+            fi
+        fi    
+
+        log_msg "INFO: zfs send -cw $fs$snap | pv | cat - >"\
+            "$destinationdir/$archivename/$fs.zfssendstream"
+        if ! (zfs send -cw $fs$snap | pv \
+            | cat - > $destinationdir/$archivename/$fs.zfssendstream); then
+            log_msg "FATAL: Failed to send $fs$snap to" \
+                "$destinationdir/$archivename/$fs.zfssendstream."
+            source $mydir/bashreturn 8
+        fi
+    done
+done
+
+# Archive the Proxmox VM configuration file
+if ! mkdir -p $(dirname $destinationdir/$archivename$proxmoxconfig); then
+    log_msg "FATAL: Could not create the VM config archive directory" \
+        "$destinationdir/$archivename$proxmoxconfig."
+    source $mydir/bashreturn 8
+fi
+if ! cp $proxmoxconfig $destinationdir/$archivename$proxmoxconfig; then
+    log_msg "FATAL: Failed to copy $proxmoxconfig to" \
+        "$destinationdir/$archivename$proxmoxconfig."
+    source $mydir/bashreturn 8
+fi
+
+log_msg "INFO: Archive of \n$(printf '%s\n' ${fsarray[@]}) \n$proxmoxconfig \n ... completed."
+

@@ -1,0 +1,132 @@
+#!/usr/bin/bash
+# test-move-vm-disk — Unit tests for move-vm-disk helper functions.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Extract simple helper functions from move-vm-disk.
+# The state-file functions contain heredocs, so they are not extracted.
+# ------------------------------------------------------------------
+old_mydir="$mydir"
+func_text=$(sed -n '/^disk_num_from_key() {/,/^}$/p' "$old_mydir/08 Two-node/move-vm-disk" | head -20)
+func_text+=$'\n'
+func_text+=$(sed -n '/^auto_select_dst_key() {/,/^}$/p' "$old_mydir/08 Two-node/move-vm-disk" | head -30)
+func_text+=$'\n'
+eval "$func_text"
+
+# Define the manifest helpers locally (they are simple one-liners in move-vm-disk).
+manifest_remove() { [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"; }
+manifest_add()    { [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" && echo "$1" >> "$ISCSI_MANIFEST"; }
+encrypted_remove(){ [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" && sed -i "/^${1}:/d" "$ISCSI_ENCRYPTED_CONF"; }
+encrypted_add()   { [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" && echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"; }
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+setup_manifests() {
+    ISCSI_MANIFEST="$_mock_zfs_state_dir/expected-backstores.txt"
+    ISCSI_ENCRYPTED_CONF="$_mock_zfs_state_dir/iscsi-encrypted-luns.conf"
+    echo "vm-100-disk-0" > "$ISCSI_MANIFEST"
+    echo "vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos" > "$ISCSI_ENCRYPTED_CONF"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_disk_num_from_key() {
+    test_start "disk_num_from_key extracts numeric suffix"
+    local num
+    num=$(disk_num_from_key "scsi2")
+    assert_equals "2" "$num"
+}
+
+test_disk_num_from_key_ide() {
+    test_start "disk_num_from_key works for ide keys"
+    local num
+    num=$(disk_num_from_key "ide1")
+    assert_equals "1" "$num"
+}
+
+test_auto_select_dst_key() {
+    test_start "auto_select_dst_key picks next free scsi slot"
+    SRCKEY="scsi0"
+    DST_CONF="$_mock_zfs_state_dir/dst.conf"
+    cat > "$DST_CONF" << 'EOF'
+scsi0: some-disk
+EOF
+    local key
+    key=$(auto_select_dst_key)
+    assert_equals "scsi1" "$key"
+}
+
+test_auto_select_dst_key_efidisk() {
+    test_start "auto_select_dst_key handles efidisk0"
+    SRCKEY="efidisk0"
+    DST_CONF="$_mock_zfs_state_dir/dst-efi.conf"
+    touch "$DST_CONF"
+    local key
+    key=$(auto_select_dst_key)
+    assert_equals "efidisk0" "$key"
+}
+
+test_manifest_remove() {
+    setup_manifests
+    test_start "manifest_remove removes backstore from expected-backstores"
+    manifest_remove "vm-100-disk-0"
+    if ! grep -q "^vm-100-disk-0$" "$ISCSI_MANIFEST"; then
+        test_pass
+    else
+        test_fail "Backstore still in manifest"
+    fi
+}
+
+test_manifest_add() {
+    setup_manifests
+    echo "" > "$ISCSI_MANIFEST"
+    test_start "manifest_add adds backstore to expected-backstores"
+    manifest_add "vm-100-disk-0"
+    if grep -q "^vm-100-disk-0$" "$ISCSI_MANIFEST"; then
+        test_pass
+    else
+        test_fail "Backstore not added to manifest"
+    fi
+}
+
+test_encrypted_remove() {
+    setup_manifests
+    test_start "encrypted_remove removes backstore from encrypted-luns config"
+    encrypted_remove "vm-100-disk-0"
+    if ! grep -q "^vm-100-disk-0:" "$ISCSI_ENCRYPTED_CONF"; then
+        test_pass
+    else
+        test_fail "Backstore still in encrypted config"
+    fi
+}
+
+test_encrypted_add() {
+    setup_manifests
+    echo "" > "$ISCSI_ENCRYPTED_CONF"
+    test_start "encrypted_add adds backstore to encrypted-luns config"
+    encrypted_add "vm-100-disk-0" "/dev/zvol/threeamigos/proxmox/vm-100-disk-0" "threeamigos"
+    if grep -q "^vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos" "$ISCSI_ENCRYPTED_CONF"; then
+        test_pass
+    else
+        test_fail "Backstore not added to encrypted config"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_disk_num_from_key
+test_disk_num_from_key_ide
+test_auto_select_dst_key
+test_auto_select_dst_key_efidisk
+test_manifest_remove
+test_manifest_add
+test_encrypted_remove
+test_encrypted_add
+
+test_summary

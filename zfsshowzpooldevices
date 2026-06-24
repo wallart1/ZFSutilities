@@ -1,0 +1,5 @@
+#!/usr/bin/bash
+# List the Linux devices in a zpool.
+
+sudo ZPOOL_SCRIPTS_AS_ROOT=1 zpool status -LPs -c vendor,model,size,serial $1
+

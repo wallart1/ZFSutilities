@@ -1,0 +1,44 @@
+#!/bin/bash
+# uninstall-version <version>
+# Removes a deployed version directory. Refuses to remove the active version.
+
+set -e
+
+VERSION_BASE="/usr/local/lib/zfsutilities"
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+usage() {
+    echo "Usage: uninstall-version <version>"
+    echo ""
+    echo "Examples:"
+    echo "  sudo uninstall-version 1.0.0"
+    exit 1
+}
+
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+[[ $# -eq 1 ]] || usage
+
+VERSION="$1"
+TARGET="$VERSION_BASE/versions/$VERSION"
+
+[[ -d "$TARGET" ]] || die "Version not found: $VERSION"
+
+CURRENT=$(readlink -f "$VERSION_BASE/current" 2>/dev/null || true)
+if [[ "$CURRENT" == "$TARGET" ]]; then
+    die "Cannot uninstall the currently active version ($VERSION)"
+fi
+
+read -rp "Remove $VERSION? (y/N): " confirm
+# Regex: ^[Yy]$
+# Purpose: Accept any single-character response starting with Y or y as confirmation.
+# Example: "Y" -> match; "y" -> match; "yes" -> no match (triggers abort)
+[[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+
+rm -rf "$TARGET"
+
+echo "=== uninstall-version ==="
+echo "  Removed: $VERSION"

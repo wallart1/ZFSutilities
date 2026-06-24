@@ -1,0 +1,36 @@
+#!/bin/bash
+# lock-zfs-keys
+# Safely unmount the ZFS keys USB drive and close the LUKS container.
+# Does NOT unload ZFS encryption keys (zvols remain accessible).
+# Run this before physically removing the USB drive.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/lock-zfs-keys on the storage host
+
+set -e
+
+echo "Locking ZFS keys USB..."
+
+# Legacy cleanup: if /mnt/ZFSkeys is a symlink, remove it.
+if [[ -L /mnt/ZFSkeys ]]; then
+    rm /mnt/ZFSkeys
+    echo "Removed legacy symlink /mnt/ZFSkeys"
+fi
+
+# Unmount /mnt/ZFSkeys if we mounted it. If udisksd mounted it, unmount it too
+# so the device can be removed safely.
+if mountpoint -q /mnt/ZFSkeys 2>/dev/null; then
+    source=$(findmnt -n -o SOURCE /mnt/ZFSkeys 2>/dev/null || true)
+    umount /mnt/ZFSkeys
+    echo "Unmounted /mnt/ZFSkeys"
+else
+    source=""
+fi
+
+# Close only the LUKS mapper we opened ourselves. udisksd may have used a
+# different mapper name; leave those alone.
+if [[ -e /dev/mapper/keys ]]; then
+    cryptsetup luksClose keys
+    echo "LUKS container /dev/mapper/keys closed"
+fi
+
+echo "Done. Safe to remove USB drive."

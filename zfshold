@@ -1,0 +1,16 @@
+#!/usr/bin/bash
+# $1    The hold tag to add
+# $2    The subtree to work with
+# $3    Any string that will be used for finding the specific snapshot name.
+
+source ~/bashinit
+bashinit
+
+function zfshold {
+    if [[ -z $3 ]]; then
+        log_msg "WARN: zfshold requires a snapshot pattern (\$3). Skipping."
+        return 1
+    fi
+    # -r: don't run if empty, suppress "tag already exists" errors (hold already present)
+    zfs list -Hrt snapshot -o name "$2" | grep "$3" | xargs -r -n1 zfs hold "$1" 2>/dev/null
+}

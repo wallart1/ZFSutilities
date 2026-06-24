@@ -1,0 +1,85 @@
+#!/usr/bin/bash
+
+source ~/bashinit
+bashinit
+
+log_msg "FATAL: WIP!"
+exit 8
+
+source $mydir/checkroot
+
+# Change the size of a ZFS volume.
+
+# $1  Fully-qualified name of the volume dataset to be resized.
+# $2  The new size for the volume dataset.
+#     Can be specified using human-readable suffixes (for example, k, KB, M, Gb, and so
+#     forth, up to Z for zettabyte).
+# $3  Name of pool/filesystem for storing the backup of the volume before making changes.
+
+# ====================  Step 1: Verify that requirements are met.  =====================
+if [[ $1 != '' ]]; then
+    zvol=$1
+    if ! zfs list -t volume $zvol >/dev/null; then
+        log_msg "FATAL: $1 doesn't seem to be a valid ZFS volume."
+        exit 8
+    else
+        log_msg 'WARN: A fully-qualified ZFS volume must be specified as $1.'
+    fi
+fi
+if [[ $2 != '' ]]; then
+    newsize=$2
+    
+
+
+
+
+
+# Copy a dataset subtree from a backup copy.
+# In order to get all the snapshots in the backup,
+# we must do the restore in two steps. First, a 
+# full copy is performed using the oldest available
+# snapshot. Then an incremental copy is performed
+# to get the remaining snapshots.
+
+echo "Running from $mydir"
+
+#bashsetx
+autoproceed='N'
+
+# ================== Back up the
+# ========================== Global arguments ===============================
+restoresourcefs="threeamigos"
+sourcefsremovequalifiers='0'    # '0' = Keep the full sourcefs name in the destfs name.
+destfs="fivebays"               # Add the dest pool name and '/' at the beginning of the sourcefs name, giving the destination filesystem.
+depth=''
+label=''
+includes=()
+excludes=()
+startwith=''                    # Substring of fs name. All preceeding fs's will be skipped.
+nextsnap=$(source $mydir/zfssnapbuild)
+nextsnapsave=$nextsnap
+
+# First, do a full copy using the oldest available snapshot.
+echo "Part one: Full copy using the oldest available snapshot."
+force='N'
+releaseholds='Y'
+doincrementals='N'              # Do full copies.
+dointermediates='N'             # Don't try to do any other shapshots.
+nextsnap=$nextsnapsave
+commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
+source $mydir/zfs-send-receive $restoresourcefs 
+
+if [[ $autoproceed != 'Y' ]]; then
+    read -p 'Press enter to continue with part two.'
+fi
+
+# Then, do the rest of the snapshots incrementally.
+echo "Part two: The rest of the snapshots incrementally."
+nextsnap=$nextsnapsave
+doincrementals='Y'              # Do incremental copies.
+dointermediates='Y'             # Do all the remaining snapshots.
+commsnap_mostrecent=''          # Finish by copying the remaining snapshots.
+source $mydir/zfs-send-receive $restoresourcefs
+
+echo "***  zfsrestore completed.  ***"
+

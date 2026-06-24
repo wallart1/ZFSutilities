@@ -1,0 +1,275 @@
+#!/bin/bash
+# check-prerequisites
+# Validate that the host environment meets ZFSutilities requirements.
+#
+# Run from the repository root before installation, or from any directory
+# after installation. Must be run as root.
+#
+# Modes:
+#   --single-node      Check only prerequisites needed for single-node operation
+#   --two-node         Check prerequisites for two-node (storage+compute) operation
+#   --list-failures    Print machine-readable failures and exit
+#
+# Categories checked:
+#   core     — bash, zfs, zpool, pv, rsync
+#   proxmox  — pveversion (warn if absent; optional for single-node)
+#   gui      — python3, python3-gi, gir1.2-gtk-3.0, DISPLAY
+#   two-node — ssh, scp, open-iscsi (only in --two-node mode)
+#   docs     — pip3, mkdocs, mkdocs-material (optional)
+#
+# Exit codes:
+#   0  All required prerequisites are present
+#   1  One or more required prerequisites are missing
+
+set -euo pipefail
+
+[[ $EUID -eq 0 ]] || { echo "✗ ERROR: Must run as root (use sudo)" >&2; exit 1; }
+
+# ------------------------------------------------------------------
+# Argument parsing
+# ------------------------------------------------------------------
+
+CHECK_MODE=""
+LIST_FAILURES=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --single-node)
+            CHECK_MODE="single-node"
+            ;;
+        --two-node)
+            CHECK_MODE="two-node"
+            ;;
+        --list-failures)
+            LIST_FAILURES="Y"
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--single-node|--two-node] [--list-failures]"
+            exit 0
+            ;;
+        *)
+            echo "✗ ERROR: Unknown argument: $arg" >&2
+            echo "Usage: $0 [--single-node|--two-node] [--list-failures]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+PASS=0
+FAIL=0
+WARN=0
+
+# Arrays for structured failure reporting
+FAIL_CATS=()
+FAIL_NAMES=()
+FAIL_PKGS=()
+FAIL_MSGS=()
+
+pass() {
+    if [[ -z "$LIST_FAILURES" ]]; then
+        echo "  ✓ $1"
+    fi
+    ((++PASS))
+}
+
+fail() {
+    local category="${1:-}"
+    local name="${2:-}"
+    local package="${3:-}"
+    local message="${4:-}"
+
+    FAIL_CATS+=("$category")
+    FAIL_NAMES+=("$name")
+    FAIL_PKGS+=("$package")
+    FAIL_MSGS+=("$message")
+
+    if [[ -z "$LIST_FAILURES" ]]; then
+        if [[ -n "$package" ]]; then
+            echo "  ✗ $name — $message (install: $package)"
+        else
+            echo "  ✗ $name — $message"
+        fi
+    fi
+    ((++FAIL))
+}
+
+warn() {
+    if [[ -z "$LIST_FAILURES" ]]; then
+        echo "  ⚠ $1"
+    fi
+    ((++WARN))
+}
+
+check_cmd() {
+    local category="$1"
+    local name="$2"
+    local package="${3:-$name}"
+    if command -v "$name" >/dev/null 2>&1; then
+        pass "$name"
+    else
+        fail "$category" "$name" "$package" "command not found"
+    fi
+}
+
+check_python_module() {
+    local mod="$1"
+    if python3 -c "import ${mod}" >/dev/null 2>&1; then
+        pass "python3 module: $mod"
+    else
+        fail "gui" "python3 module: $mod" "python3-$mod" "module not installed"
+    fi
+}
+
+check_apt_pkg() {
+    local category="$1"
+    local pkg="$2"
+    if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+        pass "$pkg"
+    else
+        fail "$category" "$pkg" "$pkg" "package not installed"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Core ZFS utilities
+# ------------------------------------------------------------------
+
+if [[ -z "$LIST_FAILURES" ]]; then
+    echo "=== Core ZFS Utilities ==="
+fi
+check_cmd "core" "bash" "bash"
+check_cmd "core" "zfs" "zfsutils-linux"
+check_cmd "core" "zpool" "zfsutils-linux"
+check_cmd "core" "pv" "pv"
+check_cmd "core" "rsync" "rsync"
+if [[ -z "$LIST_FAILURES" ]]; then
+    echo ""
+fi
+
+# ------------------------------------------------------------------
+# Proxmox
+# ------------------------------------------------------------------
+
+if [[ -z "$LIST_FAILURES" ]]; then
+    echo "=== Proxmox VE (optional) ==="
+fi
+if command -v pveversion >/dev/null 2>&1; then
+    pass "pveversion: $(pveversion 2>/dev/null || true)"
+else
+    warn "pveversion not found — Proxmox VE integration is optional and only needed for VM/iSCSI features"
+fi
+if [[ -z "$LIST_FAILURES" ]]; then
+    echo ""
+fi
+
+# ------------------------------------------------------------------
+# GTK GUI
+# ------------------------------------------------------------------
+
+if [[ -z "$LIST_FAILURES" ]]; then
+    echo "=== GTK GUI ==="
+fi
+check_cmd "gui" "python3" "python3"
+check_python_module gi
+check_apt_pkg "gui" "gir1.2-gtk-3.0"
+check_apt_pkg "gui" "gir1.2-webkit2-4.1"
+check_apt_pkg "gui" "libwebkit2gtk-4.1-0"
+
+if [[ -n "${DISPLAY:-}" ]]; then
+    pass "DISPLAY=$DISPLAY"
+else
+    warn "DISPLAY not set — GUI requires an X11 or Wayland session"
+fi
+if [[ -z "$LIST_FAILURES" ]]; then
+    echo ""
+fi
+
+# ------------------------------------------------------------------
+# Two-node prerequisites
+# ------------------------------------------------------------------
+
+if [[ "$CHECK_MODE" == "two-node" ]]; then
+    if [[ -z "$LIST_FAILURES" ]]; then
+        echo "=== Two-Node ==="
+    fi
+    check_cmd "two-node" "ssh" "openssh-client"
+    check_cmd "two-node" "scp" "openssh-client"
+
+    if command -v iscsiadm >/dev/null 2>&1; then
+        pass "open-iscsi (iscsiadm)"
+    else
+        warn "open-iscsi not found — required on compute nodes for two-node mode"
+    fi
+    if [[ -z "$LIST_FAILURES" ]]; then
+        echo ""
+    fi
+fi
+
+# ------------------------------------------------------------------
+# Documentation server
+# ------------------------------------------------------------------
+
+if [[ -z "$LIST_FAILURES" ]]; then
+    echo "=== Documentation Server (optional) ==="
+fi
+if command -v pip3 >/dev/null 2>&1; then
+    pass "pip3"
+else
+    warn "pip3 not found — documentation server (mkdocs) will not be installable"
+fi
+
+if command -v mkdocs >/dev/null 2>&1; then
+    pass "mkdocs: $(mkdocs --version 2>/dev/null | head -1)"
+else
+    warn "mkdocs not found — doc server will not be available (try: pip3 install mkdocs mkdocs-material)"
+fi
+if [[ -z "$LIST_FAILURES" ]]; then
+    echo ""
+fi
+
+# ------------------------------------------------------------------
+# Machine-readable failure list
+# ------------------------------------------------------------------
+
+if [[ -n "$LIST_FAILURES" ]]; then
+    for i in "${!FAIL_NAMES[@]}"; do
+        printf '%s|%s|%s|%s\n' \
+            "${FAIL_CATS[$i]}" \
+            "${FAIL_NAMES[$i]}" \
+            "${FAIL_PKGS[$i]}" \
+            "${FAIL_MSGS[$i]}"
+    done
+    if [[ $FAIL -gt 0 ]]; then
+        exit 1
+    fi
+    exit 0
+fi
+
+# ------------------------------------------------------------------
+# Summary
+# ------------------------------------------------------------------
+
+echo "=========================================="
+echo "  Pass:  $PASS"
+echo "  Warn:  $WARN"
+echo "  Fail:  $FAIL"
+echo "=========================================="
+
+if [[ $FAIL -gt 0 ]]; then
+    echo ""
+    echo "✗ $FAIL required prerequisite(s) missing. Install them before proceeding."
+    exit 1
+fi
+
+if [[ $WARN -gt 0 ]]; then
+    echo ""
+    echo "⚠ $WARN optional item(s) missing — installation can continue but some features may be unavailable."
+fi
+
+echo ""
+echo "✓ All required prerequisites are present."
+exit 0

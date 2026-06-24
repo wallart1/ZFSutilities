@@ -1,0 +1,148 @@
+#!/usr/bin/bash
+
+function getcommonsnap {
+# Determine the most recent snapshot that is in two filesystems
+# if $commsnap_mostrecent = "Y", then return the most recent snap for one filesystem
+# These are assumed to be already set by the caller.
+# $1                        Source dataset
+# $2                        Destination dataset
+# commsnap_mostrecent        "Y" = Send back just the name of the source's most recent snapshot.
+#                            "OLDEST" = Send back just the name of the source's oldest
+#                                       snapshot.
+#                            ""  = Send back the most recent snapshot in source that has the same
+#                                  GUID as any snapshot in dest.
+# commsnap_find_another      "Y" = This will determine whether there is an additional common snap,
+#                                  helping to determine whether or not $fs_s may be subsequently
+#                                  deleted. In this case, $1 needs to be a snapshot name.
+source ~/bashinit
+bashinit
+
+local \
+    fs_s=$1 \
+    fs_s_fs \
+    fs_s_snap \
+    fs_d=$2 \
+    set_save=$- \
+    snaparray_s=() \
+    snaparraylen_s \
+    guidarray_s=() \
+    guidarray_d \
+    snaparraylen_d \
+    found_a_match \
+    match_i \
+    ignored_a_snap \
+    nowseconds \
+    snapseconds \
+    snapdaysold \
+    i \
+    j \
+    k \
+    snaptype
+
+local -i save_i=$i save_j=$j
+local -i i=0 j=0
+
+# Get arrays of snapshots and corresponding GUIDs, sorted most recent first
+# awk -F'@' '{print $1}'  —  Extract dataset path from a "dataset@snapshot" string.
+fs_s_fs=$(echo $fs_s | awk -F'@' '{print $1}')
+# awk -F'@' '{print $2}'  —  Extract snapshot name from a "dataset@snapshot" string.
+fs_s_snap='@'$(echo $fs_s | awk -F'@' '{print $2}')
+readarray -t snaparray_s < \
+    <(zfs list -t snap,bookmark -o name -S createtxg -H -d1 "$fs_s_fs" 2>/dev/null)
+snaparraylen_s=${#snaparray_s[@]}
+if [[ "$snaparraylen_s" = "0" ]]; then echo ""; return 8; fi
+# If just the most recent snap was requested, send it back and return to caller
+if [[ $commsnap_mostrecent = "Y" ]]; then
+    # awk -F'@' '{print $2}'  —  Extract snapshot name from the most recent source snap.
+    echo '@'$(echo "${snaparray_s[0]}" | awk -F'@' '{print $2}')
+    return 0
+fi
+# Likewise if the oldest snap is requested.
+if [[ $commsnap_mostrecent = "OLDEST" ]]; then
+    echo '@'$(echo "${snaparray_s[(($snaparraylen_s-1))]}" | awk -F'@' '{print $2}')
+    return 0
+fi
+readarray -t guidarray_s < \
+    <(zfs list -t snap,bookmark -o guid -S createtxg -H -d1 "$fs_s_fs" 2>/dev/null)
+readarray -t snaparray_d < <(zfs list -t snap -o name -S createtxg -H -d1 "$fs_d" 2>/dev/null)
+readarray -t guidarray_d < <(zfs list -t snap -o guid -S createtxg -H -d1 "$fs_d" 2>/dev/null)
+snaparraylen_d=${#snaparray_d[@]}
+
+# Run through GUIDs in the source array looking for the same GUID in the
+# destination array. Equal GUIDs ensure that source and destination correspond.
+# Stop as soon as a match is found so that the array indexes are preserved.
+# If a second match was requested ($commsnap_find_another='Y'), and the source
+# array item matches $fs_s, ignore it and continue looking for another common snap.
+found_a_match=false
+match_i=''; match_j=''
+
+ignored_a_snap=false
+for (( i=0; i<snaparraylen_s; i++ )); do     # For each source snap ...
+    if [[ $commsnap_find_another = 'Y' ]] \
+      && [[ ${snaparray_s[$i]} = $fs_s ]]; then  # Ignore the snap that was given. Find another one.
+        ignored_a_snap=true
+        continue
+    fi
+    if [[ $commsnap_find_another = 'Y' ]]; then     # Check the age of the snap.
+        nowseconds=$(date +%s)
+        # awk '{print $3}'  —  zfs get -Hp outputs "name\tproperty\tvalue\tsource".
+        #   Extract the raw Unix timestamp (third field) from the creation property.
+        snapseconds=$(zfs get -Hp creation ${snaparray_s[$i]} | awk '{print $3}')
+        snapdaysold=$(( (nowseconds - snapseconds) / 86400 ))   # 86400 = 24 hours
+        if [[ $snapdaysold -gt $maxcommsnapperiod ]]; then  # Ignore any snap that is too old.
+            ignored_a_snap=true
+            log_msg "INFO: ${snaparray_s[$i]} is $snapdaysold days old. The maximum is " \
+              "$maxcommsnapperiod. Ignoring."
+            continue
+        fi
+    fi
+    for (( j=0; j<snaparraylen_d; j++ )); do # ... and each dest snap
+        if [[ ${guidarray_s[$i]} = "${guidarray_d[$j]}" ]]; then  # These two snaps correspond
+            found_a_match=true
+            if [[ $match_i = '' ]]; then match_i=$i; match_j=$j; fi
+        fi
+    done
+done
+
+if [[ $commsnap_find_another = 'Y' ]]; then
+    if [[ $found_a_match = false ]]; then    # Another match was not found
+        echo ''
+        return 64   # "Find another match" was requested, but no other match was found.
+    elif [[ $found_a_match = true ]]; then     # Another match was found.
+        echo "${snaparray_s[$match_i]}" # Return the other match.
+        return 32   # "Find another match" was requested, and another match was found.
+    fi
+    exit 8
+fi
+if [[ $found_a_match = true ]]; then
+    # awk '{print $3}'  —  zfs get -H outputs "name\tproperty\tvalue".
+    #   Extract the type value ("snapshot" or "bookmark").
+    snaptype=$(zfs get -H type ${snaparray_s[$match_i]} | awk '{print $3}')
+    if [[ $snaptype = 'snapshot' ]]; then snapseparator='@'
+    elif [[ $snaptype = 'bookmark' ]]; then snapseparator='#'
+    else
+        log_msg "FATAL: Unexpected snap type = \"$snaptype\" snap: ${snaparray_s[$match_i]}." >2
+        exit 8
+    fi
+    if [[ $match_j -eq 0 ]]; then   # Common snap was found, and it's the most recent in dest.
+        # awk -F'[@#]' '{print $2}'  —  Split on @ or # to extract the snapshot/bookmark name.
+        echo $snapseparator$(echo "${snaparray_d[$match_j]}" | awk -F'[@#]' '{print $2}')
+        return 0
+    else
+        echo $snapseparator$(echo "${snaparray_d[$match_j]}" | awk -F'[@#]' '{print $2}')  # Send back the common snapshot name.
+        return 16     # The destination snapshot is not the most recent one.
+    fi
+fi
+# if no common snap, return the most recent source snap
+# awk '{print $3}'  —  Extract type from zfs get output (see comment above).
+snaptype=$(zfs get -H type ${snaparray_s[0]} | awk '{print $3}')
+if [[ $snaptype = 'snapshot' ]]; then snapseparator='@'
+elif [[ $snaptype = 'bookmark' ]]; then snapseparator='#'
+else
+    log_msg "FATAL: Unexpected snap type = \"$snaptype\" snap: ${snaparray_s[0]}." >2
+    exit 8
+fi
+# awk -F'[@#]' '{print $2}'  —  Extract snapshot/bookmark name from the most recent source snap.
+echo $snapseparator$(echo "${snaparray_s[0]}" | awk -F'[@#]' '{print $2}')
+return 4
+}

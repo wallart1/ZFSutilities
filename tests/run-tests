@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# run-tests — Main test harness for ZFS Utilities.
+#
+# Usage:
+#   ./tests/run-tests              # Run all tests
+#   ./tests/run-tests test-foo     # Run specific test(s)
+
+set -euo pipefail
+
+mydir="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "$mydir/.." && pwd)"
+cd "$repo_root"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+# ---------------------------------------------------------------------------
+# Partition arguments into bash and Python tests
+# ---------------------------------------------------------------------------
+
+bash_tests=()
+python_tests=()
+
+if [[ $# -gt 0 ]]; then
+    for arg in "$@"; do
+        # Skip flags
+        if [[ "$arg" == -* ]]; then
+            continue
+        fi
+        # Check if it looks like a Python test
+        py_name="$arg"
+        if [[ ! "$py_name" == test_* ]]; then
+            py_name="test_${py_name}"
+        fi
+        if [[ -f "tests/python/${py_name}.py" ]]; then
+            python_tests+=("$py_name")
+            continue
+        fi
+        # Otherwise treat as bash test
+        if [[ ! -f "$arg" && -f "tests/${arg}" ]]; then
+            bash_tests+=("tests/${arg}")
+        else
+            bash_tests+=("$arg")
+        fi
+    done
+else
+    readarray -t bash_tests < <(find tests -maxdepth 1 -type f -name 'test-*' | sort)
+    python_tests=("all")
+fi
+
+# ---------------------------------------------------------------------------
+# Run bash tests
+# ---------------------------------------------------------------------------
+
+total_suites=0
+total_passed=0
+total_failed=0
+total_skipped=0
+any_failed=0
+
+for tf in "${bash_tests[@]}"; do
+    suite_name="$(basename "$tf")"
+    echo "========================================"
+    echo "Running: $suite_name"
+    echo "========================================"
+
+    total_suites=$((total_suites + 1))
+
+    tmpout=$(mktemp)
+    if bash "$tf" > "$tmpout" 2>&1; then
+        suite_rc=0
+    else
+        suite_rc=$?
+    fi
+    cat "$tmpout"
+
+    last_line=$(tail -n 1 "$tmpout" 2>/dev/null || true)
+    rm -f "$tmpout"
+
+    # Parse the bash test suite's final summary line. Each suite ends with a
+    # line from test_summary() that looks like:
+    #
+    #     Total:   N
+    #     Passed:  M
+    #     Failed:  0
+    #     All tests passed!
+    #
+    # (or "Some tests failed." when there are failures). The regex below
+    # captures the two numeric values after "passed" and "failed" so we can
+    # aggregate counts across all bash suites. The capture groups are:
+    #   \1 -> number of tests that passed
+    #   \2 -> number of tests that failed
+    # BASH_REMATCH is a bash builtin array populated by the =~ operator.
+    if [[ "$last_line" =~ ([0-9]+)\ passed.*([0-9]+)\ failed ]]; then
+        suite_passed="${BASH_REMATCH[1]}"
+        suite_failed="${BASH_REMATCH[2]}"
+    else
+        if [[ $suite_rc -eq 0 ]]; then
+            suite_passed=1
+            suite_failed=0
+        else
+            suite_passed=0
+            suite_failed=1
+        fi
+    fi
+
+    total_passed=$((total_passed + suite_passed))
+    total_failed=$((total_failed + suite_failed))
+
+    if [[ $suite_rc -ne 0 ]]; then
+        any_failed=1
+        echo -e "${RED}  SUITE FAILED${NC} ($suite_name)"
+    else
+        echo -e "${GREEN}  SUITE PASSED${NC} ($suite_name)"
+    fi
+    echo ""
+done
+
+# ---------------------------------------------------------------------------
+# Run Python tests
+# ---------------------------------------------------------------------------
+
+if [[ ${#python_tests[@]} -gt 0 ]]; then
+    echo "========================================"
+    echo "Running: Python test suites"
+    echo "========================================"
+
+    py_tmpout=$(mktemp)
+    if [[ "${python_tests[0]}" == "all" ]]; then
+        if python3 "$mydir/python/runner.py" > "$py_tmpout" 2>&1; then
+            py_rc=0
+        else
+            py_rc=$?
+        fi
+    else
+        if python3 "$mydir/python/runner.py" "${python_tests[@]}" > "$py_tmpout" 2>&1; then
+            py_rc=0
+        else
+            py_rc=$?
+        fi
+    fi
+    cat "$py_tmpout"
+
+    # Parse Python runner summary lines. The custom Python runner prints
+    # colored summary lines near the end of its output, e.g.:
+    #
+    #     Total:   18
+    #     Passed:  334
+    #     Failed:  0
+    #
+    # We extract the "Passed:" and "Failed:" lines independently and then
+    # apply a regex to each to capture the trailing integer. The pattern
+    #   Passed:[[:space:]]+([0-9]+)
+    # means: the literal word "Passed:", one or more whitespace characters,
+    # then a sequence of one or more digits captured into BASH_REMATCH[1].
+    # The same structure is used for "Failed:". If a line is missing or
+    # does not match, we default to 0 so the aggregate totals remain valid.
+    py_summary=$(grep -E "^  Passed:" "$py_tmpout" | tail -n 1 || true)
+    if [[ "$py_summary" =~ Passed:[[:space:]]+([0-9]+) ]]; then
+        py_passed="${BASH_REMATCH[1]}"
+    else
+        py_passed=0
+    fi
+    py_failed_summary=$(grep -E "^  Failed:" "$py_tmpout" | tail -n 1 || true)
+    if [[ "$py_failed_summary" =~ Failed:[[:space:]]+([0-9]+) ]]; then
+        py_failed="${BASH_REMATCH[1]}"
+    else
+        py_failed=0
+    fi
+
+    rm -f "$py_tmpout"
+
+    total_suites=$((total_suites + 1))
+    total_passed=$((total_passed + py_passed))
+    total_failed=$((total_failed + py_failed))
+
+    if [[ $py_rc -ne 0 ]]; then
+        any_failed=1
+        echo -e "${RED}  SUITE FAILED${NC} (python tests)"
+    else
+        echo -e "${GREEN}  SUITE PASSED${NC} (python tests)"
+    fi
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# Overall summary
+# ---------------------------------------------------------------------------
+
+echo "========================================"
+echo "Overall Summary"
+echo "========================================"
+echo "  Suites:  $total_suites"
+echo -e "  Passed:  ${GREEN}$total_passed${NC}"
+[[ $total_failed -gt 0 ]] && echo -e "  Failed:  ${RED}$total_failed${NC}" || echo "  Failed:  0"
+
+if [[ $any_failed -ne 0 ]]; then
+    echo -e "${RED}Some test suites failed.${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}All test suites passed!${NC}"
+exit 0

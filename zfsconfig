@@ -1,0 +1,243 @@
+#!/usr/bin/bash
+
+# zfsconfig — JSON config helper for bash scripts
+#
+# Source this file to get functions that read/write the JSON config file used
+# by the GUI (/root/.config/zfsutilities.json). Implemented with python3 so
+# there is no dependency on jq.
+#
+# Functions:
+#   zfsconfig_get_pools              # Print one pool name per line
+#   zfsconfig_get_offsite_candidates # Print offsite-candidate pool names, one per line
+#   zfsconfig_set_pools POOL...      # Replace the pool list
+#   zfsconfig_get_checkagainst       # Print entries: "<dataset> <quals> <counterpart> <label>"
+#   zfsconfig_set_checkagainst_file <path>   # Replace checkagainst from a whitespace file
+#   zfsconfig_get_retention <pool>   # Emit bash-sourceable bktname[]/bktretain[]/minage[]
+#                                    # for <pool>, or 'default' if no pool entry exists.
+#                                    # Falls back to legacy zfsretainpol-<pool> files in
+#                                    # $ZFSCONFIG_LEGACY_DIR (default: helper's dir).
+#   poolarray                        # Compatibility shim: fills $zfspoolarray from pools
+#
+# Environment:
+#   ZFSCONFIG_PATH  override config path (default: /root/.config/zfsutilities.json)
+#
+# Cached in the shell for speed: _ZFSCONFIG_POOLS_CACHE,
+# _ZFSCONFIG_OFFSITE_CACHE, _ZFSCONFIG_CA_CACHE.
+# Unset them to force a re-read, or call zfsconfig_invalidate.
+
+ZFSCONFIG_PATH="${ZFSCONFIG_PATH:-/root/.config/zfsutilities.json}"
+
+_zfsconfig_ensure() {
+    if [[ ! -f "$ZFSCONFIG_PATH" ]]; then
+        mkdir -p "$(dirname "$ZFSCONFIG_PATH")"
+        echo '{}' > "$ZFSCONFIG_PATH"
+    fi
+}
+
+zfsconfig_invalidate() {
+    unset _ZFSCONFIG_POOLS_CACHE _ZFSCONFIG_OFFSITE_CACHE _ZFSCONFIG_CA_CACHE
+}
+
+zfsconfig_get_pools() {
+    if [[ -z "${_ZFSCONFIG_POOLS_CACHE+x}" ]]; then
+        _zfsconfig_ensure
+        _ZFSCONFIG_POOLS_CACHE=$(
+            CFG_PATH="$ZFSCONFIG_PATH" python3 - <<'PYEOF'
+import json, os, sys
+try:
+    with open(os.environ["CFG_PATH"]) as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+for p in cfg.get("pools", []) or []:
+    if isinstance(p, dict):
+        name = p.get("name")
+        if name:
+            print(name)
+    else:
+        print(p)
+PYEOF
+        )
+        export _ZFSCONFIG_POOLS_CACHE
+    fi
+    printf '%s\n' "$_ZFSCONFIG_POOLS_CACHE"
+}
+
+zfsconfig_get_offsite_candidates() {
+    if [[ -z "${_ZFSCONFIG_OFFSITE_CACHE+x}" ]]; then
+        _zfsconfig_ensure
+        _ZFSCONFIG_OFFSITE_CACHE=$(
+            CFG_PATH="$ZFSCONFIG_PATH" python3 - <<'PYEOF'
+import json, os, sys
+try:
+    with open(os.environ["CFG_PATH"]) as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+for p in cfg.get("pools", []) or []:
+    if isinstance(p, dict):
+        if p.get("offsite_candidate"):
+            print(p.get("name", ""))
+    elif isinstance(p, str):
+        # Legacy string entries are never offsite candidates.
+        pass
+PYEOF
+        )
+        export _ZFSCONFIG_OFFSITE_CACHE
+    fi
+    printf '%s\n' "$_ZFSCONFIG_OFFSITE_CACHE"
+}
+
+zfsconfig_set_pools() {
+    _zfsconfig_ensure
+    CFG_PATH="$ZFSCONFIG_PATH" ZFS_POOL_ARGS="$*" python3 - <<'PYEOF'
+import json, os
+path = os.environ["CFG_PATH"]
+pools = os.environ["ZFS_POOL_ARGS"].split()
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+cfg["pools"] = pools
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+PYEOF
+    zfsconfig_invalidate
+}
+
+zfsconfig_get_checkagainst() {
+    if [[ -z "${_ZFSCONFIG_CA_CACHE+x}" ]]; then
+        _zfsconfig_ensure
+        _ZFSCONFIG_CA_CACHE=$(
+            CFG_PATH="$ZFSCONFIG_PATH" python3 - <<'PYEOF'
+import json, os
+try:
+    with open(os.environ["CFG_PATH"]) as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+for e in cfg.get("checkagainst", []) or []:
+    dataset = e.get("dataset", "")
+    quals = e.get("quals", "0")
+    counterpart = e.get("counterpart", "-")
+    label = e.get("label", "")
+    if not dataset or not label:
+        continue
+    print(dataset, quals, counterpart, label)
+PYEOF
+        )
+        export _ZFSCONFIG_CA_CACHE
+    fi
+    printf '%s\n' "$_ZFSCONFIG_CA_CACHE"
+}
+
+zfsconfig_set_checkagainst_file() {
+    local src="$1"
+    _zfsconfig_ensure
+    CFG_PATH="$ZFSCONFIG_PATH" SRC_PATH="$src" python3 - <<'PYEOF'
+import json, os
+path = os.environ["CFG_PATH"]
+src  = os.environ["SRC_PATH"]
+entries = []
+with open(src) as f:
+    for raw in f:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        entries.append({
+            "dataset": parts[0],
+            "quals": parts[1],
+            "counterpart": parts[2],
+            "label": parts[3],
+        })
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+cfg["checkagainst"] = entries
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+PYEOF
+    zfsconfig_invalidate
+}
+
+# zfsconfig_get_retention <pool>
+#   Prints a bash-sourceable fragment: `bktname[i]='...'; bktretain[i]=N; minage[i]=N`
+#   for the given pool, falling back to 'default'. If the JSON has neither, falls
+#   back to parsing legacy zfsretainpol-<pool> files from $ZFSCONFIG_LEGACY_DIR
+#   (default: the directory containing this helper). Exit status: 0 if any
+#   buckets were emitted, 1 otherwise.
+zfsconfig_get_retention() {
+    local pool="$1"
+    local legacy_dir="${ZFSCONFIG_LEGACY_DIR:-$(dirname "${BASH_SOURCE[0]}")}"
+    _zfsconfig_ensure
+    CFG_PATH="$ZFSCONFIG_PATH" POOL="$pool" LEGACY_DIR="$legacy_dir" python3 - <<'PYEOF'
+import json, os, re, sys
+
+path = os.environ["CFG_PATH"]
+pool = os.environ["POOL"]
+legacy_dir = os.environ["LEGACY_DIR"]
+
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+retention = cfg.get("retention") or {}
+buckets = retention.get(pool) or retention.get("default")
+
+if not buckets:
+    # Legacy fallback: parse zfsretainpol-<pool> then zfsretainpol-default.
+    pat = re.compile(
+        r"bktname\[\d+\]='(\w+)';\s*bktretain\[\d+\]=(\d+);\s*minage\[\d+\]=(\d+)"
+    )
+    for name in (pool, "default"):
+        fpath = os.path.join(legacy_dir, f"zfsretainpol-{name}")
+        if not os.path.exists(fpath):
+            continue
+        parsed = []
+        try:
+            with open(fpath) as f:
+                for line in f:
+                    m = pat.search(line)
+                    if m:
+                        parsed.append({
+                            "name": m.group(1),
+                            "retain": int(m.group(2)),
+                            "minage": int(m.group(3)),
+                        })
+        except OSError:
+            continue
+        if parsed:
+            buckets = parsed
+            break
+
+if not buckets:
+    sys.exit(1)
+
+for i, b in enumerate(buckets):
+    bname = b.get("name", "")
+    retain = int(b.get("retain", 0))
+    minage = int(b.get("minage", 0))
+    if not bname:
+        continue
+    print(f"bktname[{i}]='{bname}'; bktretain[{i}]={retain}; minage[{i}]={minage}")
+PYEOF
+}
+
+# poolarray — fills $zfspoolarray from the JSON pool list.
+# Compatibility shim for scripts that previously sourced zfsallthepools.
+poolarray() {
+    zfspoolarray=()
+    local pool
+    while IFS= read -r pool; do
+        [[ -z "$pool" ]] && continue
+        zfspoolarray+=("$pool")
+    done < <(zfsconfig_get_pools)
+}

@@ -1,0 +1,65 @@
+#!/usr/bin/bash
+# Restore a ZFS stream that was created by the zfs send command
+
+function restoresendstream {
+    source ~/bashinit
+    bashinit
+    source $mydir/rootcheck
+    rootcheck
+    source $mydir/bashsetx
+    
+    # Source path example:
+    #   /temp/archive/proxmox/tari-vm-205/threeamigos/proxmox/vm-205-disk-0.zfssendstream
+    
+    # Destination path example:
+    #   threeamigos/proxmox/vm-205-disk-0
+    
+    local autoproceed='Y'
+    local vm='vm-205'
+    local vmname='tari'
+    local destfs='threeamigos/proxmox'
+    local sourcedir='/temp/archive/proxmox/'"$vmname"'-'"$vm"'/'"$destfs"
+        # Example: /temp/archive/proxmox/tari-vm-205/threeamigos/proxmox
+    local filepattern="$vm"'-disk-*.zfssendstream'
+    
+    local files=()
+    readarray -t files < <(printf '%s\n' "$sourcedir"/$filepattern)
+    # Get array of file names using the globbing pattern in $filepattern.
+
+    # Check if any files matched
+    if [[ ! -e "${files[0]}" ]]; then
+        log_msg "FATAL: No matching files found."
+        source $mydir/bashreturn 8
+    fi
+
+#    # List the files
+    log_msg 'INFO: Preparing to process these files:'
+    local file
+
+#    printf '\t%s\n' "${files[@]}"
+    for file in "${files[@]}"; do
+        # Get the text after the last '/'. Then get the text before the '.'.
+        local destfile=$(echo $file | awk -F'/' '{print $NF}' | awk -F'.' '{print $1}')
+        local fulldestfs="$destfs"'/'"$destfile"
+        log_msg "INFO: \tRestore $file to $fulldestfs."
+    done
+    if [[ $autoproceed != 'Y' ]]; then
+        read -p 'Press enter to continue.'
+    fi
+
+    for file in "${files[@]}"; do
+        # Get the text after the last '/'. Then get the text before the '.'.
+        local destfile=$(echo $file | awk -F'/' '{print $NF}' | awk -F'.' '{print $1}')
+        local fulldestfs="$destfs"'/'"$destfile"
+        log_msg "INFO: cat $file | zfs receive -v $fulldestfs"
+        if [[ $autoproceed != 'Y' ]]; then
+            read -p 'Press enter to continue.'
+        fi
+        if ! (cat $file | pv | zfs receive -v $fulldestfs); then
+            log_msg 'FATAL: Unable to restore file.'
+            source $mydir/bashreturn 8
+        fi
+    done
+}
+restoresendstream
+

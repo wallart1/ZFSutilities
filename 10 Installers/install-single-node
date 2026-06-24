@@ -1,0 +1,208 @@
+#!/bin/bash
+# install-single-node
+# Interactive installer for single-node ZFSutilities configuration.
+#
+# Single-node means all ZFS pools are local to this host — no separate
+# storage node, no iSCSI. ZFS clone support is included.
+#
+# This installer:
+#   1. Checks prerequisites interactively and offers to install missing items
+#   2. Optionally installs the documentation server (MkDocs)
+#   3. Prompts for the minimum required information
+#   4. Generates /etc/zfsutilities-node.conf
+#   5. Deploys scripts as a versioned installation and sets up PATH
+#
+# Can also upgrade an existing two-node installation to single-node mode.
+#
+# Run as root on the host that will run ZFSutilities.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+DOCS_DIR="$REPO_DIR/06 Docs"
+TWO_NODE_DIR="$REPO_DIR/08 Two-node"
+CLONE_DIR="$REPO_DIR/09 ZFS clone support"
+
+NODE_CONF="/etc/zfsutilities-node.conf"
+NODE_LIB_SRC="$TWO_NODE_DIR/node-lib.sh"
+NODE_LIB_DST="/usr/local/lib/node-lib.sh"
+COMPAT_LINK="/usr/local/lib/two-node-lib.sh"
+
+# Scripts to install in single-node mode (no iSCSI-only scripts)
+SINGLE_NODE_SCRIPTS="new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk clone-vm move-vm-disk"
+CLONE_SCRIPTS="zfsclone-vm promote-vm-clone"
+
+INSTALLER_LIB="$SCRIPT_DIR/installer-lib.sh"
+[[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
+source "$INSTALLER_LIB"
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+_check_zfs_root() {
+    local root_fs_type
+    root_fs_type=$(findmnt -n -o FSTYPE / 2>/dev/null || true)
+    if [[ "$root_fs_type" == "zfs" ]]; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  ⚠  WARNING: ZFS root filesystem detected"
+        echo ""
+        echo "  ZFS Utilities has NOT been tested on systems where the root"
+        echo "  filesystem (/) is stored on a ZFS dataset."
+        echo ""
+        echo "  Pool operations, snapshot retention, and iSCSI lifecycle"
+        echo "  scripts may interact with the root pool in unexpected ways."
+        echo ""
+        echo "  Proceed at your own risk."
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        read -rp "Press Enter to continue, or Ctrl-C to abort..."
+    fi
+}
+
+[[ $EUID -eq 0 ]] || die "Must run as root"
+_check_zfs_root
+
+echo "=========================================="
+echo "  ZFSutilities — Single-Node Installer"
+echo "=========================================="
+echo ""
+
+# ------------------------------------------------------------------
+# Prerequisites check (interactive)
+# ------------------------------------------------------------------
+CHECK_PREREQS="$REPO_DIR/check-prerequisites"
+if [[ -f "$CHECK_PREREQS" ]]; then
+    if ! run_interactive_prerequisites --single-node "$CHECK_PREREQS"; then
+        exit 1
+    fi
+fi
+
+# ------------------------------------------------------------------
+# Step 1: Optional documentation server
+# ------------------------------------------------------------------
+run_interactive_doc_server || true
+
+echo ""
+
+# ------------------------------------------------------------------
+# Step 2: Detect existing configuration
+# ------------------------------------------------------------------
+echo "=== Step 2: Configuration ==="
+echo ""
+
+EXISTING_MODE=""
+if [[ -f "$NODE_CONF" ]]; then
+    source "$NODE_CONF"
+    EXISTING_MODE="${NODE_MODE:-two-node}"
+    if [[ "$EXISTING_MODE" == "single-node" ]]; then
+        echo "Existing single-node configuration found."
+        echo "  Hostname: ${THIS_HOST:-$(hostname -s)}"
+        echo ""
+        read -rp "Reconfigure? (y/N): " reconf
+        if [[ ! "$reconf" =~ ^[Yy]$ ]]; then
+            echo "Keeping existing configuration. Proceeding to script installation."
+            echo ""
+            # Skip to step 4
+            SKIP_CONFIG=true
+        fi
+    elif [[ "$EXISTING_MODE" == "two-node" ]]; then
+        echo "⚠ Existing TWO-NODE configuration found."
+        echo "  Storage host: ${STORAGE_HOST:-?}"
+        echo "  Compute host: ${COMPUTE_HOST:-?}"
+        echo ""
+        echo "Switching to single-node mode will:"
+        echo "  - Rewrite $NODE_CONF for single-node operation"
+        echo "  - iSCSI scripts will remain installed but iSCSI operations will be skipped"
+        echo "  - Scripts on the remote compute host will NOT be removed"
+        echo ""
+        read -rp "Switch to single-node mode? (y/N): " switch
+        [[ "$switch" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+    fi
+elif [[ -f /etc/two-node.conf ]]; then
+    echo "⚠ Legacy /etc/two-node.conf found (no /etc/zfsutilities-node.conf)."
+    echo "  This will create a new single-node config."
+    echo "  The old /etc/two-node.conf will be left in place as a backup."
+    echo ""
+fi
+
+if [[ "${SKIP_CONFIG:-}" != "true" ]]; then
+    # ------------------------------------------------------------------
+    # Step 2: Prompt for settings and generate config
+    # ------------------------------------------------------------------
+
+    default_host=$(hostname -s)
+    echo "Single-node mode: all ZFS pools are on this host, no iSCSI."
+    echo ""
+    read -rp "Hostname [${default_host}]: " input_host
+    THIS_HOST="${input_host:-$default_host}"
+
+    echo ""
+    echo "Generating configuration..."
+
+    # Build the config file from template
+    sed "s/@@THIS_HOST@@/${THIS_HOST}/g" "$SCRIPT_DIR/node.conf.template" > "$NODE_CONF"
+    chmod 0644 "$NODE_CONF"
+
+    echo ""
+    echo "=== Generated configuration ==="
+    cat "$NODE_CONF"
+    echo "=== End ==="
+    echo ""
+
+    read -rp "Edit this file now? (y/N): " edit_conf
+    if [[ "$edit_conf" =~ ^[Yy]$ ]]; then
+        "${EDITOR:-nano}" "$NODE_CONF"
+    fi
+
+    echo ""
+    echo "✓ Configuration saved to $NODE_CONF"
+fi
+
+echo ""
+
+# ------------------------------------------------------------------
+# Step 3: Deploy versioned installation
+# ------------------------------------------------------------------
+echo "=== Step 3: Deploying Versioned Installation ==="
+echo ""
+
+# Run deploy-version from the repo root
+DEPLOY_VERSION="$REPO_DIR/deploy-version"
+[[ -f "$DEPLOY_VERSION" ]] || die "Missing: $DEPLOY_VERSION"
+"$DEPLOY_VERSION"
+
+# Activate the deployed version.  switch-version creates all production
+# wiring, including the desktop shortcuts.
+VERSION=$(cat "$REPO_DIR/VERSION")
+"$REPO_DIR/switch-version" "$VERSION"
+
+echo ""
+
+# ------------------------------------------------------------------
+# Step 4: Summary
+# ------------------------------------------------------------------
+echo "=========================================="
+echo "  Installation Complete"
+echo "=========================================="
+echo ""
+echo "  Mode:       single-node"
+echo "  Hostname:   $(hostname -s)"
+echo "  Config:     $NODE_CONF"
+echo "  Version:    $(cat "$REPO_DIR/VERSION")"
+echo ""
+echo "  Installed versions:"
+sudo /usr/local/lib/zfsutilities/bin/switch-version --list
+echo ""
+echo "Next Steps:"
+echo "  • Launch the GUI from the 'ZFSutilities GUI' shortcut in your home folder."
+echo "  • Launch the documentation viewer from the 'ZFSutilities Documentation' shortcut."
+echo "  • Add panel or desktop launchers by pointing them at those shortcuts."
+echo ""
+echo "  To switch to two-node mode later:"
+echo "    sudo $REPO_DIR/10 Installers/install-two-node"
+echo ""
+

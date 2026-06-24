@@ -1,0 +1,109 @@
+#!/bin/bash
+# promote-vm-clone <vmid>
+# Promotes a ZFS-cloned VM's disk zvols, cutting the dependency on the source VM.
+#
+# After promotion:
+# - This VM's zvols become independent (no origin snapshot)
+# - The shared clone-origin snapshots move to this VM's zvols
+# - All other clones of those snapshots re-parent to this VM automatically
+# - The former source VM's zvols become clones of this VM
+#
+# zfs promote is a metadata-only operation — no data is moved and no iSCSI
+# reconfiguration is needed. Safe to run while the VM is running.
+#
+# To destroy the source VM after promotion:
+#   Stop the source VM, then use zfsdelfs for each zvol (handles iSCSI teardown).
+#
+# Install to: /usr/local/lib/zfsutilities/bin/promote-vm-clone on BOTH the storage and compute hosts
+# Run from:   the compute host (or the storage host directly — delegates via SSH)
+
+source /usr/local/lib/node-lib.sh
+
+MY_HOST=$(hostname -s)
+
+usage() {
+    echo "Usage: promote-vm-clone <vmid>"
+    echo ""
+    echo "  vmid   VM ID whose zvols should be promoted (must be a ZFS clone)"
+    echo ""
+    echo "Example: promote-vm-clone 310"
+    exit 1
+}
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+[[ $# -eq 1 ]] || usage
+
+VMID="$1"
+[[ "$VMID" =~ ^[0-9]+$ ]] || die "vmid must be a number, got: $VMID"
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+
+# --- If not on the compute host, delegate (two-node only) ---
+if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    exec ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/promote-vm-clone '$VMID'"
+fi
+
+# --- Discover clone zvols ---
+if is_single_node; then
+    clone_info=$(zfs list -H -o name,origin \
+        | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
+else
+    clone_info=$(ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF'
+VMID="$1"
+zfs list -H -o name,origin \
+    | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}'
+SSHEOF
+    ) || die "SSH to $STORAGE_HOST failed"
+fi
+
+[[ -n "$clone_info" ]] \
+    || die "No clone zvols found for VM ${VMID} — already promoted or not a ZFS clone"
+
+echo "=== promote-vm-clone ==="
+echo "  VM: ${VMID}"
+echo ""
+echo "  Zvols to promote:"
+while IFS=$'\t' read -r zvol origin; do
+    src_vmid=$(echo "$origin" | grep -oP '/proxmox/vm-\K[0-9]+(?=-disk-)')
+    echo "    ${zvol}"
+    echo "      origin: ${origin}"
+    [[ -n "$src_vmid" ]] && echo "      cuts dependency on VM ${src_vmid}"
+done <<< "$clone_info"
+echo ""
+
+read -rp "Proceed with promotion? (y/N): " confirm
+[[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+echo ""
+
+# --- Promote each zvol ---
+if is_single_node; then
+    while IFS=$'\t' read -r zvol origin; do
+        zfs promote "$zvol" || die "Promotion failed: $zvol"
+        echo "✓ Promoted: ${zvol}"
+        echo "  snapshot moved from ${origin%%@*} to ${zvol}"
+    done < <(zfs list -H -o name,origin \
+        | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
+else
+    ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF' || die "Promotion failed on $STORAGE_HOST"
+set -e
+VMID="$1"
+while IFS=$'\t' read -r zvol origin; do
+    zfs promote "$zvol"
+    echo "✓ Promoted: ${zvol}"
+    echo "  snapshot moved from ${origin%%@*} to ${zvol}"
+done < <(zfs list -H -o name,origin \
+    | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
+SSHEOF
+fi
+
+echo ""
+echo "=== Done ==="
+echo "  VM ${VMID} zvols are now independent."
+echo "  Other clones of the same snapshots have been re-parented to VM ${VMID}."
+echo "  The former source VM can be destroyed when ready:"
+echo "    1. Stop the source VM"
+echo "    2. Remove its disks from the Proxmox config"
+echo "    3. For each source zvol: zfsdelfs <pool>/proxmox/vm-<srcvmid>-disk-<N>"

@@ -1,0 +1,16 @@
+#!/usr/bin/bash
+# $1    The subtree to work with
+# $2    Subtree depth
+source ~/bashinit
+bashinit
+
+function holds {
+    if [[ $2 = '' ]]; then
+        unset depth
+    else
+        depth="-d$2"
+    fi
+    log_msg 'INFO: Snapshot holds for' "$1"'.'
+    zfs list -Hrt snapshot -o name "$1" | xargs -r -n1 zfs holds -H
+}
+if calledbybash; then holds "$*"; fi

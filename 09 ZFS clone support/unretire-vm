@@ -1,0 +1,501 @@
+#!/bin/bash
+# unretire-vm <vmid> [archive_base]
+# Restores a retired VM from archive: recreates zvols, Proxmox config,
+# and iSCSI infrastructure (two-node).
+#
+# Install to: /usr/local/lib/zfsutilities/bin/unretire-vm on BOTH hosts
+# Run from:   the compute host (or the storage host directly — delegates via SSH)
+
+source /usr/local/lib/node-lib.sh
+
+MY_HOST=$(hostname -s)
+PVE_CONF_DIR="/etc/pve/qemu-server"
+JSON_CONFIG="/root/.config/zfsutilities.json"
+
+usage() {
+    echo "Usage: unretire-vm <vmid> [archive_base]"
+    echo ""
+    echo "  vmid         VM ID of the retired VM to restore"
+    echo "  archive_base Optional ZFS dataset that contains the archive"
+    echo "               (defaults to the path saved in JSON config)"
+    echo ""
+    echo "Steps:"
+    echo "  1. Discover archived zvols and Proxmox config"
+    echo "  2. Verify destination zvols and config do not already exist"
+    echo "  3. Restore each zvol with its original volblocksize"
+    echo "  4. Rebuild iSCSI backstores and LUNs (two-node)"
+    echo "  5. Restore Proxmox config (rewriting disk lines in two-node)"
+    echo "  6. Rescan iSCSI (two-node)"
+    echo ""
+    echo "Example: unretire-vm 904"
+    echo "Example: unretire-vm 904 temp/archive"
+    exit 1
+}
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+ask_yn() {
+    local prompt="$1"
+    local response
+    read -rp "$prompt (y/N): " response
+    [[ "$response" =~ ^[Yy]$ ]]
+}
+
+# --- Read archive_path from JSON config ---
+get_json_archive_path() {
+    python3 -c "
+import json
+try:
+    with open('$JSON_CONFIG') as f:
+        c = json.load(f)
+    print(c.get('archive_path', ''), end='')
+except:
+    pass
+"
+}
+
+[[ $# -ge 1 && $# -le 2 ]] || usage
+
+VMID="$1"
+ARCHIVE_BASE="${2:-}"
+
+[[ "$VMID" =~ ^[0-9]+$ ]] || die "vmid must be a number, got: $VMID"
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+
+# --- If not on the compute host, delegate (two-node only) ---
+if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    exec ssh root@"$COMPUTE_HOST" \
+        "/usr/local/lib/zfsutilities/bin/unretire-vm '$VMID' '$ARCHIVE_BASE'"
+fi
+
+echo "=== unretire-vm ==="
+echo "  VM: ${VMID}"
+echo ""
+
+# =======================================================================
+# Resolve archive base
+# =======================================================================
+
+if [[ -z "$ARCHIVE_BASE" ]]; then
+    ARCHIVE_BASE=$(get_json_archive_path)
+fi
+
+[[ -n "$ARCHIVE_BASE" ]] \
+    || die "Archive base path is required (provide as argument or save in JSON config)"
+
+# Validate the base exists as a ZFS dataset
+if is_single_node; then
+    if ! zfs list -H -o name "$ARCHIVE_BASE" >/dev/null 2>&1; then
+        die "Not a ZFS dataset: $ARCHIVE_BASE"
+    fi
+else
+    if ! ssh root@"$STORAGE_HOST" "zfs list -H -o name '$ARCHIVE_BASE'" \
+            >/dev/null 2>&1; then
+        die "Not a ZFS dataset on $STORAGE_HOST: $ARCHIVE_BASE"
+    fi
+fi
+
+# Get mountpoint of the base dataset
+if is_single_node; then
+    ARCHIVE_MOUNT=$(zfs get -H -o value mountpoint "$ARCHIVE_BASE")
+else
+    ARCHIVE_MOUNT=$(ssh root@"$STORAGE_HOST" \
+        "zfs get -H -o value mountpoint '$ARCHIVE_BASE'")
+fi
+
+# =======================================================================
+# Discover archived zvols
+# =======================================================================
+
+echo "--- Discovering archive ---"
+
+# Find archived zvol datasets under the archive base
+if is_single_node; then
+    archived_zvols=$(zfs list -H -t volume -o name -r "$ARCHIVE_BASE" 2>/dev/null \
+        | grep -E "^${ARCHIVE_BASE}/.+/proxmox/vm-${VMID}-disk-[0-9]+$" \
+        | sort)
+else
+    archived_zvols=$(ssh root@"$STORAGE_HOST" bash -s "$ARCHIVE_BASE" "$VMID" << 'SSHEOF'
+ARCHIVE_BASE="$1"
+VMID="$2"
+zfs list -H -t volume -o name -r "$ARCHIVE_BASE" 2>/dev/null \
+    | grep -E "^${ARCHIVE_BASE}/.+/proxmox/vm-${VMID}-disk-[0-9]+$" \
+    | sort
+SSHEOF
+    ) || die "SSH to $STORAGE_HOST failed"
+fi
+
+[[ -n "$archived_zvols" ]] || die "No archived zvols found for VM ${VMID} under ${ARCHIVE_BASE}"
+
+# Build arrays of archive datasets and their original zvol paths
+declare -a archive_datasets=()
+declare -a original_zvols=()
+declare -a disk_nums=()
+
+dataset_count=0
+while IFS= read -r arc_zvol; do
+    # Original zvol path is the suffix after ARCHIVE_BASE/
+    orig_zvol="${arc_zvol#${ARCHIVE_BASE}/}"
+    disknum=$(echo "$orig_zvol" | grep -oP 'disk-\K[0-9]+$')
+
+    archive_datasets+=("$arc_zvol")
+    original_zvols+=("$orig_zvol")
+    disk_nums+=("$disknum")
+    ((++dataset_count))
+done <<< "$archived_zvols"
+
+# Verify sidecar files exist
+missing_sidecars=()
+for i in "${!archive_datasets[@]}"; do
+    vbs_file="${ARCHIVE_MOUNT}/${original_zvols[$i]}.original_volblocksize"
+    info_file="${ARCHIVE_MOUNT}/${original_zvols[$i]}.disk_info"
+    if is_single_node; then
+        [[ -f "$vbs_file" ]] || missing_sidecars+=("$vbs_file")
+        [[ -f "$info_file" ]] || missing_sidecars+=("$info_file")
+    else
+        if ! ssh root@"$STORAGE_HOST" "[[ -f '$vbs_file' ]]"; then
+            missing_sidecars+=("$vbs_file")
+        fi
+        if ! ssh root@"$STORAGE_HOST" "[[ -f '$info_file' ]]"; then
+            missing_sidecars+=("$info_file")
+        fi
+    fi
+done
+
+[[ ${#missing_sidecars[@]} -eq 0 ]] \
+    || die "Missing sidecar files:\n  $(printf '%s\n  ' "${missing_sidecars[@]}")"
+
+# Verify destination zvols do not already exist
+existing_dest=()
+for i in "${!original_zvols[@]}"; do
+    if is_single_node; then
+        if zfs list -H -o name "${original_zvols[$i]}" >/dev/null 2>&1; then
+            existing_dest+=("${original_zvols[$i]}")
+        fi
+    else
+        if ssh root@"$STORAGE_HOST" "zfs list -H -o name '${original_zvols[$i]}'" \
+                >/dev/null 2>&1; then
+            existing_dest+=("${original_zvols[$i]}")
+        fi
+    fi
+done
+
+[[ ${#existing_dest[@]} -eq 0 ]] \
+    || die "Destination zvols already exist:\n  $(printf '%s\n  ' "${existing_dest[@]}")"
+
+# Verify archived config exists
+archived_config="${ARCHIVE_MOUNT}/${PVE_CONF_DIR}/${VMID}.conf"
+if is_single_node; then
+    [[ -f "$archived_config" ]] || die "Archived config not found: $archived_config"
+else
+    if ! ssh root@"$STORAGE_HOST" "[[ -f '$archived_config' ]]"; then
+        die "Archived config not found on $STORAGE_HOST: $archived_config"
+    fi
+fi
+
+# Verify destination config does not already exist
+dest_config="${PVE_CONF_DIR}/${VMID}.conf"
+[[ ! -f "$dest_config" ]] || die "Destination Proxmox config already exists: $dest_config"
+
+# =======================================================================
+# Show summary and confirm
+# =======================================================================
+
+echo "  Archive base: ${ARCHIVE_BASE}"
+echo "  Archive mount: ${ARCHIVE_MOUNT}"
+echo "  Archived config: ${archived_config}"
+echo "  Zvols to restore:"
+for i in "${!archive_datasets[@]}"; do
+    vbs_file="${ARCHIVE_MOUNT}/${original_zvols[$i]}.original_volblocksize"
+    if is_single_node; then
+        orig_vbs=$(cat "$vbs_file")
+    else
+        orig_vbs=$(ssh root@"$STORAGE_HOST" "cat '$vbs_file'")
+    fi
+    echo "    ${original_zvols[$i]} (volblocksize: ${orig_vbs})"
+done
+echo ""
+
+if ! ask_yn "Proceed with restore?"; then
+    echo "Aborted."
+    exit 0
+fi
+echo ""
+
+# =======================================================================
+# Step 1: Restore zvols
+# =======================================================================
+
+echo "--- Step 1: Restoring zvols ---"
+
+if is_single_node; then
+    for i in "${!archive_datasets[@]}"; do
+        arc_dataset="${archive_datasets[$i]}"
+        orig_zvol="${original_zvols[$i]}"
+        vbs_file="${ARCHIVE_MOUNT}/${orig_zvol}.original_volblocksize"
+
+        snap=$(zfs list -H -t snapshot -o name -S creation "$arc_dataset" 2>/dev/null | head -1)
+        [[ -n "$snap" ]] || die "No snapshots found on archive dataset: $arc_dataset"
+
+        snap_name="@${snap##*@}"
+        orig_vbs=$(cat "$vbs_file")
+
+        parent=$(dirname "$orig_zvol")
+        zfs create -p "$parent" 2>/dev/null || true
+
+        echo "  Restoring ${orig_zvol} (volblocksize: ${orig_vbs})..."
+        if ! zfs send -cw "${arc_dataset}${snap_name}" \
+                | zfs receive -o volblocksize="$orig_vbs" "$orig_zvol"; then
+            die "Failed to restore ${orig_zvol}"
+        fi
+        echo "  ✓ Restored: ${orig_zvol}"
+    done
+else
+    # Two-node: run restoration on storage host via SSH
+    ssh root@"$STORAGE_HOST" bash -s "$ARCHIVE_MOUNT" "$dataset_count" \
+        "${archive_datasets[@]}" "${original_zvols[@]}" << 'SSHEOF'
+set -e
+ARCHIVE_MOUNT="$1"
+dataset_count="$2"
+shift 2
+
+archive_datasets=("${@:1:$dataset_count}")
+original_zvols=("${@:$((dataset_count + 1)):$dataset_count}")
+
+for i in "${!archive_datasets[@]}"; do
+    arc_dataset="${archive_datasets[$i]}"
+    orig_zvol="${original_zvols[$i]}"
+    vbs_file="${ARCHIVE_MOUNT}/${orig_zvol}.original_volblocksize"
+
+    snap=$(zfs list -H -t snapshot -o name -S creation "$arc_dataset" 2>/dev/null | head -1)
+    [[ -n "$snap" ]] || { echo "ERROR: No snapshots found on ${arc_dataset}" >&2; exit 1; }
+
+    snap_name="@${snap##*@}"
+    orig_vbs=$(cat "$vbs_file")
+
+    parent=$(dirname "$orig_zvol")
+    zfs create -p "$parent" 2>/dev/null || true
+
+    echo "  Restoring ${orig_zvol} (volblocksize: ${orig_vbs})..." >&2
+    zfs send -cw "${arc_dataset}${snap_name}" \
+        | zfs receive -o volblocksize="$orig_vbs" "$orig_zvol"
+    echo "  ✓ Restored: ${orig_zvol}" >&2
+done
+SSHEOF
+    [[ $? -eq 0 ]] || die "Zvol restoration failed on $STORAGE_HOST"
+fi
+
+echo ""
+
+# =======================================================================
+# Step 2: iSCSI reconstruction (two-node only)
+# =======================================================================
+
+declare -A disk_to_lun=()
+declare -A disk_to_target=()
+
+if is_two_node; then
+    echo "--- Step 2: Rebuilding iSCSI infrastructure ---"
+
+    lun_result=$(ssh root@"$STORAGE_HOST" bash -s "$VMID" "$dataset_count" \
+        "${original_zvols[@]}" << 'SSHEOF'
+set -e
+VMID="$1"
+dataset_count="$2"
+shift 2
+original_zvols=("${@:1:$dataset_count}")
+
+for i in "${!original_zvols[@]}"; do
+    orig_zvol="${original_zvols[$i]}"
+    pool="${orig_zvol%%/*}"
+    disknum=$(echo "$orig_zvol" | grep -oP 'disk-\K[0-9]+$')
+    backstore="vm-${VMID}-disk-${disknum}"
+    zvol_dev="/dev/zvol/${orig_zvol}"
+
+    # Map pool to target using node-lib's pool_to_target logic
+    target=$(python3 -c "
+import json, sys
+conf = '/etc/zfsutilities-node.conf'
+try:
+    with open(conf) as f:
+        exec(f.read())
+    print(f'{IQN_PREFIX}:{POOL_TARGET[\"'$pool'\"]}')
+except Exception as e:
+    sys.exit(1)
+") || { echo "ERROR: Cannot map pool ${pool} to target" >&2; exit 1; }
+
+    echo "TARGET:${target}"
+    echo "DISK:${disknum}"
+
+    # Create backstore if missing
+    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${backstore} "; then
+        echo "BACKSTORE_EXISTS:${backstore}"
+    else
+        targetcli /backstores/block create "$backstore" "$zvol_dev"
+        targetcli "/backstores/block/${backstore}" set attribute emulate_tpu=1
+        echo "BACKSTORE_CREATED:${backstore}"
+    fi
+
+    # Create LUN if missing
+    existing_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
+        | grep " ${backstore} " \
+        | grep -oP 'lun\K[0-9]+' \
+        | head -1)
+
+    if [[ -n "$existing_lun" ]]; then
+        echo "LUN_EXISTS:${disknum}:${existing_lun}"
+    else
+        targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${backstore}"
+        new_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
+            | grep " ${backstore} " \
+            | grep -oP 'lun\K[0-9]+' \
+            | head -1)
+        echo "LUN_CREATED:${disknum}:${new_lun}"
+    fi
+
+    # Add to expected-backstores manifest
+    manifest="/etc/rtslib-fb-target/expected-backstores.txt"
+    if [[ -f "$manifest" ]]; then
+        if ! grep -q "^${backstore}$" "$manifest"; then
+            echo "$backstore" >> "$manifest"
+            echo "MANIFEST_ADDED:${backstore}"
+        fi
+    fi
+
+    # Check encryption status and add to encrypted-luns.conf if needed
+    enc_status=$(zfs get -H -o value encryption "$orig_zvol" 2>/dev/null || echo "-")
+    if [[ "$enc_status" != "-" && "$enc_status" != "off" ]]; then
+        enc_conf="/etc/iscsi-encrypted-luns.conf"
+        target_short="${target##*:}"
+        if [[ -f "$enc_conf" ]] && grep -q "^${backstore}:" "$enc_conf"; then
+            echo "ENCRYPTED_ALREADY:${backstore}"
+        else
+            echo "${backstore}:${zvol_dev}:${target_short}" >> "$enc_conf"
+            echo "ENCRYPTED_ADDED:${backstore}"
+        fi
+    fi
+done
+
+# Save iSCSI config
+/usr/local/lib/zfsutilities/bin/safe-iscsi-save
+echo "CONFIG_SAVED"
+SSHEOF
+    ) || die "iSCSI reconstruction failed on $STORAGE_HOST"
+
+    # Parse results
+    current_target=""
+    while IFS= read -r line; do
+        case "$line" in
+            TARGET:*)
+                current_target="${line#TARGET:}"
+                ;;
+            LUN_EXISTS:*)
+                dnum="${line#LUN_EXISTS:}"
+                dnum="${dnum%%:*}"
+                lun="${line##*:}"
+                disk_to_lun["$dnum"]="$lun"
+                disk_to_target["$dnum"]="$current_target"
+                echo "  ✓ Disk ${dnum}: LUN ${lun} (existing)"
+                ;;
+            LUN_CREATED:*)
+                dnum="${line#LUN_CREATED:}"
+                dnum="${dnum%%:*}"
+                lun="${line##*:}"
+                disk_to_lun["$dnum"]="$lun"
+                disk_to_target["$dnum"]="$current_target"
+                echo "  ✓ Disk ${dnum}: LUN ${lun} (created)"
+                ;;
+            CONFIG_SAVED)
+                echo "  ✓ iSCSI configuration saved"
+                ;;
+        esac
+    done <<< "$lun_result"
+    echo ""
+fi
+
+# =======================================================================
+# Step 3: Restore Proxmox config
+# =======================================================================
+
+echo "--- Step 3: Restoring Proxmox config ---"
+
+mkdir -p "$(dirname "$dest_config")"
+
+if is_single_node; then
+    cp "$archived_config" "$dest_config"
+    echo "  ✓ Config restored: $dest_config"
+else
+    # Two-node: fetch archived config and rewrite disk lines with new LUNs.
+    # Build disk_key -> disk_num mapping from .disk_info sidecars.
+    declare -A key_to_disknum=()
+    for i in "${!original_zvols[@]}"; do
+        info_file="${ARCHIVE_MOUNT}/${original_zvols[$i]}.disk_info"
+        disk_key=$(ssh root@"$STORAGE_HOST" "grep '^DISK_KEY=' '$info_file' | cut -d= -f2")
+        disknum="${disk_nums[$i]}"
+        [[ -n "$disk_key" ]] && key_to_disknum["$disk_key"]="$disknum"
+    done
+
+    # Fetch archived config content
+    archived_content=$(ssh root@"$STORAGE_HOST" "cat '$archived_config'")
+    [[ -n "$archived_content" ]] || die "Failed to read archived config from $STORAGE_HOST"
+
+    # Write new config, rewriting disk lines
+    while IFS= read -r line; do
+        [[ "$line" =~ ^\[.+\] ]] && break
+
+        if [[ "$line" =~ \
+            ^([a-z]+[0-9]+):.*ip-([0-9\.]+):3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+)(.*) ]]; then
+            key="${BASH_REMATCH[1]}"
+            rest="${BASH_REMATCH[5]}"
+            disknum="${key_to_disknum[$key]}"
+
+            if [[ -n "$disknum" && -n "${disk_to_lun[$disknum]}" ]]; then
+                new_lun="${disk_to_lun[$disknum]}"
+                new_target="${disk_to_target[$disknum]}"
+                new_path="ip-${STORAGE_IP}:3260-iscsi-${new_target}-lun-${new_lun}"
+                # Reconstruct line preserving everything except the path
+                prefix="${line%%ip-*}"
+                echo "${prefix}${new_path}${rest}"
+                echo "  ✓ Rewrote ${key} → LUN ${new_lun}" >&2
+            else
+                echo "  ⚠ Could not map ${key}, keeping original line" >&2
+                echo "$line"
+            fi
+        else
+            echo "$line"
+        fi
+    done <<< "$archived_content" > "$dest_config"
+
+    echo "  ✓ Config restored: $dest_config"
+fi
+
+echo ""
+
+# =======================================================================
+# Step 4: Rescan (two-node only)
+# =======================================================================
+
+if is_two_node; then
+    echo "--- Step 4: Rescanning iSCSI ---"
+    /usr/local/lib/zfsutilities/bin/rescan-storage
+    echo ""
+fi
+
+# =======================================================================
+# Done
+# =======================================================================
+
+echo "=== Done ==="
+echo "  VM ${VMID} has been unretired."
+if is_two_node; then
+    echo "  iSCSI LUNs:"
+    for d in "${!disk_to_lun[@]}"; do
+        echo "    disk ${d}: LUN ${disk_to_lun[$d]}"
+    done
+fi
+echo "  Config: ${dest_config}"
+echo ""
+echo "  Review hardware in the Proxmox GUI before starting the VM."

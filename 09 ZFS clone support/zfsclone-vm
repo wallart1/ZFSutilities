@@ -1,0 +1,421 @@
+#!/bin/bash
+# zfsclone-vm <src_vmid> <dst_vmid> <new_name>
+# Creates a new Proxmox VM by ZFS-cloning the source VM's disk zvols.
+#
+# Unlike clone-vm (which does a full zfs send/receive copy), this creates
+# true ZFS clones — instantaneous COW datasets that share blocks with the
+# source until they diverge. No data is copied; only written blocks consume
+# new space.
+#
+# The clone origin snapshot (@clone-...-c) is retained on the source zvols.
+# It must not be deleted while any clones from this operation exist.
+# Use promote-vm-clone <dst_vmid> to cut the dependency before retiring the source VM.
+#
+# The source VM must be stopped before cloning.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/zfsclone-vm on every host where it may be run
+# Run from:   the local host in single-node mode, or the compute/storage host in
+#             two-node mode (storage-host runs delegate via SSH to compute)
+
+source /usr/local/lib/node-lib.sh
+
+MY_HOST=$(hostname -s)
+PVE_CONF_DIR="/etc/pve/qemu-server"
+
+usage() {
+    echo "Usage: zfsclone-vm <src_vmid> <dst_vmid> <new_name>"
+    echo ""
+    echo "  src_vmid   VM ID to clone from (must be stopped)"
+    echo "  dst_vmid   New VM ID"
+    echo "  new_name   Name for the new VM"
+    echo ""
+    echo "Example: zfsclone-vm 904 310 myvm"
+    exit 1
+}
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+gen_mac() {
+    printf 'BC:24:11:%02X:%02X:%02X' $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256))
+}
+
+# --- Argument validation ---
+[[ $# -eq 3 ]] || usage
+
+SRCVMID="$1"
+DSTVMID="$2"
+NEW_NAME="$3"
+
+[[ "$SRCVMID" =~ ^[0-9]+$ ]] || die "src_vmid must be a number, got: $SRCVMID"
+[[ "$DSTVMID" =~ ^[0-9]+$ ]] || die "dst_vmid must be a number, got: $DSTVMID"
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+
+# --- If not on the compute host, delegate (two-node only) ---
+if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    exec ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/zfsclone-vm '$SRCVMID' '$DSTVMID' '$NEW_NAME'"
+fi
+
+# === Running on the compute host ===
+
+src_conf="$PVE_CONF_DIR/${SRCVMID}.conf"
+dst_conf="$PVE_CONF_DIR/${DSTVMID}.conf"
+
+[[ -f "$src_conf" ]]   || die "Source VM config not found: $src_conf"
+[[ ! -f "$dst_conf" ]] || die "Destination VM config already exists: $dst_conf"
+
+# --- Check source VM is stopped ---
+vm_status=$(qm status "$SRCVMID" 2>/dev/null | awk '{print $2}')
+[[ "$vm_status" == "stopped" ]] \
+    || die "VM $SRCVMID must be stopped before cloning (status: ${vm_status:-unknown})"
+
+# === Single-node ZFS clone path ===
+if is_single_node; then
+    # Parse ZFS-backed disk lines (format: scsiN: <storage>:vm-VMID-disk-N,...)
+    declare -a sn_disk_keys=()
+    declare -A sn_disk_zvols=()
+    declare -A sn_disk_storage=()
+    declare -A sn_disk_nums=()
+
+    while IFS= read -r line; do
+        [[ "$line" =~ ^\[.+\] ]] && break
+        if [[ "$line" =~ ^([a-z]+[0-9]+):\ *([^:]+):vm-${SRCVMID}-disk-([0-9]+) ]]; then
+            key="${BASH_REMATCH[1]}"
+            storage="${BASH_REMATCH[2]}"
+            disknum="${BASH_REMATCH[3]}"
+            zvol=$(zfs list -H -t volume -o name 2>/dev/null \
+                | grep "/proxmox/vm-${SRCVMID}-disk-${disknum}$" | head -1)
+            if [[ -n "$zvol" ]]; then
+                sn_disk_keys+=("$key")
+                sn_disk_zvols["$key"]="$zvol"
+                sn_disk_storage["$key"]="$storage"
+                sn_disk_nums["$key"]="$disknum"
+            fi
+        fi
+    done < "$src_conf"
+
+    [[ ${#sn_disk_keys[@]} -gt 0 ]] || die "No ZFS disk zvols found for VM $SRCVMID"
+
+    SNAP_SUFFIX="@clone-$(date -Iminutes)-c"
+
+    echo "=== zfsclone-vm (single-node) ==="
+    echo "  Source:   VM ${SRCVMID}"
+    echo "  Dest:     VM ${DSTVMID} (${NEW_NAME})"
+    echo "  Snapshot: ${SNAP_SUFFIX}"
+    echo "  Disks:"
+    for key in "${sn_disk_keys[@]}"; do
+        echo "    ${key}: ${sn_disk_zvols[$key]}"
+    done
+    echo ""
+    read -rp "Proceed? (y/N): " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+    echo ""
+
+    # Clone each disk locally
+    for key in "${sn_disk_keys[@]}"; do
+        src_zvol="${sn_disk_zvols[$key]}"
+        disknum="${sn_disk_nums[$key]}"
+        pool="${src_zvol%%/*}"
+        dst_zvol="${pool}/proxmox/vm-${DSTVMID}-disk-${disknum}"
+        snap="${src_zvol}${SNAP_SUFFIX}"
+
+        echo "Cloning ${key}: ${src_zvol}..."
+
+        ! zfs list -H "$dst_zvol" >/dev/null 2>&1 \
+            || die "Destination zvol already exists: $dst_zvol"
+
+        if ! zfs list -H -t snapshot "$snap" >/dev/null 2>&1; then
+            zfs snapshot "$snap"
+            echo "✓ Snapshot created: $snap"
+        else
+            echo "✓ Snapshot exists: $snap"
+        fi
+
+        zfs clone -o compression=lz4 -o refreservation=none "$snap" "$dst_zvol"
+        echo "✓ ZFS clone created: $dst_zvol"
+        echo ""
+    done
+
+    # Write new VM config
+    echo "Writing VM ${DSTVMID} config..."
+
+    new_vmgenid=$(cat /proc/sys/kernel/random/uuid)
+    new_smbios_uuid=$(cat /proc/sys/kernel/random/uuid)
+    name_written=false
+    vmgenid_written=false
+    smbios1_written=false
+
+    while IFS= read -r line; do
+        [[ "$line" =~ ^\[.+\] ]] && break
+
+        if [[ "$line" =~ ^([a-z]+[0-9]+):\ *([^:]+):vm-${SRCVMID}-disk-([0-9]+)(.*) ]]; then
+            key="${BASH_REMATCH[1]}"
+            storage="${BASH_REMATCH[2]}"
+            disknum="${BASH_REMATCH[3]}"
+            rest="${BASH_REMATCH[4]}"
+            echo "${key}: ${storage}:vm-${DSTVMID}-disk-${disknum}${rest}"
+        elif [[ "$line" =~ ^vmgenid: ]]; then
+            echo "vmgenid: $new_vmgenid"
+            vmgenid_written=true
+        elif [[ "$line" =~ ^smbios1: ]]; then
+            echo "smbios1: uuid=${new_smbios_uuid}"
+            smbios1_written=true
+        elif [[ "$line" =~ ^name: ]]; then
+            echo "name: $NEW_NAME"
+            name_written=true
+        elif [[ "$line" =~ ^net[0-9]+: ]]; then
+            new_mac=$(gen_mac)
+            if [[ "$line" =~ ^(net[0-9]+:.*=)([0-9A-Fa-f:]{17})(,.*)$ ]]; then
+                echo "${BASH_REMATCH[1]}${new_mac}${BASH_REMATCH[3]}"
+            else
+                echo "$line"
+            fi
+        elif [[ "$line" =~ ^protection: ]]; then
+            :
+        elif [[ "$line" =~ ^meta: ]]; then
+            :
+        else
+            echo "$line"
+        fi
+    done < "$src_conf" > "$dst_conf"
+
+    [[ "$name_written"     == "true" ]] || echo "name: $NEW_NAME"                  >> "$dst_conf"
+    [[ "$vmgenid_written"  == "true" ]] || echo "vmgenid: $new_vmgenid"            >> "$dst_conf"
+    [[ "$smbios1_written"  == "true" ]] || echo "smbios1: uuid=${new_smbios_uuid}" >> "$dst_conf"
+
+    echo "✓ Config written: $dst_conf"
+    echo ""
+    echo "=== Done ==="
+    echo "  VM ${DSTVMID} (${NEW_NAME}) is ready in Proxmox."
+    echo "  Clone origin: ${SNAP_SUFFIX} (retained on source VM ${SRCVMID} zvols)"
+    echo "  To cut dependency before retiring VM ${SRCVMID}: promote-vm-clone ${DSTVMID}"
+    echo "  Review hardware in the GUI before starting."
+    exit 0
+fi
+
+# === Two-node iSCSI clone path ===
+
+# --- Parse iSCSI disk lines from source config ---
+# The full target IQN is embedded in the by-path device string — extract it directly.
+# No pool names or IQN prefixes are hardcoded here.
+declare -a disk_keys=()
+declare -A disk_targets=()
+declare -A disk_luns=()
+
+while IFS= read -r line; do
+    [[ "$line" =~ ^\[.+\] ]] && break
+    # Regex: ^([a-z]+[0-9]+):.*ip-${STORAGE_IP}:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+)
+    # Purpose: Parse iSCSI disk lines with full IQN capture (including commas in the IQN).
+    # Group 1: disk key    e.g. "scsi0"
+    # Group 2: full IQN    e.g. "iqn.2024-01.com.vendor:threeamigos"
+    # Group 3: LUN number  e.g. "0"
+    if [[ "$line" =~ ^([a-z]+[0-9]+):.*ip-${STORAGE_IP}:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+) ]]; then
+        key="${BASH_REMATCH[1]}"
+        disk_keys+=("$key")
+        disk_targets["$key"]="${BASH_REMATCH[2]}"
+        disk_luns["$key"]="${BASH_REMATCH[3]}"
+    fi
+done < "$src_conf"
+
+[[ ${#disk_keys[@]} -gt 0 ]] || die "No iSCSI disks found in source VM config"
+
+# Snapshot name — same for all disks in this operation, kept as clone origin
+SNAP_SUFFIX="@clone-$(date -Iminutes)-c"
+
+echo "=== zfsclone-vm ==="
+echo "  Source:   VM ${SRCVMID}"
+echo "  Dest:     VM ${DSTVMID} (${NEW_NAME})"
+echo "  Snapshot: ${SNAP_SUFFIX}"
+echo "  Disks:"
+for key in "${disk_keys[@]}"; do
+    echo "    ${key}: target=${disk_targets[$key]}, LUN ${disk_luns[$key]}"
+done
+echo ""
+read -rp "Proceed? (y/N): " confirm
+[[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+echo ""
+
+# --- Clone each disk on the storage host ---
+declare -A disk_new_luns=()
+
+for key in "${disk_keys[@]}"; do
+    target="${disk_targets[$key]}"
+    old_lun="${disk_luns[$key]}"
+
+    echo "Cloning ${key} (target=${target}, LUN ${old_lun})..."
+
+    new_lun=$(ssh root@"$STORAGE_HOST" bash -s "$target" "$SRCVMID" "$DSTVMID" "$old_lun" "$SNAP_SUFFIX" \
+    << 'SSHEOF'
+set -e
+TARGET="$1"
+SRC_VMID="$2"
+DST_VMID="$3"
+OLD_LUN="$4"
+SNAP_SUFFIX="$5"
+
+# Find the backstore name for the old LUN to get the disk number
+backstore=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
+    | grep -E "lun${OLD_LUN}[^0-9]" \
+    | grep -oP 'block/\K\S+')
+[[ -n "$backstore" ]] \
+    || { echo "ERROR: No backstore found for LUN ${OLD_LUN} in ${TARGET}" >&2; exit 1; }
+
+disknum=$(echo "$backstore" | grep -oP 'disk-\K[0-9]+$')
+[[ -n "$disknum" ]] \
+    || { echo "ERROR: Cannot extract disk number from '${backstore}'" >&2; exit 1; }
+
+# Derive pool from the backstore's device path — no pool names hardcoded
+pool=$(targetcli /backstores/block ls 2>/dev/null \
+    | grep " ${backstore} " \
+    | grep -oP '/dev/zvol/\K[^/]+')
+[[ -n "$pool" ]] \
+    || { echo "ERROR: Cannot determine pool for backstore ${backstore}" >&2; exit 1; }
+
+src_zvol="${pool}/proxmox/vm-${SRC_VMID}-disk-${disknum}"
+dst_zvol="${pool}/proxmox/vm-${DST_VMID}-disk-${disknum}"
+dst_zvol_dev="/dev/zvol/${dst_zvol}"
+dst_backstore="vm-${DST_VMID}-disk-${disknum}"
+snap="${src_zvol}${SNAP_SUFFIX}"
+
+echo "  ${src_zvol} → ${dst_zvol}" >&2
+echo "  Snapshot: ${snap}" >&2
+
+zfs list -H "$src_zvol" >/dev/null 2>&1 \
+    || { echo "ERROR: Source zvol not found: ${src_zvol}" >&2; exit 1; }
+! zfs list -H "$dst_zvol" >/dev/null 2>&1 \
+    || { echo "ERROR: Destination zvol already exists: ${dst_zvol}" >&2; exit 1; }
+! targetcli /backstores/block ls 2>/dev/null | grep -q " ${dst_backstore} " \
+    || { echo "ERROR: Backstore already exists: ${dst_backstore}" >&2; exit 1; }
+
+# Take snapshot if it doesn't already exist (same name reused across all disks of this VM)
+if ! zfs list -H -t snapshot "${snap}" >/dev/null 2>&1; then
+    zfs snapshot "$snap"
+    echo "✓ Snapshot created: ${snap}" >&2
+else
+    echo "✓ Snapshot exists: ${snap}" >&2
+fi
+
+# ZFS clone — instantaneous, shares all blocks with source until they diverge
+zfs clone -o compression=lz4 -o refreservation=none "$snap" "$dst_zvol"
+echo "✓ ZFS clone created" >&2
+
+# Wait for device node to appear (udev is async)
+for i in $(seq 1 20); do [[ -b "$dst_zvol_dev" ]] && break; sleep 0.5; done
+[[ -b "$dst_zvol_dev" ]] \
+    || { echo "ERROR: Device node did not appear: ${dst_zvol_dev}" >&2; exit 1; }
+
+# Create iSCSI backstore and LUN
+targetcli /backstores/block create "$dst_backstore" "$dst_zvol_dev" >/dev/null 2>&1
+targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${dst_backstore}" >/dev/null 2>&1
+echo "✓ iSCSI LUN added" >&2
+
+# Print only the new LUN number to stdout (captured by caller)
+targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
+    | grep "$dst_backstore" \
+    | grep -oP 'lun\K[0-9]+' \
+    | head -1
+SSHEOF
+    ) || die "Failed to clone ${key}"
+
+    [[ -n "$new_lun" ]] || die "Could not determine new LUN number for ${key}"
+    disk_new_luns["$key"]="$new_lun"
+    echo "✓ ${key}: LUN ${old_lun} → LUN ${new_lun}"
+    echo ""
+done
+
+# --- Save iSCSI config on the storage host ---
+echo "Saving iSCSI configuration..."
+ssh root@"$STORAGE_HOST" /usr/local/lib/zfsutilities/bin/safe-iscsi-save
+echo "✓ Configuration saved"
+echo ""
+
+# --- Write new VM config ---
+echo "Writing VM ${DSTVMID} config..."
+
+# Build target:old_lun → new_lun lookup (target IQN is unique per pool, handles multi-pool VMs)
+declare -A lun_map=()
+for key in "${disk_keys[@]}"; do
+    lun_map["${disk_targets[$key]}:${disk_luns[$key]}"]="${disk_new_luns[$key]}"
+done
+
+new_vmgenid=$(cat /proc/sys/kernel/random/uuid)
+new_smbios_uuid=$(cat /proc/sys/kernel/random/uuid)
+name_written=false
+vmgenid_written=false
+smbios1_written=false
+
+while IFS= read -r line; do
+    [[ "$line" =~ ^\[.+\] ]] && break
+
+    # Regex: ^[a-z]+[0-9]+:.*ip-${STORAGE_IP}:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+)
+    # Purpose: Rewrite iSCSI disk lines with full IQN capture, substituting LUN numbers.
+    # Group 1: full IQN     e.g. "iqn.2024-01.com.vendor:threeamigos"
+    # Group 2: old LUN      e.g. "0"
+    if [[ "$line" =~ ^[a-z]+[0-9]+:.*ip-${STORAGE_IP}:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+) ]]; then
+        # Disk line — replace old LUN with new LUN
+        old_target="${BASH_REMATCH[1]}"
+        old_lun="${BASH_REMATCH[2]}"
+        new_lun="${lun_map[${old_target}:${old_lun}]}"
+        [[ -n "$new_lun" ]] && line="${line/-lun-${old_lun},/-lun-${new_lun},}"
+        echo "$line"
+
+    elif [[ "$line" =~ ^vmgenid: ]]; then
+        echo "vmgenid: $new_vmgenid"
+        vmgenid_written=true
+
+    elif [[ "$line" =~ ^smbios1: ]]; then
+        echo "smbios1: uuid=${new_smbios_uuid}"
+        smbios1_written=true
+
+    elif [[ "$line" =~ ^name: ]]; then
+        echo "name: $NEW_NAME"
+        name_written=true
+
+    elif [[ "$line" =~ ^net[0-9]+: ]]; then
+        # Replace MAC address
+        new_mac=$(gen_mac)
+        # Regex: ^(net[0-9]+:.*=)([0-9A-Fa-f][0-9A-Fa-f]:...)(,.*)$
+        # Purpose: MAC replacement with explicit per-nibble hex matching.
+        #          Functionally equivalent to [0-9A-Fa-f:]{17} but spelled out
+        #          nibble-by-nibble to be extra explicit about the 17-char format.
+        # Group 1: prefix up to =    e.g. "net0: virtio="
+        # Group 2: MAC address       e.g. "BC:24:11:AA:BB:CC"
+        # Group 3: trailing params   e.g. ",bridge=vmbr0"
+        if [[ "$line" =~ ^(net[0-9]+:.*=)([0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f])(,.*)$ ]]; then
+            echo "${BASH_REMATCH[1]}${new_mac}${BASH_REMATCH[3]}"
+        else
+            echo "$line"
+        fi
+
+    elif [[ "$line" =~ ^protection: ]]; then
+        : # Drop — clone is not a template
+
+    elif [[ "$line" =~ ^meta: ]]; then
+        : # Drop — Proxmox regenerates this on first interaction
+
+    else
+        echo "$line"
+    fi
+
+done < "$src_conf" > "$dst_conf"
+
+# Add any fields not present in source config
+[[ "$name_written"     == "true" ]] || echo "name: $NEW_NAME"                  >> "$dst_conf"
+[[ "$vmgenid_written"  == "true" ]] || echo "vmgenid: $new_vmgenid"            >> "$dst_conf"
+[[ "$smbios1_written"  == "true" ]] || echo "smbios1: uuid=${new_smbios_uuid}" >> "$dst_conf"
+
+echo "✓ Config written: $dst_conf"
+echo ""
+
+# --- Rescan iSCSI ---
+echo "Rescanning iSCSI..."
+/usr/local/lib/zfsutilities/bin/rescan-storage
+echo ""
+
+echo "=== Done ==="
+echo "  VM ${DSTVMID} (${NEW_NAME}) is ready in Proxmox."
+echo "  Clone origin: ${SNAP_SUFFIX} (retained on source VM ${SRCVMID} zvols)"
+echo "  To cut dependency before retiring VM ${SRCVMID}: promote-vm-clone ${DSTVMID}"
+echo "  Review hardware in the GUI before starting."

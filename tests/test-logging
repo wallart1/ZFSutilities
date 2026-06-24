@@ -1,0 +1,120 @@
+#!/usr/bin/bash
+# test-logging — Verify log_msg writes all messages to the session log file.
+
+mydir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Source bashinit directly so we test the real log_msg, not the test harness
+# redirection in test-lib.sh.
+source ~/bashinit
+bashinit
+
+source "$mydir/tests/test-lib.sh"
+setup_test_env
+
+test_log_msg_writes_all_levels() {
+    test_start "log_msg writes all levels to session log file"
+    local logfile
+    logfile="$(mktemp)"
+    export ZFSUTILITIES_LOG_FILE="$logfile"
+    export ZFSUTILITIES_LOG_INHERIT="N"
+    export msg_level="WARN"
+
+    # Run log_msg in a subshell so the test harness override is not active.
+    # Restore ZFSUTILITIES_LOG_FILE after bashinit so log_msg writes to the
+    # test file rather than the auto-created session log.
+    (
+        source ~/bashinit
+        bashinit
+        export ZFSUTILITIES_LOG_FILE="$logfile"
+        export ZFSUTILITIES_LOG_INHERIT="N"
+        log_msg "DEBUG: debug message"
+        log_msg "VERB: verbose message"
+        log_msg "INFO: info message"
+        log_msg "WARN: warn message"
+        log_msg "FATAL: fatal message"
+        log_msg "unprefixed message"
+    ) >/dev/null 2>&1
+
+    local content
+    content="$(cat "$logfile")"
+    local rc=0
+    for needle in \
+        "DEBUG: debug message" \
+        "VERB: verbose message" \
+        "INFO: info message" \
+        "WARN: warn message" \
+        "FATAL: fatal message" \
+        "unprefixed message"
+    do
+        if [[ "$content" != *"$needle"* ]]; then
+            test_fail "Missing log line: $needle"
+            rc=1
+            break
+        fi
+    done
+    if [[ $rc -eq 0 ]]; then
+        test_pass
+    fi
+    rm -f "$logfile"
+}
+
+test_log_msg_prints_all_to_stderr() {
+    test_start "log_msg prints all messages to stderr"
+    export msg_level="WARN"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            bashinit
+            log_msg "DEBUG: d"
+            log_msg "INFO: i"
+            log_msg "WARN: w"
+        ) 2>&1 >/dev/null
+    )"
+    assert_contains "$stderr" "DEBUG: d"
+    assert_contains "$stderr" "INFO: i"
+    assert_contains "$stderr" "WARN: w"
+}
+
+test_log_msg_no_filtering() {
+    test_start "log_msg ignores msg_level environment variable"
+    export msg_level="FATAL"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            bashinit
+            log_msg "INFO: should appear"
+        ) 2>&1 >/dev/null
+    )"
+    assert_contains "$stderr" "INFO: should appear"
+}
+
+test_log_msg_writes_to_file_when_owned() {
+    test_start "log_msg writes to file only when process owns the log"
+    local logfile
+    logfile="$(mktemp)"
+    export ZFSUTILITIES_LOG_FILE="$logfile"
+    export ZFSUTILITIES_LOG_INHERIT="Y"
+
+    (
+        source ~/bashinit
+        bashinit
+        log_msg "INFO: inherited process"
+    ) >/dev/null 2>&1
+
+    if [[ -s "$logfile" ]]; then
+        test_fail "Inherited process should not write to the log file"
+    else
+        test_pass
+    fi
+    rm -f "$logfile"
+}
+
+test_log_msg_writes_to_file_when_owned
+test_log_msg_writes_all_levels
+test_log_msg_prints_all_to_stderr
+test_log_msg_no_filtering
+
+test_summary
+teardown_test_env

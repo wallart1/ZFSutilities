@@ -1,0 +1,84 @@
+#!/bin/bash
+# show-lun-map
+# Shows which iSCSI LUN maps to which /dev/sd* device and size.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/show-lun-map on BOTH the storage and compute hosts
+# Run from:   the compute host (or the storage host directly — delegates via SSH)
+
+source /usr/local/lib/node-lib.sh
+
+MY_HOST=$(hostname -s)
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+
+if is_single_node; then
+    echo "show-lun-map: not applicable in single-node mode (no iSCSI)"
+    exit 0
+fi
+
+# --- If not on the compute host, delegate via SSH ---
+if [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    exec ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/show-lun-map"
+fi
+
+# === Running on the compute host ===
+
+echo "=== LUN → Device Map ==="
+echo ""
+
+# /dev/disk/by-path entries for iSCSI look like:
+#   ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:<target_short>-lun-<n>
+# and are symlinks to ../../sdX. The list of valid <target_short> values
+# comes from /etc/two-node.conf via POOL_TARGET.
+
+# Build a regex alternation from the target short names: e.g. "threeamigos|nvme1"
+TARGET_RE="$(IFS='|'; echo "${POOL_TARGET[*]}")"
+
+declare -A LUN_TO_DEV
+
+while IFS= read -r link; do
+    name=$(basename "$link")
+
+    # Regex: :(${TARGET_RE})-lun-([0-9]+)$
+    # Purpose: Extract the iSCSI target short name and LUN number from a
+    #          /dev/disk/by-path symlink basename.
+    # Group 1: target short name  e.g. "threeamigos"
+    # Group 2: LUN number         e.g. "0"
+    if [[ "$name" =~ :(${TARGET_RE})-lun-([0-9]+)$ ]]; then
+        TARGET="${BASH_REMATCH[1]}"
+        LUN="${BASH_REMATCH[2]}"
+    else
+        continue
+    fi
+
+    DEVPATH=$(readlink -f "$link" 2>/dev/null)
+    [[ -b "$DEVPATH" ]] || continue
+    DEV=$(basename "$DEVPATH")
+
+    LUN_TO_DEV["${TARGET}:${LUN}"]="$DEV"
+done < <(ls /dev/disk/by-path/ip-${STORAGE_IP}* 2>/dev/null)
+
+if [[ ${#LUN_TO_DEV[@]} -eq 0 ]]; then
+    echo "No iSCSI devices found. Is the storage network up?"
+    exit 1
+fi
+
+printf "%-14s  %-6s  %-8s  %s\n" "Target" "LUN" "Device" "Size"
+printf "%-14s  %-6s  %-8s  %s\n" "------" "---" "------" "----"
+
+for KEY in $(printf '%s\n' "${!LUN_TO_DEV[@]}" | sort -t: -k1,1 -k2,2n); do
+    TARGET="${KEY%%:*}"
+    LUN="${KEY##*:}"
+    DEV="${LUN_TO_DEV[$KEY]}"
+    SIZE=$(lsblk -bdn -o SIZE "/dev/${DEV}" 2>/dev/null \
+          | awk '{printf "%.0fG", $1/1073741824}')
+    printf "%-14s  lun%-3s  %-8s  %s\n" "$TARGET" "$LUN" "/dev/$DEV" "$SIZE"
+done
+
+echo ""
+echo "Total iSCSI LUNs visible: ${#LUN_TO_DEV[@]}"

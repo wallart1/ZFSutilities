@@ -1,0 +1,343 @@
+#!/bin/bash
+# switch-version <version>|previous|--list|--uninstall
+# Activates a deployed version by updating the current symlink and wiring
+# the version into active production.
+#
+# --list       Show installed versions.
+# --uninstall  Remove this version's production wiring (used internally
+#              when switching versions; may also be run manually).
+#
+# Run as root on each host where you want to switch versions.
+
+MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+# System wiring targets.  Override these in tests to avoid touching the real
+# filesystem.  They are re-evaluated at function entry so tests can set the
+# environment variables after sourcing this file.
+load_switch_config() {
+    VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
+    BASHINIT_LINK="${ZFSUTILITIES_BASHINIT_LINK:-/root/bashinit}"
+    PROFILE_FILE="${ZFSUTILITIES_PROFILE_FILE:-/etc/profile.d/zfsutilities.sh}"
+    SUDOERS_FILE="${ZFSUTILITIES_SUDOERS_FILE:-/etc/sudoers.d/zfsutilities}"
+    NODE_LIB_LINK="${ZFSUTILITIES_NODE_LIB_LINK:-/usr/local/lib/node-lib.sh}"
+    TWO_NODE_LIB_LINK="${ZFSUTILITIES_TWO_NODE_LIB_LINK:-/usr/local/lib/two-node-lib.sh}"
+    LOCAL_BIN_DIR="${ZFSUTILITIES_LOCAL_BIN_DIR:-/usr/local/bin}"
+}
+
+# Use the project's rootcheck helper if it is not already loaded (tests mock
+# this function to run as non-root).
+if ! declare -f rootcheck &>/dev/null; then
+    # shellcheck source=rootcheck
+    source "$MYDIR/rootcheck"
+fi
+rootcheck
+
+# Source desktop launcher helpers.  In the repo root the library lives at
+# "10 Installers/..."; in the deployed layout it is at "../10 Installers/...".
+if [[ -f "$MYDIR/10 Installers/desktop-launcher-lib.sh" ]]; then
+    # shellcheck source=10 Installers/desktop-launcher-lib.sh
+    source "$MYDIR/10 Installers/desktop-launcher-lib.sh"
+else
+    # shellcheck source=10 Installers/desktop-launcher-lib.sh
+    source "$MYDIR/../10 Installers/desktop-launcher-lib.sh"
+fi
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+usage() {
+    echo "Usage: switch-version <version>|previous|--list|--uninstall"
+    echo ""
+    echo "  version     Version string to activate"
+    echo "  previous    Roll back to the previous active version"
+    echo "  --list      Show all installed versions"
+    echo "  --uninstall Remove this version's production wiring"
+    echo ""
+    echo "Examples:"
+    echo "  sudo switch-version 1.1.0"
+    echo "  sudo switch-version previous"
+    echo "  sudo switch-version --list"
+    echo "  sudo switch-version --uninstall"
+    exit 1
+}
+
+# ------------------------------------------------------------------
+# Wiring helpers
+# ------------------------------------------------------------------
+
+setup_bin_symlink() {
+    local bin_link="$VERSION_BASE/bin"
+    if [[ ! -L "$bin_link" ]]; then
+        ln -sfn "current/bin" "$bin_link"
+        echo "  Created $bin_link -> current/bin"
+    fi
+}
+
+setup_path_config() {
+    local profile_file="$PROFILE_FILE"
+    local sudoers_file="$SUDOERS_FILE"
+    local bin_path="$VERSION_BASE/bin"
+
+    # /etc/profile.d — idempotent
+    if [[ ! -f "$profile_file" ]] || ! grep -qF "$bin_path" "$profile_file" 2>/dev/null; then
+        echo "export PATH=\"${bin_path}:\$PATH\"" > "$profile_file"
+        chmod 644 "$profile_file"
+        echo "  Created $profile_file"
+    fi
+
+    # /etc/sudoers.d — idempotent and validated
+    if [[ ! -f "$sudoers_file" ]] || ! grep -qF "$bin_path" "$sudoers_file" 2>/dev/null; then
+        local tmpfile
+        tmpfile=$(mktemp)
+        cat > "$tmpfile" << EOF
+Defaults    secure_path="${bin_path}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EOF
+        if visudo -c -f "$tmpfile" >/dev/null 2>&1; then
+            mv "$tmpfile" "$sudoers_file"
+            chmod 440 "$sudoers_file"
+            echo "  Created $sudoers_file"
+        else
+            rm -f "$tmpfile"
+            echo "  ⚠ WARNING: sudoers validation failed — $sudoers_file not updated" >&2
+        fi
+    fi
+}
+
+setup_bashinit_symlink() {
+    local target="$VERSION_BASE/current/bin/bashinit"
+    local link="$BASHINIT_LINK"
+
+    if [[ -f "$link" && ! -L "$link" ]]; then
+        mv "$link" "${link}.bak"
+        echo "  Backed up existing /root/bashinit to /root/bashinit.bak"
+    fi
+
+    if [[ ! -L "$link" ]] || [[ "$(readlink "$link")" != "$target" ]]; then
+        ln -sfn "$target" "$link"
+        echo "  Created /root/bashinit -> $target"
+    fi
+}
+
+setup_library_symlinks() {
+    local node_target="$VERSION_BASE/current/lib/node-lib.sh"
+    local two_node_target="$VERSION_BASE/current/lib/two-node-lib.sh"
+
+    if [[ -f "$VERSION_BASE/current/lib/node-lib.sh" ]]; then
+        ln -sfn "$node_target" "$NODE_LIB_LINK"
+        echo "  Created $NODE_LIB_LINK -> $node_target"
+    fi
+
+    if [[ -f "$VERSION_BASE/current/lib/two-node-lib.sh" ]]; then
+        ln -sfn "$two_node_target" "$TWO_NODE_LIB_LINK"
+        echo "  Created $TWO_NODE_LIB_LINK -> $two_node_target"
+    elif [[ -f "$VERSION_BASE/current/lib/node-lib.sh" ]]; then
+        # Backward-compat: old scripts source /usr/local/lib/two-node-lib.sh
+        ln -sfn "node-lib.sh" "$TWO_NODE_LIB_LINK"
+        echo "  Created $TWO_NODE_LIB_LINK -> node-lib.sh (compat)"
+    fi
+}
+
+cleanup_old_symlinks() {
+    local removed=0
+    for link in "$LOCAL_BIN_DIR"/*; do
+        [[ -L "$link" ]] || continue
+        local target
+        target=$(readlink "$link" 2>/dev/null || true)
+        [[ "$target" == "$VERSION_BASE/current/bin/"* ]] || continue
+        rm -f "$link"
+        ((++removed))
+    done
+    if [[ $removed -gt 0 ]]; then
+        echo "  Removed $removed old symlinks from $LOCAL_BIN_DIR"
+    fi
+}
+
+install_wiring() {
+    load_switch_config
+    echo "=== Wiring version into active production ==="
+    setup_bin_symlink
+    setup_path_config
+    setup_bashinit_symlink
+    setup_library_symlinks
+    cleanup_old_symlinks
+
+    local desktop_user
+    desktop_user=$(get_desktop_user)
+    create_desktop_symlinks "$desktop_user"
+}
+
+uninstall_wiring() {
+    load_switch_config
+    echo "=== Unwiring version from active production ==="
+
+    if [[ -L "$BASHINIT_LINK" ]]; then
+        rm -f "$BASHINIT_LINK"
+        echo "  Removed $BASHINIT_LINK"
+    fi
+
+    if [[ -L "$NODE_LIB_LINK" ]]; then
+        rm -f "$NODE_LIB_LINK"
+        echo "  Removed $NODE_LIB_LINK"
+    fi
+
+    if [[ -L "$TWO_NODE_LIB_LINK" ]]; then
+        rm -f "$TWO_NODE_LIB_LINK"
+        echo "  Removed $TWO_NODE_LIB_LINK"
+    fi
+
+    local desktop_user
+    desktop_user=$(get_desktop_user)
+    remove_desktop_symlinks "$desktop_user"
+}
+
+# ------------------------------------------------------------------
+# Subcommands
+# ------------------------------------------------------------------
+
+list_versions() {
+    echo "=== Installed versions ==="
+    if [[ ! -d "$VERSION_BASE/versions" ]]; then
+        echo "  (no versions installed)"
+        return 0
+    fi
+
+    local current previous
+    current=$(readlink -f "$VERSION_BASE/current" 2>/dev/null || true)
+    previous=$(readlink -f "$VERSION_BASE/previous" 2>/dev/null || true)
+
+    {
+    for v in "$VERSION_BASE/versions/"*; do
+        [[ -d "$v" ]] || continue
+        local name
+        name=$(basename "$v")
+        local marker=""
+        if [[ "$v" == "$current" ]]; then
+            marker="  <-- current"
+        elif [[ "$v" == "$previous" ]]; then
+            marker="  <-- previous"
+        fi
+        echo "$name$marker"
+    done
+    } | sort -V | sed 's/^/  /'
+}
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+switch_version_main() {
+    # Enable strict error handling for this function and its helpers, but
+    # restore the caller's setting on return so sourcing tests are not
+    # affected.
+    local old_set_e=0
+    [[ $- == *e* ]] && old_set_e=1
+    set -e
+
+    load_switch_config
+
+    # --list
+    if [[ "${1:-}" == "--list" ]]; then
+        list_versions
+        return 0
+    fi
+
+    # --uninstall
+    if [[ "${1:-}" == "--uninstall" ]]; then
+        uninstall_wiring
+        return 0
+    fi
+
+    [[ $# -eq 1 ]] || usage
+
+    local version="$1"
+
+    # Resolve "previous"
+    if [[ "$version" == "previous" ]]; then
+        local previous_link
+        previous_link=$(readlink "$VERSION_BASE/previous" 2>/dev/null || true)
+        [[ -n "$previous_link" ]] || die "No previous version recorded"
+        version=$(basename "$previous_link")
+    fi
+
+    local target="versions/$version"
+    [[ -d "$VERSION_BASE/$target" ]] || die "Version not found: $version"
+
+    local current
+    current=$(readlink "$VERSION_BASE/current" 2>/dev/null || true)
+
+    if [[ "$current" != "$target" ]]; then
+        # Uninstall prior version's wiring using its own switch-version.
+        if [[ -n "$current" ]]; then
+            local prior_version
+            prior_version=$(basename "$current")
+            local prior_switch="$VERSION_BASE/versions/$prior_version/bin/switch-version"
+            if [[ -x "$prior_switch" ]]; then
+                echo "  Unwiring previous version $prior_version..."
+                "$prior_switch" --uninstall || \
+                    echo "  ⚠ WARNING: previous version uninstall returned non-zero; continuing" >&2
+            else
+                echo "  ⚠ WARNING: previous version switch-version not found at $prior_switch" >&2
+            fi
+        fi
+
+        # Record current as previous before switching
+        if [[ -n "$current" ]]; then
+            ln -sfn "$current" "$VERSION_BASE/previous"
+        fi
+
+        # Switch current symlink
+        ln -sfn "$target" "$VERSION_BASE/current"
+
+        # Re-execute target version's switch-version so its own code performs
+        # the wiring.  The re-executed instance sees current == target and
+        # proceeds straight to install_wiring().
+        local this_switch new_switch
+        this_switch=$(realpath "$0" 2>/dev/null || echo "$0")
+        new_switch=$(realpath "$VERSION_BASE/current/bin/switch-version" 2>/dev/null || \
+            echo "$VERSION_BASE/current/bin/switch-version")
+        if [[ "$this_switch" != "$new_switch" ]]; then
+            exec "$VERSION_BASE/current/bin/switch-version" "$version"
+        fi
+    fi
+
+    # Current already equals target — install wiring for this version.
+    install_wiring
+
+    # Stop documentation server so it restarts from the current version
+    local _docserver_pid=""
+    if command -v lsof &>/dev/null; then
+        _docserver_pid=$(lsof -t -i :8000 2>/dev/null | head -1)
+    fi
+    if [[ -z "$_docserver_pid" ]] && command -v fuser &>/dev/null; then
+        _docserver_pid=$(fuser 8000/tcp 2>/dev/null | tr -d ' ' | head -1)
+    fi
+    if [[ -z "$_docserver_pid" ]]; then
+        _docserver_pid=$(pgrep -f 'mkdocs serve' | head -1)
+    fi
+    if [[ -z "$_docserver_pid" ]]; then
+        _docserver_pid=$(pgrep -f 'http.server 8000' | head -1)
+    fi
+    if [[ -n "$_docserver_pid" ]]; then
+        kill "$_docserver_pid" 2>/dev/null || true
+        echo "  Stopped documentation server (will restart on next access)"
+    fi
+
+    echo "=== switch-version ==="
+    echo "  Active: $version"
+    [[ -n "$current" && "$current" != "$target" ]] && echo "  Previous: $(basename "$current")"
+    echo ""
+    echo "  New invocations will use $version immediately."
+    echo "  Already-running scripts are unaffected."
+
+    if [[ $old_set_e -eq 0 ]]; then
+        set +e
+    fi
+}
+
+# Only run the main flow when executed directly; sourcing (e.g., in tests)
+# loads the functions without side effects.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    switch_version_main "$@"
+    exit $?
+fi

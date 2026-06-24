@@ -1,0 +1,40 @@
+#!/usr/bin/bash
+# Show the biggest or smallest datasets in the pool or dataset given in $1
+
+pool=$(echo $1 | awk -F'/' '{print $1}')
+if [[ $2 != '' ]]; then
+    sequence="$2"
+    if   [[ "$sequence" = 'largest' ]];  then true
+    elif [[ "$sequence" = 'smallest' ]]; then true
+    else echo 'Sort option ($2) must be either \"largest\" or \"smallest\".'
+    fi
+else sequence='largest'
+fi
+if [[ $3 != '' ]]; then
+    numberofdatasets=$3
+else
+    numberofdatasets=5
+fi
+echo "Sequence=$sequence."
+echo "Number of datasets=$numberofdatasets."
+
+zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health "$pool"
+zfs get -o name,property,value recordsize "$1"
+
+sortbys=('used' 'usedds' 'usedsnap' 'written' 'quota' 'refer' 'refquota' 'reservation')
+for sortby in ${sortbys[@]}; do
+    echo -e "\nSorted by:" $sequence $sortby
+    sortby="$sortoption $sortby"
+    if [[ $sequence = 'largest' ]]; then
+        zfs list -rt all -S $sortby \
+            -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$1" \
+        | head -n5
+    elif [[ $sequence = 'smallest' ]]; then
+        zfs list -rt all -s $sortby \
+            -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$1" \
+        | head -n$numberofdatasets
+    else
+        false
+    fi
+done
+

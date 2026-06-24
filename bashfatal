@@ -1,0 +1,7 @@
+#!/usr/bin/bash
+# Source this file for fatal errors that must terminate regardless of context.
+# Unlike bashreturn, this always uses exit because fatal errors should terminate
+# the entire process - if the caller was sourced from somewhere else, that parent
+# script probably can't recover from a fatal child error anyway.
+# $1    Exit code (Default = 8).
+exit "${1:-8}"

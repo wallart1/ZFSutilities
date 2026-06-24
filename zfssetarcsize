@@ -1,0 +1,12 @@
+#!/usr/bin/bash
+set -x
+# Set the max size of the ZFS ARC.
+
+GiB=45
+
+# On the fly
+echo "$(($GiB * 1024 * 1024 * 1024))" | sudo tee /sys/module/zfs/parameters/zfs_arc_maxS # On the fly
+
+# Permanent
+echo "options zfs zfs_arc_max=$(($GiB * 1024 * 1024 * 1024))" | sudo tee /etc/modprobe.d/zfs.conf
+sudo update-initramfs -u

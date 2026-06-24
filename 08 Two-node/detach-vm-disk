@@ -1,0 +1,169 @@
+#!/bin/bash
+# detach-vm-disk <vmid> <disk-key>
+# Removes a disk from a Proxmox VM config and tears down iSCSI infrastructure
+# (two-node), leaving the underlying zvol intact.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/detach-vm-disk on BOTH hosts
+# Run from:   the compute host (or storage host — delegates via SSH)
+
+source /usr/local/lib/node-lib.sh
+
+MY_HOST=$(hostname -s)
+PVE_CONF_DIR="/etc/pve/qemu-server"
+
+usage() {
+    echo "Usage: detach-vm-disk <vmid> <disk-key>"
+    echo ""
+    echo "  vmid      Proxmox VM ID"
+    echo "  disk-key  Disk key to detach (e.g. scsi0, scsi1, efidisk0)"
+    echo ""
+    echo "WARNING: The VM must be stopped before detaching a disk."
+    echo ""
+    echo "Example: detach-vm-disk 300 scsi1"
+    exit 1
+}
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+# --- Argument validation ---
+[[ $# -eq 2 ]] || usage
+
+VMID="$1"
+DISKKEY="$2"
+
+[[ "$VMID" =~ ^[0-9]+$ ]] || die "vmid must be a number, got: $VMID"
+[[ "$DISKKEY" =~ ^[a-z]+[0-9]+$ ]] || die "disk-key must be like scsi0 or ide1, got: $DISKKEY"
+
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+
+# --- Delegate to compute host if run on storage node (two-node only) ---
+if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    exec ssh root@"$COMPUTE_HOST" \
+        "/usr/local/lib/zfsutilities/bin/detach-vm-disk '$VMID' '$DISKKEY'"
+fi
+
+# === Running on the compute host ===
+
+conf="$PVE_CONF_DIR/${VMID}.conf"
+[[ -f "$conf" ]] || die "VM config not found: $conf"
+
+# --- VM state check ---
+status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+if [[ "${status:-unknown}" != "stopped" ]]; then
+    echo "⚠ VM $VMID is currently $status"
+    echo "  Detaching a disk from a running VM is allowed but may cause I/O errors"
+    echo "  if the guest OS is actively using the disk."
+    echo ""
+    read -rp "  Continue anyway? (y/N): " proceed
+    [[ "$proceed" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+    echo ""
+fi
+
+# --- Parse disk line ---
+disk_line=$(grep "^${DISKKEY}:" "$conf" 2>/dev/null || true)
+[[ -n "$disk_line" ]] || die "Disk key $DISKKEY not found in VM $VMID config"
+
+echo "=== detach-vm-disk ==="
+echo "  VM:        $VMID"
+echo "  Disk key:  $DISKKEY"
+echo "  Config:    $conf"
+
+# --- Two-node: parse iSCSI info from disk line ---
+BACKSTORE_NAME=""
+LUN_NUM=""
+TARGET_SHORT=""
+POOL=""
+
+if is_two_node; then
+    # Build target regex
+    declare -A TARGET_POOL=()
+    TARGET_RE=""
+    for _pool in "${!POOL_TARGET[@]}"; do
+        TARGET_POOL["${POOL_TARGET[$_pool]}"]="$_pool"
+    done
+    TARGET_RE="$(IFS='|'; echo "${POOL_TARGET[*]}")"
+
+    # Regex: ^${DISKKEY}:.*ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+)
+    # Purpose: Extract iSCSI target and LUN from a disk line so the corresponding backstore
+    #          can be removed. ${TARGET_RE} is a pipe-joined list of valid target short names.
+    # Group 1: target short name  e.g. "threeamigos"
+    # Group 2: LUN number         e.g. "0"
+    if [[ "$disk_line" =~ ^${DISKKEY}:.*ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+) ]]; then
+        TARGET_SHORT="${BASH_REMATCH[1]}"
+        LUN_NUM="${BASH_REMATCH[2]}"
+        POOL="${TARGET_POOL[$TARGET_SHORT]}"
+        BACKSTORE_NAME="vm-${VMID}-disk-${DISKKEY//[^0-9]/}"
+        # efidisk is always disk 0 in naming convention
+        if [[ "$DISKKEY" == efidisk* ]]; then
+            BACKSTORE_NAME="vm-${VMID}-disk-0"
+        fi
+    else
+        echo "⚠ Disk line does not look like iSCSI — skipping iSCSI teardown"
+    fi
+fi
+
+# --- Show what will be done ---
+echo ""
+echo "This will detach $DISKKEY from VM $VMID:"
+echo "  $disk_line"
+if is_two_node && [[ -n "$BACKSTORE_NAME" ]]; then
+    echo ""
+    echo "  Two-node: iSCSI LUN and backstore will also be removed:"
+    echo "    LUN:       $LUN_NUM"
+    echo "    Backstore: $BACKSTORE_NAME"
+fi
+echo ""
+echo "  The underlying zvol will be left intact."
+echo ""
+read -rp "Proceed? (y/N): " confirm
+[[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+echo ""
+
+# --- Remove from Proxmox config ---
+sed -i "/^${DISKKEY}:/d" "$conf"
+echo "✓ Removed $DISKKEY from VM $VMID config"
+
+# --- Two-node: tear down iSCSI ---
+if is_two_node && [[ -n "$BACKSTORE_NAME" ]]; then
+    TARGET="${IQN_PREFIX}:${TARGET_SHORT}"
+
+    # Remove LUN from target
+    if [[ -n "$LUN_NUM" ]]; then
+        echo "Removing LUN $LUN_NUM from target..."
+        targetcli "/iscsi/${TARGET}/tpg1/luns" delete "lun${LUN_NUM}" 2>/dev/null || \
+            echo "⚠ Could not remove LUN (may already be removed)"
+    fi
+
+    # Remove backstore
+    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${BACKSTORE_NAME} "; then
+        echo "Removing backstore $BACKSTORE_NAME..."
+        targetcli /backstores/block delete "$BACKSTORE_NAME"
+        echo "✓ Backstore removed"
+    else
+        echo "⚠ Backstore not found — skipping"
+    fi
+
+    # Save config
+    echo "Saving iSCSI configuration..."
+    /usr/local/lib/zfsutilities/bin/safe-iscsi-save
+    echo "✓ Configuration saved"
+
+    # Rescan
+    echo "Triggering iSCSI rescan on $COMPUTE_HOST..."
+    if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
+        "/usr/local/lib/zfsutilities/bin/rescan-storage" 2>&1; then
+        echo "✓ Rescan triggered"
+    else
+        echo "⚠ Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' manually"
+    fi
+fi
+
+echo ""
+echo "=== Done ==="
+echo "  Detached: $DISKKEY from VM $VMID"
+if is_two_node && [[ -n "$POOL" ]]; then
+    echo "  Zvol left intact: $POOL/proxmox/$BACKSTORE_NAME"
+fi

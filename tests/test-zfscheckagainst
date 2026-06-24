@@ -1,0 +1,445 @@
+#!/usr/bin/bash
+# test-zfscheckagainst — Verify <offsite> placeholder resolution.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+mock_mydir=$(mktemp -d)
+mydir="$mock_mydir"
+
+# Copy real helpers that zfscheckagainst sources.
+cp "$old_mydir/zfsremoveleadingqualifiers" "$mock_mydir/zfsremoveleadingqualifiers"
+cp "$old_mydir/bashdebug" "$mock_mydir/bashdebug"
+
+# Stub zfsconfig so we control offsite candidates and checkagainst entries.
+cat > "$mock_mydir/zfsconfig" << 'EOF'
+# Test-controlled state variables (set by the test before checkagainst runs):
+#   _zfscheckagainst_offsite_candidates
+#   _zfscheckagainst_checkagainst_lines
+zfsconfig_get_offsite_candidates() {
+    printf '%s\n' "${_zfscheckagainst_offsite_candidates[@]}"
+}
+zfsconfig_get_checkagainst() {
+    printf '%s\n' "${_zfscheckagainst_checkagainst_lines[@]}"
+}
+EOF
+
+# Stub zfscommsnap so we can control getcommonsnap return codes.
+cat > "$mock_mydir/zfscommsnap" << 'EOF'
+# Test-controlled state variables (set by the test before checkagainst runs):
+#   _getcommonsnap_rc        default rc when no sequence is active
+#   _getcommonsnap_sequence  array of rcs to return on successive calls
+#   _getcommonsnap_call      index into _getcommonsnap_sequence
+getcommonsnap() {
+    if [[ ${#_getcommonsnap_sequence[@]} -gt 0 ]]; then
+        local rc=${_getcommonsnap_sequence[$_getcommonsnap_call]}
+        ((_getcommonsnap_call++))
+        return "$rc"
+    fi
+    return "${_getcommonsnap_rc:-32}"
+}
+EOF
+
+# Load the module under test.
+source "$old_mydir/zfscheckagainst"
+
+# ------------------------------------------------------------------------------
+# Mock zfs/zpool commands.
+# ------------------------------------------------------------------------------
+
+# State variables controlled by tests.
+_zfscheckagainst_online_pools=()
+_zfscheckagainst_existing_datasets=()
+_zfscheckagainst_snap_exists=0
+_zfscheckagainst_guid="guid-candidate"
+_zfscheckagainst_dest_guids=""
+_zfscheckagainst_holds=""
+_zfscheckagainst_source_snaps=""
+
+reset_mocks() {
+    _zfscheckagainst_online_pools=()
+    _zfscheckagainst_existing_datasets=()
+    _zfscheckagainst_snap_exists=0
+    _zfscheckagainst_guid="guid-candidate"
+    _zfscheckagainst_dest_guids=""
+    _zfscheckagainst_holds=""
+    _zfscheckagainst_source_snaps=""
+    _getcommonsnap_rc=32
+    _getcommonsnap_call=0
+    _getcommonsnap_sequence=()
+    _zfscheckagainst_offsite_candidates=()
+    _zfscheckagainst_checkagainst_lines=("poolA/data 0 <offsite> offsite")
+}
+
+set_online_pools() {
+    _zfscheckagainst_online_pools=("$@")
+}
+
+set_existing_datasets() {
+    _zfscheckagainst_existing_datasets=("$@")
+}
+
+zpool() {
+    if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" ]]; then
+        local pool
+        for pool in "${_zfscheckagainst_online_pools[@]}"; do
+            if [[ "$pool" == "$4" ]]; then
+                return 0
+            fi
+        done
+        return 1
+    fi
+    command zpool "$@"
+}
+
+zfs() {
+    # Snapshot existence check: "zfs list -t snapshot <snap>" only.
+    if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" && -n "$4" && "$4" != -* ]]; then
+        return "$_zfscheckagainst_snap_exists"
+    fi
+    # Destination GUID list: "zfs list -t snapshot -H -o guid -d1 <dataset>".
+    if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" && "$4" == "-H" && "$5" == "-o" && "$6" == "guid" && "$7" == "-d1" ]]; then
+        echo "$_zfscheckagainst_dest_guids"
+        return 0
+    fi
+    if [[ "$1" == "list" && "$2" == "-rt" && "$3" == "filesystem,volume" ]]; then
+        local ds
+        for ds in "${_zfscheckagainst_existing_datasets[@]}"; do
+            if [[ "$ds" == "$4" ]]; then
+                return 0
+            fi
+        done
+        return 1
+    fi
+    if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" && "$5" == "guid" ]]; then
+        echo "$_zfscheckagainst_guid"
+        return 0
+    fi
+    if [[ "$1" == "holds" && "$2" == "-H" && -n "$3" ]]; then
+        local _hold_snap="$3" _hold_line
+        while IFS= read -r _hold_line; do
+            [[ "$_hold_line" == "$_hold_snap"$'\t'* ]] && echo "$_hold_line"
+        done <<< "$_zfscheckagainst_holds"
+        return 0
+    fi
+    if [[ "$1" == "list" && "$2" == "-Ht" && "$3" == "snapshot" && "$4" == "-o" && "$5" == "name" && "$6" == "-s" && "$7" == "creation" ]]; then
+        echo "$_zfscheckagainst_source_snaps"
+        return 0
+    fi
+    command zfs "$@"
+}
+
+export -f zpool zfs
+
+# ------------------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------------------
+
+test_offsite_placeholder_one_online_candidate_found() {
+    test_start "<offsite> resolves to one online candidate and finds counterpart"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb)
+    set_online_pools z22tb
+    set_existing_datasets z22tb/poolA/data
+
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_offsite_placeholder_multiple_candidates_second_verifies() {
+    test_start "<offsite> checks all online candidates; second verifies"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    set_online_pools z22tb z40tb
+    set_existing_datasets z22tb/poolA/data z40tb/poolA/data
+    # First candidate returns 64 (no other common snap); second returns 32.
+    _getcommonsnap_sequence=(64 32)
+    _getcommonsnap_call=0
+
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_offsite_placeholder_last_remaining_common() {
+    test_start "<offsite> online candidate shows last remaining common snap"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb)
+    set_online_pools z22tb
+    set_existing_datasets z22tb/poolA/data
+    _getcommonsnap_rc=64
+    _zfscheckagainst_guid="guid-common"
+    _zfscheckagainst_dest_guids="guid-common"
+
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 7 "$rc"
+}
+
+test_offsite_placeholder_no_counterpart_at_all() {
+    test_start "<offsite> online candidate has no counterpart at all"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb)
+    set_online_pools z22tb
+    set_existing_datasets z22tb/poolA/data
+    _getcommonsnap_rc=64
+    _zfscheckagainst_guid="guid-candidate"
+    _zfscheckagainst_dest_guids="guid-other"
+
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_offsite_placeholder_no_candidates_configured() {
+    test_start "<offsite> with no offsite candidates configured blocks"
+    reset_mocks
+    # No candidates, no online pools.
+    set_online_pools
+
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 6 "$rc"
+}
+
+test_offsite_placeholder_offline_hold_verified() {
+    test_start "<offsite> offline candidates verified by hold tag"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    set_online_pools
+    _zfscheckagainst_source_snaps=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\npoolA/data@offsite-2025-01-02T10:00-05:00-s'
+    # Hold on the OTHER snapshot for z40tb.
+    _zfscheckagainst_holds=$'poolA/data@offsite-2025-01-02T10:00-05:00-s\toffsite-z40tb\t2025-01-02T10:00'
+
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_offsite_placeholder_offline_no_hold_blocks() {
+    test_start "<offsite> offline candidates without hold blocks"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    set_online_pools
+    _zfscheckagainst_source_snaps=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\npoolA/data@offsite-2025-01-02T10:00-05:00-s'
+    _zfscheckagainst_holds=""
+
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 6 "$rc"
+}
+
+test_offsite_placeholder_offline_non_offsite_label_blocks() {
+    test_start "<offsite> offline candidates with non-offsite label blocks"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    set_online_pools
+    _zfscheckagainst_checkagainst_lines=("poolA/data 0 <offsite> dailybackup")
+
+    local rc=0
+    checkagainst "poolA/data@dailybackup-2025-01-01T10:00-05:00-d" >/dev/null 2>&1 || rc=$?
+    assert_rc 6 "$rc"
+}
+
+test_offsite_placeholder_with_suffix() {
+    test_start "<offsite>/suffix expands correctly"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    set_online_pools z22tb z40tb
+    set_existing_datasets z22tb/archive/poolA/data z40tb/archive/poolA/data
+    _zfscheckagainst_checkagainst_lines=("poolA/data 0 <offsite>/archive offsite")
+
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+# ------------------------------------------------------------------------------
+# Additional coverage tests
+# ------------------------------------------------------------------------------
+
+test_snapshot_not_found() {
+    test_start "Non-existent snapshot is fatal"
+    reset_mocks
+    _zfscheckagainst_snap_exists=1
+    local rc=0
+    (checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s") >/dev/null 2>&1 || rc=$?
+    assert_rc 8 "$rc"
+}
+
+test_literal_counterpart_found() {
+    test_start "Literal counterpart path finds a common snapshot"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=("poolA/data 0 fivebays offsite")
+    set_online_pools fivebays
+    set_existing_datasets fivebays/poolA/data
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_no_eligible_fss_entry() {
+    test_start "No matching fss entry returns 5"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=("poolB/data 0 <offsite> offsite")
+    set_online_pools z22tb
+    set_existing_datasets z22tb/poolA/data
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 5 "$rc"
+}
+
+test_label_mismatch() {
+    test_start "Label mismatch falls through to no eligible entry"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=("poolA/data 0 <offsite> dailybackup")
+    set_online_pools z22tb
+    set_existing_datasets z22tb/poolA/data
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 5 "$rc"
+}
+
+test_null_prepend() {
+    test_start "Counterpart '-' leaves destination unchanged"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=("poolA/data 0 - offsite")
+    set_online_pools poolA
+    set_existing_datasets poolA/data
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_nonzero_quals() {
+    test_start "Non-zero quals strip leading path segments"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=("poolA/poolB/data 2 z22tb offsite")
+    set_online_pools z22tb
+    set_existing_datasets z22tb/data
+    local rc=0
+    checkagainst "poolA/poolB/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_getcommonsnap_rc_zero() {
+    test_start "getcommonsnap rc 0 is treated as counterpart found"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb)
+    set_online_pools z22tb
+    set_existing_datasets z22tb/poolA/data
+    _getcommonsnap_rc=0
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_unexpected_getcommonsnap_rc() {
+    test_start "Unexpected getcommonsnap rc is fatal"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb)
+    set_online_pools z22tb
+    set_existing_datasets z22tb/poolA/data
+    _getcommonsnap_rc=99
+    local rc=0
+    (checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s") >/dev/null 2>&1 || rc=$?
+    assert_rc 8 "$rc"
+}
+
+test_missing_destination_dataset_continue() {
+    test_start "Missing destination dataset continues to next candidate"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    set_online_pools z22tb z40tb
+    set_existing_datasets z40tb/poolA/data
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_legacy_conf_fallback() {
+    test_start "Empty JSON checkagainst falls back to legacy conf"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=()
+    cat > "$mock_mydir/zfscheckagainst.conf" <<'EOF'
+# Legacy fallback config
+poolA/data 0 fivebays offsite
+EOF
+    set_online_pools fivebays
+    set_existing_datasets fivebays/poolA/data
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    rm -f "$mock_mydir/zfscheckagainst.conf"
+    assert_rc 0 "$rc"
+}
+
+test_offline_hold_excludes_candidate() {
+    test_start "Offline hold verification excludes the candidate snapshot"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb)
+    set_online_pools
+    _zfscheckagainst_source_snaps=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\npoolA/data@offsite-2025-01-02T10:00-05:00-s'
+    _zfscheckagainst_holds=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\toffsite-z22tb\t2025-01-01T10:00'
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 6 "$rc"
+}
+
+test_mixed_online_offline_candidates() {
+    test_start "Online candidate verifies even when another is offline"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    set_online_pools z40tb
+    set_existing_datasets z40tb/poolA/data
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_literal_counterpart_last_remaining() {
+    test_start "Literal counterpart can report last remaining common"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=("poolA/data 0 fivebays offsite")
+    set_online_pools fivebays
+    set_existing_datasets fivebays/poolA/data
+    _getcommonsnap_rc=64
+    _zfscheckagainst_guid="guid-common"
+    _zfscheckagainst_dest_guids="guid-common"
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 7 "$rc"
+}
+
+# ------------------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------------------
+
+test_snapshot_not_found
+test_literal_counterpart_found
+test_no_eligible_fss_entry
+test_label_mismatch
+test_null_prepend
+test_nonzero_quals
+test_getcommonsnap_rc_zero
+test_unexpected_getcommonsnap_rc
+test_missing_destination_dataset_continue
+test_legacy_conf_fallback
+test_offline_hold_excludes_candidate
+test_mixed_online_offline_candidates
+test_literal_counterpart_last_remaining
+test_offsite_placeholder_one_online_candidate_found
+test_offsite_placeholder_multiple_candidates_second_verifies
+test_offsite_placeholder_last_remaining_common
+test_offsite_placeholder_no_counterpart_at_all
+test_offsite_placeholder_no_candidates_configured
+test_offsite_placeholder_offline_hold_verified
+test_offsite_placeholder_offline_no_hold_blocks
+test_offsite_placeholder_offline_non_offsite_label_blocks
+test_offsite_placeholder_with_suffix
+
+rm -rf "$mock_mydir"
+
+test_summary
+teardown_test_env

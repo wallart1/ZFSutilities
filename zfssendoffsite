@@ -1,0 +1,151 @@
+#!/usr/bin/bash
+
+# Copy various backup datasets to a pool that is intended to be exported and taken offsite.
+# $1    Optional parameter overrides.
+#
+# The usual zfs-send-receive script is used, except that:
+# - ZFS holds are applied to the source and destination snapshots to prevent accidental removal.
+# - The snapshot name's label field is set to "offsite", and the bucket field is set to "s".
+# - Only the offsite snapshot is copied. Other intermediate snapshots are ignored.
+
+source ~/bashinit
+bashinit
+source $mydir/rootcheck
+rootcheck
+source $mydir/zfshold
+source $mydir/zfs-send-receive
+source $mydir/zfssnapbuild
+source $mydir/zfsoverrides
+source $mydir/zfsfindoffsitepool
+
+# ========================= Functions =========================
+
+function applyholds {
+    # Uses the $fsarray left behind by send-receive's buildfsarray call.
+    # This ensures holds are applied to exactly the datasets that were copied.
+    if [[ $applyholds = 'Y' ]]; then
+        local sourcefspool=${sourcefs%%/*}
+        local destfspool=${destfs%%/*}
+        log_msg "INFO: Applying holds to $sourcefspool and $destfspool snapshots."
+
+        local fs
+        for fs in "${fsarray[@]}"; do
+            # Construct the corresponding destination path
+            local destpath="$destfs/$fs"
+            zfshold "${label:1}-$destfspool" "$fs" "$nextsnap"
+            zfshold "${label:1}-$sourcefspool" "$destpath" "$nextsnap"
+        done
+    fi
+}
+
+# ========================== Global setup =====================
+autoproceed='Y'
+label='@offsite'
+nextsnap=$(zfssnapbuild $label)
+applyholds='Y'          # Put holds on the source and destination snapshots to prevent
+                        # accidental deletion.
+doincrementals='Y'      # "Y" = Attempt to do incremental copies. Fall back to full copies if
+                        # necessary.
+dointermediates='N'     # "N" = Send just the most recent snapshot.
+receive_F_option='F'    # Roll back changes on destination since most recent common snapshot.
+                        # This helps ensure a faithfull backup.
+
+# Find an online offsite pool.
+onlineoffsitepool=$(findoffsitepool)
+
+if [[ $onlineoffsitepool = '' ]]; then
+    log_msg "FATAL: No offsite pools are currently online." \
+        "\n\tLooked for: ${offsitepools[@]}." \
+        "\n\tFound: ${onlinepools[@]}."
+    exit 8
+else
+    log_msg "INFO: Will be sending to pool $onlineoffsitepool." \
+        "\n\tThe snapshot will be $nextsnap."
+    if [[ $autoproceed != 'Y' ]]; then
+        read -p 'Press enter to continue.'
+    fi
+fi
+
+step1='Y'   # Send the temp pool to the offsite pool.
+step2='Y'   # Send the threeamigos/proxmox subpool to fivebays
+step3='Y'   # Send the NVME1 pool to fivebays.
+step4='Y'   # Send the fivebays/threeamigos/proxmox and fivebays/NVME1/proxmox subpools to offsite
+            # pool.
+
+if [[ $1 != '' ]]; then overrides "$1"; fi
+
+nextsnap_save=$nextsnap # Save in case it gets clobbered.
+
+# ========================== Various copy jobs. ======================================
+
+# NOTE: The offsite snapshot must exist in all the pools in the backup chain. If
+#       the backup chain is [threeamigos --> fivebays --> <offsite>], the offsite snapshot must
+#       be in all three. Start with the first pool and copy the snapshot from each pool to
+#       the next pool. [threeamigos --> fivebays] then [fivebays --> <offsite>]
+
+# temp --- (1) ----------------------------------> <offsite>
+#                                                   A
+#                                                   |
+# threeamigos/proxmox -- (2) --> fivebays--- (4) ---'
+#                                 A
+#                                 |
+# NVME1 --- (3) ------------------'
+
+#   (1) Send the temp pool to the offsite pool.
+if [[ $step1 = 'Y' ]]; then
+    nextsnap=$nextsnap_save
+    sourcefs="temp"
+    destfs="$onlineoffsitepool"
+    includes=()
+    excludes=('temp/temp')  # This area is intended for work files and needn't be backed up.
+    log_msg "INFO: ***  Step 1: Sending $sourcefs to offsite $destfs  ***"
+    send-receive
+    if [[ $? -eq 0 ]]; then applyholds; fi
+fi
+
+#   (2) Send the threeamigos/proxmox subpool to fivebays
+if [[ $step2 = 'Y' ]]; then
+    nextsnap=$nextsnap_save
+    sourcefs="threeamigos"
+    destfs="fivebays"
+    includes=('proxmox')
+    excludes=()
+    log_msg "INFO: ***  Step 2: Sending $sourcefs to $destfs  ***"
+    send-receive
+    if [[ $? -eq 0 ]]; then applyholds; fi
+fi
+
+#   (3) Send the NVME1 pool to fivebays.
+if [[ $step3 = 'Y' ]]; then
+    nextsnap=$nextsnap_save
+    sourcefs="NVME1"
+    destfs='fivebays'
+    includes=()
+    excludes=()
+    log_msg "INFO: ***  Step 3: Sending $sourcefs to $destfs  ***"
+    send-receive
+    if [[ $? -eq 0 ]]; then applyholds; fi
+fi
+
+#   (4) Send the fivebays/threeamigos/proxmox and fivebays/NVME1/proxmox subpools to offsite pool.
+if [[ $step4 = 'Y' ]]; then
+    nextsnap=$nextsnap_save
+    sourcefs="fivebays"
+    destfs="$onlineoffsitepool"
+    includes=('threeamigos/proxmox' 'NVME1/proxmox')
+    excludes=()
+    log_msg "INFO: ***  Step 4: Sending $sourcefs to $destfs  ***"
+    send-receive
+    if [[ $? -eq 0 ]]; then applyholds; fi
+fi
+
+# Clean up the saved nextsnap file would normally be done at this point,  however ...
+# The $snapfile will be retained because this job is commonly rerun.
+# If you want a new $nextsnap, decline reuse of the prior one when prompted at run-time.
+# rm -f /tmp/zfsnextsnap_zfssendoffsite
+
+# To prune old offsite backups, run the following command:
+# sudo zfscleanup '<poolname>' '' 'offsite'
+
+echo "***  zfssendoffsite completed.  ***"
+

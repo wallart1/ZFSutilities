@@ -1,0 +1,96 @@
+#!/usr/bin/bash
+
+# Copy a dataset subtree from a backup copy.
+# In order to get all the snapshots in the backup,
+# we must do the restore in two steps. First, a
+# full copy is performed using the oldest available
+# snapshot. Then an incremental copy is performed
+# to get the remaining snapshots.
+
+# NOTE: This script (zfsfullcopy) is designed to be called by other scripts. If you want a more
+#       flexible version that you can run yourself, see the zfsrestore script.
+
+# $restorefs                    (Required.) The dataset to be restored. May be not fully-qualified.
+# $sourcefsremovequalifiers     (Optional.) Number of leading qualifiers to remove from $restorefs.
+#                                           Default: "0".
+# $destfs                       (Required.) The prefix of the destination dataset.
+# $nextsnap                     (Optional.) Name of snapshot. If specified, will be used as name of
+#                                           the newest snapshot to be copied.
+#                                           Default: Newest available snapshot.
+
+# $1                            (Optional.) Overrides for Part 1.
+
+
+function zfsfullcopy {
+    source ~/bashinit
+    bashinit
+    source $mydir/zfs-send-receive
+    source $mydir/zfsoverrides
+
+    local autoproceed='Y'
+    if [[ $1 != '' ]]; then local overrides=$1; else local overrides=''; fi
+
+    # ========================== Global arguments ===============================
+    if [[ $nextsnap = '' ]]; then local nextsnap=$(zfssnapbuild); fi
+    local depth=''
+    local label=''
+    local includes=()
+    local excludes=()
+    local nextsnapsave=$nextsnap
+    local dopart1='Y'
+    local dopart2='Y'
+
+    if [[ $dopart1 = 'Y' ]]; then
+        # Part 1: do a full copy using the oldest available snapshot.
+        log_msg "INFO: Part one: Full copy using the oldest available snapshot."
+        local startwith=''              # Substring of fs name. All preceeding fs's will be skipped.
+        local force='Y'                 # Do full copy even if common snapshots are found.
+        local releaseholds='Y'          # Allow all of destfs to be deleted, unconditionally, before
+                                        # restoring.
+        local doincrementals='N'        # 'N' means do full copies.
+        local dointermediates='N'       # Don't try to do any other shapshots.
+        local nextsnap=$nextsnapsave    # Just in case it gets clobbered.
+        local commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
+
+        if [[ overrides != '' ]]; then overrides "$overrides"; fi
+        
+        if [[ $restoresourcefs='' ]]; then              # Dataset to be source of restore.
+            log_msg 'FATAL: $restoresourcefs was not specified.'
+            source $mydir/bashdie 8
+        fi
+        if [[ $sourcefsremovequalifiers='' ]]; then
+            local $sourcefsremovequalifiers='0'
+        fi                          # '0' = Keep the full sourcefs name in the destfs name.
+        if [[ $destfs='' ]]; then   # Add the dest pool name and '/' at the beginning of the
+                                    # sourcefs name, giving the destination filesystem.
+            log_msg 'FATAL: $destfs was not specified.'
+            source $mydir/bashdie 8
+        fi
+
+        send-receive $restoresourcefs
+    fi
+
+    if [[ $dopart2 = 'Y' ]]; then
+        # Part 2: do the rest of the snapshots incrementally.
+        log_msg "INFO: Part two: Copy the rest of the snapshots incrementally."
+        local startwith=''
+        local force='N'
+        local releaseholds='N'
+        local doincrementals='Y'              # Do incremental rather than full copies.
+        local dointermediates='Y'             # Do all the remaining snapshots.
+        local nextsnap=$nextsnapsave          # Just in case it gets clobbered.
+        local commsnap_mostrecent=''          # Finish by copying the remaining snapshots.
+
+        if [[ $autoproceed != 'Y' ]]; then
+            while :; do
+                read -p msg_prefix 'Press enter to continue with part two. Or enter overrides.: ' \
+                    overrides
+                if [[ $overrides != '' ]]; then overrides "$overrides"
+                else break
+                fi
+            done
+        fi
+
+        send-receive $restoresourcefs
+    fi
+}    

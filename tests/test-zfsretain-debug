@@ -1,0 +1,12 @@
+#!/bin/bash
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+mock_mydir=$(mktemp -d)
+mydir="$mock_mydir"
+
+cat > "$mock_mydir/zfsconfig" << 'EOF'
+zfsconfig_get_retention() {
+    mock_retention_policy
+}

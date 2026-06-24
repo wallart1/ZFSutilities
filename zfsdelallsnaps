@@ -1,0 +1,104 @@
+#!/usr/bin/bash
+# Delete all snapshots in a given ZFS filesystem
+# $1    Filesystem.
+# $2    A string that, if specified, is used to select snapshots.
+# $3    "releaseholds" means to release all holds on snapshots that have any.
+# $4    "recursive" means to process the entire subtree, not just the specified dataset.
+#       Causes display of snapshots to be deleted and requests approval, just to be safer.
+# $5    Optional overrides.
+# NOTE: For same-day deletions, this script passes minage=0 to delsnap, bypassing minimum age
+#       protection since delallsnaps is an explicit "delete everything" operation with user
+#       confirmation.
+
+source ~/bashinit
+
+function delallsnaps {
+
+    bashinit
+    source $mydir/rootcheck
+    rootcheck
+    source $mydir/zfsdelsnap
+    source $mydir/zfsoverrides
+    
+    local snap
+    local save_autoproceed=$autoproceed
+
+    if [[ $1 = '' ]]; then 
+        echo "$0: A dataset must be specified."
+        exit 8
+    else
+        zfsdelallsnaps_fs=$1
+    fi
+
+    unset zfsdelsnapsfind
+    if [[ $2 != '' ]]; then zfsdelsnapsfind="$2"; fi
+
+    if [[ $releaseholds = '' ]]; then releaseholds='N'; fi
+    if [[ $3 = 'releaseholds' ]]; then 
+        releaseholds='Y'
+        release='releaseholds'
+    else
+        releaseholds='N'
+        release=''
+    fi
+    if [[ $4 = 'recursive' ]]; then 
+        recurse='-r'
+        autoproceed='N'
+    fi
+    
+    if [[ "$5" != '' ]]; then overrides "$5"; fi
+
+    readarray -t snaparray < <(zfs list $recurse -Ho name -t snapshot "$zfsdelallsnaps_fs" \
+        2> /dev/null)
+
+    if [[ ${#snaparray[@]} -lt 1 ]]; then        # There are no snapshots
+        if calledbybash; then
+            log_msg "INFO: There are no snapshots of $zfsdelallsnaps_fs to delete."
+        fi
+        autoproceed=$save_autoproceed
+        return 0
+    else
+        if [[ $zfsdelsnapsfind != "" ]]; then
+            for ((i=0; i<${#snaparray[@]}; i++)); do
+                if [[ ${snaparray[i]} != *"$zfsdelsnapsfind"* ]]; then # If search string is not found
+                    snaparray=("${snaparray[@]:0:$i}" "${snaparray[@]:$((i+1))}")  # delete the item
+                    ((i--))     # Adjust i so that it points to the item before the deleted item
+                fi
+            done
+        fi
+        if [[ ${#snaparray[@]} -lt 1 ]]; then
+            if calledbybash; then
+               log_msg "INFO: There are no snapshots of $zfsdelallsnaps_fs with string" \
+                "$zfsdelsnapsfind."
+            fi
+            autoproceed=$save_autoproceed
+            return 0
+        else
+            log_msg "INFO: About to delete the following ${#snaparray[@]} snapshots from" \
+                "$zfsdelallsnaps_fs." \
+                "\nThis will disregard all holds, retaining of incremental backup ability and snapshot age."
+            local now=$(date +%s)
+            for snap in "${snaparray[@]}"; do
+                local snap_creation=$(zfs get -Hp -o value creation "$snap")
+                local age_days=$(( (now - snap_creation) / 86400 ))
+                printf "%-60s  (%d days old)\n" "$snap" "$age_days"
+            done
+            if [[ $autoproceed != "Y" ]]; then
+                read -p "Press enter to continue."
+            fi
+            local _delallsnaps_failed=0
+            for snap in "${snaparray[@]}"; do
+                if ! delsnap "$snap" 0 "$release" 'nocheckagainst'; then
+                    _delallsnaps_failed=1
+                fi
+            done
+            if [[ $_delallsnaps_failed -ne 0 ]]; then
+                autoproceed=$save_autoproceed
+                return 1
+            fi
+        fi
+    fi
+    autoproceed=$save_autoproceed
+    return 0
+}
+if calledbybash; then delallsnaps "$1" "$2" "$3" "$4" "$5"; fi

@@ -1,0 +1,25 @@
+#!/usr/bin/bash
+source ~/bashinit
+bashinit
+source $mydir/rootcheck
+rootcheck
+
+# Display the real ashift value
+# $1  The Linux partition ID. E.g., /dev/sdd1
+
+# Valid ashift values
+# ashift blocksize
+# ------ ---------
+# 9      512
+# 10     1024
+# 11     2048
+# 12     4096
+# 13     8192
+# 14     16384
+# 15     32768
+# 16     65536
+
+ashift=$(zdb -l $1 | grep ashift | awk -F' ' '{print $2}')
+ashiftbytes=$((2 ** $ashift))
+log_msg "INFO: The ashift value for $1 is $ashift, which is $ashiftbytes bytes per zpool block."
+

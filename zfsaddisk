@@ -1,0 +1,16 @@
+#!/usr/bin/bash
+source ~/bashinit
+
+# Add a virtual disk to a VM.
+# This works around a problem in the Proxmox GUI where it assigns the wrong disk number
+# in some situations.
+
+# $1    Numeric Proxmox VM ID.
+# $2    Numeric disk number of the new disk. Make it higher than any existing disk in the VM.
+# $3    Name of the Proxmox storage where the new disk will reside.
+# $4    Size of the new disk in GiB.
+
+log_msg "INFO: Command to be issued: qm set $1 --scsi$2 $3:$4"
+read -p 'Press enter to continue.'
+
+qm set $1 --scsi$2 $3:$4

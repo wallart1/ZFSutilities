@@ -1,0 +1,125 @@
+#!/bin/bash
+# restart-iscsi-services
+# Restart iSCSI target services after ZFS keys are loaded.
+#
+# Does systemctl stop/start. The boot-config.conf drop-in causes ExecStart to
+# restore from saveconfig-boot.json (encrypted backstores excluded). Then
+# ExecStartPost runs iscsi-add-encrypted-luns which adds them back if keys
+# are loaded. This script then reports the final status.
+#
+# Reads encrypted zvol list from /etc/iscsi-encrypted-luns.conf (plain text, one per line).
+# Format: backstore_name:device_path:target_short_name
+#
+# Install to: /usr/local/lib/zfsutilities/bin/restart-iscsi-services on the storage host
+
+source /usr/local/lib/node-lib.sh
+
+CONF="/etc/iscsi-encrypted-luns.conf"
+
+# ------------------------------------------------------------------
+# Safety check: warn if any VMs are running before tearing down iSCSI
+# ------------------------------------------------------------------
+check_running_vms() {
+    is_single_node && return 0
+
+    local backstores
+    backstores=$(targetcli /backstores/block ls 2>/dev/null)
+    [[ -z "$backstores" ]] && return 0
+
+    local vmids=""
+
+    while IFS= read -r TARGET; do
+        [[ -z "$TARGET" ]] && continue
+        while IFS= read -r line; do
+            local BSNAME
+            BSNAME=$(echo "$line" | grep -oP 'block/\K[^\s/]+')
+            [[ -z "$BSNAME" ]] && continue
+
+            local ZVOL
+            ZVOL=$(echo "$backstores" | grep " ${BSNAME} " | grep -oP '/dev/zvol/\K[^ )]+')
+            [[ -z "$ZVOL" ]] && continue
+
+            local VMID
+            VMID=$(echo "$ZVOL" | grep -oP '/vm-\K[0-9]+(?=-disk-)')
+            [[ -z "$VMID" ]] && continue
+
+            if [[ -z "$vmids" ]]; then
+                vmids="$VMID"
+            elif [[ " $vmids " != *" $VMID "* ]]; then
+                vmids="$vmids $VMID"
+            fi
+        done < <(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null)
+    done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+')
+
+    [[ -z "$vmids" ]] && return 0
+
+    local running_vms=()
+    for VMID in $vmids; do
+        local status
+        status=$(ssh -o ConnectTimeout=5 -o BatchMode=yes \
+            root@"$COMPUTE_HOST" "qm status '$VMID' 2>/dev/null | awk '{print \$2}'" \
+            2>/dev/null || true)
+        if [[ "$status" == "running" ]]; then
+            running_vms+=("$VMID")
+        fi
+    done
+
+    if [[ ${#running_vms[@]} -gt 0 ]]; then
+        echo ""
+        echo "⚠ ERROR: The following VMs are currently running on $COMPUTE_HOST:"
+        for vm in "${running_vms[@]}"; do
+            echo "    VM $vm"
+        done
+        echo ""
+        echo "Restarting iSCSI will disconnect their disks and cause I/O errors."
+        echo "Stop the VMs first, then re-run this script."
+        exit 1
+    fi
+}
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+echo "=== Restarting iSCSI Target Services ==="
+
+check_running_vms
+
+# Stop the iSCSI target service
+echo "Stopping rtslib-fb-targetctl..."
+systemctl stop rtslib-fb-targetctl
+
+# Start the iSCSI target service
+# ExecStart restores boot config; ExecStartPost adds encrypted LUNs if available
+echo "Starting rtslib-fb-targetctl..."
+systemctl start rtslib-fb-targetctl
+
+# Show encrypted LUN status
+echo ""
+echo "Encrypted LUN status:"
+if [[ -f "$CONF" ]]; then
+    while IFS=: read -r name device target; do
+        [[ -z "$name" || "$name" == \#* ]] && continue
+        if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
+            echo "  ✓ $name configured"
+        elif [[ ! -e "$device" ]]; then
+            echo "  ⚠ $name — device not available (keys not loaded?)"
+        else
+            echo "  ✗ $name — missing from iSCSI target"
+        fi
+    done < "$CONF"
+else
+    echo "  (no encrypted LUNs config at $CONF)"
+fi
+
+# Save only if all expected LUNs are active
+echo ""
+/usr/local/lib/zfsutilities/bin/safe-iscsi-save
+
+# Show current status
+echo ""
+echo "=== iSCSI Target Status ==="
+targetcli ls /iscsi 2>/dev/null | grep -E "iqn\.|LUNs"
+
+echo ""
+echo "=== Complete ==="

@@ -1,0 +1,6 @@
+#!/usr/bin/bash
+source ~/bashinit
+bashinit
+source $mydir/bashsetx
+setx
+$mydir/Watchall/watchall -n 30 -m 500 "zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health $1; zfs list -rt all -o name,creation,type,used,avail,refer $1"

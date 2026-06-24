@@ -1,0 +1,140 @@
+#!/bin/bash
+# list-vm-disks [--with-devices]
+# Lists all zvols currently exported as iSCSI LUNs, with sizes and clone relationships.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/list-vm-disks on BOTH the storage and compute hosts
+# Run from:   the compute host (or the storage host directly — delegates via SSH)
+
+source /usr/local/lib/node-lib.sh
+
+MY_HOST=$(hostname -s)
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+
+WITH_DEVICES=false
+[[ "${1}" == "--with-devices" ]] && WITH_DEVICES=true
+
+# --- Single-node mode: list zvols directly ---
+if is_single_node; then
+    echo "=== VM Disk Inventory (single-node) ==="
+    echo ""
+
+    for pool in $(zpool list -H -o name 2>/dev/null); do
+        # Check if this pool has any vm- zvols
+        zvols=$(zfs list -H -t volume -o name -r "$pool" 2>/dev/null | grep '/proxmox/vm-' || true)
+        [[ -n "$zvols" ]] || continue
+
+        echo "Pool: $pool"
+        echo "---------------------------------------------------------------"
+        printf "  %-30s  %-8s  %s\n" "Disk Name" "Size" ""
+        printf "  %-30s  %-8s  %s\n" "---------" "----" ""
+
+        while IFS= read -r zvol; do
+            bsname="${zvol##*/}"
+            SIZE=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "?")
+
+            clone_info=""
+            origin=$(zfs get -H -o value origin "$zvol" 2>/dev/null)
+            if [[ "$origin" != "-" && -n "$origin" ]]; then
+                src_vmid=$(echo "$origin" | grep -oP '/vm-\K[0-9]+(?=-disk-)')
+                [[ -n "$src_vmid" ]] && clone_info="[clone of vm-${src_vmid}]"
+            fi
+
+            clone_list=$(zfs list -H -t snapshot -o clones -r "$zvol" 2>/dev/null \
+                | grep -v '^-$' \
+                | grep -oP 'vm-\K[0-9]+(?=-disk-)' \
+                | sort -u \
+                | awk '{printf "%svm-%s", (NR>1?", ":""), $1}')
+            if [[ -n "$clone_list" ]]; then
+                clone_info+="${clone_info:+ }[cloned by: ${clone_list}]"
+            fi
+
+            printf "  %-30s  %-8s  %s\n" "$bsname" "$SIZE" "$clone_info"
+        done <<< "$zvols"
+        echo ""
+    done
+    exit 0
+fi
+
+# --- If not on the storage host, get LUN list via SSH (two-node only) ---
+if [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
+    if [[ "$WITH_DEVICES" == true ]]; then
+        ssh root@"$STORAGE_HOST" "/usr/local/lib/zfsutilities/bin/list-vm-disks --with-devices" || exit 1
+    else
+        ssh root@"$STORAGE_HOST" "/usr/local/lib/zfsutilities/bin/list-vm-disks" || exit 1
+    fi
+
+    if [[ "$WITH_DEVICES" == true ]]; then
+        echo ""
+        if [[ "$MY_HOST" == "$COMPUTE_HOST" ]]; then
+            /usr/local/lib/zfsutilities/bin/show-lun-map
+        else
+            ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/show-lun-map" 2>&1 \
+                || echo "⚠ Could not reach $COMPUTE_HOST — run 'sudo show-lun-map' on $COMPUTE_HOST manually"
+        fi
+    fi
+    exit 0
+fi
+
+# === Running on the storage host ===
+
+echo "=== VM Disk Inventory ==="
+echo ""
+
+# Cache backstores output once — used to derive zvol path from backstore name
+backstores=$(targetcli /backstores/block ls 2>/dev/null)
+
+# Enumerate all iSCSI targets dynamically — no pool names or IQNs hardcoded
+while IFS= read -r TARGET; do
+    echo "Target: $TARGET"
+    echo "---------------------------------------------------------------"
+    printf "  %-8s  %-30s  %-8s\n" "LUN" "Disk Name" "Size"
+    printf "  %-8s  %-30s  %-8s\n" "---" "---------" "----"
+
+    while IFS= read -r line; do
+        LUN=$(echo "$line" | grep -oP 'lun\K[0-9]+')
+        BSNAME=$(echo "$line" | grep -oP 'block/\K[^\s/]+')
+        [[ -z "$LUN" || -z "$BSNAME" ]] && continue
+
+        # Derive full zvol path from the backstore's device path
+        ZVOL=$(echo "$backstores" | grep " ${BSNAME} " | grep -oP '/dev/zvol/\K[^ )]+')
+        if [[ -z "$ZVOL" ]]; then
+            printf "  lun%-5s  %-30s  %-8s\n" "$LUN" "$BSNAME" "?"
+            continue
+        fi
+
+        SIZE=$(zfs get -H -o value volsize "$ZVOL" 2>/dev/null || echo "?")
+
+        # Clone relationship: is this zvol itself a clone?
+        origin=$(zfs get -H -o value origin "$ZVOL" 2>/dev/null)
+        clone_info=""
+        if [[ "$origin" != "-" && -n "$origin" ]]; then
+            src_vmid=$(echo "$origin" | grep -oP '/vm-\K[0-9]+(?=-disk-)')
+            [[ -n "$src_vmid" ]] && clone_info="[clone of vm-${src_vmid}]"
+        fi
+
+        # Clone relationship: do any of this zvol's snapshots have clone dependents?
+        clone_list=$(zfs list -H -t snapshot -o clones -r "$ZVOL" 2>/dev/null \
+            | grep -v '^-$' \
+            | grep -oP 'vm-\K[0-9]+(?=-disk-)' \
+            | sort -u \
+            | awk '{printf "%svm-%s", (NR>1?", ":""), $1}')
+        if [[ -n "$clone_list" ]]; then
+            clone_info+="${clone_info:+ }[cloned by: ${clone_list}]"
+        fi
+
+        printf "  lun%-5s  %-30s  %-8s  %s\n" "$LUN" "$BSNAME" "$SIZE" "$clone_info"
+    done < <(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null)
+
+    echo ""
+done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+')
+
+if [[ "$WITH_DEVICES" == true ]]; then
+    ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/show-lun-map" 2>&1 \
+        || echo "⚠ Could not reach $COMPUTE_HOST — run 'sudo show-lun-map' on $COMPUTE_HOST to see device map"
+fi

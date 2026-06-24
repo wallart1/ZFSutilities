@@ -1,0 +1,182 @@
+#!/usr/bin/bash
+# ZPOOL scrub one pool or all pools with pause/resume support
+#
+# Usage:
+#   ./zfsscruball [start]           Start scrubbing all pools (default)
+#   ./zfsscruball pause             Pause all running scrubs
+#   ./zfsscruball resume            Resume paused scrubs, continue with remaining pools
+#   ./zfsscruball '(pool1 pool2)'   Scrub specific pools
+#
+# $1            (Optional) Mode: 'start', 'pause', 'resume', or pool list in bash form.
+# $2            (Optional) Quoted command that overrides variables.
+#
+# VARIABLES:
+# $parallel     (Optional) Number of scrubs to run in parallel. Default is 2.
+
+source ~/bashinit
+STATEFILE="/tmp/zfsscruball.state"
+
+function scruball {
+    bashinit
+    export STATEFILE        # Make state file path available to subshells.
+    source $mydir/rootcheck
+    rootcheck
+    source $mydir/zfsoverrides
+    source $mydir/zfsfindoffsitepool
+
+    local parallel='2'  # Number of scrubs to do in parallel. As one finishes, another is started.
+    local mode='start'
+    local poolarray=()
+
+    # Determine mode from first argument
+    case "$1" in
+        pause|resume)
+            mode="$1"
+            if [[ $2 != '' ]]; then overrides "$2"; fi
+            ;;
+        start|'')
+            mode='start'
+            if [[ $2 != '' ]]; then overrides "$2"; fi
+            ;;
+        *)
+            # Assume it's a pool list
+            poolarray=$1
+            if [[ $2 != '' ]]; then overrides "$2"; fi
+            ;;
+    esac
+
+    case "$mode" in
+        pause)
+            do_pause
+            ;;
+        resume)
+            do_resume
+            ;;
+        start)
+            do_start
+            ;;
+    esac
+
+    exit 0
+}
+
+function do_pause {
+    log_msg "INFO: Pausing all running scrubs."
+    local found=0
+    for pool in $(zpool list -Ho name); do
+        if zpool status "$pool" 2>/dev/null | grep -q "scrub in progress"; then
+            log_msg "INFO: Pausing scrub on $pool."
+            zpool scrub -p "$pool"
+            found=1
+        fi
+    done
+    if [[ $found -eq 0 ]]; then
+        log_msg "INFO: No scrubs in progress to pause."
+    fi
+}
+
+function do_resume {
+    # Build pool list if not provided
+    if [[ ${#poolarray[@]} -eq 0 ]]; then
+        readarray -t poolarray < <(zpool list -Ho name)
+        local offsitepool=$(findoffsitepool)
+        # Regex: " ${poolarray[*]} " =~ " $offsitepool "
+        # Purpose: Check whether the offsite pool is already present in poolarray.
+        #          Spaces are padded around both sides to prevent partial matches
+        #          (e.g. "pool" matching against "pool2").
+        # Example: poolarray=("threeamigos" "fivebays"); offsitepool="fivebays"
+        #          -> match (already in list); offsitepool="z40tb" -> no match
+        # Regex: " ${poolarray[*]} " =~ " $offsitepool "
+        # Purpose: Check whether the offsite pool is already present in poolarray.
+        #          Spaces are padded around both sides to prevent partial matches
+        #          (e.g. "pool" matching against "pool2").
+        # Example: poolarray=("threeamigos" "fivebays"); offsitepool="fivebays"
+        #          -> match (already in list); offsitepool="z40tb" -> no match
+        if [[ $offsitepool != '' ]] && [[ ! " ${poolarray[*]} " =~ " $offsitepool " ]]; then
+            poolarray+=("$offsitepool")
+        fi
+    fi
+
+    # Load completed pools from state file
+    local -A completed=()
+    if [[ -f "$STATEFILE" ]]; then
+        while read -r pool; do
+            completed["$pool"]=1
+        done < "$STATEFILE"
+    fi
+
+    # Categorize pools: paused, pending, or completed
+    local paused_pools=()
+    local pending_pools=()
+
+    for pool in "${poolarray[@]}"; do
+        # Check for paused scrubs first - they take priority over completed status
+        if zpool status "$pool" 2>/dev/null | grep -q "scrub paused"; then
+            paused_pools+=("$pool")
+        elif [[ -n "${completed[$pool]}" ]]; then
+            log_msg "INFO: Skipping $pool (already completed)."
+        else
+            pending_pools+=("$pool")
+        fi
+    done
+
+    # Scrub paused pools first, then pending
+    local all_pools=("${paused_pools[@]}" "${pending_pools[@]}")
+
+    if [[ ${#all_pools[@]} -eq 0 ]]; then
+        log_msg "INFO: No pools to scrub."
+        return
+    fi
+
+    log_msg "INFO: Resuming scrub ($parallel at a time): ${all_pools[*]}."
+    do_scrubs "${all_pools[@]}"
+}
+
+function do_start {
+    # Clear state file for new run
+    > "$STATEFILE"
+
+    # Build pool list if not provided
+    if [[ ${#poolarray[@]} -eq 0 ]]; then
+        readarray -t poolarray < <(zpool list -Ho name)
+        local offsitepool=$(findoffsitepool)
+        # Add offsite pool only if not already in the list
+        if [[ $offsitepool != '' ]] && [[ ! " ${poolarray[*]} " =~ " $offsitepool " ]]; then
+            poolarray+=("$offsitepool")
+        fi
+    fi
+
+    log_msg "INFO: Scrubbing ($parallel at a time): ${poolarray[*]}."
+    do_scrubs "${poolarray[@]}"
+}
+
+function do_scrubs {
+    local pools=("$@")
+
+    # How it works:
+    # printf inserts a newline character after each pool name and pipes the list to xargs.
+    # xargs runs multiple scrubs in parallel providing one pool name to each instance. When one
+    # finishes, it starts another.
+    # For each instance:
+    #   bash -c 'commands' _ {} runs a bash shell with the pool name as $1.
+    #     Print "Started scrubbing [poolname]."
+    #     Run the scrub and when it finishes,
+    #     print "Finished scrubbing [poolname]." or "Failed to scrub [poolname]."
+    #     On success, record the pool in the state file.
+    #   The _ is a placeholder for $0 (unneeded script name).
+    #   {} becomes $1 inside the shell.
+
+    printf '%s\n' "${pools[@]}" \
+        | xargs -P$parallel -I{} \
+            bash -c '
+                source ~/bashinit
+                log_msg "INFO: Started scrubbing $1."
+                ionice -c3 zpool scrub -w "$1" \
+                && { log_msg "INFO: ✓ Finished scrubbing $1."; echo "$1" >> "$STATEFILE"; } \
+                || log_msg "WARN: ✗ Failed to scrub $1."
+            ' _ {}
+    log_msg "INFO: All scrubs complete."
+    rm -f "$STATEFILE"
+}
+
+if calledbybash; then scruball "$*"; fi

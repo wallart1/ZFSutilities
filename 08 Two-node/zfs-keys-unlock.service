@@ -1,0 +1,19 @@
+# systemd service to unlock ZFS encryption keys from USB at boot.
+# Runs before rtslib-fb-targetctl so all zvols are accessible when iSCSI starts.
+#
+# Install to: /etc/systemd/system/zfs-keys-unlock.service on the storage host
+
+[Unit]
+Description=Unlock ZFS encryption keys from USB at boot
+After=local-fs.target
+Before=rtslib-fb-targetctl.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/zfsutilities/bin/unlock-zfs-keys-auto
+TimeoutStartSec=300
+
+[Install]
+WantedBy=sysinit.target

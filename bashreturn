@@ -1,0 +1,15 @@
+#!/usr/bin/bash
+# Source this file to return to caller regardless of whether the caller is a bash shell or another
+# script.
+# NOTE: This code cannot be used in a function to cause the caller to return/exit. It must be
+# sourced at the point in the code where it will be immediately executed.
+# The following bash parameter expansion is used in this script.
+# ${parameter:-word}
+#   Use Default Values.  If parameter is unset or null, the expansion of word is substituted. 
+#   Otherwise, the value of parameter is substituted.
+# $1    Return code (Default = 0).
+if [[ "${BASH_SOURCE[1]}" != "${0}" ]]; then
+    return "${1:-0}"     # We were called by bash.
+else
+    exit "${1:-0}"       # We were called by something other than bash.
+fi

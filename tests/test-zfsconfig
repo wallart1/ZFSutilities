@@ -1,0 +1,209 @@
+#!/usr/bin/bash
+# test-zfsconfig — Verify JSON config helper functions.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+source "$mydir/zfsconfig"
+
+ZFSCONFIG_PATH=$(mktemp)
+export ZFSCONFIG_PATH
+
+clear_zfsconfig_cache() {
+    unset _ZFSCONFIG_POOLS_CACHE _ZFSCONFIG_OFFSITE_CACHE _ZFSCONFIG_CA_CACHE
+}
+
+write_config() {
+    cat > "$ZFSCONFIG_PATH" <<EOF
+$1
+EOF
+    clear_zfsconfig_cache
+}
+
+# ------------------------------------------------------------------------------
+# zfsconfig_get_pools
+# ------------------------------------------------------------------------------
+
+test_get_pools_with_string_entries() {
+    test_start "String pool entries are emitted as names"
+    write_config '{
+  "pools": ["tank", "fivebays"]
+}'
+    mapfile -t result < <(zfsconfig_get_pools)
+    assert_equals "tank" "${result[0]}"
+    assert_equals "fivebays" "${result[1]}"
+    assert_equals "2" "${#result[@]}"
+}
+
+test_get_pools_with_dict_entries() {
+    test_start "Dict pool entries emit the name field"
+    write_config '{
+  "pools": [
+    {"name": "tank", "offsite_candidate": false},
+    {"name": "fivebays", "offsite_candidate": true}
+  ]
+}'
+    mapfile -t result < <(zfsconfig_get_pools)
+    assert_equals "tank" "${result[0]}"
+    assert_equals "fivebays" "${result[1]}"
+    assert_equals "2" "${#result[@]}"
+}
+
+test_get_pools_with_mixed_entries() {
+    test_start "Mixed string and dict pool entries are handled"
+    write_config '{
+  "pools": [
+    "tank",
+    {"name": "fivebays", "offsite_candidate": true}
+  ]
+}'
+    mapfile -t result < <(zfsconfig_get_pools)
+    assert_equals "tank" "${result[0]}"
+    assert_equals "fivebays" "${result[1]}"
+    assert_equals "2" "${#result[@]}"
+}
+
+test_get_pools_skips_dict_without_name() {
+    test_start "Dict pool entries without a name are skipped"
+    write_config '{
+  "pools": [
+    {"offsite_candidate": true},
+    {"name": "fivebays"}
+  ]
+}'
+    mapfile -t result < <(zfsconfig_get_pools)
+    assert_equals "fivebays" "${result[0]}"
+    assert_equals "1" "${#result[@]}"
+}
+
+test_get_pools_missing_key() {
+    test_start "Missing pools key yields no pool names"
+    write_config '{}'
+    local result
+    result=$(zfsconfig_get_pools)
+    assert_equals "" "$result"
+}
+
+test_get_pools_skips_empty_name() {
+    test_start "Dict pool entries with empty name are skipped"
+    write_config '{
+  "pools": [
+    {"name": "", "offsite_candidate": true},
+    {"name": "tank"}
+  ]
+}'
+    mapfile -t result < <(zfsconfig_get_pools)
+    assert_equals "tank" "${result[0]}"
+    assert_equals "1" "${#result[@]}"
+}
+
+test_get_pools_skips_null_name() {
+    test_start "Dict pool entries with null name are skipped"
+    write_config '{
+  "pools": [
+    {"name": null, "offsite_candidate": true},
+    {"name": "tank"}
+  ]
+}'
+    mapfile -t result < <(zfsconfig_get_pools)
+    assert_equals "tank" "${result[0]}"
+    assert_equals "1" "${#result[@]}"
+}
+
+# ------------------------------------------------------------------------------
+# zfsconfig_get_offsite_candidates
+# ------------------------------------------------------------------------------
+
+test_offsite_candidates_with_dict_pools() {
+    test_start "Offsite candidates selects pools marked offsite_candidate"
+    write_config '{
+  "pools": [
+    {"name": "tank", "offsite_candidate": false},
+    {"name": "z22tb", "offsite_candidate": true}
+  ]
+}'
+    mapfile -t result < <(zfsconfig_get_offsite_candidates)
+    assert_equals "z22tb" "${result[0]}"
+}
+
+test_offsite_candidates_ignore_string_pools() {
+    test_start "String pool entries are not offsite candidates"
+    write_config '{
+  "pools": ["tank", "z22tb"]
+}'
+    local result
+    result=$(zfsconfig_get_offsite_candidates)
+    assert_equals "" "$result"
+}
+
+test_offsite_candidates_ignores_missing_pools() {
+    test_start "Missing pools key yields no offsite candidates"
+    write_config '{}'
+    local result
+    result=$(zfsconfig_get_offsite_candidates)
+    assert_equals "" "$result"
+}
+
+# ------------------------------------------------------------------------------
+# zfsconfig_get_checkagainst
+# ------------------------------------------------------------------------------
+
+test_get_checkagainst_emits_fields() {
+    test_start "Checkagainst entries emitted as whitespace fields"
+    write_config '{
+  "checkagainst": [
+    {"dataset": "tank/a", "quals": "1", "counterpart": "backup/a", "label": "offsite"}
+  ]
+}'
+    local result
+    result=$(zfsconfig_get_checkagainst)
+    assert_equals "tank/a 1 backup/a offsite" "$result"
+}
+
+test_get_checkagainst_skips_incomplete_entries() {
+    test_start "Incomplete checkagainst entries are skipped"
+    write_config '{
+  "checkagainst": [
+    {"dataset": "tank/a", "quals": "1", "counterpart": "backup/a", "label": "offsite"},
+    {"dataset": "incomplete", "counterpart": "backup/incomplete"}
+  ]
+}'
+    local result
+    result=$(zfsconfig_get_checkagainst)
+    assert_equals "tank/a 1 backup/a offsite" "$result"
+}
+
+test_get_checkagainst_defaults_counterpart_to_dash() {
+    test_start "Missing counterpart defaults to '-'"
+    write_config '{
+  "checkagainst": [
+    {"dataset": "tank/a", "quals": "0", "label": "offsite"}
+  ]
+}'
+    local result
+    result=$(zfsconfig_get_checkagainst)
+    assert_equals "tank/a 0 - offsite" "$result"
+}
+
+# ------------------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------------------
+
+test_get_pools_with_string_entries
+test_get_pools_with_dict_entries
+test_get_pools_with_mixed_entries
+test_get_pools_skips_dict_without_name
+test_get_pools_missing_key
+test_get_pools_skips_empty_name
+test_get_pools_skips_null_name
+test_offsite_candidates_with_dict_pools
+test_offsite_candidates_ignore_string_pools
+test_offsite_candidates_ignores_missing_pools
+test_get_checkagainst_emits_fields
+test_get_checkagainst_skips_incomplete_entries
+test_get_checkagainst_defaults_counterpart_to_dash
+
+rm -f "$ZFSCONFIG_PATH"
+
+test_summary
+teardown_test_env

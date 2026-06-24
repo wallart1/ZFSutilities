@@ -1,0 +1,303 @@
+#!/usr/bin/bash
+# test-startdocserver — Unit tests for startdocserver helper functions
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+
+source "$mydir/startdocserver"
+
+# Override set -euo pipefail from startdocserver so test failures don't abort early
+set +euo pipefail
+
+# =============================================================================
+# Mock helpers
+# =============================================================================
+
+_mock_curl_http_code=""
+_mock_pgrep_output=""
+_mock_lsof_output=""
+_mock_fuser_output=""
+_mock_server_cwd=""
+
+_stop_server_called=""
+_start_server_called=""
+
+curl() {
+    if [[ "$*" == *"-w %{http_code}"* ]]; then
+        echo -n "$_mock_curl_http_code"
+        return 0
+    fi
+    return 1
+}
+
+pgrep() {
+    if [[ "$*" == *"mkdocs serve"* ]]; then
+        if [[ -n "$_mock_pgrep_output" ]]; then
+            echo "$_mock_pgrep_output"
+            return 0
+        fi
+    fi
+    if [[ "$*" == *"http.server 8000"* ]]; then
+        if [[ -n "$_mock_pgrep_http_output" ]]; then
+            echo "$_mock_pgrep_http_output"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+lsof() {
+    if [[ "$*" == *":8000"* ]]; then
+        if [[ -n "$_mock_lsof_output" ]]; then
+            echo "$_mock_lsof_output"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+fuser() {
+    if [[ "$*" == *"8000/tcp"* ]]; then
+        if [[ -n "$_mock_fuser_output" ]]; then
+            echo "$_mock_fuser_output"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+_get_server_cwd() {
+    echo "$_mock_server_cwd"
+}
+
+_stop_server() {
+    _stop_server_called="$1"
+}
+
+start_server() {
+    _start_server_called="yes"
+}
+
+reset_mocks() {
+    _mock_curl_http_code=""
+    _mock_pgrep_output=""
+    _mock_pgrep_http_output=""
+    _mock_lsof_output=""
+    _mock_fuser_output=""
+    _mock_server_cwd=""
+    _stop_server_called=""
+    _start_server_called=""
+}
+
+# =============================================================================
+# Tests
+# =============================================================================
+
+test_is_server_running_true() {
+    reset_mocks
+    _mock_curl_http_code="200"
+    test_start "is_server_running returns true on HTTP 200"
+    if is_server_running; then
+        test_pass
+    else
+        test_fail "Expected true, got false"
+    fi
+}
+
+test_is_server_running_false() {
+    reset_mocks
+    _mock_curl_http_code="000"
+    test_start "is_server_running returns false on no response"
+    if ! is_server_running; then
+        test_pass
+    else
+        test_fail "Expected false, got true"
+    fi
+}
+
+test_get_server_pid_lsof() {
+    reset_mocks
+    _mock_lsof_output="12345"
+    test_start "_get_server_pid finds PID via lsof"
+    local pid
+    pid=$(_get_server_pid)
+    assert_equals "12345" "$pid"
+}
+
+test_get_server_pid_fuser() {
+    reset_mocks
+    _mock_lsof_output=""
+    _mock_fuser_output="67890"
+    test_start "_get_server_pid falls back to fuser"
+    local pid
+    pid=$(_get_server_pid)
+    assert_equals "67890" "$pid"
+}
+
+test_get_server_pid_pgrep() {
+    reset_mocks
+    _mock_lsof_output=""
+    _mock_fuser_output=""
+    _mock_pgrep_output="11111"
+    test_start "_get_server_pid falls back to pgrep"
+    local pid
+    pid=$(_get_server_pid)
+    assert_equals "11111" "$pid"
+}
+
+test_get_server_pid_http_server() {
+    reset_mocks
+    _mock_lsof_output=""
+    _mock_fuser_output=""
+    _mock_pgrep_output=""
+    _mock_pgrep_http_output="22222"
+    test_start "_get_server_pid falls back to pgrep for http.server"
+    local pid
+    pid=$(_get_server_pid)
+    assert_equals "22222" "$pid"
+}
+
+test_is_server_serving_expected_dir_match() {
+    reset_mocks
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/06 Docs"
+    _mock_server_cwd="$tmpdir/06 Docs"
+    test_start "_is_server_serving_expected_dir returns true on exact match"
+    if _is_server_serving_expected_dir "1234" "$tmpdir/06 Docs"; then
+        test_pass
+    else
+        test_fail "Expected true for matching CWD"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_is_server_serving_expected_dir_site_match() {
+    reset_mocks
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/06 Docs/site"
+    _mock_server_cwd="$tmpdir/06 Docs/site"
+    test_start "_is_server_serving_expected_dir returns true on site/ match"
+    if _is_server_serving_expected_dir "1234" "$tmpdir/06 Docs"; then
+        test_pass
+    else
+        test_fail "Expected true for site/ CWD"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_is_server_serving_expected_dir_mismatch() {
+    reset_mocks
+    local tmpdir_old tmpdir_new
+    tmpdir_old=$(mktemp -d)
+    tmpdir_new=$(mktemp -d)
+    mkdir -p "$tmpdir_old/06 Docs"
+    mkdir -p "$tmpdir_new/06 Docs"
+    _mock_server_cwd="$tmpdir_old/06 Docs"
+    test_start "_is_server_serving_expected_dir returns false on mismatch"
+    if ! _is_server_serving_expected_dir "1234" "$tmpdir_new/06 Docs"; then
+        test_pass
+    else
+        test_fail "Expected false for mismatched CWD"
+    fi
+    rm -rf "$tmpdir_old" "$tmpdir_new"
+}
+
+test_is_server_serving_expected_dir_empty() {
+    reset_mocks
+    _mock_server_cwd=""
+    test_start "_is_server_serving_expected_dir returns false when CWD unreadable"
+    if ! _is_server_serving_expected_dir "1234" "/some/path/06 Docs"; then
+        test_pass
+    else
+        test_fail "Expected false for empty CWD"
+    fi
+}
+
+test_main_restarts_stale_server() {
+    reset_mocks
+    _mock_curl_http_code="200"
+    _mock_lsof_output="99999"
+    _mock_server_cwd="/old/path/06 Docs"
+    test_start "main restarts server when serving from wrong directory"
+    main
+    if [[ "$_stop_server_called" == "99999" && "$_start_server_called" == "yes" ]]; then
+        test_pass
+    else
+        test_fail "Expected stop+restart, got stop='$_stop_server_called' start='$_start_server_called'"
+    fi
+}
+
+test_main_leaves_correct_server() {
+    reset_mocks
+    _mock_curl_http_code="200"
+    _mock_lsof_output="99999"
+    _mock_server_cwd="$docs_dir"
+    test_start "main leaves server alone when serving from correct directory"
+    main
+    if [[ -z "$_stop_server_called" && -z "$_start_server_called" ]]; then
+        test_pass
+    else
+        test_fail "Expected no action, got stop='$_stop_server_called' start='$_start_server_called'"
+    fi
+}
+
+test_main_starts_when_not_running() {
+    reset_mocks
+    _mock_curl_http_code="000"
+    test_start "main starts server when not running"
+    main
+    if [[ -z "$_stop_server_called" && "$_start_server_called" == "yes" ]]; then
+        test_pass
+    else
+        test_fail "Expected start only, got stop='$_stop_server_called' start='$_start_server_called'"
+    fi
+}
+
+test_main_restart_flag_stops_running_server() {
+    reset_mocks
+    _mock_curl_http_code="200"
+    _mock_lsof_output="99999"
+    _mock_server_cwd="$docs_dir"
+    test_start "main --restart stops a running server before starting"
+    main --restart
+    if [[ "$_stop_server_called" == "99999" && "$_start_server_called" == "yes" ]]; then
+        test_pass
+    else
+        test_fail "Expected stop+start, got stop='$_stop_server_called' start='$_start_server_called'"
+    fi
+}
+
+test_main_restart_flag_starts_when_not_running() {
+    reset_mocks
+    _mock_curl_http_code="000"
+    test_start "main --restart starts server when none is running"
+    main --restart
+    if [[ -z "$_stop_server_called" && "$_start_server_called" == "yes" ]]; then
+        test_pass
+    else
+        test_fail "Expected start only, got stop='$_stop_server_called' start='$_start_server_called'"
+    fi
+}
+
+# =============================================================================
+# Run
+# =============================================================================
+
+test_is_server_running_true
+test_is_server_running_false
+test_get_server_pid_lsof
+test_get_server_pid_fuser
+test_get_server_pid_pgrep
+test_get_server_pid_http_server
+test_is_server_serving_expected_dir_match
+test_is_server_serving_expected_dir_site_match
+test_is_server_serving_expected_dir_mismatch
+test_is_server_serving_expected_dir_empty
+test_main_restarts_stale_server
+test_main_leaves_correct_server
+test_main_starts_when_not_running
+test_main_restart_flag_stops_running_server
+test_main_restart_flag_starts_when_not_running
+
+test_summary

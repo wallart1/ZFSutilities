@@ -1,0 +1,142 @@
+#!/usr/bin/bash
+# run-tests — Discover and execute all test-* suites in tests/.
+#
+# Usage:
+#   ./run-tests                    # Run all suites
+#   ./run-tests test-zfsretain     # Run a specific suite
+#   ./run-tests -v                 # Verbose (show all output)
+#   ./run-tests -q                 # Quiet (only show summary)
+#
+# Exit codes:
+#   0  All tests passed
+#   1  One or more tests failed
+
+set -uo pipefail
+
+MYDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEST_DIR="$MYDIR/tests"
+
+verbose=0
+quiet=0
+specific_suite=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -v|--verbose) verbose=1; shift ;;
+        -q|--quiet)   quiet=1;   shift ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [-v|-q] [suite-name]" >&2
+            exit 2
+            ;;
+        *) specific_suite="$1"; shift ;;
+    esac
+done
+
+RESULTS_FILE="/tmp/zfsutilities_test_results_$$"
+export ZFSUTILITIES_TEST_RESULTS="$RESULTS_FILE"
+: > "$RESULTS_FILE"
+
+trap 'rm -f "$RESULTS_FILE"' EXIT
+
+suite_count=0
+fail_count=0
+
+# ---------------------------------------------------------------------------
+# Header
+# ---------------------------------------------------------------------------
+
+if [[ "$quiet" -eq 0 ]]; then
+    echo "========================================"
+    echo "ZFS Utilities Test Runner"
+    echo "========================================"
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# Discover and run
+# ---------------------------------------------------------------------------
+
+run_suite() {
+    local test_file="$1"
+    local suite_name
+    suite_name=$(basename "$test_file")
+    ((suite_count++))
+
+    if [[ "$quiet" -eq 0 ]]; then
+        echo "→ $suite_name"
+    fi
+
+    local output
+    output=$(bash "$test_file" 2>&1)
+    local rc=$?
+
+    if [[ "$verbose" -eq 1 ]]; then
+        echo "$output"
+        echo ""
+    elif [[ "$quiet" -eq 0 && "$rc" -ne 0 ]]; then
+        echo "$output"
+        echo ""
+    fi
+
+    [[ "$rc" -ne 0 ]] && ((fail_count++))
+}
+
+if [[ -n "$specific_suite" ]]; then
+    test_file="$TEST_DIR/$specific_suite"
+    if [[ ! -f "$test_file" ]]; then
+        echo "Suite not found: $specific_suite" >&2
+        exit 2
+    fi
+    run_suite "$test_file"
+else
+    for test_file in "$TEST_DIR"/test-*; do
+        [[ -f "$test_file" && -x "$test_file" ]] || continue
+        bn=$(basename "$test_file")
+        [[ "$bn" == "test-lib.sh" ]] && continue
+        [[ "$bn" == *"-debug" ]] && continue
+        run_suite "$test_file"
+    done
+fi
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+
+total_tests=0
+total_passed=0
+total_failed=0
+total_skipped=0
+
+while IFS=$'\t' read -r suite run passed failed skipped rc; do
+    [[ -n "$suite" ]] || continue
+    if [[ "$quiet" -eq 0 ]]; then
+        printf "  %-42s  %3d run  %3d pass  %3d fail  %3d skip\n" \
+            "$suite" "$run" "$passed" "$failed" "$skipped"
+    fi
+    ((total_tests += run))
+    ((total_passed += passed))
+    ((total_failed += failed))
+    ((total_skipped += skipped))
+done < "$RESULTS_FILE"
+
+if [[ "$quiet" -eq 0 ]]; then
+    echo ""
+    echo "========================================"
+    echo "Summary"
+    echo "========================================"
+    echo "  Suites:  $suite_count"
+    echo "  Tests:   $total_tests"
+    echo "  Passed:  $total_passed"
+    echo "  Failed:  $total_failed"
+    echo "  Skipped: $total_skipped"
+    echo ""
+fi
+
+if [[ "$fail_count" -eq 0 ]]; then
+    [[ "$quiet" -eq 0 ]] && echo "All tests passed!"
+    exit 0
+else
+    [[ "$quiet" -eq 0 ]] && echo "Some tests failed."
+    exit 1
+fi

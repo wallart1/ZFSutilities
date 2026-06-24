@@ -1,0 +1,131 @@
+#!/usr/bin/bash
+# test-zfscleanup — Verify pool selection and fallback behavior.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+mock_mydir=$(mktemp -d)
+mydir="$mock_mydir"
+
+cat > "$mock_mydir/rootcheck" <<'EOF'
+rootcheck() { true; }
+EOF
+
+cat > "$mock_mydir/bashreturn" <<'EOF'
+return "${1:-0}"
+EOF
+
+cat > "$mock_mydir/zfsconfig" <<'EOF'
+zfsconfig_get_pools() {
+    printf '%s\n' "${zfscleanup_test_pools[@]}"
+}
+
+poolarray() {
+    zfspoolarray=()
+    while IFS= read -r pool; do
+        [[ -n "$pool" ]] && zfspoolarray+=("$pool")
+    done < <(zfsconfig_get_pools)
+}
+EOF
+
+cat > "$mock_mydir/zfsbuildfsarray" <<'EOF'
+buildfsarray() {
+    fsarray=("$1")
+}
+EOF
+
+cat > "$mock_mydir/zfsretain" <<'EOF'
+retain() {
+    zfscleanup_processed+=("$1 $2")
+}
+EOF
+
+cat > "$mock_mydir/zfsoverrides" <<'EOF'
+overrides() { true; }
+EOF
+
+source "$old_mydir/zfscleanup"
+
+reset_state() {
+    zfscleanup_processed=()
+    zfscleanup_test_pools=()
+    _mock_zpool_list=""
+    autoproceed='Y'
+    dryrun='N'
+    releaseholds='N'
+}
+
+# -----------------------------------------------------------------------------
+# Tests
+# -----------------------------------------------------------------------------
+
+test_fallback_when_config_has_no_pools() {
+    test_start "Fallback to all online pools when config has no pools"
+    reset_state
+    _mock_zpool_list=$'tank\nfivebays'
+    cleanup "" "" "dailybackup"
+    assert_equals "tank @dailybackup fivebays @dailybackup" "${zfscleanup_processed[*]}"
+}
+
+test_uses_configured_pools() {
+    test_start "Uses pools from JSON config instead of zpool list"
+    reset_state
+    zfscleanup_test_pools=(tank fivebays)
+    _mock_zpool_list=$'otherpool'
+    cleanup "" "" "dailybackup"
+    assert_equals "tank @dailybackup fivebays @dailybackup" "${zfscleanup_processed[*]}"
+}
+
+test_explicit_pool_argument_wins() {
+    test_start "Explicit pool argument bypasses config and fallback"
+    reset_state
+    zfscleanup_test_pools=(ignored1 ignored2)
+    _mock_zpool_list=$'ignored3'
+    cleanup "tank" "" "dailybackup"
+    assert_equals "tank @dailybackup" "${zfscleanup_processed[*]}"
+}
+
+test_skips_offline_pools() {
+    test_start "Skips configured pools that are offline"
+    reset_state
+    zfscleanup_test_pools=(tank offlinepool)
+    # Make zpool list <pool> fail for the offline pool.
+    zpool() {
+        if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" ]]; then
+            echo -e "$_mock_zpool_list"
+            return 0
+        fi
+        if [[ "$1" == "list" && "$2" == "offlinepool" ]]; then
+            return 1
+        fi
+        return 0
+    }
+    cleanup "" "" "dailybackup"
+    assert_equals "tank @dailybackup" "${zfscleanup_processed[*]}"
+}
+
+test_fallback_with_empty_array() {
+    test_start "Empty pools array triggers fallback to online pools"
+    reset_state
+    zfscleanup_test_pools=()
+    _mock_zpool_list=$'tank'
+    cleanup "" "" "dailybackup"
+    assert_equals "tank @dailybackup" "${zfscleanup_processed[*]}"
+}
+
+# -----------------------------------------------------------------------------
+# Run tests
+# -----------------------------------------------------------------------------
+
+test_fallback_when_config_has_no_pools
+test_uses_configured_pools
+test_explicit_pool_argument_wins
+test_skips_offline_pools
+test_fallback_with_empty_array
+
+rm -rf "$mock_mydir"
+mydir="$old_mydir"
+
+test_summary
+teardown_test_env

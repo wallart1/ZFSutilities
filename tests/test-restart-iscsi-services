@@ -1,0 +1,196 @@
+#!/usr/bin/bash
+# test-restart-iscsi-services — Unit tests for the VM safety check.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Extract check_running_vms from the script, replacing exit with return
+# so the function is testable without killing the test runner.
+# ------------------------------------------------------------------
+old_mydir="$mydir"
+func_text=$(sed -n '/^check_running_vms() {/,/^}$/p' "$old_mydir/08 Two-node/restart-iscsi-services")
+func_text="${func_text//exit 1/return 1}"
+eval "$func_text"
+
+# ------------------------------------------------------------------
+# Mock node-lib.sh functions
+# ------------------------------------------------------------------
+is_single_node() { [[ "$NODE_MODE" == "single-node" ]]; }
+is_two_node()     { [[ "$NODE_MODE" == "two-node" ]]; }
+
+# ------------------------------------------------------------------
+# Mock targetcli
+# ------------------------------------------------------------------
+targetcli() {
+    case "$*" in
+        "/backstores/block ls")
+            if [[ "$_mock_backstores" == "empty" ]]; then
+                true
+            else
+                echo "  vm-100-disk-0     /dev/zvol/threeamigos/vm-100-disk-0   50G"
+                echo "  vm-101-disk-0     /dev/zvol/threeamigos/vm-101-disk-0   50G"
+                echo "  vm-102-disk-0     /dev/zvol/threeamigos/vm-102-disk-0   50G"
+            fi
+            ;;
+        "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns ls")
+            if [[ "$_mock_luns" == "empty" ]]; then
+                true
+            else
+                echo "  lun0  block/vm-100-disk-0   /dev/zvol/threeamigos/vm-100-disk-0"
+                echo "  lun1  block/vm-101-disk-0   /dev/zvol/threeamigos/vm-101-disk-0"
+                echo "  lun2  block/vm-102-disk-0   /dev/zvol/threeamigos/vm-102-disk-0"
+            fi
+            ;;
+        "/iscsi ls")
+            if [[ "$_mock_targets" == "empty" ]]; then
+                true
+            else
+                echo "  iqn.2026-02.local.stewie:threeamigos"
+            fi
+            ;;
+        *)
+            true
+            ;;
+    esac
+}
+
+# ------------------------------------------------------------------
+# Mock ssh
+# ------------------------------------------------------------------
+ssh() {
+    local cmd="${!#}"
+    if [[ "$cmd" == *"qm status"* ]]; then
+        local vmid
+        vmid=$(echo "$cmd" | grep -oP "qm status '\K[0-9]+")
+        if [[ " $_mock_running_vmids " == *" $vmid "* ]]; then
+            echo "running"
+        else
+            echo "stopped"
+        fi
+    fi
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+reset_mocks() {
+    NODE_MODE="two-node"
+    STORAGE_HOST="stewie"
+    COMPUTE_HOST="tweety"
+    _mock_backstores=""
+    _mock_luns=""
+    _mock_targets=""
+    _mock_running_vmids=""
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_single_node_skips_check() {
+    reset_mocks
+    NODE_MODE="single-node"
+    test_start "Single-node mode skips VM check"
+    if check_running_vms >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "Should return 0 in single-node mode"
+    fi
+}
+
+test_no_targets_proceeds() {
+    reset_mocks
+    _mock_targets="empty"
+    test_start "No iSCSI targets means no VMs to check"
+    if check_running_vms >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "Should return 0 when there are no targets"
+    fi
+}
+
+test_no_luns_proceeds() {
+    reset_mocks
+    _mock_luns="empty"
+    test_start "No LUNs means no VMs to check"
+    if check_running_vms >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "Should return 0 when there are no LUNs"
+    fi
+}
+
+test_all_vms_stopped_proceeds() {
+    reset_mocks
+    _mock_running_vmids=""  # none running
+    test_start "All VMs stopped allows proceed"
+    if check_running_vms >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "Should return 0 when no VMs are running"
+    fi
+}
+
+test_running_vm_aborts() {
+    reset_mocks
+    _mock_running_vmids=" 100 "
+    test_start "Running VM detected aborts"
+    if ! check_running_vms >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "Should abort when a VM is running"
+    fi
+}
+
+test_multiple_running_vms_aborts() {
+    reset_mocks
+    _mock_running_vmids=" 100 101 "
+    test_start "Multiple running VMs aborts"
+    if ! check_running_vms >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "Should abort when multiple VMs are running"
+    fi
+}
+
+test_running_vm_outputs_error() {
+    reset_mocks
+    _mock_running_vmids=" 100 "
+    test_start "Running VM produces error message"
+    local output
+    output=$(check_running_vms 2>&1 || true)
+    if [[ "$output" == *"ERROR"* ]] && [[ "$output" == *"VM 100"* ]]; then
+        test_pass
+    else
+        test_fail "Expected error mentioning VM 100"
+    fi
+}
+
+test_aborts_tells_user_to_stop_vms() {
+    reset_mocks
+    _mock_running_vmids=" 100 "
+    test_start "Running VMs abort tells user to stop VMs"
+    local output
+    output=$(check_running_vms 2>&1 || true)
+    if [[ "$output" == *"Stop the VMs first"* ]]; then
+        test_pass
+    else
+        test_fail "Expected 'Stop the VMs first' message"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_single_node_skips_check
+test_no_targets_proceeds
+test_no_luns_proceeds
+test_all_vms_stopped_proceeds
+test_running_vm_aborts
+test_multiple_running_vms_aborts
+test_running_vm_outputs_error
+test_aborts_tells_user_to_stop_vms
+
+test_summary

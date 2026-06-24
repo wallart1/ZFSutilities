@@ -1,0 +1,92 @@
+#!/usr/bin/bash
+
+source ~/bashinit
+bashinit
+function cleanup {
+    # Perform retention policies on given or all pools.
+
+    # $1    (Optional) Name of pool to clean up. Defaults to all online pools.
+    # $2    (Optional) 'only' means to not recurse the pool given in $1.
+    #                  Anything else means to recurse the pool or subtree.
+    # $3    (Required) Snapshot label that must be matched in order to be processed.
+    # $4    (Optional) Overrides.
+    #
+    # $autoproceed  'N' means to ask user to press enter before important steps are taken.
+    #               'Y' means to not stop. (Default)
+    # $dryrun       'Y' means to not perform any dataset updates.Only say what would happen.
+    #               'N' means to perform updates. (Default)
+    # $releaseholds 'Y' means to release any and all holds on snapshots to be deleted.
+    #               'N' means to keep snapshot holds. May result in "Dataset is busy" messages
+    #                   as holds may be preventing snapshots from being deleted. (Default)
+    #                   "Dataset is busy" is used as a ZFS catch-all for this and many other cases.
+    # $skipbusy     'Y' means a "Dataset is busy" destroy failure is logged as WARN and the
+    #               script continues to the next snapshot. 'N' means treat it as fatal.
+    #               Defaults to 'Y' when called via zfsretain; 'N' for direct delsnap calls.
+
+    source bashinit
+    bashinit
+    source $mydir/rootcheck
+    rootcheck
+    source $mydir/zfsconfig
+    source $mydir/zfsbuildfsarray
+    source $mydir/zfsretain
+    source $mydir/zfsoverrides
+
+    if [[ $autoproceed = '' ]]; then autoproceed='Y'; fi
+    if [[ $dryrun = '' ]]; then dryrun="N"; fi
+
+    # Holds are maintained for offsite snapshots to avoid accidental removal.
+    # This function does not release holds by default.
+    if [[ $releaseholds = '' ]]; then releaseholds='N'; fi
+
+    if [[ $1 != "" ]]; then zfspoolarray=("$1")
+    else
+        poolarray        # Put list of ZFS pools into zfspoolarray
+        if [[ ${#zfspoolarray[@]} -eq 0 ]]; then
+            log_msg "WARN: No pools configured in JSON config; falling back to all online pools."
+            readarray -t zfspoolarray < <(zpool list -Ho name)
+        fi
+    fi
+
+    if [[ $2 = 'only' ]]; then
+        depth='-d0'
+    else
+        depth=''
+    fi
+
+    if [[ $3 = '' ]]; then
+        log_msg 'FATAL: Please provide a label in $3 to specify which snapshots to process.'
+        source $mydir/bashreturn 8
+    else
+        zfscleanup_label=$3
+        if [[ ${zfscleanup_label:0:1} != '@' ]]; then zfscleanup_label='@'$zfscleanup_label; fi
+    fi
+    
+    if [[ $4 != '' ]]; then overrides $4; fi
+
+    for pool in "${zfspoolarray[@]}"; do
+        if ! zpool list $pool >/dev/null 2>&1; then continue; fi
+        echo '--------------------------------'
+
+        if [[ $pool = 'temp' ]]; then
+            excludes=('temp/temp')
+        else
+            excludes=()
+        fi
+        depth=''
+        buildfsarray "$pool"
+        log_msg "INFO: About to apply snapshot retention policies to the following datasets:"
+        for retainfs in "${fsarray[@]}"; do
+            log_msg "INFO: $retainfs"
+        done
+        if [[ $autoproceed != 'Y' ]]; then
+            read -p "$(log_msg) Press enter to continue."
+        fi
+        for retainfs in "${fsarray[@]}"; do
+            retain "$retainfs" "$zfscleanup_label"
+        done
+    done
+    log_msg "INFO: zfscleanup completed."
+}
+if calledbybash; then cleanup "$1" "$2" "$3" "$4"; fi
+

@@ -1,0 +1,22 @@
+{#-
+  Override: shows the project version (injected by hooks/version_stamp.py)
+  alongside the standard copyright and generator attribution.
+-#}
+<div class="md-copyright">
+  {% if config.extra.version %}
+    <div class="md-copyright__highlight">
+      ZFS Utilities v{{ config.extra.version }}
+    </div>
+  {% endif %}
+  {% if config.copyright %}
+    <div class="md-copyright__highlight">
+      {{ config.copyright }}
+    </div>
+  {% endif %}
+  {% if not config.extra.generator == false %}
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  {% endif %}
+</div>

@@ -1,0 +1,137 @@
+#!/bin/bash
+# unlock-zfs-keys-auto
+# Automatic LUKS unlock and ZFS key loading at boot.
+# Waits up to 60 seconds for the USB key drive to appear, then unlocks and loads keys.
+# Called by zfs-keys-unlock.service (Before=rtslib-fb-targetctl.service).
+#
+# Reads encrypted zvol list from /etc/iscsi-encrypted-luns.conf (plain text, one per line).
+# Format: backstore_name:device_path:target_short_name
+#
+# Does NOT restart iSCSI — rtslib-fb-targetctl will start after this service completes,
+# at which point all zvols will be accessible.
+#
+# Keys are expected at /mnt/ZFSkeys. If /mnt/ZFSkeys is already a mount point
+# (e.g. a previous run or udisksd left it mounted), it is reused.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/unlock-zfs-keys-auto on the storage host
+
+set -e
+
+KEY_MOUNT="/mnt/ZFSkeys"
+KEY_FILE="/root/.luks-key"
+CONF="/etc/iscsi-encrypted-luns.conf"
+
+# ---------------------------------------------------------------------------
+# If /mnt/ZFSkeys is already mounted, reuse it (Cinnamon/udisksd may have done
+# this, or a previous run left it mounted).
+# ---------------------------------------------------------------------------
+if mountpoint -q "$KEY_MOUNT" 2>/dev/null; then
+    echo "Using already-mounted keys at $KEY_MOUNT"
+    USE_EXISTING_MOUNT=true
+else
+    USE_EXISTING_MOUNT=false
+fi
+
+# ---------------------------------------------------------------------------
+# If keys are not already mounted, locate and unlock the USB device.
+# ---------------------------------------------------------------------------
+if [[ "$USE_EXISTING_MOUNT" != true ]]; then
+    # Without a keyfile we cannot unlock non-interactively. Exit cleanly so
+    # iSCSI can still start without encrypted LUNs.
+    if [[ ! -f "$KEY_FILE" ]]; then
+        echo "No $KEY_FILE present — unattended LUKS unlock not configured."
+        echo "Encrypted LUNs will remain offline until unlock-zfs-keys is run manually."
+        exit 0
+    fi
+
+    echo "Waiting for ZFS keys USB device..."
+
+    TIMEOUT=60
+    ELAPSED=0
+    DEVICE=""
+    while [[ $ELAPSED -lt $TIMEOUT ]]; do
+        DEVICE=$(blkid -t PARTLABEL=ZFSkeys -o device 2>/dev/null | head -1 || true)
+        [[ -n "$DEVICE" ]] && break
+        sleep 1
+        ELAPSED=$((ELAPSED + 1))
+    done
+
+    if [[ -z "$DEVICE" ]]; then
+        echo "ZFS keys USB not found after ${TIMEOUT}s — encrypted LUNs will remain offline."
+        echo "Insert the USB and run unlock-zfs-keys to load keys manually."
+        exit 0
+    fi
+
+    echo "Found ZFS keys USB: $DEVICE"
+
+    # Unlock LUKS
+    if [[ -e /dev/mapper/keys ]]; then
+        echo "Already unlocked"
+    else
+        echo "Unlocking LUKS partition..."
+        cryptsetup luksOpen "$DEVICE" keys --key-file "$KEY_FILE"
+        echo "Unlocked successfully"
+    fi
+
+    # Prepare mount point (remove legacy symlink if present)
+    if [[ -L "$KEY_MOUNT" ]]; then
+        rm "$KEY_MOUNT"
+        echo "Removed legacy symlink $KEY_MOUNT"
+    fi
+    mkdir -p "$KEY_MOUNT"
+
+    # Mount
+    if ! mountpoint -q "$KEY_MOUNT"; then
+        mount LABEL=ZFSkeys "$KEY_MOUNT" || {
+            echo "ERROR: Failed to mount $KEY_MOUNT"
+            exit 1
+        }
+        echo "Mounted at $KEY_MOUNT"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Load ZFS keys
+# ---------------------------------------------------------------------------
+echo "Loading ZFS encryption keys..."
+
+LOADED=0
+TOTAL=0
+
+if [[ ! -f "$CONF" ]]; then
+    echo "No encrypted LUNs config at $CONF — nothing to load"
+else
+    while IFS=: read -r name device target; do
+        [[ -z "$name" || "$name" == \#* ]] && continue
+        dataset="${device#/dev/zvol/}"
+        TOTAL=$((TOTAL + 1))
+        STATUS=$(zfs get keystatus "$dataset" -H -o value 2>/dev/null || echo "unknown")
+        if [[ "$STATUS" == "unavailable" ]]; then
+            if zfs load-key "$dataset" 2>/dev/null; then
+                echo "  ✓ $dataset"
+                LOADED=$((LOADED + 1))
+            else
+                echo "  ✗ $dataset — failed to load key"
+            fi
+        elif [[ "$STATUS" == "available" ]]; then
+            echo "  ✓ $dataset — already loaded"
+            LOADED=$((LOADED + 1))
+        else
+            echo "  ⚠ $dataset — status: $STATUS"
+        fi
+    done < "$CONF"
+fi
+
+echo "ZFS keys loaded: $LOADED of $TOTAL"
+
+# Wait briefly for zvol device nodes to appear after key loading
+sleep 2
+
+# ---------------------------------------------------------------------------
+# Unmount keys immediately — they're in ZFS kernel memory now
+# ---------------------------------------------------------------------------
+echo "Securing keys..."
+/usr/local/lib/zfsutilities/bin/lock-zfs-keys
+
+echo "ZFS keys unlock complete"
+exit 0

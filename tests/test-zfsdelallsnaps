@@ -1,0 +1,183 @@
+#!/usr/bin/bash
+# test-zfsdelallsnaps — Verify return-code behavior of delallsnaps.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# Create a temporary helper directory so delallsnaps sources stubs instead of
+# the real zfsdelsnap (which would require root locks and ZFS helpers).
+_create_helper_dir() {
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    cat > "$tmpdir/rootcheck" << 'EOF'
+rootcheck() { true; }
+EOF
+    cat > "$tmpdir/zfsoverrides" << 'EOF'
+overrides() { true; }
+EOF
+    printf '%s\n' "$tmpdir"
+}
+
+# Write a zfsdelsnap stub whose delsnap returns the requested rc.
+_write_delsnap_stub() {
+    local dir="$1" fail_snap="${2:-}"
+    cat > "$dir/zfsdelsnap" << EOF
+function delsnap {
+    [[ -n "$fail_snap" && "\$1" == "$fail_snap" ]] && return 1
+    return 0
+}
+EOF
+}
+
+# ------------------------------------------------------------------
+# Test: All snapshots deleted successfully returns 0
+# ------------------------------------------------------------------
+test_all_success_returns_zero() {
+    test_start "All snapshots deleted successfully returns 0"
+    local tmpdir output rc=0
+    tmpdir=$(_create_helper_dir)
+    _write_delsnap_stub "$tmpdir" ""
+
+    output=$(
+        mydir="$tmpdir"
+        bash -c '
+            zfs() {
+                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
+                    echo "tank/fs@snap1"
+                    echo "tank/fs@snap2"
+                    return 0
+                fi
+                if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" && "$5" == "creation" ]]; then
+                    echo "1750000000"
+                    return 0
+                fi
+                command zfs "$@"
+            }
+            export -f zfs
+            source "'"$old_mydir"'/zfsdelallsnaps"
+            delallsnaps "tank/fs"
+        '
+    ) || rc=$?
+
+    rm -rf "$tmpdir"
+    if [[ $rc -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0, got rc=$rc output: $output"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Test: Any delsnap failure returns 1
+# ------------------------------------------------------------------
+test_any_failure_returns_one() {
+    test_start "Any delsnap failure returns 1"
+    local tmpdir output rc=0
+    tmpdir=$(_create_helper_dir)
+    _write_delsnap_stub "$tmpdir" "tank/fs@snap2"
+
+    output=$(
+        mydir="$tmpdir"
+        bash -c '
+            zfs() {
+                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
+                    echo "tank/fs@snap1"
+                    echo "tank/fs@snap2"
+                    return 0
+                fi
+                if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" && "$5" == "creation" ]]; then
+                    echo "1750000000"
+                    return 0
+                fi
+                command zfs "$@"
+            }
+            export -f zfs
+            source "'"$old_mydir"'/zfsdelallsnaps"
+            delallsnaps "tank/fs"
+        '
+    ) || rc=$?
+
+    rm -rf "$tmpdir"
+    if [[ $rc -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=1, got rc=$rc output: $output"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Test: No snapshots returns 0
+# ------------------------------------------------------------------
+test_no_snapshots_returns_zero() {
+    test_start "No snapshots returns 0"
+    local tmpdir output rc=0
+    tmpdir=$(_create_helper_dir)
+    _write_delsnap_stub "$tmpdir" ""
+
+    output=$(
+        mydir="$tmpdir"
+        bash -c '
+            zfs() {
+                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
+                    return 0
+                fi
+                command zfs "$@"
+            }
+            export -f zfs
+            source "'"$old_mydir"'/zfsdelallsnaps"
+            delallsnaps "tank/fs"
+        '
+    ) || rc=$?
+
+    rm -rf "$tmpdir"
+    if [[ $rc -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0, got rc=$rc output: $output"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Test: Filtered list with no matches returns 0
+# ------------------------------------------------------------------
+test_filtered_no_match_returns_zero() {
+    test_start "Filtered list with no matches returns 0"
+    local tmpdir output rc=0
+    tmpdir=$(_create_helper_dir)
+    _write_delsnap_stub "$tmpdir" ""
+
+    output=$(
+        mydir="$tmpdir"
+        bash -c '
+            zfs() {
+                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
+                    echo "tank/fs@snap1"
+                    return 0
+                fi
+                command zfs "$@"
+            }
+            export -f zfs
+            source "'"$old_mydir"'/zfsdelallsnaps"
+            delallsnaps "tank/fs" "nomatch"
+        '
+    ) || rc=$?
+
+    rm -rf "$tmpdir"
+    if [[ $rc -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0, got rc=$rc output: $output"
+    fi
+}
+
+test_all_success_returns_zero
+test_any_failure_returns_one
+test_no_snapshots_returns_zero
+test_filtered_no_match_returns_zero
+
+test_summary
+rc=$?
+teardown_test_env
+exit $rc

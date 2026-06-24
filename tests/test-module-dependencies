@@ -1,0 +1,187 @@
+#!/usr/bin/bash
+# test-module-dependencies — Static check that every module function call is
+# satisfied by a local definition, a sourced module, or bashinit.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+test_module_dependencies() {
+    test_start "Module function calls have required sources"
+
+    local result
+    result=$(python3 - "$old_mydir" <<'PYEOF'
+import os, re, sys
+
+repo_root = sys.argv[1]
+
+# Modules that provide reusable bash functions.  We scan every bash-looking
+# script in the repo root; scripts that define no functions simply contribute
+# nothing to the function map.
+modules = []
+for name in os.listdir(repo_root):
+    path = os.path.join(repo_root, name)
+    if not os.path.isfile(path):
+        continue
+    if name.endswith(('.py', '.md', '.json', '.conf', '.yml', '.yaml',
+                      '.txt', '.html', '.js', '.css', '.zip', '.png',
+                      '.jpg', '.service', '.template')):
+        continue
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            sample = f.read(256)
+    except Exception:
+        continue
+    if sample.startswith('#!/usr/bin/bash') or sample.startswith('#!/bin/bash'):
+        modules.append(name)
+
+# Functions provided by bashinit (available everywhere without an explicit source).
+bashinit_funcs = {
+    'bashinit', 'log_msg', 'msg_prefix', 'calledbybash', 'ask_yn',
+}
+
+func_def_re = re.compile(
+    r'^\s*(?:function\s+([a-zA-Z0-9_-]+)|([a-zA-Z0-9_-]+)\s*\(\s*\)\s*\{)'
+)
+
+func_to_module = {}
+module_lines = {}
+for mod in modules:
+    path = os.path.join(repo_root, mod)
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        text = f.read()
+    module_lines[mod] = text.splitlines()
+    for line in module_lines[mod]:
+        m = func_def_re.match(line)
+        if m:
+            func = m.group(1) if m.group(1) else m.group(2)
+            if func not in func_to_module:
+                func_to_module[func] = mod
+
+# Regex that matches a source line for any known module (handles $mydir,
+# $extrasourcedir, ./, absolute paths, etc.).
+module_names_alt = '|'.join(re.escape(m) for m in modules)
+source_re = re.compile(
+    r'source\s+\S*?/(' + module_names_alt + r')(?=\s|;|$)'
+)
+
+
+def strip_quoted_strings(line):
+    """Remove bash single- and double-quoted substrings from a line."""
+    result = []
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == "'":
+            j = line.find("'", i + 1)
+            if j == -1:
+                break
+            i = j + 1
+        elif ch == '"':
+            i += 1
+            while i < n:
+                if line[i] == '\\' and i + 1 < n:
+                    i += 2
+                elif line[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+        elif ch == '\\' and i + 1 < n and line[i + 1] in ('"', "'"):
+            result.append(ch)
+            i += 1
+        else:
+            result.append(ch)
+            i += 1
+    return ''.join(result)
+
+
+def scan_lines(lines):
+    """Yield (lineno, logical_line) skipping heredoc bodies."""
+    in_heredoc = False
+    heredoc_delim = None
+    for lineno, raw in enumerate(lines, start=1):
+        if in_heredoc:
+            if raw.strip() == heredoc_delim:
+                in_heredoc = False
+                heredoc_delim = None
+            continue
+        logical = raw
+        while logical.rstrip().endswith('\\'):
+            logical = logical.rstrip()[:-1] + ' '
+        m = re.search(r'<<\s*(\'?)\s*([A-Za-z0-9_]+)\s*\1', logical)
+        if m:
+            heredoc_delim = m.group(2)
+            in_heredoc = True
+        yield lineno, logical
+
+
+violations = []
+for mod in modules:
+    local_funcs = set()
+    sourced_modules = set()
+    for line in module_lines[mod]:
+        m = func_def_re.match(line)
+        if m:
+            func = m.group(1) if m.group(1) else m.group(2)
+            local_funcs.add(func)
+        for src in source_re.findall(line):
+            sourced_modules.add(src)
+
+    available = set(bashinit_funcs)
+    available |= local_funcs
+    for src in sourced_modules:
+        if src in module_lines:
+            for line in module_lines[src]:
+                m = func_def_re.match(line)
+                if m:
+                    func = m.group(1) if m.group(1) else m.group(2)
+                    available.add(func)
+
+    for lineno, logical in scan_lines(module_lines[mod]):
+        stripped = logical.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        if func_def_re.match(stripped):
+            continue
+        if source_re.search(stripped):
+            continue
+        unquoted = strip_quoted_strings(stripped)
+        for func, defining_mod in func_to_module.items():
+            if func in available:
+                continue
+            if func in bashinit_funcs:
+                continue
+            pattern = r'(?:^|[;|&$()`{}])\s*' + re.escape(func) + r'(?=\s|$)'
+            if re.search(pattern, unquoted):
+                violations.append(
+                    f'{mod}:{lineno}: calls {func} (defined in {defining_mod}) '
+                    f'but does not source it'
+                )
+                break
+
+if violations:
+    print('VIOLATIONS')
+    for v in violations:
+        print(v)
+    sys.exit(1)
+else:
+    print('OK')
+    sys.exit(0)
+PYEOF
+    )
+    local rc=$?
+
+    if [[ $rc -eq 0 && "$result" == "OK" ]]; then
+        test_pass
+    else
+        test_fail "Static dependency check failed:\n$result"
+    fi
+}
+
+test_module_dependencies
+
+test_summary
+teardown_test_env

@@ -1,0 +1,4 @@
+bktname[0]='d';     bktretain[0]=0; minage[0]=0     # 0 Daily snapshots
+bktname[1]='w';     bktretain[1]=0; minage[1]=0     # 0 Weekly snapshots
+bktname[2]='m';     bktretain[2]=0; minage[2]=0     # 0 Monthly snapshots
+bktname[3]='s';     bktretain[3]=4; minage[3]=65    # 4 Offsite snapshots, minimum age 65 days

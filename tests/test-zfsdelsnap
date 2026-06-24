@@ -1,0 +1,289 @@
+#!/usr/bin/bash
+# test-zfsdelsnap — Verify fatal error when required helpers are missing.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# ------------------------------------------------------------------
+# Test: Missing zfs-diagnose-busy is fatal
+# ------------------------------------------------------------------
+test_missing_zfs_diagnose_busy_is_fatal() {
+    test_start "Missing zfs-diagnose-busy causes fatal message"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Stub out the other helpers that delsnap sources
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { true; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfsdelallholds" << 'EOF'
+delallholds() { true; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    # Intentionally do NOT create zfs-diagnose-busy
+    # Provide a stub bashfatal so the test shell does not exit.
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    # Run delsnap in a subshell so a fatal exit does not kill the test runner.
+    local output rc=0
+    output=$(
+        mydir="$tmpdir"
+        bash -c "source '$old_mydir/zfsdelsnap'; delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
+    ) || rc=$?
+
+    if [[ "$output" == *"FATAL: Required helper $tmpdir/zfs-diagnose-busy is missing."* ]]; then
+        test_pass
+    else
+        test_fail "Expected fatal message about missing helper, got: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+# ------------------------------------------------------------------
+# Test: Present zfs-diagnose-busy allows normal operation
+# ------------------------------------------------------------------
+test_present_zfs_diagnose_busy_proceeds() {
+    test_start "Present zfs-diagnose-busy allows delsnap to proceed"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { true; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfsdelallholds" << 'EOF'
+delallholds() { true; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
+function diagnose_dataset_busy {
+    true
+}
+EOF
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    # Mock zfs so list, clone check and destroy all succeed
+    zfs() {
+        if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" ]]; then
+            return 0
+        elif [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" && "$4" == "clones" ]]; then
+            echo "-"
+        elif [[ "$1" == "destroy" ]]; then
+            return 0
+        else
+            command zfs "$@"
+        fi
+    }
+    export -f zfs
+
+    local output rc=0
+    output=$(
+        mydir="$tmpdir"
+        bash -c "source '$old_mydir/zfsdelsnap'; delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
+    ) || rc=$?
+
+    unset -f zfs
+
+    if [[ "$output" != *"FATAL: Required helper"* && $rc -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected normal completion, got rc=$rc output: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+test_missing_zfs_diagnose_busy_is_fatal
+test_present_zfs_diagnose_busy_proceeds
+
+# ------------------------------------------------------------------
+# Test: checkagainst rc=7 blocks deletion
+# ------------------------------------------------------------------
+test_checkagainst_rc7_blocks_deletion() {
+    test_start "checkagainst rc=7 blocks snapshot deletion"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { return 7; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfsdelallholds" << 'EOF'
+delallholds() { true; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
+function diagnose_dataset_busy {
+    true
+}
+EOF
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    local output rc=0
+    output=$(
+        mydir="$tmpdir"
+        bash -c '
+            zfs() {
+                if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" ]]; then
+                    return 0
+                elif [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" && "$4" == "clones" ]]; then
+                    echo "-"
+                elif [[ "$1" == "destroy" ]]; then
+                    return 0
+                else
+                    command zfs "$@"
+                fi
+            }
+            source "'"$old_mydir"'/zfsdelsnap"
+            delsnap "pool@snap" "0" "N"
+        ' 2>&1
+    ) || rc=$?
+
+    if [[ $rc -eq 7 ]]; then
+        test_pass
+    else
+        test_fail "Expected blocked deletion (rc=7), got rc=$rc output: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+# ------------------------------------------------------------------
+# Test: checkagainst rc=4 allows deletion
+# ------------------------------------------------------------------
+test_checkagainst_rc4_allows_deletion() {
+    test_start "checkagainst rc=4 allows snapshot deletion"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { return 4; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfsdelallholds" << 'EOF'
+delallholds() { true; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
+function diagnose_dataset_busy {
+    true
+}
+EOF
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    local output rc=0
+    output=$(
+        mydir="$tmpdir"
+        bash -c '
+            zfs() {
+                if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" ]]; then
+                    return 0
+                elif [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" && "$4" == "clones" ]]; then
+                    echo "-"
+                elif [[ "$1" == "destroy" ]]; then
+                    return 0
+                else
+                    command zfs "$@"
+                fi
+            }
+            source "'"$old_mydir"'/zfsdelsnap"
+            delsnap "pool@snap" "0" "N"
+        ' 2>&1
+    ) || rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected deletion allowed (rc=0), got rc=$rc output: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+test_missing_zfs_diagnose_busy_is_fatal
+test_present_zfs_diagnose_busy_proceeds
+test_checkagainst_rc7_blocks_deletion
+test_checkagainst_rc4_allows_deletion
+
+# ------------------------------------------------------------------
+# Test: Real zfscheckagainst sources remove_leading_qualifiers
+# ------------------------------------------------------------------
+test_checkagainst_sources_remove_leading_qualifiers() {
+    test_start "Real zfscheckagainst defines remove_leading_qualifiers when called"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Copy the real helper modules that zfscheckagainst sources.
+    cp "$old_mydir/zfscheckagainst" "$tmpdir/zfscheckagainst"
+    cp "$old_mydir/zfscommsnap" "$tmpdir/zfscommsnap"
+    cp "$old_mydir/bashdebug" "$tmpdir/bashdebug"
+    cp "$old_mydir/zfsconfig" "$tmpdir/zfsconfig"
+    cp "$old_mydir/zfsremoveleadingqualifiers" "$tmpdir/zfsremoveleadingqualifiers"
+
+    local output rc=0
+    output=$(
+        mydir="$tmpdir"
+        bash -c '
+            # Minimal mock: only the snapshot-existence check needs to succeed.
+            zfs() {
+                if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" ]]; then
+                    return 0
+                fi
+                command zfs "$@"
+            }
+            source "$mydir/zfscheckagainst"
+            checkagainst "pool/fs@snap" >/dev/null 2>&1 || true
+            if [[ $(type -t remove_leading_qualifiers) == "function" ]]; then
+                echo FUNCTION_DEFINED
+            else
+                echo FUNCTION_MISSING
+            fi
+        ' 2>&1
+    ) || rc=$?
+
+    if [[ "$output" == *"FUNCTION_DEFINED"* ]]; then
+        test_pass
+    else
+        test_fail "Expected remove_leading_qualifiers to be defined after calling" \
+            "zfscheckagainst. rc=$rc output: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+test_checkagainst_sources_remove_leading_qualifiers
+
+test_summary
+teardown_test_env
