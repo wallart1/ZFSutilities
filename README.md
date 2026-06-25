@@ -83,7 +83,8 @@ administrators. It is designed for small and medium-sized installations.
    
    The installer deploys a versioned installation under
    `/usr/local/lib/zfsutilities/`, sets up `PATH` configuration, and creates
-   desktop menu entries for the GUI.
+   two launcher symlinks in the desktop user's home directory:
+   `~/ZFSutilities GUI` and `~/ZFSutilities Documentation`.
 
 3. Launch the GUI from the terminal:
    
