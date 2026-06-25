@@ -8,6 +8,8 @@ administrators. It is designed for small and medium-sized installations.
 
 ---
 
+![ZFSutilities GUI](<06 Docs/images/Screenshot from 0-54-0.png>)
+
 ## Primary Features
 
 - **GTK3 GUI front-end** — A graphical interface that makes ZFS operations more
@@ -38,10 +40,12 @@ administrators. It is designed for small and medium-sized installations.
 - Root privileges for all ZFS operations
 - ZFS pools already set up and running
 - MkDocs and the Material theme (installed automatically by the installer):
+  
   ```bash
   pip install mkdocs mkdocs-material
   ```
 - For the GUI:
+  
   ```bash
   apt install gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0
   ```
@@ -56,42 +60,48 @@ administrators. It is designed for small and medium-sized installations.
 ## Download and Install
 
 1. Clone the repository:
+   
    ```bash
    git clone https://github.com/wallart1/ZFSutilities.git
    cd ZFSutilities
    ```
 
 2. Run the appropriate installer as root:
-
+   
    For a **single-node** setup (compute and storage roles on the same host;
    VMs are optional):
+   
    ```bash
    sudo ./10\ Installers/install-single-node
    ```
-
+   
    For a **two-node** setup (storage host plus a separate compute host):
+   
    ```bash
    sudo ./10\ Installers/install-two-node
    ```
-
+   
    The installer deploys a versioned installation under
    `/usr/local/lib/zfsutilities/`, sets up `PATH` configuration, and creates
    desktop menu entries for the GUI.
 
 3. Launch the GUI from the terminal:
-
+   
    After installation the GUI is on `PATH`:
+   
    ```bash
    sudo zfsutilities-gui
    ```
-
+   
    If you are running a local copy that is not yet in `PATH`, prefix the
    command:
+   
    ```bash
    sudo ~/zfsutilities-gui
    ```
-
+   
    Or run individual scripts directly. For example:
+   
    ```bash
    sudo zfsdailybackup
    ```
