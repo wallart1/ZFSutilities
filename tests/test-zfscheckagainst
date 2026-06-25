@@ -412,6 +412,53 @@ test_literal_counterpart_last_remaining() {
     assert_rc 7 "$rc"
 }
 
+test_dataset_offsite_placeholder_reverse_check() {
+    test_start "Dataset <offsite>/suffix expands for reverse check"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    _zfscheckagainst_checkagainst_lines=("<offsite>/temp 1 - offsite")
+    set_online_pools z22tb temp
+    set_existing_datasets temp
+    local rc=0
+    checkagainst "z22tb/temp@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_dataset_offsite_placeholder_no_candidates() {
+    test_start "Dataset <offsite>/suffix with no candidates returns 5"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=()
+    _zfscheckagainst_checkagainst_lines=("<offsite>/temp 1 - offsite")
+    set_online_pools temp
+    local rc=0
+    checkagainst "z22tb/temp@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 5 "$rc"
+}
+
+test_dataset_and_counterpart_offsite_placeholder() {
+    test_start "<offsite> in both columns expands and skips self-checks"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    _zfscheckagainst_checkagainst_lines=("<offsite>/temp 1 <offsite> offsite")
+    set_online_pools z22tb z40tb temp
+    set_existing_datasets z40tb/temp temp
+    local rc=0
+    checkagainst "z22tb/temp@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_counterpart_offsite_not_at_start() {
+    test_start "Counterpart <offsite> may appear after the pool name"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    _zfscheckagainst_checkagainst_lines=("poolA/data 0 poolA/<offsite>/backup offsite")
+    set_online_pools z22tb z40tb poolA
+    set_existing_datasets poolA/z40tb/backup/poolA/data
+    local rc=0
+    checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
 # ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
@@ -438,6 +485,10 @@ test_offsite_placeholder_offline_hold_verified
 test_offsite_placeholder_offline_no_hold_blocks
 test_offsite_placeholder_offline_non_offsite_label_blocks
 test_offsite_placeholder_with_suffix
+test_dataset_offsite_placeholder_reverse_check
+test_dataset_offsite_placeholder_no_candidates
+test_dataset_and_counterpart_offsite_placeholder
+test_counterpart_offsite_not_at_start
 
 rm -rf "$mock_mydir"
 

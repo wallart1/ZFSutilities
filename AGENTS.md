@@ -522,6 +522,15 @@ log_msg("DEBUG: variable =", value)
 
 ---
 
+## Recent Session Notes (2026-06-25)
+
+- `zfscheckagainst`: The `<offsite>` placeholder may now appear anywhere in the
+  Dataset *or* Counterpart column of the fss table. Every occurrence is replaced
+  at run-time with each configured offsite-candidate pool name; rows expanded
+  from an `<offsite>` dataset skip the meaningless self-check against the source
+  pool. The GUI Checkagainst tab notes and the documentation were updated
+  accordingly; `tests/test-zfscheckagainst` was expanded to cover the new cases.
+
 ## Recent Session Notes (2026-03-13)
 
 - `zfsretain`: Phase 2 now deletes the oldest snapshots first when a bucket overflows; empty snapshots (`written=0`) are still logged as `(empty)` but no longer receive deletion preference. Most recent snapshot in each bucket is always protected as incremental base

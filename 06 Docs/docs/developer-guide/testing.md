@@ -48,7 +48,7 @@ The `./run-tests` harness detects whether a name starts with `test_` (Python) or
 | `test-zfsbuildfsarray` | 14 | Dataset array building with includes, excludes, exact-match (`=` prefix), depth limits, `startwith` / `endwith`, clone skipping |
 | `test-zfscommsnap` | 6 | Common snapshot detection by GUID, most-recent / oldest modes, return codes (0, 4, 8, 16) |
 | `test-zfscleanup` | 5 | Pool selection: configured pools, explicit argument, fallback to online pools, offline-pool skipping |
-| `test-zfscheckagainst` | 22 | `<offsite>` placeholder expansion, offline hold-tag verification, literal counterparts, missing-snapshot fatal error, legacy `.conf` fallback |
+| `test-zfscheckagainst` | 26 | `<offsite>` placeholder expansion in Dataset and Counterpart columns, offline hold-tag verification, literal counterparts, missing-snapshot fatal error, legacy `.conf` fallback |
 | `test-zfsconfig` | 13 | Pool entry parsing: strings, dicts, mixed entries, missing/empty/null names; offsite-candidate selection; checkagainst field emission and default/incomplete-entry handling |
 | `test-zfs-diagnose-busy` | 8 | Diagnostic output from `zfs-diagnose-busy` — detects busy dataset causes (clones, holds, open files, sends, receives, shares, iSCSI LUNs) |
 | `test-zfsdelfs` | 7 | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs` |

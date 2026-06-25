@@ -40,13 +40,19 @@ function checkagainst {
         rc \
         snaplabel \
         snaptocheck="$1" \
-        zfsdelsnap_other_commsnap
+        zfsdelsnap_other_commsnap \
+        _source_pool \
+        _ca_from_offsite_ds=()
 
     # Verify that the given snapshot exists.
     if ! zfs list -t snapshot $snaptocheck > /dev/null 2>&1; then
         log_msg "FATAL: Snapshot $snaptocheck does not exist."
         exit 8
     fi
+
+    # Remember the source pool so we can skip self-checks for rows that were
+    # expanded from an <offsite> dataset placeholder.
+    _source_pool=$(echo "${snaptocheck%%@*}" | awk -F'/' '{print $1}')
 
 # =======================  Backup Series  ==============================
 # Each < or > is one line in the fss table.
@@ -94,10 +100,39 @@ function checkagainst {
         fi
     fi
 
+    # Expand <offsite> placeholders in the Dataset column. Every occurrence
+    # of the literal token is replaced with each offsite-candidate pool.
+    local _expanded_fss=()
+    local _ca_line _fs _pool
+    for _ca_line in "${fss[@]}"; do
+        _fs=$(echo "$_ca_line" | awk '{print $1}')
+        if [[ $_fs == *'<offsite>'* ]]; then
+            local _offsite_ds_candidates=()
+            while IFS= read -r _pool; do
+                [[ -n "$_pool" ]] && _offsite_ds_candidates+=("$_pool")
+            done < <(zfsconfig_get_offsite_candidates)
+            if [[ ${#_offsite_ds_candidates[@]} -eq 0 ]]; then
+                log_msg "WARN: <offsite> used in dataset but no offsite candidate" \
+                    "pools are configured. Skipping fss row: $_ca_line"
+                continue
+            fi
+            for _pool in "${_offsite_ds_candidates[@]}"; do
+                local _new_ds="${_fs//<offsite>/$_pool}"
+                _expanded_fss+=("$(echo "$_ca_line" | awk -v d="$_new_ds" '{$1=d; print}')")
+                _ca_from_offsite_ds+=("Y")
+            done
+        else
+            _expanded_fss+=("$_ca_line")
+            _ca_from_offsite_ds+=("N")
+        fi
+    done
+    fss=("${_expanded_fss[@]}")
+
     foundcounterpart=''
     local offline_pools=""
     local matched_fss_entry=false
-    for fullfs in "${fss[@]}"; do
+    for ((i=0; i<${#fss[@]}; i++)); do
+        fullfs="${fss[$i]}"
         # awk '{print $1}'  —  fullfs is a space-separated config line; get the target dataset.
         fs=$(echo "$fullfs" | awk '{print $1}')
         # Check if snapshot belongs to this dataset (exact match or child dataset)
@@ -127,10 +162,7 @@ function checkagainst {
                 # Expand <offsite> placeholder to all configured offsite-candidate pools.
                 local _offsite_candidates=()
                 local _ca_prefixes=("$checkagainst")
-                if [[ $checkagainst == '<offsite>' || $checkagainst == '<offsite>'/* ]]; then
-                    local _pool _suffix
-                    _suffix="${checkagainst#<offsite>}"
-                    _suffix="${_suffix#/}"
+                if [[ $checkagainst == *'<offsite>'* ]]; then
                     while IFS= read -r _pool; do
                         [[ -n "$_pool" ]] && _offsite_candidates+=("$_pool")
                     done < <(zfsconfig_get_offsite_candidates)
@@ -148,11 +180,7 @@ function checkagainst {
                     fi
                     _ca_prefixes=()
                     for _pool in "${_offsite_candidates[@]}"; do
-                        if [[ -n "$_suffix" ]]; then
-                            _ca_prefixes+=("${_pool}/${_suffix}")
-                        else
-                            _ca_prefixes+=("$_pool")
-                        fi
+                        _ca_prefixes+=("${checkagainst//<offsite>/$_pool}")
                     done
                 fi
 
@@ -182,6 +210,13 @@ function checkagainst {
                         _candidate_pool=$(echo "$checkagainst" | awk -F'/' '{print $1}')
                     else
                         _candidate_pool=$(echo "$_candidate_dstocheck" | awk -F'/' '{print $1}')
+                    fi
+
+                    # If this row was expanded from an <offsite> dataset
+                    # placeholder, skip the meaningless self-check (e.g.
+                    # z22tb/temp should not be checked against z22tb/temp).
+                    if [[ ${_ca_from_offsite_ds[$i]} == "Y" && $_candidate_pool == $_source_pool ]]; then
+                        continue
                     fi
 
                     # See if the pool is online.

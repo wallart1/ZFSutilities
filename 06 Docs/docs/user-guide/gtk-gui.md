@@ -832,9 +832,9 @@ An editable, reorderable table with five columns. Drag rows to reorder them; cli
 
 | Column          | Meaning                                                              |
 | --------------- | -------------------------------------------------------------------- |
-| **Dataset**     | Leading path segments of the source dataset path                     |
-| **Quals**       | Number of leading path segments to strip                             |
-| **Counterpart** | Leading path segments to be prepended after the stripping operation. Use `<offsite>` to check against all offsite-candidate pools. |
+| **Dataset**     | Source dataset tree this row applies to. `<offsite>` may appear anywhere; each occurrence is replaced with each offsite-candidate pool name at run-time. |
+| **Quals**       | Number of leading path segments to strip from the snapshot's dataset name |
+| **Counterpart** | Path prefix to prepend after stripping. A literal `-` means "no prepend". `<offsite>` may appear anywhere and is replaced with each offsite-candidate pool name. |
 | **Label**       | Snapshot label to match                                              |
 | **Comment**     | Optional note stored in the JSON config and shown in this table      |
 
@@ -844,7 +844,7 @@ Here is how this table is used to construct the dataset name where counterpart s
 
 2. If the match succeeds, the Quals column is used as the number of leading path segments to be stripped from the candidate snapshot name. ("0" means none).
 
-3. After the stripping operation, the Counterpart column is prepended to the resulting dataset name. A literal `-` means "no prepend". The special value `<offsite>` (or `<offsite>/suffix`) is resolved at run-time to every pool marked as an offsite candidate in the Pools tab; the snapshot is safe to delete if any online candidate has a counterpart, or (for `offsite` labels) if hold-tag verification succeeds for an offline candidate.
+3. The `<offsite>` placeholder may appear anywhere in the Dataset or Counterpart value. Every occurrence is replaced at run-time with each pool marked as an offsite candidate in the Pools tab; rows expanded from an `<offsite>` dataset skip the meaningless self-check against their source pool. A literal `-` in the Counterpart column means "no prepend". The snapshot is safe to delete if any online candidate has a counterpart, or (for `offsite` labels) if hold-tag verification succeeds for an offline candidate.
 
 The result is the dataset where counterpart snapshots will be searched for. If any matching row fails, the snapshot is not deleted. Further logic is used to make the final determination whether the candidate snapshot should be deleted.
 

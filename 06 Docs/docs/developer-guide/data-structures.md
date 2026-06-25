@@ -38,7 +38,7 @@ ignored by the bash consumer:
 
 | Field | Variable name in script                 | Purpose                                                          |
 | ----- | --------------------------------------- | ---------------------------------------------------------------- |
-| 1     | apply-to dataset (`$fs`)                | Matches the source dataset tree                                  |
+| 1     | apply-to dataset (`$fs`)                | Matches the source dataset tree. May contain `<offsite>` anywhere; every occurrence is replaced with each offsite-candidate pool name at run-time |
 | 2     | qualifiers to delete (`$delquals`)      | Leading path components to strip                                 |
 | 3     | qualifiers to prepend (`$checkagainst`) | Path prefix to prepend, or `-` for none                          |
 | 4     | label                                   | Snapshot label this row applies to (`dailybackup`, `offsite`, …) |

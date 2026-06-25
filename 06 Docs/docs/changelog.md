@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.54.1
+
+### Added
+
+- **`<offsite>` placeholder in the Dataset column** — `zfscheckagainst` fss
+  table rows may now use `<offsite>` in the Dataset value. Every occurrence is
+  replaced at run-time with each pool marked as an offsite candidate in the
+  Pools tab, creating one expanded row per candidate.
+- **`<offsite>` anywhere in the Counterpart column** — the token is no longer
+  restricted to a prefix or `<offsite>/suffix`; it may appear anywhere in the
+  Counterpart value (e.g. `poolA/<offsite>/backup`).
+- **Self-check skipping** — rows expanded from an `<offsite>` dataset skip the
+  meaningless check of a pool against itself (e.g. `z22tb/temp` vs.
+  `z22tb/temp`).
+
+### Changed
+
+- Updated the Checkagainst tab help text in the GTK GUI to document that
+  `<offsite>` may appear in the Dataset or Counterpart column.
+
+### Tests
+
+- Expanded `tests/test-zfscheckagainst` from 22 to 26 tests, adding coverage
+  for dataset-placeholder expansion, no-candidate handling, dual-column
+  expansion, and non-leading counterpart placeholders.
+
+### Documentation
+
+- Updated `commands-and-modules/modules.md` and
+  `developer-guide/data-structures.md` to describe `<offsite>` use in Dataset
+  and Counterpart values.
+- Updated `user-guide/gtk-gui.md` Checkagainst tab description.
+- Updated `developer-guide/testing.md` with the current
+  `test-zfscheckagainst` count.
+
 ## 0.54.0
 
 ### Changed

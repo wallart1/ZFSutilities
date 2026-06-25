@@ -47,9 +47,9 @@ def _entries_to_config(app, entries):
 def create_checkagainst_page(app):
     """Build and return the Checkagainst configuration page widget.
 
-    The Counterpart column accepts literal pool/path values, "-" for no
-    prefix, or "<offsite>" to resolve to all offsite-candidate pools at
-    run-time.
+    The Dataset and Counterpart columns accept literal pool/path values,
+    "-" for no prefix, or "<offsite>" to resolve to all offsite-candidate
+    pools at run-time.
     """
 
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -126,16 +126,20 @@ def create_checkagainst_page(app):
         "(N = Quals column)\n"
         "  2. <b>Prepend</b> the Counterpart prefix to the result\n\n"
         "<b>Special value:</b>\n"
-        "  <b>&lt;offsite&gt;</b> checks against every pool marked as an offsite "
-        "candidate in the Pools tab. A suffix such as <b>&lt;offsite&gt;/archive</b> "
-        "is appended to each candidate pool.\n\n"
+        "  <b>&lt;offsite&gt;</b> may be used anywhere in the Dataset or Counterpart "
+        "column. Every occurrence is replaced with every pool marked as an offsite "
+        "candidate in the Pools tab.\n\n"
         "<b>Examples:</b>\n"
         "  Quals=0: poolA/data → remove nothing → prepend poolB → "
         "<b>poolB/poolA/data</b>\n"
         "  Quals=2: poolB/poolA/data → remove 'poolB/poolA' → "
         "prepend poolA → <b>poolA/data</b>\n"
         "  Quals=0, Counterpart=&lt;offsite&gt;: poolA/data → "
-        "<b>z22tb/poolA/data</b>, <b>z40tb/poolA/data</b>, …</small>"
+        "<b>z22tb/poolA/data</b>, <b>z40tb/poolA/data</b>, …\n"
+        "  Dataset=&lt;offsite&gt;/temp, Quals=1, Counterpart=-: "
+        "z22tb/temp → remove 'z22tb' → <b>temp</b>\n"
+        "  Counterpart=poolA/&lt;offsite&gt;/backup: poolA/data → "
+        "<b>poolA/z22tb/backup/poolA/data</b>, …</small>"
     )
     notes.set_halign(Gtk.Align.START)
     notes.set_line_wrap(True)

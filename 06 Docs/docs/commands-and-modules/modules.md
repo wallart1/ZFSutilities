@@ -281,7 +281,7 @@ config and shown in the GUI, but it is not emitted by `zfsconfig_get_checkagains
 
 | Field | Name in code                            | Purpose                                                                                                                                   |
 | ----- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | apply-to dataset (`$fs`)                | The source dataset tree this entry applies to. The snapshot being checked must belong to this dataset or one of its descendants           |
+| 1     | apply-to dataset (`$fs`)                | The source dataset tree this entry applies to. The snapshot being checked must belong to this dataset or one of its descendants. May contain `<offsite>` anywhere; every occurrence is replaced with each offsite-candidate pool name at run-time |
 | 2     | qualifiers to delete (`$delquals`)      | Number of leading path components to strip from the source dataset name before constructing the counterpart name. `0` means strip nothing |
 | 3     | qualifiers to prepend (`$checkagainst`) | Path prefix to prepend to the stripped dataset name. A literal `-` means "null prepend" — use the stripped name as-is                     |
 | 4     | label                                   | Snapshot label to match (`dailybackup`, `offsite`, etc.). Only snapshots carrying this label are checked against this entry               |
@@ -296,7 +296,14 @@ NVME1                0    fivebays               dailybackup
 temp                 0    z22tb                  dailybackup
 temp                 0    z40tb                  offsite
 fivebays             0    z22tb                  offsite
+<offsite>/temp       1    -                      offsite
 ```
+
+The last entry expands at run-time to one row per offsite-candidate pool
+(e.g. `z22tb/temp` and `z40tb/temp`), allowing `zfscheckagainst` to verify
+offsite snapshots against their local counterpart. The `<offsite>` token may
+appear anywhere in the Dataset or Counterpart value; every occurrence is
+replaced with the candidate pool name.
 
 #### How an entry is used
 
