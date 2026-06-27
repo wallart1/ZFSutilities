@@ -294,6 +294,53 @@ class TestLogIndex(unittest.TestCase):
         self.assertEqual(entry["duration"], 2.0)
         self.assertEqual(entry["bytes_transferred"], 2048)
 
+    def test_large_file_scans_tail_for_trailer(self):
+        """scan_file must not read the whole file; tail scan finds trailer."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "big.log")
+            with open(path, "w", encoding="utf-8") as fh:
+                for i in range(200):
+                    fh.write(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n")
+                fh.write("2026-06-22 07:03:20  /a:1: WARN: near end\n")
+                fh.write("# END: rc=0, duration=123.4s, bytes=1073741824\n")
+
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                # Force tail-only scan with a small window.
+                entry = li.scan_file(path, max_tail_bytes=200)
+
+        self.assertEqual(entry["status"], "Done")
+        self.assertEqual(entry["duration"], 123.4)
+        self.assertEqual(entry["bytes_transferred"], 1073741824)
+        self.assertTrue(entry["has_trailer"])
+
+    def test_large_file_without_trailer_recent_is_running(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "big_running.log")
+            with open(path, "w", encoding="utf-8") as fh:
+                for i in range(200):
+                    fh.write(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n")
+
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                entry = li.scan_file(path, max_tail_bytes=200)
+
+        self.assertEqual(entry["status"], "Running")
+        self.assertFalse(entry["has_trailer"])
+
+    def test_large_file_highest_level_from_tail(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "big.log")
+            with open(path, "w", encoding="utf-8") as fh:
+                for i in range(200):
+                    fh.write(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n")
+                fh.write("2026-06-22 07:03:20  /a:1: FATAL: near end\n")
+                fh.write("# END: rc=1, duration=1.0s\n")
+
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                entry = li.scan_file(path, max_tail_bytes=200)
+
+        self.assertEqual(entry["highest_level"], "FATAL")
+        self.assertEqual(entry["status"], "Failed")
+
     def test_scan_file_returns_defaults_when_missing(self):
         entry = li.scan_file("/tmp/does-not-exist.log")
         self.assertEqual(entry["size"], 0)

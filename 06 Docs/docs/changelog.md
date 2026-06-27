@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.55.1
+
+### Fixed
+
+- **Large session log files no longer exhaust RAM on GUI startup** —
+  `log_index.py::scan_file()` previously read the entire log file into memory
+  with `fh.read()`. A session log that grew to ~18 GB caused the GUI process
+  to consume all system memory and swap, making the GUI unresponsive and the
+  node unstable. `scan_file()` now scans only the trailing portion of files
+  larger than 1 MB, which is where the trailer and recent message levels live.
+
+### Tests
+
+- Added `test_log_index.py` cases for large-file tail scanning, including
+  trailer detection, highest-level extraction, and running-status handling
+  when no trailer is present.
+
 ## 0.55.0
 
 ### Added

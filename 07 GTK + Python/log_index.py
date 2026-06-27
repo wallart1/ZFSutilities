@@ -131,25 +131,41 @@ def _update_entry_from_text(entry, text):
             break
 
 
-def scan_file(path):
+def scan_file(path, max_tail_bytes=1024 * 1024):
     """Scan a log file and return a complete index entry.
 
     This is the cold-path fallback used when no index entry exists yet or
     when a file has been truncated.
+
+    For files larger than *max_tail_bytes*, only the trailing portion is
+    scanned. The trailer line and the highest message level are almost always
+    near the end of a completed log, so scanning the tail avoids loading
+    multi-gigabyte logs into memory.
     """
     entry = _empty_entry()
     if not os.path.isfile(path):
         return entry
 
     try:
-        entry["size"] = os.path.getsize(path)
+        size = os.path.getsize(path)
+        entry["size"] = size
         entry["mtime"] = os.path.getmtime(path)
     except OSError:
         return entry
 
+    if size == 0:
+        return entry
+
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
+            if size <= max_tail_bytes:
+                text = fh.read()
+            else:
+                fh.seek(size - max_tail_bytes)
+                # Discard the likely-partial first line so we start on a clean
+                # line boundary; the trailer we care about is near the end.
+                fh.readline()
+                text = fh.read()
     except OSError:
         return entry
 
