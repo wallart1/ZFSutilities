@@ -269,6 +269,70 @@ test_validate_all_present
 test_validate_missing_scripts_warns
 
 # ------------------------------------------------------------------
+# Two-node script symlinks (from deploy-version deploy_to_host)
+# ------------------------------------------------------------------
+_test_two_node_symlink_logic() {
+    local version_dir="$1"
+    local two_node_scripts=(
+        new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk
+        rescan-storage show-lun-map clone-vm move-vm-disk
+        safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns
+        unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys
+        install-scripts enroll-efi-keys-vm
+    )
+    mkdir -p "$version_dir/bin"
+    mkdir -p "$version_dir/08 Two-node"
+
+    for script in "${two_node_scripts[@]}"; do
+        echo '#!/bin/bash' > "$version_dir/08 Two-node/$script"
+        chmod +x "$version_dir/08 Two-node/$script"
+        rm -f "$version_dir/bin/$script"
+        ln -sfn "../08 Two-node/$script" "$version_dir/bin/$script"
+    done
+}
+
+test_enroll_efi_keys_vm_symlinked() {
+    test_start "deploy-version symlinks enroll-efi-keys-vm into bin"
+    local tmpdir=$(mktemp -d)
+    _test_two_node_symlink_logic "$tmpdir"
+
+    local ok=1
+    if [[ ! -L "$tmpdir/bin/enroll-efi-keys-vm" ]]; then
+        ok=0
+        echo "    enroll-efi-keys-vm symlink missing"
+    fi
+    local target
+    target=$(readlink "$tmpdir/bin/enroll-efi-keys-vm" 2>/dev/null || true)
+    if [[ "$target" != "../08 Two-node/enroll-efi-keys-vm" ]]; then
+        ok=0
+        echo "    enroll-efi-keys-vm target wrong: $target"
+    fi
+
+    rm -rf "$tmpdir"
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "enroll-efi-keys-vm was not symlinked correctly"
+    fi
+}
+
+test_enroll_efi_keys_vm_in_deploy_list() {
+    test_start "deploy-version TWO_NODE_SCRIPTS includes enroll-efi-keys-vm"
+    local deploy_script
+    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+
+    if grep -qE '\benroll-efi-keys-vm\b' "$deploy_script"; then
+        test_pass
+    else
+        test_fail "enroll-efi-keys-vm not found in deploy-version TWO_NODE_SCRIPTS"
+    fi
+}
+
+test_enroll_efi_keys_vm_symlinked
+test_enroll_efi_keys_vm_in_deploy_list
+
+# ------------------------------------------------------------------
 # Launcher symlinks (from deploy-version deploy_to_host)
 # ------------------------------------------------------------------
 _test_symlink_logic() {

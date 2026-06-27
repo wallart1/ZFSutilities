@@ -1,0 +1,196 @@
+#!/bin/bash
+# enroll-efi-keys-vm <vmid>
+# Re-initializes a VM's EFI vars disk with the Microsoft UEFI CA 2023
+# certificates.
+#
+# Grows the backing EFI zvol to 4M if needed, rewrites the EFI vars disk from
+# OVMF_VARS_4M.ms.fd, and updates the Proxmox VM config with size=4M and
+# ms-cert=2023k.
+#
+# Run from the compute node (or from the storage node in two-node mode; it
+# will delegate via SSH to the compute node).
+#
+# The VM must be stopped. The script will gracefully shut it down and wait if
+# it is running.
+
+source /usr/local/lib/node-lib.sh
+
+MY_HOST=$(hostname -s)
+PVE_CONF_DIR="/etc/pve/qemu-server"
+
+usage() {
+    echo "Usage: enroll-efi-keys-vm <vmid>"
+    echo ""
+    echo "  vmid   Proxmox VM ID whose EFI disk should be enrolled"
+    echo ""
+    echo "Example: enroll-efi-keys-vm 209"
+    exit 1
+}
+
+die() {
+    echo "✗ ERROR: $*" >&2
+    exit 1
+}
+
+[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+[[ $# -eq 1 ]] || usage
+
+VMID="$1"
+[[ "$VMID" =~ ^[0-9]+$ ]] || die "vmid must be a number, got: $VMID"
+
+# In two-node mode, run on the compute host.
+if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    exec ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/enroll-efi-keys-vm '$VMID'"
+fi
+
+conf="$PVE_CONF_DIR/${VMID}.conf"
+[[ -f "$conf" ]] || die "VM config not found: $conf"
+
+# --- Ensure VM is stopped ---
+vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+if [[ "$vm_status" == "running" ]]; then
+    echo "VM $VMID is running. Shutting down gracefully..."
+    qm shutdown "$VMID" >/dev/null 2>&1 || true
+    for i in $(seq 1 120); do
+        vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+        [[ "$vm_status" != "running" ]] && break
+        sleep 1
+    done
+    vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+    [[ "$vm_status" != "running" ]] || die "VM $VMID did not shut down in time"
+    echo "✓ VM $VMID is stopped"
+fi
+
+# --- Parse efidisk0 line ---
+# Helper: read conf file, echo "by_path size has_ms_cert".
+parse_efidisk_line() {
+    local conf_file="$1"
+    local line by_path size has_ms_cert
+    line=$(grep '^efidisk0:' "$conf_file" 2>/dev/null | head -1)
+    [[ -n "$line" ]] || { echo ""; return 1; }
+
+    # Volume identifier is the first field after the colon.
+    by_path=$(echo "$line" | cut -d: -f2- | cut -d, -f1 | tr -d ' ')
+    size=$(echo "$line" | grep -oP 'size=\K[^,]+' || true)
+
+    has_ms_cert=no
+    if echo "$line" | grep -q 'ms-cert=2023k'; then
+        has_ms_cert=yes
+    fi
+
+    echo "$by_path $size $has_ms_cert"
+}
+
+parsed=$(parse_efidisk_line "$conf")
+[[ -n "$parsed" ]] || die "VM $VMID has no efidisk0 entry"
+read -r by_path current_size has_ms_cert <<< "$parsed"
+
+[[ -n "$by_path" ]] || die "Could not extract efidisk0 volume ID"
+[[ -n "$current_size" ]] || die "Could not extract efidisk0 size"
+
+# --- Resolve backing zvol ---
+if [[ "$by_path" =~ ^/dev/disk/by-path/ip-[^/]+-iscsi-(.+)-lun-([0-9]+)$ ]]; then
+    TARGET="${BASH_REMATCH[1]}"
+    LUN="${BASH_REMATCH[2]}"
+
+    if is_two_node; then
+        echo "Resolving iSCSI LUN $LUN in target $TARGET on $STORAGE_HOST..."
+        backstore=$(ssh root@"$STORAGE_HOST" "targetcli '/iscsi/${TARGET}/tpg1/luns' ls 2>/dev/null | grep -E 'lun${LUN}[^0-9]' | grep -oP 'block/\\K\\S+' | head -1")
+        [[ -n "$backstore" ]] || die "No iSCSI backstore found for LUN $LUN in $TARGET"
+
+        zvol=$(ssh root@"$STORAGE_HOST" "targetcli /backstores/block ls 2>/dev/null | grep ' ${backstore} ' | grep -oP '/dev/zvol/\\K\\S+' | head -1")
+        [[ -n "$zvol" ]] || die "No zvol found for backstore $backstore"
+    else
+        die "Single-node by-path EFI disk resolution is not supported for: $by_path"
+    fi
+elif [[ "$by_path" =~ ^([^:]+):vm-([0-9]+)-disk-([0-9]+)$ ]]; then
+    # Proxmox storage reference (single-node only).
+    storage="${BASH_REMATCH[1]}"
+    zvol=$(zfs list -H -t volume -o name 2>/dev/null | grep "/proxmox/vm-${BASH_REMATCH[2]}-disk-${BASH_REMATCH[3]}$" | head -1)
+    [[ -n "$zvol" ]] || die "No zvol found for storage reference: $by_path"
+else
+    die "Unsupported efidisk0 volume ID format: $by_path"
+fi
+
+echo "  Backing zvol: $zvol"
+
+# --- Grow zvol to 4M if needed ---
+get_zvol_bytes() {
+    if is_two_node; then
+        ssh root@"$STORAGE_HOST" "zfs get -Hp -o value volsize '$zvol'"
+    else
+        zfs get -Hp -o value volsize "$zvol"
+    fi
+}
+
+current_bytes=$(get_zvol_bytes)
+[[ -n "$current_bytes" && "$current_bytes" =~ ^[0-9]+$ ]] || die "Could not read zvol size"
+
+if [[ "$current_bytes" -lt 4194304 ]]; then
+    echo "Growing EFI zvol from ${current_bytes} bytes to 4M..."
+    if is_two_node; then
+        ssh root@"$STORAGE_HOST" "zfs set volsize=4M '$zvol'" || die "Failed to grow zvol"
+    else
+        zfs set volsize=4M "$zvol" || die "Failed to grow zvol"
+    fi
+    echo "✓ Zvol grown to 4M"
+else
+    echo "EFI zvol is already ${current_bytes} bytes (>= 4M)"
+fi
+
+# --- Rescan iSCSI so the compute node sees the new size ---
+if is_two_node; then
+    echo "Rescanning iSCSI..."
+    /usr/local/lib/zfsutilities/bin/rescan-storage || die "iSCSI rescan failed"
+fi
+
+# --- Wait for device to appear at the new size ---
+echo "Waiting for EFI device $by_path at >= 4M..."
+device=""
+for i in $(seq 1 20); do
+    device=$(readlink -f "$by_path" 2>/dev/null)
+    if [[ -b "$device" ]]; then
+        dev_size=$(blockdev --getsize64 "$device" 2>/dev/null || echo 0)
+        [[ "$dev_size" -ge 4194304 ]] && break
+    fi
+    sleep 0.5
+done
+
+[[ -b "$device" ]] || die "EFI device not found: $by_path"
+dev_size=$(blockdev --getsize64 "$device" 2>/dev/null || echo 0)
+[[ "$dev_size" -ge 4194304 ]] || die "EFI device size is ${dev_size} bytes, expected >= 4194304"
+echo "✓ EFI device ready: $device (${dev_size} bytes)"
+
+# --- Re-initialize EFI vars disk ---
+vars_file="/usr/share/pve-edk2-firmware/OVMF_VARS_4M.ms.fd"
+[[ -f "$vars_file" ]] || die "Firmware file not found: $vars_file"
+
+echo "Writing $vars_file to EFI disk..."
+dd if="$vars_file" of="$device" bs=1M conv=notrunc status=progress || die "Failed to write EFI vars"
+echo "✓ EFI disk re-initialized"
+
+# --- Update VM config ---
+# Helper: apply ms-cert=2023k and size=4M, drop pending block.
+update_efidisk_config() {
+    local conf_file="$1"
+
+    # Remove any pending change block first.
+    sed -i '/^\[PENDING\]$/,$d' "$conf_file"
+
+    # Ensure ms-cert=2023k is present on the active efidisk0 line.
+    if ! grep -q '^efidisk0:.*ms-cert=2023k' "$conf_file"; then
+        sed -i 's|^\(efidisk0: .*\)|\1,ms-cert=2023k|' "$conf_file"
+    fi
+
+    # Ensure size=4M on the active efidisk0 line.
+    sed -i 's|size=[0-9]*[KMGTP]|size=4M|' "$conf_file"
+}
+
+echo "Updating VM $VMID config..."
+update_efidisk_config "$conf"
+echo "✓ VM $VMID config updated"
+echo ""
+echo "=== Done ==="
+echo "  VM $VMID is stopped. Start it manually and watch the console."
+echo "  The UEFI boot order may have been reset; re-select the boot device"
+echo "  in the UEFI firmware setup if the VM drops to a shell."

@@ -2092,3 +2092,291 @@ class TestTreeSearchFreeze(unittest.TestCase):
                 ts.thaw()
                 ts.handle_expand_collapse()
                 mock_run.assert_called_once()
+
+
+class TestTreeSearchMatching(unittest.TestCase):
+    """TreeSearch matching behaviour, including optional full-path matching."""
+
+    class _FakeNode:
+        def __init__(self, values, children=None, path=None):
+            self.values = values
+            self.children = children or []
+            self.path = path
+            self.next_sibling = None
+
+    class _FakeStore:
+        def __init__(self, roots):
+            self._roots = roots
+            for i, node in enumerate(roots):
+                if i + 1 < len(roots):
+                    node.next_sibling = roots[i + 1]
+            self._link_children(roots)
+
+        def _link_children(self, nodes):
+            for node in nodes:
+                for i, child in enumerate(node.children):
+                    if i + 1 < len(node.children):
+                        child.next_sibling = node.children[i + 1]
+                self._link_children(node.children)
+
+        def get_iter_first(self):
+            return self._roots[0] if self._roots else None
+
+        def iter_next(self, node):
+            return node.next_sibling
+
+        def iter_children(self, node):
+            return node.children[0] if node.children else None
+
+        def get_value(self, node, column):
+            return node.values[column]
+
+        def get_path(self, node):
+            return node.path
+
+    def _make_store(self):
+        """Return a fake store representing threeamigos -> proxmox -> (loading...)."""
+        placeholder = self._FakeNode(
+            ["(loading...)", "", "", "", "", "", "", True],
+            path="0:0:0",
+        )
+        child = self._FakeNode(
+            ["proxmox", "", "filesystem", "", "", "", "", False],
+            children=[placeholder],
+            path="0:0",
+        )
+        root = self._FakeNode(
+            ["threeamigos", "", "filesystem", "", "", "", "", False],
+            children=[child],
+            path="0",
+        )
+        return self._FakeStore([root])
+
+    def _full_name_func(self, _store, node):
+        """Return reconstructed ZFS path by node path."""
+        return {
+            "0": "threeamigos",
+            "0:0": "threeamigos/proxmox",
+        }.get(node.path)
+
+    def test_local_match_without_full_name_func(self):
+        with mock_gtk():
+            import gui_helpers as gh
+
+            store = self._make_store()
+            ts = gh.TreeSearch(MagicMock(), MagicMock(), MagicMock(),
+                               MagicMock(), MagicMock())
+            self.assertEqual(ts._find_matches(store, "proxmox"), ["0:0"])
+            self.assertEqual(ts._find_matches(store, "threeamigos/proxmox"), [])
+
+    def test_slash_match_with_full_name_func(self):
+        with mock_gtk():
+            import gui_helpers as gh
+
+            store = self._make_store()
+            ts = gh.TreeSearch(MagicMock(), MagicMock(), MagicMock(),
+                               MagicMock(), MagicMock(),
+                               full_name_func=self._full_name_func)
+            self.assertEqual(ts._find_matches(store, "threeamigos/proxmox"),
+                             ["0:0"])
+
+    def test_local_match_still_works_with_full_name_func(self):
+        with mock_gtk():
+            import gui_helpers as gh
+
+            store = self._make_store()
+            ts = gh.TreeSearch(MagicMock(), MagicMock(), MagicMock(),
+                               MagicMock(), MagicMock(),
+                               full_name_func=self._full_name_func)
+            self.assertEqual(ts._find_matches(store, "proxmox"), ["0:0"])
+
+    def test_placeholders_are_excluded_from_matches(self):
+        with mock_gtk():
+            import gui_helpers as gh
+
+            store = self._make_store()
+            ts = gh.TreeSearch(MagicMock(), MagicMock(), MagicMock(),
+                               MagicMock(), MagicMock(),
+                               full_name_func=self._full_name_func)
+            self.assertEqual(ts._find_matches(store, "loading"), [])
+
+
+class TestExpandPathToRow(unittest.TestCase):
+    """expand_path_to_row reveals a row by expanding its ancestors."""
+
+    class _Node:
+        def __init__(self, values, children=None, path=None):
+            self.values = values
+            self.children = children or []
+            self.path = path
+            self.next_sibling = None
+
+    class _Store:
+        def __init__(self, roots):
+            self._roots = roots
+            for i, node in enumerate(roots):
+                if i + 1 < len(roots):
+                    node.next_sibling = roots[i + 1]
+            self._link_children(roots)
+
+        def _link_children(self, nodes):
+            for node in nodes:
+                for i, child in enumerate(node.children):
+                    if i + 1 < len(node.children):
+                        child.next_sibling = node.children[i + 1]
+                self._link_children(node.children)
+
+        def get_iter_first(self):
+            return self._roots[0] if self._roots else None
+
+        def iter_next(self, node):
+            return node.next_sibling
+
+        def iter_children(self, node):
+            return node.children[0] if node.children else None
+
+        def get_value(self, node, col):
+            return node.values[col]
+
+        def get_path(self, node):
+            return node.path
+
+    def _make_store(self):
+        """Root -> child (not loaded) -> grandchild (target)."""
+        grandchild = self._Node(
+            ["@snap", "", "snapshot", "", "", "", "", True],
+            path="0:0:0",
+        )
+        child = self._Node(
+            ["proxmox", "", "filesystem", "", "", "", "", False],
+            children=[grandchild],
+            path="0:0",
+        )
+        root = self._Node(
+            ["threeamigos", "", "filesystem", "", "", "", "", True],
+            children=[child],
+            path="0",
+        )
+        return self._Store([root]), root, child, grandchild
+
+    def test_expands_collapsed_ancestors(self):
+        with mock_gtk():
+            import gui_helpers as gh
+
+            store, _root, child, grandchild = self._make_store()
+            view = MagicMock()
+            view.row_expanded.return_value = False
+
+            with patch.object(gh, "on_row_expanded") as mock_load:
+                result = gh.expand_path_to_row(view, store, "0:0:0")
+
+            self.assertIs(result, grandchild)
+            mock_load.assert_called_once()
+            self.assertEqual(mock_load.call_args[0][1], child)
+            self.assertEqual(view.expand_row.call_count, 2)
+
+    def test_skips_already_expanded_ancestors(self):
+        with mock_gtk():
+            import gui_helpers as gh
+
+            store, _root, _child, grandchild = self._make_store()
+            view = MagicMock()
+            view.row_expanded.return_value = True
+
+            with patch.object(gh, "on_row_expanded") as mock_load:
+                result = gh.expand_path_to_row(view, store, "0:0:0")
+
+            self.assertIs(result, grandchild)
+            mock_load.assert_not_called()
+            view.expand_row.assert_not_called()
+
+    def test_returns_none_for_invalid_path(self):
+        with mock_gtk():
+            import gui_helpers as gh
+
+            child = self._Node(
+                ["proxmox", "", "filesystem", "", "", "", "", True],
+                path="0:0",
+            )
+            root = self._Node(
+                ["threeamigos", "", "filesystem", "", "", "", "", True],
+                children=[child],
+                path="0",
+            )
+            store = self._Store([root])
+            view = MagicMock()
+
+            result = gh.expand_path_to_row(view, store, "0:0:1")
+            self.assertIsNone(result)
+
+
+class TestTreeSearchGotoMatch(unittest.TestCase):
+    """_goto_match reveals, selects, and refreshes around the current match."""
+
+    def test_goto_match_expands_and_selects_path(self):
+        with mock_gtk():
+            import gui_helpers as gh
+
+            view = MagicMock()
+            store = MagicMock()
+            view.get_model.return_value = store
+            entry = MagicMock()
+            label = MagicMock()
+            prev_btn = MagicMock()
+            next_btn = MagicMock()
+
+            ts = gh.TreeSearch(view, entry, label, prev_btn, next_btn)
+            ts._text = "foo"
+            ts._matches = ["0:0"]
+            ts._current_idx = 0
+
+            with patch.object(gh, "expand_path_to_row") as mock_expand, \
+                 patch.object(ts, "_update_matches_from_store") as mock_update:
+                ts._goto_match(0)
+
+            mock_expand.assert_called_once_with(view, store, "0:0")
+            view.get_selection().unselect_all.assert_called_once()
+            view.get_selection().select_path.assert_called_once_with("0:0")
+            view.scroll_to_cell.assert_called_once()
+            mock_update.assert_called_once()
+            self.assertFalse(ts._frozen)
+
+    def test_update_matches_from_store_preserves_current_path(self):
+        with mock_gtk():
+            import gui_helpers as gh
+
+            view = MagicMock()
+            store = MagicMock()
+            view.get_model.return_value = store
+            ts = gh.TreeSearch(
+                view, MagicMock(), MagicMock(), MagicMock(), MagicMock()
+            )
+            ts._text = "foo"
+            ts._matches = ["0:0"]
+            ts._current_idx = 0
+
+            with patch.object(ts, "_find_matches", return_value=["0:0", "0:1"]):
+                ts._update_matches_from_store()
+
+            self.assertEqual(ts._matches, ["0:0", "0:1"])
+            self.assertEqual(ts._current_idx, 0)
+
+    def test_update_matches_from_store_clamps_index_when_current_gone(self):
+        with mock_gtk():
+            import gui_helpers as gh
+
+            view = MagicMock()
+            store = MagicMock()
+            view.get_model.return_value = store
+            ts = gh.TreeSearch(
+                view, MagicMock(), MagicMock(), MagicMock(), MagicMock()
+            )
+            ts._text = "foo"
+            ts._matches = ["0:0", "0:1", "0:2"]
+            ts._current_idx = 2
+
+            with patch.object(ts, "_find_matches", return_value=["0:0"]):
+                ts._update_matches_from_store()
+
+            self.assertEqual(ts._matches, ["0:0"])
+            self.assertEqual(ts._current_idx, 0)

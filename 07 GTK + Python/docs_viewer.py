@@ -8,6 +8,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
@@ -779,6 +780,23 @@ class DocsViewerWindow(Gtk.Window):
 
 def main():
     """Launch the standalone documentation viewer."""
+    if os.geteuid() != 0:
+        # Re-launch with pkexec, preserving the X11/Wayland display environment.
+        display = os.environ.get('DISPLAY', ':0')
+        xauthority = os.environ.get('XAUTHORITY', '')
+        wayland = os.environ.get('WAYLAND_DISPLAY', '')
+        cmd = [
+            'pkexec', 'env',
+            f'DISPLAY={display}',
+        ]
+        if xauthority:
+            cmd.append(f'XAUTHORITY={xauthority}')
+        if wayland:
+            cmd.append(f'WAYLAND_DISPLAY={wayland}')
+        cmd.append(sys.executable)
+        cmd.extend(sys.argv)
+        os.execvp('pkexec', cmd)
+
     import gi
     gi.require_version('Gtk', '3.0')
     from gi.repository import Gtk

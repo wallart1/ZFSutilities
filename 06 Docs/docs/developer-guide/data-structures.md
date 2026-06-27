@@ -27,6 +27,21 @@ historically from `zfsallthepools`). Plain indexed array of pool names as
 configured in the JSON config's `pools` key. This is a registry — it does not
 reflect import state; use `zpool list` output for that.
 
+## Snapshot name persistence
+
+[`zfssnapbuild`](../commands-and-modules/modules.md#zfssnapbuild) writes the generated
+snapshot name to a per-caller file in `/tmp` so that the same name can be reused
+if the calling script is rerun. This keeps incremental replication chains stable
+across multiple invocations.
+
+| File pattern | Writer | Consumers | Purpose |
+| ------------ | ------ | --------- | ------- |
+| `/tmp/zfsnextsnap_<caller>` | `zfssnapbuild` | `zfs-send-receive`, `zfssendoffsite`, `zfssend`, `zfsdailybackup` | Reuse the same snapshot name on rerun |
+
+`removesnapfile` (called by orchestrators such as `zfsdailybackup`) deletes the
+snapfile at the end of a successful run. In dry-run mode the snapfile is left in
+place.
+
 ## `fss` table (in-memory rows from [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) JSON)
 
 Used by [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst)
@@ -305,6 +320,33 @@ Read methods return typed rows instead of raw tab-separated strings.
 | `SnapshotRow` | `name`, `creation`, `ds_type`, `used`, `avail`, `refer`, `origin`, `clones` | `zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones` |
 | `HoldRow` | `snapshot`, `tag`, `date` | `zfs holds -H <snapshot>` |
 
+### Scrub state (`scrub_manager.py`)
+
+`ScrubState` is an enum and `ScrubInfo` is a dataclass produced by
+`scrub_manager.parse_scrub_status()` from raw `zpool status` output. They are
+consumed by the Pools tab, Dashboard, and `ScrubQueue`.
+
+| Enum value | Meaning |
+| ---------- | ------- |
+| `NONE` | No scrub requested |
+| `PENDING` | Queued but not yet started by the manager |
+| `SCANNING` | Scrub in progress |
+| `PAUSED` | Scrub paused |
+| `FINISHED` | Scrub completed |
+| `CANCELED` | Scrub canceled |
+| `UNKNOWN` | Could not determine state |
+
+| `ScrubInfo` field | Type | Purpose |
+| ----------------- | ---- | ------- |
+| `state` | `ScrubState` | Current scrub state |
+| `progress_percent` | `float` or `None` | Percentage done when scanning/paused |
+| `scan_line` | `str` | Raw scan lines from `zpool status` |
+| `last_scrub` | `str` | Timestamp/description of the last scrub event |
+| `errors` | `int` | Error count from finished/canceled scrubs |
+
+`ScrubQueue` persists pending/active/paused/finished/paused_by_user pool sets
+and a concurrency target to the JSON config under the scrub-manager section.
+
 ## iSCSI expected-backstores manifest
 
 Plain-text file, one backstore name per line:
@@ -430,6 +472,28 @@ The file is written atomically (temp + rename) to avoid corruption.
 - `backup_runner.py` — creates an entry when a GUI run finishes
 - `profile_runner.py` — creates an entry when a scheduled/cron run finishes
 - `logs_page.py` — reads the file to compute and display the success-rate summary
+
+## zfsscruball state file
+
+[`zfsscruball`](../commands-and-modules/commands.md#zfsscruball) uses a temporary
+state file to remember which pools have already finished when resuming a paused
+or interrupted scrub run.
+
+```
+/tmp/zfsscruball.state
+```
+
+**Format:** one finished pool name per line.
+
+**Lifecycle:**
+
+- `do_start` truncates the file at the beginning of a new run.
+- Each parallel scrub worker appends its pool name on successful completion.
+- `do_resume` reads the file and skips any pool listed there.
+- `do_scrubs` removes the file after all pools finish.
+
+Because the file lives on `tmpfs`, it is cleared on reboot and a resume after
+reboot starts fresh.
 
 ## Lock files
 

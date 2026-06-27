@@ -30,7 +30,7 @@ NODE_LIB_DST="/usr/local/lib/node-lib.sh"
 COMPAT_LINK="/usr/local/lib/two-node-lib.sh"
 
 # Scripts to install in single-node mode (no iSCSI-only scripts)
-SINGLE_NODE_SCRIPTS="new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk clone-vm move-vm-disk"
+SINGLE_NODE_SCRIPTS="new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk clone-vm move-vm-disk enroll-efi-keys-vm"
 CLONE_SCRIPTS="zfsclone-vm promote-vm-clone"
 
 INSTALLER_LIB="$SCRIPT_DIR/installer-lib.sh"

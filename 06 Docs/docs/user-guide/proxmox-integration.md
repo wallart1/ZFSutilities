@@ -38,33 +38,33 @@ iscsi: iscsi-threeamigos
     content images
 ```
 
-Proxmox treats these LUNs as **administratively read-only block devices** — it can attach
-and detach them, but cannot create, resize, or delete them.
+Proxmox treats these LUNs as **administratively read-only block devices** — it
+can attach and detach them, but cannot create, resize, or delete them.
 
 ---
 
 ## Feature Comparison
 
-| Operation                       | Single-node (local ZFS)                                                                                        | Two-node (iSCSI)                                                                       |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| **Create VM disk**              | Proxmox GUI: Hardware → Add → Hard Disk → select ZFS pool                                                      | Script only: [new-vm-disk](../commands-and-modules/two-node.md#new-vm-disk-both)       |
-| **Resize VM disk**              | Proxmox GUI: Hardware → select disk → Disk Action → Resize                                                     | Script only: [resize-vm-disk](../commands-and-modules/two-node.md#resize-vm-disk-both) |
-| **Delete VM disk**              | Proxmox GUI: Hardware → select disk → Detach, then Remove                                                      | Script only: [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both) |
-| **Detach VM disk**              | Proxmox GUI: Hardware → select disk → Detach                                                                   | Script only: [detach-vm-disk](../commands-and-modules/two-node.md#detach-vm-disk-both) |
-| **Attach existing disk**        | Proxmox GUI: Hardware → Add → Hard Disk → select existing                                                      | Script only: [attach-vm-disk](../commands-and-modules/two-node.md#attach-vm-disk-both) |
-| **Move VM disk to another VM**  | Proxmox GUI: not supported for iSCSI LUNs                                                                      | Script only: [move-vm-disk](../commands-and-modules/two-node.md#move-vm-disk-both)     |
-| **Clone VM (full copy)**        | Proxmox GUI: right-click VM → Clone (Mode: Full Clone)                                                         | Script only: [clone-vm](../commands-and-modules/two-node.md#clone-vm-both)             |
-| **Clone VM (linked/ZFS clone)** | Proxmox GUI: right-click VM → Clone (Mode: Linked Clone)                                                       | Script only: [zfsclone-vm](../commands-and-modules/two-node.md#zfsclone-vm-both)       |
-| **Promote clone**               | Not exposed in Proxmox GUI — use [promote-vm-clone](../commands-and-modules/two-node.md#promote-vm-clone-both) | [promote-vm-clone](../commands-and-modules/two-node.md#promote-vm-clone-both)          |
-| **Snapshots (Proxmox-managed)** | Proxmox GUI: Snapshots tab → Take Snapshot                                                                     | Not available (no ZFS awareness)                                                       |
-| **Snapshots (ZFSutilities)**    | ZFSutilities GTK GUI or scripts                                                                                | ZFSutilities GTK GUI or scripts                                                        |
-| **View pool status**            | Proxmox GUI: node → Disks → ZFS, or ZFSutilities GUI                                                           | ZFSutilities GUI or `zpool` on storage host                                            |
-| **View datasets/snapshots**     | Proxmox GUI (limited) or ZFSutilities GUI                                                                      | ZFSutilities GUI only                                                                  |
-| **Start/stop VMs**              | Proxmox GUI                                                                                                    | Proxmox GUI                                                                            |
-| **VM hardware settings**        | Proxmox GUI                                                                                                    | Proxmox GUI                                                                            |
-| **Retention / prune**           | ZFSutilities GTK GUI or [zfsretain](../commands-and-modules/modules.md#zfsretain)                              | ZFSutilities GTK GUI or [zfsretain](../commands-and-modules/modules.md#zfsretain)      |
-| **Backup (zfs send/receive)**   | ZFSutilities scripts                                                                                           | ZFSutilities scripts                                                                   |
-| **Offsite backup**              | ZFSutilities scripts                                                                                           | ZFSutilities scripts                                                                   |
+| Operation                       | Single-node (local ZFS)                                                          | Two-node (iSCSI)                                                                       |
+| ------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Create VM disk**              | Proxmox GUI: Hardware → Add → Hard Disk → select ZFS pool                        | Script only: [`new-vm-disk`](../commands-and-modules/two-node.md#new-vm-disk-both)       |
+| **Resize VM disk**              | Proxmox GUI: Hardware → select disk → Disk Action → Resize                       | Script only: [`resize-vm-disk`](../commands-and-modules/two-node.md#resize-vm-disk-both) |
+| **Delete VM disk**              | Proxmox GUI: Hardware → select disk → Detach, then Remove                        | Script only: [`remove-vm-disk`](../commands-and-modules/two-node.md#remove-vm-disk-both) |
+| **Detach VM disk**              | Proxmox GUI: Hardware → select disk → Detach                                     | Script only: [`detach-vm-disk`](../commands-and-modules/two-node.md#detach-vm-disk-both) |
+| **Attach existing disk**        | Proxmox GUI: Hardware → Add → Hard Disk → select existing                        | Script only: [`attach-vm-disk`](../commands-and-modules/two-node.md#attach-vm-disk-both) |
+| **Move VM disk to another VM**  | Proxmox GUI: not supported for iSCSI LUNs                                        | Script only: [`move-vm-disk`](../commands-and-modules/two-node.md#move-vm-disk-both)     |
+| **Clone VM (full copy)**        | Proxmox GUI: right-click VM → Clone (Mode: Full Clone)                           | Script only: [`clone-vm`](../commands-and-modules/two-node.md#clone-vm-both)             |
+| **Clone VM (linked/ZFS clone)** | Proxmox GUI: right-click VM → Clone (Mode: Linked Clone)                         | Script only: [`zfsclone-vm`](../commands-and-modules/two-node.md#zfsclone-vm-both)       |
+| **Promote clone**               | Not exposed in Proxmox GUI — use [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both) | [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both)          |
+| **Snapshots (Proxmox-managed)** | Proxmox GUI: Snapshots tab → Take Snapshot                                       | Not available (no ZFS awareness)                                                       |
+| **Snapshots (ZFSutilities)**    | ZFSutilities GTK GUI or scripts                                                  | ZFSutilities GTK GUI or scripts                                                        |
+| **View pool status**            | Proxmox GUI: node → Disks → ZFS, or ZFSutilities GUI                             | ZFSutilities GUI or `zpool` on storage host                                            |
+| **View datasets/snapshots**     | Proxmox GUI (limited) or ZFSutilities GUI                                        | ZFSutilities GUI only                                                                  |
+| **Start/stop VMs**              | Proxmox GUI                                                                      | Proxmox GUI                                                                            |
+| **VM hardware settings**        | Proxmox GUI                                                                      | Proxmox GUI                                                                            |
+| **Retention / prune**           | ZFSutilities GTK GUI or [`zfsretain`](../commands-and-modules/modules.md#zfsretain) | ZFSutilities GTK GUI or [`zfsretain`](../commands-and-modules/modules.md#zfsretain)      |
+| **Backup (zfs send/receive)**   | ZFSutilities scripts                                                             | ZFSutilities scripts                                                                   |
+| **Offsite backup**              | ZFSutilities scripts                                                             | ZFSutilities scripts                                                                   |
 
 ---
 
@@ -88,7 +88,7 @@ choose the ZFS pool and size.
 Proxmox cannot create zvols on the remote storage host. The workflow
 requires a helper script before touching the GUI.
 
-#### BIOS boot (legacy SeaBIOS)
+#### BIOS boot VMs (legacy SeaBIOS)
 
 For most Linux VMs:
 
@@ -108,7 +108,7 @@ For most Linux VMs:
 
 3. Attach ISO, boot, install OS
 
-#### UEFI boot (EFI disk)
+#### UEFI boot VMs (EFI disk)
 
 Required for Windows 11 and recommended for modern Linux. The EFI disk
 stores UEFI firmware variables (boot order, Secure Boot state, etc.).
@@ -123,8 +123,7 @@ stores UEFI firmware variables (boot order, Secure Boot state, etc.).
    The script will ask about Secure Boot:
    
    - **y** — pre-enroll Microsoft + distro keys (required for Windows 11)
-   
-   - **N** — clean slate, Secure Boot off (simpler for Linux, can enable later)
+   - **N** — clean slate, Secure Boot off (simpler for Linux; can enable later)
 
 2. Create the boot and data disks as normal:
    
@@ -137,9 +136,7 @@ stores UEFI firmware variables (boot order, Secure Boot state, etc.).
    
    - On the **System** tab: set BIOS to **OVMF (UEFI)** and **uncheck**
      "Add EFI Disk" (the script already created and configured it)
-   
    - On the **Disks** step: select "No disk" or delete the default disk
-   
    - After creation: **Hardware → Add → Hard Disk → iSCSI** → select the
      boot/data LUNs
 
@@ -148,14 +145,33 @@ stores UEFI firmware variables (boot order, Secure Boot state, etc.).
    !!! warning "Do not use Proxmox's 'Add EFI Disk' button with iSCSI"
    
        The Proxmox GUI's **Add EFI Disk** button does not work with iSCSI
-       storage — it fails trying to initialize the disk. The
-       `new-vm-disk EFI` script does the full job: creates the zvol, exports
-       the LUN, initializes the firmware variables with `dd`, and adds
-       `bios: ovmf` + `efidisk0:` to the VM config.
+       storage — it fails trying to initialize the disk. Use
+       `new-vm-disk EFI` instead; it creates the zvol, exports the LUN,
+       initializes the firmware variables, and adds the required VM config
+       lines.
 
-The [new-vm-disk](../commands-and-modules/two-node.md#new-vm-disk-both) script creates the zvol, registers an iSCSI backstore,
-maps a LUN, saves the iSCSI config, and triggers a rescan on the compute
-host — all the steps that Proxmox would do natively with local ZFS.
+!!! tip "UEFI 2023 certificate enrollment"
+       When you choose Secure Boot pre-enrollment, `new-vm-disk EFI` adds
+       `ms-cert=2023k` to the `efidisk0` config line. This marks the 2023
+       Microsoft UEFI certificates as enrolled and suppresses the Proxmox
+       warning about the expiring 2011 certificates.
+
+       For existing VMs that show that warning, use the helper script on
+       the compute node:
+
+       ```bash
+       sudo enroll-efi-keys-vm <vmid>
+       ```
+
+       This grows the EFI zvol to 4M, re-initializes it with the Microsoft
+       UEFI CA 2023 certificates, and updates the Proxmox config. You can
+       also use the Proxmox GUI: **Hardware → EFI Disk → Disk Action →
+       Enroll Updated Certificates** — however, that operation may fail for
+       iSCSI by-path EFI disks because Proxmox cannot parse the raw volume
+       ID.
+
+       For Windows VMs with BitLocker, disable BitLocker protectors inside
+       the VM before enrolling.
 
 !!! tip "Avoiding kernel log spam"
     By default, Proxmox's `pvestatd` runs `iscsiadm --rescan` roughly every
@@ -165,9 +181,9 @@ host — all the steps that Proxmox would do natively with local ZFS.
 
     The `install-two-node` installer patches
     `/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm` on the compute host to
-    limit automatic rescans to once per day. Your scripts ([`new-vm-disk`](../commands-and-modules/two-node.md#new-vm-disk-both),
-    [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both), [`resize-vm-disk`](../commands-and-modules/two-node.md#resize-vm-disk-both)) trigger explicit rescans immediately
-    when they make changes, so day-to-day operation is unaffected.
+    limit automatic rescans to once per day. The disk-management scripts
+    trigger explicit rescans immediately when they make changes, so
+    day-to-day operation is unaffected.
 
 ---
 
@@ -201,7 +217,7 @@ sudo attach-vm-disk threeamigos/proxmox/vm-100-disk-0 200
 ```
 
 This rebuilds any missing iSCSI infrastructure and adds the disk to the
-destination VM config. The destination slot is auto-detected; you can
+destination VM config. The destination device slot is auto-detected; you can
 override it: `attach-vm-disk ... 200 scsi2`.
 
 **Remove permanently (destroy the zvol):**
@@ -223,8 +239,8 @@ In the Proxmox GUI:
 
 1. Select the VM → **Hardware** → select the disk
 2. **Disk Action → Resize**
-3. Enter the additional size (Proxmox only supports growing, not shrinking)
-4. The guest OS sees the new size after a rescan or reboot
+3. Enter the **additional** size
+4. The guest OS sees the new size after it rescans or is rebooted 
 
 ### Two-node
 
@@ -276,22 +292,21 @@ destination VM config. The LUN number and device path do not change.
 Proxmox offers both clone types through its GUI:
 
 - **Full Clone** (right-click VM → Clone → Mode: Full Clone): creates an
-  independent copy. Equivalent to [clone-vm](../commands-and-modules/two-node.md#clone-vm-both) but managed entirely by
-  Proxmox.
+  independent copy.
 - **Linked Clone** (right-click VM → Clone → Mode: Linked Clone): creates a
-  ZFS clone with shared blocks. Equivalent to [zfsclone-vm](../commands-and-modules/two-node.md#zfsclone-vm-both) but managed
-  by Proxmox.
+  ZFS clone with shared blocks.
 
 !!! note "ZFSutilities clone scripts vs Proxmox GUI clones"
     In single-node mode, you can use **either** the Proxmox GUI or the
     ZFSutilities clone scripts. The Proxmox GUI handles everything
     automatically — disk creation, VM config, MAC regeneration. The scripts
     provide the same result but with more control over snapshot naming and
-    clone lifecycle management via [promote-vm-clone](../commands-and-modules/two-node.md#promote-vm-clone-both) and [list-vm-disks](../commands-and-modules/two-node.md#list-vm-disks-both).
+    clone lifecycle management via [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both) and [`list-vm-disks`](../commands-and-modules/two-node.md#list-vm-disks-both).
 
     If you use Proxmox GUI clones, Proxmox manages the clone dependency
-    chain. If you use [zfsclone-vm](../commands-and-modules/two-node.md#zfsclone-vm-both), ZFSutilities manages it. Do not mix
-    the two approaches for the same VM — pick one and stay with it.
+    chain. If you use [`zfsclone-vm`](../commands-and-modules/two-node.md#zfsclone-vm-both),
+    ZFSutilities manages it. Do not mix the two approaches for the same VM —
+    pick one and stay with it.
 
 ### Two-node
 
@@ -310,23 +325,9 @@ For background on how ZFS clones work, see
 
 - The source VM must be **stopped** before cloning.
 - In a two-node configuration, the source VM's disks must use the iSCSI by-path
-  format in Proxmox config (all VMs recently created by ZFS Utilities satisfy this).
+  format in Proxmox config (all VMs created by ZFS Utilities satisfy this).
 - In a two-node configuration, run from the compute node. If run from the
   storage node, the script delegates to the compute node automatically.
-
-### Single-node vs Two-node Cloning
-
-| Step                    | Single-node                                              | Two-node                                                                                                            |
-| ----------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Disk discovery**      | Reads `storage:vm-<id>-disk-<n>` lines from local config | Reads iSCSI by-path lines from local config; looks up LUNs on storage host                                          |
-| **ZFS snapshot**        | Created locally on the ZFS pool                          | Created on the storage host via SSH                                                                                 |
-| **ZFS clone**           | Created locally; no network involved                     | Created on the storage host via SSH                                                                                 |
-| **iSCSI backstore/LUN** | *Not applicable*                                         | Created on the storage host for each cloned zvol                                                                    |
-| **Proxmox config**      | Uses `storage:vm-<dst>-disk-<n>` references              | Uses `/dev/disk/by-path/...` iSCSI references. The storage node borrows from the Proxmox naming convention locally. |
-| **Rescan**              | *Not needed*                                             | Triggered on the compute host so Proxmox sees new LUNs                                                              |
-| **Host delegation**     | Runs entirely on local host                              | Compute host SSHes to storage host for ZFS/iSCSI ops                                                                |
-
----
 
 ### Creating a ZFS-Cloned VM
 
@@ -346,48 +347,36 @@ sudo zfsclone-vm <src_vmid> <dst_vmid> <new_name>
 sudo zfsclone-vm 904 310 myvm
 ```
 
-#### What the script does
+The script discovers the source VM's disks, snapshots each source zvol, creates
+a ZFS clone from each snapshot, and (in two-node mode) registers the clones as
+new iSCSI LUNs. It then writes a new Proxmox VM config with fresh MAC
+address(es), `vmgenid`, and SMBIOS UUID. After the script completes, the new VM
+appears in Proxmox.
 
-**Two-node:**
+**Review the hardware settings in the GUI before starting it** — CPU, memory,
+and network settings are copied from the source and may need adjustment.
 
-1. Parse the source VM config for iSCSI by-path disk lines
-2. Show you the disks it will clone and the snapshot name, then ask for confirmation
-3. On the storage node: snapshot each source zvol, create a ZFS clone, register a new
-   iSCSI backstore and LUN
-4. Save the iSCSI config
-5. Write a new Proxmox VM config on the compute node with fresh MAC address(es), `vmgenid`, and SMBIOS UUID
-6. Rescan iSCSI on the compute node so that it sees the new LUNs
-
-**Single-node:**
-
-1. Parse the source VM config for ZFS-backed disk lines (`storage:vm-<id>-disk-<n>`)
-2. Show the disks and snapshot name, then ask for confirmation
-3. Snapshot each source zvol and create a local ZFS clone
-4. Write a new Proxmox VM config with fresh MAC address(es), `vmgenid`, and SMBIOS UUID
-
-After the script completes, the new VM appears in Proxmox. **Review the hardware settings
-in the GUI before starting it** — CPU, memory, and network settings are copied from the
-source and may need adjustment.
+For the exact steps the script performs in single-node vs two-node mode, see
+the [`zfsclone-vm` command reference](../commands-and-modules/two-node.md#zfsclone-vm-both).
 
 #### What the clone shares with the source
 
 The new VM's disks start as exact copies of the VM at the moment of the clone
-snapshot. As the new VM runs and writes data, only the changed blocks consume additional
-storage. The VM and all other clones continue sharing unchanged blocks.
+snapshot. As the new VM runs and writes data, only the changed blocks consume
+additional storage. The source VM and all other clones continue sharing
+unchanged blocks.
 
 #### Clone origin snapshot
 
-[zfsclone-vm](../commands-and-modules/two-node.md#zfsclone-vm-both) creates a snapshot on each source zvol named:
+`zfsclone-vm` creates a snapshot on each source zvol named:
 
 ```
 @clone-<yyyy-mm-dd>T<hh:mm><tz>-c
 ```
 
-This snapshot is retained on the source zvols for as long as any clone depends on it.
-If you clone the same source VM multiple times, snapshots from earlier runs are
-preserved alongside the new one.
-
----
+This snapshot is retained on the source zvols for as long as any clone depends
+on it. If you clone the same source VM multiple times, snapshots from earlier
+runs are preserved alongside the new one.
 
 ### Viewing Clone Relationships
 
@@ -414,8 +403,6 @@ zfs get origin threeamigos/proxmox/vm-310-disk-1
 zfs list -t snapshot -o name,clones -r threeamigos/proxmox/vm-904-disk-1
 ```
 
----
-
 ### Troubleshooting
 
 #### "No iSCSI disks found in source VM config"
@@ -425,7 +412,8 @@ The source VM has no disks in the iSCSI by-path format. This can happen if:
 - The VM has only a CDROM or no disks (e.g., a placeholder VM)
 - Disks are still in the old `scsi-<NAA-ID>` format rather than by-path
 
-VMs created or modified with [new-vm-disk](../commands-and-modules/two-node.md#new-vm-disk-both) always use the correct by-path format.
+VMs created or modified with [`new-vm-disk`](../commands-and-modules/two-node.md#new-vm-disk-both)
+always use the correct by-path format.
 
 #### "Destination VM config already exists"
 
@@ -433,15 +421,15 @@ A VM with the specified `dst_vmid` already exists in Proxmox. Choose a different
 
 #### "ZFS clone dependents — cannot delete"
 
-[zfsdelfs](../commands-and-modules/commands.md#zfsdelfs) is blocking deletion because a zvol has clone dependents. Run
-[promote-vm-clone](../commands-and-modules/two-node.md#promote-vm-clone-both) on one of the dependent VMs first, then retry.
-
----
+[`zfsdelfs`](../commands-and-modules/commands.md#zfsdelfs) is blocking deletion because a zvol has clone dependents. Run
+[`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both)
+on one of the dependent VMs first, then retry.
 
 ### Backup Considerations
 
-Cloned datasets are backed up normally by [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup) and [zfssendoffsite](../commands-and-modules/commands.md#zfssendoffsite). In the backup
-stream, they are treated as **regular datasets**, not as clones. This means:
+Cloned datasets are backed up normally by `zfsdailybackup` and
+`zfssendoffsite`. In the backup stream, they are treated as **regular
+datasets**, not as clones. This means:
 
 - Each clone is sent independently and is restorable as a full dataset.
 - Therefore, shared blocks between the dataset and its clones are stored twice on the backup pool.
@@ -455,81 +443,52 @@ with their own unique data. Excluding them from backup causes data loss.
 
 ## Retiring a VM
 
-The [retire-vm](../commands-and-modules/commands.md#retire-vm) script handles the entire retirement process automatically.
-Retiring a VM permanently severs all clone relationships associated with the VM
-and archives the VM's data before destruction.
+The [`retire-vm`](../commands-and-modules/commands.md#retire-vm) script
+handles the entire retirement process automatically. Retiring a VM permanently
+severs all clone relationships associated with the VM and archives the VM's
+data before destruction.
 
 ```bash
 sudo retire-vm <vmid>
 ```
 
-**What it does:**
+The script stops the VM, discovers any clone VMs that still depend on its
+zvol snapshots, and (if any exist) asks you to promote them first. It then
+archives each zvol to a dataset under an archive base path of your choice,
+copies the Proxmox VM config alongside the archive, and — after confirmation —
+removes the original VM config and destroys the original zvols.
 
-1. Stops the VM
-2. Discovers all clone VMs that still depend on the VM's zvol snapshots
-3. If any clones are found, asks to promote them first (calls [promote-vm-clone](../commands-and-modules/two-node.md#promote-vm-clone-both)
-   on each dependent VM, which severs the dependency)
-4. Prompts for the archive base ZFS dataset (e.g. `temp/archive`), saving it to
-   the JSON config for future runs
-5. Archives each zvol by receiving it as a new dataset under the base path:
-   `<base>/<original_zvol_path>` (e.g. `temp/archive/threeamigos/proxmox/vm-204-disk-0`)
-6. Sets the archived zvol's `volblocksize` to `1M` for space efficiency and saves
-   the original `volblocksize` to a sidecar file
-7. Copies the Proxmox VM config to `/<base_mount>/<full_config_path>`
-8. Verifies the archived datasets and config file exist
-9. Asks for confirmation before removing the original VM
-10. If yes, removes the Proxmox config and destroys the original zvols
-
-**Single-node vs two-node:**
-
-| Step            | Single-node                | Two-node                                                                                       |
-| --------------- | -------------------------- | ---------------------------------------------------------------------------------------------- |
-| **Promotion**   | Runs locally               | Delegates to storage host via SSH                                                              |
-| **Archive**     | `zfs receive` locally      | `zfs receive` on storage host via SSH                                                          |
-| **Config copy** | Copied to local mountpoint | SCP'd to storage host mountpoint                                                               |
-| **Teardown**    | `zfs destroy` locally      | [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both) handles iSCSI + zvol |
+For the exact archive layout and single-node vs two-node behavior, see the
+[`retire-vm` command reference](../commands-and-modules/commands.md#retire-vm).
 
 ### Unretiring a VM
 
-If you later need to restore a retired VM from archive, use [unretire-vm](../commands-and-modules/commands.md#unretire-vm):
+If you later need to restore a retired VM from archive, use
+[`unretire-vm`](../commands-and-modules/commands.md#unretire-vm):
 
 ```bash
-sudo unretire-vm <vmid> [archive_base]
+sudo unretire-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 ```
 
-| Argument       | Description                                                                                |
-| -------------- | ------------------------------------------------------------------------------------------ |
-| `vmid`         | VM ID of the retired VM to restore                                                         |
-| `archive_base` | Optional ZFS dataset that contains the archive (defaults to the path saved in JSON config) |
+| Argument         | Description                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------ |
+| `vmid`           | VM ID of the retired VM to restore                                                         |
+| `archive_base`   | Optional ZFS dataset that contains the archive (defaults to the path saved in JSON config) |
+| `--new-vmid`     | Optional new VM ID to use for restored resources                                           |
 
-**What it does:**
+The script discovers archived zvols, restores each one with its original
+`volblocksize`, rebuilds iSCSI backstores and LUNs in two-node mode, restores
+the Proxmox config, and triggers an iSCSI rescan. Cloned datasets are retired
+as full datasets and are therefore restored as full datasets.
 
-1. Discovers archived zvols under the archive base dataset
-2. Verifies destination zvols and Proxmox config do not already exist
-3. Restores each zvol with its original `volblocksize` (read from the `.original_volblocksize` sidecar)
-4. Rebuilds iSCSI backstores and LUNs (two-node)
-5. Restores the Proxmox config, rewriting disk lines with new LUN numbers (two-node)
-6. Triggers an iSCSI rescan (two-node)
-7. Note that cloned datasets are retired as full datasets. Therefore, they are restored as full datasets.
+If the original `vmid` is already in use and you do not pass `--new-vmid`, the
+script prompts you to enter a new VM ID or cancel. When a new VM ID is used,
+the restored zvols, iSCSI backstores, LUNs, and Proxmox config are all named
+with the new VM ID, and `vmgenid`/`smbios1` UUIDs are regenerated so the
+restored VM does not share identifiers with the original.
 
-**Single-node vs two-node:**
-
-| Step               | Single-node                | Two-node                                    |
-| ------------------ | -------------------------- | ------------------------------------------- |
-| **Zvol restore**   | `zfs send/receive` locally | Runs on storage host via SSH                |
-| **volblocksize**   | Restored from sidecar      | Restored from sidecar                       |
-| **iSCSI rebuild**  | *Not applicable*           | Creates backstores, LUNs, updates manifests |
-| **Config restore** | Copied directly            | Rewritten with new by-path LUN numbers      |
-| **Rescan**         | *Not needed*               | Triggered on compute host                   |
-
-**Sidecar files:**
-
-During retirement, [retire-vm](../commands-and-modules/commands.md#retire-vm) saves two sidecar files per zvol alongside the archive:
-
-- `.original_volblocksize` — the original zvol block size
-- `.disk_info` — the Proxmox disk key (`scsi0`, `efidisk0`, etc.) and, in two-node mode, the original LUN number and iSCSI target
-
-These are read by [unretire-vm](../commands-and-modules/commands.md#unretire-vm) to reconstruct the VM exactly.
+For the exact restoration steps and sidecar files used, see the
+[`unretire-vm` command reference](../commands-and-modules/commands.md#unretire-vm).
 
 ---
 
@@ -590,7 +549,8 @@ snapshots it created). Manage them through:
 Before restoring a dataset that is on a Proxmox storage pool, verify no VMs are
 running that use it. The restore will be blocked if running VMs are detected.
 
-Use the [`zfscheckrunningvms`](../commands-and-modules/modules.md#zfscheckrunningvms) helper:
+Use the [`zfscheckrunningvms`](../commands-and-modules/modules.md#zfscheckrunningvms)
+helper:
 
 ```bash
 source ./zfscheckrunningvms
@@ -634,7 +594,11 @@ The Proxmox GUI handles VM runtime management (start, stop, console,
 hardware settings). For everything storage-related, use ZFSutilities:
 
 - **All disk operations**: create, resize, delete, move ([`new-vm-disk`](../commands-and-modules/two-node.md#new-vm-disk-both),
-  [resize-vm-disk](../commands-and-modules/two-node.md#resize-vm-disk-both), [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both), [`move-vm-disk`](../commands-and-modules/two-node.md#move-vm-disk-both))
-- **All clone operations**: [zfsclone-vm](../commands-and-modules/two-node.md#zfsclone-vm-both), [clone-vm](../commands-and-modules/two-node.md#clone-vm-both), [promote-vm-clone](../commands-and-modules/two-node.md#promote-vm-clone-both)
+  [`resize-vm-disk`](../commands-and-modules/two-node.md#resize-vm-disk-both),
+  [`remove-vm-disk`](../commands-and-modules/two-node.md#remove-vm-disk-both),
+  [`move-vm-disk`](../commands-and-modules/two-node.md#move-vm-disk-both))
+- **All clone operations**: [`zfsclone-vm`](../commands-and-modules/two-node.md#zfsclone-vm-both),
+  [`clone-vm`](../commands-and-modules/two-node.md#clone-vm-both),
+  [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both)
 - **Pool and dataset monitoring**: ZFSutilities GTK GUI
 - **Backup, retention, offsite**: ZFSutilities scripts

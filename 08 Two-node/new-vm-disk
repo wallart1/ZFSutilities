@@ -128,6 +128,23 @@ ZVOL_NAME="$POOL/proxmox/vm-${VMID}-disk-${DISKNUM}"
 BACKSTORE_NAME="vm-${VMID}-disk-${DISKNUM}"
 ZVOL_DEV="/dev/zvol/${ZVOL_NAME}"
 
+# --- EFI config line builder ---
+# Builds the Proxmox efidisk0 config line. Extracted for unit testing.
+# Arguments:
+#   $1  by-path device string
+#   $2  pre-enrolled-keys value (0 or 1)
+#   $3  secure_boot flag (true/false)
+build_efidisk_line() {
+    local by_path="$1"
+    local pre_enrolled="$2"
+    local secure_boot="$3"
+    local line="efidisk0: ${by_path},efitype=4m,pre-enrolled-keys=${pre_enrolled},size=4M,format=raw"
+    if [[ "$secure_boot" == true ]]; then
+        line+=",ms-cert=2023k"
+    fi
+    echo "$line"
+}
+
 # --- EFI initialization (runs on the compute host after zvol + LUN are set up) ---
 init_efi_disk() {
     local lun_num="$1"
@@ -173,7 +190,8 @@ init_efi_disk() {
 
     # Construct the VM config lines
     # Proxmox uses the by-path symlink directly as the volume identifier for iSCSI
-    local efidisk_line="efidisk0: ${by_path},efitype=4m,pre-enrolled-keys=${pre_enrolled},size=4M,format=raw"
+    local efidisk_line
+    efidisk_line=$(build_efidisk_line "$by_path" "$pre_enrolled" "$SECURE_BOOT")
 
     # Edit VM config if the VM already exists
     local conf="/etc/pve/qemu-server/${VMID}.conf"

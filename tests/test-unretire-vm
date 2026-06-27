@@ -1,0 +1,273 @@
+#!/usr/bin/bash
+# test-unretire-vm — Unit tests for unretire-vm new-VMID support.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+setup_node_config() {
+    NODE_CONF_FILE="$_mock_zfs_state_dir/node.conf"
+    cat > "$NODE_CONF_FILE" << 'EOF'
+NODE_MODE=single-node
+EOF
+    export NODE_CONF="$NODE_CONF_FILE"
+}
+
+setup_archive() {
+    local archive_base="$1"
+    local vmid="$2"
+    local pve_dir="${3:-/etc/pve/qemu-server}"
+
+    mkdir -p "${archive_base}${pve_dir}"
+    mkdir -p "$archive_base/threeamigos/proxmox"
+
+    # Archived zvol dataset path (under archive base)
+    local arc_dataset="${archive_base}/threeamigos/proxmox/vm-${vmid}-disk-0"
+
+    # Sidecar files keyed by the original zvol path
+    echo "8K" > "${archive_base}/threeamigos/proxmox/vm-${vmid}-disk-0.original_volblocksize"
+    echo "DISK_KEY=scsi0" > "${archive_base}/threeamigos/proxmox/vm-${vmid}-disk-0.disk_info"
+
+    # Archived Proxmox config (mirrors the PVE_CONF_DIR layout)
+    cat > "${archive_base}${pve_dir}/${vmid}.conf" << EOF
+name: test-vm
+scsi0: threeamigos:vm-${vmid}-disk-0,size=10G
+vmgenid: 11111111-1111-1111-1111-111111111111
+smbios1: uuid=22222222-2222-2222-2222-222222222222
+EOF
+}
+
+# Run unretire-vm in a subshell so an exit/die does not kill the test harness.
+run_unretire() {
+    local pve_dir="$1"
+    local archive_base="$2"
+    shift 2
+    local vmid="$1"
+    shift
+    local stdin_input="${_mock_read_response:-}"
+    (
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+        setup_test_env
+        setup_node_config
+        export PVE_CONF_DIR="$pve_dir"
+
+        # Allow the script to run without root in the test harness, and
+        # redirect the deployed node-lib path to the repository copy so tests
+        # work without deployment.
+        export UNRETIRE_VM_TEST_NO_ROOT=1
+        export NODE_LIB="$mydir/08 Two-node/node-lib.sh"
+
+        # Mock zfs state.
+        local arc_dataset="${archive_base}/threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0"
+        _mock_zfs_fs_list="${archive_base}
+${arc_dataset}"
+        _mock_zfs_datasets["${archive_base}"]=1
+        _mock_zfs_props["${archive_base}:mountpoint"]="${archive_base}"
+        _mock_zfs_props["threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0:volblocksize"]="8K"
+        _mock_zfs_snap_lists["${arc_dataset}"]="${arc_dataset}@snap1"
+
+        # Conflict state.
+        if [[ "${_mock_old_config_present:-}" == "1" ]]; then
+            touch "${pve_dir}/${_mock_orig_vmid}.conf"
+        fi
+        if [[ "${_mock_old_zvol_present:-}" == "1" ]]; then
+            _mock_zfs_fs_list+="\nthreeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0"
+        fi
+
+        # Optional explicit destination conflict for the new VMID.
+        if [[ "${_mock_new_config_present:-}" == "1" ]]; then
+            touch "${pve_dir}/${_mock_new_vmid}.conf"
+        fi
+
+        set -- "$vmid" "$archive_base" "$@"
+        source "$mydir/09 ZFS clone support/unretire-vm"
+    ) <<< "$stdin_input" 2>&1
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+reset_unretire_mocks() {
+    unset _mock_old_config_present _mock_old_zvol_present \
+        _mock_new_config_present _mock_read_response
+}
+
+test_usage_rejects_invalid_new_vmid() {
+    reset_unretire_mocks
+    test_start "Usage error on invalid --new-vmid"
+
+    _mock_orig_vmid="904"
+    local pve_dir="$_mock_zfs_state_dir/pve1"
+    local archive="$_mock_zfs_state_dir/archive1"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+
+    local out rc
+    out=$(run_unretire "$pve_dir" "$archive" 904 --new-vmid abc)
+    rc=$?
+
+    assert_rc 1 "$rc"
+}
+
+test_new_vmid_flag_rewrites_config() {
+    reset_unretire_mocks
+    test_start "--new-vmid rewrites single-node disk lines and UUIDs"
+
+    _mock_orig_vmid="904"
+    _mock_new_vmid="910"
+    _mock_read_response="y"
+    local pve_dir="$_mock_zfs_state_dir/pve2"
+    local archive="$_mock_zfs_state_dir/archive2"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+
+    local out rc
+    out=$(run_unretire "$pve_dir" "$archive" 904 --new-vmid 910)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local new_conf="${pve_dir}/910.conf"
+    if [[ ! -f "$new_conf" ]]; then
+        test_fail "New config not created: $new_conf"
+        return
+    fi
+
+    if grep -q "vm-910-disk-0" "$new_conf"; then
+        test_pass
+    else
+        test_fail "Config disk line not rewritten; content:\n$(cat "$new_conf")"
+    fi
+}
+
+test_new_vmid_regenerates_uuids() {
+    reset_unretire_mocks
+    test_start "--new-vmid regenerates vmgenid and smbios1 UUIDs"
+
+    _mock_orig_vmid="904"
+    _mock_new_vmid="910"
+    _mock_read_response="y"
+    local pve_dir="$_mock_zfs_state_dir/pve3"
+    local archive="$_mock_zfs_state_dir/archive3"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+
+    local out rc
+    out=$(run_unretire "$pve_dir" "$archive" 904 --new-vmid 910)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local new_conf="${pve_dir}/910.conf"
+    if grep -q "11111111-1111-1111-1111-111111111111" "$new_conf"; then
+        test_fail "Original vmgenid still present"
+        return
+    fi
+    if grep -q "22222222-2222-2222-2222-222222222222" "$new_conf"; then
+        test_fail "Original smbios1 uuid still present"
+        return
+    fi
+    if grep -qE "^vmgenid: [0-9a-f-]{36}$" "$new_conf" && grep -qE "^smbios1: uuid=[0-9a-f-]{36}$" "$new_conf"; then
+        test_pass
+    else
+        test_fail "New UUIDs not present; content:\n$(cat "$new_conf")"
+    fi
+}
+
+test_prompts_for_new_vmid_when_original_in_use() {
+    reset_unretire_mocks
+    test_start "Prompts for new VMID when original config exists"
+
+    _mock_orig_vmid="904"
+    _mock_new_vmid="910"
+    _mock_read_response="910"
+    _mock_old_config_present="1"
+    _mock_read_response=$'910\ny'
+    local pve_dir="$_mock_zfs_state_dir/pve4"
+    local archive="$_mock_zfs_state_dir/archive4"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+
+    local out rc
+    out=$(run_unretire "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ -f "${pve_dir}/910.conf" ]]; then
+        test_pass
+    else
+        test_fail "Config for prompted VMID not created; output:\n$out"
+    fi
+}
+
+test_explicit_new_vmid_rejected_if_in_use() {
+    reset_unretire_mocks
+    test_start "Explicit --new-vmid rejected if already in use"
+
+    _mock_orig_vmid="904"
+    _mock_new_vmid="910"
+    _mock_new_config_present="1"
+    local pve_dir="$_mock_zfs_state_dir/pve5"
+    local archive="$_mock_zfs_state_dir/archive5"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+
+    local out rc
+    out=$(run_unretire "$pve_dir" "$archive" 904 --new-vmid 910)
+    rc=$?
+
+    assert_rc 1 "$rc"
+}
+
+test_original_vmid_preserved_without_conflict() {
+    reset_unretire_mocks
+    test_start "Original VMID preserved when no conflict and no --new-vmid"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="y"
+    local pve_dir="$_mock_zfs_state_dir/pve6"
+    local archive="$_mock_zfs_state_dir/archive6"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+
+    local out rc
+    out=$(run_unretire "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ -f "${pve_dir}/904.conf" ]]; then
+        test_pass
+    else
+        test_fail "Original config not created; output:\n$out"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_usage_rejects_invalid_new_vmid
+test_new_vmid_flag_rewrites_config
+test_new_vmid_regenerates_uuids
+test_prompts_for_new_vmid_when_original_in_use
+test_explicit_new_vmid_rejected_if_in_use
+test_original_vmid_preserved_without_conflict
+
+test_summary

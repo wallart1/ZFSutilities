@@ -1,9 +1,11 @@
 # Offsite Backup
 
-[zfssendoffsite](../commands-and-modules/commands.md#zfssendoffsite) copies datasets to a removable pool that can be taken off-site
-for disaster recovery. 
+[`zfssendoffsite`](../commands-and-modules/commands.md#zfssendoffsite) copies
+datasets to a removable pool that can be taken off-site for disaster recovery.
 
-Please review this script and lightly modify to meet your needs.
+Like `zfsdailybackup`, this script is intended as a template. Review and
+customize it to match your pools and offsite targets, or use the GUI's Offsite
+tab to configure the equivalent workflow.
 
 ## Running the Offsite Backup
 
@@ -44,12 +46,18 @@ NVME1 ───────────────────┘
 | 3    | `NVME1`       | `fivebays`  | All datasets           |
 | 4    | `fivebays`    | `<offsite>` | All datasets           |
 
+The `<offsite>` token is replaced at run time with the first online offsite
+pool marked as an offsite candidate in the pool registry.
+
 ## Snapshot Label and Holds
 
 Offsite snapshots use the label `offsite` and bucket `s`
 (e.g., `@offsite-2026-02-21T10:00-05:00-s`).
 
-Holds named `offsite-<counterpart_pool>` are placed on both source and destination snapshots to prevent accidental deletion.
+Holds named `offsite-<counterpart_pool>` are placed on both source and
+destination snapshots to prevent accidental deletion. These holds also act as
+**receipts** that help retention safety checks work while an offsite pool is
+offline (see [Hold Tags as Receipts](#hold-tags-as-receipts)).
 
 ## Skipping Steps
 
@@ -57,6 +65,9 @@ Holds named `offsite-<counterpart_pool>` are placed on both source and destinati
 sudo ./zfssendoffsite "step1='N'"
 sudo ./zfssendoffsite "step2='N'; step3='N'"
 ```
+
+See the [`zfssendoffsite` command reference](../commands-and-modules/commands.md#zfssendoffsite)
+for the full list of step flags.
 
 ## Dry Run
 
@@ -72,8 +83,8 @@ when dry-run is enabled.
 
 ## Hold Tags as Receipts
 
-When [zfssendoffsite](../commands-and-modules/commands.md#zfssendoffsite) copies a snapshot, it places a hold on both the source and
-destination snapshots. The hold tag encodes the counterpart pool:
+When `zfssendoffsite` copies a snapshot, it places a hold on both the source
+and destination snapshots. The hold tag encodes the counterpart pool:
 
 | Snapshot location          | Hold tag           | Meaning                    |
 | -------------------------- | ------------------ | -------------------------- |
@@ -81,12 +92,21 @@ destination snapshots. The hold tag encodes the counterpart pool:
 | `z22tb/...@offsite-...`    | `offsite-fivebays` | fivebays has this snapshot |
 
 These holds serve as **receipts** — proof that the counterpart pool has the
-snapshot. This is critical for safe retention when offsite pools are offline
-(see below).
+snapshot. This is critical for safe retention when offsite pools are offline.
+
+When an offsite pool is offline, retention cannot confirm a common snapshot by
+checking the pool directly. Instead, it looks for another `@offsite` snapshot on
+the same source dataset that carries the hold tag `offsite-<counterpart_pool>`.
+If such a snapshot exists, the counterpart received it too, so the current
+snapshot is safe to delete. If no such hold exists, deletion is blocked until
+the offsite pool comes back online.
+
+For the full algorithm, see the
+[`zfscheckagainst` module reference](../commands-and-modules/modules.md#zfscheckagainst).
 
 ## Cleaning Up Old Offsite Snapshots
 
-### Automated: [zfsoffsiteretain](../commands-and-modules/commands.md#zfsoffsiteretain)
+### Automated: [`zfsoffsiteretain`](../commands-and-modules/commands.md#zfsoffsiteretain)
 
 The recommended way to prune offsite snapshots:
 
@@ -94,22 +114,9 @@ The recommended way to prune offsite snapshots:
 sudo ./zfsoffsiteretain
 ```
 
-This dynamically discovers all online pools that contain `@offsite`
-snapshots and runs retention against each one using that pool's retention
-policy (`s` bucket counts). It relies on the
-[zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) safety
-checks to prevent deleting snapshots that an offline offsite pool still needs.
-
-**How it stays safe when the offsite pool is offline:**
-
-For incremental backups to work, source and destination must share a common
-snapshot. While preparing to remove a snapshot, if [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) encounters an offline counterpart pool, it scans
-other `@offsite` snapshots on the same source dataset for a hold tag
-`offsite-<counterpart_pool>`. If another snapshot carries that hold, the
-counterpart received it too — a second common snapshot is confirmed and
-deletion of the current one is safe. If no other snapshot has the hold, the
-current snapshot may be the only common one; deletion is blocked until the
-counterpart pool is brought online for verification.
+This discovers all online pools that contain `@offsite` snapshots and runs
+retention against each one using that pool's retention policy (`s` bucket
+counts). The same safety checks apply as when pruning from the GUI.
 
 ### GUI: Retention Tab
 
@@ -121,7 +128,7 @@ retention policy against all snapshot labels on that pool, including the `s`
 - Dry-run mode is respected if the **Dry Run** toggle is active.
 - The **Prune** button is disabled while a retention job is running.
 
-### Manual: [zfscleanup](../commands-and-modules/commands.md#zfscleanup)
+### Manual: [`zfscleanup`](../commands-and-modules/commands.md#zfscleanup)
 
 You can also prune offsite snapshots per-pool manually:
 
@@ -130,4 +137,4 @@ sudo ./zfscleanup '<poolname>' '' 'offsite'
 ```
 
 This removes `offsite`-labeled snapshots beyond the retention count for that
-pool's policy. The same [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) safety checks apply.
+pool's policy. The same safety checks apply.

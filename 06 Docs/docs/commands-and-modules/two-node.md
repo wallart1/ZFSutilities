@@ -27,6 +27,7 @@ script uses one in a non-obvious way.
 - [`clone-vm` (both)](#clone-vm-both)
 - [`deploy-version` (repo root)](#deploy-version-repo-root)
 - [`detach-vm-disk` (both)](#detach-vm-disk-both)
+- [`enroll-efi-keys-vm` (compute node)](#enroll-efi-keys-vm-compute-node)
 - [`iscsi-add-encrypted-luns` (storage node)](#iscsi-add-encrypted-luns-storage-node)
 - [`iscsi-restore-luns` (storage node)](#iscsi-restore-luns-storage-node)
 - [`list-vm-disks` (both)](#list-vm-disks-both)
@@ -290,6 +291,41 @@ The VM must be stopped. The script parses the disk line from the VM config,
 removes it, and (in two-node mode) deletes the matching LUN and iSCSI backstore on
 the storage host. A rescan is triggered on the compute host so Proxmox sees
 the change.
+
+---
+
+### `enroll-efi-keys-vm` (compute node)
+
+Re-initializes a VM's EFI vars disk with the Microsoft UEFI CA 2023
+certificates. This is useful when Proxmox warns that the EFI disk is missing
+`ms-cert=2023k`, especially for iSCSI-backed VMs where the Proxmox GUI
+enrollment may fail to parse the raw `by-path` volume ID.
+
+```bash
+sudo enroll-efi-keys-vm <vmid>
+```
+
+**Arguments:**
+
+| Argument | Description                 |
+| -------- | --------------------------- |
+| `vmid`   | Proxmox VM ID to enroll     |
+
+**Globals:** node-config globals only.
+
+**What it does:**
+
+1. Shuts down the VM if it is running.
+2. Resolves the backing EFI zvol via the iSCSI target/LUN (two-node) or the
+   storage reference (single-node).
+3. Grows the zvol to 4M if it is smaller.
+4. Rescans iSCSI on the compute node so the new size is visible.
+5. Writes `/usr/share/pve-edk2-firmware/OVMF_VARS_4M.ms.fd` to the EFI disk.
+6. Updates the Proxmox config to `size=4M` and adds `ms-cert=2023k`.
+7. Removes any stale `[PENDING]` change block.
+
+The VM is left stopped. After starting it, watch the console — the UEFI boot
+order is reset and may need to be re-selected in the firmware setup.
 
 ---
 

@@ -123,6 +123,22 @@ storage — it fails trying to initialize the disk. The `new-vm-disk EFI` script
 does the full job: creates the zvol, exports the LUN, initializes the firmware
 variables with `dd`, and adds `bios: ovmf` + `efidisk0:` to the VM config.
 
+When you choose Secure Boot pre-enrollment, the generated `efidisk0` line
+includes `ms-cert=2023k`, which tells Proxmox that the 2023 Microsoft UEFI
+certificates are enrolled. This avoids the Proxmox warning about expired 2011
+certificates.
+
+For existing VMs created before this change, use the helper script:
+
+```bash
+sudo enroll-efi-keys-vm <vmid>
+```
+
+This grows the EFI zvol to 4M, re-initializes it with the 2023 Microsoft
+vars file, and updates the Proxmox config. You can also do it manually via
+the Proxmox GUI (**Hardware → EFI Disk → Disk Action → Enroll Updated
+Certificates**), but the GUI may fail for iSCSI by-path EFI disks.
+
 ## Workflow: Cloning a VM
 
 The Proxmox GUI clone operation does not work with iSCSI storage — it cannot

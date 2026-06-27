@@ -127,7 +127,7 @@ TWO_NODE_SCRIPTS=(
     rescan-storage show-lun-map clone-vm move-vm-disk
     safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns
     unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys
-    install-scripts
+    install-scripts enroll-efi-keys-vm
 )
 
 CLONE_SCRIPTS=(zfsclone-vm promote-vm-clone retire-vm)

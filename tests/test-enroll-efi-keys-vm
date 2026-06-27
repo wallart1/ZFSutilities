@@ -1,0 +1,103 @@
+#!/usr/bin/bash
+# test-enroll-efi-keys-vm — Unit tests for enroll-efi-keys-vm helpers.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Extract helper functions from enroll-efi-keys-vm.
+# ------------------------------------------------------------------
+old_mydir="$mydir"
+func_text=$(sed -n '/^parse_efidisk_line() {/,/^}$/p' "$old_mydir/08 Two-node/enroll-efi-keys-vm")
+func_text+=$'\n'
+func_text+=$(sed -n '/^update_efidisk_config() {/,/^}$/p' "$old_mydir/08 Two-node/enroll-efi-keys-vm")
+eval "$func_text"
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_parse_efidisk_line_basic() {
+    test_start "parse_efidisk_line extracts by-path, size, and ms-cert flag"
+    local conf_file="$_mock_zfs_state_dir/209.conf"
+    cat > "$conf_file" << 'EOF'
+efidisk0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13,format=raw,efitype=4m,pre-enrolled-keys=1,size=1M
+EOF
+    local parsed by_path size has_ms_cert
+    parsed=$(parse_efidisk_line "$conf_file")
+    read -r by_path size has_ms_cert <<< "$parsed"
+    assert_equals "/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13" "$by_path"
+    assert_equals "1M" "$size"
+    assert_equals "no" "$has_ms_cert"
+}
+
+test_parse_efidisk_line_with_ms_cert() {
+    test_start "parse_efidisk_line detects ms-cert=2023k"
+    local conf_file="$_mock_zfs_state_dir/209-pending.conf"
+    cat > "$conf_file" << 'EOF'
+efidisk0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13,efitype=4m,format=raw,ms-cert=2023k,pre-enrolled-keys=1,size=1M
+EOF
+    local parsed by_path size has_ms_cert
+    parsed=$(parse_efidisk_line "$conf_file")
+    read -r by_path size has_ms_cert <<< "$parsed"
+    assert_equals "yes" "$has_ms_cert"
+}
+
+test_parse_efidisk_line_storage_ref() {
+    test_start "parse_efidisk_line handles storage:vm-... reference"
+    local conf_file="$_mock_zfs_state_dir/sn.conf"
+    cat > "$conf_file" << 'EOF'
+efidisk0: local-zfs:vm-100-disk-0,efitype=4m,pre-enrolled-keys=1,size=1M
+EOF
+    local parsed by_path size has_ms_cert
+    parsed=$(parse_efidisk_line "$conf_file")
+    read -r by_path size has_ms_cert <<< "$parsed"
+    assert_equals "local-zfs:vm-100-disk-0" "$by_path"
+    assert_equals "1M" "$size"
+}
+
+test_update_efidisk_config() {
+    test_start "update_efidisk_config adds ms-cert, sets size=4M, drops pending"
+    local conf_file="$_mock_zfs_state_dir/209-update.conf"
+    cat > "$conf_file" << 'EOF'
+bios: ovmf
+efidisk0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13,format=raw,efitype=4m,pre-enrolled-keys=1,size=1M
+scsi0: /dev/disk/by-path/...
+
+[PENDING]
+efidisk0: /dev/disk/by-path/...,efitype=4m,format=raw,ms-cert=2023k,pre-enrolled-keys=1,size=1M
+EOF
+    update_efidisk_config "$conf_file"
+    local line
+    line=$(grep '^efidisk0:' "$conf_file")
+    assert_contains "$line" "size=4M"
+    assert_contains "$line" "ms-cert=2023k"
+    if grep -q '^\[PENDING\]$' "$conf_file"; then
+        test_fail "[PENDING] block was not removed"
+    else
+        test_pass
+    fi
+}
+
+test_update_efidisk_config_idempotent() {
+    test_start "update_efidisk_config is idempotent"
+    local conf_file="$_mock_zfs_state_dir/209-idem.conf"
+    cat > "$conf_file" << 'EOF'
+efidisk0: /dev/disk/by-path/...,efitype=4m,format=raw,pre-enrolled-keys=1,size=4M,ms-cert=2023k
+EOF
+    update_efidisk_config "$conf_file"
+    local count
+    count=$(grep -o 'ms-cert=2023k' "$conf_file" | wc -l)
+    assert_equals "1" "$count"
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_parse_efidisk_line_basic
+test_parse_efidisk_line_with_ms_cert
+test_parse_efidisk_line_storage_ref
+test_update_efidisk_config
+test_update_efidisk_config_idempotent
+
+test_summary

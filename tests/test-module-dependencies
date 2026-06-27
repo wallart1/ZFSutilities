@@ -63,7 +63,7 @@ for mod in modules:
 # $extrasourcedir, ./, absolute paths, etc.).
 module_names_alt = '|'.join(re.escape(m) for m in modules)
 source_re = re.compile(
-    r'source\s+\S*?/(' + module_names_alt + r')(?=\s|;|$)'
+    r'source\s+["\']?\S*?/(' + module_names_alt + r')["\']?(?=\s|;|\)|$)'
 )
 
 

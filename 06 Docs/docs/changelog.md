@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.55.0
+
+### Added
+
+- **`enroll-efi-keys-vm`** — new `08 Two-node/` helper that re-initializes a
+  Proxmox VM's EFI vars disk with the Microsoft UEFI CA 2023 certificates.
+  Grows the backing EFI zvol to 4M, rewrites it from `OVMF_VARS_4M.ms.fd`, and
+  updates the VM config with `size=4M` and `ms-cert=2023k`. Supports two-node
+  configurations by delegating to the compute host via SSH.
+- **Secure Boot 2023 certificate pre-enrollment** — `new-vm-disk` now emits
+  `ms-cert=2023k` on the `efidisk0` line when Secure Boot is enabled, so new
+  VMs boot with the current Microsoft UEFI CA already enrolled.
+- **`unretire-vm --new-vmid <id>`** — retired VMs can be unretired under a new
+  VM ID. The script rewrites disk lines, regenerates `vmgenid` and `smbios1`
+  UUIDs, and interactively prompts for a new VM ID when the original is still
+  in use. A test mode (`UNRETIRE_VM_TEST_NO_ROOT=1`) enables unit testing.
+- **Datasets tab full-path search** — the Datasets tree search can now match
+  full ZFS dataset paths, not just the displayed node label. Lazy-loaded
+  ancestors are expanded automatically when a match is selected.
+- **Documentation viewer auto-elevation** — `zfsutilities-docs` (`docs_viewer.py`)
+  automatically relaunches through `pkexec` when not run as root, preserving
+  `DISPLAY`, `XAUTHORITY`, and `WAYLAND_DISPLAY`.
+- **Internals reference expansion** — `commands-and-modules/commands.md` now
+  includes Called modules, Data structures consumed/produced, Internal flow,
+  and Return codes tables for most entries. `developer-guide/data-structures.md`
+  adds sections for snapshot-name persistence, scrub state, and the
+  `zfsscruball` state file.
+
+### Changed
+
+- `deploy-version` now symlinks `enroll-efi-keys-vm` into the deployed `bin/`
+  directory, and both installers include it in their script lists so the helper
+  is available after installation.
+- `unretire-vm` validation was refactored for robustness and now supports
+  single-node and two-node storage-reference conventions.
+
+### Tests
+
+- Added `tests/test-enroll-efi-keys-vm` (5 tests) covering `parse_efidisk_line()`
+  and `update_efidisk_config()`.
+- Added `tests/test-new-vm-disk` (3 tests) covering `build_efidisk_line()`.
+- Added `tests/test-unretire-vm` (6 tests) covering `--new-vmid`, prompting,
+  UUID regeneration, and conflict rejection.
+- Expanded `tests/test-deploy-version` with tests verifying
+  `enroll-efi-keys-vm` is included in `TWO_NODE_SCRIPTS` and symlinked into
+  the deployed `bin/` directory.
+- Updated `tests/test-module-dependencies` so its source-line regex handles
+  quoted paths such as `source "$MYDIR/rootcheck"`.
+- Expanded `tests/python/test_gui_infrastructure.py` for `TreeSearch` full-name
+  matching, `expand_path_to_row()`, and `_goto_match()` /
+  `_update_matches_from_store()`.
+- Expanded `tests/python/test_docs_viewer.py` for `pkexec` root elevation and
+  optional environment-variable omission.
+- Expanded `tests/python/test_datasets_page.py` to ensure
+  `refresh_datasets_page()` re-runs an active search.
+
+### Documentation
+
+- Added `enroll-efi-keys-vm` to `commands-and-modules/two-node.md` and updated
+  `user-guide/proxmox-integration.md` to describe EFI key enrollment and the
+  `--new-vmid` option.
+- Streamlined and updated `user-guide/gtk-gui.md`, `user-guide/concepts.md`,
+  `user-guide/daily-backup.md`, `user-guide/offsite-backup.md`,
+  `user-guide/retention.md`, and `user-guide/restore.md` for clarity and
+  consistency.
+- Fixed a typo in `user-guide/retention.md`.
+- Added `InternalsDocPlan.md` documenting the phased plan to enhance the
+  Commands & Modules Reference.
+
 ## 0.54.1
 
 ### Added

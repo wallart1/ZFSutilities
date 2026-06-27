@@ -6,18 +6,23 @@
 # Install to: /usr/local/lib/zfsutilities/bin/unretire-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
-source /usr/local/lib/node-lib.sh
+NODE_LIB="${NODE_LIB:-/usr/local/lib/node-lib.sh}"
+source "$NODE_LIB"
 
 MY_HOST=$(hostname -s)
-PVE_CONF_DIR="/etc/pve/qemu-server"
+PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 JSON_CONFIG="/root/.config/zfsutilities.json"
 
 usage() {
-    echo "Usage: unretire-vm <vmid> [archive_base]"
+    echo "Usage: unretire-vm <vmid> [archive_base] [--new-vmid <new_vmid>]"
     echo ""
     echo "  vmid         VM ID of the retired VM to restore"
     echo "  archive_base Optional ZFS dataset that contains the archive"
     echo "               (defaults to the path saved in JSON config)"
+    echo "  --new-vmid   Optional new VM ID to use for restored resources"
+    echo ""
+    echo "If the original vmid is already in use and --new-vmid is not given,"
+    echo "you will be prompted for a new VM ID (or cancel)."
     echo ""
     echo "Steps:"
     echo "  1. Discover archived zvols and Proxmox config"
@@ -29,6 +34,7 @@ usage() {
     echo ""
     echo "Example: unretire-vm 904"
     echo "Example: unretire-vm 904 temp/archive"
+    echo "Example: unretire-vm 904 temp/archive --new-vmid 910"
     exit 1
 }
 
@@ -44,6 +50,45 @@ ask_yn() {
     [[ "$response" =~ ^[Yy]$ ]]
 }
 
+prompt_new_vmid() {
+    local response
+    echo ""
+    echo "VMID ${VMID} is already in use (config or zvols exist)."
+    read -rp "Enter a new VMID to restore as, or leave blank to abort: " response
+    if [[ -z "$response" ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+    [[ "$response" =~ ^[0-9]+$ ]] || die "new VMID must be a number, got: $response"
+    [[ "$response" != "$VMID" ]] || die "new VMID must differ from the original VMID"
+    NEWVMID="$response"
+}
+
+vmid_in_use() {
+    local check_vmid="$1"
+    local dest_conf="${PVE_CONF_DIR}/${check_vmid}.conf"
+    [[ -f "$dest_conf" ]] && return 0
+
+    local found
+    if is_single_node; then
+        found=$(zfs list -H -t volume -o name 2>/dev/null \
+            | grep -E "/proxmox/vm-${check_vmid}-disk-[0-9]+$" \
+            | grep -v "^${ARCHIVE_BASE}/" \
+            | head -1)
+    else
+        found=$(ssh root@"$STORAGE_HOST" bash -s "$check_vmid" "$ARCHIVE_BASE" << 'SSHEOF'
+VMID="$1"
+ARCHIVE_BASE="$2"
+zfs list -H -t volume -o name 2>/dev/null \
+    | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$" \
+    | grep -v "^${ARCHIVE_BASE}/" \
+    | head -1
+SSHEOF
+        )
+    fi
+    [[ -n "$found" ]]
+}
+
 # --- Read archive_path from JSON config ---
 get_json_archive_path() {
     python3 -c "
@@ -57,22 +102,44 @@ except:
 "
 }
 
-[[ $# -ge 1 && $# -le 2 ]] || usage
+NEWVMID=""
+POS_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --new-vmid)
+            shift
+            NEWVMID="${1:-}"
+            [[ -n "$NEWVMID" ]] || usage
+            shift
+            ;;
+        *)
+            POS_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
 
-VMID="$1"
-ARCHIVE_BASE="${2:-}"
+[[ ${#POS_ARGS[@]} -ge 1 && ${#POS_ARGS[@]} -le 2 ]] || usage
+
+VMID="${POS_ARGS[0]}"
+ARCHIVE_BASE="${POS_ARGS[1]:-}"
 
 [[ "$VMID" =~ ^[0-9]+$ ]] || die "vmid must be a number, got: $VMID"
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+[[ -z "$NEWVMID" || "$NEWVMID" =~ ^[0-9]+$ ]] || die "new-vmid must be a number, got: $NEWVMID"
+[[ -z "$NEWVMID" || "$NEWVMID" != "$VMID" ]] || die "new-vmid must differ from vmid"
+[[ $EUID -eq 0 || ${UNRETIRE_VM_TEST_NO_ROOT:-0} == "1" ]] || die "Must run as root (use sudo)"
 
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    new_vmid_arg=""
+    [[ -n "$NEWVMID" ]] && new_vmid_arg=" --new-vmid '$NEWVMID'"
     exec ssh root@"$COMPUTE_HOST" \
-        "/usr/local/lib/zfsutilities/bin/unretire-vm '$VMID' '$ARCHIVE_BASE'"
+        "/usr/local/lib/zfsutilities/bin/unretire-vm '$VMID' '$ARCHIVE_BASE'${new_vmid_arg}"
 fi
 
 echo "=== unretire-vm ==="
 echo "  VM: ${VMID}"
+[[ -n "$NEWVMID" && "$NEWVMID" != "$VMID" ]] && echo "  New VM: ${NEWVMID}"
 echo ""
 
 # =======================================================================
@@ -88,12 +155,13 @@ fi
 
 # Validate the base exists as a ZFS dataset
 if is_single_node; then
-    if ! zfs list -H -o name "$ARCHIVE_BASE" >/dev/null 2>&1; then
+    if ! zfs list -H -o name "$ARCHIVE_BASE" 2>/dev/null \
+            | grep -q "^${ARCHIVE_BASE}$"; then
         die "Not a ZFS dataset: $ARCHIVE_BASE"
     fi
 else
-    if ! ssh root@"$STORAGE_HOST" "zfs list -H -o name '$ARCHIVE_BASE'" \
-            >/dev/null 2>&1; then
+    if ! ssh root@"$STORAGE_HOST" "zfs list -H -o name '$ARCHIVE_BASE' 2>/dev/null \
+            | grep -q '^${ARCHIVE_BASE}$'"; then
         die "Not a ZFS dataset on $STORAGE_HOST: $ARCHIVE_BASE"
     fi
 fi
@@ -133,6 +201,7 @@ fi
 # Build arrays of archive datasets and their original zvol paths
 declare -a archive_datasets=()
 declare -a original_zvols=()
+declare -a new_zvols=()
 declare -a disk_nums=()
 
 dataset_count=0
@@ -168,17 +237,40 @@ done
 [[ ${#missing_sidecars[@]} -eq 0 ]] \
     || die "Missing sidecar files:\n  $(printf '%s\n  ' "${missing_sidecars[@]}")"
 
+# Resolve new VMID if the original is in use and none was supplied
+if [[ -n "$NEWVMID" ]]; then
+    if vmid_in_use "$NEWVMID"; then
+        die "Requested new VMID ${NEWVMID} is already in use"
+    fi
+elif vmid_in_use "$VMID"; then
+    while true; do
+        prompt_new_vmid
+        if ! vmid_in_use "$NEWVMID"; then
+            break
+        fi
+        echo "VMID ${NEWVMID} is also in use."
+        NEWVMID=""
+    done
+fi
+NEWVMID="${NEWVMID:-$VMID}"
+
+# Build new zvol paths using the (possibly changed) VMID
+for i in "${!original_zvols[@]}"; do
+    new_zvols+=("${original_zvols[$i]/%vm-${VMID}-disk-${disk_nums[$i]}/vm-${NEWVMID}-disk-${disk_nums[$i]}}")
+done
+
 # Verify destination zvols do not already exist
 existing_dest=()
-for i in "${!original_zvols[@]}"; do
+for i in "${!new_zvols[@]}"; do
     if is_single_node; then
-        if zfs list -H -o name "${original_zvols[$i]}" >/dev/null 2>&1; then
-            existing_dest+=("${original_zvols[$i]}")
+        if zfs list -H -o name "${new_zvols[$i]}" 2>/dev/null \
+                | grep -q "^${new_zvols[$i]}$"; then
+            existing_dest+=("${new_zvols[$i]}")
         fi
     else
-        if ssh root@"$STORAGE_HOST" "zfs list -H -o name '${original_zvols[$i]}'" \
-                >/dev/null 2>&1; then
-            existing_dest+=("${original_zvols[$i]}")
+        if ssh root@"$STORAGE_HOST" "zfs list -H -o name '${new_zvols[$i]}' 2>/dev/null \
+                | grep -q '^${new_zvols[$i]}$'"; then
+            existing_dest+=("${new_zvols[$i]}")
         fi
     fi
 done
@@ -197,7 +289,7 @@ else
 fi
 
 # Verify destination config does not already exist
-dest_config="${PVE_CONF_DIR}/${VMID}.conf"
+dest_config="${PVE_CONF_DIR}/${NEWVMID}.conf"
 [[ ! -f "$dest_config" ]] || die "Destination Proxmox config already exists: $dest_config"
 
 # =======================================================================
@@ -215,7 +307,11 @@ for i in "${!archive_datasets[@]}"; do
     else
         orig_vbs=$(ssh root@"$STORAGE_HOST" "cat '$vbs_file'")
     fi
-    echo "    ${original_zvols[$i]} (volblocksize: ${orig_vbs})"
+    if [[ "${original_zvols[$i]}" != "${new_zvols[$i]}" ]]; then
+        echo "    ${original_zvols[$i]} → ${new_zvols[$i]} (volblocksize: ${orig_vbs})"
+    else
+        echo "    ${new_zvols[$i]} (volblocksize: ${orig_vbs})"
+    fi
 done
 echo ""
 
@@ -235,6 +331,7 @@ if is_single_node; then
     for i in "${!archive_datasets[@]}"; do
         arc_dataset="${archive_datasets[$i]}"
         orig_zvol="${original_zvols[$i]}"
+        new_zvol="${new_zvols[$i]}"
         vbs_file="${ARCHIVE_MOUNT}/${orig_zvol}.original_volblocksize"
 
         snap=$(zfs list -H -t snapshot -o name -S creation "$arc_dataset" 2>/dev/null | head -1)
@@ -243,20 +340,20 @@ if is_single_node; then
         snap_name="@${snap##*@}"
         orig_vbs=$(cat "$vbs_file")
 
-        parent=$(dirname "$orig_zvol")
+        parent=$(dirname "$new_zvol")
         zfs create -p "$parent" 2>/dev/null || true
 
-        echo "  Restoring ${orig_zvol} (volblocksize: ${orig_vbs})..."
+        echo "  Restoring ${new_zvol} (volblocksize: ${orig_vbs})..."
         if ! zfs send -cw "${arc_dataset}${snap_name}" \
-                | zfs receive -o volblocksize="$orig_vbs" "$orig_zvol"; then
-            die "Failed to restore ${orig_zvol}"
+                | zfs receive -o volblocksize="$orig_vbs" "$new_zvol"; then
+            die "Failed to restore ${new_zvol}"
         fi
-        echo "  ✓ Restored: ${orig_zvol}"
+        echo "  ✓ Restored: ${new_zvol}"
     done
 else
     # Two-node: run restoration on storage host via SSH
     ssh root@"$STORAGE_HOST" bash -s "$ARCHIVE_MOUNT" "$dataset_count" \
-        "${archive_datasets[@]}" "${original_zvols[@]}" << 'SSHEOF'
+        "${archive_datasets[@]}" "${original_zvols[@]}" "${new_zvols[@]}" << 'SSHEOF'
 set -e
 ARCHIVE_MOUNT="$1"
 dataset_count="$2"
@@ -264,10 +361,12 @@ shift 2
 
 archive_datasets=("${@:1:$dataset_count}")
 original_zvols=("${@:$((dataset_count + 1)):$dataset_count}")
+new_zvols=("${@:$((2 * dataset_count + 1)):$dataset_count}")
 
 for i in "${!archive_datasets[@]}"; do
     arc_dataset="${archive_datasets[$i]}"
     orig_zvol="${original_zvols[$i]}"
+    new_zvol="${new_zvols[$i]}"
     vbs_file="${ARCHIVE_MOUNT}/${orig_zvol}.original_volblocksize"
 
     snap=$(zfs list -H -t snapshot -o name -S creation "$arc_dataset" 2>/dev/null | head -1)
@@ -276,13 +375,13 @@ for i in "${!archive_datasets[@]}"; do
     snap_name="@${snap##*@}"
     orig_vbs=$(cat "$vbs_file")
 
-    parent=$(dirname "$orig_zvol")
+    parent=$(dirname "$new_zvol")
     zfs create -p "$parent" 2>/dev/null || true
 
-    echo "  Restoring ${orig_zvol} (volblocksize: ${orig_vbs})..." >&2
+    echo "  Restoring ${new_zvol} (volblocksize: ${orig_vbs})..." >&2
     zfs send -cw "${arc_dataset}${snap_name}" \
-        | zfs receive -o volblocksize="$orig_vbs" "$orig_zvol"
-    echo "  ✓ Restored: ${orig_zvol}" >&2
+        | zfs receive -o volblocksize="$orig_vbs" "$new_zvol"
+    echo "  ✓ Restored: ${new_zvol}" >&2
 done
 SSHEOF
     [[ $? -eq 0 ]] || die "Zvol restoration failed on $STORAGE_HOST"
@@ -300,20 +399,20 @@ declare -A disk_to_target=()
 if is_two_node; then
     echo "--- Step 2: Rebuilding iSCSI infrastructure ---"
 
-    lun_result=$(ssh root@"$STORAGE_HOST" bash -s "$VMID" "$dataset_count" \
-        "${original_zvols[@]}" << 'SSHEOF'
+    lun_result=$(ssh root@"$STORAGE_HOST" bash -s "$NEWVMID" "$dataset_count" \
+        "${new_zvols[@]}" << 'SSHEOF'
 set -e
 VMID="$1"
 dataset_count="$2"
 shift 2
-original_zvols=("${@:1:$dataset_count}")
+new_zvols=("${@:1:$dataset_count}")
 
-for i in "${!original_zvols[@]}"; do
-    orig_zvol="${original_zvols[$i]}"
-    pool="${orig_zvol%%/*}"
-    disknum=$(echo "$orig_zvol" | grep -oP 'disk-\K[0-9]+$')
+for i in "${!new_zvols[@]}"; do
+    new_zvol="${new_zvols[$i]}"
+    pool="${new_zvol%%/*}"
+    disknum=$(echo "$new_zvol" | grep -oP 'disk-\K[0-9]+$')
     backstore="vm-${VMID}-disk-${disknum}"
-    zvol_dev="/dev/zvol/${orig_zvol}"
+    zvol_dev="/dev/zvol/${new_zvol}"
 
     # Map pool to target using node-lib's pool_to_target logic
     target=$(python3 -c "
@@ -366,7 +465,7 @@ except Exception as e:
     fi
 
     # Check encryption status and add to encrypted-luns.conf if needed
-    enc_status=$(zfs get -H -o value encryption "$orig_zvol" 2>/dev/null || echo "-")
+    enc_status=$(zfs get -H -o value encryption "$new_zvol" 2>/dev/null || echo "-")
     if [[ "$enc_status" != "-" && "$enc_status" != "off" ]]; then
         enc_conf="/etc/iscsi-encrypted-luns.conf"
         target_short="${target##*:}"
@@ -424,30 +523,59 @@ echo "--- Step 3: Restoring Proxmox config ---"
 
 mkdir -p "$(dirname "$dest_config")"
 
+# Build disk_key -> disk_num mapping from .disk_info sidecars.
+declare -A key_to_disknum=()
+for i in "${!original_zvols[@]}"; do
+    info_file="${ARCHIVE_MOUNT}/${original_zvols[$i]}.disk_info"
+    if is_single_node; then
+        disk_key=$(grep '^DISK_KEY=' "$info_file" 2>/dev/null | cut -d= -f2)
+    else
+        disk_key=$(ssh root@"$STORAGE_HOST" "grep '^DISK_KEY=' '$info_file' 2>/dev/null | cut -d= -f2")
+    fi
+    disknum="${disk_nums[$i]}"
+    [[ -n "$disk_key" ]] && key_to_disknum["$disk_key"]="$disknum"
+done
+
 if is_single_node; then
+    archived_content=$(cat "$archived_config")
+else
+    archived_content=$(ssh root@"$STORAGE_HOST" "cat '$archived_config'")
+fi
+[[ -n "$archived_content" ]] || die "Failed to read archived config"
+
+rewrite_needed=false
+[[ "$NEWVMID" != "$VMID" ]] && rewrite_needed=true
+
+if [[ "$rewrite_needed" == "false" ]] && is_single_node; then
+    # No VMID change in single-node mode: simple copy is sufficient.
     cp "$archived_config" "$dest_config"
     echo "  ✓ Config restored: $dest_config"
 else
-    # Two-node: fetch archived config and rewrite disk lines with new LUNs.
-    # Build disk_key -> disk_num mapping from .disk_info sidecars.
-    declare -A key_to_disknum=()
-    for i in "${!original_zvols[@]}"; do
-        info_file="${ARCHIVE_MOUNT}/${original_zvols[$i]}.disk_info"
-        disk_key=$(ssh root@"$STORAGE_HOST" "grep '^DISK_KEY=' '$info_file' | cut -d= -f2")
-        disknum="${disk_nums[$i]}"
-        [[ -n "$disk_key" ]] && key_to_disknum["$disk_key"]="$disknum"
-    done
+    # Rewrite disk lines (and UUIDs when the VMID changed).
+    new_vmgenid=""
+    new_smbios_uuid=""
+    vmgenid_written=false
+    smbios1_written=false
+    if [[ "$rewrite_needed" == "true" ]]; then
+        new_vmgenid=$(cat /proc/sys/kernel/random/uuid)
+        new_smbios_uuid=$(cat /proc/sys/kernel/random/uuid)
+    fi
 
-    # Fetch archived config content
-    archived_content=$(ssh root@"$STORAGE_HOST" "cat '$archived_config'")
-    [[ -n "$archived_content" ]] || die "Failed to read archived config from $STORAGE_HOST"
-
-    # Write new config, rewriting disk lines
     while IFS= read -r line; do
         [[ "$line" =~ ^\[.+\] ]] && break
 
         if [[ "$line" =~ \
+            ^([a-z]+[0-9]+):\ *([^:]+):vm-${VMID}-disk-([0-9]+)(.*) ]]; then
+            # Single-node disk line: rewrite VMID if it changed, otherwise keep.
+            key="${BASH_REMATCH[1]}"
+            storage="${BASH_REMATCH[2]}"
+            disknum="${BASH_REMATCH[3]}"
+            rest="${BASH_REMATCH[4]}"
+            echo "${key}: ${storage}:vm-${NEWVMID}-disk-${disknum}${rest}"
+            [[ "$NEWVMID" != "$VMID" ]] && echo "  ✓ Rewrote ${key} for VMID ${NEWVMID}" >&2
+        elif [[ "$line" =~ \
             ^([a-z]+[0-9]+):.*ip-([0-9\.]+):3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+)(.*) ]]; then
+            # Two-node iSCSI disk line: rewrite LUN (and target if needed).
             key="${BASH_REMATCH[1]}"
             rest="${BASH_REMATCH[5]}"
             disknum="${key_to_disknum[$key]}"
@@ -464,10 +592,21 @@ else
                 echo "  ⚠ Could not map ${key}, keeping original line" >&2
                 echo "$line"
             fi
+        elif [[ "$rewrite_needed" == "true" && "$line" =~ ^vmgenid: ]]; then
+            echo "vmgenid: $new_vmgenid"
+            vmgenid_written=true
+        elif [[ "$rewrite_needed" == "true" && "$line" =~ ^smbios1: ]]; then
+            echo "smbios1: uuid=${new_smbios_uuid}"
+            smbios1_written=true
         else
             echo "$line"
         fi
     done <<< "$archived_content" > "$dest_config"
+
+    if [[ "$rewrite_needed" == "true" ]]; then
+        [[ "$vmgenid_written" == "true" ]] || echo "vmgenid: $new_vmgenid" >> "$dest_config"
+        [[ "$smbios1_written" == "true" ]] || echo "smbios1: uuid=${new_smbios_uuid}" >> "$dest_config"
+    fi
 
     echo "  ✓ Config restored: $dest_config"
 fi
@@ -489,7 +628,11 @@ fi
 # =======================================================================
 
 echo "=== Done ==="
-echo "  VM ${VMID} has been unretired."
+if [[ "$NEWVMID" != "$VMID" ]]; then
+    echo "  VM ${VMID} has been unretired as VM ${NEWVMID}."
+else
+    echo "  VM ${VMID} has been unretired."
+fi
 if is_two_node; then
     echo "  iSCSI LUNs:"
     for d in "${!disk_to_lun[@]}"; do

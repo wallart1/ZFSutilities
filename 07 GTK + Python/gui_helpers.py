@@ -33,6 +33,11 @@ def bold_label(text):
 ACTIVE_COLUMN_WIDTH = 60
 TREEVIEW_MIN_WIDTH = 100
 
+# Placeholder rows used while lazy-loading tree children.
+PLACEHOLDER_NAMES = {
+    "(loading...)", "(no datasets)", "(empty)", "(no holds)"
+}
+
 
 def configure_treeview_column(col, width=None, min_width=20, resizable=True):
     """Configure a TreeViewColumn as fixed-width and user-resizable.
@@ -205,12 +210,68 @@ def expand_tree_recursively(view, store, tree_iter=None):
         view.expand_row(path, False)
 
     child = store.iter_children(tree_iter)
-    placeholders = {"(loading...)", "(no datasets)", "(empty)", "(no holds)"}
     while child:
         name = store.get_value(child, 0)
-        if name not in placeholders:
+        if name not in PLACEHOLDER_NAMES:
             expand_tree_recursively(view, store, child)
         child = store.iter_next(child)
+
+
+def _tree_path_indices(path):
+    """Return a list of integer indices for a Gtk.TreePath or test path."""
+    if hasattr(path, "get_indices"):
+        return list(path.get_indices())
+    if isinstance(path, str):
+        return [int(p) for p in path.split(":") if p]
+    if isinstance(path, (list, tuple)):
+        return [int(p) for p in path]
+    return []
+
+
+def expand_path_to_row(view, store, path):
+    """Expand every ancestor of *path* so the target row is visible.
+
+    Lazy-loaded ancestors are loaded before they are expanded.  The target
+    row itself is not expanded.  Returns the target TreeIter, or None if the
+    path cannot be reached.
+    """
+    indices = _tree_path_indices(path)
+    if not indices:
+        return None
+
+    it = None
+    for depth, idx in enumerate(indices):
+        if depth == 0:
+            it = store.get_iter_first()
+            for _ in range(idx):
+                if it is None:
+                    return None
+                it = store.iter_next(it)
+        else:
+            child = store.iter_children(it)
+            it = child
+            for _ in range(idx):
+                if it is None:
+                    return None
+                it = store.iter_next(it)
+
+        if it is None:
+            return None
+
+        subpath = Gtk.TreePath.new_from_indices(indices[:depth + 1])
+        name = store.get_value(it, 0)
+        loaded = store.get_value(it, 7)
+        if (
+            depth < len(indices) - 1
+            and not view.row_expanded(subpath)
+            and not loaded
+            and name not in PLACEHOLDER_NAMES
+        ):
+            on_row_expanded(view, it, subpath)
+        if depth < len(indices) - 1 and not view.row_expanded(subpath):
+            view.expand_row(subpath, False)
+
+    return it
 
 
 # ---------------------------------------------------------------------------
@@ -929,7 +990,7 @@ class TreeSearch:
     """Debounced search with prev/next navigation for a Gtk.TreeView."""
 
     def __init__(self, treeview, entry, results_label, prev_btn, next_btn,
-                 placeholder_names=None):
+                 placeholder_names=None, full_name_func=None):
         self.view = treeview
         self.entry = entry
         self.results_label = results_label
@@ -938,6 +999,7 @@ class TreeSearch:
         self.placeholder_names = placeholder_names or {
             "(loading...)", "(no datasets)", "(empty)", "(no holds)"
         }
+        self.full_name_func = full_name_func
         self._text = ""
         self._matches = []
         self._current_idx = -1
@@ -977,8 +1039,15 @@ class TreeSearch:
             while tree_iter:
                 name = store.get_value(tree_iter, 0)
                 if name not in self.placeholder_names:
-                    if lower in name.lower():
-                        matches.append(store.get_path(tree_iter))
+                    candidates = [name]
+                    if self.full_name_func:
+                        full_name = self.full_name_func(store, tree_iter)
+                        if full_name and full_name != name:
+                            candidates.append(full_name)
+                    for candidate in candidates:
+                        if lower in candidate.lower():
+                            matches.append(store.get_path(tree_iter))
+                            break
                 child = store.iter_children(tree_iter)
                 if child:
                     _walk(child)
@@ -1025,10 +1094,36 @@ class TreeSearch:
         if not self._matches or idx < 0 or idx >= len(self._matches):
             return
         path = self._matches[idx]
-        selection = self.view.get_selection()
-        selection.unselect_all()
-        selection.select_path(path)
-        self.view.scroll_to_cell(path, None, True, 0.5, 0.5)
+        store = self.view.get_model()
+        self.freeze()
+        try:
+            expand_path_to_row(self.view, store, path)
+            selection = self.view.get_selection()
+            selection.unselect_all()
+            selection.select_path(path)
+            self.view.scroll_to_cell(path, None, True, 0.5, 0.5)
+            self._update_ui()
+        finally:
+            self.thaw()
+            self._update_matches_from_store()
+
+    def _update_matches_from_store(self):
+        """Recompute matches after expanding rows without changing selection."""
+        if not self._text:
+            return
+        store = self.view.get_model()
+        current_path = None
+        if 0 <= self._current_idx < len(self._matches):
+            current_path = self._matches[self._current_idx]
+        self._matches = self._find_matches(store, self._text)
+        if current_path is not None and current_path in self._matches:
+            self._current_idx = self._matches.index(current_path)
+        elif self._matches:
+            self._current_idx = min(self._current_idx, len(self._matches) - 1)
+            if self._current_idx < 0:
+                self._current_idx = 0
+        else:
+            self._current_idx = -1
         self._update_ui()
 
     def _update_ui(self):

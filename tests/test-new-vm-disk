@@ -1,0 +1,54 @@
+#!/usr/bin/bash
+# test-new-vm-disk — Unit tests for new-vm-disk helper functions.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Extract helper functions from new-vm-disk.
+# ------------------------------------------------------------------
+old_mydir="$mydir"
+func_text=$(sed -n '/^build_efidisk_line() {/,/^}$/p' "$old_mydir/08 Two-node/new-vm-disk")
+eval "$func_text"
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_build_efidisk_line_secure_boot() {
+    test_start "build_efidisk_line includes ms-cert=2023k with Secure Boot"
+    local line
+    line=$(build_efidisk_line "/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.storage-host:tank-lun-5" 1 true)
+    assert_contains "$line" "ms-cert=2023k"
+}
+
+test_build_efidisk_line_no_secure_boot() {
+    test_start "build_efidisk_line omits ms-cert without Secure Boot"
+    local line
+    line=$(build_efidisk_line "/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.storage-host:tank-lun-5" 0 false)
+    if [[ "$line" != *"ms-cert"* ]]; then
+        test_pass
+    else
+        test_fail "Expected no ms-cert option, got: $line"
+    fi
+}
+
+test_build_efidisk_line_preserves_base_options() {
+    test_start "build_efidisk_line preserves base EFI options"
+    local line
+    line=$(build_efidisk_line "/dev/disk/by-path/test-lun-5" 1 true)
+    assert_contains "$line" "efidisk0: /dev/disk/by-path/test-lun-5"
+    assert_contains "$line" "efitype=4m"
+    assert_contains "$line" "pre-enrolled-keys=1"
+    assert_contains "$line" "size=4M"
+    assert_contains "$line" "format=raw"
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_build_efidisk_line_secure_boot
+test_build_efidisk_line_no_secure_boot
+test_build_efidisk_line_preserves_base_options
+
+test_summary

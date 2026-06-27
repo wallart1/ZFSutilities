@@ -3,13 +3,16 @@
 See [Concepts and Terminology](concepts.md) for background on pools, datasets,
 snapshots, and the backup chain before reading this page.
 
-The daily backup job ([`zfsdailybackup`](../commands-and-modules/commands.md#zfsdailybackup)) is the main ZFSutilities operation. It:
+The daily backup job ([`zfsdailybackup`](../commands-and-modules/commands.md#zfsdailybackup))
+is the main ZFSutilities operation. It:
 
 1. Pulls custom rsync backups from remote hosts
 2. Snapshots source datasets and copies them to their destination pools
 3. Applies retention policies to prune old snapshots
 
-It is anticipated that the system administrator will customize this script to their needs. 
+`zfsdailybackup` is intended as a starting template. Sites customize it
+to match their pools and hosts, or configure and run the equivalent workflow
+from the GUI's Backup tab.
 
 ## Running the Daily Backup
 
@@ -22,11 +25,11 @@ sudo zfsdailybackup
 Different steps have different consequences when they fail:
 
 - **Pre-backup script** — fatal. The entire backup aborts immediately.
-- **Pull steps (rsync)** — non-fatal. The failure is logged as a `WARN`, but the
-  backup continues with the remaining steps. This lets a single unreachable
+- **Pull steps (rsync)** — non-fatal. The failure is logged as a warning, but
+  the backup continues with the remaining steps. This lets a single unreachable
   remote host prevent only its own pull rather than canceling the whole job.
-- **ZFS keys backup (rsync)** — non-fatal. The failure is logged as a `WARN` and
-  the backup continues.
+- **ZFS keys backup (rsync)** — non-fatal. The failure is logged as a warning
+  and the backup continues.
 - **Send/receive steps** — fatal. A ZFS transfer failure aborts the remaining
   backup steps.
 - **Retention/prune step** — fatal. A pruning failure aborts the remaining steps.
@@ -58,8 +61,7 @@ that must run regardless of outcome.
 Enable and set it via override:
 
 ```bash
-post_backup_script='echo backup finished'
-sudo ./zfsdailybackup "post_backup_script_enabled='Y'; 
+sudo ./zfsdailybackup "post_backup_script_enabled='Y'; post_backup_script='echo backup finished'"
 ```
 
 Or configure it permanently in the GUI (Backup tab → **Post-Backup Steps**).
@@ -119,18 +121,19 @@ sudo ./zfsdailybackup "prune='N'"
 sudo ./zfsdailybackup "backup_NVME1='N'; prune='N'"
 ```
 
-Available overrides include: `backup_threeamigos`, `backup_NVME1`, `prune`.
+Available overrides include: `backup_threeamigos`, `backup_NVME1`, `prune`,
+and the rsync-pull flags for each configured host. See the
+[`zfsdailybackup` command reference](../commands-and-modules/commands.md#zfsdailybackup)
+for the full list.
 
-To skip the [backup-installed-programs](../commands-and-modules/commands.md#backup-installed-programs) step (which runs before rsync on each
-pull host):
+To skip the package-list backup step that runs before rsync on each pull host:
 
 ```bash
 sudo ./zfsdailybackup "run_installed_programs='N'"
 ```
 
 To skip **all** pull steps at once (for example, when the remote hosts are
-unreachable and you only want to run ZFS send/receive and retention), set
-`pull_steps_active` to `'N'`:
+unreachable and you only want to run ZFS send/receive and retention):
 
 ```bash
 sudo ./zfsdailybackup "pull_steps_active='N'"
@@ -158,8 +161,6 @@ In dry-run mode, the script logs what it would do but skips:
 This is useful for verifying configuration and estimating transfer sizes before
 a live run.
 
-NOTE: This is a "job script" and should be customized to your environment. Or, you may configure and run the daily backup from the GUI.
-
 ## What a Successful Run Looks Like
 
 ```
@@ -180,10 +181,13 @@ NOTE: This is a "job script" and should be customized to your environment. Or, y
 The source and destination have no snapshot in common. This prevents an
 incremental transfer. The script will ask whether to do a full copy.
 
-**Cause**: The destination pool was re-created, or no backup has ever run, or a required destination snapshot was deleted.
+**Cause**: The destination pool was re-created, no backup has ever run, or a
+required destination snapshot was deleted.
 
 **Action**: If expected, answer `y` to proceed with a full copy. Be aware a
-full copy can take hours for large datasets. There is no way to do an incremental transfer without at least one common snapshot. Restoring destination snapshots from another backup will probably not fix this.
+full copy can take hours for large datasets. There is no way to do an
+incremental transfer without at least one common snapshot. Restoring
+destination snapshots from another backup will probably not fix this.
 
 ### Remote rsync SSH failure
 
@@ -193,7 +197,7 @@ If the job SSHes to a remote host and the known_hosts entry is stale:
 Host key verification failed.
 ```
 
-**Action**: On the remote host, run:
+**Action**: On the backup host, run:
 
 ```bash
 ssh-keygen -f "/root/.ssh/known_hosts" -R "<hostname>"
@@ -206,11 +210,9 @@ pull's return code, so monitoring systems can flag it.
 
 ## Rerunning After Failure
 
-The daily backup is idempotent for the snapshot-and-copy steps: if a snapshot
+The daily backup is idempotent for the snapshot-and-copy steps (zfs-send-receive): if a snapshot
 with today's name already exists, that step is skipped. You can safely rerun
-the job after fixing a failure.
+the job using the same snapshot name after fixing a failure.
 
-!!! note "Snapshot reuse"
-    [zfssnapbuild](../commands-and-modules/modules.md#zfssnapbuild) saves the generated snapshot name to a file.
-    On rerun, it will ask whether to reuse the previous name. Answer `y`
-    to keep everything consistent.
+When a failed backup is rerun, the snapshot-name generator will ask whether to reuse the previous
+name. Answer `y` to keep everything consistent.

@@ -30,7 +30,7 @@ NODE_LIB_DST="/usr/local/lib/node-lib.sh"
 COMPAT_LINK="/usr/local/lib/two-node-lib.sh"
 
 # Scripts installed on BOTH hosts
-BOTH_SCRIPTS="new-vm-disk remove-vm-disk detach-vm-disk attach-vm-disk list-vm-disks resize-vm-disk rescan-storage show-lun-map clone-vm move-vm-disk"
+BOTH_SCRIPTS="new-vm-disk remove-vm-disk detach-vm-disk attach-vm-disk list-vm-disks resize-vm-disk rescan-storage show-lun-map clone-vm move-vm-disk enroll-efi-keys-vm"
 
 # Scripts installed on the storage host ONLY
 STORAGE_ONLY_SCRIPTS="safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys"

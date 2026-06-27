@@ -105,6 +105,7 @@ def create_datasets_page(app):
         app.datasets_search_results_label,
         app.datasets_search_prev_btn,
         app.datasets_search_next_btn,
+        full_name_func=build_full_dataset_name,
     )
     app.datasets_search_clear_btn.connect(
         "clicked", lambda _b: app.datasets_search.clear()

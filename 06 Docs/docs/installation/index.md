@@ -260,7 +260,7 @@ installation:
 
 ```bash
 sudo zfsutilities-gui
-sudo zfsutilities-docs
+zfsutilities-docs
 ```
 
 The installer creates desktop shortcuts in the installing user's home directory:

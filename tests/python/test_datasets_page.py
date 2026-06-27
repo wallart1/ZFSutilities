@@ -357,3 +357,39 @@ class TestExpandSelectedDatasets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRefreshDatasetsPageSearch(unittest.TestCase):
+    """refresh_datasets_page re-runs an active search after repopulating."""
+
+    def _make_app(self):
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.list_pools.return_value = [
+            _FakePoolRow("tank"),
+        ]
+        app.datasets_store = _FakeStore()
+        app.datasets_view = MagicMock()
+        app.datasets_view.get_selection.return_value.get_selected_rows.return_value = (None, [])
+        app.datasets_search = MagicMock()
+        app.datasets_search._text = ""
+        app.datasets_summary_label = MagicMock()
+        app.datasets_scrolled = MagicMock()
+        app.datasets_scrolled.get_vadjustment.return_value.get_value.return_value = 0.0
+        return app
+
+    def test_refresh_reruns_active_search(self):
+        app = self._make_app()
+        app.datasets_search._text = "foo"
+        with patch.object(dp, "get_expanded_rows", return_value=set()), \
+             patch.object(dp, "restore_expanded_rows"):
+            dp.refresh_datasets_page(app)
+        app.datasets_search._run_search.assert_called_once()
+
+    def test_refresh_skips_search_when_entry_empty(self):
+        app = self._make_app()
+        app.datasets_search._text = ""
+        with patch.object(dp, "get_expanded_rows", return_value=set()), \
+             patch.object(dp, "restore_expanded_rows"):
+            dp.refresh_datasets_page(app)
+        app.datasets_search._run_search.assert_not_called()

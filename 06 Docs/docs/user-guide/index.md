@@ -1,8 +1,9 @@
 # User Guide
 
-This guide covers day-to-day operations from the command line: running backups,
-managing offsite copies, restoring data, and understanding how retention works.
-All operations are described as script invocations.
+This guide covers day-to-day operations: running backups, managing offsite
+copies, restoring data, and understanding how retention works. Operations are
+described both as command-line invocations and through the GTK GUI where
+applicable.
 
 If you prefer a graphical interface, the [GTK GUI Reference](gtk-gui.md) covers
 the same workflows through the ZFSutilities GUI.
@@ -12,21 +13,21 @@ before reading the task pages.
 
 ## Contents
 
-| Page | Description |
-|------|-------------|
-| [Concepts and Terminology](concepts.md) | ZFS fundamentals, naming conventions, the backup chain |
-| [Daily Backup](daily-backup.md) | Run or troubleshoot the nightly backup job |
-| [Offsite Backup](offsite-backup.md) | Copy backups to a removable pool for offsite storage |
-| [Restore Operations](restore.md) | Recover a dataset or file from a snapshot |
-| [Retention Policies](retention.md) | Understand and configure how long snapshots are kept |
-| [GTK GUI Reference](gtk-gui.md) | Tabs, color conventions, Pool Watch windows, session Logs, Retention runner, embedded documentation viewer |
+| Page                                          | Description                                                                                                |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| [Concepts and Terminology](concepts.md)       | ZFS fundamentals, naming conventions, the backup chain                                                     |
+| [Daily Backup](daily-backup.md)               | Run or troubleshoot the nightly backup job                                                                 |
+| [Offsite Backup](offsite-backup.md)           | Copy backups to a removable pool for offsite storage                                                       |
+| [Restore Operations](restore.md)              | Recover a dataset or file from a snapshot                                                                  |
+| [Retention Policies](retention.md)            | Understand and configure how long snapshots are kept                                                       |
+| [Proxmox Integration](proxmox-integration.md) | Use ZFS Utilities with Proxmox VE                                                                          |
+| [GTK GUI Reference](gtk-gui.md)               | Tabs, color conventions, Pool Watch windows, session Logs, Retention runner, embedded documentation viewer |
 
 ## Prerequisites
 
 - Root (or `sudo`) access on the backup server
 - ZFS pools must be imported and online (`zpool status` to check)
-- `bashinit` available at `~/bashinit` (development) or `/root/bashinit` (deployed)
-- Scripts are installed to `PATH` and can be run from any directory
+- Scripts are installed to `PATH` and can be run from any directory (handled by the installer scripts)
 
 ## Getting Help
 
