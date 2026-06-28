@@ -32,10 +32,10 @@ from scrub_manager import (
 # ListStore columns:
 #   0 name, 1 health, 2 size, 3 alloc, 4 free, 5 freeing,
 #   6 ckpoint, 7 frag, 8 cap, 9 status_flag ("registered" / "unregistered"),
-#  10 offsite_candidate (bool)
+#  10 offsite_candidate (bool), 11 errors_summary (str)
 COL_NAME, COL_HEALTH, COL_SIZE, COL_ALLOC, COL_FREE, \
     COL_FREEING, COL_CKPOINT, COL_FRAG, COL_CAP, COL_FLAG, \
-    COL_OFFSITE = range(11)
+    COL_OFFSITE, COL_ERRORS = range(12)
 
 FLAG_REGISTERED   = "registered"
 FLAG_UNREGISTERED = "unregistered"
@@ -134,7 +134,7 @@ def create_pools_page(app):
 
     # Pool table
     app.pool_store = Gtk.ListStore(
-        str, str, str, str, str, str, str, str, str, str, bool
+        str, str, str, str, str, str, str, str, str, str, bool, str
     )
     app.pool_view = Gtk.TreeView(model=app.pool_store)
     app.pool_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
@@ -169,6 +169,13 @@ def create_pools_page(app):
     health_col.set_clickable(True)
     health_col.connect("clicked", _on_pool_column_clicked, app, COL_HEALTH)
     app.pool_view.append_column(health_col)
+
+    # Errors summary from zpool status
+    errors_renderer = Gtk.CellRendererText()
+    errors_col = Gtk.TreeViewColumn("Errors", errors_renderer, text=COL_ERRORS)
+    errors_col.set_cell_data_func(errors_renderer, _pool_errors_cell_func)
+    configure_treeview_column(errors_col, width=120)
+    app.pool_view.append_column(errors_col)
 
     # Numeric columns — narrower, right-aligned headings and cells
     numeric_cols = [
@@ -360,26 +367,28 @@ def refresh_pools_page(app):
         is_candidate = pool.get("offsite_candidate", False)
         if pool_name in online_pools:
             p = online_pools[pool_name]
+            errors_summary = _errors_summary_for_pool(pool_name, app)
             app.pool_store.append([
                 pool_name, p['health'], p['size'], p['alloc'], p['free'],
                 p['freeing'], p['ckpoint'], p['frag'], p['cap'],
-                FLAG_REGISTERED, is_candidate,
+                FLAG_REGISTERED, is_candidate, errors_summary,
             ])
             online_count += 1
         else:
             app.pool_store.append([
                 pool_name, "OFFLINE", "-", "-", "-", "-", "-", "-", "-",
-                FLAG_REGISTERED, is_candidate,
+                FLAG_REGISTERED, is_candidate, "—",
             ])
             offline_count += 1
 
     # Unregistered pools (online but not in the registry)
     for pool_name, p in online_pools.items():
         if pool_name not in known_names:
+            errors_summary = _errors_summary_for_pool(pool_name, app)
             app.pool_store.append([
                 pool_name, p['health'], p['size'], p['alloc'], p['free'],
                 p['freeing'], p['ckpoint'], p['frag'], p['cap'],
-                FLAG_UNREGISTERED, False,
+                FLAG_UNREGISTERED, False, errors_summary,
             ])
             log_msg(
                 f"WARN: Pool '{pool_name}' is online but not in the pool registry"
@@ -445,6 +454,35 @@ def _pool_health_cell_func(column, renderer, model, tree_iter, data=None):
     else:
         renderer.set_property("foreground", None)
         renderer.set_property("weight", Pango.Weight.NORMAL)
+
+
+def _errors_summary_for_pool(pool_name, app):
+    """Return a short error summary string for *pool_name* from zpool status.
+
+    Returns "No errors" when there are no errors, an error summary when there
+    are, and "—" when status cannot be fetched.
+    """
+    try:
+        errors = app.ctx.zfs_repository.pool_status_errors(pool_name)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "—"
+    if errors.get("has_errors"):
+        return errors.get("errors_summary", "unknown error")
+    return "No errors"
+
+
+def _pool_errors_cell_func(column, renderer, model, tree_iter, data=None):
+    """Color the Errors column based on value."""
+    errors_summary = model.get_value(tree_iter, COL_ERRORS)
+    if errors_summary in (None, "", "—"):
+        renderer.set_property("foreground", None)
+        renderer.set_property("weight", Pango.Weight.NORMAL)
+    elif errors_summary == "No errors":
+        renderer.set_property("foreground", "#4CAF50")
+        renderer.set_property("weight", Pango.Weight.NORMAL)
+    else:
+        renderer.set_property("foreground", "#F44336")
+        renderer.set_property("weight", Pango.Weight.BOLD)
 
 
 # ---------------------------------------------------------------------------

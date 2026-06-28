@@ -14,6 +14,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Dict, List, Optional, Set
 
@@ -42,6 +43,8 @@ class ScrubInfo:
     scan_line: str = ""
     last_scrub: str = ""
     errors: int = 0
+    remaining_seconds: Optional[int] = None
+    eta: Optional[datetime] = None
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +72,12 @@ _SCAN_RESILVER_RE = re.compile(
 )
 # Stale paused summary that can appear as a continuation line after a resume.
 _STALE_PAUSED_RE = re.compile(r"^scrub\s+paused\b", re.IGNORECASE)
+# Remaining time reported on an in-progress scrub, e.g.
+#   "01:23:45 to go" or "1 days 01:23:45 to go"
+_SCAN_REMAINING_RE = re.compile(
+    r"(?:(\d+)\s+days?\s+)?(\d+):(\d{2}):(\d{2})\s+to\s+go",
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +122,9 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
         info.state = ScrubState.SCANNING
         info.last_scrub = m.group(1).strip()
         info.progress_percent = _extract_percent(raw)
+        info.remaining_seconds = _extract_remaining_seconds(raw)
+        if info.remaining_seconds is not None:
+            info.eta = datetime.now() + timedelta(seconds=info.remaining_seconds)
         scan_lines = [
             line for line in scan_lines
             if not _STALE_PAUSED_RE.match(line)
@@ -165,6 +177,27 @@ def _extract_percent(raw: str) -> Optional[float]:
         except ValueError:
             pass
     return None
+
+
+def _extract_remaining_seconds(raw: str) -> Optional[int]:
+    """Return seconds remaining from a 'zpool status' 'to go' line, or None."""
+    m = _SCAN_REMAINING_RE.search(raw)
+    if not m:
+        return None
+    days_str, hours_str, minutes_str, seconds_str = m.groups()
+    try:
+        days = int(days_str) if days_str else 0
+        hours = int(hours_str)
+        minutes = int(minutes_str)
+        seconds = int(seconds_str)
+        return (
+            (days * 24 * 3600)
+            + (hours * 3600)
+            + (minutes * 60)
+            + seconds
+        )
+    except (ValueError, TypeError):
+        return None
 
 
 def get_pool_scrub_info(pool_name: str, repo=None) -> ScrubInfo:

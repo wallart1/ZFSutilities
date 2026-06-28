@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime
 from contextlib import ExitStack
 from unittest.mock import MagicMock, Mock, patch
 
@@ -569,6 +570,38 @@ class TestGetWarnings(unittest.TestCase):
         warnings = dp._get_warnings(pools, {}, threshold=80)
         self.assertEqual(len(warnings), 2)
 
+    def test_status_errors_summary(self):
+        pools = [
+            {
+                "name": "tank",
+                "health": "ONLINE",
+                "cap": "50%",
+                "cap_int": 50,
+                "status_errors": {
+                    "has_errors": True,
+                    "errors_summary": "vdev errors: sda (cksum=5)",
+                },
+            },
+        ]
+        warnings = dp._get_warnings(pools, {}, threshold=80)
+        self.assertEqual(
+            warnings,
+            ['Pool "tank" has ZFS errors: vdev errors: sda (cksum=5)'],
+        )
+
+    def test_status_errors_no_errors_ignored(self):
+        pools = [
+            {
+                "name": "tank",
+                "health": "ONLINE",
+                "cap": "50%",
+                "cap_int": 50,
+                "status_errors": {"has_errors": False},
+            },
+        ]
+        warnings = dp._get_warnings(pools, {}, threshold=80)
+        self.assertEqual(warnings, [])
+
 
 class TestHealthIcon(unittest.TestCase):
 
@@ -714,18 +747,49 @@ class TestCollectRunningTasks(unittest.TestCase):
         queue = MagicMock()
         queue.active = {"fivebays"}
         app.scrub_queue = queue
+        fixed_eta = datetime(2026, 6, 28, 12, 0, 0)
         with patch("scrub_manager.get_all_pool_scrub_states") as mock_states:
             with patch("scrub_manager.ScrubState") as MockState:
                 MockState.SCANNING = MagicMock()
                 mock_states.return_value = {
-                    "fivebays": MagicMock(state=MockState.SCANNING, progress_percent=45.5),
+                    "fivebays": MagicMock(
+                        state=MockState.SCANNING,
+                        progress_percent=45.5,
+                        eta=fixed_eta,
+                    ),
                 }
                 tasks = dp._collect_running_tasks(app)
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["name"], "Scrub: fivebays")
         self.assertEqual(tasks[0]["type"], "Scrub")
-        self.assertEqual(tasks[0]["status"], "45.5% complete")
+        self.assertEqual(
+            tasks[0]["status"],
+            "45.5% complete (ETA 2026-06-28 12:00)",
+        )
         self.assertEqual(tasks[0]["task_key"], "scrub:fivebays")
+
+    def test_scrub_task_no_eta(self):
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        queue = MagicMock()
+        queue.active = {"fivebays"}
+        app.scrub_queue = queue
+        with patch("scrub_manager.get_all_pool_scrub_states") as mock_states:
+            with patch("scrub_manager.ScrubState") as MockState:
+                MockState.SCANNING = MagicMock()
+                mock_states.return_value = {
+                    "fivebays": MagicMock(
+                        state=MockState.SCANNING,
+                        progress_percent=45.5,
+                        eta=None,
+                    ),
+                }
+                tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["status"], "45.5% complete")
 
 
 class TestCancelTask(unittest.TestCase):
@@ -1205,6 +1269,141 @@ class TestCancelSelectedButton(unittest.TestCase):
         del app._cancel_selected_button
         dp.setup_dashboard_actions(app)
         # Should not raise
+
+
+class TestGetHostZfsVersion(unittest.TestCase):
+    """_get_host_zfs_version() runs ``zfs version`` locally or via SSH."""
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    def test_local_returns_zfs_version_output(self, _mock_host):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "zfs-2.2.2\nzfs-kmod-2.2.2\n"
+            ver = dp._get_host_zfs_version("myhost")
+        self.assertEqual(ver, "zfs-2.2.2\nzfs-kmod-2.2.2")
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, ["zfs", "version"])
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    def test_local_failure_returns_unknown(self, _mock_host):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            ver = dp._get_host_zfs_version("myhost")
+        self.assertEqual(ver, "unknown")
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    def test_remote_returns_zfs_version_output(self, _mock_host):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "zfs-2.1.5\nzfs-kmod-2.1.5\n"
+            ver = dp._get_host_zfs_version("remote1")
+        self.assertEqual(ver, "zfs-2.1.5\nzfs-kmod-2.1.5")
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        self.assertIn("root@remote1", args)
+        self.assertIn("zfs version", args)
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    def test_remote_ssh_failure_returns_unknown(self, _mock_host):
+        with patch("subprocess.run", side_effect=OSError("no route")):
+            ver = dp._get_host_zfs_version("remote1")
+        self.assertEqual(ver, "unknown")
+
+
+class TestRefreshConfigSection(unittest.TestCase):
+    """_refresh_config_section() populates the Configuration card grid."""
+
+    def _run_refresh(self, cfg, versions, zfs_versions):
+        """Call _refresh_config_section with mocked dependencies.
+
+        Returns the app mock and the mock Gtk object so callers can inspect
+        the labels that were created.
+        """
+        with mock_gtk() as gtk_mock:
+            gtk_mock.Label.side_effect = lambda *args, **kwargs: MagicMock()
+            with patch.object(dp, "Gtk", gtk_mock):
+                with patch.object(dp, "_get_node_config", return_value=cfg):
+                    with patch.object(
+                        dp, "_get_host_version", side_effect=versions.get
+                    ):
+                        with patch.object(
+                            dp,
+                            "_get_host_zfs_version",
+                            side_effect=zfs_versions.get,
+                        ):
+                            app = MagicMock()
+                            app.dashboard_config_grid = MagicMock()
+                            dp._refresh_config_section(app)
+        return app, gtk_mock
+
+    def _find_label_with_text(self, gtk_mock, text):
+        """Return True if any Gtk.Label call created a label with the text."""
+        for call in gtk_mock.Label.call_args_list:
+            if call.kwargs.get("label") == text:
+                return True
+        return False
+
+    def test_single_node_shows_local_zfs_version(self):
+        cfg = {
+            "mode": "single-node",
+            "this_host": "myhost",
+            "storage_host": "",
+            "compute_host": "",
+        }
+        _app, gtk_mock = self._run_refresh(
+            cfg,
+            versions={"myhost": "1.2.3"},
+            zfs_versions={"myhost": "zfs-2.2.2"},
+        )
+        # The grid attach method should have been called for the ZFS value.
+        self.assertTrue(self._find_label_with_text(gtk_mock, "zfs-2.2.2"))
+
+    def test_two_node_shows_zfs_version_per_unique_host(self):
+        cfg = {
+            "mode": "two-node",
+            "this_host": "host-a",
+            "storage_host": "host-b",
+            "compute_host": "host-c",
+        }
+        _app, gtk_mock = self._run_refresh(
+            cfg,
+            versions={"host-a": "1.0", "host-b": "1.0", "host-c": "1.0"},
+            zfs_versions={
+                "host-a": "zfs-2.2.2",
+                "host-b": "zfs-2.2.3",
+                "host-c": "zfs-2.2.4",
+            },
+        )
+        expected = (
+            "host-a (this):\n"
+            "zfs-2.2.2\n\n"
+            "host-b (storage):\n"
+            "zfs-2.2.3\n\n"
+            "host-c (compute):\n"
+            "zfs-2.2.4"
+        )
+        self.assertTrue(self._find_label_with_text(gtk_mock, expected))
+
+    def test_two_node_deduplicates_same_host_across_roles(self):
+        cfg = {
+            "mode": "two-node",
+            "this_host": "host-a",
+            "storage_host": "host-a",
+            "compute_host": "host-b",
+        }
+        _app, gtk_mock = self._run_refresh(
+            cfg,
+            versions={"host-a": "1.0", "host-b": "1.0"},
+            zfs_versions={"host-a": "zfs-2.2.2", "host-b": "zfs-2.2.3"},
+        )
+        expected = (
+            "host-a (this,storage):\n"
+            "zfs-2.2.2\n\n"
+            "host-b (compute):\n"
+            "zfs-2.2.3"
+        )
+        self.assertTrue(self._find_label_with_text(gtk_mock, expected))
 
 
 if __name__ == "__main__":

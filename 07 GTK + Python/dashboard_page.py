@@ -6,7 +6,7 @@ import re
 import signal
 import socket
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -142,8 +142,9 @@ def _parse_cap(cap_str):
 
 
 def _get_pool_health(repo=None):
-    """Run zpool list, return list of {name, health, cap, cap_int, scrub_date}.
+    """Run zpool list, return list of pool health dicts.
 
+    Each dict contains: name, health, cap, cap_int, scrub_date, status_errors.
     Returns None if the command fails or times out.
     """
     repo = repo or get_default_repository()
@@ -155,6 +156,7 @@ def _get_pool_health(repo=None):
     for row in rows:
         cap_int = _parse_cap(row.cap)
         scrub_date = _get_scrub_date(row.name, repo=repo)
+        status_errors = repo.pool_status_errors(row.name)
         pools.append(
             {
                 "name": row.name,
@@ -162,6 +164,7 @@ def _get_pool_health(repo=None):
                 "cap": row.cap,
                 "cap_int": cap_int,
                 "scrub_date": scrub_date,
+                "status_errors": status_errors,
             }
         )
     return pools
@@ -316,6 +319,42 @@ def _get_host_version(host):
     try:
         result = subprocess.run(
             ["ssh", f"root@{host}", "cat /usr/local/lib/zfsutilities/current/VERSION"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return "unknown"
+
+
+def _get_host_zfs_version(host):
+    """Return the output of ``zfs version`` for the given host.
+
+    For the local host, runs ``zfs version`` directly.  For remote hosts,
+    SSHes as root and runs ``zfs version``.  Returns "unknown" if the
+    version cannot be determined.
+    """
+    local_host = _local_hostname()
+    if host == local_host:
+        try:
+            result = subprocess.run(
+                ["zfs", "version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        return "unknown"
+
+    try:
+        result = subprocess.run(
+            ["ssh", f"root@{host}", "zfs version"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -625,6 +664,12 @@ def _get_warnings(pools, recent_history, threshold):
         if cap >= threshold:
             warnings.append(
                 f'Pool "{p["name"]}" capacity at {p["cap"]} (threshold: {threshold}%)'
+            )
+        status_errors = p.get("status_errors") or {}
+        if status_errors.get("has_errors"):
+            summary = status_errors.get("errors_summary", "unknown error")
+            warnings.append(
+                f'Pool "{p["name"]}" has ZFS errors: {summary}'
             )
 
     return warnings
@@ -957,6 +1002,49 @@ def _refresh_config_section(app):
     ver_val = Gtk.Label(label=ver_text)
     ver_val.set_halign(Gtk.Align.START)
     app.dashboard_config_grid.attach(ver_val, 1, row, 1, 1)
+    row += 1
+
+    # ZFS versions
+    zfs_lbl = Gtk.Label()
+    zfs_lbl.set_markup("<b>ZFS version(s):</b>")
+    zfs_lbl.set_halign(Gtk.Align.START)
+    app.dashboard_config_grid.attach(zfs_lbl, 0, row, 1, 1)
+
+    if cfg["mode"] == "two-node":
+        # Map each unique host to the roles it occupies.
+        host_roles = []
+        seen = set()
+        for role, host in (
+            ("this", cfg["this_host"]),
+            ("storage", cfg["storage_host"]),
+            ("compute", cfg["compute_host"]),
+        ):
+            if not host:
+                continue
+            if host in seen:
+                for entry in host_roles:
+                    if entry[0] == host:
+                        entry[1].append(role)
+                        break
+            else:
+                seen.add(host)
+                host_roles.append((host, [role]))
+
+        zfs_parts = []
+        for host, roles in host_roles:
+            zfs_out = _get_host_zfs_version(host)
+            if len(roles) == 1:
+                header = f"{host} ({roles[0]}):"
+            else:
+                header = f"{host} ({','.join(roles)}):"
+            zfs_parts.append(f"{header}\n{zfs_out}")
+        zfs_text = "\n\n".join(zfs_parts)
+    else:
+        zfs_text = _get_host_zfs_version(cfg["this_host"])
+
+    zfs_val = Gtk.Label(label=zfs_text)
+    zfs_val.set_halign(Gtk.Align.START)
+    app.dashboard_config_grid.attach(zfs_val, 1, row, 1, 1)
 
 
 def _refresh_pool_section(app, pools, scrub_states=None, stale=False):
@@ -1160,10 +1248,12 @@ def _collect_running_tasks(app):
         scrub_states = get_all_pool_scrub_states()
         for pool_name in queue.active:
             info = scrub_states.get(pool_name)
-            if info and info.state == ScrubState.SCANNING and info.progress_percent is not None:
-                status = f"{info.progress_percent:.1f}% complete"
-            else:
-                status = "Running"
+            status = "Running"
+            if info and info.state == ScrubState.SCANNING:
+                if info.progress_percent is not None:
+                    status = f"{info.progress_percent:.1f}% complete"
+                if info.eta is not None:
+                    status += f" (ETA {info.eta:%Y-%m-%d %H:%M})"
             tasks.append({
                 "name": f"Scrub: {pool_name}",
                 "type": "Scrub",

@@ -75,6 +75,48 @@ class TestParseScrubStatus(unittest.TestCase):
         self.assertEqual(info.errors, 0)
         self.assertEqual(info.last_scrub, "Wed Jun  3 20:50:19 2026")
 
+    def test_in_progress_remaining_seconds(self):
+        raw = (
+            "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
+            "    1.23T scanned at 123M/s, 456G issued at 45M/s\n"
+            "    0B repaired, 12.34% done, 01:23:45 to go\n"
+        )
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.remaining_seconds, 5025)
+
+    def test_in_progress_remaining_seconds_with_days(self):
+        raw = (
+            "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
+            "    1.23T scanned at 123M/s, 456G issued at 45M/s\n"
+            "    0B repaired, 12.34% done, 1 days 01:23:45 to go\n"
+        )
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.remaining_seconds, 86400 + 5025)
+
+    def test_in_progress_no_remaining(self):
+        raw = (
+            "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
+            "    1.23T scanned at 123M/s, 456G issued at 45M/s\n"
+            "    0B repaired, 12.34% done\n"
+        )
+        info = sm.parse_scrub_status(raw)
+        self.assertIsNone(info.remaining_seconds)
+        self.assertIsNone(info.eta)
+
+    def test_in_progress_eta_computed(self):
+        from datetime import datetime, timedelta
+        raw = (
+            "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
+            "    1.23T scanned at 123M/s, 456G issued at 45M/s\n"
+            "    0B repaired, 12.34% done, 01:23:45 to go\n"
+        )
+        fixed_now = datetime(2026, 6, 28, 10, 30, 0)
+        with patch.object(sm, "datetime") as mock_datetime:
+            mock_datetime.now.return_value = fixed_now
+            mock_datetime.timedelta = timedelta
+            info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.eta, fixed_now + timedelta(seconds=5025))
+
 
 class TestScrubQueue(unittest.TestCase):
 

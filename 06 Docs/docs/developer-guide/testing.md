@@ -150,7 +150,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_command_builders` | 30 | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
 | `test_config_migrations` | 28 | JSON config migration chain (v1 → v15), idempotency, missing-migration handling |
 | `test_cron_manager` | 17 | Cron expression formatting, next-run calculation, profile scheduling, cron file generation |
-| `test_dashboard_page` | 107 | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators |
+| `test_dashboard_page` | 117 | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, ZFS version display |
 | `test_docs_integrity` | 11 | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability |
 | `test_docs_viewer` | 1 | Standalone documentation viewer launcher (`docs_viewer.main()`) |
 | `test_gui_infrastructure` | 95 | GTK mock setup, `gi.repository` patching, module imports without a display server, docs viewer HTTP server, zoom/navigation/state persistence, anchor scrolling, tree expansion helpers, TreeSearch freeze/thaw, clear-button status-bar reset |
@@ -165,7 +165,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_retention_page` | 22 | Retention tab: prune-label persistence, dirty detection, multi-pool Save/Revert, profile round-trip, fresh-install cleanup, prune-list filtering |
 | `test_runner_factory` | 4 | `RunnerFactory` creates `BackupRunner` instances with shared callbacks |
 | `test_schedule_page` | 15 | Schedule page path resolution for deployed vs repo layouts; dirty tracking and multi-row Save/Revert for active toggles and cron edits; dry-run flag display in profile summary |
-| `test_scrub_manager` | 24 | Scrub state parsing, queue/target management, tick logic, systemd timers |
+| `test_scrub_manager` | 35 | Scrub state parsing, queue/target management, tick logic, systemd timers, remaining-time ETA |
 | `test_scrub_page` | 5 | Scrub page store schema and flicker-free refresh logic |
 | `test_zfs_diagnostics` | 8 | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run` |
 | `test_datasets_page` | 17 | Datasets tab UI: page construction, pool refresh, button sensitivity, and the Expand Selected action |
@@ -173,7 +173,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_zfsinfo` | 10 | Pool/dataset/snapshot parsing, summary counting, CLI output formatting |
 | `test_dataset_actions` | 6 | Dataset destruction routed through `BackupRunner`: `BashStep` building, runner start/callback, missing/busy runner, cancel handling |
 | `test_logs_page` | 35 | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, Load Full Log confirmation, column-header label tooltips, and live-viewer buffer cap |
-| `test_zfs_repository` | 25 | `ZfsRepository` pool/dataset/snapshot/hold parsing and write-method success/failure |
+| `test_zfs_repository` | 30 | `ZfsRepository` pool/dataset/snapshot/hold parsing, pool error parsing, and write-method success/failure |
 | `test_zfsutilities_gui` | 17 | Window behavior: peer-version check, dry-run toggle, dataset-runner creation, stdin forwarding, info-panel level filtering, Restore tab destination refresh |
 
 Python tests run with the standard library `unittest` module (no pytest required).

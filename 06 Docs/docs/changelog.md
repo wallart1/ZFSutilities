@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.56.0
+
+### Added
+
+- **Pool error reporting** — `ZfsRepository.pool_status_errors()` parses
+  `zpool status` and surfaces both permanent data errors and vdev
+  READ/WRITE/CKSUM counter errors. The Pools tab now shows an **Errors**
+  column with green `No errors` or a red/bold error summary; offline or
+  unavailable pools show `—`.
+- **Dashboard pool-error warnings** — the Warnings list now includes any pool
+  whose `zpool status` reports errors.
+- **Scrub ETA** — `scrub_manager.parse_scrub_status()` extracts the remaining
+  time from `zpool status` (`HH:MM:SS to go` or `N days HH:MM:SS to go`) and
+  computes an estimated completion timestamp. Running scrub tasks in the
+  Dashboard show this ETA alongside the percentage.
+- **Dashboard ZFS version display** — the Configuration card now lists the
+  **ZFS version(s)** in use. In two-node mode it fetches the version from the
+  remote storage/compute hosts, deduplicates identical hosts, and labels each
+  by role.
+
+### Tests
+
+- Expanded `tests/python/test_zfs_repository.py` to 30 tests, adding
+  `TestPoolStatusErrors` for no-error, data-error, and vdev-error scenarios.
+- Expanded `tests/python/test_pools_page.py` to 17 tests, adding
+  `TestErrorsSummaryForPool` and `TestPoolErrorsCellFunc` for label translation,
+  subprocess-error fallback, and color/weight styling.
+- Expanded `tests/python/test_scrub_manager.py` to 35 tests, adding coverage
+  for `remaining_seconds` and `eta` extraction.
+- Expanded `tests/python/test_dashboard_page.py` to 117 tests, adding coverage
+  for status-error warnings, scrub ETA display, local/remote ZFS version lookup,
+  and two-node host deduplication.
+
+### Documentation
+
+- Updated `user-guide/gtk-gui.md` to describe the new Pools tab **Errors**
+  column, Dashboard pool-error warnings, scrub ETA, and ZFS version row.
+- Updated `developer-guide/data-structures.md` with `ZfsRepository.pool_status_errors()`
+  and the new `ScrubInfo.remaining_seconds` / `ScrubInfo.eta` fields.
+- Updated `developer-guide/testing.md` test counts for
+  `test_dashboard_page`, `test_scrub_manager`, and `test_zfs_repository`.
+
 ## 0.55.6
 
 ### Fixed

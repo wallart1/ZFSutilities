@@ -367,6 +367,7 @@ Live compilation of issues that need attention:
 
 - Degraded or offline pools
 - Pools above the low-space threshold
+- Pools with ZFS errors (vdev or permanent data errors)
 - Missing backup/offsite/checkagainst configuration
 - Unregistered pools
 - Stale lock files in `/run/lock/zfs/.locks/`
@@ -381,6 +382,7 @@ A live table from `zpool list` showing:
 | **Capacity**   | Progress bar showing used percentage; turns **red** at the low-space warning threshold or above                |
 | **Last Scrub** | Date of the most recent scrub (including the date a scrub was canceled), or *"In progress"* if one is running. |
 | **Scrub**      | Current scrub status: progress bar while **scrubbing**, or `paused` / `—` / `finished`                         |
+| **Errors**     | `No errors` (green) or a short summary of vdev/data errors from `zpool status` (red)                           |
 
 A **Low-space warning threshold** spin button sits above the pool table. It
 sets the capacity percentage at which the Dashboard warns about low space.
@@ -394,7 +396,7 @@ and click **Cancel Selected Tasks** to stop them.
 | Task type     | Source                                                                   | Cancel behaviour                                |
 | ------------- | ------------------------------------------------------------------------ | ----------------------------------------------- |
 | **GUI**       | Backup, Offsite, Restore, or Prune started from their respective tabs    | Graceful cancel (SIGTERM the runner subprocess) |
-| **Scrub**     | Pool scrubs started from the Pools tab or detected as externally running | `zpool scrub -s <pool>`                         |
+| **Scrub**     | Pool scrubs started from the Pools tab or detected as externally running | `zpool scrub -s <pool>`. While running, the progress text includes an ETA when `zpool status` reports remaining time. |
 | **Scheduled** | `profile_runner.py` jobs launched by cron                                | SIGTERM the profile-runner process              |
 
 ### Recent Operations
@@ -422,9 +424,11 @@ This section is hidden entirely on single-node systems.
 
 ### Configuration
 
-Shows the current node mode (`single-node` or `two-node`), hostnames, and the
-zfsutilities version on each host. In two-node mode the versions of the
-storage host and compute host are fetched remotely.
+Shows the current node mode (`single-node` or `two-node`), hostnames, the
+ZFSutilities version, and the **ZFS version(s)** in use. In two-node mode the
+versions of the storage host and compute host are fetched remotely; if both
+roles resolve to the same host it is shown once with both role labels. If a
+remote host cannot be reached, its version is shown as *unknown*.
 
 ### Actions
 
@@ -782,7 +786,7 @@ lets you maintain the pool registry stored in JSON. It also contains the
 
 ### Pool table
 
-Columns: **Pool**, **Offsite**, **Health**, **Size**, **Alloc**, **Free**, **Freeing**,
+Columns: **Pool**, **Offsite**, **Health**, **Errors**, **Size**, **Alloc**, **Free**, **Freeing**,
 **Ckpoint**, **Frag**, **Cap**.
 
 Multiple pools can be selected at once (Ctrl+click or Shift+click). Most
@@ -810,6 +814,14 @@ candidates. The checkbox state is saved with the registry when you click
 | Orange, bold   | `DEGRADED`                                           |
 | Orange, normal | `OFFLINE` (not present in `zpool list`)              |
 | Red      | Any other state (`FAULTED`, `UNAVAIL`, `REMOVED`, …) |
+
+**Errors column:**
+
+| Style          | Meaning                                                              |
+| -------------- | -------------------------------------------------------------------- |
+| Green          | `No errors` — `zpool status` reports no data or vdev errors          |
+| Red, bold      | Error summary from `zpool status` (vdev READ/WRITE/CKSUM counters or permanent data errors) |
+| Default color  | `—` — pool is offline or status could not be fetched                 |
 
 ### Actions — Pool Registry
 

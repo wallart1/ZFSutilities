@@ -320,6 +320,12 @@ Read methods return typed rows instead of raw tab-separated strings.
 | `SnapshotRow` | `name`, `creation`, `ds_type`, `used`, `avail`, `refer`, `origin`, `clones` | `zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones` |
 | `HoldRow` | `snapshot`, `tag`, `date` | `zfs holds -H <snapshot>` |
 
+Additional `ZfsRepository` methods:
+
+| Method | Return | Purpose |
+| ------ | ------ | ------- |
+| `pool_status_errors(pool)` | `dict` | Parses `zpool status <pool>` and returns `has_errors` (`bool`), `errors_summary` (`str`), `data_errors` (`list` of paths), and `vdev_errors` (`list` of `{name, read, write, cksum}` dicts). Used by the Dashboard and Pools tab to color the **Errors** column. |
+
 ### Scrub state (`scrub_manager.py`)
 
 `ScrubState` is an enum and `ScrubInfo` is a dataclass produced by
@@ -343,6 +349,8 @@ consumed by the Pools tab, Dashboard, and `ScrubQueue`.
 | `scan_line` | `str` | Raw scan lines from `zpool status` |
 | `last_scrub` | `str` | Timestamp/description of the last scrub event |
 | `errors` | `int` | Error count from finished/canceled scrubs |
+| `remaining_seconds` | `int` or `None` | Seconds remaining when `zpool status` reports `HH:MM:SS to go` (or `N days HH:MM:SS to go`) |
+| `eta` | `str` or `None` | Estimated completion timestamp (`YYYY-MM-DD HH:MM`) computed from `remaining_seconds` |
 
 `ScrubQueue` persists pending/active/paused/finished/paused_by_user pool sets
 and a concurrency target to the JSON config under the scrub-manager section.

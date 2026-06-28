@@ -29,7 +29,7 @@ def _import_pools_page():
 class TestRefreshPoolsPage(unittest.TestCase):
     """refresh_pools_page() populates the pool store including offsite flags."""
 
-    def _make_app(self, known_pools, online_pools=None):
+    def _make_app(self, known_pools, online_pools=None, errors_by_pool=None):
         app = MagicMock()
         app.config = {"pools": known_pools}
         app.known_pools = list(known_pools)
@@ -45,6 +45,15 @@ class TestRefreshPoolsPage(unittest.TestCase):
         app._ui_state = MagicMock()
         app.ctx = MagicMock()
         app.ctx.zfs_repository.list_pools_full.return_value = online_pools or []
+        errors_by_pool = errors_by_pool or {}
+
+        def _pool_status_errors(pool_name):
+            return errors_by_pool.get(
+                pool_name,
+                {"has_errors": False, "errors_summary": "No known data errors"},
+            )
+
+        app.ctx.zfs_repository.pool_status_errors.side_effect = _pool_status_errors
         app._offsite_candidates = set()
         return app
 
@@ -83,6 +92,113 @@ class TestRefreshPoolsPage(unittest.TestCase):
         self.assertEqual(len(captured), 1)
         self.assertEqual(captured[0][pp.COL_FLAG], "unregistered")
         self.assertFalse(captured[0][pp.COL_OFFSITE])
+
+    def test_registered_pool_with_errors(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            [{"name": "tank", "offsite_candidate": False}],
+            [{"name": "tank", "health": "ONLINE", "size": "1T",
+              "alloc": "100G", "free": "900G", "freeing": "0",
+              "ckpoint": "-", "frag": "5%", "cap": "10%"}],
+            errors_by_pool={
+                "tank": {
+                    "has_errors": True,
+                    "errors_summary": "vdev errors: sda (cksum=5)",
+                },
+            },
+        )
+        captured = []
+        app.pool_store.append = captured.append
+
+        with patch.object(pp, "_update_pools_dirty_indicator"):
+            pp.refresh_pools_page(app)
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][pp.COL_ERRORS], "vdev errors: sda (cksum=5)")
+
+    def test_offline_pool_shows_no_errors_dash(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            [{"name": "tank", "offsite_candidate": False}],
+            [],
+        )
+        captured = []
+        app.pool_store.append = captured.append
+
+        with patch.object(pp, "_update_pools_dirty_indicator"):
+            pp.refresh_pools_page(app)
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][pp.COL_HEALTH], "OFFLINE")
+        self.assertEqual(captured[0][pp.COL_ERRORS], "—")
+
+
+class TestErrorsSummaryForPool(unittest.TestCase):
+    """_errors_summary_for_pool() translates repository output to labels."""
+
+    def test_no_errors(self):
+        pp = _import_pools_page()
+        app = MagicMock()
+        app.ctx.zfs_repository.pool_status_errors.return_value = {
+            "has_errors": False,
+            "errors_summary": "No known data errors",
+        }
+        self.assertEqual(pp._errors_summary_for_pool("tank", app), "No errors")
+
+    def test_has_errors(self):
+        pp = _import_pools_page()
+        app = MagicMock()
+        app.ctx.zfs_repository.pool_status_errors.return_value = {
+            "has_errors": True,
+            "errors_summary": "vdev errors: sda (cksum=5)",
+        }
+        self.assertEqual(
+            pp._errors_summary_for_pool("tank", app),
+            "vdev errors: sda (cksum=5)",
+        )
+
+    def test_missing_summary_falls_back(self):
+        pp = _import_pools_page()
+        app = MagicMock()
+        app.ctx.zfs_repository.pool_status_errors.return_value = {
+            "has_errors": True,
+        }
+        self.assertEqual(pp._errors_summary_for_pool("tank", app), "unknown error")
+
+    def test_subprocess_error_returns_dash(self):
+        pp = _import_pools_page()
+        app = MagicMock()
+        app.ctx.zfs_repository.pool_status_errors.side_effect = FileNotFoundError
+        self.assertEqual(pp._errors_summary_for_pool("tank", app), "—")
+
+
+class TestPoolErrorsCellFunc(unittest.TestCase):
+    """_pool_errors_cell_func() colors the Errors column correctly."""
+
+    def _call(self, errors_summary):
+        pp = _import_pools_page()
+        renderer = MagicMock()
+        model = MagicMock()
+        model.get_value.return_value = errors_summary
+        pp._pool_errors_cell_func(None, renderer, model, None)
+        return pp, renderer
+
+    def test_no_errors_is_green_and_normal(self):
+        pp, renderer = self._call("No errors")
+        renderer.set_property.assert_any_call("foreground", "#4CAF50")
+        renderer.set_property.assert_any_call("weight", pp.Pango.Weight.NORMAL)
+
+    def test_errors_is_red_and_bold(self):
+        pp, renderer = self._call("vdev errors: sda (cksum=5)")
+        renderer.set_property.assert_any_call("foreground", "#F44336")
+        renderer.set_property.assert_any_call("weight", pp.Pango.Weight.BOLD)
+
+    def test_unavailable_is_default_and_normal(self):
+        for value in (None, "", "—"):
+            with self.subTest(value=value):
+                pp, renderer = self._call(value)
+                renderer.set_property.assert_any_call("foreground", None)
+                renderer.set_property.assert_any_call("weight", pp.Pango.Weight.NORMAL)
 
 
 class TestOffsiteToggle(unittest.TestCase):

@@ -173,5 +173,103 @@ class TestZfsRepositoryErrors(unittest.TestCase):
             repo.list_pools()
 
 
+class TestPoolStatusErrors(unittest.TestCase):
+    """pool_status_errors parses zpool status output."""
+
+    def _repo(self, stdout):
+        result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=stdout, stderr=""
+        )
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: result
+        return repo
+
+    def _status_no_errors(self):
+        return (
+            "  pool: tank\n"
+            " state: ONLINE\n"
+            "config:\n"
+            "\tNAME        STATE     READ WRITE CKSUM\n"
+            "\ttank        ONLINE       0     0     0\n"
+            "\t  mirror-0  ONLINE       0     0     0\n"
+            "\t    sda     ONLINE       0     0     0\n"
+            "\t    sdb     ONLINE       0     0     0\n"
+            "\n"
+            "errors: No known data errors\n"
+        )
+
+    def test_no_errors(self):
+        repo = self._repo(self._status_no_errors())
+        errors = repo.pool_status_errors("tank")
+        self.assertFalse(errors["has_errors"])
+        self.assertEqual(errors["errors_summary"], "No known data errors")
+        self.assertEqual(errors["data_errors"], [])
+        self.assertEqual(errors["vdev_errors"], [])
+
+    def test_permanent_data_errors(self):
+        stdout = (
+            "  pool: tank\n"
+            " state: ONLINE\n"
+            "config:\n"
+            "\tNAME        STATE     READ WRITE CKSUM\n"
+            "\ttank        ONLINE       0     0     0\n"
+            "\n"
+            "errors: Permanent errors have been detected in the following files:\n"
+            "\ttank/data/file1\n"
+            "\ttank/data/file2\n"
+        )
+        repo = self._repo(stdout)
+        errors = repo.pool_status_errors("tank")
+        self.assertTrue(errors["has_errors"])
+        self.assertIn("Permanent errors", errors["errors_summary"])
+        self.assertEqual(
+            errors["data_errors"],
+            ["tank/data/file1", "tank/data/file2"],
+        )
+
+    def test_vdev_errors(self):
+        stdout = (
+            "  pool: tank\n"
+            " state: DEGRADED\n"
+            "config:\n"
+            "\tNAME        STATE     READ WRITE CKSUM\n"
+            "\ttank        DEGRADED     0     0     0\n"
+            "\t  sda       ONLINE       0     0     0\n"
+            "\t  sdb       DEGRADED     0     0   123\n"
+        )
+        repo = self._repo(stdout)
+        errors = repo.pool_status_errors("tank")
+        self.assertTrue(errors["has_errors"])
+        self.assertEqual(len(errors["vdev_errors"]), 1)
+        self.assertEqual(errors["vdev_errors"][0]["name"], "sdb")
+        self.assertEqual(errors["vdev_errors"][0]["cksum"], 123)
+        self.assertIn("sdb (cksum=123)", errors["errors_summary"])
+
+    def test_vdev_multiple_counters(self):
+        stdout = (
+            "  pool: tank\n"
+            " state: ONLINE\n"
+            "config:\n"
+            "\tNAME        STATE     READ WRITE CKSUM\n"
+            "\ttank        ONLINE       0     0     0\n"
+            "\t  sda       ONLINE       5     3     0\n"
+            "\n"
+            "errors: No known data errors\n"
+        )
+        repo = self._repo(stdout)
+        errors = repo.pool_status_errors("tank")
+        self.assertTrue(errors["has_errors"])
+        self.assertEqual(errors["vdev_errors"][0]["read"], 5)
+        self.assertEqual(errors["vdev_errors"][0]["write"], 3)
+        self.assertIn("read=5", errors["errors_summary"])
+        self.assertIn("write=3", errors["errors_summary"])
+
+    def test_empty_status(self):
+        repo = self._repo("")
+        errors = repo.pool_status_errors("tank")
+        self.assertFalse(errors["has_errors"])
+        self.assertEqual(errors["errors_summary"], "status unavailable")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6,9 +6,24 @@ raise subprocess.CalledProcessError on failure so callers can decide how to
 handle errors; write methods swallow the exception and return success/failure.
 """
 
+import re
 import subprocess
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
+
+
+# Regex: ^[\s]*errors:\s*(.+?)\s*$
+# Purpose: Extract the summary text from the "errors:" line in zpool status.
+# Group 1: Error summary text, e.g. "No known data errors".
+_ERRORS_LINE_RE = re.compile(r"^[\s]*errors:\s*(.+?)\s*$", re.MULTILINE)
+
+# Regex: ^\s*(\S+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$
+# Purpose: Parse a vdev/device line from the zpool status config table.
+# Groups: 1 name, 2 state, 3 read errors, 4 write errors, 5 checksum errors.
+_VDEV_ERRORS_RE = re.compile(
+    r"^\s*(\S+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$",
+    re.MULTILINE,
+)
 
 
 @dataclass
@@ -128,6 +143,97 @@ class ZfsRepository:
         """Return raw `zpool status` text (empty on failure)."""
         result = self._run(self._zpool("status", pool), check=False, timeout=timeout)
         return result.stdout
+
+    def pool_status_errors(self, pool: str, timeout: Optional[int] = None) -> dict:
+        """Parse `zpool status` and return a structured error report.
+
+        Returns a dict with keys:
+            has_errors (bool): True if any data or vdev errors are present.
+            errors_summary (str): Short human-readable summary.
+            data_errors (List[str]): Lines/files listed under the errors block.
+            vdev_errors (List[Dict[str, int]]): Vdevs with non-zero error
+                counters. Each dict has keys: name, state, read, write, cksum.
+
+        On failure or missing output, returns has_errors=False and empty
+        collections.
+        """
+        raw = self.pool_status(pool, timeout=timeout)
+        result: Dict[str, object] = {
+            "has_errors": False,
+            "errors_summary": "",
+            "data_errors": [],
+            "vdev_errors": [],
+        }
+        if not raw:
+            result["errors_summary"] = "status unavailable"
+            return result
+
+        # Extract the "errors:" summary line.
+        m = _ERRORS_LINE_RE.search(raw)
+        if m:
+            summary = m.group(1).strip()
+            result["errors_summary"] = summary
+            if summary.lower() != "no known data errors":
+                result["has_errors"] = True
+                # Capture any subsequent lines/files listed under errors.
+                data_errors: List[str] = []
+                capture = False
+                for line in raw.splitlines():
+                    stripped = line.strip()
+                    if stripped.lower().startswith("errors:"):
+                        capture = True
+                        continue
+                    if capture:
+                        if not stripped:
+                            break
+                        if stripped.lower() in (
+                            "config:",
+                            "pool:",
+                            "state:",
+                            "scan:",
+                            "logs:",
+                            "cache:",
+                        ):
+                            break
+                        data_errors.append(stripped)
+                result["data_errors"] = data_errors
+        else:
+            result["errors_summary"] = "status unavailable"
+
+        # Look for vdevs with non-zero READ/WRITE/CKSUM counters.
+        vdev_errors = []
+        for vm in _VDEV_ERRORS_RE.finditer(raw):
+            name, state, read_s, write_s, cksum_s = vm.groups()
+            read = int(read_s)
+            write = int(write_s)
+            cksum = int(cksum_s)
+            if read > 0 or write > 0 or cksum > 0:
+                vdev_errors.append(
+                    {
+                        "name": name,
+                        "state": state,
+                        "read": read,
+                        "write": write,
+                        "cksum": cksum,
+                    }
+                )
+        if vdev_errors:
+            result["has_errors"] = True
+            result["vdev_errors"] = vdev_errors
+            # Upgrade the summary if it was the generic no-errors line.
+            parts = []
+            for vdev in vdev_errors:
+                counters = []
+                if vdev["read"] > 0:
+                    counters.append(f"read={vdev['read']}")
+                if vdev["write"] > 0:
+                    counters.append(f"write={vdev['write']}")
+                if vdev["cksum"] > 0:
+                    counters.append(f"cksum={vdev['cksum']}")
+                parts.append(f"{vdev['name']} ({', '.join(counters)})")
+            result["errors_summary"] = "vdev errors: " + "; ".join(parts)
+
+        return result
 
     # ------------------------------------------------------------------
     # Pool writes
