@@ -156,7 +156,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_gui_infrastructure` | 95 | GTK mock setup, `gi.repository` patching, module imports without a display server, docs viewer HTTP server, zoom/navigation/state persistence, anchor scrolling, tree expansion helpers, TreeSearch freeze/thaw, clear-button status-bar reset |
 | `test_legacy_retention` | 7 | Legacy `zfsretainpol-*` file parsing, malformed-line handling, JSON config import |
 | `test_logging_config` | 20 | `log_msg` sink/file behavior, session log environment helpers, and viewer level helpers |
-| `test_main` | 37 | GUI entry point: PID-file single-instance, replace, pkexec logic, X11 window visibility for stuck-instance detection, existing-instance confirmation dialog |
+| `test_main` | 41 | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, X11 window visibility for stuck-instance detection |
 | `test_page_runners` | 6 | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation |
 | `test_profile_manager` | 15 | Profile CRUD, name validation, duplicate detection, override string generation |
 | `test_profile_runner` | 45 | Step building, pool selection, rsync/ZFS command generation, error handling, dataset encryption detection, dry-run profile execution |
@@ -171,7 +171,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_datasets_tree` | 6 | Datasets tree lazy loading: row expansion, full-name building, exact-dataset snapshot filtering |
 | `test_zfsinfo` | 10 | Pool/dataset/snapshot parsing, summary counting, CLI output formatting |
 | `test_dataset_actions` | 6 | Dataset destruction routed through `BackupRunner`: `BashStep` building, runner start/callback, missing/busy runner, cancel handling |
-| `test_logs_page` | 15 | Log list selection/deletion, viewer text filtering by level, level-change reload |
+| `test_logs_page` | 33 | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, Load Full Log confirmation, and column-header label tooltips |
 | `test_zfs_repository` | 25 | `ZfsRepository` pool/dataset/snapshot/hold parsing and write-method success/failure |
 | `test_zfsutilities_gui` | 17 | Window behavior: peer-version check, dry-run toggle, dataset-runner creation, stdin forwarding, info-panel level filtering, Restore tab destination refresh |
 

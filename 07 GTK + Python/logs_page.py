@@ -234,9 +234,16 @@ def create_logs_page(app):
         if col_idx == COL_DATETIME:
             set_monospace_font(renderer)
         column = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
-        column.set_tooltip_text(tooltip)
         configure_treeview_column(column, width=width)
         column.set_sort_column_id(col_idx)
+
+        # TreeViewColumn is not a Gtk.Widget, so tooltips must live on the
+        # header label instead of on the column itself.
+        header = Gtk.Label(label=title_text)
+        header.set_tooltip_text(tooltip)
+        header.show_all()
+        column.set_widget(header)
+
         app.logs_view.append_column(column)
     app._ui_state.bind_treeview(app.logs_view, "logs_view")
 

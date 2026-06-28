@@ -124,13 +124,28 @@ def _pid_state(pid):
 
 
 def _is_zfsutilities_process(pid):
-    """Return True if the process cmdline contains the GUI module name."""
+    """Return True if pid is a ZFS Utilities GUI process.
+
+    Matches:
+    - the repo entry point (zfsutilities_gui.py)
+    - the deployed wrapper entry point (main.py inside a zfsutilities path)
+    - the desktop launcher wrapper script itself ("ZFSutilities GUI")
+    """
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
             cmdline = f.read()
     except OSError:
         return False
-    return b"zfsutilities_gui.py" in cmdline
+    lower = cmdline.lower()
+    if b"zfsutilities_gui.py" in cmdline:
+        return True
+    # The deployed desktop launcher runs main.py directly.
+    if b"main.py" in cmdline and b"zfsutilities" in lower:
+        return True
+    # The wrapper script is itself a Python process named "ZFSutilities GUI".
+    if b"zfsutilities" in lower and b"gui" in lower:
+        return True
+    return False
 
 
 def _pid_file_status(pid):
@@ -154,8 +169,10 @@ def _pid_file_status(pid):
     return False, None
 
 
-def _terminate_process(pid, timeout=5.0):
+def _terminate_process(pid, timeout=5.0, sleep_fn=None):
     """Send SIGTERM, wait, then SIGKILL if necessary. Return True if gone."""
+    if sleep_fn is None:
+        sleep_fn = time.sleep
     if not _is_pid_alive(pid):
         return True
     try:
@@ -168,7 +185,7 @@ def _terminate_process(pid, timeout=5.0):
     waited = 0.0
     interval = 0.1
     while _is_pid_alive(pid) and waited < timeout:
-        time.sleep(interval)
+        sleep_fn(interval)
         waited += interval
 
     if _is_pid_alive(pid):
@@ -178,32 +195,45 @@ def _terminate_process(pid, timeout=5.0):
             return True
         except OSError:
             pass
-        time.sleep(0.1)
+        sleep_fn(0.1)
 
     return not _is_pid_alive(pid)
 
 
-def _ask_kill_existing_instance(pid):
-    """Ask the user whether to terminate an existing GUI instance.
-
-    Shows a modal GTK confirmation dialog. Returns True if the user approves
-    termination, False otherwise.
-    """
+def _show_wait_dialog(text):
+    """Create and show a modal, no-button wait dialog."""
     dialog = Gtk.MessageDialog(
         transient_for=None,
         flags=Gtk.DialogFlags.MODAL,
-        message_type=Gtk.MessageType.QUESTION,
-        buttons=Gtk.ButtonsType.YES_NO,
-        text=f"ZFS Utilities is already running (PID {pid}).",
+        message_type=Gtk.MessageType.INFO,
+        buttons=Gtk.ButtonsType.NONE,
+        text=text,
     )
     dialog.set_title("ZFS Utilities")
-    dialog.format_secondary_text(
-        "Do you want to terminate the existing instance and start a new one?"
+    dialog.set_deletable(False)
+    dialog.show_all()
+    _pump_events_for(0.05)
+    return dialog
+
+
+def _pump_events_for(duration):
+    """Run GTK main-loop iterations for *duration* seconds."""
+    deadline = time.time() + duration
+    while time.time() < deadline:
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+        time.sleep(0.01)
+
+
+def _terminate_with_wait(pid, timeout=5.0):
+    """Terminate pid while showing and updating a transient wait dialog."""
+    wait = _show_wait_dialog(
+        "Please wait: closing the previous ZFS Utilities window..."
     )
-    dialog.set_default_response(Gtk.ResponseType.NO)
-    response = dialog.run()
-    dialog.destroy()
-    return response == Gtk.ResponseType.YES
+    try:
+        _terminate_process(pid, timeout=timeout, sleep_fn=_pump_events_for)
+    finally:
+        wait.destroy()
 
 
 def _find_matching_pids(exclude_pid=None):
@@ -410,12 +440,11 @@ def main():
         cmd.extend(sys.argv)
         os.execvp('pkexec', cmd)
 
-    flags = Gio.ApplicationFlags.FLAGS_NONE
-    replace_requested = "--replace" in sys.argv
+    flags = Gio.ApplicationFlags.REPLACE
     pid = _read_pid_file()
     our_pid = os.getpid()
 
-    if pid is not None:
+    if pid is not None and pid != our_pid:
         stale, reason = _pid_file_status(pid)
         if stale:
             log_msg(f"INFO: replacing stale GUI instance {pid} ({reason})")
@@ -423,61 +452,49 @@ def main():
                 os.remove(PID_FILE)
             except OSError:
                 pass
-            flags = Gio.ApplicationFlags.REPLACE
-        elif replace_requested:
-            if _terminate_process(pid):
-                try:
-                    os.remove(PID_FILE)
-                except OSError:
-                    pass
-            flags = Gio.ApplicationFlags.REPLACE
         else:
-            # PID file points to a live, non-stuck process. Ask the user for
-            # approval to terminate it rather than attempting remote activation,
-            # which fails in this environment.
-            log_msg(
-                f"INFO: existing GUI instance {pid} is alive; asking user "
-                "whether to replace it"
-            )
-            if not _ask_kill_existing_instance(pid):
-                log_msg("INFO: startup aborted by user")
-                return
-            if _terminate_process(pid):
-                try:
-                    os.remove(PID_FILE)
-                except OSError:
-                    pass
-            flags = Gio.ApplicationFlags.REPLACE
+            log_msg(f"INFO: replacing existing GUI instance {pid}")
+            _terminate_with_wait(pid)
+            try:
+                os.remove(PID_FILE)
+            except OSError:
+                pass
 
-    # Scan for other stuck instances that may still own the D-Bus application ID.
-    if not replace_requested:
-        terminated_any = False
-        for matching_pid in _find_matching_pids(exclude_pid=our_pid):
-            if matching_pid == pid:
-                continue
-            if _is_instance_stuck(matching_pid):
-                log_msg(
-                    f"INFO: terminating stuck GUI instance {matching_pid}"
-                )
-                if _terminate_process(matching_pid):
-                    terminated_any = True
-        if terminated_any:
-            flags = Gio.ApplicationFlags.REPLACE
-    elif pid is None and replace_requested:
-        for matching_pid in _find_matching_pids(exclude_pid=our_pid):
-            _terminate_process(matching_pid)
-        flags = Gio.ApplicationFlags.REPLACE
+    # Terminate any other running GUI instances that may still own the D-Bus
+    # application ID.
+    for matching_pid in _find_matching_pids(exclude_pid=our_pid):
+        if matching_pid == pid:
+            continue
+        log_msg(f"INFO: terminating existing GUI instance {matching_pid}")
+        _terminate_with_wait(matching_pid)
 
     app = None
     try:
         app = ZFSUtilitiesApp(flags=flags)
         app.register(cancellable=None)
         if app.get_is_remote():
+            # A process we did not catch still owns the D-Bus application ID.
+            # Terminate any matching processes that appeared after our first
+            # scan and create a fresh application instance to retry once.
             log_msg(
-                f"WARN: another GUI instance is still registered (PID {pid}); "
-                "startup aborted"
+                "INFO: another GUI instance is still registered; "
+                "retrying after cleanup"
             )
-            return
+            for matching_pid in _find_matching_pids(exclude_pid=our_pid):
+                if matching_pid == pid:
+                    continue
+                log_msg(
+                    f"INFO: terminating existing GUI instance {matching_pid}"
+                )
+                _terminate_with_wait(matching_pid)
+            app = ZFSUtilitiesApp(flags=flags)
+            app.register(cancellable=None)
+            if app.get_is_remote():
+                log_msg(
+                    "WARN: another GUI instance is still registered; "
+                    "startup aborted"
+                )
+                return
         _write_pid_file(our_pid)
         app.run(None)
     except Exception:

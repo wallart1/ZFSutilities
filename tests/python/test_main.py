@@ -4,7 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import ANY, MagicMock, mock_open, patch
 
 from test_support import capture_logs, mock_gtk
 
@@ -61,7 +61,7 @@ class TestMainSingleInstance(unittest.TestCase):
                   alive_pids=None, our_pids=None, pid_states=None,
                   terminate_ok=True, terminate_mock=None,
                   matching_pids=None, has_visible_window=True,
-                  is_instance_stuck=False, ask_kill=True):
+                  is_instance_stuck=False):
         """Run main.main() under controlled conditions.
 
         Returns a dict with the application class mock, the execvp mock, and
@@ -100,10 +100,11 @@ class TestMainSingleInstance(unittest.TestCase):
              patch.object(main_module, "_is_zfsutilities_process", side_effect=fake_is_zfsutilities_process), \
              patch.object(main_module, "_pid_state", side_effect=fake_pid_state), \
              terminate_patch as mock_term, \
-             patch.object(main_module, "_find_matching_pids", return_value=matching_pids), \
+             patch.object(main_module, "_find_matching_pids", side_effect=[matching_pids, []] if matching_pids else [matching_pids]), \
              patch.object(main_module, "_has_visible_window", return_value=has_visible_window), \
              patch.object(main_module, "_is_instance_stuck", return_value=is_instance_stuck), \
-             patch.object(main_module, "_ask_kill_existing_instance", return_value=ask_kill), \
+             patch.object(main_module, "_show_wait_dialog", MagicMock()), \
+             patch.object(main_module, "_pump_events_for", MagicMock()), \
              patch.object(main_module, "time", MagicMock()), \
              patch.object(main_module, "ZFSUtilitiesApp", app_class):
             with capture_logs():
@@ -121,7 +122,7 @@ class TestMainSingleInstance(unittest.TestCase):
             "find_matching": main_module._find_matching_pids,
         }
 
-    def test_no_pid_file_starts_primary_without_replace(self):
+    def test_no_pid_file_starts_primary_with_replace(self):
         app = self._make_app(remote=False)
         app_class = self._make_app_class(app)
         result = self._run_main(
@@ -130,7 +131,7 @@ class TestMainSingleInstance(unittest.TestCase):
         )
         result["app_class"].assert_called_once()
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
-        self.assertEqual(flags, main_module.Gio.ApplicationFlags.FLAGS_NONE)
+        self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
         app.register.assert_called_once()
         app.run.assert_called_once()
 
@@ -182,7 +183,7 @@ class TestMainSingleInstance(unittest.TestCase):
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
         self.assertFalse(os.path.exists(self._pid_path))
 
-    def test_live_primary_no_replace_asks_and_replaces_on_approval(self):
+    def test_live_primary_replaces_without_asking(self):
         self._write_pid(1234)
         app = self._make_app(remote=False)
         app_class = self._make_app_class(app)
@@ -190,29 +191,14 @@ class TestMainSingleInstance(unittest.TestCase):
         result = self._run_main(
             ["main.py"], app_class,
             alive_pids={1234}, our_pids={1234}, pid_states={1234: "S"},
-            terminate_mock=terminate_mock, ask_kill=True
+            terminate_mock=terminate_mock
         )
-        terminate_mock.assert_called_once_with(1234)
+        terminate_mock.assert_called_once_with(1234, timeout=5.0, sleep_fn=ANY)
         result["app_class"].assert_called_once()
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
         app.run.assert_called_once()
         self.assertFalse(os.path.exists(self._pid_path))
-
-    def test_live_primary_no_replace_aborts_on_decline(self):
-        self._write_pid(1234)
-        app = self._make_app(remote=False)
-        app_class = self._make_app_class(app)
-        terminate_mock = MagicMock(return_value=True)
-        result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids={1234}, our_pids={1234}, pid_states={1234: "S"},
-            terminate_mock=terminate_mock, ask_kill=False
-        )
-        terminate_mock.assert_not_called()
-        result["app_class"].assert_not_called()
-        app.run.assert_not_called()
-        self.assertTrue(os.path.exists(self._pid_path))
 
     def test_live_primary_with_replace_terminates_and_replaces(self):
         self._write_pid(1234)
@@ -224,26 +210,72 @@ class TestMainSingleInstance(unittest.TestCase):
             alive_pids={1234}, our_pids={1234}, pid_states={1234: "S"},
             terminate_mock=terminate_mock
         )
-        terminate_mock.assert_called_once_with(1234)
+        terminate_mock.assert_called_once_with(1234, timeout=5.0, sleep_fn=ANY)
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
         self.assertFalse(os.path.exists(self._pid_path))
 
-    def test_replace_finds_untracked_matching_process(self):
+    def test_default_finds_untracked_matching_process(self):
         app = self._make_app(remote=False)
         app_class = self._make_app_class(app)
         terminate_mock = MagicMock(return_value=True)
         result = self._run_main(
-            ["main.py", "--replace"], app_class,
+            ["main.py"], app_class,
             alive_pids=set(), our_pids=set(), pid_states={},
             terminate_mock=terminate_mock,
             matching_pids=[5678, 5679]
         )
         self.assertEqual(terminate_mock.call_count, 2)
-        terminate_mock.assert_any_call(5678)
-        terminate_mock.assert_any_call(5679)
+        terminate_mock.assert_any_call(5678, timeout=5.0, sleep_fn=ANY)
+        terminate_mock.assert_any_call(5679, timeout=5.0, sleep_fn=ANY)
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
+
+    def test_replace_flag_is_accepted_as_no_op(self):
+        app = self._make_app(remote=False)
+        app_class = self._make_app_class(app)
+        result = self._run_main(
+            ["main.py", "--replace"], app_class,
+            alive_pids=set(), our_pids=set(), pid_states={}
+        )
+        result["app_class"].assert_called_once()
+        flags = result["app_class"].call_args.kwargs.get("flags", 0)
+        self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
+        app.run.assert_called_once()
+
+    def test_retries_registration_after_remote(self):
+        first_app = self._make_app(remote=False)
+        first_app.get_is_remote.return_value = True
+        second_app = self._make_app(remote=False)
+        second_app.get_is_remote.return_value = False
+        app_class = self._make_app_class(first_app, second_app)
+        terminate_mock = MagicMock(return_value=True)
+        result = self._run_main(
+            ["main.py"], app_class,
+            alive_pids=set(), our_pids=set(), pid_states={},
+            terminate_mock=terminate_mock,
+            matching_pids=[5678]
+        )
+        # First register is remote, then a fresh app is created and succeeds.
+        self.assertEqual(app_class.call_count, 2)
+        terminate_mock.assert_called_once_with(5678, timeout=5.0, sleep_fn=ANY)
+        second_app.run.assert_called_once()
+
+    def test_aborts_when_registration_stays_remote(self):
+        first_app = self._make_app(remote=True)
+        second_app = self._make_app(remote=True)
+        app_class = self._make_app_class(first_app, second_app)
+        terminate_mock = MagicMock(return_value=True)
+        result = self._run_main(
+            ["main.py"], app_class,
+            alive_pids=set(), our_pids=set(), pid_states={},
+            terminate_mock=terminate_mock,
+            matching_pids=[5678]
+        )
+        self.assertEqual(app_class.call_count, 2)
+        terminate_mock.assert_called_once_with(5678, timeout=5.0, sleep_fn=ANY)
+        first_app.run.assert_not_called()
+        second_app.run.assert_not_called()
 
     def test_replace_passed_through_pkexec(self):
         result = self._run_main(
@@ -313,6 +345,42 @@ class TestPidHelpers(unittest.TestCase):
         def fake_open(path, mode):
             if "1234" in path:
                 return mock_open(read_data=b"/usr/bin/python3\x00/path/zfsutilities_gui.py\x00")(path, mode)
+            raise FileNotFoundError(path)
+
+        with patch.object(main_module.os, "scandir", return_value=[fake_entry]), \
+             patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"), \
+             patch("builtins.open", side_effect=fake_open):
+            pids = main_module._find_matching_pids(exclude_pid=9999)
+        self.assertEqual(pids, [1234])
+
+    def test_find_matching_pids_includes_deployed_main_py(self):
+        fake_entry = MagicMock()
+        fake_entry.name = "1234"
+        fake_entry.stat.return_value.st_uid = 0
+
+        def fake_open(path, mode):
+            if "1234" in path:
+                return mock_open(
+                    read_data=b"/usr/bin/python3\x00/usr/local/lib/zfsutilities/versions/0.55.2/07 GTK + Python/main.py\x00"
+                )(path, mode)
+            raise FileNotFoundError(path)
+
+        with patch.object(main_module.os, "scandir", return_value=[fake_entry]), \
+             patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"), \
+             patch("builtins.open", side_effect=fake_open):
+            pids = main_module._find_matching_pids(exclude_pid=9999)
+        self.assertEqual(pids, [1234])
+
+    def test_find_matching_pids_includes_wrapper_script(self):
+        fake_entry = MagicMock()
+        fake_entry.name = "1234"
+        fake_entry.stat.return_value.st_uid = 0
+
+        def fake_open(path, mode):
+            if "1234" in path:
+                return mock_open(
+                    read_data=b"/usr/bin/python3\x00/home/dan/ZFSutilities GUI\x00"
+                )(path, mode)
             raise FileNotFoundError(path)
 
         with patch.object(main_module.os, "scandir", return_value=[fake_entry]), \
@@ -415,7 +483,7 @@ class TestMainStuckInstance(unittest.TestCase):
                   alive_pids=None, our_pids=None, pid_states=None,
                   terminate_ok=True, terminate_mock=None,
                   has_visible_window=False, is_instance_stuck=True,
-                  matching_pids=None, ask_kill=True):
+                  matching_pids=None):
         app_class = app_class or self._make_app_class()
         alive_pids = alive_pids or set()
         our_pids = our_pids or set()
@@ -447,8 +515,9 @@ class TestMainStuckInstance(unittest.TestCase):
              patch.object(main_module, "_pid_state", side_effect=fake_pid_state), \
              patch.object(main_module, "_has_visible_window", return_value=has_visible_window), \
              patch.object(main_module, "_is_instance_stuck", return_value=is_instance_stuck), \
-             patch.object(main_module, "_find_matching_pids", return_value=matching_pids), \
-             patch.object(main_module, "_ask_kill_existing_instance", return_value=ask_kill), \
+             patch.object(main_module, "_find_matching_pids", side_effect=[matching_pids, []] if matching_pids else [matching_pids]), \
+             patch.object(main_module, "_show_wait_dialog", MagicMock()), \
+             patch.object(main_module, "_pump_events_for", MagicMock()), \
              terminate_patch as mock_term, \
              patch.object(main_module, "time", MagicMock()), \
              patch.object(main_module, "ZFSUtilitiesApp", app_class):
@@ -471,7 +540,7 @@ class TestMainStuckInstance(unittest.TestCase):
             terminate_mock=terminate_mock,
             has_visible_window=False, is_instance_stuck=True,
         )
-        terminate_mock.assert_called_once_with(1234)
+        terminate_mock.assert_called_once_with(1234, timeout=5.0, sleep_fn=ANY)
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
         self.assertFalse(os.path.exists(self._pid_path))
@@ -487,11 +556,11 @@ class TestMainStuckInstance(unittest.TestCase):
             matching_pids=[5678],
             has_visible_window=False, is_instance_stuck=True,
         )
-        terminate_mock.assert_called_once_with(5678)
+        terminate_mock.assert_called_once_with(5678, timeout=5.0, sleep_fn=ANY)
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
 
-    def test_live_visible_pid_asks_and_replaces_on_approval(self):
+    def test_live_visible_pid_replaces_without_asking(self):
         self._write_pid(1234)
         app = self._make_app(remote=False)
         app_class = self._make_app_class(app)
@@ -501,30 +570,12 @@ class TestMainStuckInstance(unittest.TestCase):
             alive_pids={1234}, our_pids={1234}, pid_states={1234: "S"},
             terminate_mock=terminate_mock,
             has_visible_window=True, is_instance_stuck=False,
-            ask_kill=True
         )
-        terminate_mock.assert_called_once_with(1234)
+        terminate_mock.assert_called_once_with(1234, timeout=5.0, sleep_fn=ANY)
         result["app_class"].assert_called_once()
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
         self.assertFalse(os.path.exists(self._pid_path))
-
-    def test_live_visible_pid_aborts_on_decline(self):
-        self._write_pid(1234)
-        app = self._make_app(remote=False)
-        app_class = self._make_app_class(app)
-        terminate_mock = MagicMock(return_value=True)
-        result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids={1234}, our_pids={1234}, pid_states={1234: "S"},
-            terminate_mock=terminate_mock,
-            has_visible_window=True, is_instance_stuck=False,
-            ask_kill=False
-        )
-        terminate_mock.assert_not_called()
-        result["app_class"].assert_not_called()
-        app.run.assert_not_called()
-        self.assertTrue(os.path.exists(self._pid_path))
 
 
 class TestWindowHelpers(unittest.TestCase):
@@ -606,34 +657,69 @@ class TestWindowHelpers(unittest.TestCase):
             self.assertFalse(main_module._is_instance_stuck(42))
 
 
-class TestAskKillExistingInstance(unittest.TestCase):
-    """Tests for the existing-instance confirmation dialog."""
+class TestWaitDialogHelpers(unittest.TestCase):
+    """Tests for the transient wait dialog and event-pumping helpers."""
 
-    def _make_dialog(self, response):
+    def test_show_wait_dialog_creates_modal_info_dialog(self):
         dialog = MagicMock()
-        dialog.run.return_value = response
-        return dialog
-
-    def test_ask_kill_returns_true_on_yes(self):
-        dialog = self._make_dialog(main_module.Gtk.ResponseType.YES)
-        with patch.object(main_module.Gtk, "MessageDialog", return_value=dialog) as mock_dialog:
-            result = main_module._ask_kill_existing_instance(1234)
-        self.assertTrue(result)
+        with patch.object(
+            main_module.Gtk, "MessageDialog", return_value=dialog
+        ) as mock_dialog:
+            with patch.object(main_module, "_pump_events_for"):
+                result = main_module._show_wait_dialog("Please wait...")
+        self.assertEqual(result, dialog)
         mock_dialog.assert_called_once()
         kwargs = mock_dialog.call_args.kwargs
-        self.assertIn("1234", kwargs.get("text", ""))
-        dialog.set_title.assert_called_once_with("ZFS Utilities")
-        dialog.set_default_response.assert_called_once_with(
-            main_module.Gtk.ResponseType.NO
+        self.assertEqual(
+            kwargs.get("message_type"), main_module.Gtk.MessageType.INFO
         )
-        dialog.destroy.assert_called_once()
+        self.assertEqual(
+            kwargs.get("buttons"), main_module.Gtk.ButtonsType.NONE
+        )
+        self.assertEqual(kwargs.get("text"), "Please wait...")
+        dialog.set_title.assert_called_once_with("ZFS Utilities")
+        dialog.set_deletable.assert_called_once_with(False)
+        dialog.show_all.assert_called_once()
+        dialog.destroy.assert_not_called()
 
-    def test_ask_kill_returns_false_on_no(self):
-        dialog = self._make_dialog(main_module.Gtk.ResponseType.NO)
-        with patch.object(main_module.Gtk, "MessageDialog", return_value=dialog):
-            result = main_module._ask_kill_existing_instance(1234)
-        self.assertFalse(result)
-        dialog.destroy.assert_called_once()
+    def test_pump_events_for_processes_pending_events(self):
+        start = [0.0]
+
+        def fake_time():
+            start[0] += 0.02
+            return start[0]
+
+        pending_values = [True, True, False]
+
+        def fake_pending():
+            return pending_values.pop(0) if pending_values else False
+
+        with patch.object(main_module, "time") as mock_time:
+            mock_time.time.side_effect = fake_time
+            mock_time.sleep = MagicMock()
+            with patch.object(
+                main_module.Gtk, "events_pending", side_effect=fake_pending
+            ):
+                with patch.object(
+                    main_module.Gtk, "main_iteration_do"
+                ) as mock_iter:
+                    main_module._pump_events_for(0.1)
+        self.assertEqual(mock_iter.call_count, 2)
+        self.assertGreater(mock_time.sleep.call_count, 0)
+
+    def test_pump_events_for_stops_after_timeout(self):
+        start = [0.0]
+
+        def fake_time():
+            start[0] += 0.02
+            return start[0]
+
+        with patch.object(main_module, "time") as mock_time:
+            mock_time.time.side_effect = fake_time
+            mock_time.sleep = MagicMock()
+            with patch.object(main_module.Gtk, "events_pending", return_value=False):
+                main_module._pump_events_for(0.05)
+        self.assertGreater(mock_time.sleep.call_count, 0)
 
 
 if __name__ == "__main__":

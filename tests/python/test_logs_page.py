@@ -626,6 +626,53 @@ class TestCreateLogsPage(unittest.TestCase):
         frame.set_label.assert_not_called()
         frame.set_label_widget.assert_called_once()
 
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
+    def test_column_headers_use_label_tooltips(self, _mock_update, _mock_sync):
+        """TreeViewColumn tooltips must live on the header label widget."""
+        app = MagicMock()
+        app.config = {}
+        app._ui_state.bind_treeview = MagicMock()
+
+        # Isolate this test from any earlier Gtk mock calls.
+        lp.Gtk.TreeViewColumn.reset_mock()
+        lp.Gtk.TreeViewColumn.return_value.reset_mock()
+
+        labels_by_text = {}
+
+        def fake_label(*args, **kwargs):
+            lbl = MagicMock()
+            lbl._text = kwargs.get("label") or (args[0] if args else None)
+            labels_by_text[lbl._text] = lbl
+            return lbl
+
+        lp.Gtk.Label.side_effect = fake_label
+
+        lp.create_logs_page(app)
+
+        expected = {
+            "Date/Time": "Session log timestamp",
+            "Type": "Log type: backup, offsite, restore, prune, or gui",
+            "Name": "Name of the operation or profile",
+            "Status": "Completion status",
+            "Log Size": "Size of the log file on disk",
+            "Duration": "Elapsed run time",
+            "Transfer": "Bytes transferred during the operation",
+        }
+
+        # Only the column header labels are passed to TreeViewColumn.set_widget().
+        set_widgets = [
+            call[0][0]
+            for call in lp.Gtk.TreeViewColumn.return_value.set_widget.call_args_list
+        ]
+        self.assertEqual(len(set_widgets), len(expected))
+
+        for widget in set_widgets:
+            text = widget._text
+            self.assertIn(text, expected)
+            widget.set_tooltip_text.assert_called_once_with(expected[text])
+            widget.show_all.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

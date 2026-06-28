@@ -391,8 +391,8 @@ A Python test harness lives in `tests/python/` and uses Python's built-in `unitt
 | `test_gui_infrastructure` | 81    | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling            |
 | `test_legacy_retention`   | 7     | Legacy `zfsretainpol-*` file parsing and pool scanning                                                         |
 | `test_logging_config`     | 24    | Message levels, GUI sink, session log env helpers, and session log truncation                                  |
-| `test_logs_page`          | 32    | Log list scanning, filtering, deletion, status parsing, and tail-only viewer for large files                   |
-| `test_main`               | 33    | GUI entry point: PID-file single-instance, replace, pkexec logic                                               |
+| `test_logs_page`          | 33    | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, and column-header label tooltips |
+| `test_main`               | 41    | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic |
 | `test_page_runners`       | 6     | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation           |
 | `test_profile_manager`    | 15    | Profile CRUD, name validation, listing, existence checks                                                       |
 | `test_profile_runner`     | 43    | Backup/offsite/restore/retention profile step building                                                         |

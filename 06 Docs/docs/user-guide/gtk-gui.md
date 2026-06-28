@@ -19,26 +19,19 @@ shared config read by the bash scripts. See
 ## Single-Instance Behavior
 
 Only one primary GUI instance is allowed. If the GUI is already running, a
-second launch shows a confirmation dialog:
+second launch automatically terminates the existing instance and starts a fresh
+primary instance. A transient wait dialog is shown while the previous window is
+closing:
 
 ```
-ZFS Utilities is already running (PID <pid>).
-Do you want to terminate the existing instance and start a new one?
+Please wait: closing the previous ZFS Utilities window...
 ```
-
-- **Yes** — the existing instance is terminated and a fresh primary instance
-  starts.
-- **No** — startup aborts and the existing instance remains running.
 
 If a previous launch crashed or hung without showing a usable window, it is
 detected as stuck and terminated automatically without prompting.
 
-To force replacement of a running instance without the confirmation dialog,
-launch with `--replace`:
-
-```bash
-sudo zfsutilities-gui --replace
-```
+The `--replace` command-line flag is still accepted for backward compatibility,
+but it is no longer required; replacement is now the default behavior.
 
 For the underlying mechanism (PID file, D-Bus, window detection), see
 [Architecture — GUI ↔ Bash Integration](../developer-guide/architecture.md#gui-bash-integration-architecture).

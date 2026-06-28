@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.55.3
+
+### Changed
+
+- **GUI single-instance behavior** — a second launch of the GUI now automatically
+  terminates the existing instance instead of showing a confirmation dialog. A
+  transient wait dialog is displayed while the previous window closes, and GTK
+  events are pumped so the dialog remains responsive.
+- **`--replace` is a compatibility no-op** — the flag is still accepted, but
+  replacement is now the default behavior.
+
+### Fixed
+
+- **Logs tab column-header tooltips** — tooltips are now attached to a
+  `Gtk.Label` widget set with `TreeViewColumn.set_widget()`, because
+  `Gtk.TreeViewColumn` is not a `Gtk.Widget` and cannot display tooltips itself.
+
+### Tests
+
+- Expanded `tests/python/test_main.py` to 41 tests covering auto-replace,
+  transient wait-dialog creation, event pumping, retry after remote registration,
+  and `--replace` as a no-op.
+- Expanded `tests/python/test_logs_page.py` to 33 tests covering column-header
+  label tooltips.
+
 ## 0.55.2
 
 ### Added
