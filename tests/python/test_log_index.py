@@ -79,6 +79,26 @@ class TestScanFile(unittest.TestCase):
                 entry = li.scan_file(path)
         self.assertEqual(entry["status"], "Done")
 
+    def test_multiple_trailers_last_one_wins(self):
+        """A reused/appended log file reports the final trailer's metadata."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write(
+                tmpdir,
+                "2026-06-22_07-00-00_backup_x.log",
+                "2026-06-22 07:00:00  /a:1: INFO: first run start\n"
+                "# END: rc=0, duration=5.5s\n"
+                "2026-06-22 07:10:00  /a:1: INFO: second run start\n"
+                "2026-06-22 07:10:01  /a:1: WARN: something\n"
+                "# END: rc=0, duration=404.2s, bytes=1234\n",
+            )
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                entry = li.scan_file(path)
+        self.assertTrue(entry["has_trailer"])
+        self.assertEqual(entry["status"], "Done")
+        self.assertEqual(entry["duration"], 404.2)
+        self.assertEqual(entry["bytes_transferred"], 1234)
+        self.assertEqual(entry["highest_level"], "WARN")
+
 
 class TestUpdateEntryIncrementally(unittest.TestCase):
 
@@ -103,6 +123,32 @@ class TestUpdateEntryIncrementally(unittest.TestCase):
         self.assertTrue(entry["has_trailer"])
         self.assertEqual(entry["duration"], 5.0)
         self.assertGreater(entry["size"], initial_size)
+
+    def test_update_incrementally_last_trailer_wins(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_x.log")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("2026-06-22 07:00:00  /a:1: INFO: first run\n")
+
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                entry = li.scan_file(path)
+
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write("# END: rc=0, duration=5.0s\n")
+                entry = li.update_entry_incrementally(entry, path)
+                self.assertEqual(entry["duration"], 5.0)
+                self.assertEqual(entry["highest_level"], "INFO")
+
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write(
+                        "2026-06-22 07:10:00  /a:1: WARN: second run\n"
+                        "# END: rc=0, duration=42.0s, bytes=999\n"
+                    )
+                entry = li.update_entry_incrementally(entry, path)
+
+        self.assertEqual(entry["duration"], 42.0)
+        self.assertEqual(entry["bytes_transferred"], 999)
+        self.assertEqual(entry["highest_level"], "WARN")
 
     def test_truncated_file_rescans_from_scratch(self):
         with tempfile.TemporaryDirectory() as tmpdir:

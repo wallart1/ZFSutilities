@@ -1006,6 +1006,11 @@ Right-click any row to open a context menu:
   entire file from the start. This prevents the GUI from hanging if a session
   log grows very large.
 
+- **Reused or appended logs** — if a session log file is reused or appended to,
+  the log list and viewer show the status, duration, and transfer bytes from the
+  **final** run, because `log_index.py` treats the last `# END` trailer as
+  authoritative.
+
 - **Pop Out** — a button in the search bar detaches the entire viewer (search
   controls + text view + Show More) into an independent window.
 

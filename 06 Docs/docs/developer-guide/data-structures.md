@@ -428,6 +428,11 @@ Each entry has this schema:
   while the log is open in the viewer.
 - Deleting a log via the Logs tab removes its entry from the index.
 
+If a log file contains more than one `# END` trailer (for example because the
+file was reused or appended), the index treats the **last** trailer and the
+highest message level found anywhere in the file as authoritative. This keeps
+the Logs tab in sync with the final run rather than an earlier one.
+
 If the index file is missing or unreadable, the Logs tab scans log files
 directly and rebuilds the index. The file is written atomically (temp + rename)
 and ignored by log retention pruning.

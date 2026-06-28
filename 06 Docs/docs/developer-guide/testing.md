@@ -146,7 +146,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_feature_config` | 23 | Backup/offsite/restore config, retention, snapshot names, scrub manager, pools/checkagainst, prune label |
 | `test_backup_history` | 36 | History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting |
 | `test_backup_page` | 8 | Backup tab UI labels (including pre/post command labels), config load/collect helpers, and frame header widget support |
-| `test_backup_runner` | 17 | Session log creation, subprocess output parsing, byte counting, trailer formatting, and fatal step messages |
+| `test_backup_runner` | 24 | Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and session-log reuse |
 | `test_command_builders` | 30 | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
 | `test_config_migrations` | 28 | JSON config migration chain (v1 → v15), idempotency, missing-migration handling |
 | `test_cron_manager` | 17 | Cron expression formatting, next-run calculation, profile scheduling, cron file generation |
@@ -155,6 +155,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_docs_viewer` | 1 | Standalone documentation viewer launcher (`docs_viewer.main()`) |
 | `test_gui_infrastructure` | 95 | GTK mock setup, `gi.repository` patching, module imports without a display server, docs viewer HTTP server, zoom/navigation/state persistence, anchor scrolling, tree expansion helpers, TreeSearch freeze/thaw, clear-button status-bar reset |
 | `test_legacy_retention` | 7 | Legacy `zfsretainpol-*` file parsing, malformed-line handling, JSON config import |
+| `test_log_index` | 29 | Persistent session-log index: scan/update, trailer and level extraction, large-file tail scanning, and last-trailer-wins behavior |
 | `test_logging_config` | 26 | `log_msg` sink/file behavior, session log environment helpers, viewer level helpers, and configurable session-log size cap |
 | `test_main` | 41 | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, X11 window visibility for stuck-instance detection |
 | `test_page_runners` | 6 | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation |

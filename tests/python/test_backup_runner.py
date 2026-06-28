@@ -346,6 +346,82 @@ class TestSessionTrailer(unittest.TestCase):
         self.assertEqual(entry["status"], "Cancelled")
 
 
+class TestSessionLogReuse(unittest.TestCase):
+    """Each run must get its own session log file."""
+
+    def _runner(self):
+        return br.BackupRunner(MagicMock(), MagicMock())
+
+    @patch("backup_runner.add_history_entry")
+    @patch("backup_runner.datetime")
+    def test_finish_resets_session_log_file(self, mock_datetime, _mock_add):
+        from datetime import datetime as _datetime
+        call_times = [
+            _datetime(2026, 6, 27, 22, 22, 41),
+            _datetime(2026, 6, 27, 22, 22, 41),
+            _datetime(2026, 6, 27, 22, 26, 35),
+        ]
+        mock_datetime.now.side_effect = call_times
+
+        runner = self._runner()
+        runner.label = "Prune"
+        runner._total_bytes_received = 0
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                first_path = runner._session_log_file
+                runner._session_start_time = time.time()
+                runner._finish(rc=0)
+
+                # After _finish the runner should be ready for a new run.
+                self.assertIsNone(runner._session_log_file)
+                self.assertIsNone(runner._session_start_time)
+
+                runner.prepare_session_log()
+                second_path = runner._session_log_file
+
+                self.assertIsNotNone(first_path)
+                self.assertIsNotNone(second_path)
+                self.assertNotEqual(first_path, second_path)
+
+                # The first run's file has its END trailer; the second file
+                # was created fresh and has not been finished yet.
+                with open(first_path, "r", encoding="utf-8") as fh:
+                    first_content = fh.read()
+                with open(second_path, "r", encoding="utf-8") as fh:
+                    second_content = fh.read()
+                self.assertEqual(first_content.count("# END:"), 1)
+                self.assertEqual(second_content.count("# END:"), 0)
+
+    @patch("backup_runner.datetime")
+    def test_cancel_clears_session_log_file(self, mock_datetime):
+        from datetime import datetime as _datetime
+        mock_datetime.now.side_effect = [
+            _datetime(2026, 6, 27, 22, 30, 0),
+            _datetime(2026, 6, 27, 22, 30, 0),
+            _datetime(2026, 6, 27, 22, 31, 0),
+        ]
+
+        runner = self._runner()
+        runner.label = "Backup"
+        runner.running = True
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                first_path = runner._session_log_file
+                runner.cancel()
+
+                self.assertIsNone(runner._session_log_file)
+                self.assertIsNone(runner._session_start_time)
+
+                runner.running = True
+                runner.prepare_session_log()
+                second_path = runner._session_log_file
+
+                self.assertIsNotNone(second_path)
+                self.assertNotEqual(first_path, second_path)
+
+
 class TestSessionLogSizeCap(unittest.TestCase):
     """_maybe_truncate_session_log caps the shared log and resets the index."""
 

@@ -52,6 +52,11 @@ lists, `zfs receive` progress, separator lines, etc.) is preserved alongside
   Python `log_msg` calls made by the runner itself (e.g. "Running profile:")
   write to the file because `ZFSUTILITIES_LOG_FILE` is set.
 
+After a run finishes, is cancelled, or aborts with rc=9, `BackupRunner` clears
+`_session_log_file` and `_session_start_time`. This lets the same runner
+instance prepare a fresh session log for the next operation instead of
+re-using or appending to the previous run's file.
+
 | Context                  | Auto-set? | Notes                                                                                                                                              |
 | ------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Direct CLI execution     | **Yes**   | `bashinit` creates the log and exports the variable                                                                                                |
@@ -114,6 +119,12 @@ trailer. `logs_page._scan_logs()` creates or incrementally updates entries for
 any log without an up-to-date index record, removes entries for deleted files,
 and saves the index. `logs_page._tail_log_file()` also updates the index
 incrementally while a running log is being viewed.
+
+When a log file contains more than one `# END` trailer (for example because the
+file was reused or appended), `log_index.py` uses the **last** trailer and the
+highest message level seen anywhere in the scanned text as the authoritative
+metadata. This ensures the Logs tab reports the status, duration, and transfer
+bytes of the final run rather than an earlier one.
 
 The index is advisory: if it is missing or corrupt, the Logs tab falls back to
 scanning the log files directly and rebuilds the index.

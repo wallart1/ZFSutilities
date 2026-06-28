@@ -240,6 +240,8 @@ class BackupRunner:
         if self._session_log_prev is not None:
             restore_session_log(self._session_log_prev)
             self._session_log_prev = None
+        self._session_log_file = None
+        self._session_start_time = None
         if self._on_complete:
             self._on_complete(cancelled=True)
 
@@ -482,6 +484,8 @@ class BackupRunner:
                     if self._session_log_prev is not None:
                         restore_session_log(self._session_log_prev)
                         self._session_log_prev = None
+                    self._session_log_file = None
+                    self._session_start_time = None
                     self.running = False
                     if self.progress:
                         self.progress(None, None)
@@ -583,5 +587,7 @@ class BackupRunner:
         if self._session_log_prev is not None:
             restore_session_log(self._session_log_prev)
             self._session_log_prev = None
+        self._session_log_file = None
+        self._session_start_time = None
         if self._on_complete:
             self._on_complete(cancelled=False)

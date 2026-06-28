@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.55.6
+
+### Fixed
+
+- **`BackupRunner` session-log reuse** — `cancel()` and the rc=9 abort path now
+  reset `_session_log_file` and `_session_start_time` to `None`, just like
+  `_finish()` already did. A `BackupRunner` instance can now start a fresh
+  session log for a subsequent run instead of reusing or appending to the
+  previous run's file.
+- **`log_index.py` last-trailer wins** — `_update_entry_from_text()` no longer
+  stops at the first `# END` trailer. It scans to the end of the text so that
+  reused or appended session logs report the status, duration, and transfer
+  bytes of the **final** run, and the highest message level found anywhere in
+  the file.
+
+### Tests
+
+- Expanded `tests/python/test_backup_runner.py` to 24 tests, adding
+  `TestSessionLogReuse` to verify a second run gets a fresh log file and that
+  `cancel()` clears the session-log state.
+- Expanded `tests/python/test_log_index.py` to 29 tests, adding coverage for
+  multiple trailers in both `scan_file()` and `update_entry_incrementally()`.
+
+### Documentation
+
+- Updated `developer-guide/architecture.md` to describe `BackupRunner`
+  session-log reset behavior and the persistent log index's last-trailer-wins
+  semantics.
+- Updated `developer-guide/data-structures.md` with the same last-trailer-wins
+  note for the session-log index.
+- Updated `user-guide/gtk-gui.md` (Logs tab) to mention reused/appended logs.
+- Updated `developer-guide/testing.md` test counts for `test_backup_runner`
+  and added the `test_log_index` row.
+
 ## 0.55.5
 
 ### Added

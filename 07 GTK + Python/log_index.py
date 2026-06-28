@@ -104,22 +104,20 @@ def _parse_lines(text):
 
 
 def _update_entry_from_text(entry, text):
-    """Parse *text* and update level/trailer fields in *entry*."""
+    """Parse *text* and update level/trailer fields in *entry*.
+
+    The last trailer in the text wins, so a log that was appended to or
+    re-used shows the duration/status of the final run rather than the
+    first one.
+    """
     highest_priority = _MSG_PRIORITY.get(entry.get("highest_level"), -1)
 
     lines, _consumed = _parse_lines(text)
     for line in lines:
-        if entry.get("has_trailer"):
-            break
-
         level = parse_msg_level(line)
         if level is not None and _MSG_PRIORITY[level] > highest_priority:
             entry["highest_level"] = level
             highest_priority = _MSG_PRIORITY[level]
-            if level == "FATAL":
-                # No higher level exists; we can stop scanning for levels,
-                # but we still want to see the trailer if it appears later.
-                pass
 
         m = _TRAILER_RE.search(line)
         if m:
@@ -128,7 +126,7 @@ def _update_entry_from_text(entry, text):
             entry["duration"] = float(m.group(2))
             if m.group(3):
                 entry["bytes_transferred"] = int(m.group(3))
-            break
+            # Keep scanning; a later trailer overrides an earlier one.
 
 
 def scan_file(path, max_tail_bytes=1024 * 1024):
