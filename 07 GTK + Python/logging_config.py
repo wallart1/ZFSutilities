@@ -11,6 +11,14 @@ from datetime import datetime
 MSG_LEVELS = ("DEBUG", "VERB", "INFO", "WARN", "FATAL")
 DEFAULT_MSG_LEVEL = "INFO"
 
+# Session log size cap.  When a log exceeds MAX_SESSION_LOG_BYTES it is
+# rewritten as START context + marker + TAIL context.  These values bound the
+# disk footprint of a runaway backup/offsite job while preserving enough recent
+# output to be useful for debugging.
+MAX_SESSION_LOG_BYTES = 1024 * 1024 * 1024          # 1 GB
+SESSION_LOG_TAIL_BYTES = 100 * 1024 * 1024          # 100 MB
+SESSION_LOG_START_BYTES = 64 * 1024                 # 64 KB
+
 
 _MSG_PRIORITY = {
     "DEBUG": 0,
@@ -67,6 +75,58 @@ def restore_session_log(previous):
     prev_file, prev_inherit = previous
     _restore_env("ZFSUTILITIES_LOG_FILE", prev_file)
     _restore_env("ZFSUTILITIES_LOG_INHERIT", prev_inherit)
+
+
+def truncate_session_log(path,
+                         max_bytes=MAX_SESSION_LOG_BYTES,
+                         tail_bytes=SESSION_LOG_TAIL_BYTES,
+                         start_bytes=SESSION_LOG_START_BYTES):
+    """Truncate a session log to keep opening context plus recent tail.
+
+    If the file at *path* is larger than *max_bytes*, rewrite it as:
+      - the first *start_bytes* (rounded down to the last complete line),
+      - a marker line showing how many bytes were omitted,
+      - the last *tail_bytes* (rounded up by discarding the partial first line).
+
+    Returns True if truncation occurred, False otherwise (including when the
+    file is missing or already within the cap).
+    """
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return False
+
+    if size <= max_bytes:
+        return False
+
+    try:
+        with open(path, "r+b") as fh:
+            # Prefix: opening context, rounded down to a whole line.
+            fh.seek(0)
+            prefix = fh.read(start_bytes)
+            last_nl = prefix.rfind(b"\n")
+            if last_nl != -1:
+                prefix = prefix[:last_nl + 1]
+            else:
+                prefix = b""
+
+            # Suffix: recent tail, rounded up by dropping the partial first line.
+            fh.seek(max(0, size - tail_bytes))
+            fh.readline()
+            suffix = fh.read()
+
+            omitted = size - len(prefix) - len(suffix)
+            marker = (
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  "
+                f"zfsutilities: [... {omitted} bytes omitted by log size cap ...]\n"
+            ).encode("utf-8", errors="replace")
+
+            fh.seek(0)
+            fh.write(prefix + marker + suffix)
+            fh.truncate()
+        return True
+    except OSError:
+        return False
 
 
 @contextmanager

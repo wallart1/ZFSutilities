@@ -25,6 +25,8 @@ if PYTHON_SRC not in sys.path:
 # Mock GTK/WebKit so gi.repository imports succeed without a display.
 from test_support import mock_gtk
 
+import log_index as li
+
 with mock_gtk():
     import backup_runner as br
     from command_builders import BashStep
@@ -342,6 +344,37 @@ class TestSessionTrailer(unittest.TestCase):
 
         self.assertIsNotNone(entry)
         self.assertEqual(entry["status"], "Cancelled")
+
+
+class TestSessionLogSizeCap(unittest.TestCase):
+    """_maybe_truncate_session_log caps the shared log and resets the index."""
+
+    def _runner(self):
+        return br.BackupRunner(MagicMock(), MagicMock())
+
+    def test_noop_when_no_session_log(self):
+        runner = self._runner()
+        with patch("backup_runner.truncate_session_log") as mock_truncate:
+            runner._maybe_truncate_session_log()
+        mock_truncate.assert_not_called()
+
+    def test_truncate_and_index_reset(self):
+        runner = self._runner()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                path = runner._session_log_file
+                # Seed the index with an entry for this log.
+                index = li.LogIndex.load()
+                index.update(path)
+                index.save()
+
+                with patch("backup_runner.truncate_session_log", return_value=True) as mock_truncate:
+                    runner._maybe_truncate_session_log()
+
+                mock_truncate.assert_called_once_with(path)
+                index2 = li.LogIndex.load()
+                self.assertIsNone(index2.get(path))
 
 
 if __name__ == "__main__":

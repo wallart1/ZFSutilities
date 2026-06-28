@@ -308,6 +308,97 @@ class TestSyncLogListPreservesSelection(unittest.TestCase):
         return next_fn
 
 
+class TestLoadLogIntoViewer(unittest.TestCase):
+    """_load_log_into_viewer loads full small files and tails large ones."""
+
+    def _make_app(self, path, file_size):
+        app = MagicMock()
+        app._logs_current_path = path
+        app._logs_file_size = file_size
+        app._logs_read_offset = 0
+        app._logs_full_mode = False
+        app.logs_viewer_level = "DEBUG"
+        app.logs_show_more_btn.get_visible.return_value = False
+        buf = MagicMock()
+        app.logs_text.get_buffer.return_value = buf
+        return app, buf
+
+    def test_small_file_loads_full(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "small.log")
+            with open(path, "w") as fh:
+                fh.write("line1\nline2\n")
+            app, buf = self._make_app(path, os.path.getsize(path))
+            lp._load_log_into_viewer(app)
+            self.assertEqual(app._logs_read_offset, os.path.getsize(path))
+            inserted = "".join(call[0][1] for call in buf.insert.call_args_list)
+            self.assertIn("line1", inserted)
+            self.assertIn("line2", inserted)
+            app.logs_load_full_btn.hide.assert_called()
+
+    def test_large_file_loads_tail_and_shows_load_full(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "large.log")
+            with open(path, "w") as fh:
+                fh.write("START\n")
+                for i in range(50000):
+                    fh.write(f"line {i} padding to make the file large enough\n")
+                fh.write("END\n")
+            size = os.path.getsize(path)
+            self.assertGreater(size, lp.MAX_VIEWER_FULL_READ_BYTES)
+            app, buf = self._make_app(path, size)
+            # Allow the chunked tail loader to read all remaining chunks.
+            app.logs_show_more_btn.get_visible.side_effect = [True, True, True, True, False]
+            lp._load_log_into_viewer(app)
+            app.logs_load_full_btn.show.assert_called()
+            inserted = "".join(call[0][1] for call in buf.insert.call_args_list)
+            self.assertIn("END", inserted)
+            self.assertNotIn("START", inserted)
+            header = buf.set_text.call_args[0][0]
+            self.assertIn("showing last", header)
+            self.assertIn("Load Full Log", header)
+
+
+class TestLoadFullLogClicked(unittest.TestCase):
+    """_on_load_full_log_clicked switches tail mode to full-file mode."""
+
+    def test_small_file_switches_without_dialog(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "medium.log")
+            with open(path, "w") as fh:
+                for i in range(100):
+                    fh.write(f"line {i}\n")
+            app = MagicMock()
+            app._logs_current_path = path
+            app._logs_file_size = os.path.getsize(path)
+            app._logs_full_mode = False
+            app.logs_show_more_btn.get_visible.return_value = False
+            app.logs_text.get_buffer.return_value = MagicMock()
+            lp._on_load_full_log_clicked(app)
+            self.assertTrue(app._logs_full_mode)
+
+    def test_large_file_shows_confirmation_dialog(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "large.log")
+            with open(path, "w") as fh:
+                fh.write("START\n")
+                for i in range(50000):
+                    fh.write(f"line {i} padding to make the file large enough\n")
+                fh.write("END\n")
+            app = MagicMock()
+            app._logs_current_path = path
+            app._logs_file_size = os.path.getsize(path)
+            app._logs_full_mode = False
+            app.logs_show_more_btn.get_visible.return_value = False
+            app.logs_text.get_buffer.return_value = MagicMock()
+            dialog = MagicMock()
+            dialog.run.return_value = lp.Gtk.ResponseType.YES
+            with patch("logs_page.Gtk.MessageDialog", return_value=dialog):
+                lp._on_load_full_log_clicked(app)
+            dialog.run.assert_called_once()
+            self.assertTrue(app._logs_full_mode)
+
+
 class TestLogsLevelChanged(unittest.TestCase):
 
     def test_changes_level_and_reloads(self):
@@ -324,12 +415,11 @@ class TestLogsLevelChanged(unittest.TestCase):
         combo = MagicMock()
         combo.get_active_text.return_value = "WARN"
 
-        with patch("logs_page._load_next_chunk") as mock_load:
+        with patch("logs_page._load_log_into_viewer") as mock_load:
             with patch("logs_page.GLib.idle_add") as mock_idle:
                 lp._on_logs_level_changed(combo, app)
 
         self.assertEqual(app.logs_viewer_level, "WARN")
-        self.assertEqual(app._logs_read_offset, 0)
         app.logs_text.get_buffer().set_text.assert_called_once_with("")
         mock_load.assert_called_once_with(app)
         mock_idle.assert_called_once()

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.55.2
+
+### Added
+
+- **Session log size cap** — `logging_config.py` adds a 1 GB cap on session log
+  files. Logs that exceed the cap are rewritten as 64 KB of opening context, a
+  marker line, and 100 MB of recent tail. The Python runners (`backup_runner.py`
+  and `profile_runner.py`) check the shared log file every 5 seconds, so the cap
+  also bounds output written by inherited bash subprocesses. After truncation,
+  the persistent log index entry for that file is removed so the Logs tab
+  rescans the smaller file.
+- **Tail-only log viewer** — the Logs tab now opens files larger than 1 MB at
+  the tail instead of loading the entire file from the start. A **Load Full
+  Log** button (with a size warning confirmation) lets you read the whole file
+  when needed.
+- **Logs tab clarity** — the `Size` column is renamed to `Log Size` and all
+  log-list columns now have tooltips explaining the difference between log size
+  and transfer bytes.
+
+### Tests
+
+- Added `test_logging_config.py` cases for `truncate_session_log()`.
+- Added `test_backup_runner.py` and `test_profile_runner.py` cases verifying
+  that truncation resets the persistent log index entry.
+- Added `test_logs_page.py` cases for tail-only loading and the Load Full Log
+  confirmation dialog.
+
 ## 0.55.1
 
 ### Fixed

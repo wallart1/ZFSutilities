@@ -19,7 +19,7 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
-from logging_config import log_msg, session_log_context
+from logging_config import log_msg, session_log_context, truncate_session_log
 from log_index import LogIndex
 from config_core import load_config, prune_old_logs, SESSION_LOG_DIR
 from feature_config import (
@@ -105,6 +105,10 @@ def _is_dataset_encrypted(path):
 
 _session_log_file = None
 _session_start_time = None
+_last_log_size_check = 0.0
+
+# How often to check the session log size while a profile is running.
+_PROFILE_LOG_SIZE_CHECK_INTERVAL = 5  # seconds
 
 # Log path used on the source host for pull-step rsync output in headless mode.
 _REMOTE_RSYNC_LOG_PATH = "/var/log/zfsutilities/rsync-pull.log"
@@ -172,7 +176,29 @@ def _write_raw_line(session_log_file, line):
         pass
 
 
+def _maybe_truncate_session_log(session_log_file):
+    """Truncate the session log if it has grown beyond the cap.
+
+    Called periodically while a profile is running.  Returns True if truncation
+    occurred.
+    """
+    global _last_log_size_check
+    if not session_log_file:
+        return False
+    if truncate_session_log(session_log_file):
+        log_msg("WARN: Session log exceeded size cap and was truncated")
+        try:
+            index = LogIndex.load()
+            index.remove(session_log_file)
+            index.save()
+        except Exception as e:
+            log_msg(f"WARN: Could not reset log index after truncation: {e}")
+        return True
+    return False
+
+
 def _run_command(step, session_log_file=None):
+    global _last_log_size_check
     log_msg(f"INFO: {step.description}")
     log_msg(f"DEBUG: {' '.join(shlex.quote(str(c)) for c in step.command)}")
     env = os.environ.copy()
@@ -194,6 +220,10 @@ def _run_command(step, session_log_file=None):
                     line = line.rstrip("\n")
                     print(line, file=sys.stderr)
                     _write_raw_line(session_log_file, line)
+                    now = time.time()
+                    if now - _last_log_size_check >= _PROFILE_LOG_SIZE_CHECK_INTERVAL:
+                        _last_log_size_check = now
+                        _maybe_truncate_session_log(session_log_file)
         finally:
             returncode = process.wait()
         if returncode != 0:
@@ -522,8 +552,9 @@ def main():
 
     tab_type = profile.get("tab_type", "")
 
-    global _session_start_time
+    global _session_start_time, _last_log_size_check
     _session_start_time = time.time()
+    _last_log_size_check = time.time()
     _create_session_log_file(tab_type, profile_name)
 
     ctx = session_log_context(_session_log_file) if _session_log_file else nullcontext()
@@ -545,6 +576,7 @@ def main():
             rc = runner(profile, config, parent_dir, _session_log_file)
 
         log_msg(f"INFO: Profile {profile_name} finished (rc={rc})")
+        _maybe_truncate_session_log(_session_log_file)
         bytes_transferred = _parse_bytes_from_log(_session_log_file)
         duration = time.time() - _session_start_time if _session_start_time else 0.0
         result = "success" if rc == 0 else "failed"

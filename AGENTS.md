@@ -382,7 +382,7 @@ A Python test harness lives in `tests/python/` and uses Python's built-in `unitt
 | `test_backup_config`      | 32    | Config load/save, defaults, pools, retention, UI state, snapshot name generation, log pruning, message level   |
 | `test_backup_history`     | 33    | History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting       |
 | `test_backup_page`        | 8     | Backup tab UI labels (including pre/post command labels), config load/collect helpers, and frame header widget support |
-| `test_backup_runner`      | 17    | Session log creation, subprocess output parsing, byte counting, trailer formatting, and fatal step messages    |
+| `test_backup_runner`      | 19    | Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and log size cap |
 | `test_command_builders`   | 31    | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
 | `test_config_migrations`  | 17    | Schema migrations 1→12, idempotency, missing migration errors                                                  |
 | `test_cron_manager`       | 17    | Cron line generation, human-readable interpretation, next-run computation                                      |
@@ -390,6 +390,8 @@ A Python test harness lives in `tests/python/` and uses Python's built-in `unitt
 | `test_docs_integrity`     | 11    | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability  |
 | `test_gui_infrastructure` | 81    | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling            |
 | `test_legacy_retention`   | 7     | Legacy `zfsretainpol-*` file parsing and pool scanning                                                         |
+| `test_logging_config`     | 24    | Message levels, GUI sink, session log env helpers, and session log truncation                                  |
+| `test_logs_page`          | 32    | Log list scanning, filtering, deletion, status parsing, and tail-only viewer for large files                   |
 | `test_main`               | 33    | GUI entry point: PID-file single-instance, replace, pkexec logic                                               |
 | `test_page_runners`       | 6     | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation           |
 | `test_profile_manager`    | 15    | Profile CRUD, name validation, listing, existence checks                                                       |
@@ -521,6 +523,20 @@ log_msg("DEBUG: variable =", value)
 - Each line is prefixed with `file:line:` via `inspect`
 
 ---
+
+## Recent Session Notes (2026-06-27)
+
+- Session log defenses: Added a 1 GB size cap with 100 MB tail + 64 KB start
+  retention to prevent runaway backup/offsite logs from filling disk. The cap is
+  enforced from the Python runners (`backup_runner.py`, `profile_runner.py`) so
+  it also bounds output written by inherited bash subprocesses. When a log is
+  truncated, its persistent index entry is reset so the Logs tab rescans the
+  smaller file.
+- Logs tab viewer: Files larger than 1 MB are now opened tail-first; a
+  "Load Full Log" button with a confirmation prompt allows reading the entire
+  file when needed. The Size column was renamed to "Log Size" and column
+  tooltips were added to clarify the difference between log size and transfer
+  bytes.
 
 ## Recent Session Notes (2026-06-25)
 

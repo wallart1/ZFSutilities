@@ -39,6 +39,10 @@ COL_DURATION = 5
 COL_BYTES = 6
 COL_PATH = 7
 
+# Maximum log file size the viewer will load from the beginning.  Larger files
+# are shown tail-only to avoid hanging the GUI on a multi-gigabyte session log.
+MAX_VIEWER_FULL_READ_BYTES = 1024 * 1024  # 1 MB
+
 # Regex: ^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(\w+)_(.+)\.log$
 # Purpose: Parse session log filenames into (date, time, type, name).
 # Supports both new format (type first) and legacy format (gui first).
@@ -216,20 +220,21 @@ def create_logs_page(app):
     app.logs_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
 
     cols = [
-        (COL_DATETIME, "Date/Time", 160),
-        (COL_TYPE, "Type", 70),
-        (COL_NAME, "Name", 140),
-        (COL_STATUS, "Status", 70),
-        (COL_SIZE, "Size", 65),
-        (COL_DURATION, "Duration", 65),
-        (COL_BYTES, "Transfer", 70),
+        (COL_DATETIME, "Date/Time", 160, "Session log timestamp"),
+        (COL_TYPE, "Type", 70, "Log type: backup, offsite, restore, prune, or gui"),
+        (COL_NAME, "Name", 140, "Name of the operation or profile"),
+        (COL_STATUS, "Status", 70, "Completion status"),
+        (COL_SIZE, "Log Size", 65, "Size of the log file on disk"),
+        (COL_DURATION, "Duration", 65, "Elapsed run time"),
+        (COL_BYTES, "Transfer", 70, "Bytes transferred during the operation"),
     ]
-    for col_idx, title_text, width in cols:
+    for col_idx, title_text, width, tooltip in cols:
         renderer = Gtk.CellRendererText()
         renderer.set_property("editable", False)
         if col_idx == COL_DATETIME:
             set_monospace_font(renderer)
         column = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
+        column.set_tooltip_text(tooltip)
         configure_treeview_column(column, width=width)
         column.set_sort_column_id(col_idx)
         app.logs_view.append_column(column)
@@ -312,10 +317,23 @@ def create_logs_page(app):
     app.logs_show_more_btn.connect("clicked", lambda _b: _load_next_chunk(app))
     viewer_box.pack_start(app.logs_show_more_btn, False, False, 0)
 
+    # Load Full Log button for large files (hidden until needed)
+    app.logs_load_full_btn = Gtk.Button(label="Load Full Log")
+    app.logs_load_full_btn.set_no_show_all(True)
+    app.logs_load_full_btn.hide()
+    app.logs_load_full_btn.set_tooltip_text(
+        "Load the entire log file (may be slow for very large files)"
+    )
+    app.logs_load_full_btn.connect(
+        "clicked", lambda _b: _on_load_full_log_clicked(app)
+    )
+    viewer_box.pack_start(app.logs_load_full_btn, False, False, 0)
+
     # Track current file and read offset for chunked loading
     app._logs_current_path = None
     app._logs_read_offset = 0
     app._logs_file_size = 0
+    app._logs_full_mode = False
     app._logs_tail_timer = None
     app._logs_sync_debounce_id = None
 
@@ -571,6 +589,77 @@ def _on_logs_selection_changed(selection, app):
     button.set_sensitive(bool(pathlist))
 
 
+def _load_log_into_viewer(app):
+    """Load the current log file into the viewer, tail-first if it is huge."""
+    path = app._logs_current_path
+    if not path or not os.path.isfile(path):
+        return
+
+    size = app._logs_file_size
+    buf = app.logs_text.get_buffer()
+    app.logs_show_more_btn.hide()
+    app.logs_load_full_btn.hide()
+
+    if not getattr(app, "_logs_full_mode", False) and size > MAX_VIEWER_FULL_READ_BYTES:
+        # Tail-only mode: show the last MAX_VIEWER_FULL_READ_BYTES plus a header.
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(max(0, size - MAX_VIEWER_FULL_READ_BYTES))
+                fh.readline()  # discard the likely-partial first line
+                app._logs_read_offset = fh.tell()
+        except OSError as e:
+            log_msg(f"WARN: Could not seek log file: {e}")
+            return
+
+        header = (
+            f"[Log file is {_format_size(size)}; showing last "
+            f"{_format_size(MAX_VIEWER_FULL_READ_BYTES)}. "
+            f"Use 'Load Full Log' to read from the beginning.]\n"
+        )
+        buf.set_text(header)
+        _load_next_chunk(app)
+        while app.logs_show_more_btn.get_visible():
+            _load_next_chunk(app)
+        app.logs_load_full_btn.show()
+    else:
+        # Full-file mode (default for files under the threshold).
+        app._logs_read_offset = 0
+        _load_next_chunk(app)
+        while app.logs_show_more_btn.get_visible():
+            _load_next_chunk(app)
+
+
+def _on_load_full_log_clicked(app):
+    """Prompt and switch the viewer from tail mode to full-file mode."""
+    path = app._logs_current_path
+    if not path:
+        return
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return
+
+    if size > MAX_VIEWER_FULL_READ_BYTES:
+        dialog = Gtk.MessageDialog(
+            transient_for=app.get_active_window(),
+            flags=Gtk.DialogFlags.MODAL,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=(
+                f"The log file is {_format_size(size)}. Loading it fully "
+                f"may be slow or use a lot of memory. Continue?"
+            ),
+        )
+        response = dialog.run()
+        dialog.destroy()
+        if response != Gtk.ResponseType.YES:
+            return
+
+    app._logs_full_mode = True
+    app.logs_text.get_buffer().set_text("")
+    _load_log_into_viewer(app)
+
+
 def _on_selection_changed(selection, app):
     """Load the selected log file into the viewer."""
     # Stop any existing tail timer
@@ -583,6 +672,7 @@ def _on_selection_changed(selection, app):
         app.logs_text.get_buffer().set_text("")
         app._logs_current_path = None
         app.logs_show_more_btn.hide()
+        app.logs_load_full_btn.hide()
         app.logs_search.clear()
         return
 
@@ -600,6 +690,7 @@ def _on_selection_changed(selection, app):
 
     app._logs_current_path = path
     app._logs_read_offset = 0
+    app._logs_full_mode = False
     try:
         app._logs_file_size = os.path.getsize(path)
     except OSError:
@@ -611,9 +702,7 @@ def _on_selection_changed(selection, app):
     buf.set_text("")
 
     # Load all existing chunks so the viewer is at the current end
-    _load_next_chunk(app)
-    while app.logs_show_more_btn.get_visible():
-        _load_next_chunk(app)
+    _load_log_into_viewer(app)
 
     if query:
         app.logs_search.search()
@@ -634,12 +723,9 @@ def _on_logs_level_changed(combo, app):
     old_value = vadj.get_value()
     old_upper = vadj.get_upper()
 
-    # Re-read the whole file with the new filter.
-    app._logs_read_offset = 0
+    # Re-read the file with the new filter (respecting tail/full mode).
     app.logs_text.get_buffer().set_text("")
-    _load_next_chunk(app)
-    while app.logs_show_more_btn.get_visible():
-        _load_next_chunk(app)
+    _load_log_into_viewer(app)
 
     query = app.logs_search.entry.get_text()
     if query:

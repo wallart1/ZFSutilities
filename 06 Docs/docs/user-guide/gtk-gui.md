@@ -973,9 +973,9 @@ A sortable table with columns:
 | **Type**      | `backup`, `offsite`, `restore`, `prune` — the operation type             |
 | **Name**      | `gui` for GUI runs, or `profile-<name>` for scheduled/cron runs          |
 | **Status**    | `Done`, `Failed`, `Cancelled`, `Running`, `Warn`, or `Fatal`.            |
-| **Size**      | Log file size                                                 |
-| **Duration**  | Total elapsed time in `HH:MM:SS`             |
-| **Transfer**  | Total bytes transferred during ZFS send/receive steps   |
+| **Log Size**  | Size of the log file on disk                                           |
+| **Duration**  | Total elapsed time in `HH:MM:SS`                                       |
+| **Transfer**  | Total bytes transferred during ZFS send/receive steps                  |
 
 Click any column heading to change the sort order.
 
@@ -1001,6 +1001,12 @@ Right-click any row to open a context menu:
   Auto-scroll to the bottom occurs only if the scroll position was already near
   the bottom; if you have scrolled up to read earlier output, your position is
   preserved.
+
+- **Large logs** — log files larger than **1 MB** are opened tail-first. The
+  viewer shows a header indicating that the beginning is skipped and displays a
+  **Load Full Log** button. Clicking it prompts for confirmation, then reads the
+  entire file from the start. This prevents the GUI from hanging if a session
+  log grows very large.
 
 - **Pop Out** — a button in the search bar detaches the entire viewer (search
   controls + text view + Show More) into an independent window.

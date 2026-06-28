@@ -586,6 +586,29 @@ class TestSessionLogFile(unittest.TestCase):
         self.assertIsNotNone(entry)
         self.assertEqual(entry["status"], "Failed")
 
+    def test_maybe_truncate_resets_index(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_dir = profile_runner.SESSION_LOG_DIR
+            orig_log_dir = log_index.SESSION_LOG_DIR
+            profile_runner.SESSION_LOG_DIR = tmpdir
+            log_index.SESSION_LOG_DIR = tmpdir
+            try:
+                path = profile_runner._create_session_log_file("backup", "test")
+                index = log_index.LogIndex.load()
+                index.update(path)
+                index.save()
+
+                with patch("profile_runner.truncate_session_log", return_value=True) as mock_truncate:
+                    profile_runner._maybe_truncate_session_log(path)
+
+                mock_truncate.assert_called_once_with(path)
+                index2 = log_index.LogIndex.load()
+                self.assertIsNone(index2.get(path))
+            finally:
+                profile_runner.SESSION_LOG_DIR = orig_dir
+                log_index.SESSION_LOG_DIR = orig_log_dir
+
 
 class TestWriteRawLine(unittest.TestCase):
 

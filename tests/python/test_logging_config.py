@@ -18,6 +18,10 @@ from logging_config import (
     set_session_log,
     restore_session_log,
     session_log_context,
+    truncate_session_log,
+    MAX_SESSION_LOG_BYTES,
+    SESSION_LOG_TAIL_BYTES,
+    SESSION_LOG_START_BYTES,
     MSG_LEVELS,
     parse_msg_level,
     viewer_should_show,
@@ -201,3 +205,71 @@ class TestViewerShouldShow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTruncateSessionLog(unittest.TestCase):
+    """truncate_session_log caps log files while preserving start and tail."""
+
+    def test_small_file_not_truncated(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            path = f.name
+            f.write("small log\n")
+        try:
+            self.assertFalse(truncate_session_log(path, max_bytes=100))
+            with open(path) as fh:
+                self.assertEqual(fh.read(), "small log\n")
+        finally:
+            os.unlink(path)
+
+    def test_missing_file_returns_false(self):
+        self.assertFalse(truncate_session_log("/nonexistent/path.log"))
+
+    def test_truncation_keeps_start_and_tail(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            path = f.name
+            f.write("START\n")
+            for i in range(200):
+                f.write(f"middle line {i}\n")
+            f.write("TAIL\n")
+        try:
+            # cap below current size, keep tiny amounts for easy assertions
+            self.assertTrue(
+                truncate_session_log(
+                    path,
+                    max_bytes=100,
+                    tail_bytes=30,
+                    start_bytes=20,
+                )
+            )
+            with open(path) as fh:
+                content = fh.read()
+            self.assertIn("START", content)
+            self.assertIn("TAIL", content)
+            self.assertNotIn("middle line 50", content)
+            self.assertIn("bytes omitted by log size cap", content)
+        finally:
+            os.unlink(path)
+
+    def test_truncation_rounds_to_whole_lines(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            path = f.name
+            f.write("first partial")
+            for i in range(50):
+                f.write(f"line {i}\n")
+            f.write("last line\n")
+        try:
+            self.assertTrue(
+                truncate_session_log(
+                    path,
+                    max_bytes=50,
+                    tail_bytes=40,
+                    start_bytes=10,
+                )
+            )
+            with open(path) as fh:
+                content = fh.read()
+            # Start prefix should not include the cut-off "first partial"
+            self.assertNotIn("first partial", content)
+            self.assertIn("last line", content)
+        finally:
+            os.unlink(path)

@@ -19,7 +19,9 @@ from datetime import datetime
 from gi.repository import GLib
 
 from backup_config import SESSION_LOG_DIR
-from logging_config import log_msg, set_session_log, restore_session_log
+from logging_config import (
+    log_msg, set_session_log, restore_session_log, truncate_session_log,
+)
 from log_index import LogIndex
 from backup_history import _parse_human_size, build_entry, add_history_entry
 from command_builders import BashStep
@@ -27,6 +29,9 @@ from command_builders import BashStep
 RSYNC_LOG_DIR = "/var/log/zfsutilities"
 RSYNC_LOG_FILE = os.path.join(RSYNC_LOG_DIR, "rsync-backup.log")
 RSYNC_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB
+
+# How often to check the session log size while a runner is active.
+_SESSION_LOG_SIZE_CHECK_INTERVAL = 5  # seconds
 
 # Regex: \[\s*[\d.]+\s*[kKMGTP]?i?B/s\]
 # Purpose: Match pv progress output rate fields like [28.1MiB/s] or [ 148MiB/s].
@@ -87,6 +92,7 @@ class BackupRunner:
         self._is_finally = False
         self._total_bytes_received = 0
         self._in_lock_wait = False
+        self._last_log_size_check = 0.0
 
     def set_steps(self, steps):
         """Set the list of steps as BashStep objects."""
@@ -170,6 +176,25 @@ class BackupRunner:
         except Exception as e:
             log_msg(f"WARN: Could not update log index: {e}")
 
+    def _maybe_truncate_session_log(self):
+        """Truncate the session log if it has grown beyond the cap.
+
+        Called periodically while a runner is active.  Bash subprocesses share
+        the same log file, so this also caps output written by child shells.
+        After truncation the persistent index entry is removed so the Logs tab
+        rescans the smaller file.
+        """
+        if not self._session_log_file:
+            return
+        if truncate_session_log(self._session_log_file):
+            log_msg("WARN: Session log exceeded size cap and was truncated")
+            try:
+                index = LogIndex.load()
+                index.remove(self._session_log_file)
+                index.save()
+            except Exception as e:
+                log_msg(f"WARN: Could not reset log index after truncation: {e}")
+
     def _log(self, msg):
         """Log to the GUI panel and session log file."""
         log_msg(msg)
@@ -187,6 +212,7 @@ class BackupRunner:
         self._fatal_rc = None
         self._is_finally = False
         self._total_bytes_received = 0
+        self._last_log_size_check = time.time()
         if not self._session_log_file:
             self._create_session_log_file()
         if self._session_log_file and self._session_log_prev is None:
@@ -422,6 +448,10 @@ class BackupRunner:
     def _check_process(self):
         if self.process is None:
             return False
+        now = time.time()
+        if now - self._last_log_size_check >= _SESSION_LOG_SIZE_CHECK_INTERVAL:
+            self._last_log_size_check = now
+            self._maybe_truncate_session_log()
         rc = self.process.poll()
         if rc is not None:
             self._drain_remaining()
