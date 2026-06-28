@@ -224,6 +224,153 @@ class TestScrubQueue(unittest.TestCase):
         self.assertIn("tank", q.finished)
         self.assertNotIn("tank", q.active)
 
+    def test_tick_pending_paused_stays_pending(self):
+        """A pending pool that is still live-PAUSED must not be promoted to active."""
+        q = sm.ScrubQueue(target=1)
+        q.add_pending(["tank"])
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)}
+        with patch.object(sm, "start_scrub") as mock_start:
+            q.tick(states)
+        self.assertIn("tank", q.pending)
+        self.assertNotIn("tank", q.active)
+        mock_start.assert_not_called()
+
+
+class TestParseScrubStatusMixed(unittest.TestCase):
+
+    def test_scan_line_drops_stale_paused_when_scanning(self):
+        """A resumed scrub can briefly emit both 'in progress' and 'paused' lines."""
+        raw = (
+            "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
+            "    scrub paused since Sun May 10 00:24:03 2026\n"
+            "    scrub started on Sun May 10 00:00:00 2026\n"
+            "    1.23T scanned at 123M/s, 456G issued at 45M/s\n"
+            "    0B repaired, 12.34% done, 01:23:45 to go\n"
+        )
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.state, sm.ScrubState.SCANNING)
+        self.assertAlmostEqual(info.progress_percent, 12.34)
+        self.assertNotIn("scrub paused", info.scan_line)
+        self.assertIn("scrub in progress", info.scan_line)
+        self.assertIn("12.34% done", info.scan_line)
+
+
+class TestPoolActionsScrub(unittest.TestCase):
+
+    def test_on_scrub_resume_calls_resume_scrub_for_paused_pools(self):
+        """on_scrub_resume issues zpool scrub only for pools that were paused."""
+        from test_support import mock_gtk
+
+        with mock_gtk():
+            import pool_actions
+            import pools_page
+
+        app = MagicMock()
+        app.scrub_queue.paused = {"tank"}
+
+        with patch.object(
+            pool_actions, "get_selected_pool_names", return_value=["tank", "data"]
+        ):
+            with patch.object(pool_actions, "resume_scrub") as mock_resume:
+                with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
+                    with patch.object(
+                        pools_page, "schedule_scrub_refresh_burst"
+                    ) as mock_burst:
+                        pool_actions.on_scrub_resume(app)
+
+        mock_resume.assert_called_once_with("tank")
+        app.scrub_queue.resume_pools.assert_called_once_with(["tank", "data"])
+        mock_refresh.assert_called_once_with(app)
+        mock_burst.assert_called_once_with(app)
+
+    def test_on_scrub_start_schedules_refresh_burst(self):
+        """Start handler adds pools to queue and schedules a refresh burst."""
+        from test_support import mock_gtk
+
+        with mock_gtk():
+            import pool_actions
+            import pools_page
+
+        app = MagicMock()
+        with patch.object(
+            pool_actions, "get_selected_pool_names", return_value=["tank"]
+        ):
+            with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
+                with patch.object(
+                    pools_page, "schedule_scrub_refresh_burst"
+                ) as mock_burst:
+                    pool_actions.on_scrub_start(app)
+
+        app.scrub_queue.add_pending.assert_called_once_with(["tank"])
+        mock_refresh.assert_called_once_with(app)
+        mock_burst.assert_called_once_with(app)
+
+    def test_on_scrub_pause_schedules_refresh_burst(self):
+        """Pause handler pauses pools and schedules a refresh burst."""
+        from test_support import mock_gtk
+
+        with mock_gtk():
+            import pool_actions
+            import pools_page
+
+        app = MagicMock()
+        with patch.object(
+            pool_actions, "get_selected_pool_names", return_value=["tank"]
+        ):
+            with patch.object(pool_actions, "pause_scrub"):
+                with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
+                    with patch.object(
+                        pools_page, "schedule_scrub_refresh_burst"
+                    ) as mock_burst:
+                        pool_actions.on_scrub_pause(app)
+
+        app.scrub_queue.pause_pools.assert_called_once_with(["tank"])
+        mock_refresh.assert_called_once_with(app)
+        mock_burst.assert_called_once_with(app)
+
+    def test_on_scrub_stop_schedules_refresh_burst(self):
+        """Stop handler stops scrubs and schedules a refresh burst."""
+        from test_support import mock_gtk
+
+        with mock_gtk():
+            import pool_actions
+            import pools_page
+
+        app = MagicMock()
+        with patch.object(
+            pool_actions, "get_selected_pool_names", return_value=["tank"]
+        ):
+            with patch.object(pool_actions, "stop_scrub"):
+                with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
+                    with patch.object(
+                        pools_page, "schedule_scrub_refresh_burst"
+                    ) as mock_burst:
+                        pool_actions.on_scrub_stop(app)
+
+        app.scrub_queue.remove_pools.assert_called_once_with(["tank"])
+        mock_refresh.assert_called_once_with(app)
+        mock_burst.assert_called_once_with(app)
+
+
+class TestScheduleScrubRefreshBurst(unittest.TestCase):
+
+    def test_schedules_initial_timeout(self):
+        """schedule_scrub_refresh_burst schedules the first timeout."""
+        from test_support import mock_gtk
+
+        with mock_gtk():
+            import pools_page
+
+        app = MagicMock()
+        with patch.object(pools_page.GLib, "timeout_add_seconds") as mock_timeout:
+            pools_page.schedule_scrub_refresh_burst(app, count=3, interval=2)
+
+        self.assertEqual(mock_timeout.call_count, 1)
+        args, _kwargs = mock_timeout.call_args
+        self.assertEqual(args[0], 2)
+        self.assertTrue(callable(args[1]))
+        self.assertEqual(args[2], 3)
+
 
 class TestSystemScrubHelpers(unittest.TestCase):
 

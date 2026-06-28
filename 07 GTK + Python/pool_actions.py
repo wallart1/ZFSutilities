@@ -398,8 +398,9 @@ def on_scrub_start(app):
         log_msg("WARN: Select at least one pool to scrub")
         return
     app.scrub_queue.add_pending(pools)
-    from pools_page import refresh_scrub_table
+    from pools_page import refresh_scrub_table, schedule_scrub_refresh_burst
     refresh_scrub_table(app)
+    schedule_scrub_refresh_burst(app)
 
 
 def on_scrub_pause(app):
@@ -411,8 +412,9 @@ def on_scrub_pause(app):
     app.scrub_queue.pause_pools(pools)
     for name in pools:
         pause_scrub(name)
-    from pools_page import refresh_scrub_table
+    from pools_page import refresh_scrub_table, schedule_scrub_refresh_burst
     refresh_scrub_table(app)
+    schedule_scrub_refresh_burst(app)
 
 
 def on_scrub_resume(app):
@@ -421,9 +423,13 @@ def on_scrub_resume(app):
     if not pools:
         log_msg("WARN: Select at least one pool to resume")
         return
+    to_resume = [n for n in pools if n in app.scrub_queue.paused]
     app.scrub_queue.resume_pools(pools)
-    from pools_page import refresh_scrub_table
+    for name in to_resume:
+        resume_scrub(name)
+    from pools_page import refresh_scrub_table, schedule_scrub_refresh_burst
     refresh_scrub_table(app)
+    schedule_scrub_refresh_burst(app)
 
 
 def on_scrub_stop(app):
@@ -435,8 +441,9 @@ def on_scrub_stop(app):
     for name in pools:
         stop_scrub(name)
     app.scrub_queue.remove_pools(pools)
-    from pools_page import refresh_scrub_table
+    from pools_page import refresh_scrub_table, schedule_scrub_refresh_burst
     refresh_scrub_table(app)
+    schedule_scrub_refresh_burst(app)
 
 
 # ---------------------------------------------------------------------------

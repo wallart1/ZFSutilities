@@ -861,9 +861,12 @@ buttons to control them.
 | --------------------------- | ------------------------------------------------------------------------------------------------- |
 | **Start Scrub**             | Adds selected pools to the pending queue. The manager automatically starts them up to the target. |
 | **Pause Scrub**             | Pauses selected active or pending scrubs (`zpool scrub -p`)                                       |
-| **Resume Scrub**            | Moves selected paused pools back to the pending queue so the manager can restart them                          |
+| **Resume Scrub**            | Issues `zpool scrub` for selected paused pools and returns them to the pending queue so the manager can restart them |
 | **Stop Scrub**              | Stops selected scrubs (`zpool scrub -s`) and removes them from the queue                          |
 | **Add Profile to Schedule** | Saves selected pools and all settings as a scheduled profile                                      |
+
+After any scrub action, the status table refreshes in a short burst so state
+changes appear quickly even when the normal refresh interval is long.
 
 #### How the queue works
 

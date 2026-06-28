@@ -67,6 +67,8 @@ _SCAN_RESILVER_RE = re.compile(
     r"scan:\s*resilvered\s+\S+\s+in\s+(.+?)\s+with\s+(\d+)\s+errors?\s+on\s+(.+)$",
     re.MULTILINE,
 )
+# Stale paused summary that can appear as a continuation line after a resume.
+_STALE_PAUSED_RE = re.compile(r"^scrub\s+paused\b", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -99,11 +101,11 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
                 break
             scan_lines.append(stripped)
 
-    info.scan_line = " ".join(scan_lines)
-
-    # Determine state
+    # Determine state before finalizing scan_line so we can drop stale
+    # continuation lines that do not match the resolved state.
     if _SCAN_NONE_RE.search(raw):
         info.state = ScrubState.NONE
+        info.scan_line = " ".join(scan_lines)
         return info
 
     m = _SCAN_PROGRESS_RE.search(raw)
@@ -111,6 +113,11 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
         info.state = ScrubState.SCANNING
         info.last_scrub = m.group(1).strip()
         info.progress_percent = _extract_percent(raw)
+        scan_lines = [
+            line for line in scan_lines
+            if not _STALE_PAUSED_RE.match(line)
+        ]
+        info.scan_line = " ".join(scan_lines)
         return info
 
     m = _SCAN_PAUSED_RE.search(raw)
@@ -118,6 +125,7 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
         info.state = ScrubState.PAUSED
         info.last_scrub = m.group(1).strip()
         info.progress_percent = _extract_percent(raw)
+        info.scan_line = " ".join(scan_lines)
         return info
 
     m = _SCAN_FINISHED_RE.search(raw)
@@ -125,12 +133,14 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
         info.state = ScrubState.FINISHED
         info.errors = int(m.group(2))
         info.last_scrub = m.group(3).strip()
+        info.scan_line = " ".join(scan_lines)
         return info
 
     m = _SCAN_CANCELED_RE.search(raw)
     if m:
         info.state = ScrubState.CANCELED
         info.last_scrub = m.group(1).strip()
+        info.scan_line = " ".join(scan_lines)
         return info
 
     m = _SCAN_RESILVER_RE.search(raw)
@@ -139,9 +149,11 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
         info.state = ScrubState.FINISHED
         info.errors = int(m.group(2))
         info.last_scrub = m.group(3).strip()
+        info.scan_line = " ".join(scan_lines)
         return info
 
     info.state = ScrubState.UNKNOWN
+    info.scan_line = " ".join(scan_lines)
     return info
 
 
@@ -444,14 +456,22 @@ class ScrubQueue:
 
         if active_count < self.target:
             # Start pending first, then resume paused
-            while len(self.active) < self.target and self.pending:
-                candidate = sorted(self.pending)[0]
-                self.pending.discard(candidate)
+            for candidate in sorted(self.pending):
+                if len(self.active) >= self.target:
+                    break
                 info = states.get(candidate)
-                if info and info.state in (ScrubState.SCANNING, ScrubState.PAUSED):
+                if info is None:
+                    # Pool offline — leave in pending
+                    continue
+                if info.state == ScrubState.SCANNING:
                     # Already running externally
+                    self.pending.discard(candidate)
                     self.active.add(candidate)
-                elif info and info.state in (
+                elif info.state == ScrubState.PAUSED:
+                    # Resume was issued but not yet reflected in zpool status;
+                    # leave the pool pending and try again on the next tick.
+                    continue
+                elif info.state in (
                     ScrubState.NONE,
                     ScrubState.FINISHED,
                     ScrubState.CANCELED,
@@ -459,6 +479,7 @@ class ScrubQueue:
                 ):
                     # No live scrub (or only a prior finished/canceled scrub).
                     # Start a fresh scrub for this queued request.
+                    self.pending.discard(candidate)
                     if start_scrub(candidate):
                         self.active.add(candidate)
                     else:
@@ -466,7 +487,8 @@ class ScrubQueue:
                         self.pending.add(candidate)
                         break
                 else:
-                    self.active.add(candidate)
+                    # Unexpected state — leave in pending
+                    continue
 
             while len(self.active) < self.target and self.paused:
                 # Only auto-resume pools paused by target management; user-paused

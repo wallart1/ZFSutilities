@@ -12,7 +12,7 @@ import subprocess
 
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Pango
+from gi.repository import Gtk, Pango, GLib
 
 from logging_config import log_msg
 from feature_config import (
@@ -619,6 +619,23 @@ def refresh_scrub_table(app):
         )
     else:
         app.scrub_summary_label.set_text("Queue: idle")
+
+
+def schedule_scrub_refresh_burst(app, count=3, interval=2):
+    """Schedule *count* extra scrub refreshes every *interval* seconds.
+
+    Gives quick visual feedback after scrub actions, even when the user has
+    configured a long refresh interval.
+    """
+    def _burst_tick(remaining):
+        if remaining <= 0:
+            return False
+        if app.stack.get_visible_child_name() == "pools":
+            refresh_scrub_table(app)
+        GLib.timeout_add_seconds(interval, _burst_tick, remaining - 1)
+        return False
+
+    GLib.timeout_add_seconds(interval, _burst_tick, count)
 
 
 def _on_scrub_sim_changed(spin, app):

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.55.4
+
+### Added
+
+- **Scrub-table refresh burst** — after any manual scrub action in the Pools tab
+  (Start, Pause, Resume, Stop), the scrub status table refreshes several times
+  over the next few seconds. This gives immediate visual feedback even when the
+  normal refresh interval is long.
+
+### Fixed
+
+- **Resume Scrub issues `zpool scrub` immediately** — the Resume button now
+  calls `zpool scrub` for selected paused pools before returning them to the
+  pending queue, instead of relying solely on the queue tick to restart them.
+- **Pending pools no longer promoted while still live-paused** — after a resume,
+  `zpool status` can briefly continue to report a pool as paused. The scrub
+  manager now waits until the scrub shows as scanning before moving the pool
+  from pending to active.
+- **Stale "scrub paused" continuation lines filtered** — `parse_scrub_status()`
+  drops stale `scrub paused` lines that can appear alongside `scrub in progress`
+  right after a resumed scrub starts.
+
+### Tests
+
+- Expanded `tests/python/test_scrub_manager.py` to 31 tests covering the
+  refresh-burst scheduling, resume-only-paused logic, stale-paused scan-line
+  filtering, and the pending-paused queue tick behavior.
+
 ## 0.55.3
 
 ### Changed
