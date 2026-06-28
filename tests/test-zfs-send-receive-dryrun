@@ -585,6 +585,71 @@ test_handle_commsnap_rc16() {
 }
 
 # ---------------------------------------------------------------------------
+# Test handle_commsnap_rc rc=16 autoproceed=Y logs a warning
+# ---------------------------------------------------------------------------
+
+test_handle_commsnap_rc16_autoproceed_warns() {
+    test_start "handle_commsnap_rc rc=16 autoproceed=Y logs WARN"
+
+    commsnap="@common"
+    autoproceed='Y'
+    doincrementals="Y"
+    dointermediates="Y"
+    dryrun='Y'
+    fs="pool/src/data"
+    destfs="pool/dest"
+    restorefs="/data"
+    _mock_zfs_snap_lists["pool/dest/data"]=\
+"pool/dest/data@snap3\npool/dest/data@snap2\npool/dest/data@common"
+    clear_log
+    capture_stderr
+    handle_commsnap_rc 16 "$fs" "pool/dest/data"
+    local rc=$?
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$rc" -eq 0 && "$receive_F_option" == "F" && \
+          "$log" == *"WARN: autoproceed=Y"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc receive_F_option='$receive_F_option' log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test handle_commsnap_rc rc=16 skips in non-interactive mode
+# ---------------------------------------------------------------------------
+
+test_handle_commsnap_rc16_noninteractive_skips() {
+    test_start "handle_commsnap_rc rc=16 skips dataset when stdin is not a TTY"
+
+    commsnap="@common"
+    autoproceed='N'
+    doincrementals="Y"
+    dointermediates="Y"
+    dryrun='N'
+    fs="pool/src/data"
+    destfs="pool/dest"
+    restorefs="/data"
+    _mock_zfs_snap_lists["pool/dest/data"]=\
+"pool/dest/data@snap3\npool/dest/data@snap2\npool/dest/data@common"
+    clear_log
+    capture_stderr
+    handle_commsnap_rc 16 "$fs" "pool/dest/data" </dev/null
+    local rc=$?
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$rc" -eq 1 && "$log" == *"WARN: Non-interactive mode"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Test clone dataset message is logged at VERB level
 # ---------------------------------------------------------------------------
 
@@ -777,6 +842,8 @@ test_dryrun_size_estimate_info_not_warn
 test_full_copy_resumable_verb
 test_clone_dataset_message_verb
 test_handle_commsnap_rc16
+test_handle_commsnap_rc16_autoproceed_warns
+test_handle_commsnap_rc16_noninteractive_skips
 test_trailer_written_without_inherit
 test_trailer_suppressed_with_inherit
 test_dailybackup_trailer_written_without_inherit

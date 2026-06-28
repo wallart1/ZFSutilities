@@ -799,6 +799,14 @@ arguments. Callers set the variables below, then invoke `send-receive`.
 | 4    | No common snapshot found (full copy declined) |
 | 8    | Fatal error                                   |
 
+When the destination is newer than the common snapshot (`zfscommsnap` returns
+16), `send-receive` normally prompts to roll back. With `$autoproceed='Y'` the
+rollback is performed automatically and logged as a warning. In
+non-interactive mode (stdin is not a TTY) the dataset is skipped with a warning
+instead of waiting for input. The same rules apply when a resume token cannot
+be validated and the user would otherwise be asked whether to abort the token
+and retry.
+
 `$sourcefs`, `$destfs`, `$doincrementals`, and `$nextsnap` are saved on entry
 and restored on exit so callers do not need to save/restore them between
 steps.

@@ -159,6 +159,44 @@ class TestHistoryRetention(unittest.TestCase):
             self.assertEqual(config["history_retention_days"], 14)
 
 
+class TestSessionLogCap(unittest.TestCase):
+    """session_log_max_bytes helpers read/write the log cap."""
+
+    def test_get_session_log_max_bytes_default(self):
+        config = {}
+        self.assertEqual(
+            config_core.get_session_log_max_bytes(config),
+            config_core.DEFAULT_SESSION_LOG_MAX_BYTES,
+        )
+
+    def test_get_session_log_max_bytes_custom(self):
+        config = {"session_log_max_bytes": 5 * 1024 * 1024}
+        self.assertEqual(
+            config_core.get_session_log_max_bytes(config),
+            5 * 1024 * 1024,
+        )
+
+    def test_get_session_log_max_bytes_rejects_invalid(self):
+        config = {"session_log_max_bytes": -1}
+        self.assertEqual(
+            config_core.get_session_log_max_bytes(config),
+            config_core.DEFAULT_SESSION_LOG_MAX_BYTES,
+        )
+
+    def test_save_session_log_max_bytes(self):
+        with temp_config_dir():
+            config = {}
+            config_core.save_session_log_max_bytes(config, 20 * 1024 * 1024)
+            self.assertEqual(config["session_log_max_bytes"], 20 * 1024 * 1024)
+
+    def test_save_session_log_max_bytes_rejects_invalid(self):
+        config = {}
+        with self.assertRaises(ValueError):
+            config_core.save_session_log_max_bytes(config, 0)
+        with self.assertRaises(ValueError):
+            config_core.save_session_log_max_bytes(config, -100)
+
+
 class TestDashboardConfig(unittest.TestCase):
     """Dashboard config helpers return and save defaults."""
 

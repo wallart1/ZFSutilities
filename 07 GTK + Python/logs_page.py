@@ -43,6 +43,11 @@ COL_PATH = 7
 # are shown tail-only to avoid hanging the GUI on a multi-gigabyte session log.
 MAX_VIEWER_FULL_READ_BYTES = 1024 * 1024  # 1 MB
 
+# Maximum characters the live log viewer will keep in its TextBuffer while
+# tailing a running log.  Older text is dropped to prevent unbounded memory
+# growth when a subprocess logs continuously.
+MAX_VIEWER_BUFFER_CHARS = 2 * 1024 * 1024  # 2 MB
+
 # Regex: ^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(\w+)_(.+)\.log$
 # Purpose: Parse session log filenames into (date, time, type, name).
 # Supports both new format (type first) and legacy format (gui first).
@@ -512,6 +517,18 @@ def _tail_log_file(app):
             filtered = _filter_log_text(text, app.logs_viewer_level)
             if filtered:
                 buf = app.logs_text.get_buffer()
+
+                # Prevent the live tail buffer from growing without bound.
+                current_chars = buf.get_char_count()
+                new_chars = len(filtered)
+                if current_chars + new_chars > MAX_VIEWER_BUFFER_CHARS:
+                    drop_target = (current_chars + new_chars) // 2
+                    drop_end = buf.get_iter_at_offset(drop_target)
+                    buf.delete(buf.get_start_iter(), drop_end)
+                    log_msg(
+                        "WARN: Log viewer buffer truncated to prevent "
+                        "excessive memory use"
+                    )
 
                 # Only auto-scroll if the user is already near the bottom
                 vadj = app.logs_text_scroll.get_vadjustment()

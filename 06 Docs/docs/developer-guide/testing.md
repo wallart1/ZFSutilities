@@ -56,7 +56,7 @@ The `./run-tests` harness detects whether a name starts with `test_` (Python) or
 | `test-zfsdelallsnaps` | 4 | Return-code behavior of `zfsdelallsnaps`: all-success returns `0`, any `delsnap` failure returns `1`, empty list returns `0` |
 | `test-zfslockmanager` | 33 | Lock acquire / release, same-dataset conflicts, hierarchy conflicts, stale detection, concurrent access, path encoding. **Requires root.** |
 | `test-zfsretain` | 10 | Retention policy phases: offsite monthly dedup, same-day dedup, bucket pruning with empty-snapshot preference, empty logging, retain=0 |
-| `test-zfs-send-receive-dryrun` | 20 | Dry-run logging, space-check logic, resume-token decisions, `handle_commsnap_rc` paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior |
+| `test-zfs-send-receive-dryrun` | 22 | Dry-run logging, space-check logic, resume-token decisions, `handle_commsnap_rc` paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling |
 | `test-zfssnapbuild` | 9 | Snapshot name generation, bucket logic (daily / weekly / monthly / offsite), snapfile reuse |
 | `test-logging` | 4 | `log_msg` writes all messages to the session log file and ignores `msg_level` |
 | `test-module-dependencies` | 1 | Static analysis: every root-level bash module call to a known module function is satisfied by a local definition, a sourced module, or `bashinit` |
@@ -141,7 +141,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_action_dispatch` | 18 | Page button specs, action dispatch table, and Logs/Datasets/Offsite button wiring |
 | `test_app_context` | 5 | `AppContext` dataclass fields, `is_new_install`, and default repository |
 | `test_backup_config` | 32 | Config load/save, defaults, pools, retention, UI state, snapshot name generation, log pruning, message level |
-| `test_config_core` | 18 | Core config load/save, UI state, log/history retention, dashboard config, pruning |
+| `test_config_core` | 23 | Core config load/save, UI state, log/history retention, session-log size cap, dashboard config, pruning |
 | `test_checkagainst_page` | 35 | Checkagainst tab page construction, Comment column, dirty tracking, cell editing, Save/Revert/Add/Remove handlers |
 | `test_feature_config` | 23 | Backup/offsite/restore config, retention, snapshot names, scrub manager, pools/checkagainst, prune label |
 | `test_backup_history` | 36 | History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting |
@@ -155,7 +155,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_docs_viewer` | 1 | Standalone documentation viewer launcher (`docs_viewer.main()`) |
 | `test_gui_infrastructure` | 95 | GTK mock setup, `gi.repository` patching, module imports without a display server, docs viewer HTTP server, zoom/navigation/state persistence, anchor scrolling, tree expansion helpers, TreeSearch freeze/thaw, clear-button status-bar reset |
 | `test_legacy_retention` | 7 | Legacy `zfsretainpol-*` file parsing, malformed-line handling, JSON config import |
-| `test_logging_config` | 20 | `log_msg` sink/file behavior, session log environment helpers, and viewer level helpers |
+| `test_logging_config` | 26 | `log_msg` sink/file behavior, session log environment helpers, viewer level helpers, and configurable session-log size cap |
 | `test_main` | 41 | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, X11 window visibility for stuck-instance detection |
 | `test_page_runners` | 6 | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation |
 | `test_profile_manager` | 15 | Profile CRUD, name validation, duplicate detection, override string generation |
@@ -171,7 +171,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_datasets_tree` | 6 | Datasets tree lazy loading: row expansion, full-name building, exact-dataset snapshot filtering |
 | `test_zfsinfo` | 10 | Pool/dataset/snapshot parsing, summary counting, CLI output formatting |
 | `test_dataset_actions` | 6 | Dataset destruction routed through `BackupRunner`: `BashStep` building, runner start/callback, missing/busy runner, cancel handling |
-| `test_logs_page` | 33 | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, Load Full Log confirmation, and column-header label tooltips |
+| `test_logs_page` | 35 | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, Load Full Log confirmation, column-header label tooltips, and live-viewer buffer cap |
 | `test_zfs_repository` | 25 | `ZfsRepository` pool/dataset/snapshot/hold parsing and write-method success/failure |
 | `test_zfsutilities_gui` | 17 | Window behavior: peer-version check, dry-run toggle, dataset-runner creation, stdin forwarding, info-panel level filtering, Restore tab destination refresh |
 

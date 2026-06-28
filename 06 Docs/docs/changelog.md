@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.55.5
+
+### Added
+
+- **Configurable session-log size cap** — `config_core.py` adds a
+  `session_log_max_bytes` setting with a default of **10 MB**. The cap is read
+  from `/root/.config/zfsutilities.json`; use
+  `config_core.get_session_log_max_bytes()` and
+  `config_core.save_session_log_max_bytes()` to read or change it.
+- **Live log viewer buffer cap** — while tailing a running log, the Logs tab
+  viewer now keeps only the most recent **2 MB** of characters in memory and
+  drops older content, preventing unbounded RAM growth on very long-running
+  jobs.
+
+### Changed
+
+- **Session-log truncation defaults reduced** — `logging_config.py` now uses a
+  10 MB maximum, 1 MB tail, and 64 KB start by default (down from the previous
+  hard-coded 1 GB / 100 MB / 64 KB). The values are still configurable via
+  `session_log_max_bytes`.
+- **`zfs-send-receive` non-interactive handling** — when stdin is not a TTY,
+  rollback prompts (common snapshot exists but destination is newer) and
+  resume-token validation errors now skip the dataset with a `WARN:` message
+  instead of hanging indefinitely.
+
+### Fixed
+
+- **`autoproceed='Y'` now covers rollback and resume-token prompts** — in
+  `zfs-send-receive`, a destination rollback required by a common snapshot is
+  performed automatically when `$autoproceed='Y'`, and resume-token validation
+  failures abort the token and retry without prompting.
+
+### Tests
+
+- Expanded `tests/python/test_config_core.py` to 23 tests covering
+  `session_log_max_bytes` read/write helpers.
+- Expanded `tests/python/test_logging_config.py` to 26 tests covering the
+  configurable cap and default values.
+- Expanded `tests/python/test_logs_page.py` to 35 tests covering the live
+  viewer buffer cap.
+- Expanded `tests/test-zfs-send-receive-dryrun` to 22 tests covering rc=16
+  autoproceed rollback and non-interactive skip behavior.
+
 ## 0.55.4
 
 ### Added

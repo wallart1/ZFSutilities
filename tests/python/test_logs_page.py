@@ -359,6 +359,57 @@ class TestLoadLogIntoViewer(unittest.TestCase):
             self.assertIn("Load Full Log", header)
 
 
+class TestTailLogFileBufferCap(unittest.TestCase):
+    """_tail_log_file drops old buffer content when it grows too large."""
+
+    def _make_app(self, path, file_size, read_offset, char_count=None):
+        app = MagicMock()
+        app._logs_current_path = path
+        app._logs_file_size = file_size
+        app._logs_read_offset = read_offset
+        app.logs_viewer_level = "DEBUG"
+        app._logs_tail_timer = None
+        app._log_index = None
+        buf = MagicMock()
+        if char_count is None:
+            char_count = lp.MAX_VIEWER_BUFFER_CHARS
+        buf.get_char_count.return_value = char_count
+        app.logs_text.get_buffer.return_value = buf
+        vadj = MagicMock()
+        vadj.get_value.return_value = 0
+        vadj.get_upper.return_value = 100
+        vadj.get_page_size.return_value = 20
+        app.logs_text_scroll.get_vadjustment.return_value = vadj
+        return app, buf
+
+    def test_truncates_buffer_when_it_exceeds_cap(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "growing.log")
+            with open(path, "w") as fh:
+                fh.write("old text\n")
+                fh.write("new tail line\n")
+            size = os.path.getsize(path)
+            # _logs_file_size must be smaller than the actual file size so the
+            # tailer sees new bytes to read.
+            app, buf = self._make_app(path, size - 1, 0)
+            result = lp._tail_log_file(app)
+            self.assertTrue(result)
+            buf.delete.assert_called_once()
+            inserted = "".join(call[0][1] for call in buf.insert.call_args_list)
+            self.assertIn("new tail line", inserted)
+
+    def test_does_not_truncates_buffer_when_below_cap(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "small.log")
+            with open(path, "w") as fh:
+                fh.write("new tail line\n")
+            size = os.path.getsize(path)
+            app, buf = self._make_app(path, size - 1, 0, char_count=lp.MAX_VIEWER_BUFFER_CHARS // 2)
+            result = lp._tail_log_file(app)
+            self.assertTrue(result)
+            buf.delete.assert_not_called()
+
+
 class TestLoadFullLogClicked(unittest.TestCase):
     """_on_load_full_log_clicked switches tail mode to full-file mode."""
 

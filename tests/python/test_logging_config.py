@@ -4,7 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
@@ -19,9 +19,9 @@ from logging_config import (
     restore_session_log,
     session_log_context,
     truncate_session_log,
-    MAX_SESSION_LOG_BYTES,
-    SESSION_LOG_TAIL_BYTES,
-    SESSION_LOG_START_BYTES,
+    DEFAULT_MAX_SESSION_LOG_BYTES,
+    DEFAULT_SESSION_LOG_TAIL_BYTES,
+    DEFAULT_SESSION_LOG_START_BYTES,
     MSG_LEVELS,
     parse_msg_level,
     viewer_should_show,
@@ -209,6 +209,34 @@ if __name__ == "__main__":
 
 class TestTruncateSessionLog(unittest.TestCase):
     """truncate_session_log caps log files while preserving start and tail."""
+
+    def test_default_cap_is_10mb(self):
+        self.assertEqual(DEFAULT_MAX_SESSION_LOG_BYTES, 10 * 1024 * 1024)
+        self.assertEqual(DEFAULT_SESSION_LOG_TAIL_BYTES, 1 * 1024 * 1024)
+        self.assertEqual(DEFAULT_SESSION_LOG_START_BYTES, 64 * 1024)
+
+    def test_cap_is_read_from_config(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            path = f.name
+            f.write("START\n")
+            for i in range(200):
+                f.write(f"middle line {i}\n")
+            f.write("TAIL\n")
+        try:
+            custom_max = 500
+            custom_tail = 200
+            custom_start = 100
+            with patch("config_core.load_config", return_value={
+                "session_log_max_bytes": custom_max,
+            }):
+                self.assertTrue(truncate_session_log(path))
+            with open(path) as fh:
+                content = fh.read()
+            self.assertIn("START", content)
+            self.assertIn("TAIL", content)
+            self.assertIn("bytes omitted by log size cap", content)
+        finally:
+            os.unlink(path)
 
     def test_small_file_not_truncated(self):
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:

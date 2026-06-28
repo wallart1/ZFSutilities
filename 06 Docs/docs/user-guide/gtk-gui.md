@@ -996,7 +996,9 @@ Right-click any row to open a context menu:
   automatically loads all existing content and shows new lines as they arrive.
   Auto-scroll to the bottom occurs only if the scroll position was already near
   the bottom; if you have scrolled up to read earlier output, your position is
-  preserved.
+  preserved. To prevent unbounded memory growth on very long-running jobs, the
+  live viewer keeps only the most recent **2 MB** of characters in the text
+  buffer and drops older content.
 
 - **Large logs** — log files larger than **1 MB** are opened tail-first. The
   viewer shows a header indicating that the beginning is skipped and displays a

@@ -70,12 +70,16 @@ export ZFSUTILITIES_LOG_FILE="/var/log/zfsutilities/sessions/manual.log"
 ### Session log size cap
 
 To prevent a runaway subprocess from filling disk, the Python runners enforce a
-size cap on the session log file they own. When a log grows beyond
-**1 GB**, it is rewritten as:
+configurable size cap on the session log file they own. The maximum is stored in
+`/root/.config/zfsutilities.json` under `session_log_max_bytes` and defaults to
+**10 MB**. When a log grows beyond the configured maximum, it is rewritten as:
 
 - the first **64 KB** (opening context),
 - a marker line indicating how many bytes were omitted,
-- the last **100 MB** (recent tail).
+- the last **1 MB** (recent tail).
+
+Use `config_core.get_session_log_max_bytes()` and
+`config_core.save_session_log_max_bytes()` to read or change the cap.
 
 `backup_runner.py` checks the file size every 5 seconds via its process polling
 timer; `profile_runner.py` checks every 5 seconds while reading subprocess
@@ -83,6 +87,10 @@ output and once more after the profile finishes. Because inherited bash
 subprocesses write to the same file, the cap also bounds their output. After
 truncation, the persistent index entry for that log is removed so the Logs tab
 rescans the smaller file.
+
+The Logs tab's live viewer also limits the in-memory text buffer to the most
+recent **2 MB** of characters while tailing a running log, dropping older
+content to prevent unbounded RAM growth.
 
 ### Persistent log index
 

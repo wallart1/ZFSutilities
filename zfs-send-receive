@@ -206,25 +206,46 @@ function send-receive {
             log_msg "INFO: A common snapshot between $fs and $destfs_restorefs was found.\n\tHowever, the destination snapshot is not the most recent one.\n\tThis will roll back snapshot(s) and changes on the destination since the common snapshot, bypassing any holds.\n\tThe common snap is: $commsnap.\n\tApproximate transfer size: $_sz.\n\tThe snapshots to be rolled back are:"
             for snap in "${snaparray_d[@]}"; do echo -e "\t\t$snap"; done
             local readprompt="Roll back and transfer? (y=proceed, n=skip this dataset): "
-            while true; do
-                read -p $'\t'"$readprompt" response
-                [[ ${response,,} = 'y' ]] && break
-                [[ ${response,,} = 'n' ]] && { log_msg "INFO: Skipping $fs (rollback declined)."; return 1; }
-                echo "Please enter 'y' or 'n'."
-            done
-            if [[ $dryrun != 'N' ]]; then
-                [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: Would release holds and rollback $destfs_restorefs to $commsnap"
+            local do_rollback='N'
+            if [[ $autoproceed = 'Y' ]]; then
+                log_msg "WARN: autoproceed=Y — rolling back $destfs_restorefs to $commsnap and proceeding with transfer"
+                do_rollback='Y'
+            elif ! [[ -t 0 ]]; then
+                log_msg "WARN: Non-interactive mode — skipping $fs (rollback required for $destfs_restorefs)"
+                return 1
             else
-                local _save_autoproceed="$autoproceed"
-                autoproceed='Y'
-                for snap in "${snaparray_d[@]}"; do delallholds "$snap"; done
-                autoproceed="$_save_autoproceed"
-                if ! zfs rollback -r "$destfs_restorefs$commsnap"; then
-                    log_msg "FATAL: Unable to roll back to snapshot $destfs_restorefs$commsnap."
-                    return 2
-                fi
+                local response
+                local eof_count=0
+                while true; do
+                    read -p $'\t'"$readprompt" response
+                    if [[ -z "$response" ]]; then
+                        ((eof_count++))
+                        if [[ $eof_count -ge 3 ]]; then
+                            log_msg "WARN: No interactive input — skipping $fs (rollback required)"
+                            return 1
+                        fi
+                        continue
+                    fi
+                    [[ ${response,,} = 'y' ]] && { do_rollback='Y'; break; }
+                    [[ ${response,,} = 'n' ]] && { log_msg "INFO: Skipping $fs (rollback declined)."; return 1; }
+                    echo "Please enter 'y' or 'n'."
+                done
             fi
-            receive_F_option='F'
+            if [[ $do_rollback = 'Y' ]]; then
+                if [[ $dryrun != 'N' ]]; then
+                    log_msg "INFO: Dry-run: Would release holds and rollback $destfs_restorefs to $commsnap"
+                else
+                    local _save_autoproceed="$autoproceed"
+                    autoproceed='Y'
+                    for snap in "${snaparray_d[@]}"; do delallholds "$snap"; done
+                    autoproceed="$_save_autoproceed"
+                    if ! zfs rollback -r "$destfs_restorefs$commsnap"; then
+                        log_msg "FATAL: Unable to roll back to snapshot $destfs_restorefs$commsnap."
+                        return 2
+                    fi
+                fi
+                receive_F_option='F'
+            fi
         elif [[ $rc = 32 ]]; then true
         else
             log_msg "FATAL: Unhandled return code=$rc from zfscommsnap"
@@ -338,14 +359,26 @@ function send-receive {
                 else
                     log_msg "WARN: Resume token validation failed with unexpected error:\n\t$resumedata"
                     if [[ $autoproceed = 'Y' ]]; then
-                        log_msg "INFO: Aborting resume token and retrying..."
+                        log_msg "WARN: autoproceed=Y — aborting resume token and retrying..."
                         abort_resume_token "$destfs$restorefs"
                         continue
+                    elif ! [[ -t 0 ]]; then
+                        log_msg "WARN: Non-interactive mode — skipping $fs (resume token error for $destfs$restorefs)"
+                        zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue
                     else
                         log_msg "INFO: Options:\n\t[A] Abort resume token and retry (may trigger full copy)\n\t[S] Skip this dataset\n\t[Q] Quit"
                         local choice
+                        local eof_count=0
                         while true; do
                             read -p "Choice [A/S/Q]: " choice
+                            if [[ -z "$choice" ]]; then
+                                ((eof_count++))
+                                if [[ $eof_count -ge 3 ]]; then
+                                    log_msg "WARN: No interactive input — skipping $fs (resume token error)"
+                                    zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue 2
+                                fi
+                                continue
+                            fi
                             [[ "${choice^^}" = 'A' ]] && { log_msg "INFO: Aborting resume token..."; abort_resume_token "$destfs$restorefs"; continue 2; }
                             [[ "${choice^^}" = 'S' ]] && { log_msg "INFO: Skipping $fs."; zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue 2; }
                             [[ "${choice^^}" = 'Q' ]] && { zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8; }

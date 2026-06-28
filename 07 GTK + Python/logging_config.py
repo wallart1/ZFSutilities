@@ -11,13 +11,14 @@ from datetime import datetime
 MSG_LEVELS = ("DEBUG", "VERB", "INFO", "WARN", "FATAL")
 DEFAULT_MSG_LEVEL = "INFO"
 
-# Session log size cap.  When a log exceeds MAX_SESSION_LOG_BYTES it is
-# rewritten as START context + marker + TAIL context.  These values bound the
-# disk footprint of a runaway backup/offsite job while preserving enough recent
-# output to be useful for debugging.
-MAX_SESSION_LOG_BYTES = 1024 * 1024 * 1024          # 1 GB
-SESSION_LOG_TAIL_BYTES = 100 * 1024 * 1024          # 100 MB
-SESSION_LOG_START_BYTES = 64 * 1024                 # 64 KB
+# Session log size cap defaults.  When a log exceeds the configured maximum
+# it is rewritten as START context + marker + TAIL context.  These values
+# bound the disk footprint of a runaway backup/offsite job while preserving
+# enough recent output to be useful for debugging.  The maximum is read from
+# the saved configuration; these constants are the fallback defaults.
+DEFAULT_MAX_SESSION_LOG_BYTES = 10 * 1024 * 1024    # 10 MB
+DEFAULT_SESSION_LOG_TAIL_BYTES = 1 * 1024 * 1024    # 1 MB
+DEFAULT_SESSION_LOG_START_BYTES = 64 * 1024         # 64 KB
 
 
 _MSG_PRIORITY = {
@@ -77,10 +78,34 @@ def restore_session_log(previous):
     _restore_env("ZFSUTILITIES_LOG_INHERIT", prev_inherit)
 
 
+def _get_session_log_cap():
+    """Return the effective session-log cap (max, tail, start) bytes.
+
+    Reads the cap from the saved configuration when available, otherwise
+    returns the module defaults.
+    """
+    try:
+        from config_core import (
+            load_config,
+            get_session_log_max_bytes,
+            DEFAULT_SESSION_LOG_TAIL_BYTES,
+            DEFAULT_SESSION_LOG_START_BYTES,
+        )
+        config = load_config()
+        max_bytes = get_session_log_max_bytes(config)
+    except Exception:
+        max_bytes = DEFAULT_MAX_SESSION_LOG_BYTES
+    return (
+        max_bytes,
+        DEFAULT_SESSION_LOG_TAIL_BYTES,
+        DEFAULT_SESSION_LOG_START_BYTES,
+    )
+
+
 def truncate_session_log(path,
-                         max_bytes=MAX_SESSION_LOG_BYTES,
-                         tail_bytes=SESSION_LOG_TAIL_BYTES,
-                         start_bytes=SESSION_LOG_START_BYTES):
+                         max_bytes=None,
+                         tail_bytes=None,
+                         start_bytes=None):
     """Truncate a session log to keep opening context plus recent tail.
 
     If the file at *path* is larger than *max_bytes*, rewrite it as:
@@ -88,9 +113,21 @@ def truncate_session_log(path,
       - a marker line showing how many bytes were omitted,
       - the last *tail_bytes* (rounded up by discarding the partial first line).
 
+    When *max_bytes* is None, the value is read from the saved configuration
+    (defaulting to 10 MB).
+
     Returns True if truncation occurred, False otherwise (including when the
     file is missing or already within the cap).
     """
+    if max_bytes is None or tail_bytes is None or start_bytes is None:
+        cfg_max, cfg_tail, cfg_start = _get_session_log_cap()
+        if max_bytes is None:
+            max_bytes = cfg_max
+        if tail_bytes is None:
+            tail_bytes = cfg_tail
+        if start_bytes is None:
+            start_bytes = cfg_start
+
     try:
         size = os.path.getsize(path)
     except OSError:

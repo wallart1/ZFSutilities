@@ -172,6 +172,9 @@ def save_ui_state(config, state_dict):
 
 DEFAULT_LOG_RETENTION_DAYS = 30
 DEFAULT_HISTORY_RETENTION_DAYS = 90
+DEFAULT_SESSION_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+DEFAULT_SESSION_LOG_TAIL_BYTES = 1 * 1024 * 1024   # 1 MB
+DEFAULT_SESSION_LOG_START_BYTES = 64 * 1024        # 64 KB
 SESSION_LOG_DIR = "/var/log/zfsutilities/sessions"
 
 
@@ -196,6 +199,22 @@ def save_history_retention_days(config, days):
     if not isinstance(days, int) or days < 0:
         raise ValueError(f"invalid history_retention_days: {days!r}")
     config["history_retention_days"] = days
+    save_config(config)
+
+
+def get_session_log_max_bytes(config):
+    """Return the configured session-log size cap in bytes."""
+    value = config.get("session_log_max_bytes")
+    if isinstance(value, int) and value > 0:
+        return value
+    return DEFAULT_SESSION_LOG_MAX_BYTES
+
+
+def save_session_log_max_bytes(config, max_bytes):
+    """Persist the session-log size cap in bytes."""
+    if not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise ValueError(f"invalid session_log_max_bytes: {max_bytes!r}")
+    config["session_log_max_bytes"] = max_bytes
     save_config(config)
 
 
