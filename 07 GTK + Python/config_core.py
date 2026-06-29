@@ -145,6 +145,7 @@ UI_STATE_DEFAULTS = {
         "theme": "default",
     },
     "treeview_columns": {},
+    "paned_positions": {},
 }
 
 

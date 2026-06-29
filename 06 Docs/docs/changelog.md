@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.57.0
+
+### Added
+
+- **Weekday ordinal cron scheduling** — the Schedule tab and `cron_manager.py`
+  now support ordinal qualifiers in the Day-of-Week field: `6#1` (first
+  Saturday), `6#2` through `6#5`, `6#L` (last Saturday), lists such as
+  `6#1,3`, and ranges such as `6#1,3-5`. `interpret_cron()` and
+  `next_run_times()` parse and describe these expressions; `generate_cron_line()`
+  strips the ordinal suffix when writing `/etc/cron.d/zfsutilities` because
+  standard cron does not understand it.
+- **Runtime weekday-ordinal guard** — `profile_runner.py` applies the ordinal
+  check at profile execution time so scheduled jobs skip days that do not match
+  the requested weekday occurrence.
+- **Persistent paned divider positions** — `gui_helpers.UIStateManager` now
+  saves and restores the divider position of registered `Gtk.Paned` widgets.
+  The Pools tab uses this to persist the split between the pool/scrub table
+  and the scrub state table.
+- **Concurrency and collision risks document** — new
+  `developer-guide/concurrency-collisions.md` documents what the lock manager
+  protects today, the shared resources each job type touches, and unaccounted
+  collision scenarios (prune vs backup/restore, concurrent prunes, dataset
+  destroys, snapshot-name collisions, config/state-file races, scrub management
+  races, headless `profile_runner.py` concurrency, and GUI tab isolation gaps).
+
+### Fixed
+
+- **Docs viewer WebKit callback signature** — `docs_viewer.py`
+  `_on_theme_captured()` now accepts the optional third user-data argument
+  expected by newer WebKit2/GTK versions.
+
+### Tests
+
+- Added `TestUIStateManagerPanedPositions` in
+  `tests/python/test_gui_infrastructure.py` covering paned restore, ignored
+  zero positions, and save collection.
+- Expanded `tests/python/test_cron_manager.py` to cover weekday ordinal
+  parsing, formatting, interpretation, and next-run computation.
+- Expanded `tests/python/test_profile_runner.py` to cover the runtime ordinal
+  guard and cron-line stripping behavior.
+- Expanded `tests/python/test_pools_page.py` to cover scrub panel expansion
+  and paned wiring.
+- Fixed GTK mock isolation in `tests/python/test_gui_infrastructure.py` so
+  `bold_label` and `add_scrolled_text_view` tests pass when the module is run
+  directly.
+
+### Documentation
+
+- Updated `user-guide/gtk-gui.md` with the weekday ordinal syntax, examples,
+  and the note that standard cron receives a plain weekday while the runtime
+  guard handles the ordinal.
+- Updated `commands-and-modules/python-modules.md` to document
+  `_parse_weekday`, `_match_weekday_ordinal`, `_format_ordinal_specs`, and
+  `_check_weekday_ordinal`.
+- Updated `developer-guide/testing.md` test counts for `test_cron_manager`,
+  `test_gui_infrastructure`, and `test_profile_runner`.
+
 ## 0.56.1
 
 ### Added

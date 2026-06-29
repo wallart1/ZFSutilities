@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import ExitStack
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from test_support import temp_config_dir, mock_subprocess, capture_logs
@@ -963,6 +964,49 @@ class TestMainHistoryEntry(unittest.TestCase):
         mock_add.assert_called_once()
         entry = mock_add.call_args[0][0]
         self.assertNotIn("log_file", entry)
+
+
+class TestCheckWeekdayOrdinal(unittest.TestCase):
+
+    def _patch_now(self, year, month, day):
+        dt = datetime(year, month, day)
+        mock_datetime = MagicMock()
+        mock_datetime.now.return_value = dt
+        return patch.object(profile_runner, "datetime", mock_datetime)
+
+    def test_plain_weekday_always_matches(self):
+        with self._patch_now(2025, 1, 18):
+            self.assertTrue(profile_runner._check_weekday_ordinal("6"))
+
+    def test_first_saturday_on_first_saturday(self):
+        # 2025-01-04 is the first Saturday of January 2025.
+        with self._patch_now(2025, 1, 4):
+            self.assertTrue(profile_runner._check_weekday_ordinal("6#1"))
+
+    def test_first_saturday_on_second_saturday(self):
+        # 2025-01-11 is the second Saturday.
+        with self._patch_now(2025, 1, 11):
+            self.assertFalse(profile_runner._check_weekday_ordinal("6#1"))
+
+    def test_last_saturday_on_last_saturday(self):
+        # 2025-01-25 is the last Saturday of January 2025.
+        with self._patch_now(2025, 1, 25):
+            self.assertTrue(profile_runner._check_weekday_ordinal("6#L"))
+
+    def test_last_saturday_on_non_last_saturday(self):
+        # 2025-01-18 is not the last Saturday.
+        with self._patch_now(2025, 1, 18):
+            self.assertFalse(profile_runner._check_weekday_ordinal("6#L"))
+
+    def test_list_of_ordinals(self):
+        # 2025-01-11 is the second Saturday.
+        with self._patch_now(2025, 1, 11):
+            self.assertTrue(profile_runner._check_weekday_ordinal("6#2,4"))
+            self.assertFalse(profile_runner._check_weekday_ordinal("6#1,3"))
+
+    def test_invalid_ordinal_returns_false(self):
+        with self._patch_now(2025, 1, 4):
+            self.assertFalse(profile_runner._check_weekday_ordinal("*#1"))
 
 
 if __name__ == "__main__":

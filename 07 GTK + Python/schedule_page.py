@@ -138,7 +138,8 @@ def create_schedule_page(app):
         ("month", "Month (1-12 or *)",
          "1-12, *, lists, ranges, steps", 3),
         ("weekday", "Day of Week (0-7 or *)",
-         "0=Sun, 1=Mon, ..., 7=Sun; lists, ranges, steps", 4),
+         "0=Sun, 1=Mon, ..., 7=Sun; lists, ranges, steps; "
+         "ordinals 6#1 (first Sat) through 6#5, 6#L (last)", 4),
     ]
     app.schedule_cron_entries = {}
     for key, label_text, tooltip, row in cron_fields:

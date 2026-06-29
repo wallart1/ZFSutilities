@@ -317,7 +317,7 @@ def create_pools_page(app):
     scrub_scrolled.set_min_content_height(150)
     scrub_scrolled.add(app.scrub_view)
     setup_row_scroll(scrub_scrolled, app.scrub_view)
-    bottom_box.pack_start(scrub_scrolled, False, False, 0)
+    bottom_box.pack_start(scrub_scrolled, True, True, 0)
 
     # Initialize scrub queue
     app.scrub_queue = ScrubQueue(target=int(scrub_cfg.get("simultaneous", 1)))
@@ -325,7 +325,8 @@ def create_pools_page(app):
     # --- Paned divider ---
     paned = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
     paned.pack1(top_box, True, False)
-    paned.pack2(bottom_box, False, False)
+    paned.pack2(bottom_box, True, False)
+    app._ui_state.bind_paned(paned, "pools_paned")
     box.pack_start(paned, True, True, 0)
 
     return box

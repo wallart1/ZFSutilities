@@ -385,7 +385,7 @@ class DocsViewerWindow(Gtk.Window):
         self._webview.run_javascript(js, None, self._on_theme_captured, None)
         return True
 
-    def _on_theme_captured(self, _webview, result):
+    def _on_theme_captured(self, _webview, result, _user_data=None):
         """Store the scheme reported by the page and persist it if it changed."""
         scheme = "default"
         try:

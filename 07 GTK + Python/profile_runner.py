@@ -43,6 +43,7 @@ from offsite_runner import detect_offsite_pool, build_offsite_step_command
 from restore_runner import compute_restore_params, build_restore_command
 from profile_manager import load_profile
 from scrub_manager import ScrubQueue, get_all_pool_scrub_states, ScrubState, start_scrub, pause_scrub, resume_scrub, stop_scrub
+from cron_manager import _parse_weekday, _match_weekday_ordinal
 
 # Regex: received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds
 # Purpose: Match the final summary line emitted by `zfs receive` on stderr,
@@ -74,6 +75,27 @@ def _parse_bytes_from_log(path):
     except OSError:
         pass
     return total
+
+
+def _check_weekday_ordinal(weekday_field):
+    """Return True if today matches the weekday field, including any #n/#L suffix.
+
+    Standard cron ignores weekday ordinals, so profile_runner.py applies this
+    guard at runtime. A plain weekday value (no '#') always matches.
+    """
+    if "#" not in weekday_field:
+        return True
+    try:
+        base, specs = _parse_weekday(weekday_field)
+    except ValueError:
+        return False
+    today = datetime.now()
+    wd = today.weekday() + 1  # cron: 0=Sun, 1=Mon; python: 0=Mon
+    if today.weekday() == 6:
+        wd = 0
+    if int(base) != wd:
+        return False
+    return _match_weekday_ordinal(today, wd, specs)
 
 
 def _is_dataset_encrypted(path):
@@ -560,6 +582,15 @@ def main():
     ctx = session_log_context(_session_log_file) if _session_log_file else nullcontext()
     with ctx:
         log_msg(f"INFO: Running profile: {profile_name} (type={tab_type})")
+
+        weekday_field = profile.get("cron", {}).get("weekday", "*")
+        if not _check_weekday_ordinal(weekday_field):
+            log_msg(
+                f"INFO: Skipping profile {profile_name}: today does not match "
+                f"weekday ordinal '{weekday_field}'"
+            )
+            _write_session_trailer(rc=0)
+            sys.exit(0)
 
         runners = {
             "backup": run_backup_profile,

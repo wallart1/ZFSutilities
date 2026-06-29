@@ -57,6 +57,10 @@ def generate_cron_line(profile, runner_path):
     day = cron.get("day", "*")
     month = cron.get("month", "*")
     weekday = cron.get("weekday", "*")
+    # Standard cron does not understand weekday ordinals (e.g. 6#1). Strip
+    # the ordinal suffix; profile_runner.py applies the guard at runtime.
+    if "#" in weekday:
+        weekday = weekday.split("#", 1)[0].strip()
     name = profile["profile_name"]
     quoted_runner = shlex_quote(runner_path)
     return (
@@ -85,6 +89,102 @@ _MONTHS = {
     5: "May", 6: "June", 7: "July", 8: "August",
     9: "September", 10: "October", 11: "November", 12: "December",
 }
+
+
+_ORDINAL_NAMES = {
+    1: "first", 2: "second", 3: "third", 4: "fourth",
+    5: "fifth", 6: "sixth",
+}
+
+
+def _parse_weekday(value):
+    """Parse a weekday field that may include an ordinal suffix.
+
+    Returns (base, ordinal_specs) where base is the weekday part before '#'
+    and ordinal_specs is a list of specs. Each spec is either an integer
+    tuple (start, end) or the string 'L' for "last".
+
+    Examples:
+        "6"      -> ("6", [])
+        "6#1"    -> ("6", [(1, 1)])
+        "6#1,3"  -> ("6", [(1, 1), (3, 3)])
+        "6#3-5"  -> ("6", [(3, 5)])
+        "6#L"    -> ("6", ['L'])
+        "6#1,L"  -> ("6", [(1, 1), 'L'])
+
+    Raises ValueError for invalid syntax.
+    """
+    if "#" not in value:
+        return value, []
+    base, suffix = value.split("#", 1)
+    base = base.strip()
+    if not base.isdigit() or not 0 <= int(base) <= 7:
+        raise ValueError(
+            f"Weekday ordinal requires a single weekday digit before '#': {value}"
+        )
+
+    specs = []
+    for part in suffix.split(","):
+        part = part.strip()
+        if not part:
+            raise ValueError(f"Empty ordinal in weekday expression: {value}")
+        if part == "L":
+            specs.append("L")
+        elif "-" in part:
+            start, end = part.split("-", 1)
+            start = int(start.strip())
+            end = int(end.strip())
+            if start > end or start < 1:
+                raise ValueError(f"Invalid ordinal range in weekday expression: {value}")
+            specs.append((start, end))
+        elif part.lstrip("-").isdigit():
+            n = int(part)
+            if n < 1:
+                raise ValueError(f"Invalid ordinal in weekday expression: {value}")
+            specs.append((n, n))
+        else:
+            raise ValueError(f"Invalid ordinal '{part}' in weekday expression: {value}")
+    return base, specs
+
+
+def _match_weekday_ordinal(date, weekday, specs):
+    """Return True if date satisfies any of the ordinal specs for weekday.
+
+    weekday is the cron-style weekday (0=Sunday, 6=Saturday).
+    specs is the list returned by _parse_weekday.
+    """
+    pos = ((date.day - 1) // 7) + 1
+    next_week = date + timedelta(days=7)
+    is_last = next_week.month != date.month or next_week.year != date.year
+
+    for spec in specs:
+        if spec == "L":
+            if is_last:
+                return True
+        else:
+            start, end = spec
+            if start <= pos <= end:
+                return True
+    return False
+
+
+def _format_ordinal_specs(specs):
+    """Convert ordinal specs into a human-readable phrase."""
+    def fmt(spec):
+        if spec == "L":
+            return "last"
+        start, end = spec
+        if start == end:
+            return _ORDINAL_NAMES.get(start, f"{start}th")
+        return f"{_ORDINAL_NAMES.get(start, f'{start}th')} through " \
+               f"{_ORDINAL_NAMES.get(end, f'{end}th')}"
+
+    parts = [fmt(spec) for spec in specs]
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return f"{parts[0]} and {parts[1]}"
+    return ", ".join(parts[:-1]) + ", and " + parts[-1]
 
 
 def interpret_cron(minute, hour, day, month, weekday):
@@ -215,6 +315,22 @@ def _interpret_day_of_week(value):
     """Interpret day-of-week field."""
     if value == "*":
         return ""
+    if "#" in value:
+        try:
+            base, specs = _parse_weekday(value)
+        except ValueError:
+            return f"on weekdays {value}"
+        name = _WEEKDAYS.get(int(base), base)
+        ordinal_phrase = _format_ordinal_specs(specs)
+        single_spec = (
+            len(specs) == 1 and (
+                (isinstance(specs[0], tuple) and specs[0][0] == specs[0][1]) or
+                specs[0] == "L"
+            )
+        )
+        if single_spec:
+            return f"on the {ordinal_phrase} {name} of the month"
+        return f"on the {ordinal_phrase} {name}s of the month"
     if value.isdigit():
         name = _WEEKDAYS.get(int(value), value)
         return f"on {name}s"
@@ -301,7 +417,11 @@ def next_run_times(minute, hour, day, month, weekday, count=3):
     hour_set = parse_field(hour, 0, 23)
     day_set = parse_field(day, 1, 31)
     month_set = parse_field(month, 1, 12)
-    weekday_set = parse_field(weekday, 0, 7)
+    try:
+        weekday_base, ordinal_specs = _parse_weekday(weekday)
+    except ValueError:
+        return []
+    weekday_set = parse_field(weekday_base, 0, 7)
 
     # Safety: don't search more than 4 years ahead
     max_search = current + timedelta(days=1461)
@@ -317,7 +437,11 @@ def next_run_times(minute, hour, day, month, weekday, count=3):
         wd_match = weekday_set is None or wd in weekday_set
 
         if m_match and h_match and d_match and mo_match and wd_match:
-            matches.append(current)
+            if ordinal_specs:
+                if _match_weekday_ordinal(current, wd, ordinal_specs):
+                    matches.append(current)
+            else:
+                matches.append(current)
 
         current += timedelta(minutes=1)
 

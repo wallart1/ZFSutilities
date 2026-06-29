@@ -149,18 +149,18 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_backup_runner` | 24 | Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and session-log reuse |
 | `test_command_builders` | 30 | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
 | `test_config_migrations` | 28 | JSON config migration chain (v1 → v15), idempotency, missing-migration handling |
-| `test_cron_manager` | 17 | Cron expression formatting, next-run calculation, profile scheduling, cron file generation |
+| `test_cron_manager` | 34 | Cron expression formatting, next-run calculation, profile scheduling, cron file generation, weekday ordinal support |
 | `test_dashboard_page` | 117 | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, ZFS version display |
 | `test_docs_integrity` | 11 | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability |
 | `test_docs_viewer` | 1 | Standalone documentation viewer launcher (`docs_viewer.main()`) |
-| `test_gui_infrastructure` | 95 | GTK mock setup, `gi.repository` patching, module imports without a display server, docs viewer HTTP server, zoom/navigation/state persistence, anchor scrolling, tree expansion helpers, TreeSearch freeze/thaw, clear-button status-bar reset |
+| `test_gui_infrastructure` | 88 | GTK mock setup, `gi.repository` patching, module imports without a display server, docs viewer HTTP server, zoom/navigation/state persistence, anchor scrolling, tree expansion helpers, TreeSearch freeze/thaw, clear-button status-bar reset, paned position persistence |
 | `test_legacy_retention` | 7 | Legacy `zfsretainpol-*` file parsing, malformed-line handling, JSON config import |
 | `test_log_index` | 29 | Persistent session-log index: scan/update, trailer and level extraction, large-file tail scanning, and last-trailer-wins behavior |
 | `test_logging_config` | 26 | `log_msg` sink/file behavior, session log environment helpers, viewer level helpers, and configurable session-log size cap |
 | `test_main` | 41 | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, X11 window visibility for stuck-instance detection |
 | `test_page_runners` | 6 | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation |
 | `test_profile_manager` | 15 | Profile CRUD, name validation, duplicate detection, override string generation |
-| `test_profile_runner` | 45 | Step building, pool selection, rsync/ZFS command generation, error handling, dataset encryption detection, dry-run profile execution |
+| `test_profile_runner` | 56 | Step building, pool selection, rsync/ZFS command generation, error handling, dataset encryption detection, dry-run profile execution, weekday ordinal runtime guard |
 | `test_restore_runner` | 11 | Restore destination computation and zfs-send-receive parameter mapping |
 | `test_retention_page` | 22 | Retention tab: prune-label persistence, dirty detection, multi-pool Save/Revert, profile round-trip, fresh-install cleanup, prune-list filtering |
 | `test_runner_factory` | 4 | `RunnerFactory` creates `BackupRunner` instances with shared callbacks |

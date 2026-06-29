@@ -304,7 +304,7 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
             win._webview.run_javascript_finish.return_value.get_js_value.return_value.to_string.return_value = '"slate"'
             win._config = None  # avoid writing config while testing parsing
 
-            win._on_theme_captured(win._webview, MagicMock())
+            win._on_theme_captured(win._webview, MagicMock(), None)
 
             self.assertEqual(win._theme, "slate")
 
@@ -437,7 +437,9 @@ class TestGtkMocking(unittest.TestCase):
 
     def test_bold_label_applies_markup_and_alignment(self):
         with mock_gtk():
+            import importlib
             import gui_helpers
+            importlib.reload(gui_helpers)
             label = gui_helpers.bold_label("Snapshot")
             self.assertIs(label, gui_helpers.Gtk.Label.return_value)
             label.set_markup.assert_called_once_with("<b>Snapshot</b>")
@@ -1180,6 +1182,102 @@ class TestTreeviewColumnHelpers(unittest.TestCase):
             self.assertEqual(elv.columns, columns)
 
 
+class TestUIStateManagerPanedPositions(unittest.TestCase):
+
+    @patch("backup_config.save_ui_state")
+    def test_bind_paned_restores_saved_position(self, mock_save):
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {"paned_positions": {"test_paned": 250}}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            paned = MagicMock()
+            orig_idle_add = gui_helpers.GLib.idle_add
+            gui_helpers.GLib.idle_add = lambda fn, *a, **k: fn(*a, **k) or False
+            try:
+                mgr.bind_paned(paned, "test_paned")
+            finally:
+                gui_helpers.GLib.idle_add = orig_idle_add
+
+            paned.set_position.assert_called_once_with(250)
+            self.assertIn("test_paned", mgr._paneds)
+            self.assertIs(mgr._paneds["test_paned"], paned)
+
+    @patch("backup_config.save_ui_state")
+    def test_bind_paned_does_not_set_position_when_unsaved(self, mock_save):
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            paned = MagicMock()
+            orig_idle_add = gui_helpers.GLib.idle_add
+            gui_helpers.GLib.idle_add = lambda fn, *a, **k: fn(*a, **k) or False
+            try:
+                mgr.bind_paned(paned, "test_paned")
+            finally:
+                gui_helpers.GLib.idle_add = orig_idle_add
+
+            paned.set_position.assert_not_called()
+
+    @patch("backup_config.save_ui_state")
+    def test_do_save_collects_paned_positions(self, mock_save):
+        with mock_gtk():
+            import gui_helpers
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            paned = MagicMock()
+            paned.get_position.return_value = 300
+            mgr._paneds["test_paned"] = paned
+
+            mgr._do_save()
+
+            args = mock_save.call_args[0][1]
+            self.assertIn("paned_positions", args)
+            self.assertEqual(args["paned_positions"]["test_paned"], 300)
+
+    @patch("backup_config.save_ui_state")
+    def test_do_save_ignores_zero_paned_positions(self, mock_save):
+        with mock_gtk():
+            import gui_helpers
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            paned = MagicMock()
+            paned.get_position.return_value = 0
+            mgr._paneds["test_paned"] = paned
+
+            mgr._do_save()
+
+            args = mock_save.call_args[0][1]
+            self.assertNotIn("paned_positions", args)
+
+
 class _FakeTreeStore:
     """Minimal TreeStore for testing tree helper functions."""
     def __init__(self, rows):
@@ -1278,7 +1376,9 @@ class TestGuiHelpersMisc(unittest.TestCase):
 
     def test_add_scrolled_text_view(self):
         with mock_gtk():
+            import importlib
             import gui_helpers
+            importlib.reload(gui_helpers)
             parent = MagicMock()
             sw = gui_helpers.add_scrolled_text_view(parent, text="hello")
             self.assertIs(sw, gui_helpers.Gtk.ScrolledWindow.return_value)

@@ -362,15 +362,18 @@ as the GUI runners but writes its own session logs and history entries.
 | `run_restore_profile(profile)` | Build and run a restore profile |
 | `run_retention_profile(profile)` | Run retention/cleanup for configured pools |
 | `run_scrub_profile(profile)` | Queue and poll scrubs for configured pools |
+| `_check_weekday_ordinal(weekday_field)` | Runtime guard for weekday ordinal expressions |
 | `main()` | CLI entry point for cron execution |
 
 **Internal flow:**
 
 1. Load the requested profile from disk.
-2. Generate snapshot names and build `BashStep` lists using the same helpers
+2. If the profile's cron weekday field contains an ordinal expression
+   (`#1`–`#5` or `#L`), verify today matches it; otherwise skip the run.
+3. Generate snapshot names and build `BashStep` lists using the same helpers
    as the GUI pages.
-3. Create a session log and run each step.
-4. Write the trailer and append a history entry.
+4. Create a session log and run each step.
+5. Write the trailer and append a history entry.
 
 **Called modules / imported helpers:**
 
@@ -893,6 +896,9 @@ profiles.
 | `interpret_cron(expression)` | Human-readable description of a cron expression |
 | `next_run_times(expression, count)` | Next `count` datetimes matching the expression |
 | `format_next_runs(expression)` | Formatted next-run preview |
+| `_parse_weekday(value)` | Parse weekday field with optional `#n`/`#L` ordinal suffix |
+| `_match_weekday_ordinal(date, weekday, specs)` | Check whether `date` satisfies ordinal specs |
+| `_format_ordinal_specs(specs)` | Human-readable phrase for ordinal specs |
 
 **Called modules / imported helpers:**
 

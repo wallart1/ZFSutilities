@@ -53,6 +53,7 @@ nav:
     - Coding Policies: 'developer-guide/coding-policies.md'
     - Testing: 'developer-guide/testing.md'
     - Lock Manager: 'developer-guide/lock-manager.md'
+    - Concurrency Collisions: 'developer-guide/concurrency-collisions.md'
     - Node Configuration: 'developer-guide/two-node-config.md'
     - Global Variables: 'developer-guide/global-variables.md'
     - Data Structures: 'developer-guide/data-structures.md'

@@ -135,5 +135,92 @@ class TestFormatNextRuns(unittest.TestCase):
         self.assertIn("No upcoming runs", text)
 
 
+class TestWeekdayOrdinals(unittest.TestCase):
+
+    def test_parse_weekday_no_ordinal(self):
+        self.assertEqual(cron_manager._parse_weekday("6"), ("6", []))
+
+    def test_parse_weekday_single_ordinal(self):
+        self.assertEqual(cron_manager._parse_weekday("6#1"), ("6", [(1, 1)]))
+
+    def test_parse_weekday_list_and_range(self):
+        self.assertEqual(
+            cron_manager._parse_weekday("6#1,3-5,L"),
+            ("6", [(1, 1), (3, 5), "L"]),
+        )
+
+    def test_parse_weekday_invalid_base(self):
+        with self.assertRaises(ValueError):
+            cron_manager._parse_weekday("*#1")
+
+    def test_format_ordinal_specs_single(self):
+        self.assertEqual(cron_manager._format_ordinal_specs([(1, 1)]), "first")
+
+    def test_format_ordinal_specs_range(self):
+        self.assertEqual(
+            cron_manager._format_ordinal_specs([(3, 5)]), "third through fifth"
+        )
+
+    def test_format_ordinal_specs_list_with_last(self):
+        self.assertEqual(
+            cron_manager._format_ordinal_specs([(1, 1), (3, 3), "L"]),
+            "first, third, and last",
+        )
+
+    def test_interpret_first_saturday(self):
+        result = cron_manager.interpret_cron("0", "2", "*", "*", "6#1")
+        self.assertIn("first Saturday", result)
+        self.assertIn("of the month", result)
+
+    def test_interpret_last_saturday(self):
+        result = cron_manager.interpret_cron("0", "2", "*", "*", "6#L")
+        self.assertIn("last Saturday", result)
+
+    def test_interpret_first_and_third_saturdays(self):
+        result = cron_manager.interpret_cron("0", "2", "*", "*", "6#1,3")
+        self.assertIn("first and third Saturdays", result)
+
+    def test_interpret_first_through_fifth_saturdays(self):
+        result = cron_manager.interpret_cron("0", "2", "*", "*", "6#1,3-5")
+        self.assertIn("first and third through fifth Saturdays", result)
+
+    def test_generate_cron_line_strips_ordinal(self):
+        profile = {
+            "profile_name": "monthly",
+            "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "6#1"},
+        }
+        line = cron_manager.generate_cron_line(profile, "/run.py")
+        self.assertIn("0 2 * * 6", line)
+        self.assertNotIn("#1", line)
+
+    def test_next_run_first_saturday(self):
+        times = cron_manager.next_run_times("0", "2", "*", "*", "6#1", count=3)
+        self.assertEqual(len(times), 3)
+        for t in times:
+            self.assertEqual(t.weekday(), 5)  # Saturday
+            self.assertLessEqual(t.day, 7)
+
+    def test_next_run_last_saturday(self):
+        times = cron_manager.next_run_times("0", "2", "*", "*", "6#L", count=3)
+        self.assertEqual(len(times), 3)
+        for t in times:
+            self.assertEqual(t.weekday(), 5)
+            # Adding 7 days should cross into the next month
+            from datetime import timedelta
+            self.assertNotEqual((t + timedelta(days=7)).month, t.month)
+
+    def test_next_run_fifth_saturday_may_skip_months(self):
+        # Find three fifth Saturdays; there may be gaps of several months.
+        times = cron_manager.next_run_times("0", "2", "*", "*", "6#5", count=3)
+        self.assertEqual(len(times), 3)
+        for t in times:
+            self.assertEqual(t.weekday(), 5)
+            self.assertGreaterEqual(t.day, 29)
+
+    def test_next_run_invalid_ordinal_returns_empty(self):
+        times = cron_manager.next_run_times("0", "2", "*", "*", "*#1", count=1)
+        self.assertEqual(len(times), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

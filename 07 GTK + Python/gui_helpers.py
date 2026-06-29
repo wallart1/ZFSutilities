@@ -1760,6 +1760,7 @@ class UIStateManager:
         self.config = config
         self._timer = None
         self._treeviews = {}
+        self._paneds = {}
 
     def restore(self):
         """Restore window state from config."""
@@ -1794,6 +1795,25 @@ class UIStateManager:
     def _apply_vpaned(self, position):
         self.window.vpaned.set_position(position)
         return False
+
+    def bind_paned(self, paned, state_key):
+        """Register a Gtk.Paned divider position for persistence.
+
+        Restore a saved position after the paned is realized and save changes
+        with the same debounce used for window geometry.
+        """
+        from backup_config import get_ui_state
+        ui_state = get_ui_state(self.config)
+        saved_pos = ui_state.get("paned_positions", {}).get(state_key)
+
+        def _apply():
+            if saved_pos is not None:
+                paned.set_position(saved_pos)
+            paned.connect("notify::position", lambda *_a: self._schedule_save())
+            self._paneds[state_key] = paned
+            return False
+
+        GLib.idle_add(_apply)
 
     def bind_treeview(self, treeview, state_key):
         """Register a TreeView for persistent column widths.
@@ -1891,6 +1911,14 @@ class UIStateManager:
         vpaned_pos = self.window.vpaned.get_position()
         if vpaned_pos > 0:
             mw["vpaned_position"] = vpaned_pos
+
+        paned_positions = {}
+        for key, paned in self._paneds.items():
+            pos = paned.get_position()
+            if pos > 0:
+                paned_positions[key] = pos
+        if paned_positions:
+            state["paned_positions"] = paned_positions
 
         lw = state["log_window"]
         popped = (

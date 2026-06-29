@@ -669,7 +669,9 @@ after recalling.
   - **Hour** — `0-23`, `*`, e.g. `0,6,12`, `9-17`, `*/2`
   - **Day of Month** — `1-31`, `*`, e.g. `1,15`, `10-20`
   - **Month** — `1-12`, `*`, e.g. `1,4,7,10`, `3-5`
-  - **Day of Week** — `0-7` (`0` and `7` are Sunday), `*`, e.g. `1-5`, `*/2`
+  - **Day of Week** — `0-7` (`0` and `7` are Sunday), `*`, e.g. `1-5`, `*/2`,
+    plus ordinal qualifiers `6#1` (first Saturday) through `6#5`, `6#L` (last
+    Saturday), lists `6#1,3`, and ranges `6#1,3-5`
 - **Interpretation** — live prose explanation of the cron expression
   (e.g. *"At 02:00 every day"* or *"Every 15 minutes on weekdays"*)
 - **Examples** — next three datetimes that match the expression
@@ -691,10 +693,28 @@ field:
 
 These patterns can be combined within a field (e.g. `1,9-17/2,30`).
 
+**Weekday ordinals:** The Day-of-Week field supports ordinal qualifiers using
+`#` to schedule a specific occurrence of a weekday within the month. Standard
+Vixie cron does not understand this syntax, so the GUI writes a plain weekday
+to `/etc/cron.d/zfsutilities` and `profile_runner.py` applies the ordinal
+check at runtime.
+
+| Example | Meaning |
+| ------- | ------- |
+| `6#1`   | First Saturday of the month |
+| `6#2`   | Second Saturday of the month |
+| `6#3`   | Third Saturday of the month |
+| `6#4`   | Fourth Saturday of the month |
+| `6#5`   | Fifth Saturday of the month (may not occur) |
+| `6#L`   | Last Saturday of the month |
+| `6#1,3` | First and third Saturdays |
+| `6#1,3-5` | First, third, fourth, and fifth Saturdays |
+| `6#1,L` | First and last Saturdays |
+
 **Not supported:** textual weekday or month names (`MON`, `JAN`), cron
-special strings (`@daily`, `@hourly`), `L`/`W`/`#` qualifiers, or question
-marks. For a full cron syntax reference, see
-[crontab.guru](https://crontab.guru/).
+special strings (`@daily`, `@hourly`), `L`/`W` qualifiers for non-weekday
+fields, `W`/`?` qualifiers, or question marks. For a full cron syntax
+reference, see [crontab.guru](https://crontab.guru/).
 
 ### Actions
 

@@ -3,7 +3,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, ANY
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
@@ -358,6 +358,40 @@ class TestScrubTogglesUsePoolNames(unittest.TestCase):
             self.assertEqual(args[0], ["tank", "archive"])
             self.assertFalse(args[1])  # weekly
             self.assertTrue(args[2])  # monthly
+
+
+class TestPoolsPageLayout(unittest.TestCase):
+    """create_pools_page() wires widgets and UI state correctly."""
+
+    def _make_app(self):
+        app = MagicMock()
+        app.config = {}
+        app._ui_state = MagicMock()
+        app.ctx.zfs_repository.list_pools_full.return_value = []
+        return app
+
+    def test_paned_is_bound_to_ui_state(self):
+        pp = _import_pools_page()
+        with patch.object(pp, "refresh_pools_page", MagicMock()):
+            with patch.object(pp, "ScrubQueue", MagicMock()):
+                app = self._make_app()
+                pp.create_pools_page(app)
+
+        app._ui_state.bind_paned.assert_called_once()
+        args = app._ui_state.bind_paned.call_args[0]
+        self.assertEqual(args[1], "pools_paned")
+
+    def test_paned_bottom_pane_is_resizable(self):
+        pp = _import_pools_page()
+        paned_mock = MagicMock()
+        with mock_gtk():
+            with patch.object(pp.Gtk, "Paned", return_value=paned_mock):
+                with patch.object(pp, "refresh_pools_page", MagicMock()):
+                    with patch.object(pp, "ScrubQueue", MagicMock()):
+                        app = self._make_app()
+                        pp.create_pools_page(app)
+
+        paned_mock.pack2.assert_called_with(ANY, True, False)
 
 
 class TestPoolsDirtyState(unittest.TestCase):
