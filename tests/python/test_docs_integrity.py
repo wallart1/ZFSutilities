@@ -7,8 +7,8 @@ import unittest
 
 from test_support import (
     check_pyyaml, collect_nav_files, extract_markdown_headers,
-    extract_markdown_links, list_all_md_files, resolve_relative_link,
-    DOCS_DIR, MKDOCS_YML, REPO_ROOT
+    extract_markdown_links, extract_python_module_names, list_all_md_files,
+    resolve_relative_link, DOCS_DIR, MKDOCS_YML, PYTHON_SRC, REPO_ROOT
 )
 
 
@@ -172,6 +172,27 @@ class TestDocsDirectoryStructure(unittest.TestCase):
                 empty.append(os.path.relpath(root, DOCS_DIR))
         if empty:
             self.fail(f"Empty directories under docs/: {empty}")
+
+
+class TestPythonModulesReference(unittest.TestCase):
+
+    def test_all_documented_python_modules_exist(self):
+        """Every module listed in python-modules.md must exist in 07 GTK + Python/."""
+        ref_path = os.path.join(
+            DOCS_DIR, "commands-and-modules", "python-modules.md"
+        )
+        self.assertTrue(os.path.isfile(ref_path))
+        documented = extract_python_module_names(ref_path)
+        self.assertGreater(len(documented), 0)
+        missing = []
+        for module in documented:
+            module_path = os.path.join(PYTHON_SRC, module)
+            if not os.path.isfile(module_path):
+                missing.append(module)
+        if missing:
+            self.fail(
+                f"Documented Python modules missing from {PYTHON_SRC}: {missing}"
+            )
 
 
 if __name__ == "__main__":

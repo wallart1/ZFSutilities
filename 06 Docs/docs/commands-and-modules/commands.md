@@ -15,23 +15,33 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 ## Jump to
 
 - [`backup-installed-programs`](#backup-installed-programs)
+- [`check-prerequisites`](#check-prerequisites)
 - [`datesubtract`](#datesubtract)
+- [`deploy-version`](#deploy-version)
 - [`getlinecount`](#getlinecount)
+- [`git-release`](#git-release)
 - [`PVE-send-to-archive`](#pve-send-to-archive)
+- [`retire-vm`](#retire-vm)
+- [`run-tests`](#run-tests)
+- [`startdocserver`](#startdocserver)
+- [`switch-version`](#switch-version)
+- [`uninstall-version`](#uninstall-version)
+- [`unretire-vm`](#unretire-vm)
 - [`unroot`](#unroot)
 - [`watchit`](#watchit)
+- [`zfs-diagnose-busy`](#zfs-diagnose-busy)
 - [`zfsaddisk`](#zfsaddisk)
+- [`zfsallthepools`](#zfsallthepools)
 - [`zfscleanup`](#zfscleanup)
 - [`zfscleanupbadoffsiteholds`](#zfscleanupbadoffsiteholds)
 - [`zfsdailybackup`](#zfsdailybackup)
 - [`zfsdelallsnaps`](#zfsdelallsnaps)
 - [`zfsdelfs`](#zfsdelfs)
 - [`zfsdelholds`](#zfsdelholds)
-- [`zfs-diagnose-busy`](#zfs-diagnose-busy)
 - [`zfsfullcopy`](#zfsfullcopy)
 - [`zfsgetashift`](#zfsgetashift)
-- [`zfsgetsnapage`](#zfsgetsnapage)
 - [`zfsgetsendsize`](#zfsgetsendsize)
+- [`zfsgetsnapage`](#zfsgetsnapage)
 - [`zfsholds`](#zfsholds)
 - [`zfslistkeys`](#zfslistkeys)
 - [`zfsloadkeys`](#zfsloadkeys)
@@ -39,23 +49,23 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfslockmanager-test`](#zfslockmanager-test)
 - [`zfsmaketest`](#zfsmaketest-archived)
 - [`zfsmount`](#zfsmount)
+- [`zfsmountsnapshot`](#zfsmountsnapshot)
+- [`zfsoffsiteretain`](#zfsoffsiteretain)
 - [`zfsreadthru`](#zfsreadthru)
 - [`zfsrecurse`](#zfsrecurse)
+- [`zfsresizevol`](#zfsresizevol)
 - [`zfsrestore`](#zfsrestore)
 - [`zfsrestoresendstream`](#zfsrestoresendstream)
-- [`zfsresizevol`](#zfsresizevol)
 - [`zfsresume`](#zfsresume)
 - [`zfsscruball`](#zfsscruball)
 - [`zfssend`](#zfssend)
 - [`zfssendoffsite`](#zfssendoffsite)
-- [`zfsoffsiteretain`](#zfsoffsiteretain)
+- [`zfssendrepo`](#zfssendrepo)
 - [`zfssetarcsize`](#zfssetarcsize)
 - [`zfsshowbigstuff`](#zfsshowbigstuff)
 - [`zfsshowholds`](#zfsshowholds)
 - [`zfsshowtuneables`](#zfsshowtuneables)
 - [`zfsshowzpooldevices`](#zfsshowzpooldevices)
-- [`retire-vm`](#retire-vm)
-- [`unretire-vm`](#unretire-vm)
 - [`zfsstatus`](#zfsstatus)
 - [`zfsunmount`](#zfsunmount)
 - [`zfswatcharc`](#zfswatcharc)
@@ -86,6 +96,42 @@ On failure, removes the partial output file.
 
 ---
 
+### `check-prerequisites`
+
+Validate that the host environment meets ZFS Utilities requirements.
+
+```bash
+sudo check-prerequisites [--single-node|--two-node] [--list-failures]
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `--single-node` | Check only prerequisites needed for single-node operation |
+| `--two-node` | Check prerequisites for two-node (storage+compute) operation |
+| `--list-failures` | Print machine-readable failures and exit |
+
+**Globals:** none.
+
+Checks the following categories: core ZFS utilities (`bash`, `zfs`, `zpool`,
+`pv`, `rsync`), optional Proxmox VE, GTK GUI packages, two-node tools (`ssh`,
+`scp`, `iscsiadm`), and documentation tools (`pip3`, `mkdocs`,
+`mkdocs-material`).
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | All required prerequisites are present |
+| `1` | One or more required prerequisites are missing |
+
+---
+
 ### `datesubtract`
 
 Calculates the number of days, months, and years between two dates.
@@ -109,6 +155,70 @@ Outputs days, months (decimal), and years (decimal).
 
 **Data structures consumed / produced:** none.
 
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+
+---
+
+### `deploy-version`
+
+Deploys the current repository state as a new versioned installation under
+`/usr/local/lib/zfsutilities/versions/<version>/`. Does not activate the
+version; use [`switch-version`](#switch-version) for that.
+
+```bash
+sudo ./deploy-version [version] [group ...]
+```
+
+**Arguments:**
+
+| Argument | Default | Description |
+| -------- | ------- | ----------- |
+| `version` | contents of `./VERSION` | Version string to deploy |
+| `group` | all groups in deploy.conf | Deployment group names from `/etc/zfsutilities-deploy.conf` |
+
+**Globals:**
+
+| Variable | Role | Reference |
+| -------- | ---- | --------- |
+| `NODE_MODE`, `STORAGE_HOST`, `COMPUTE_HOST` | Legacy remote-host fallback when no deploy.conf exists | [Node Configuration](../developer-guide/global-variables.md#node-configuration) |
+
+**Called modules:**
+
+| Script | Purpose |
+| ------ | ------- |
+| `10 Installers/desktop-launcher-lib.sh` | Desktop shortcut helpers |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| `/etc/zfsutilities-deploy.conf` | Deployment group definitions | — |
+| Node config | Legacy remote host list | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf) |
+| `/usr/local/lib/zfsutilities/versions/<version>/` | Deployed version directory | — |
+
+**Internal flow:**
+
+1. Parse arguments; read `./VERSION` if no version is supplied.
+2. Load `/etc/zfsutilities-deploy.conf` groups, or fall back to the node config for remote hosts.
+3. Build the version directory, copy root-level scripts, and symlink two-node,
+   clone, installer, and versioning scripts.
+4. Copy project subdirectories (`06 Docs`, `07 GTK + Python`, etc.) and rebuild
+   static docs if `mkdocs` is available.
+5. Verify that critical scripts are present in the deployed `bin/` directory.
+6. `rsync` the version directory to each remote host in the selected groups.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Deployment completed |
+| `1` | Fatal error (wrong directory, missing version, unknown group, etc.) |
+
 ---
 
 ### `getlinecount`
@@ -124,6 +234,53 @@ utility.
 **Called modules:** none.
 
 **Data structures consumed / produced:** none.
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+
+---
+
+### `git-release`
+
+Bumps `VERSION`, commits all staged changes, and creates a git tag. Must be
+run from a git repository.
+
+```bash
+./git-release <version> <commit-message>
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `version` | New version string (e.g. `1.2.0`) |
+| `commit-message` | Message used for both the commit and the annotated tag |
+
+**Globals:** none.
+
+The script writes the new version to the `VERSION` file, runs `git add -A`,
+`git commit`, and `git tag -a v<version>`. Pushing the result is left to the
+caller.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:**
+
+| Structure | Role |
+| --------- | ---- |
+| `VERSION` | Updated with the new release version |
+| Git repository | Commit and annotated tag are created |
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Version bumped, committed, and tagged |
+| `1` | Not a git repository or git operation failed |
 
 ---
 
@@ -166,6 +323,217 @@ Sends a single ZFS dataset to an archive file on disk using
 4. Run `zfs send -cw <dataset>@<snap> | pv | cat - > <archive>.zfssendstream`.
 5. Copy the Proxmox VM config file into the same archive tree.
 
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
+
+---
+
+### `run-tests`
+
+Discovers and executes the bash test suites in `tests/`.
+
+```bash
+./run-tests [-v|-q] [suite-name]
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `-v` / `--verbose` | Show all test output |
+| `-q` / `--quiet` | Show only the summary |
+| `suite-name` | Run a single suite (e.g. `test-zfsretain`) |
+
+**Globals:** none. Sets `ZFSUTILITIES_TEST_RESULTS` internally for suite coordination.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:**
+
+| Structure | Role |
+| --------- | ---- |
+| `tests/test-*` | Test suite files discovered and executed |
+| `/tmp/zfsutilities_test_results_*` | Per-suite result summaries aggregated by the harness |
+
+**Internal flow:**
+
+1. Parse options and optional suite name.
+2. Discover test files or use the requested suite.
+3. Run each suite as a separate `bash` process and capture its result record.
+4. Print a pass/fail/skip summary and exit with the overall result.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | All tests passed |
+| `1` | One or more tests failed |
+| `2` | Unknown option or suite not found |
+
+---
+
+### `startdocserver`
+
+Starts the documentation server on port `8000`. Serves the MkDocs
+live-reload site when `mkdocs` is available; otherwise falls back to the
+pre-built static `site/` directory.
+
+```bash
+./startdocserver [--restart] [path]
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `--restart` | Stop any existing server on port 8000 and start fresh |
+| `path` | Accepted for compatibility; ignored by the server |
+
+**Globals:** none.
+
+**Called modules:**
+
+| Module | Purpose |
+| ------ | ------- |
+| `bashinit` | Session log setup and `calledbybash` guard |
+
+**Data structures consumed / produced:**
+
+| Structure | Role |
+| --------- | ---- |
+| `~/docserver.log` | Server stdout/stderr |
+| `06 Docs/site/` | Static fallback site |
+| `http://localhost:8000` | Documentation URL |
+
+**Internal flow:**
+
+1. Locate the docs directory relative to the script (`06 Docs` or `../06 Docs`).
+2. Probe `localhost:8000` to see if a server is already running.
+3. If the running server serves the wrong directory, stop it.
+4. Start `mkdocs serve --livereload` if available; otherwise start
+   `python3 -m http.server` from `site/`.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Server started or already running |
+| `1` | Docs directory not found or server could not start |
+
+---
+
+### `switch-version`
+
+Activates a deployed version by updating production wiring: symlinks, `PATH`,
+sudoers, `/root/bashinit`, library links, and desktop shortcuts.
+
+```bash
+sudo switch-version <version>|previous|--list|--uninstall
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `version` | Version string to activate |
+| `previous` | Roll back to the previously active version |
+| `--list` | List installed versions |
+| `--uninstall` | Remove this version's production wiring |
+
+**Globals:**
+
+| Variable | Role |
+| -------- | ---- |
+| `ZFSUTILITIES_VERSION_BASE` | Override `/usr/local/lib/zfsutilities` (used by tests) |
+| `ZFSUTILITIES_BASHINIT_LINK` | Override `/root/bashinit` target (used by tests) |
+| `ZFSUTILITIES_PROFILE_FILE` | Override `/etc/profile.d/zfsutilities.sh` (used by tests) |
+| `ZFSUTILITIES_SUDOERS_FILE` | Override `/etc/sudoers.d/zfsutilities` (used by tests) |
+| `ZFSUTILITIES_NODE_LIB_LINK` | Override `/usr/local/lib/node-lib.sh` (used by tests) |
+| `ZFSUTILITIES_TWO_NODE_LIB_LINK` | Override `/usr/local/lib/two-node-lib.sh` (used by tests) |
+| `ZFSUTILITIES_LOCAL_BIN_DIR` | Override `/usr/local/bin` (used by tests) |
+
+**Called modules:**
+
+| Module / Script | Purpose |
+| --------------- | ------- |
+| [rootcheck](modules.md#rootcheck) | Verify root privileges |
+| `10 Installers/desktop-launcher-lib.sh` | Desktop shortcut helpers |
+
+**Data structures consumed / produced:**
+
+| Structure | Role |
+| --------- | ---- |
+| `/usr/local/lib/zfsutilities/current` | Symlink to the active version |
+| `/usr/local/lib/zfsutilities/previous` | Symlink to the prior version for rollback |
+| `/root/bashinit` | Symlink to the active version's `bashinit` |
+| `/etc/profile.d/zfsutilities.sh` | Adds the versioned `bin/` to `PATH` |
+| `/etc/sudoers.d/zfsutilities` | Adds the versioned `bin/` to `secure_path` |
+| `/usr/local/lib/node-lib.sh` | Symlink to the active version's node library |
+| `/usr/local/lib/two-node-lib.sh` | Compatibility symlink to the node library |
+
+**Internal flow:**
+
+1. Parse the subcommand (`version`, `previous`, `--list`, `--uninstall`).
+2. For `--list`, print installed versions and exit.
+3. For `--uninstall`, remove wiring symlinks and desktop shortcuts.
+4. For a version switch, call the prior version's `switch-version --uninstall`,
+   record the current version as `previous`, and update the `current` symlink.
+5. Re-execute the target version's `switch-version` so it installs its own wiring.
+6. `install_wiring()` creates `bin/`, `PATH`, sudoers, `bashinit`, library, and desktop shortcuts.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Version activated, listed, or unwired |
+| `1` | Version not found, missing previous version, or wiring error |
+
+---
+
+### `uninstall-version`
+
+Removes a deployed version directory. Refuses to remove the currently active version.
+
+```bash
+sudo uninstall-version <version>
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `version` | Version string to remove |
+
+**Globals:** none.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:**
+
+| Structure | Role |
+| --------- | ---- |
+| `/usr/local/lib/zfsutilities/versions/<version>/` | Removed if not the active version |
+| `/usr/local/lib/zfsutilities/current` | Checked to prevent removing the active version |
+
+**Internal flow:**
+
+1. Validate root privileges and the version argument.
+2. Refuse if the requested version is the current active version.
+3. Prompt for confirmation.
+4. `rm -rf` the version directory.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Version removed or operation aborted |
+| `1` | Missing argument, version not found, or version is active |
+
 ---
 
 ### `unroot`
@@ -193,6 +561,13 @@ Has no effect if not currently running as root.
 **Called modules:** none.
 
 **Data structures consumed / produced:** none.
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
 
 ---
 
@@ -223,6 +598,13 @@ Uses `Watchall/watchall` with `zpool list` and `zfs list` output.
 
 **Data structures consumed / produced:** none.
 
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+
 ---
 
 ### `zfsaddisk`
@@ -250,6 +632,53 @@ Prompts for confirmation before issuing the `qm set` command.
 **Called modules:** none.
 
 **Data structures consumed / produced:** none.
+
+
+**Internal flow:**
+
+1. Validate the VM ID, disk number, storage name, and size.
+2. Prompt for confirmation before issuing the `qm set` command.
+3. Run `qm set <vmid> --scsi<disk-number> <storage>:<size-GiB>`.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+
+---
+
+### `zfsallthepools`
+
+Compatibility shim that fills `$zfspoolarray` from the JSON config. New scripts
+should source `zfsconfig` directly and call `poolarray()`.
+
+```bash
+source zfsallthepools
+# $zfspoolarray is now populated
+```
+
+**Arguments:** none.
+
+**Globals:** none.
+
+**Called modules:**
+
+| Module | Purpose |
+| ------ | ------- |
+| [zfsconfig](modules.md#zfsconfig) | Read the pool list from the JSON config |
+
+**Data structures produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| `$zfspoolarray` | [$zfspoolarray](../developer-guide/data-structures.md#zfspoolarray) |
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Pool array loaded successfully |
 
 ---
 
@@ -373,6 +802,13 @@ Checks are performed in order until a likely cause is found:
 8. NFS/SMB share (`sharenfs`/`sharesmb`).
 
 If no cause is identified, a fallback message suggests further manual investigation.
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
 
 ---
 
@@ -498,6 +934,14 @@ sudo zfsdailybackup "dryrun='Y'"
 5. Snapshot and copy `NVME1` → `fivebays`.
 6. Remove the snapfile unless in dry-run mode.
 7. If `$prune='Y'`, run `cleanup '' '' 'dailybackup'` to apply retention policies.
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
 
 ---
 
@@ -701,6 +1145,13 @@ sudo zfsdelholds <subtree> [snap-prefix] [depth]
 2. Optionally filter snapshots whose names start with `$2`.
 3. Call `delallholds` for each matching snapshot.
 
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+
 ---
 
 ### `zfsfullcopy`
@@ -745,6 +1196,14 @@ Step 2: Incremental copy to pull in all remaining snapshots
 3. **Part 2** — incremental copy with intermediates to catch up to the newest snapshot (`doincrementals='Y'`, `dointermediates='Y'`).
 4. Re-apply caller overrides between parts so Part 1 defaults do not leak into Part 2.
 
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
+
 ---
 
 ### `zfsgetashift`
@@ -775,6 +1234,20 @@ Useful when creating a new pool. `ashift` is the power of 2 that will be the poo
 
 **Data structures consumed / produced:** none.
 
+
+**Internal flow:**
+
+1. Validate that `$1` is a block device path.
+2. Run `zdb -l <device>` to read the vdev label.
+3. Extract the `ashift` value and print it with the corresponding block size.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
+
 ---
 
 ### `zfsgetsnapage`
@@ -801,6 +1274,20 @@ and called as `getsnapage <snapshot>`.
 
 **Data structures consumed / produced:** none.
 
+
+**Internal flow:**
+
+1. Parse the snapshot name from `$1`.
+2. Query `zfs get creation -Hp <snapshot>` for the creation epoch.
+3. Compute the difference from the current time and print the age in days.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
+
 ---
 
 ### `zfsgetsendsize`
@@ -825,6 +1312,20 @@ Returns an empty string if the size cannot be determined.
 **Called modules:** none.
 
 **Data structures consumed / produced:** none.
+
+
+**Internal flow:**
+
+1. Run `zfs send -nPc <snapshot>` to request the send size.
+2. Parse the raw byte count from the dry-run output.
+3. Print the raw size and a human-readable equivalent.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Size printed successfully. |
+| non-zero | `zfs send` failed or snapshot not found. |
 
 ---
 
@@ -857,7 +1358,16 @@ See also: [`zfsshowholds`](#zfsshowholds) for a simpler version without depth su
 
 **Internal flow:**
 
-Runs `zfs list -rt snapshot <subtree>` and pipes the snapshot names through `xargs zfs holds -H`.
+1. Run `zfs list -rt snapshot <subtree>` to enumerate snapshots.
+2. Pipe the snapshot names through `xargs zfs holds -H`.
+3. Print the resulting hold tags.
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
 
 ---
 
@@ -881,6 +1391,20 @@ sudo zfslistkeys [dataset]
 **Called modules:** none.
 
 **Data structures consumed / produced:** none.
+
+
+**Internal flow:**
+
+1. If `$1` is supplied, scan only that dataset or pool.
+2. Otherwise iterate over every imported pool.
+3. List datasets whose `keystatus` is `available` and whose `keylocation` is not `prompt`.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
 
 ---
 
@@ -908,6 +1432,13 @@ and `zfs mount -a`, then unmounts and LUKS-closes the key device.
 1. Mount the USB key device labeled `ZFSkeys` at `/mnt/ZFSkeys`.
 2. Run `zfs load-key -a` and `zfs mount -a`.
 3. Unmount the key device and close the LUKS mapping.
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
 
 ---
 
@@ -952,6 +1483,13 @@ See also: [`zfslockmanager`](modules.md#zfslockmanager).
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | Lock files | Read from and removed under `/run/lock/zfs/.locks/` | [Lock files](../developer-guide/data-structures.md#lock-files) |
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
 
 ---
 
@@ -1074,6 +1612,33 @@ When unmounting: targets mounted filesystems and volumes.
 2. For `mount`, target datasets with `mounted=no`.
 3. For `unmount`, target datasets with `mounted=yes` and volumes.
 
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+
+---
+
+### `zfsmountsnapshot`
+
+Example transcript showing how to browse ZFS snapshots through a dataset's `.zfs/snapshot` directory. This file is **not an executable command**; it is included as documentation.
+
+```bash
+cat /usr/local/lib/zfsutilities/current/bin/zfsmountsnapshot
+```
+
+**Arguments:** none.
+
+**Globals:** none.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:** not applicable.
+
 ---
 
 ### `zfsreadthru`
@@ -1122,6 +1687,14 @@ sudo zfsreadthru <dataset> [overrides] [first-snapshot] [last-snapshot]
 4. Part 1: full `zfs send -wc $firstsnap | pv | cat > /dev/null`.
 5. Part 2: incremental `zfs send -wc -I $firstsnap $lastsnap | pv | cat > /dev/null`.
 
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
+
 ---
 
 ### `zfsrecurse`
@@ -1132,6 +1705,18 @@ exits immediately with an error message if run.**
 **Called modules:** (intended) `zfsbuildfsarray`.
 
 **Data structures consumed / produced:** none — script is a stub.
+
+
+**Internal flow:**
+
+Exits immediately with an error message. The intended implementation would build a dataset list with `zfsbuildfsarray` and run the supplied ZFS command for each dataset.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
 
 ---
 
@@ -1188,6 +1773,14 @@ to catch up to the newest.
 4. **Part 2** — incremental copy with intermediates to newest snapshot (`doincrementals='Y'`, `dointermediates='Y'`).
 5. Prompt before Part 2 unless `$autoproceed='Y'`.
 
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
+
 ---
 
 ### `zfsrestoresendstream`
@@ -1223,6 +1816,14 @@ file). Configured by editing variables inside the script.
 2. Optionally destroy the destination if `$force='Y'`.
 3. Pipe each stream through `pv` into `zfs receive`.
 
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
+
 ---
 
 ### `zfsresizevol`
@@ -1233,6 +1834,18 @@ message if run.**
 **Called modules:** none.
 
 **Data structures consumed / produced:** none — script is a stub.
+
+
+**Internal flow:**
+
+Exits immediately with an error message. The intended implementation would resize a ZFS volume after validating the new size.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
 
 ---
 
@@ -1357,6 +1970,14 @@ script. Primarily used for ad-hoc sends during development and testing.
 1. Generate `$nextsnap` via `zfssnapbuild`.
 2. Apply overrides from `$1`.
 3. Call `send-receive` to copy `$sourcefs` to `$destfs`.
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
 
 ---
 
@@ -1508,6 +2129,37 @@ sudo zfsoffsiteretain "dryrun='Y'"
 
 ---
 
+### `zfssendrepo`
+
+Example script that `rsync`s the local repository to a remote host. Edit the default paths inside the script or pass them on the command line.
+
+```bash
+./zfssendrepo <host> [<source-dir> [<dest-dir>]]
+```
+
+**Arguments:**
+
+| Argument | Default | Description |
+| -------- | ------- | ----------- |
+| `host` | — | Remote host to receive the rsync |
+| `source-dir` | `/path/to/local/zfsutilities` | Local repository path |
+| `dest-dir` | `/home/admin/ZFSutilities` | Remote destination path |
+
+**Globals:** none.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Rsync completed successfully |
+| non-zero | `rsync` exit code on failure |
+
+---
+
 ### `zfssetarcsize`
 
 Sets the ZFS ARC maximum size both immediately (sysfs) and persistently
@@ -1525,6 +2177,21 @@ inside the script before running.
 **Called modules:** none.
 
 **Data structures consumed / produced:** none.
+
+
+**Internal flow:**
+
+1. Validate that the `GiB` variable is set.
+2. Write the ARC max size in bytes to `/sys/module/zfs/parameters/zfs_arc_max`.
+3. Persist the setting in `/etc/modprobe.d/zfs.conf`.
+4. Run `update-initramfs` so the limit applies at boot.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
 
 ---
 
@@ -1556,7 +2223,17 @@ Sorts by: `used`, `usedds`, `usedsnap`, `written`, `quota`, `refer`,
 
 **Internal flow:**
 
-Runs `zfs list` for the target pool/dataset and sorts by several properties (`used`, `usedds`, `usedsnap`, `written`, `quota`, `refer`, `refquota`, `reservation`) to report the largest or smallest datasets.
+1. Run `zfs list` for the target pool or dataset.
+2. For each dataset, read `used`, `usedds`, `usedsnap`, `written`, `quota`,
+   `refer`, `refquota`, and `reservation`.
+3. Sort by each property and report the largest or smallest datasets.
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
 
 ---
 
@@ -1587,6 +2264,13 @@ use [`zfsholds`](#zfsholds) instead.
 
 Simple wrapper: `zfs list -rt snapshot <dataset> | xargs zfs holds -H`. For depth control see [`zfsholds`](#zfsholds).
 
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+
 ---
 
 ### `zfsshowtuneables`
@@ -1605,6 +2289,20 @@ zfsshowtuneables
 **Called modules:** none.
 
 **Data structures consumed / produced:** none.
+
+
+**Internal flow:**
+
+1. Verify that `/etc/modprobe.d/zfs.conf` exists and is non-empty.
+2. Confirm the file is embedded in the initramfs.
+3. Display current ZFS module parameters from `/sys/module/zfs/parameters/`.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
 
 ---
 
@@ -1629,6 +2327,20 @@ sudo zfsshowzpooldevices <pool>
 
 **Data structures consumed / produced:** none.
 
+
+**Internal flow:**
+
+1. Validate that `$1` names an imported pool.
+2. Run `zpool status -LPs <pool>` to list physical devices.
+3. Print vendor, model, size, and serial number for each device.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
+
 ---
 
 ### `zfsstatus`
@@ -1651,6 +2363,13 @@ zfsstatus
 | `Watchall/watchall` | Auto-refresh pool list and status |
 
 **Data structures consumed / produced:** none.
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
 
 ---
 
@@ -1675,6 +2394,19 @@ Simpler than `zfsmount unmount` — no interactivity.
 **Called modules:** none.
 
 **Data structures consumed / produced:** none.
+
+
+**Internal flow:**
+
+1. List filesystems under the given subtree with `zfs list`.
+2. Run `zfs unmount` on each mounted filesystem.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
 
 ---
 
@@ -1704,6 +2436,13 @@ Displays ARC size, target, hit rate, miss rate, and hits/misses per second.
 **Internal flow:**
 
 Reads `/proc/spl/kstat/zfs/arcstats` at the configured interval and prints ARC size, target, hit rate, miss rate, and hits/misses per second.
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
 
 ---
 
@@ -1763,6 +2502,14 @@ sudo retire-vm <vmid>
 4. Copy the Proxmox config into the archive.
 5. Verify archive integrity.
 6. Optionally remove the VM (iSCSI teardown in two-node mode, direct destroy in single-node mode).
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
 
 ---
 
@@ -1830,3 +2577,11 @@ sudo unretire-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 5. Restore/rewrite Proxmox config with updated disk lines.
 6. Trigger iSCSI rescan on the compute host.
 
+
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |

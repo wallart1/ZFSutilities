@@ -113,6 +113,17 @@ def list_all_md_files():
     return md_files
 
 
+def extract_python_module_names(filepath):
+    """Extract module file names documented as ### `module.py` headers."""
+    modules = []
+    with open(filepath) as f:
+        for line in f:
+            m = re.match(r"^###\s+`([a-zA-Z0-9_]+\.py)`\s*$", line)
+            if m:
+                modules.append(m.group(1))
+    return modules
+
+
 def check_pyyaml():
     """Return True if pyyaml is installed, else raise SkipTest with install instructions."""
     try:

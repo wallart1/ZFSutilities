@@ -379,10 +379,12 @@ active than expected, the save is aborted to prevent overwriting
 `saveconfig.json` with a degraded (partial) configuration.
 
 Comments (`#`) and blank lines are ignored. Maintained by [new-vm-disk](../commands-and-modules/two-node.md#new-vm-disk-both)
-(adds) and [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both) (removes); [zfsdelfs](../commands-and-modules/commands.md#zfsdelfs) does not modify it because
-it is not the lifecycle tool for permanent VM-disk retirement — its iSCSI
-teardown is either rebuilt later by `zfs-send-receive` or is a manual deletion
-outside the manifest-managed VM-disk lifecycle.
+(adds), [unretire-vm](../commands-and-modules/two-node.md#unretire-vm-both) (adds restored backstores), and the
+`zfs-send-receive` rebuild path (re-adds after a torn-down destination is
+re-created). [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both) (removes),
+[move-vm-disk](../commands-and-modules/two-node.md#move-vm-disk-both) source side (removes), and
+[zfsdelfs](../commands-and-modules/commands.md#zfsdelfs) iSCSI teardown (removes) keep the manifest in sync with
+destructive operations.
 
 ## iSCSI encrypted-LUNs config
 

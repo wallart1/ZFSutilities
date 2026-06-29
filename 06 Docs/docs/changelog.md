@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.56.1
+
+### Added
+
+- **Python Modules reference** — new `commands-and-modules/python-modules.md`
+  documents all 43 Python modules that make up the GTK GUI and command-
+  orchestration layer in `07 GTK + Python/`. The page is grouped by role
+  (config/data, ZFS repository/info, command builders/runners, GUI pages,
+  managers/helpers, entry points) and cross-references the bash commands and
+  modules they invoke.
+
+### Changed
+
+- **Commands reference expansion** — `commands-and-modules/commands.md` now
+  covers many previously undocumented root-level scripts (e.g.
+  `check-prerequisites`, `deploy-version`, `git-release`, `run-tests`,
+  `startdocserver`, `switch-version`, `uninstall-version`, `zfsallthepools`,
+  `zfssendrepo`) and adds Arguments, Globals, Called modules, Data structures,
+  Internal flow, and Return codes tables throughout.
+- **Modules reference expansion** — `commands-and-modules/modules.md` adds
+  detailed entries for `bashinit`, `zfsbuildfsarray`, `zfscheckagainst`, and
+  other sourceable helpers with consistent structure.
+- **Two-node reference expansion** — `commands-and-modules/two-node.md`
+  documents the `node-lib.sh` helper functions and adds detailed sections for
+  `clone-vm`, `deploy-version`, `iscsi-add-encrypted-luns`,
+  `iscsi-restore-luns`, `list-vm-disks`, `lock-zfs-keys`, and others.
+- **MkDocs navigation** — `mkdocs.yml` and `commands-and-modules/index.md` now
+  list four sections, including the new Python Modules page.
+- **Data structures update** — `developer-guide/data-structures.md` now notes
+  that `unretire-vm`, `zfs-send-receive` rebuild, `move-vm-disk` source side,
+  and `zfsdelfs` iSCSI teardown also maintain the
+  `/etc/rtslib-fb-target/expected-backstores.txt` manifest.
+
+### Tests
+
+- Added `TestPythonModulesReference` in `tests/python/test_docs_integrity.py`
+  to verify every module documented in `python-modules.md` exists as a real
+  file in `07 GTK + Python/`.
+- Added `extract_python_module_names()` helper in `tests/python/test_support.py`
+  to parse module names from `### \`module.py\`` headers.
+
 ## 0.56.0
 
 ### Added

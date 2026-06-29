@@ -8,6 +8,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 
 ## Jump to
 
+- [`bashinit`](#bashinit)
 - [`bashdebug`](#bashdebug)
 - [`bashfatal`](#bashfatal)
 - [`bashreturn`](#bashreturn)
@@ -33,11 +34,62 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 
 ---
 
+### `bashinit`
+
+Initialization and logging helper sourced by nearly every bash script and
+module in the project. It is normally loaded as `source ~/bashinit` followed by
+a call to `bashinit()`.
+
+```bash
+source ~/bashinit
+bashinit
+source $mydir/rootcheck
+rootcheck
+```
+
+**Functions:**
+
+| Function      | Purpose                                                                                 |
+| ------------- | --------------------------------------------------------------------------------------- |
+| `bashinit`    | Sets `$mydir` to the caller's directory and auto-creates a session log for CLI scripts |
+| `log_msg`     | Logs messages with `file:line:` prefix to stderr and to the session log                 |
+| `msg_prefix`  | Emits the same `file:line:` prefix without the message body                             |
+| `calledbybash`| Returns true when the current file was executed directly (not sourced)                  |
+| `ask_yn`      | Prompts for yes/no and validates the response                                           |
+
+**Globals / environment:**
+
+| Variable                         | Role                                                              | Reference                                                                 |
+| -------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `$mydir`                         | Directory of the currently-running script                         | [Infrastructure](../developer-guide/global-variables.md#infrastructure)   |
+| `$ZFSUTILITIES_LOG_DIR`          | Directory for session log files (default `/var/log/zfsutilities/sessions`) | [Infrastructure](../developer-guide/global-variables.md#infrastructure)   |
+| `$ZFSUTILITIES_LOG_FILE`         | Path of the active session log (set by `bashinit`)                | [Session log index](../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson) |
+| `$ZFSUTILITIES_LOG_INHERIT`      | `'Y'` to reuse a parent runner's log instead of creating a new one | [Session log index](../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson) |
+| `$ZFSUTILITIES_HEADLESS`         | When `'Y'`, suppresses interactive prompts in lock-manager code   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
+
+**Data structures produced:**
+
+| Structure                                              | Reference                                                                                                  |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| [Session log files](../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson) | One log file per directly-executed script; reused by child sourced modules via `$ZFSUTILITIES_LOG_INHERIT` |
+
+**Called modules:** none. `bashinit` is the lowest-level helper; it does not source other project modules.
+
+**Internal flow:**
+
+1. `bashinit` derives `$mydir` from `BASH_SOURCE[1]` only when it is not already set.
+2. If the script is executed directly and log inheritance is not enabled, it creates a timestamped log file under `$ZFSUTILITIES_LOG_DIR` and exports `$ZFSUTILITIES_LOG_FILE`.
+3. `log_msg` builds a `realpath(file):line:` prefix, writes the message to stderr (with color when connected to a terminal), and appends a timestamped copy to the session log when one is owned by the process.
+4. `ask_yn` loops until the user enters `y`, `yes`, `n`, or `no`.
+
+---
+
 ### `bashdebug`
 
 Provides a debug trap (`_trap_DEBUG`) that runs before every command, enabling
 single-step debugging with a pre-execution prompt showing the command, source
-file, line number, and call stack.
+file, line number, and call stack. Also installs an ERR trap for post-failure
+interactive debugging.
 
 ```bash
 source $mydir/bashdebug
@@ -48,6 +100,13 @@ bashdebugoff   # disable
 **Arguments:** none.
 
 **Globals:** none.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:** none (traps are installed; pre/post commands return the
+underlying command's status).
 
 ---
 
@@ -67,6 +126,12 @@ source $mydir/bashfatal 4      # exits with specified code
 
 Must be sourced at the point of execution, not at the top of the file.
 
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:** does not return; terminates the process with the supplied code.
+
 ---
 
 ### `bashreturn`
@@ -85,6 +150,12 @@ source $mydir/bashreturn 4     # returns/exits with specified code
 
 Must be sourced at the point of execution, not at the top of the file.
 
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:** returns or exits with the supplied code.
+
 ---
 
 ### `bashsetx`
@@ -101,7 +172,17 @@ Sends trace output to stderr via `BASH_XTRACEFD=2`.
 
 **Arguments:** none.
 
-**Globals:** none.
+**Globals:**
+
+| Variable      | Role                                              | Reference |
+| ------------- | ------------------------------------------------- | --------- |
+| `$bashrestorex`| Set by `setx` to the command needed to restore the original `set -x` state | —         |
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:** `0` on success.
 
 ---
 
@@ -118,6 +199,17 @@ rootcheck
 **Arguments:** none.
 
 **Globals:** none (reads `$EUID`).
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning                  |
+| ---- | ------------------------ |
+| 0    | Running as root          |
+| 1    | Not running as root      |
 
 Exits with a clear message if not running as root.
 
@@ -189,6 +281,9 @@ zfsconfig_invalidate
 | Retention arrays (`$bktname`, `$bktretain`, `$minage`)                                      | [Data Structures](../developer-guide/data-structures.md#retention-policy-arrays-bktname-bktretain-minage) |
 | [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson) | All reads/writes target this file                                                                         |
 
+**Called modules:** none. `zfsconfig` uses inline `python3` heredocs rather than
+sourcing other project modules.
+
 ---
 
 ### `zfsbuildfsarray`
@@ -239,6 +334,19 @@ buildfsarray <root-dataset>
 | -------------------------------------------------------------------------------------- | --------------------------------------------- |
 | [`$fsarray` / `$fsarraylen`](../developer-guide/data-structures.md#fsarray-fsarraylen) | Filtered dataset list (persists after return) |
 
+**Called modules:**
+
+| Module      | Purpose in this entry                            |
+| ----------- | ------------------------------------------------ |
+| `bashinit`  | Logging and `$mydir` initialization              |
+| `bashreturn`| Clean non-fatal return for the `pool` list path  |
+
+**Data structures consumed:**
+
+| Structure | Reference |
+| --------- | --------- |
+| `$includes`, `$excludes`, `$startwith`, `$endwith`, `$depth`, `$bottomup`, `$buildfsarraytype`, `$sortby`, `$skipclones` | [Selection globals](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+
 ---
 
 ### `zfscheckagainst`
@@ -252,10 +360,6 @@ source $mydir/zfscheckagainst
 checkagainst <snapshot>
 ```
 
-**Dependencies:** `zfscheckagainst` sources `zfscommsnap`,
-`zfsremoveleadingqualifiers`, `bashdebug`, and `zfsconfig` internally; callers
-only need to source `zfscheckagainst`.
-
 **Arguments:**
 
 | Argument | Description                                               |
@@ -264,11 +368,22 @@ only need to source `zfscheckagainst`.
 
 **Globals:** none required. Reads the fss table via `zfsconfig_get_checkagainst`.
 
+**Called modules:**
+
+| Module                     | Purpose in this entry                            |
+| -------------------------- | ------------------------------------------------ |
+| `bashinit`                 | Logging and `$mydir` initialization              |
+| `bashdebug`                | Optional debug traps (conditionally enabled)     |
+| `zfscommsnap`              | Find common snapshots with counterpart datasets  |
+| `zfsremoveleadingqualifiers`| Strip leading qualifiers from dataset names     |
+| `zfsconfig`                | Load the fss table from JSON config              |
+
 **Data structures consumed:**
 
 | Structure                                                                                             | Reference                                |
 | ----------------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | [fss table](../developer-guide/data-structures.md#fss-table-in-memory-rows-from-zfscheckagainst-json) | Rules for mapping snapshot → counterpart |
+| [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson)           | `checkagainst` and `pools` keys            |
 
 #### The fss table
 
@@ -387,6 +502,10 @@ checkrunningvms <dataset>
 Uses `qm config` and `pct config` to confirm that running VMs actually have
 disks on the target pool (avoids false positives from name-matching alone).
 
+**Called modules:** none (uses external Proxmox tools).
+
+**Data structures consumed / produced:** none.
+
 ---
 
 ### `zfs-diagnose-busy`
@@ -424,6 +543,17 @@ and suggests `fuser` / `lsof` commands.
 | `dataset_actions.py`  | From `_run_zfs_sudo` when destroy fails |
 | `snapshot_manager.py` | After `zfs destroy` fails               |
 
+**Called modules:** none. `diagnose_dataset_busy` runs external commands
+(`zfs`, `zpool`, `fuser`, `lsof`, `targetcli`, `qm`, `pct`) directly.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning                              |
+| ---- | ------------------------------------ |
+| 0    | Diagnosis completed (cause may or may not have been found) |
+
 ---
 
 ### `zfscommsnap`
@@ -455,6 +585,25 @@ getcommonsnap <source> <destination> [OLDEST]
 Sets `$commsnap` to the matching snapshot suffix (without dataset prefix).
 Returns non-zero if no common snapshot exists.
 
+**Called modules:**
+
+| Module      | Purpose in this entry                            |
+| ----------- | ------------------------------------------------ |
+| `bashinit`  | Logging and `$mydir` initialization              |
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning                                                         |
+| ---- | --------------------------------------------------------------- |
+| 0    | Common snapshot found and is the newest in destination          |
+| 4    | No common snapshot found; most recent source snapshot returned  |
+| 8    | No snapshots on source dataset                                  |
+| 16   | Common snapshot found but destination has newer snapshots       |
+| 32   | Another common snapshot found (used by `checkagainst`)          |
+| 64   | No other common snapshot found (used by `checkagainst`)         |
+
 ---
 
 ### `zfsdelallholds`
@@ -474,6 +623,17 @@ delallholds <snapshot> [hold-tag]
 | `$2`     | Optional: only release this specific hold tag |
 
 **Globals:** none.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning                              |
+| ---- | ------------------------------------ |
+| 0    | Holds released (or none existed)     |
+| 8    | Fatal error releasing a hold         |
 
 ---
 
@@ -498,6 +658,21 @@ sudo ./zfsdelallholdssubtree <dataset> [hold-tag]
 | --------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `$depth`, `$includes` | Forwarded to `zfsbuildfsarray` (with `buildfsarraytype='snapshot'`) | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$autoproceed`        | `'Y'` to skip confirmation prompts                                  | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
+
+**Called modules:**
+
+| Module             | Purpose in this entry                          |
+| ------------------ | ---------------------------------------------- |
+| `bashinit`         | Logging and `$mydir` initialization            |
+| `rootcheck`        | Verify root privileges                         |
+| `zfsbuildfsarray`  | Build the list of snapshots to process         |
+| `zfsdelallholds`   | Release holds on each snapshot in the subtree  |
+
+**Data structures produced:**
+
+| Structure                                                                                   | Reference                                                                 |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`$fsarray`](../developer-guide/data-structures.md#fsarray-fsarraylen)                     | Snapshot list built by `zfsbuildfsarray`                                  |
 
 ---
 
@@ -533,6 +708,34 @@ If `zfs destroy` fails (e.g. "dataset is busy"), [`zfs-diagnose-busy`](#zfs-diag
 is automatically called to report the specific cause before the script decides
 whether to warn/continue (when `$skipbusy='Y'`) or exit fatally.
 
+**Called modules:**
+
+| Module             | Purpose in this entry                                      |
+| ------------------ | ---------------------------------------------------------- |
+| `bashinit`         | Logging and `$mydir` initialization                        |
+| `zfscheckagainst`  | Verify the snapshot is not the last common snapshot        |
+| `zfsdelallholds`   | Release holds when `$releaseholds='Y'`                     |
+| `zfslockmanager`   | Acquire/release a write lock on the parent dataset         |
+| `zfs-diagnose-busy`| Report why `zfs destroy` failed                            |
+
+**Data structures consumed / produced:**
+
+| Structure                                                                  | Reference                                                           |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| [Lock files](../developer-guide/data-structures.md#lock-files)             | Write lock on parent dataset written by `zfslockmanager`            |
+| [fss table](../developer-guide/data-structures.md#fss-table-in-memory-rows-from-zfscheckagainst-json) | Consumed by `zfscheckagainst`                                       |
+
+**Return codes:**
+
+| Code | Meaning                                                        |
+| ---- | -------------------------------------------------------------- |
+| 0    | Snapshot deleted successfully                                  |
+| 1    | Lock aborted by user, snapshot too young, or busy/held skipped |
+| 5    | No checkagainst entry matched (with user prompt)               |
+| 6    | Counterpart pool offline — deletion blocked                    |
+| 7    | Last remaining common snapshot — deletion blocked              |
+| 8    | Fatal error                                                    |
+
 ---
 
 ### `zfsfindoffsitepool`
@@ -549,6 +752,16 @@ pool=$(findoffsitepool)
 **Globals:** none (compares imported pool names against the hardcoded offsite pool list).
 
 Returns the pool name, or empty string if none are online.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning                              |
+| ---- | ------------------------------------ |
+| 0    | Always; prints pool name or empty    |
 
 ---
 
@@ -573,6 +786,17 @@ zfshold <hold-tag> <dataset> <snapshot-suffix>
 **Globals:** none.
 
 Suppresses "tag already exists" errors — safe to call repeatedly.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning                              |
+| ---- | ------------------------------------ |
+| 0    | Tag applied (or already present)     |
+| 1    | Missing required snapshot pattern    |
 
 ---
 
@@ -606,12 +830,6 @@ Lock files are stored in `/run/lock/zfs/.locks/` (cleared on reboot).
 
 **Globals:** none.
 
-**Data structures produced:**
-
-| Structure                                                      | Reference                             |
-| -------------------------------------------------------------- | ------------------------------------- |
-| [Lock files](../developer-guide/data-structures.md#lock-files) | On-disk under `/run/lock/zfs/.locks/` |
-
 **Hierarchy rules:**
 
 | Existing lock     | Conflicts with          |
@@ -625,6 +843,43 @@ Lock files are stored in `/run/lock/zfs/.locks/` (cleared on reboot).
 (or its ancestor/descendant), subsequent acquire attempts succeed without
 creating a new lock file. The lock is released only when the original holder
 releases it.
+
+**Internal flow / algorithm:**
+
+1. `zfslock_init` creates `/run/lock/zfs/.locks/` and `/run/lock/zfs/.pids/`
+   and installs an `EXIT` trap that calls `zfslock_release_all`.
+2. Each lock is stored as a JSON file named
+   `<path-encoded-dataset>.<type>.<pid>.<lock-id>.lock` under `.locks/`.
+   Dataset path separators (`/`) are encoded as `%2F` and `@` as `%40`.
+3. `zfslock_check` scans the target dataset, all ancestors, and all descendants
+   for existing locks. It returns conflict if the requested type and the
+   existing type collide per the hierarchy rules above.
+4. `zfslock_acquire` first calls `zfslock_check`. If no conflict exists, it
+   writes the lock file and appends its path to the per-PID tracking file under
+   `.pids/`.
+5. `zfslock_is_stale` considers a lock stale if the file is missing, the owning
+   PID is gone, or `/proc/<pid>/cmdline` no longer contains the script named in
+   the lock file. `zfslock_cleanup_stale` removes stale locks and dead PID files.
+6. `zfslock_wait_or_resolve` repeatedly attempts acquisition. On conflict, it
+   offers interactive choices: wait, retry now, skip, abort, or force-release.
+   In non-interactive/headless mode it aborts immediately.
+7. `zfslock_release` removes the lock file and the corresponding entry from the
+   PID file. `zfslock_release_all` removes every lock owned by the current PID
+   (used by the `EXIT` trap).
+
+**Data structures produced:**
+
+| Structure                                                      | Reference                             |
+| -------------------------------------------------------------- | ------------------------------------- |
+| [Lock files](../developer-guide/data-structures.md#lock-files) | On-disk under `/run/lock/zfs/.locks/` |
+
+**Return codes:**
+
+| Code | Meaning                              |
+| ---- | ------------------------------------ |
+| 0    | Lock acquired / no conflict          |
+| 1    | Conflict or release denied           |
+| 2    | Error (bad arguments, I/O failure)   |
 
 See also: [`zfslockctl`](commands.md#zfslockctl).
 
@@ -653,6 +908,26 @@ can be overridden.
 ```bash
 sudo ./zfsdailybackup "backup_NVME1='N'; prune='N'"
 ```
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Internal flow / parse semantics:**
+
+1. All positional arguments are joined into a single string with `$*`.
+2. The joined string is logged and then evaluated with `eval` in the current
+   shell context.
+3. Any valid bash is accepted; the usual pattern is one or more assignments
+   separated by semicolons.
+4. Because the string runs as root, callers should avoid unquoted user input.
+5. Last assignment wins if the same variable is set more than once.
+
+**Return codes:**
+
+| Code | Meaning                              |
+| ---- | ------------------------------------ |
+| 0    | Overrides applied (or none provided) |
 
 ---
 
@@ -683,6 +958,22 @@ result=$(remove_leading_qualifiers <n> <dataset>)
 
 Used by `zfs-send-receive` to construct destination paths from source paths,
 and by `zfsretain` with `$leadingqualifiestodelete`.
+
+**Called modules:**
+
+| Module       | Purpose in this entry                            |
+| ------------ | ------------------------------------------------ |
+| `bashinit`   | Logging and `$mydir` initialization              |
+| `bashreturn` | Non-fatal return on argument errors (via `exit`) |
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning                              |
+| ---- | ------------------------------------ |
+| 0    | Success; stripped name printed       |
+| 1    | Fatal argument error                 |
 
 ---
 
@@ -736,6 +1027,46 @@ retain <pool> [label]
 
 Delegates each deletion to [`zfsdelsnap`](#zfsdelsnap), which runs
 [`zfscheckagainst`](#zfscheckagainst) as a safety check before every delete.
+
+**Internal flow / algorithm:**
+
+1. Parse `$1` as "`<dataset> [leadingqualifiestodelete]`" and normalize `$2`
+   into a leading-`@` label.
+2. Load the retention policy for the target pool via
+   `zfsconfig_get_retention`. Falls back to the `default` policy, then to
+   legacy `zfsretainpol-<pool>` files. Abort if no policy is found.
+3. Build `$snaparray` from `zfs list -Ht snapshot -o name,creation -s creation`
+   for the target dataset.
+4. **Phase 0** (only when `$label = @offsite`). For each `@offsite` snapshot,
+   keep only the newest snapshot per `dataset|Year-Month` key. Older snapshots
+   in the same month are removed.
+5. **Phase 1**. Walk snapshots in creation order and remove earlier snapshots
+   that share the same dataset, label, bucket, and calendar day as the next
+   snapshot.
+6. **Phase 2**. Build per-bucket arrays (`snapbucket_d`, `snapbucket_w`, etc.)
+   from the remaining snapshots. For each bucket that contains more snapshots
+   than its retention count, delete the oldest snapshots first. The most recent
+   snapshot in each bucket is protected when `retain > 0` so it remains
+   available as an incremental base.
+7. Empty snapshots (`written=0`) are flagged as `(empty)` in log messages but
+   receive no deletion preference.
+8. Snapshots with label `clone` or bucket `c` are skipped in all phases.
+
+**Called modules:**
+
+| Module                     | Purpose in this entry                            |
+| -------------------------- | ------------------------------------------------ |
+| `bashinit`                 | Logging and `$mydir` initialization              |
+| `zfsconfig`                | Load pool retention policy and offsite candidates|
+| `zfsdelsnap`               | Delete individual snapshots safely               |
+| `zfsremoveleadingqualifiers`| Strip leading qualifiers for `checkagainst`     |
+
+**Return codes:**
+
+| Code | Meaning                              |
+| ---- | ------------------------------------ |
+| 0    | Retention applied                    |
+| 8    | Fatal error (no policy, bad eval)    |
 
 ---
 
@@ -811,6 +1142,75 @@ and retry.
 and restored on exit so callers do not need to save/restore them between
 steps.
 
+**Internal flow / algorithm:**
+
+1. Source all dependent modules and apply defaults for globals such as
+   `$doincrementals`, `$dointermediates`, `$autoproceed`, `$dryrun`, and
+   `$resumablethreshold`.
+2. Apply any `$overrides` via `zfsoverrides`.
+3. Call `buildfsarray` to produce `$fsarray`, the filtered list of source
+   datasets to copy.
+4. Initialize the lock manager and acquire a write (`w`) lock on both the
+   source dataset and the destination dataset for each item in `$fsarray`.
+5. For each source dataset:
+   a. Resolve `$nextsnap`. If it is `'notneeded'`, use the newest existing
+      snapshot; otherwise create the snapshot if it does not exist.
+   b. Compute the destination path with `remove_leading_qualifiers`.
+   c. Check for a `receive_resume_token` on the destination. If present and
+      valid, resume the transfer; if invalid and `$autoproceed='Y'` or
+      non-interactive, abort the token and retry in the next loop iteration.
+   d. Call `getcommonsnap` to select the incremental base. Handle return codes:
+      `0` (common snap is newest on dest), `4` (no common snap → offer full
+      copy), `16` (destination has newer snapshots → offer rollback), `32`
+      (another common snap found for `checkagainst` logic).
+   e. For full copies (`$doincrementals='N'`), check for running VMs on the
+      destination and either delete destination snapshots (`allow_destructive`)
+      or the whole destination dataset (`force`).
+   f. Estimate stream size with `zfs send -nP`. If the destination pool has
+      insufficient space, prompt or skip (depending on `$autoproceed`).
+   g. Build send options (`-cw`, plus `-i`/`-I` for incrementals) and receive
+      options (`-uv`, plus `-F` and/or `-s` as configured). Large transfers
+      automatically enable resumable receives (`-s`).
+   h. Execute `zfs send | [pv] | zfs receive`. On failure, release locks and
+      exit fatally.
+   i. If `$verify_after_transfer='Y'`, compare source and destination snapshot
+      GUIDs.
+   j. If this is a live (non-dry-run) full copy into an existing destination,
+      call `iscsi_rebuild_torn_down` to restore any iSCSI LUNs recorded in
+      `ISCSI_TEARDOWN`.
+   k. Release source and destination locks.
+6. Restore original `$sourcefs`, `$destfs`, `$doincrementals`, and `$nextsnap`
+   before returning.
+
+**Called modules:**
+
+| Module                     | Purpose in this entry                            |
+| -------------------------- | ------------------------------------------------ |
+| `bashinit`                 | Logging and `$mydir` initialization              |
+| `rootcheck`                | Verify root privileges                           |
+| `bashsetx`                 | Optional tracing helper                          |
+| `zfssnapbuild`             | Generate the snapshot name to send               |
+| `zfsbuildfsarray`          | Build filtered source dataset list               |
+| `zfsremoveleadingqualifiers`| Build destination dataset paths                 |
+| `zfscommsnap`              | Find common snapshot for incremental sends       |
+| `zfsdelallsnaps`           | Clear destination snapshots before full copy     |
+| `zfsdelallholds`           | Release holds during rollback                    |
+| `zfsholds`                 | List holds for diagnostic output                 |
+| `zfsdelfs`                 | Destroy destination dataset when destructive     |
+| `zfsoverrides`             | Apply runtime parameter overrides                |
+| `zfslockmanager`           | Acquire/release per-dataset write locks          |
+| `zfscheckrunningvms`       | Block restores over live VMs                     |
+
+**Return codes:**
+
+| Code | Meaning                                       |
+| ---- | --------------------------------------------- |
+| 0    | Success                                       |
+| 1    | User aborted (lock conflict or prompt)        |
+| 4    | No common snapshot found (full copy declined) |
+| 8    | Fatal error                                   |
+| 9    | Operation aborted from lock manager           |
+
 ---
 
 ### `zfssnapbuild`
@@ -834,5 +1234,35 @@ Format: `@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>`
 | `$label`  | `dailybackup` | Leading label component                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive) |
 | `$bucket` | computed      | `d` (daily), `w` (weekly), or `m` (monthly) | [Retention](../developer-guide/global-variables.md#retention)          |
 
-Checks whether a previous snapshot name was saved and offers to reuse it on
-reruns.
+**Internal flow / algorithm:**
+
+1. Derive a per-caller snapfile path from `BASH_SOURCE[1]`. The file is named
+   `/tmp/zfsnextsnap_<sanitized_caller>`.
+2. If the snapfile exists and contains a snapshot name, prompt the user to
+   reuse it. Reusing keeps incremental chains stable across interrupted runs.
+3. If reuse is declined, delete the snapfile and generate a new name.
+4. Normalize `$label`: default to `@dailybackup`, ensure it starts with `@`.
+5. Compute the bucket if `$bucket` is unset:
+   - `m` if the current day is the 1st of the month (takes precedence over Sunday).
+   - `w` if the current day is Sunday.
+   - `d` otherwise.
+   - Hard-code `s` when the label is `@offsite`.
+6. Build the name as `@<label>-<ISO-8601-minutes>-<bucket>`, write it to the
+   snapfile, and print it.
+7. `removesnapfile` deletes the snapfile; orchestrators such as
+   `zfsdailybackup` call it after a successful run.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| [Snapshot name persistence](../developer-guide/data-structures.md#snapshot-name-persistence) | `/tmp/zfsnextsnap_<caller>` files |
+
+**Return codes:**
+
+| Code | Meaning                              |
+| ---- | ------------------------------------ |
+| 0    | Snapshot name printed                |
+

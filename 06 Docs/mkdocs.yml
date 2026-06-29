@@ -63,6 +63,7 @@ nav:
     - Two-Node Infrastructure: 'commands-and-modules/two-node.md'
     - Commands: 'commands-and-modules/commands.md'
     - Modules: 'commands-and-modules/modules.md'
+    - Python Modules: 'commands-and-modules/python-modules.md'
   - Messages:
     - Overview: 'messages/index.md'
 
