@@ -44,7 +44,11 @@ from command_builders import (
 from offsite_runner import detect_offsite_pool, build_offsite_step_command
 from restore_runner import compute_restore_params, build_restore_command
 from profile_manager import load_profile
-from scrub_manager import ScrubQueue, get_all_pool_scrub_states, ScrubState, start_scrub, pause_scrub, resume_scrub, stop_scrub
+from scrub_manager import (
+    ScrubQueue, get_all_pool_scrub_states, ScrubState,
+    start_scrub, pause_scrub, resume_scrub, stop_scrub,
+    attach_step_scrub_callbacks,
+)
 from cron_manager import _parse_weekday, _match_weekday_ordinal
 
 # Directory for per-profile advisory locks. Override for testing.
@@ -314,39 +318,51 @@ def _maybe_truncate_session_log(session_log_file):
 
 def _run_command(step, session_log_file=None):
     global _last_log_size_check
-    log_msg(f"INFO: {step.description}")
-    log_msg(f"DEBUG: {' '.join(shlex.quote(str(c)) for c in step.command)}")
-    env = os.environ.copy()
-    env["ZFSUTILITIES_HEADLESS"] = "Y"
-    if session_log_file:
-        env["ZFSUTILITIES_LOG_FILE"] = session_log_file
-        env["ZFSUTILITIES_LOG_INHERIT"] = "Y"
-    try:
-        process = subprocess.Popen(
-            step.command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env,
-        )
+    if step.pre_callback is not None:
         try:
-            with process.stdout:
-                for line in process.stdout:
-                    line = line.rstrip("\n")
-                    print(line, file=sys.stderr)
-                    _write_raw_line(session_log_file, line)
-                    now = time.time()
-                    if now - _last_log_size_check >= _PROFILE_LOG_SIZE_CHECK_INTERVAL:
-                        _last_log_size_check = now
-                        _maybe_truncate_session_log(session_log_file)
-        finally:
-            returncode = process.wait()
-        if returncode != 0:
-            log_msg(f"WARN: Step exited with rc={returncode}")
-        return returncode
-    except Exception as e:
-        log_msg(f"FATAL: Error running step: {e}")
-        return 1
+            step.pre_callback()
+        except Exception as exc:
+            log_msg(f"WARN: Pre-step callback failed: {exc}")
+    try:
+        log_msg(f"INFO: {step.description}")
+        log_msg(f"DEBUG: {' '.join(shlex.quote(str(c)) for c in step.command)}")
+        env = os.environ.copy()
+        env["ZFSUTILITIES_HEADLESS"] = "Y"
+        if session_log_file:
+            env["ZFSUTILITIES_LOG_FILE"] = session_log_file
+            env["ZFSUTILITIES_LOG_INHERIT"] = "Y"
+        try:
+            process = subprocess.Popen(
+                step.command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+            )
+            try:
+                with process.stdout:
+                    for line in process.stdout:
+                        line = line.rstrip("\n")
+                        print(line, file=sys.stderr)
+                        _write_raw_line(session_log_file, line)
+                        now = time.time()
+                        if now - _last_log_size_check >= _PROFILE_LOG_SIZE_CHECK_INTERVAL:
+                            _last_log_size_check = now
+                            _maybe_truncate_session_log(session_log_file)
+            finally:
+                returncode = process.wait()
+            if returncode != 0:
+                log_msg(f"WARN: Step exited with rc={returncode}")
+            return returncode
+        except Exception as e:
+            log_msg(f"FATAL: Error running step: {e}")
+            return 1
+    finally:
+        if step.post_callback is not None:
+            try:
+                step.post_callback()
+            except Exception as exc:
+                log_msg(f"WARN: Post-step callback failed: {exc}")
 
 
 def _run_step_list(steps, session_log_file=None):
@@ -459,13 +475,19 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                     remote_log_path=_REMOTE_RSYNC_LOG_PATH,
                 ))
 
+    pause_scrubs = cfg.get("pause_scrubs", False)
     for step in cfg.get("send_receive_steps", []):
         if step.get("active"):
-            steps.append(_build_send_receive_command(
+            sr_step = _build_send_receive_command(
                 step["source"], step["dest"],
                 variables, parent_dir, nextsnap,
                 dryrun=dryrun,
-            ))
+            )
+            attach_step_scrub_callbacks(
+                sr_step, step["source"], step["dest"],
+                enabled=pause_scrubs, dry_run=dryrun,
+            )
+            steps.append(sr_step)
 
     post = cfg.get("post_steps", {})
     if post.get("run_retention", False):
@@ -521,16 +543,22 @@ def run_offsite_profile(profile, config, parent_dir, session_log_file=None):
     log_msg(f"INFO: Offsite pool: {offsite_pool}")
     steps = []
 
+    pause_scrubs = cfg.get("pause_scrubs", False)
     for step in cfg.get("steps", []):
         if not step.get("active"):
             continue
         source = step["source"]
         dest = step["dest"].replace("<offsite>", offsite_pool)
-        steps.append(build_offsite_step_command(
+        offsite_step = build_offsite_step_command(
             source, dest, variables, parent_dir, nextsnap,
             step.get("includes", ""), step.get("excludes", ""),
             dryrun=dryrun,
-        ))
+        )
+        attach_step_scrub_callbacks(
+            offsite_step, source, dest,
+            enabled=pause_scrubs, dry_run=dryrun,
+        )
+        steps.append(offsite_step)
 
     if not steps:
         log_msg("WARN: No active steps to run")
@@ -551,12 +579,17 @@ def run_restore_profile(profile, config, parent_dir, session_log_file=None):
         log_msg("FATAL: Source and destination must be specified")
         return 1
     removequalifiers, destfs = compute_restore_params(source, dest)
+    restore_step = build_restore_command(
+        source, removequalifiers, destfs, parent_dir,
+        cfg.get("variables", {}), do_part1, do_part2,
+        dryrun=dryrun,
+    )
+    attach_step_scrub_callbacks(
+        restore_step, source, dest,
+        enabled=cfg.get("pause_scrubs", False), dry_run=dryrun,
+    )
     return _run_command(
-        build_restore_command(
-            source, removequalifiers, destfs, parent_dir,
-            cfg.get("variables", {}), do_part1, do_part2,
-            dryrun=dryrun,
-        ),
+        restore_step,
         session_log_file=session_log_file,
     )
 

@@ -24,6 +24,7 @@ import log_index
 import offsite_runner
 import profile_runner
 import restore_runner
+import scrub_manager as sm
 from command_builders import BashStep
 
 
@@ -1013,6 +1014,233 @@ class TestCheckWeekdayOrdinal(unittest.TestCase):
     def test_invalid_ordinal_returns_false(self):
         with self._patch_now(2025, 1, 4):
             self.assertFalse(profile_runner._check_weekday_ordinal("*#1"))
+
+
+class TestPauseScrubsInProfiles(unittest.TestCase):
+    """pause_scrubs option issues zpool scrub -p / scrub around steps."""
+
+    def _zpool_status_text(self, state):
+        if state == "scanning":
+            return "  scan: scrub in progress since Mon Jun 29 12:00:00 2026\n    50% done\n"
+        if state == "paused":
+            return "  scan: scrub paused since Mon Jun 29 12:00:00 2026\n"
+        return "  scan: none requested\n"
+
+    def _status_handler(self, m, initial):
+        status = dict(initial)
+
+        def handler(cmd, **kwargs):
+            if not cmd or cmd[0] != "zpool":
+                return m._completed("")
+            if len(cmd) >= 3 and cmd[1] == "status":
+                pool = cmd[-1]
+                return m._completed(self._zpool_status_text(status.get(pool, "none")))
+            if len(cmd) >= 2 and cmd[1] == "scrub":
+                if "-p" in cmd:
+                    pool = cmd[-1]
+                    status[pool] = "paused"
+                else:
+                    pool = cmd[-1]
+                    status[pool] = "scanning"
+                return m._completed("")
+            return m._completed("")
+
+        return handler
+
+    def _scrub_commands(self, m):
+        return [
+            list(c[0])
+            for c in m.calls
+            if c[0] and c[0][0] == "zpool" and "scrub" in c[0]
+        ]
+
+    def test_backup_profile_pauses_and_resumes_scrubs(self):
+        with temp_config_dir() as tmpdir:
+            state_path = os.path.join(tmpdir, "scrub_state.json")
+            with open(state_path, "w") as fh:
+                fh.write("{}")
+            profile = {
+                "dry_run": False,
+                "config": {
+                    "pause_scrubs": True,
+                    "variables": {"label": "dailybackup"},
+                    "send_receive_steps": [
+                        {"source": "src/a", "dest": "dst/b", "active": True},
+                    ],
+                    "pull_steps": [],
+                    "post_steps": {
+                        "run_retention": False,
+                        "remove_snapfile": False,
+                    },
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                    "zfs_keys_path": "",
+                    "zfs_keys_dest": "",
+                },
+            }
+            config = {}
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                with mock_subprocess() as m:
+                    m.add_zpool_list(
+                        [{"name": "src"}, {"name": "dst"}]
+                    )
+                    m.set_command_handler(
+                        r"^zpool (status|scrub) ",
+                        self._status_handler(m, {"src": "scanning", "dst": "scanning"}),
+                    )
+                    rc = profile_runner.run_backup_profile(profile, config, "/bin")
+            self.assertEqual(rc, 0)
+            scrub_cmds = self._scrub_commands(m)
+            self.assertIn(["zpool", "scrub", "-p", "src"], scrub_cmds)
+            self.assertIn(["zpool", "scrub", "-p", "dst"], scrub_cmds)
+            self.assertIn(["zpool", "scrub", "src"], scrub_cmds)
+            self.assertIn(["zpool", "scrub", "dst"], scrub_cmds)
+
+    def test_backup_profile_does_not_pause_when_disabled(self):
+        with temp_config_dir() as tmpdir:
+            state_path = os.path.join(tmpdir, "scrub_state.json")
+            with open(state_path, "w") as fh:
+                fh.write("{}")
+            profile = {
+                "dry_run": False,
+                "config": {
+                    "pause_scrubs": False,
+                    "variables": {"label": "dailybackup"},
+                    "send_receive_steps": [
+                        {"source": "src/a", "dest": "dst/b", "active": True},
+                    ],
+                    "pull_steps": [],
+                    "post_steps": {
+                        "run_retention": False,
+                        "remove_snapfile": False,
+                    },
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                    "zfs_keys_path": "",
+                    "zfs_keys_dest": "",
+                },
+            }
+            config = {}
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                with mock_subprocess() as m:
+                    rc = profile_runner.run_backup_profile(profile, config, "/bin")
+            self.assertEqual(rc, 0)
+            scrub_cmds = self._scrub_commands(m)
+            self.assertEqual(scrub_cmds, [])
+
+    def test_offsite_profile_pauses_and_resumes_scrubs(self):
+        with temp_config_dir() as tmpdir:
+            state_path = os.path.join(tmpdir, "scrub_state.json")
+            with open(state_path, "w") as fh:
+                fh.write("{}")
+            profile = {
+                "dry_run": False,
+                "config": {
+                    "pause_scrubs": True,
+                    "variables": {},
+                    "offsite_pools": ["offsite"],
+                    "steps": [
+                        {
+                            "source": "src/a",
+                            "dest": "<offsite>/b",
+                            "active": True,
+                        },
+                    ],
+                },
+            }
+            config = {}
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                with mock_subprocess() as m:
+                    m.add_zpool_list(
+                        [{"name": "src"}, {"name": "offsite"}]
+                    )
+                    m.set_command_handler(
+                        r"^zpool (status|scrub) ",
+                        self._status_handler(m, {"src": "scanning", "offsite": "scanning"}),
+                    )
+                    rc = profile_runner.run_offsite_profile(profile, config, "/bin")
+            self.assertEqual(rc, 0)
+            scrub_cmds = self._scrub_commands(m)
+            self.assertIn(["zpool", "scrub", "-p", "src"], scrub_cmds)
+            self.assertIn(["zpool", "scrub", "-p", "offsite"], scrub_cmds)
+            self.assertIn(["zpool", "scrub", "src"], scrub_cmds)
+            self.assertIn(["zpool", "scrub", "offsite"], scrub_cmds)
+
+    def test_restore_profile_pauses_and_resumes_scrubs(self):
+        with temp_config_dir() as tmpdir:
+            state_path = os.path.join(tmpdir, "scrub_state.json")
+            with open(state_path, "w") as fh:
+                fh.write("{}")
+            profile = {
+                "dry_run": False,
+                "config": {
+                    "pause_scrubs": True,
+                    "source": "backup/a",
+                    "dest": "tank/a",
+                    "do_part1": True,
+                    "do_part2": False,
+                    "variables": {},
+                },
+            }
+            config = {}
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                with mock_subprocess() as m:
+                    m.add_zpool_list(
+                        [{"name": "backup"}, {"name": "tank"}]
+                    )
+                    m.set_command_handler(
+                        r"^zpool (status|scrub) ",
+                        self._status_handler(m, {"backup": "scanning", "tank": "scanning"}),
+                    )
+                    rc = profile_runner.run_restore_profile(profile, config, "/bin")
+            self.assertEqual(rc, 0)
+            scrub_cmds = self._scrub_commands(m)
+            self.assertIn(["zpool", "scrub", "-p", "backup"], scrub_cmds)
+            self.assertIn(["zpool", "scrub", "-p", "tank"], scrub_cmds)
+            self.assertIn(["zpool", "scrub", "backup"], scrub_cmds)
+            self.assertIn(["zpool", "scrub", "tank"], scrub_cmds)
+
+    def test_already_paused_pool_is_not_resumed(self):
+        with temp_config_dir() as tmpdir:
+            state_path = os.path.join(tmpdir, "scrub_state.json")
+            with open(state_path, "w") as fh:
+                fh.write("{}")
+            profile = {
+                "dry_run": False,
+                "config": {
+                    "pause_scrubs": True,
+                    "variables": {"label": "dailybackup"},
+                    "send_receive_steps": [
+                        {"source": "src/a", "dest": "dst/b", "active": True},
+                    ],
+                    "pull_steps": [],
+                    "post_steps": {
+                        "run_retention": False,
+                        "remove_snapfile": False,
+                    },
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                    "zfs_keys_path": "",
+                    "zfs_keys_dest": "",
+                },
+            }
+            config = {}
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                with mock_subprocess() as m:
+                    m.add_zpool_list(
+                        [{"name": "src"}, {"name": "dst"}]
+                    )
+                    m.set_command_handler(
+                        r"^zpool (status|scrub) ",
+                        self._status_handler(m, {"src": "scanning", "dst": "paused"}),
+                    )
+                    rc = profile_runner.run_backup_profile(profile, config, "/bin")
+            self.assertEqual(rc, 0)
+            scrub_cmds = self._scrub_commands(m)
+            self.assertIn(["zpool", "scrub", "-p", "src"], scrub_cmds)
+            self.assertIn(["zpool", "scrub", "src"], scrub_cmds)
+            self.assertNotIn(["zpool", "scrub", "-p", "dst"], scrub_cmds)
+            self.assertNotIn(["zpool", "scrub", "dst"], scrub_cmds)
 
 
 if __name__ == "__main__":

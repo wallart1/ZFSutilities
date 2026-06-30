@@ -256,5 +256,113 @@ class TestOnPoolsRevert(unittest.TestCase):
         mock_refresh.assert_called_once_with(app)
 
 
+class TestOnPoolsImport(unittest.TestCase):
+    """on_pools_import refreshes both pool and scrub tables."""
+
+    def _make_app_with_offline_selection(self, pa, pools, selected):
+        app = _make_app(pools)
+        model = MagicMock()
+        paths = []
+        for name in selected:
+            path = MagicMock()
+            paths.append(path)
+
+        it = MagicMock()
+        model.get_iter.return_value = it
+        call_count = {"n": 0}
+
+        def get_value(_it, col):
+            name = selected[call_count["n"] // 2]
+            call_count["n"] += 1
+            if col == pa.COL_NAME:
+                return name
+            if col == pa.COL_HEALTH:
+                return "OFFLINE"
+            return None
+
+        model.get_value.side_effect = get_value
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
+            model, paths
+        )
+        app.pool_view.get_selection.return_value.get_selected.return_value = (
+            model, None
+        )
+        return app
+
+    def test_import_offline_selected_refreshes_scrub_table(self):
+        pa = _import_pool_actions()
+        app = self._make_app_with_offline_selection(pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        with patch.object(pa, "refresh_pools_page") as mock_refresh, \
+             patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh, \
+             patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst, \
+             patch.object(app.ctx.zfs_repository, "import_pool", return_value=True):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_import(app)
+
+        mock_refresh.assert_called_once_with(app)
+        mock_scrub_refresh.assert_called_once_with(app)
+        mock_burst.assert_called_once_with(app)
+
+
+class TestOnPoolsExport(unittest.TestCase):
+    """on_pools_export refreshes both pool and scrub tables."""
+
+    def _make_app_with_selection(self, pa, pools, selected):
+        app = _make_app(pools)
+        model = MagicMock()
+        paths = []
+        for name in selected:
+            path = MagicMock()
+            paths.append(path)
+
+        it = MagicMock()
+        model.get_iter.return_value = it
+        call_count = {"n": 0}
+
+        def get_value(_it, col):
+            name = selected[call_count["n"] // 2]
+            call_count["n"] += 1
+            if col == pa.COL_NAME:
+                return name
+            if col == pa.COL_HEALTH:
+                return "ONLINE"
+            return None
+
+        model.get_value.side_effect = get_value
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
+            model, paths
+        )
+        app.pool_view.get_selection.return_value.get_selected.return_value = (
+            model, None
+        )
+        return app
+
+    def test_export_selected_refreshes_scrub_table(self):
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        with patch.object(pa, "refresh_pools_page") as mock_refresh, \
+             patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh, \
+             patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst, \
+             patch.object(app.ctx.zfs_repository, "export_pool", return_value=True):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+        mock_refresh.assert_called_once_with(app)
+        mock_scrub_refresh.assert_called_once_with(app)
+        mock_burst.assert_called_once_with(app)
+
+
 if __name__ == "__main__":
     unittest.main()

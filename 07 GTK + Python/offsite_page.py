@@ -17,6 +17,7 @@ from feature_config import (
     _read_snapfile, OFFSITE_SNAPFILE,
 )
 from offsite_runner import detect_offsite_pool, build_offsite_step_command
+from scrub_manager import attach_step_scrub_callbacks
 from gui_helpers import (
     setup_row_scroll,
     set_button_markup_red, DirtyTracker, add_var_row,
@@ -139,6 +140,18 @@ def create_offsite_page(app, ctx):
         add_var_row(adv_grid, i, key, variables, app.offsite_var_widgets,
                     yn_vars=OFFSITE_YN_VARIABLES, topic_map=_OFFSITE_TOPIC_MAP)
 
+    app.offsite_pause_scrubs = Gtk.CheckButton(
+        label="Pause scrubs on source/destination pools during each step"
+    )
+    app.offsite_pause_scrubs.set_active(
+        offsite_cfg.get("pause_scrubs", False)
+    )
+    app.offsite_pause_scrubs.set_tooltip_text(
+        "Pause ZFS scrubs on the pools used by each offsite step "
+        "while that step is running."
+    )
+    adv_box.pack_start(app.offsite_pause_scrubs, False, False, 0)
+
     # --- Snapshot frame ---
     snap_frame = Gtk.Frame()
     snap_frame.set_label_widget(bold_label("Snapshot"))
@@ -250,6 +263,8 @@ def create_offsite_page(app, ctx):
         "row-inserted", lambda _m, _p, _i, t=tracker: t.check())
     app.offsite_step_store.connect(
         "row-deleted", lambda _m, _p, t=tracker: t.check())
+    app.offsite_pause_scrubs.connect(
+        "toggled", lambda _w, t=tracker: t.check())
 
     return scrolled
 
@@ -284,6 +299,7 @@ def collect_offsite_config(app):
         "variables": variables,
         "offsite_pools": offsite_pools,
         "steps": steps,
+        "pause_scrubs": app.offsite_pause_scrubs.get_active(),
     }
 
 
@@ -317,6 +333,7 @@ def load_offsite_config(app, config):
             step["active"], step["source"], step["dest"],
             step.get("includes", ""), step.get("excludes", ""),
         ])
+    app.offsite_pause_scrubs.set_active(config.get("pause_scrubs", False))
 
 
 def revert_offsite_config(app):
@@ -442,6 +459,7 @@ def on_offsite_run(app, ctx):
         log_msg("INFO: Dry run mode enabled — no changes will be made")
 
     steps = []
+    pause_scrubs = offsite_cfg.get("pause_scrubs", False)
     for step in offsite_cfg["steps"]:
         if not step["active"]:
             continue
@@ -450,11 +468,16 @@ def on_offsite_run(app, ctx):
         includes = step.get("includes", "")
         excludes = step.get("excludes", "")
 
-        steps.append(build_offsite_step_command(
+        offsite_step = build_offsite_step_command(
             source, dest, variables, ctx.parent_dir, nextsnap,
             includes, excludes,
             dryrun=dryrun,
-        ))
+        )
+        attach_step_scrub_callbacks(
+            offsite_step, source, dest,
+            enabled=pause_scrubs, dry_run=dryrun,
+        )
+        steps.append(offsite_step)
 
     if not steps:
         log_msg("WARN: No active steps to run")

@@ -1266,6 +1266,19 @@ class TestCreateDashboardPage(unittest.TestCase):
         self.assertEqual(len(pool_box.children), 2)
         threshold_box = pool_box.children[0]
         self.assertIn(app.dashboard_threshold_spin, threshold_box.children)
+        pool_grid_sw = pool_box.children[1]
+        self.assertIsInstance(pool_grid_sw, _WidgetRecorder)
+        self.assertIn(app.dashboard_pool_grid, pool_grid_sw.children)
+
+    def test_pool_health_grid_is_horizontally_scrollable(self):
+        app = self._create_app()
+        self._run_create(app)
+        pool_box = app.dashboard_pool_frame.children[0]
+        pool_grid_sw = pool_box.children[1]
+        self.assertIsInstance(pool_grid_sw, _WidgetRecorder)
+        pool_grid_sw.set_policy.assert_called_once()
+        pool_grid_sw.set_propagate_natural_height.assert_called_once_with(True)
+        self.assertIn(app.dashboard_pool_grid, pool_grid_sw.children)
 
     def test_threshold_spinner_configuration(self):
         app = self._create_app()

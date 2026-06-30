@@ -56,6 +56,7 @@ test_all_success_returns_zero() {
                 command zfs "$@"
             }
             export -f zfs
+            autoproceed='Y'
             source "'"$old_mydir"'/zfsdelallsnaps"
             delallsnaps "tank/fs"
         '
@@ -94,6 +95,7 @@ test_any_failure_returns_one() {
                 command zfs "$@"
             }
             export -f zfs
+            autoproceed='Y'
             source "'"$old_mydir"'/zfsdelallsnaps"
             delallsnaps "tank/fs"
         '
@@ -126,6 +128,7 @@ test_no_snapshots_returns_zero() {
                 command zfs "$@"
             }
             export -f zfs
+            autoproceed='Y'
             source "'"$old_mydir"'/zfsdelallsnaps"
             delallsnaps "tank/fs"
         '
@@ -159,6 +162,7 @@ test_filtered_no_match_returns_zero() {
                 command zfs "$@"
             }
             export -f zfs
+            autoproceed='Y'
             source "'"$old_mydir"'/zfsdelallsnaps"
             delallsnaps "tank/fs" "nomatch"
         '

@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.59.0
+
+### Added
+
+- **Pause scrubs during Backup/Offsite/Restore** — Each of these tabs now has
+  an option to **pause scrubs on the source and destination pools while each
+  send/receive step is running**. Scrubs resume automatically when the step
+  finishes. The option is stored in the JSON config under the tab's section and
+  also applies to headless profile/cron runs via `profile_runner.py`. Already
+  paused scrubs are left untouched.
+- **Run Now for scheduled profiles** — The Schedule tab supports selecting one
+  or more profiles and clicking **Run Now** to execute them immediately. Run Now
+  ignores the **Active** checkbox; output streams to the info panel with a
+  `[profile-name]` prefix so concurrent profiles can be distinguished.
+- **Profile overwrite confirmation** — Recalling a profile and saving it under
+  an existing name now prompts for overwrite confirmation via
+  `profile_dialogs.py`.
+
+### Changed
+
+- **Scrub control decoupled from dataset lock manager** — `scrub_manager.py`
+  and `zfsscruball` now consult live `zpool status` scrub state instead of
+  acquiring hierarchical dataset locks. This makes scrub pause/resume/start/stop
+  independent of backup, restore, prune, and dataset-destruction jobs; the worst
+  race outcome is a logged warning from ZFS rejecting an invalid transition.
+- **`zfsscruball` pause/resume** — `zfsscruball` now accepts `pause` and
+  `resume` arguments and tracks completed pools in `/tmp/zfsscruball.state`.
+- **Cron output suppression** — `cron_manager.py` prefixes scheduled profile
+  lines with `mkdir -p /run/lock/zfs/profiles &&` and suffixes them with
+  `> /dev/null 2>&1`. This prevents cron from mailing profile-runner output on
+  systems where `MAILTO=""` alone is not honoured, while the runner continues
+  to log everything to the session log file.
+- **Configuration schema** — Migration 16 → 17 adds the `pause_scrubs` flag to
+  the Backup, Offsite, and Restore config sections.
+
+### Tests
+
+- Expanded `test_scrub_manager.py`, `test_profile_runner.py`,
+  `test_schedule_page.py`, `test_backup_page.py`, `test_backup_runner.py`,
+  `test_cron_manager.py`, `test_config_migrations.py`, `test_dashboard_page.py`,
+  `test_pool_actions.py`, `test_profile_manager.py`, `test_profile_dialogs.py`,
+  `test_action_dispatch.py`, and `test_restore_page.py` to cover the new scrub
+  pause, Run Now, overwrite, and cron-output features.
+- Updated `tests/test-zfsscruball` and `tests/test-zfsdelallsnaps` for the new
+  pause/resume behaviour and lock integration.
+
 ## 0.58.0
 
 ### Added
@@ -49,6 +95,11 @@
 - **`zfslockmanager` multiple-lock helper** — Added
   `zfslock_acquire_multiple <type> <dataset> ...` for deadlock-free acquisition
   of several locks.
+- **Cron output suppression** — `cron_manager.py` now prefixes scheduled profile
+  lines with `mkdir -p /run/lock/zfs/profiles &&` and suffixes them with
+  `> /dev/null 2>&1`. This prevents cron from mailing profile-runner output on
+  systems where `MAILTO=""` alone is not honoured, while the runner continues
+  to log everything to the session log file.
 
 ### Tests
 

@@ -143,14 +143,12 @@ There are at least four ways a scrub can be started or controlled:
 * Standalone `zfsscruball`.
 * Systemd timers (if `system_scrub_weekly` / `system_scrub_monthly` are enabled).
 
-These paths do not coordinate. For example:
-
-* The GUI queue may think a scrub is active while `zfsscruball` also starts one.
-* `profile_runner.py` can resume a scrub that the GUI paused.
-* `zfsscruball pause` may pause a scrub that the GUI queue believes is running.
-
-ZFS itself rejects a second scrub on the same pool, but pause/resume/stop races
-are not prevented.
+Scrub actions do not use the hierarchical dataset lock manager because a scrub
+has no dependency on backup, restore, prune, or dataset destruction.  Instead,
+each action consults the live `zpool status` scrub state and skips itself when
+the requested transition is invalid (for example, pausing a pool that is not
+currently scanning).  ZFS itself rejects invalid transitions, so the worst-case
+outcome of concurrent scrub control is a logged warning, not data loss.
 
 ### 7. Headless `profile_runner.py` has no global lock
 
@@ -187,6 +185,13 @@ another of those three is running. It does **not** block:
 Each of these has its own `running` flag (`retention_runner`,
 `dataset_runner`, `scrub_queue`, etc.), but there is no cross-type guard.
 
+The Backup, Offsite, and Restore tabs now offer an optional **Pause scrubs on
+source/destination pools during each step** setting. When enabled, the runner
+pauses scrubs on the pools used by the current send/receive step and resumes
+them after the step finishes. This closes the scrub-versus-backup/restore gap
+for those pools, but it does not block other concurrent actions such as prune
+or destroy.
+
 ### 10. Two restores targeting the same destination
 
 A restore does lock the source and destination datasets inside
@@ -206,7 +211,7 @@ happens before or during destination preparation.
 | Concurrent snapshot creation on the same dataset | **High** | Rollback during receive | **Yes** (lock before snapshot in `zfs-send-receive`) |
 | Two prune jobs on same pool | **Medium** | Logged warnings | **Yes** (Phase 1 per-dataset `w` lock) |
 | History/log-index/config write races | **Medium** | Silent data loss or stale UI | **Yes** (Phase 4 file locking) |
-| Uncoordinated scrub paths | **Medium** | `zpool scrub` may reject | **Yes** (Phase 1 bash pool lock + Phase 2 Python pool lock) |
+| Uncoordinated scrub paths | **Low** | Live state check + `zpool scrub` reject | **Yes** (live `zpool status` checks) |
 | Headless profile overlap | **Medium** | `rc=9` on lock conflict | **Yes** (Phase 5 per-profile `flock`) |
 | Checkagainst during deletions | **Low** | Spurious mismatch or error | **No** |
 | rsync log truncation/interleaving | **Low** | Mixed or missing output | **No** |
@@ -216,7 +221,9 @@ happens before or during destination preparation.
 Until the gaps are closed:
 
 1. Do not run **Prune**, **Destroy Dataset**, or **Scrub** while a
-   **Backup**, **Offsite**, or **Restore** is in progress.
+   **Backup**, **Offsite**, or **Restore** is in progress. If you want scrubs
+   paused automatically during these jobs, enable the **Pause scrubs on
+   source/destination pools during each step** option on the corresponding tab.
 2. Avoid scheduling profiles so close together that they can overlap.
 3. Do not run `zfsscruball` from the command line while the GUI is managing
    scrubs.
@@ -271,8 +278,9 @@ Python/GUI mutators now participate in the lock manager:
     already locked.
   - `retention_actions.on_retention_prune` aborts if any selected pool is
     already locked.
-* `scrub_manager.start/pause/resume/stop_scrub` each acquire a `w` lock on the
-  pool around the `zpool scrub` command.
+* Scrub control has been moved out of the lock manager.  `scrub_manager`
+  consults live `zpool status` before start/pause/resume/stop, and `zfsscruball`
+  no longer acquires a pool lock while scrubbing.
 
 ## Recently resolved (Phase 3)
 

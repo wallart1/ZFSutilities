@@ -261,6 +261,5 @@ Scripts that have lock integration:
 | zfsdelsnap       | `w`       | snapshot's parent dataset        |
 | zfsdelallsnaps   | `w`       | parent dataset (via `zfsdelsnap`)|
 | zfsdelfs         | `x`       | top-level dataset being destroyed|
-| zfsscruball      | `w`       | pool being scrubbed              |
 | zfsdailybackup   |           | orchestrates other scripts       |
 | zfssendoffsite   |           | orchestrates other scripts       |

@@ -90,9 +90,43 @@ def delete_profile(name):
     path = os.path.join(get_profiles_dir(), f"{name}.json")
     try:
         os.remove(path)
+        log_msg(f"INFO: Deleted profile: {name}")
         return True
     except OSError:
         return False
+
+
+def update_profile(tab_type, custom_name, config, dry_run=False):
+    """Replace the snapshot config of an existing profile.
+
+    The existing cron schedule and active flag are preserved so the user
+    does not have to re-enable or re-schedule the profile after updating it
+    from a tab page.
+
+    Args:
+        tab_type: 'backup', 'offsite', 'restore', 'retention', or 'scrub'
+        custom_name: user-supplied suffix (validated)
+        config: tab-specific config dict to snapshot
+        dry_run: whether the profile should run in dry-run mode
+
+    Returns:
+        The updated profile dict.
+
+    Raises:
+        ValueError: if the profile does not exist.
+    """
+    user = get_user()
+    profile_name = build_profile_name(user, tab_type, custom_name)
+    profile = load_profile(profile_name)
+    if profile is None:
+        raise ValueError(f"Profile '{profile_name}' does not exist")
+
+    profile["config"] = config
+    profile["dry_run"] = bool(dry_run)
+    profile["updated_at"] = datetime.now().isoformat()
+    save_profile(profile)
+    log_msg(f"INFO: Updated profile: {profile_name}")
+    return profile
 
 
 def profile_exists(name):
@@ -139,4 +173,5 @@ def create_profile(tab_type, custom_name, config, dry_run=False):
         "active": False,
     }
     save_profile(profile)
+    log_msg(f"INFO: Created profile: {profile_name}")
     return profile

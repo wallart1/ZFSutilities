@@ -95,6 +95,7 @@ def _backup_app():
     app.backup_zfs_keys_path = _FakeEntry()
     app.backup_zfs_keys_dest = _FakeEntry()
     app.backup_pull_steps_active = _FakeCheckButton()
+    app.backup_pause_scrubs = _FakeCheckButton()
     return app
 
 
@@ -208,6 +209,37 @@ class TestBackupConfigHelpers(unittest.TestCase):
             app.backup_pull_steps_active.set_active(False)
             config = backup_page.collect_backup_config(app)
             self.assertFalse(config["pull_steps_active"])
+
+    def test_collect_backup_config_includes_pause_scrubs(self):
+        with mock_gtk():
+            import backup_page
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+
+            app = _backup_app()
+            app.backup_pause_scrubs.set_active(True)
+            config = backup_page.collect_backup_config(app)
+            self.assertTrue(config["pause_scrubs"])
+
+    def test_load_backup_config_sets_pause_scrubs(self):
+        with mock_gtk():
+            import backup_page
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+
+            app = _backup_app()
+            backup_page.load_backup_config(app, {"pause_scrubs": True})
+            self.assertTrue(app.backup_pause_scrubs.get_active())
+
+    def test_load_backup_config_defaults_pause_scrubs_to_false(self):
+        with mock_gtk():
+            import backup_page
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+
+            app = _backup_app()
+            backup_page.load_backup_config(app, {})
+            self.assertFalse(app.backup_pause_scrubs.get_active())
 
 
 class TestBackupPageFrames(unittest.TestCase):

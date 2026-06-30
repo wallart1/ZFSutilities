@@ -453,5 +453,48 @@ class TestSessionLogSizeCap(unittest.TestCase):
                 self.assertIsNone(index2.get(path))
 
 
+class TestStepCallbacks(unittest.TestCase):
+    """pre_callback / post_callback hooks run around each step."""
+
+    def _runner(self):
+        return br.BackupRunner(MagicMock(), MagicMock())
+
+    def test_pre_and_post_callbacks_called_when_spawn_fails(self):
+        runner = self._runner()
+        runner.running = True
+        pre = MagicMock()
+        post = MagicMock()
+        runner.steps = [
+            BashStep([], "step", pre_callback=pre, post_callback=post)
+        ]
+        with patch.object(runner, "_spawn_process", return_value=False):
+            runner._run_next_step()
+        pre.assert_called_once_with()
+        post.assert_called_once_with()
+
+    def test_post_callback_called_on_cancel(self):
+        runner = self._runner()
+        runner.running = True
+        post = MagicMock()
+        runner.steps = [BashStep([], "step", post_callback=post)]
+        runner.current_step = 0
+        runner.process = MagicMock()
+        runner.process.poll.return_value = None
+        runner.cancel()
+        post.assert_called_once_with()
+
+    def test_post_callback_not_called_for_finally_step(self):
+        runner = self._runner()
+        runner.running = True
+        post = MagicMock()
+        runner._finally_step = BashStep([], "finally", post_callback=post)
+        runner.current_step = 0
+        runner.process = MagicMock()
+        runner.process.poll.return_value = None
+        runner._is_finally = True
+        runner.cancel()
+        post.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

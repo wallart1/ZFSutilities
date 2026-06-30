@@ -15,7 +15,8 @@ from gui_helpers import (
     add_scrolled_text_view, set_button_markup_red,
 )
 from pools_page import (
-    refresh_pools_page, _update_pools_dirty_indicator, get_selected_pool_names,
+    refresh_pools_page, refresh_scrub_table, schedule_scrub_refresh_burst,
+    _update_pools_dirty_indicator, get_selected_pool_names,
     COL_NAME, COL_HEALTH, COL_FLAG,
     FLAG_REGISTERED, FLAG_UNREGISTERED,
 )
@@ -201,6 +202,8 @@ def on_pools_import(app):
             for pool_name in offline_selected:
                 _import_single_pool(app, pool_name)
             refresh_pools_page(app)
+            refresh_scrub_table(app)
+            schedule_scrub_refresh_burst(app)
         return
 
     # Fallback: show dialog of importable pools
@@ -288,6 +291,8 @@ def on_pools_import(app):
 
     _import_single_pool(app, selected_pool)
     refresh_pools_page(app)
+    refresh_scrub_table(app)
+    schedule_scrub_refresh_burst(app)
 
 
 def on_pools_export(app):
@@ -321,6 +326,8 @@ def on_pools_export(app):
         else:
             log_msg(f"WARN: Error exporting pool '{pool_name}'")
     refresh_pools_page(app)
+    refresh_scrub_table(app)
+    schedule_scrub_refresh_burst(app)
 
 
 def on_pools_remove(app):

@@ -180,6 +180,22 @@ class TestDatasetsPageSpec(unittest.TestCase):
         self.assertIn(("Collapse All", "list-remove", None), buttons)
 
 
+class TestSchedulePageSpec(unittest.TestCase):
+    """Schedule page exposes Run Now alongside Save/Revert/Delete."""
+
+    def test_run_now_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["schedule"]["buttons"]
+        self.assertIn(("Run Now", "media-playback-start", None), buttons)
+
+
+class TestScheduleHandlers(unittest.TestCase):
+    """Schedule action handlers are wired correctly."""
+
+    def test_run_now_handler(self):
+        handler = action_dispatch.ACTION_HANDLERS["schedule"]["Run Now"]
+        self.assertIs(handler, action_dispatch.on_schedule_run_now)
+
+
 class TestDatasetsHandlers(unittest.TestCase):
     """Datasets action handlers are wired correctly."""
 

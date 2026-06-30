@@ -17,6 +17,11 @@ if GUI_SRC not in sys.path:
 
 import cron_manager
 
+# Import schedule_page once under the GTK mock so that @patch decorators on
+# test methods do not pull in the real GTK module when they resolve names.
+with mock_gtk():
+    import schedule_page
+
 
 class TestRegenerateCronPath(unittest.TestCase):
     """Verify _regenerate_cron picks the correct runner_path."""
@@ -95,6 +100,16 @@ class FakeScheduleRow:
         return self._values[col]
 
 
+class FakeTreePath:
+    """Minimal stand-in for a Gtk.TreePath."""
+
+    def __init__(self, idx):
+        self._idx = idx
+
+    def get_indices(self):
+        return [self._idx]
+
+
 class FakeScheduleStore:
     """Minimal ListStore fake supporting the operations schedule_page uses."""
     def __init__(self, rows):
@@ -102,6 +117,12 @@ class FakeScheduleStore:
 
     def get_iter_from_string(self, path):
         return int(path)
+
+    def get_iter(self, path):
+        """Accept either an int index or a FakeTreePath."""
+        if isinstance(path, int):
+            return path
+        return path.get_indices()[0]
 
     def get_value(self, iter_idx, col):
         return self._rows[iter_idx][col]
@@ -161,6 +182,21 @@ class TestScheduleDirtyTracking(unittest.TestCase):
         self.assertTrue(app._schedule_pending)
         self.assertEqual(app._schedule_pending["p1"]["active"], True)
         mock_red.assert_called_with(app._schedule_save_button, True)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_active_toggle_selects_only_toggled_row(self, mock_red):
+        """Toggling the Active checkbox must select only that row."""
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "* * * * *", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {"profile_name": "p1", "active": False, "cron": {}}
+
+        with patch("schedule_page.load_profile", return_value=saved_profile):
+            schedule_page._on_active_toggled(None, "0", app)
+
+        selection = app.schedule_view.get_selection()
+        selection.unselect_all.assert_called_once()
+        selection.select_path.assert_called_once()
 
     @patch("schedule_page.set_button_markup_red")
     def test_active_toggle_back_to_saved_clears_dirty(self, mock_red):
@@ -501,6 +537,159 @@ class TestSchedulePageFrames(unittest.TestCase):
         frame.set_label_widget.assert_called_once()
         expander.set_label.assert_not_called()
         expander.set_label_widget.assert_called_once()
+
+
+class TestRunNow(unittest.TestCase):
+    """Verify the Run Now button launches selected profiles immediately."""
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+            return schedule_page
+
+    def _make_app(self, rows, selected_paths):
+        app = MagicMock()
+        app.schedule_store = FakeScheduleStore(rows)
+        app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
+            app.schedule_store, [FakeTreePath(p) for p in selected_paths]
+        )
+        app._running_profiles = set()
+        app._schedule_save_button = MagicMock()
+        app._schedule_pending = {}
+        app._schedule_ignore_changes = False
+        app.schedule_cron_entries = {
+            "minute": MagicMock(),
+            "hour": MagicMock(),
+            "day": MagicMock(),
+            "month": MagicMock(),
+            "weekday": MagicMock(),
+        }
+        return app
+
+    def _make_popen(self, stdout_data="", stderr_data=""):
+        process = MagicMock()
+        process.stdout.fileno.return_value = 10
+        process.stderr.fileno.return_value = 11
+        process.pid = 12345
+        process.stdout.read.side_effect = [stdout_data.encode(), b""]
+        process.stderr.read.side_effect = [stderr_data.encode(), b""]
+        return process
+
+    def test_treeview_uses_multiple_selection(self):
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._ui_state = MagicMock()
+
+        with patch.object(schedule_page, "list_profiles", return_value=[]), \
+             patch.object(schedule_page, "set_button_markup_red"), \
+             patch.object(schedule_page, "Gtk") as mock_gtk_module:
+            schedule_page.create_schedule_page(app)
+
+        selection = app.schedule_view.get_selection()
+        selection.set_mode.assert_called_once_with(
+            mock_gtk_module.SelectionMode.MULTIPLE
+        )
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_run_now_with_no_selection_warns(self, _mock_red):
+        schedule_page = self._import_schedule_page()
+        app = self._make_app([], [])
+
+        with patch("schedule_page.subprocess.Popen") as mock_popen, \
+             patch("schedule_page.log_msg") as mock_log:
+            schedule_page.on_schedule_run_now(app)
+
+        mock_popen.assert_not_called()
+        mock_log.assert_called_once_with("WARN: No profile selected")
+
+    @patch("schedule_page.set_button_markup_red")
+    @patch("schedule_page.os.set_blocking")
+    @patch("schedule_page.GLib.io_add_watch")
+    @patch("schedule_page.GLib.child_watch_add")
+    def test_run_now_launches_selected_profiles(self, mock_child_watch,
+                                                 mock_io_add_watch,
+                                                 _mock_set_blocking,
+                                                 _mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [
+            [False, "p1", "backup", "* * * * *", "next", ""],
+            [False, "p2", "offsite", "* * * * *", "next", ""],
+        ]
+        app = self._make_app(rows, [0, 1])
+
+        process1 = self._make_popen(stdout_data="out1")
+        process2 = self._make_popen(stdout_data="out2")
+        mock_popen = MagicMock(side_effect=[process1, process2])
+
+        with patch("schedule_page.subprocess.Popen", mock_popen), \
+             patch("schedule_page._resolve_profile_runner_path",
+                   return_value="/fake/profile_runner.py"):
+            schedule_page.on_schedule_run_now(app)
+
+        self.assertEqual(mock_popen.call_count, 2)
+        self.assertEqual(
+            mock_popen.call_args_list[0][0][0],
+            [sys.executable, "/fake/profile_runner.py", "run", "p1"],
+        )
+        self.assertEqual(
+            mock_popen.call_args_list[1][0][0],
+            [sys.executable, "/fake/profile_runner.py", "run", "p2"],
+        )
+        self.assertEqual(app._running_profiles, {"p1", "p2"})
+        self.assertEqual(mock_io_add_watch.call_count, 4)
+        mock_child_watch.assert_called()
+
+    @patch("schedule_page.set_button_markup_red")
+    @patch("schedule_page.os.set_blocking")
+    @patch("schedule_page.GLib.io_add_watch")
+    @patch("schedule_page.GLib.child_watch_add")
+    def test_run_now_ignores_active_flag(self, _mock_child_watch,
+                                         _mock_io_add_watch,
+                                         _mock_set_blocking,
+                                         _mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "inactive", "backup", "* * * * *", "next", ""]]
+        app = self._make_app(rows, [0])
+        process = self._make_popen()
+
+        with patch("schedule_page.subprocess.Popen", return_value=process), \
+             patch("schedule_page._resolve_profile_runner_path",
+                   return_value="/fake/profile_runner.py"):
+            schedule_page.on_schedule_run_now(app)
+
+        self.assertIn("inactive", app._running_profiles)
+
+    @patch("schedule_page.set_button_markup_red")
+    @patch("schedule_page.os.set_blocking")
+    def test_run_now_logs_profile_output_with_prefix(self, _mock_set_blocking,
+                                                     _mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        app = self._make_app(rows, [0])
+        process = self._make_popen(stdout_data="line1\nline2")
+
+        captured = []
+        with patch("schedule_page.subprocess.Popen", return_value=process), \
+             patch("schedule_page._resolve_profile_runner_path",
+                   return_value="/fake/profile_runner.py"), \
+             patch("schedule_page.log_msg", side_effect=captured.append), \
+             patch("schedule_page.os.read",
+                   return_value=b"line1\nline2\n"):
+            schedule_page.on_schedule_run_now(app)
+            # Simulate the io_add_watch callback directly
+            callback = schedule_page._log_profile_line
+            callback(process.stdout.fileno(),
+                     schedule_page.GLib.IOCondition.IN,
+                     app, "p1", "[p1] ")
+
+        self.assertTrue(
+            any("[p1] line1" in msg for msg in captured),
+            f"Expected prefixed line1 in {captured}"
+        )
+        self.assertTrue(
+            any("[p1] line2" in msg for msg in captured),
+            f"Expected prefixed line2 in {captured}"
+        )
 
 
 if __name__ == "__main__":

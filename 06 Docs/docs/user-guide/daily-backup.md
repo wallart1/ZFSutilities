@@ -161,6 +161,20 @@ In dry-run mode, the script logs what it would do but skips:
 This is useful for verifying configuration and estimating transfer sizes before
 a live run.
 
+## Pause Scrubs During Send/Receive
+
+ZFS scrubs and send/receive operations both read the same pool data, which can
+compete for disk I/O. The Backup tab has an option to **pause scrubs on the
+source and destination pools while each send/receive step is running**. Scrubs
+resume automatically when the step finishes.
+
+- The option is off by default; enable it in the Backup tab → **Advanced** →
+  **Pause scrubs on source/destination pools during each step**.
+- Only the pools used by the current step are paused, not every pool in the job.
+- Pre/post scripts, rsync pulls, and retention are not affected.
+- In dry-run mode the option logs what it would pause/resume but does not
+  change scrub state.
+
 ## What a Successful Run Looks Like
 
 ```

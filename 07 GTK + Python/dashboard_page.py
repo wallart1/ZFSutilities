@@ -828,7 +828,12 @@ def create_dashboard_page(app):
     app.dashboard_pool_grid = Gtk.Grid()
     app.dashboard_pool_grid.set_column_spacing(15)
     app.dashboard_pool_grid.set_row_spacing(5)
-    pool_box.pack_start(app.dashboard_pool_grid, False, False, 0)
+
+    pool_grid_sw = Gtk.ScrolledWindow()
+    pool_grid_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+    pool_grid_sw.set_propagate_natural_height(True)
+    pool_grid_sw.add(app.dashboard_pool_grid)
+    pool_box.pack_start(pool_grid_sw, False, False, 0)
     app.dashboard_pool_frame.add(pool_box)
     box.pack_start(app.dashboard_pool_frame, False, False, 0)
 

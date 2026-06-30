@@ -20,6 +20,7 @@ from restore_runner import (
     compute_restore_params,
     build_restore_command,
 )
+from scrub_manager import attach_step_scrub_callbacks
 from command_builders import BashStep
 from gui_helpers import bold_label
 
@@ -168,6 +169,17 @@ def create_restore_page(app, ctx):
     app.restore_part2_check.set_active(restore_cfg.get("do_part2", True))
     steps_box.pack_start(app.restore_part2_check, False, False, 0)
 
+    app.restore_pause_scrubs = Gtk.CheckButton(
+        label="Pause scrubs on source/destination pools during each step"
+    )
+    app.restore_pause_scrubs.set_active(
+        restore_cfg.get("pause_scrubs", False)
+    )
+    app.restore_pause_scrubs.set_tooltip_text(
+        "Pause ZFS scrubs on the source and destination pools while the "
+        "restore step is running."
+    )
+    steps_box.pack_start(app.restore_pause_scrubs, False, False, 0)
 
     steps_frame.add(steps_box)
     box.pack_start(steps_frame, False, False, 0)
@@ -212,6 +224,9 @@ def create_restore_page(app, ctx):
     app.restore_part2_check.connect(
         "toggled", lambda w, a=app: check_restore_dirty(a)
     )
+    app.restore_pause_scrubs.connect(
+        "toggled", lambda w, a=app: check_restore_dirty(a)
+    )
 
     # Apply initial sensitivity state and auto-computed destination.
     _on_auto_dest_toggled(app)
@@ -239,6 +254,7 @@ def collect_restore_config(app):
         "variables": variables,
         "do_part1": app.restore_part1_check.get_active(),
         "do_part2": app.restore_part2_check.get_active(),
+        "pause_scrubs": app.restore_pause_scrubs.get_active(),
     }
 
 
@@ -269,6 +285,7 @@ def load_restore_config(app, config):
 
     app.restore_part1_check.set_active(config.get("do_part1", True))
     app.restore_part2_check.set_active(config.get("do_part2", True))
+    app.restore_pause_scrubs.set_active(config.get("pause_scrubs", False))
 
     # Ensure destination entry sensitivity matches the checkbox state.
     _on_auto_dest_toggled(app)
@@ -459,6 +476,10 @@ def on_restore_run(app, ctx):
         source, removequalifiers, destfs, ctx.parent_dir,
         advanced_vars, do_part1, do_part2,
         dryrun=dryrun,
+    )
+    attach_step_scrub_callbacks(
+        step, source, dest,
+        enabled=restore_cfg.get("pause_scrubs", False), dry_run=dryrun,
     )
     log_msg(f"INFO: Starting restore: {source} -> {dest}")
     app.restore_runner.set_steps([step])

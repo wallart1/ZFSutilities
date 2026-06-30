@@ -13,6 +13,11 @@ from backup_config import log_msg
 
 CRON_FILE = "/etc/cron.d/zfsutilities"
 
+# Directory for per-profile advisory locks. Override for testing.
+PROFILE_LOCK_DIR = os.environ.get(
+    "ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles"
+)
+
 _HEADER = (
     "# /etc/cron.d/zfsutilities\n"
     "# Drop-in crontab for ZFS Utilities scheduled profiles.\n"
@@ -41,6 +46,7 @@ def write_cron_file(profiles, runner_path):
 
     content = "".join(lines)
     try:
+        os.makedirs(PROFILE_LOCK_DIR, exist_ok=True)
         with open(CRON_FILE, "w") as f:
             f.write(content)
         os.chmod(CRON_FILE, 0o644)
@@ -66,13 +72,17 @@ def generate_cron_line(profile, runner_path):
     quoted_runner = shlex_quote(runner_path)
     safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", name)
     lock_path = shlex_quote(
-        f"/run/lock/zfs/profiles/{safe_name}.lock"
+        f"{PROFILE_LOCK_DIR}/{safe_name}.lock"
     )
     inner = f"python3 {quoted_runner} run {shlex_quote(name)}"
     # flock -n -E 0 exits 0 when the lock is held so cron does not mail.
+    # Redirect all output to /dev/null; MAILTO="" alone is not honoured on
+    # every installation, and the runner already logs to the session log file.
     return (
         f'{minute} {hour} {day} {month} {weekday} '
-        f'root flock -n -E 0 {lock_path} -c {shlex_quote(inner)}'
+        f'root mkdir -p {shlex_quote(PROFILE_LOCK_DIR)} && '
+        f'flock -n -E 0 {lock_path} -c {shlex_quote(inner)} '
+        f'> /dev/null 2>&1'
     )
 
 

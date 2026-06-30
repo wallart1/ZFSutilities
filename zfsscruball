@@ -159,25 +159,16 @@ function do_scrubs {
     # finishes, it starts another.
     # For each instance:
     #   bash -c 'commands' _ {} runs a bash shell with the pool name as $1.
-    #     Acquire a write lock on the pool before scrubbing.
     #     Run the scrub and when it finishes,
     #     print "Finished scrubbing [poolname]." or "Failed to scrub [poolname]."
     #     On success, record the pool in the state file.
     #   The _ is a placeholder for $0 (unneeded script name).
     #   {} becomes $1 inside the shell.
 
-    export mydir
-
     printf '%s\n' "${pools[@]}" \
         | xargs -P$parallel -I{} \
             bash -c '
                 source ~/bashinit
-                source "$mydir/zfslockmanager"
-                zfslock_init
-                if ! zfslock_acquire "$1" "w" "scrub $1"; then
-                    log_msg "WARN: Pool $1 is locked by another operation; skipping scrub."
-                    exit 0
-                fi
                 log_msg "INFO: Started scrubbing $1."
                 ionice -c3 zpool scrub -w "$1" \
                 && { log_msg "INFO: ✓ Finished scrubbing $1."; echo "$1" >> "$STATEFILE"; } \

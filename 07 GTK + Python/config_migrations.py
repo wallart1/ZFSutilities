@@ -1,6 +1,6 @@
 """Config schema migrations. Bump CONFIG_VERSION when JSON structure changes."""
 
-CONFIG_VERSION = 16
+CONFIG_VERSION = 17
 
 
 def _migrate_1_to_2(config):
@@ -134,6 +134,16 @@ def _migrate_15_to_16(config):
     return config
 
 
+def _migrate_16_to_17(config):
+    for section in ("backup", "offsite", "restore"):
+        if section not in config:
+            config[section] = {}
+        if "pause_scrubs" not in config[section]:
+            config[section]["pause_scrubs"] = False
+    config["config_version"] = 17
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -150,6 +160,7 @@ MIGRATIONS = [
     _migrate_13_to_14,
     _migrate_14_to_15,
     _migrate_15_to_16,
+    _migrate_16_to_17,
 ]
 
 

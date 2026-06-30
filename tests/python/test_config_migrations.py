@@ -174,8 +174,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_16(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 16)
+    def test_config_version_is_17(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 17)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
         config = {"config_version": 15}
@@ -227,6 +227,26 @@ class TestRunMigrations(unittest.TestCase):
         result2 = config_migrations.run_migrations(result1)
         self.assertEqual(result1["config_version"], result2["config_version"])
 
+    def test_migrate_16_to_17_adds_pause_scrubs(self):
+        config = {"config_version": 16}
+        result = config_migrations._migrate_16_to_17(config)
+        self.assertEqual(result["config_version"], 17)
+        self.assertFalse(result["backup"]["pause_scrubs"])
+        self.assertFalse(result["offsite"]["pause_scrubs"])
+        self.assertFalse(result["restore"]["pause_scrubs"])
+
+    def test_migrate_16_to_17_preserves_existing_value(self):
+        config = {
+            "config_version": 16,
+            "backup": {"pause_scrubs": True},
+            "offsite": {"pause_scrubs": True},
+            "restore": {"pause_scrubs": True},
+        }
+        result = config_migrations._migrate_16_to_17(config)
+        self.assertTrue(result["backup"]["pause_scrubs"])
+        self.assertTrue(result["offsite"]["pause_scrubs"])
+        self.assertTrue(result["restore"]["pause_scrubs"])
+
     def test_run_migrations_from_version_14(self):
         config = {
             "config_version": 14,
@@ -235,9 +255,12 @@ class TestRunMigrations(unittest.TestCase):
             ],
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 16)
+        self.assertEqual(result["config_version"], 17)
         self.assertEqual(result["checkagainst"][0]["comment"], "")
         self.assertEqual(result["prune_pools_order"], [])
+        self.assertFalse(result["backup"]["pause_scrubs"])
+        self.assertFalse(result["offsite"]["pause_scrubs"])
+        self.assertFalse(result["restore"]["pause_scrubs"])
 
 
 if __name__ == "__main__":

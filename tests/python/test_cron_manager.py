@@ -19,8 +19,10 @@ class TestGenerateCronLine(unittest.TestCase):
         self.assertIn("root-backup-daily", line)
         self.assertIn("0 2 * * *", line)
         self.assertIn("python3 /opt/runner.py", line)
+        self.assertIn("mkdir -p", line)
         self.assertIn("flock -n -E 0", line)
         self.assertIn("/run/lock/zfs/profiles/root-backup-daily.lock", line)
+        self.assertTrue(line.rstrip().endswith("> /dev/null 2>&1"))
 
     def test_specific_weekday(self):
         profile = {
@@ -29,7 +31,9 @@ class TestGenerateCronLine(unittest.TestCase):
         }
         line = cron_manager.generate_cron_line(profile, "/run.py")
         self.assertIn("30 4 * * 0", line)
+        self.assertIn("mkdir -p", line)
         self.assertIn("flock -n -E 0", line)
+        self.assertTrue(line.rstrip().endswith("> /dev/null 2>&1"))
 
     def test_profile_name_with_spaces_sanitized(self):
         profile = {
@@ -38,6 +42,8 @@ class TestGenerateCronLine(unittest.TestCase):
         }
         line = cron_manager.generate_cron_line(profile, "/run.py")
         self.assertIn("/run/lock/zfs/profiles/Daily_Backup__1.lock", line)
+        self.assertIn("mkdir -p", line)
+        self.assertTrue(line.rstrip().endswith("> /dev/null 2>&1"))
 
 
 class TestInterpretCron(unittest.TestCase):
@@ -92,8 +98,8 @@ class TestWriteCronFile(unittest.TestCase):
             self.assertTrue(os.path.exists(cron_manager.CRON_FILE))
             with open(cron_manager.CRON_FILE) as f:
                 content = f.read()
-            self.assertIn("p1", content)
-            self.assertNotIn("p2", content)
+            self.assertIn("run p1", content)
+            self.assertNotIn("run p2", content)
             self.assertIn("DO NOT EDIT MANUALLY", content)
             self.assertIn('MAILTO=""', content)
             mode = os.stat(cron_manager.CRON_FILE).st_mode
@@ -112,6 +118,18 @@ class TestWriteCronFile(unittest.TestCase):
             self.assertGreaterEqual(mailto_pos, 0)
             self.assertGreater(job_pos, mailto_pos)
             self.assertEqual(content.count('MAILTO=""'), 1)
+            self.assertIn("mkdir -p", content)
+            self.assertIn("> /dev/null 2>&1", content)
+
+    def test_write_cron_file_creates_lock_directory(self):
+        with temp_config_dir():
+            profiles = [
+                {"profile_name": "p1", "active": True, "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"}},
+            ]
+            lock_dir = cron_manager.PROFILE_LOCK_DIR
+            self.assertFalse(os.path.exists(lock_dir))
+            cron_manager.write_cron_file(profiles, "/runner.py")
+            self.assertTrue(os.path.isdir(lock_dir))
 
 
 class TestNextRunTimes(unittest.TestCase):
@@ -203,6 +221,8 @@ class TestWeekdayOrdinals(unittest.TestCase):
         line = cron_manager.generate_cron_line(profile, "/run.py")
         self.assertIn("0 2 * * 6", line)
         self.assertNotIn("#1", line)
+        self.assertIn("mkdir -p", line)
+        self.assertTrue(line.rstrip().endswith("> /dev/null 2>&1"))
 
     def test_next_run_first_saturday(self):
         times = cron_manager.next_run_times("0", "2", "*", "*", "6#1", count=3)

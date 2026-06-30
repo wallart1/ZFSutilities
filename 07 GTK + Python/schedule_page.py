@@ -4,6 +4,8 @@ Schedule tab UI — lists profiles, manages cron parameters, and keeps
 """
 
 import os
+import subprocess
+import sys
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -58,6 +60,7 @@ def create_schedule_page(app):
     app.schedule_store = Gtk.ListStore(bool, str, str, str, str, str)
     app.schedule_view = Gtk.TreeView(model=app.schedule_store)
     app.schedule_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+    app.schedule_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
 
     toggle_r = Gtk.CellRendererToggle()
     toggle_r.connect("toggled", _on_active_toggled, app)
@@ -256,6 +259,13 @@ def _refresh_profile_list(app):
 
 
 def _on_active_toggled(renderer, path, app):
+    # Make the toggled row selected so Delete and the detail pane work even
+    # when the user clicked the checkbox column rather than the row text.
+    # With multi-selection enabled, select only the toggled row.
+    selection = app.schedule_view.get_selection()
+    selection.unselect_all()
+    selection.select_path(Gtk.TreePath.new_from_string(path))
+
     tree_iter = app.schedule_store.get_iter_from_string(path)
     old_val = app.schedule_store.get_value(tree_iter, COL_ACTIVE)
     new_val = not old_val
@@ -411,6 +421,105 @@ def _show_error_dialog(app, message):
     )
     dlg.run()
     dlg.destroy()
+
+
+def _resolve_profile_runner_path():
+    """Return the profile_runner.py path to use for ad-hoc runs.
+
+    Mirrors the logic in _regenerate_cron so Run Now uses the same runner
+    that cron uses.
+    """
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    if "/usr/local/lib/zfsutilities/versions/" in script_dir:
+        return "/usr/local/lib/zfsutilities/current/07 GTK + Python/profile_runner.py"
+    return os.path.join(script_dir, "profile_runner.py")
+
+
+def _log_profile_line(fd, condition, app, profile_name, prefix):
+    """GLib io_add_watch callback: stream one line to the GUI log panel."""
+    if condition & GLib.IOCondition.IN:
+        try:
+            data = os.read(fd, 8192)
+            if data:
+                for line in data.decode("utf-8", errors="replace").splitlines():
+                    log_msg(f"{prefix}{line}")
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _on_profile_finished(pid, status, app, profile_name, process):
+    """GLib child_watch_add callback: reap finished profile run."""
+    try:
+        process.wait()
+    except Exception:
+        pass
+    running = getattr(app, "_running_profiles", None)
+    if running is not None:
+        running.discard(profile_name)
+    log_msg(f"INFO: Profile finished: {profile_name}")
+    app.update_action_buttons("schedule")
+
+
+def _run_profile_now(app, profile_name):
+    """Launch profile_runner.py for *profile_name* and stream its output."""
+    runner_path = _resolve_profile_runner_path()
+    log_msg(f"INFO: Running profile now: {profile_name}")
+    try:
+        process = subprocess.Popen(
+            [sys.executable, runner_path, "run", profile_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except OSError as exc:
+        log_msg(f"WARN: Could not start profile {profile_name}: {exc}")
+        return
+
+    if not hasattr(app, "_running_profiles"):
+        app._running_profiles = set()
+    app._running_profiles.add(profile_name)
+    app.update_action_buttons("schedule")
+
+    prefix = f"[{profile_name}] "
+    try:
+        os.set_blocking(process.stdout.fileno(), False)
+        os.set_blocking(process.stderr.fileno(), False)
+        GLib.io_add_watch(
+            process.stdout.fileno(), GLib.PRIORITY_DEFAULT,
+            GLib.IOCondition.IN | GLib.IOCondition.HUP,
+            _log_profile_line, app, profile_name, prefix,
+        )
+        GLib.io_add_watch(
+            process.stderr.fileno(), GLib.PRIORITY_DEFAULT,
+            GLib.IOCondition.IN | GLib.IOCondition.HUP,
+            _log_profile_line, app, profile_name, prefix,
+        )
+        GLib.child_watch_add(process.pid, _on_profile_finished,
+                             app, profile_name, process)
+    except Exception as exc:
+        log_msg(f"WARN: Could not watch profile {profile_name} output: {exc}")
+        try:
+            process.terminate()
+        except Exception:
+            pass
+        app._running_profiles.discard(profile_name)
+        app.update_action_buttons("schedule")
+
+
+def on_schedule_run_now(app):
+    """Run all selected profiles immediately, ignoring their Active status."""
+    selection = app.schedule_view.get_selection()
+    model, paths = selection.get_selected_rows()
+    if not paths:
+        log_msg("WARN: No profile selected")
+        return
+
+    for path in paths:
+        tree_iter = model.get_iter(path)
+        profile_name = model.get_value(tree_iter, COL_NAME)
+        _run_profile_now(app, profile_name)
 
 
 def on_schedule_save(app):

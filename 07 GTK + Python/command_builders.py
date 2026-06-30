@@ -5,7 +5,7 @@ import shlex
 import socket
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import Callable, List, Optional
 
 
 @dataclass
@@ -17,12 +17,16 @@ class BashStep:
         description: Human-readable step description for logging and UI.
         is_rsync: True if the step is an rsync transfer (uses rsync log).
         fatal: True if a non-zero return code should abort the run.
+        pre_callback: Optional callable to run before the step starts.
+        post_callback: Optional callable to run after the step finishes.
     """
 
     command: List[str]
     description: str
     is_rsync: bool = False
     fatal: bool = False
+    pre_callback: Optional[Callable[[], None]] = None
+    post_callback: Optional[Callable[[], None]] = None
 
 
 def _dryrun_assignments(dryrun=False):

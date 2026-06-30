@@ -230,6 +230,13 @@ class BackupRunner:
         self.running = False
         if self.process and self.process.poll() is None:
             self.process.terminate()
+        if (not self._is_finally and self.current_step < len(self.steps)):
+            step = self.steps[self.current_step]
+            if step.post_callback is not None:
+                try:
+                    step.post_callback()
+                except Exception as exc:
+                    self._log(f"WARN: Post-step callback failed during cancel: {exc}")
         self._cleanup_io()
         self._write_raw_line(f"INFO: {self.label} cancelled")
         self._log(f"INFO: {self.label} cancelled")
@@ -331,7 +338,17 @@ class BackupRunner:
             self._finish()
             return
         step = self.steps[self.current_step]
+        if step.pre_callback is not None:
+            try:
+                step.pre_callback()
+            except Exception as exc:
+                self._log(f"WARN: Pre-step callback failed: {exc}")
         if not self._spawn_process(step.description, step.command, step.is_rsync):
+            if step.post_callback is not None:
+                try:
+                    step.post_callback()
+                except Exception as exc:
+                    self._log(f"WARN: Post-step callback failed: {exc}")
             self.current_step += 1
             GLib.idle_add(self._run_next_step)
 
@@ -457,6 +474,14 @@ class BackupRunner:
         rc = self.process.poll()
         if rc is not None:
             self._drain_remaining()
+
+            if not self._is_finally and self.current_step < len(self.steps):
+                step = self.steps[self.current_step]
+                if step.post_callback is not None:
+                    try:
+                        step.post_callback()
+                    except Exception as exc:
+                        self._log(f"WARN: Post-step callback failed: {exc}")
 
             if getattr(self, '_is_finally', False):
                 if rc != 0:

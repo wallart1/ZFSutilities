@@ -3,7 +3,7 @@
 import os
 import unittest
 
-from test_support import temp_config_dir
+from test_support import temp_config_dir, capture_logs
 
 import profile_manager
 
@@ -42,11 +42,15 @@ class TestProfileCrud(unittest.TestCase):
 
     def test_create_and_load(self):
         with temp_config_dir():
-            profile = profile_manager.create_profile("backup", "test1", {"variables": {"label": "x"}})
+            with capture_logs() as logs:
+                profile = profile_manager.create_profile("backup", "test1", {"variables": {"label": "x"}})
             self.assertEqual(profile["profile_name"], f"{profile_manager.get_user()}-backup-test1")
             loaded = profile_manager.load_profile(profile["profile_name"])
             self.assertIsNotNone(loaded)
             self.assertEqual(loaded["tab_type"], "backup")
+            self.assertTrue(
+                any(f"Created profile: {profile['profile_name']}" in msg for msg in logs)
+            )
 
     def test_list_profiles_sorted(self):
         with temp_config_dir():
@@ -99,6 +103,40 @@ class TestProfileCrud(unittest.TestCase):
             profile_manager.save_profile(profile)
             loaded = profile_manager.load_profile(profile["profile_name"])
             self.assertEqual(loaded["extra"], "data")
+
+    def test_update_profile(self):
+        with temp_config_dir():
+            original = profile_manager.create_profile(
+                "backup", "updatable", {"variables": {"label": "old"}}
+            )
+            original["cron"] = {"minute": "30"}
+            original["active"] = True
+            profile_manager.save_profile(original)
+
+            updated = profile_manager.update_profile(
+                "backup", "updatable", {"variables": {"label": "new"}}, dry_run=True
+            )
+
+            self.assertEqual(updated["config"], {"variables": {"label": "new"}})
+            self.assertTrue(updated["dry_run"])
+            self.assertEqual(updated["cron"], {"minute": "30"})
+            self.assertTrue(updated["active"])
+            self.assertIn("updated_at", updated)
+            loaded = profile_manager.load_profile(updated["profile_name"])
+            self.assertEqual(loaded["config"]["variables"]["label"], "new")
+
+    def test_update_missing_profile_raises(self):
+        with temp_config_dir():
+            with self.assertRaises(ValueError):
+                profile_manager.update_profile("backup", "missing", {})
+
+    def test_delete_profile_logs(self):
+        with temp_config_dir():
+            profile = profile_manager.create_profile("backup", "deleteme", {})
+            name = profile["profile_name"]
+            with capture_logs() as logs:
+                profile_manager.delete_profile(name)
+            self.assertTrue(any(f"Deleted profile: {name}" in msg for msg in logs))
 
 
 class TestGetUser(unittest.TestCase):

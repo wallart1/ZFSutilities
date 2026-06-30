@@ -10,7 +10,8 @@ from gui_helpers import (
     configure_treeview_column, _ensure_treeview_scrolling,
 )
 from profile_manager import (
-    create_profile, profile_exists, get_user, load_profile, list_profiles,
+    create_profile, update_profile, profile_exists, get_user, load_profile,
+    list_profiles,
 )
 
 
@@ -85,20 +86,38 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None,
 
     full_name = prefix + custom_name
     if profile_exists(full_name):
-        _show_error_dialog(app, f"Profile '{full_name}' already exists.")
-        return
+        dlg = Gtk.MessageDialog(
+            transient_for=app, modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=f"Profile '{full_name}' already exists.",
+        )
+        dlg.format_secondary_text(
+            "Overwrite it with the current tab settings?"
+        )
+        response = dlg.run()
+        dlg.destroy()
+        if response != Gtk.ResponseType.YES:
+            return
+        try:
+            profile = update_profile(tab_type, custom_name, config_dict,
+                                     dry_run=dry_run)
+        except ValueError as e:
+            _show_error_dialog(app, str(e))
+            return
+    else:
+        try:
+            profile = create_profile(tab_type, custom_name, config_dict,
+                                     dry_run=dry_run)
+        except ValueError as e:
+            _show_error_dialog(app, str(e))
+            return
 
-    try:
-        profile = create_profile(tab_type, custom_name, config_dict,
-                                 dry_run=dry_run)
-        log_msg(f"INFO: Created profile: {profile['profile_name']}")
-        if on_success:
-            on_success(profile)
-        if hasattr(app, "schedule_store"):
-            from schedule_page import _refresh_profile_list
-            _refresh_profile_list(app)
-    except ValueError as e:
-        _show_error_dialog(app, str(e))
+    if on_success:
+        on_success(profile)
+    if hasattr(app, "schedule_store"):
+        from schedule_page import _refresh_profile_list
+        _refresh_profile_list(app)
 
 
 def show_recall_profile_dialog(app, tab_type, on_select):

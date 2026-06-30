@@ -21,7 +21,6 @@ from typing import Dict, List, Optional, Set
 from backup_config import log_msg
 from file_locking import scrub_state_lock_read, scrub_state_lock_write
 from zfs_repository import get_default_repository
-import zfs_lock_manager as zlm
 
 
 # ---------------------------------------------------------------------------
@@ -224,16 +223,45 @@ def get_all_pool_scrub_states(repo=None) -> Dict[str, ScrubInfo]:
 # Scrub control commands
 # ---------------------------------------------------------------------------
 
+# Scrub actions do not coordinate through the hierarchical dataset lock manager.
+# A scrub is a pool-maintenance operation, not a dataset mutation, so it has no
+# dependency on backup/restore/prune jobs.  Each action consults the live scrub
+# state from zpool status and skips itself when the requested transition is
+# invalid.  ZFS is the final authority; these checks just avoid noisy failures.
+
+
+def _scrub_action_allowed(
+    pool_name: str,
+    allowed_states: Set[ScrubState],
+    repo=None,
+) -> bool:
+    """Return True if the pool's current scrub state permits the action."""
+    info = get_pool_scrub_info(pool_name, repo=repo)
+    if info.state in allowed_states:
+        return True
+    allowed = ", ".join(sorted(s.value for s in allowed_states))
+    log_msg(
+        f"INFO: Skipping scrub action on '{pool_name}': "
+        f"current state is {info.state.value}, allowed states are {allowed}"
+    )
+    return False
+
+
 def start_scrub(pool_name: str, repo=None) -> bool:
     """Start a scrub. Returns True on success."""
     repo = repo or get_default_repository()
+    if not _scrub_action_allowed(
+        pool_name,
+        {ScrubState.NONE, ScrubState.FINISHED, ScrubState.CANCELED, ScrubState.UNKNOWN},
+        repo=repo,
+    ):
+        return False
     log_msg(f"INFO: Starting scrub on pool '{pool_name}'")
     try:
-        with zlm.lock(pool_name, "w", f"start scrub {pool_name}"):
-            if repo.start_scrub(pool_name, timeout=30):
-                log_msg(f"INFO: Scrub started on '{pool_name}'")
-                return True
-    except RuntimeError as exc:
+        if repo.start_scrub(pool_name, timeout=30):
+            log_msg(f"INFO: Scrub started on '{pool_name}'")
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         log_msg(f"WARN: cannot start scrub on '{pool_name}': {exc}")
         return False
     log_msg(f"WARN: Failed to start scrub on '{pool_name}'")
@@ -243,13 +271,18 @@ def start_scrub(pool_name: str, repo=None) -> bool:
 def pause_scrub(pool_name: str, repo=None) -> bool:
     """Pause a scrub. Returns True on success."""
     repo = repo or get_default_repository()
+    if not _scrub_action_allowed(
+        pool_name,
+        {ScrubState.SCANNING},
+        repo=repo,
+    ):
+        return False
     log_msg(f"INFO: Pausing scrub on pool '{pool_name}'")
     try:
-        with zlm.lock(pool_name, "w", f"pause scrub {pool_name}"):
-            if repo.pause_scrub(pool_name, timeout=30):
-                log_msg(f"INFO: Scrub paused on '{pool_name}'")
-                return True
-    except RuntimeError as exc:
+        if repo.pause_scrub(pool_name, timeout=30):
+            log_msg(f"INFO: Scrub paused on '{pool_name}'")
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         log_msg(f"WARN: cannot pause scrub on '{pool_name}': {exc}")
         return False
     log_msg(f"WARN: Failed to pause scrub on '{pool_name}'")
@@ -259,13 +292,18 @@ def pause_scrub(pool_name: str, repo=None) -> bool:
 def resume_scrub(pool_name: str, repo=None) -> bool:
     """Resume a scrub. Returns True on success."""
     repo = repo or get_default_repository()
+    if not _scrub_action_allowed(
+        pool_name,
+        {ScrubState.PAUSED},
+        repo=repo,
+    ):
+        return False
     log_msg(f"INFO: Resuming scrub on pool '{pool_name}'")
     try:
-        with zlm.lock(pool_name, "w", f"resume scrub {pool_name}"):
-            if repo.resume_scrub(pool_name, timeout=30):
-                log_msg(f"INFO: Scrub resumed on '{pool_name}'")
-                return True
-    except RuntimeError as exc:
+        if repo.resume_scrub(pool_name, timeout=30):
+            log_msg(f"INFO: Scrub resumed on '{pool_name}'")
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         log_msg(f"WARN: cannot resume scrub on '{pool_name}': {exc}")
         return False
     log_msg(f"WARN: Failed to resume scrub on '{pool_name}'")
@@ -275,17 +313,169 @@ def resume_scrub(pool_name: str, repo=None) -> bool:
 def stop_scrub(pool_name: str, repo=None) -> bool:
     """Stop a scrub. Returns True on success."""
     repo = repo or get_default_repository()
+    if not _scrub_action_allowed(
+        pool_name,
+        {ScrubState.SCANNING, ScrubState.PAUSED},
+        repo=repo,
+    ):
+        return False
     log_msg(f"INFO: Stopping scrub on pool '{pool_name}'")
     try:
-        with zlm.lock(pool_name, "w", f"stop scrub {pool_name}"):
-            if repo.stop_scrub(pool_name, timeout=30):
-                log_msg(f"INFO: Scrub stopped on '{pool_name}'")
-                return True
-    except RuntimeError as exc:
+        if repo.stop_scrub(pool_name, timeout=30):
+            log_msg(f"INFO: Scrub stopped on '{pool_name}'")
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         log_msg(f"WARN: cannot stop scrub on '{pool_name}': {exc}")
         return False
     log_msg(f"WARN: Failed to stop scrub on '{pool_name}'")
     return False
+
+
+# ---------------------------------------------------------------------------
+# Backup / restore scrub coordination
+# ---------------------------------------------------------------------------
+
+
+def _pool_from_dataset(dataset: str) -> Optional[str]:
+    """Return the pool name for a local ZFS dataset path.
+
+    Remote endpoints (host:path) and non-dataset paths are ignored.
+    """
+    if not dataset:
+        return None
+    if ":" in dataset and not dataset.startswith("/"):
+        return None
+    name = dataset.split("/", 1)[0].strip()
+    return name or None
+
+
+def pause_scrubs_for_pools(pool_names: List[str], repo=None,
+                           dry_run: bool = False) -> List[str]:
+    """Pause any running scrubs on *pool_names* and mark them user-paused.
+
+    Returns the list of pools whose scrubs were actually paused (only pools
+    that were scanning are paused). In dry-run mode no system state is changed
+    and the returned list contains the pools that would have been paused.
+    """
+    repo = repo or get_default_repository()
+    names = [n for n in pool_names if n]
+    if not names:
+        return []
+
+    states = get_all_pool_scrub_states(repo=repo)
+
+    if not dry_run:
+        queue = ScrubQueue()
+        queue.pause_pools(names)
+        for name in names:
+            queue.paused_by_user.add(name)
+        queue._save()
+
+    paused = []
+    for name in names:
+        info = states.get(name)
+        if info is None:
+            log_msg(f"INFO: Pool '{name}' is not online; skipping scrub pause")
+            continue
+        if info.state != ScrubState.SCANNING:
+            log_msg(
+                f"INFO: Scrub on '{name}' is {info.state.value}; "
+                f"not pausing"
+            )
+            continue
+        if dry_run:
+            log_msg(f"INFO: Dry-run: would pause scrub on '{name}'")
+            paused.append(name)
+            continue
+        log_msg(f"INFO: Pausing scrub on '{name}'")
+        try:
+            if repo.pause_scrub(name, timeout=30):
+                log_msg(f"INFO: Scrub paused on '{name}'")
+                paused.append(name)
+            else:
+                log_msg(f"WARN: Failed to pause scrub on '{name}'")
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            log_msg(f"WARN: cannot pause scrub on '{name}': {exc}")
+    return paused
+
+
+def resume_scrubs_for_pools(pool_names: List[str], repo=None,
+                            dry_run: bool = False) -> None:
+    """Resume scrubs that were paused by pause_scrubs_for_pools().
+
+    Pools that were not actually paused (e.g., already finished or paused)
+    are left alone. In dry-run mode no system state is changed.
+    """
+    repo = repo or get_default_repository()
+    names = [n for n in pool_names if n]
+    if not names:
+        return
+
+    if not dry_run:
+        queue = ScrubQueue()
+        queue.resume_pools(names)
+        for name in names:
+            queue.paused_by_user.discard(name)
+        queue._save()
+
+    states = get_all_pool_scrub_states(repo=repo)
+    for name in names:
+        info = states.get(name)
+        if info is None:
+            log_msg(f"INFO: Pool '{name}' is not online; skipping scrub resume")
+            continue
+        if info.state != ScrubState.PAUSED:
+            log_msg(
+                f"INFO: Scrub on '{name}' is {info.state.value}; "
+                f"not resuming"
+            )
+            continue
+        if dry_run:
+            log_msg(f"INFO: Dry-run: would resume scrub on '{name}'")
+            continue
+        log_msg(f"INFO: Resuming scrub on '{name}'")
+        try:
+            if repo.resume_scrub(name, timeout=30):
+                log_msg(f"INFO: Scrub resumed on '{name}'")
+            else:
+                log_msg(f"WARN: Failed to resume scrub on '{name}'")
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            log_msg(f"WARN: cannot resume scrub on '{name}': {exc}")
+
+
+def attach_step_scrub_callbacks(step, source: str, dest: str,
+                                enabled: bool, dry_run: bool = False) -> None:
+    """Attach pre/post callbacks to a BashStep to pause/resume scrubs.
+
+    The callbacks pause scrubs on the pools referenced by *source* and *dest*
+    immediately before the step runs and resume them after the step finishes.
+    If *enabled* is False, or if no local pools are found, the callbacks are
+    left unset.
+    """
+    if not enabled:
+        return
+    pools = sorted(
+        {p for p in (_pool_from_dataset(source), _pool_from_dataset(dest)) if p}
+    )
+    if not pools:
+        return
+
+    paused_pools: List[str] = []
+
+    def pre_callback():
+        nonlocal paused_pools
+        paused_pools = pause_scrubs_for_pools(
+            pools, dry_run=dry_run
+        )
+
+    def post_callback():
+        nonlocal paused_pools
+        if paused_pools:
+            resume_scrubs_for_pools(paused_pools, dry_run=dry_run)
+            paused_pools = []
+
+    step.pre_callback = pre_callback
+    step.post_callback = post_callback
 
 
 # ---------------------------------------------------------------------------

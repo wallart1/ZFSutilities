@@ -624,8 +624,17 @@ The top pane lists every saved profile with columns:
 | **Next Run**     | Next scheduled execution time                                 |
 
 Click any column header to sort by **Profile Name**, **Type**, or **Next Run**.
-Click any row to
-select it; the detail pane below populates with that profile's cron settings.
+Click any row to select it; use **Ctrl**/**Shift**-click to select multiple rows.
+The detail pane below populates with the last selected profile's cron settings.
+
+### Run Now
+
+Select one or more profiles and click **Run Now** in the Actions panel to execute
+them immediately. **Run Now ignores the Active checkbox** — even disabled
+profiles run. Each profile is launched via `profile_runner.py`, so it produces
+its own session log and history entry exactly like a scheduled cron run. Output
+streams to the info panel with a `[profile-name]` prefix so you can tell which
+log line came from which running profile.
 
 ### Creating a profile
 
@@ -652,9 +661,10 @@ This is useful for two workflows:
 1. **Edit and re-save** — Recall a profile, tweak the settings, then click
    **Add Profile to Schedule** again and give it the same name (to overwrite)
    or a new name (to create a variant).
-2. **Run on demand** — Recall a profile and click the tab's **Run** button
-   immediately. The job executes using the recalled settings without waiting
-   for the scheduled cron time.
+2. **Run on demand** — Either click **Run Now** on the Schedule tab to run the
+   selected profile(s) immediately, or recall a profile and click the tab's
+   **Run** button. The job executes using the saved profile settings without
+   waiting for the scheduled cron time.
 
 Recalling a profile does **not** modify the saved config file. If you want to
 make the recalled settings the new default, click **Save Config**
@@ -899,6 +909,11 @@ buttons to control them.
 
 After any scrub action, the status table refreshes in a short burst so state
 changes appear quickly even when the normal refresh interval is long.
+
+Scrub actions are independent of backup, restore, prune, and dataset-deletion
+jobs.  They use live `zpool status` to decide whether a requested transition is
+valid, so pressing **Pause Scrub** does not fail just because a backup is
+running on a dataset in the same pool.
 
 #### How the queue works
 

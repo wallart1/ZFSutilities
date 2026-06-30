@@ -84,6 +84,7 @@ def _restore_app(source="", dest="", auto_dest=False):
     app.restore_var_widgets = {}
     app.restore_part1_check = _FakeCheckButton()
     app.restore_part2_check = _FakeCheckButton()
+    app.restore_pause_scrubs = _FakeCheckButton()
     app._restore_saved_state = None
     return app
 

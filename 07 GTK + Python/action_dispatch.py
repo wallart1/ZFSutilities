@@ -55,7 +55,7 @@ from checkagainst_page import (
 )
 from schedule_page import (
     on_schedule_save, on_schedule_revert, on_schedule_delete,
-    check_schedule_dirty,
+    on_schedule_run_now, check_schedule_dirty,
 )
 from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
 from logs_page import (
@@ -119,6 +119,7 @@ PAGE_SPECS = {
     },
     "schedule": {
         "buttons": [
+            ("Run Now", "media-playback-start", None),
             ("Save", "document-save", "_schedule_save_button"),
             ("Revert", "document-revert", None),
             ("Delete", "edit-delete", None),
@@ -374,6 +375,7 @@ ACTION_HANDLERS = {
         "Revert": _handler_checkagainst_revert,
     },
     "schedule": {
+        "Run Now": on_schedule_run_now,
         "Save": on_schedule_save,
         "Revert": on_schedule_revert,
         "Delete": on_schedule_delete,

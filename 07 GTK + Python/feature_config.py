@@ -28,7 +28,7 @@ def get_backup_config(config):
         backup["post_steps"] = merged_post
     for key in ("pre_backup_script_enabled", "pre_backup_script",
                 "post_backup_script_enabled", "post_backup_script",
-                "zfs_keys_path", "zfs_keys_dest"):
+                "zfs_keys_path", "zfs_keys_dest", "pause_scrubs"):
         if key not in backup:
             backup[key] = defaults[key]
     config["backup"] = backup
@@ -55,6 +55,7 @@ OFFSITE_DEFAULTS = {
     },
     "offsite_pools": [],
     "steps": [],
+    "pause_scrubs": False,
 }
 
 
@@ -64,7 +65,7 @@ def get_offsite_config(config):
     merged_vars = dict(defaults["variables"])
     merged_vars.update(offsite.get("variables", {}))
     offsite["variables"] = merged_vars
-    for key in ("offsite_pools", "steps"):
+    for key in ("offsite_pools", "steps", "pause_scrubs"):
         if key not in offsite:
             offsite[key] = defaults[key]
     config["offsite"] = offsite
@@ -90,13 +91,15 @@ RESTORE_DEFAULTS = {
     },
     "do_part1": True,
     "do_part2": True,
+    "pause_scrubs": False,
 }
 
 
 def get_restore_config(config):
     defaults = _deep_copy(RESTORE_DEFAULTS)
     restore = config.get("restore", {})
-    for key in ("source", "dest", "auto_dest", "do_part1", "do_part2"):
+    for key in ("source", "dest", "auto_dest", "do_part1", "do_part2",
+                "pause_scrubs"):
         if key not in restore:
             restore[key] = defaults[key]
     merged_vars = dict(defaults["variables"])

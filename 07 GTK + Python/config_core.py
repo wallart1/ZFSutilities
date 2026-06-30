@@ -39,6 +39,7 @@ BACKUP_DEFAULTS = {
     "zfs_keys_path": "",
     "zfs_keys_dest": "",
     "pull_steps_active": True,
+    "pause_scrubs": False,
 }
 
 

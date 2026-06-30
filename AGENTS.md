@@ -19,8 +19,7 @@ You are a meticulous coding agent. For every task:
 3. Wait for user approval or revision.
 4. Execute only the approved plan.
 5. Always test and debug your work after executing the plan and before responding.
-6. After changes are implemented, list modified files and summarize, then reenter plan mode.
-7. Use concise, professional language.
+6. Use concise, professional language.
 
 ## Hard Rules
 
@@ -28,9 +27,16 @@ You are a meticulous coding agent. For every task:
   `git commit`, `git push`, `git reset`, `git rebase`, or any other git
   mutation, ask the user for confirmation. Do not skip this step even if the
   user previously said "commit it," "bump the version," or similar.
-- In the terminal window, make your response lines 10 characters shorter than what would otherwise be allowed. This should fix the problem of missing characters at the end of response lines.
-- Please periodically reread AGENTS.md for rules to closely follow during this session. Do not automatically bump the version. Do not automatically commit.
+- Do not automatically bump the version.
+- Do not automatically commit.
+- You may not modify anything except what is in the current working directory and its subdirectories.
 - You may see uncommitted changed files that you did not change. Do not be alarmed by this. They are either my manual changes or were changed by Kimi in an earlier session. These changes will be included when I instruct you to perform a commit.
+- Do not automatically update the VERSION file unless I specifically tell you to.
+- Do not automatically update the change log unless I specifically tell you to.
+- Do not try to use the deploy-version script.
+- Do not try to use the switch-version script.
+- Do not attempt to do what the deploy-version or switch-version scripts do.
+- Please reread AGENTS.md every 3 prompts for rules to closely follow during this session.
 
 ## Project Overview
 
@@ -394,12 +400,13 @@ A Python test harness lives in `tests/python/` and uses Python's built-in `unitt
 | `test_logs_page`          | 33    | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, and column-header label tooltips |
 | `test_main`               | 41    | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic |
 | `test_page_runners`       | 6     | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation           |
-| `test_profile_manager`    | 15    | Profile CRUD, name validation, listing, existence checks                                                       |
+| `test_profile_manager`    | 18    | Profile CRUD, update, name validation, listing, existence checks, lifecycle logging                            |
+| `test_profile_dialogs`    | 11    | Add/Recall profile dialogs, duplicate-name overwrite handling                                                  |
 | `test_profile_runner`     | 43    | Backup/offsite/restore/retention profile step building                                                         |
 | `test_profile_runner_concurrency` | 7 | Per-profile advisory locks, duplicate-invocation suppression, and metadata                                  |
 | `test_profile_integration` | 3    | Concurrent profile execution: disjoint datasets, same-dataset conflict, backup+prune serialization             |
 | `test_restore_runner`     | 11    | Restore destination computation and zfs-send-receive parameter mapping                                         |
-| `test_schedule_page`      | 15    | Schedule page path resolution for deployed vs repo layouts                                                     |
+| `test_schedule_page`      | 17    | Schedule page path resolution, dirty tracking, and checkbox selection handling                                 |
 | `test_scrub_manager`      | 24    | Scrub state parsing, queue/target management, tick logic, systemd timers                                       |
 | `test_scrub_page`         | 5     | Scrub page store schema and flicker-free refresh logic                                                         |
 | `test_zfs_diagnostics`    | 8     | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run`                     |
@@ -530,6 +537,19 @@ log_msg("DEBUG: variable =", value)
 - Each line is prefixed with `file:line:` via `inspect`
 
 ---
+
+## Recent Session Notes (2026-06-30)
+
+- Pause scrubs during Backup/Offsite/Restore: Added a per-tab `pause_scrubs`
+  option (default disabled) on the Backup, Offsite, and Restore tabs. When
+  enabled, scrubs on the source and destination pools are paused immediately
+  before each send/receive step and resumed after the step finishes. The option
+  is stored in the JSON config under each tab's section and also applies to
+  headless profile/cron runs via `profile_runner.py`. New helpers live in
+  `scrub_manager.py` (`pause_scrubs_for_pools`, `resume_scrubs_for_pools`,
+  `attach_step_scrub_callbacks`); `BashStep` gained optional `pre_callback` and
+  `post_callback` hooks used by `backup_runner.py` and `profile_runner.py`.
+  Already-paused scrubs are left untouched.
 
 ## Recent Session Notes (2026-06-29)
 

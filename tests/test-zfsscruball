@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-# test-zfsscruball — Verify pool locking during scrub.
+# test-zfsscruball — Verify scrub control behavior.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
@@ -13,8 +13,16 @@ zpool() {
         echo "$3" >> "${ZFSLOCK_TEST_SCRUB_LOG}"
         return 0
     fi
+    if [[ "$1" == "scrub" && "$2" == "-p" ]]; then
+        echo "$3" >> "${ZFSLOCK_TEST_PAUSE_LOG}"
+        return 0
+    fi
     if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" ]]; then
         echo -e "${_mock_zpool_list:-}"
+        return 0
+    fi
+    if [[ "$1" == "status" ]]; then
+        echo -e "${_mock_zpool_status:-}"
         return 0
     fi
     return 0
@@ -28,117 +36,93 @@ ionice() {
 export -f zpool ionice
 
 # ---------------------------------------------------------------------------
-# Lock-manager mock lives in a temp module directory.
-# ---------------------------------------------------------------------------
-
-setup_scrub_mocks() {
-    mock_mydir=$(mktemp -d)
-    cat > "$mock_mydir/zfslockmanager" <<EOF
-zfslock_init() { true; }
-zfslock_acquire() {
-    echo "\$1 \$2" >> "${ZFSLOCK_TEST_LOCK_LOG}"
-    if [[ "\${ZFSLOCK_TEST_CONFLICT:-}" == "\$1" ]]; then return 1; fi
-    ZFSLOCK_ID="${ZFSLOCK_TEST_LOCK_DIR}/lock_\${1//\\//_}"
-    return 0
-}
-zfslock_release() { true; }
-zfslock_release_all() { true; }
-EOF
-}
-
-# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
-test_scrub_acquires_pool_lock() {
-    echo "=== Scrub acquires pool lock ==="
+test_scrub_runs_selected_pool() {
+    echo "=== Scrub runs on selected pool ==="
     local state_dir
     state_dir="$_mock_zfs_state_dir/scrub_normal"
     mkdir -p "$state_dir"
-    ZFSLOCK_TEST_LOCK_LOG="$state_dir/lock.log"
     ZFSLOCK_TEST_SCRUB_LOG="$state_dir/scrub.log"
-    ZFSLOCK_TEST_LOCK_DIR="$state_dir/locks"
-    ZFSLOCK_TEST_CONFLICT=""
-    export ZFSLOCK_TEST_LOCK_LOG ZFSLOCK_TEST_SCRUB_LOG ZFSLOCK_TEST_LOCK_DIR ZFSLOCK_TEST_CONFLICT
-    mkdir -p "$ZFSLOCK_TEST_LOCK_DIR"
-    : > "$ZFSLOCK_TEST_LOCK_LOG"
+    export ZFSLOCK_TEST_SCRUB_LOG
     : > "$ZFSLOCK_TEST_SCRUB_LOG"
     STATEFILE="$state_dir/state"
     export STATEFILE
     : > "$STATEFILE"
 
-    setup_scrub_mocks
-    mydir="$mock_mydir"
     source "$old_mydir/zfsscruball"
 
     poolarray=(testpool)
     parallel=2
     do_start
 
-    test_start "Acquires write lock on pool before scrubbing"
-    if [[ -f "$ZFSLOCK_TEST_LOCK_LOG" ]] && grep -q '^testpool w$' "$ZFSLOCK_TEST_LOCK_LOG"; then
-        test_pass
-    else
-        test_fail "Expected lock log to contain 'testpool w', got $(cat "$ZFSLOCK_TEST_LOCK_LOG" 2>/dev/null)"
-    fi
-
-    test_start "Runs zpool scrub after acquiring lock"
+    test_start "Runs zpool scrub -w on selected pool"
     if [[ -f "$ZFSLOCK_TEST_SCRUB_LOG" ]] && grep -q '^testpool$' "$ZFSLOCK_TEST_SCRUB_LOG"; then
         test_pass
     else
         test_fail "Expected scrub log to contain 'testpool', got $(cat "$ZFSLOCK_TEST_SCRUB_LOG" 2>/dev/null)"
     fi
-
-    rm -rf "$mock_mydir"
 }
 
-test_scrub_skips_locked_pool() {
-    echo "=== Scrub skips locked pool ==="
+test_resume_skips_completed_pools() {
+    echo "=== Resume skips completed pools ==="
     local state_dir
-    state_dir="$_mock_zfs_state_dir/scrub_conflict"
+    state_dir="$_mock_zfs_state_dir/scrub_resume"
     mkdir -p "$state_dir"
-    ZFSLOCK_TEST_LOCK_LOG="$state_dir/lock.log"
     ZFSLOCK_TEST_SCRUB_LOG="$state_dir/scrub.log"
-    ZFSLOCK_TEST_LOCK_DIR="$state_dir/locks"
-    ZFSLOCK_TEST_CONFLICT="testpool"
-    export ZFSLOCK_TEST_LOCK_LOG ZFSLOCK_TEST_SCRUB_LOG ZFSLOCK_TEST_LOCK_DIR ZFSLOCK_TEST_CONFLICT
-    mkdir -p "$ZFSLOCK_TEST_LOCK_DIR"
-    : > "$ZFSLOCK_TEST_LOCK_LOG"
+    export ZFSLOCK_TEST_SCRUB_LOG
     : > "$ZFSLOCK_TEST_SCRUB_LOG"
     STATEFILE="$state_dir/state"
-    : > "$STATEFILE"
+    export STATEFILE
+    echo "donepool" > "$STATEFILE"
+    _mock_zpool_list="donepool\nnewpool"
+    _mock_zpool_status="  scan: none requested"
+    export _mock_zpool_list _mock_zpool_status
 
-    setup_scrub_mocks
-    mydir="$mock_mydir"
     source "$old_mydir/zfsscruball"
 
-    poolarray=(testpool)
-    parallel=2
-    do_start
+    do_resume
 
-    test_start "Does not scrub a pool that is already locked"
-    if [[ ! -s "$ZFSLOCK_TEST_SCRUB_LOG" ]]; then
+    test_start "Does not scrub a pool recorded as completed"
+    if [[ -f "$ZFSLOCK_TEST_SCRUB_LOG" ]] && ! grep -q '^donepool$' "$ZFSLOCK_TEST_SCRUB_LOG"; then
         test_pass
     else
-        test_fail "Expected no scrub calls, got $(cat "$ZFSLOCK_TEST_SCRUB_LOG" 2>/dev/null)"
+        test_fail "Expected scrub log to not contain 'donepool', got $(cat "$ZFSLOCK_TEST_SCRUB_LOG" 2>/dev/null)"
     fi
+}
 
-    test_start "Does not record skipped pool as completed"
-    if [[ ! -s "$STATEFILE" ]]; then
+test_pause_scrubs_in_progress() {
+    echo "=== Pause scrubs in progress ==="
+    local state_dir
+    state_dir="$_mock_zfs_state_dir/scrub_pause"
+    mkdir -p "$state_dir"
+    ZFSLOCK_TEST_PAUSE_LOG="$state_dir/pause.log"
+    export ZFSLOCK_TEST_PAUSE_LOG
+    : > "$ZFSLOCK_TEST_PAUSE_LOG"
+    _mock_zpool_list="activepool\nnonepool"
+    _mock_zpool_status="  scan: scrub in progress since Sun May 10 00:00:00 2026"
+    export _mock_zpool_list _mock_zpool_status
+
+    source "$old_mydir/zfsscruball"
+
+    do_pause
+
+    test_start "Pauses pools with an in-progress scrub"
+    if [[ -f "$ZFSLOCK_TEST_PAUSE_LOG" ]] && grep -q '^activepool$' "$ZFSLOCK_TEST_PAUSE_LOG"; then
         test_pass
     else
-        test_fail "Expected empty state file, got $(cat "$STATEFILE" 2>/dev/null)"
+        test_fail "Expected pause log to contain 'activepool', got $(cat "$ZFSLOCK_TEST_PAUSE_LOG" 2>/dev/null)"
     fi
-
-    rm -rf "$mock_mydir"
 }
 
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 old_mydir="$mydir"
-test_scrub_acquires_pool_lock
-test_scrub_skips_locked_pool
+test_scrub_runs_selected_pool
+test_resume_skips_completed_pools
+test_pause_scrubs_in_progress
 mydir="$old_mydir"
 
 test_summary

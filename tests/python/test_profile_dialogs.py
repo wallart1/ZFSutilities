@@ -25,23 +25,28 @@ class TestShowAddProfileDialog(unittest.TestCase):
         app.schedule_store = MagicMock()
         return app
 
-    def _run_add_dialog(self, app, response, name_text, **patches):
+    def _run_add_dialog(self, app, response, name_text,
+                        duplicate_response=None, **patches):
         """Patch create_dialog/Entry and call show_add_profile_dialog."""
         dialog = MagicMock()
         dialog.run.return_value = response
         entry = MagicMock()
         entry.get_text.return_value = name_text
 
+        confirm_dialog = MagicMock()
+        if duplicate_response is not None:
+            confirm_dialog.run.return_value = duplicate_response
+
         defaults = {
             "create_dialog": patch.object(profile_dialogs, "create_dialog", return_value=dialog),
             "Entry": patch.object(profile_dialogs.Gtk, "Entry", return_value=entry),
-            "MessageDialog": patch.object(profile_dialogs.Gtk, "MessageDialog", return_value=MagicMock()),
+            "MessageDialog": patch.object(profile_dialogs.Gtk, "MessageDialog", return_value=confirm_dialog),
             "get_user": patch.object(profile_dialogs, "get_user", return_value="root"),
         }
         defaults.update(patches)
         with defaults["create_dialog"], defaults["Entry"], defaults["MessageDialog"], defaults["get_user"]:
             profile_dialogs.show_add_profile_dialog(app, "backup", {"key": "value"})
-        return dialog, entry
+        return dialog, entry, confirm_dialog
 
     def test_creates_profile_with_valid_name(self):
         app = self._make_app()
@@ -52,7 +57,7 @@ class TestShowAddProfileDialog(unittest.TestCase):
         }) as mock_create, \
              patch.object(profile_dialogs, "profile_exists", return_value=False), \
              patch.object(schedule_page, "_refresh_profile_list") as mock_refresh:
-            dialog, _ = self._run_add_dialog(
+            dialog, _, _ = self._run_add_dialog(
                 app, profile_dialogs.Gtk.ResponseType.OK, "nightly"
             )
 
@@ -101,24 +106,49 @@ class TestShowAddProfileDialog(unittest.TestCase):
     def test_rejects_invalid_characters(self):
         app = self._make_app()
         with patch.object(profile_dialogs, "create_profile") as mock_create:
-            dialog, _ = self._run_add_dialog(app, profile_dialogs.Gtk.ResponseType.OK, "my profile")
+            dialog, _, _ = self._run_add_dialog(app, profile_dialogs.Gtk.ResponseType.OK, "my profile")
         mock_create.assert_not_called()
         # Error dialog was shown
         self.assertEqual(dialog.destroy.call_count, 1)
 
-    def test_rejects_duplicate_profile(self):
+    def test_duplicate_profile_no_overwrite(self):
         app = self._make_app()
         with patch.object(profile_dialogs, "create_profile") as mock_create, \
+             patch.object(profile_dialogs, "update_profile") as mock_update, \
              patch.object(profile_dialogs, "profile_exists", return_value=True):
-            dialog, _ = self._run_add_dialog(app, profile_dialogs.Gtk.ResponseType.OK, "daily")
+            dialog, _, confirm = self._run_add_dialog(
+                app, profile_dialogs.Gtk.ResponseType.OK, "daily",
+                duplicate_response=profile_dialogs.Gtk.ResponseType.NO,
+            )
         mock_create.assert_not_called()
+        mock_update.assert_not_called()
         self.assertEqual(dialog.destroy.call_count, 1)
+        confirm.destroy.assert_called_once()
+
+    def test_duplicate_profile_overwrites(self):
+        app = self._make_app()
+        with patch.object(profile_dialogs, "create_profile") as mock_create, \
+             patch.object(profile_dialogs, "update_profile", return_value={
+                 "profile_name": "root-backup-daily"
+             }) as mock_update, \
+             patch.object(profile_dialogs, "profile_exists", return_value=True), \
+             patch.object(schedule_page, "_refresh_profile_list") as mock_refresh:
+            dialog, _, confirm = self._run_add_dialog(
+                app, profile_dialogs.Gtk.ResponseType.OK, "daily",
+                duplicate_response=profile_dialogs.Gtk.ResponseType.YES,
+            )
+        mock_create.assert_not_called()
+        mock_update.assert_called_once_with(
+            "backup", "daily", {"key": "value"}, dry_run=False
+        )
+        confirm.destroy.assert_called_once()
+        mock_refresh.assert_called_once_with(app)
 
     def test_shows_error_on_create_exception(self):
         app = self._make_app()
         with patch.object(profile_dialogs, "create_profile", side_effect=ValueError("boom")), \
              patch.object(profile_dialogs, "profile_exists", return_value=False):
-            dialog, _ = self._run_add_dialog(app, profile_dialogs.Gtk.ResponseType.OK, "bad")
+            dialog, _, _ = self._run_add_dialog(app, profile_dialogs.Gtk.ResponseType.OK, "bad")
         self.assertEqual(dialog.destroy.call_count, 1)
 
 

@@ -25,6 +25,7 @@ from command_builders import (
     build_post_backup_command,
     build_retention_command,
 )
+from scrub_manager import attach_step_scrub_callbacks
 from gui_helpers import (
     DirtyTracker, add_var_row, EditableListView, bold_label,
 )
@@ -208,6 +209,18 @@ def create_backup_page(app, ctx):
         "with a WARN instead of silently destroying them."
     )
 
+    app.backup_pause_scrubs = Gtk.CheckButton(
+        label="Pause scrubs on source/destination pools during each step"
+    )
+    app.backup_pause_scrubs.set_active(
+        backup_cfg.get("pause_scrubs", False)
+    )
+    app.backup_pause_scrubs.set_tooltip_text(
+        "Pause ZFS scrubs on the pools used by each send/receive step "
+        "while that step is running."
+    )
+    advanced_box.pack_start(app.backup_pause_scrubs, False, False, 0)
+
     # --- Pull Steps (rsync) ---
     app.backup_pull_steps_active = Gtk.CheckButton(label="Active")
     app.backup_pull_steps_active.set_active(
@@ -319,6 +332,9 @@ def create_backup_page(app, ctx):
     app.backup_pull_steps_active.connect(
         "toggled", lambda _w, t=tracker: t.check()
     )
+    app.backup_pause_scrubs.connect(
+        "toggled", lambda _w, t=tracker: t.check()
+    )
 
     return scrolled
 
@@ -350,6 +366,7 @@ def load_backup_config(app, config):
     app.backup_zfs_keys_path.set_text(config.get("zfs_keys_path", ""))
     app.backup_zfs_keys_dest.set_text(config.get("zfs_keys_dest", ""))
     app.backup_pull_steps_active.set_active(config.get("pull_steps_active", True))
+    app.backup_pause_scrubs.set_active(config.get("pause_scrubs", False))
 
 
 def mark_backup_clean(app):
@@ -401,6 +418,7 @@ def collect_backup_config(app):
         "zfs_keys_path": app.backup_zfs_keys_path.get_text(),
         "zfs_keys_dest": app.backup_zfs_keys_dest.get_text(),
         "pull_steps_active": app.backup_pull_steps_active.get_active(),
+        "pause_scrubs": app.backup_pause_scrubs.get_active(),
     }
 
 
@@ -584,12 +602,18 @@ def on_backup_run(app, ctx):
                 steps.append(build_rsync_command(zfs_keys_path, zfs_keys_dest))
 
     # Send/receive steps
+    pause_scrubs = backup_cfg.get("pause_scrubs", False)
     for row in app.backup_sr_store:
         if row[0]:
-            steps.append(build_send_receive_command(
+            sr_step = build_send_receive_command(
                 row[1], row[2], variables, ctx.parent_dir, nextsnap,
                 dryrun=dryrun,
-            ))
+            )
+            attach_step_scrub_callbacks(
+                sr_step, row[1], row[2],
+                enabled=pause_scrubs, dry_run=dryrun,
+            )
+            steps.append(sr_step)
 
     # Post steps
     post = backup_cfg["post_steps"]

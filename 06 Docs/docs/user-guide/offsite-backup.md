@@ -81,6 +81,18 @@ In dry-run mode, the script logs what it would send but does not create
 snapshots, transfer data, or apply holds. Hold application is skipped entirely
 when dry-run is enabled.
 
+## Pause Scrubs During Send/Receive
+
+The Offsite tab has an option to **pause scrubs on the source and destination
+pools while each offsite step is running**. This reduces I/O contention during
+the offsite copy and resumes scrubs automatically when the step finishes.
+
+- Enable it in the Offsite tab → **Advanced** →
+  **Pause scrubs on source/destination pools during each step**.
+- Only the pools used by the current step are paused.
+- In dry-run mode the option logs what it would pause/resume but does not
+  change scrub state.
+
 ## Hold Tags as Receipts
 
 When `zfssendoffsite` copies a snapshot, it places a hold on both the source

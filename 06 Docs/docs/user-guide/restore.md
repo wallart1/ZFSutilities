@@ -47,6 +47,18 @@ which automates this two-step process.
 For details of the two-step restore, see the
 [Architecture - Restore Flow](../developer-guide/architecture.md#restore-flow).
 
+## Pause Scrubs During Restore
+
+The Restore tab has an option to **pause scrubs on the source and destination
+pools while the restore step is running**. This reduces I/O contention while
+large snapshot data is being read and written, and resumes scrubs automatically
+when the restore finishes.
+
+- Enable it in the Restore tab → **Restore Steps** →
+  **Pause scrubs on source/destination pools during each step**.
+- In dry-run mode the option logs what it would pause/resume but does not
+  change scrub state.
+
 ## Checking Holds Before Deletion
 
 If a snapshot has holds, you must release them before it can be deleted:

@@ -177,6 +177,7 @@ def temp_config_dir():
         orig_config_path = backup_config.CONFIG_PATH
         orig_core_config_path = config_core.CONFIG_PATH
         orig_cron_file = cron_manager.CRON_FILE
+        orig_cron_profile_lock_dir = cron_manager.PROFILE_LOCK_DIR
         orig_snapfile = backup_config.SNAPFILE
         orig_core_snapfile = feature_config.SNAPFILE
         orig_offsite_snapfile = backup_config.OFFSITE_SNAPFILE
@@ -197,6 +198,7 @@ def temp_config_dir():
         backup_config.CONFIG_PATH = config_path
         config_core.CONFIG_PATH = config_path
         cron_manager.CRON_FILE = os.path.join(tmpdir, "zfsutilities.cron")
+        cron_manager.PROFILE_LOCK_DIR = os.path.join(tmpdir, "profiles", "locks")
         snapfile = os.path.join(tmpdir, "zfsnextsnap")
         offsite_snapfile = os.path.join(tmpdir, "zfsnextsnap_offsite")
         snapname_lock = os.path.join(tmpdir, "snapname.lock")
@@ -220,6 +222,7 @@ def temp_config_dir():
             backup_config.CONFIG_PATH = orig_config_path
             config_core.CONFIG_PATH = orig_core_config_path
             cron_manager.CRON_FILE = orig_cron_file
+            cron_manager.PROFILE_LOCK_DIR = orig_cron_profile_lock_dir
             backup_config.SNAPFILE = orig_snapfile
             feature_config.SNAPFILE = orig_core_snapfile
             backup_config.OFFSITE_SNAPFILE = orig_offsite_snapfile
