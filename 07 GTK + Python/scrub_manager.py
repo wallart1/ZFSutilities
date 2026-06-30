@@ -570,10 +570,21 @@ class ScrubQueue:
             self._save()
 
     def add_pending(self, pool_names: List[str]):
-        """Add pools to the pending queue (ignoring duplicates)."""
+        """Add pools to the pending queue.
+
+        Active pools are left alone. Pools that are currently paused are moved
+        back to pending (re-queued) so Start Scrub can restart them.
+        """
         added = []
         for name in pool_names:
-            if name not in self.pending and name not in self.active and name not in self.paused:
+            if name in self.active:
+                continue
+            if name in self.paused:
+                self.paused.discard(name)
+                self.paused_by_user.discard(name)
+                self.pending.add(name)
+                added.append(name)
+            elif name not in self.pending:
                 self.pending.add(name)
                 added.append(name)
         if added:
@@ -715,9 +726,14 @@ class ScrubQueue:
                     self.pending.discard(candidate)
                     self.active.add(candidate)
                 elif info.state == ScrubState.PAUSED:
-                    # Resume was issued but not yet reflected in zpool status;
-                    # leave the pool pending and try again on the next tick.
-                    continue
+                    # Pool is queued but still live-paused. Resume it only when
+                    # a scrub slot is available; do not preempt active scrubs.
+                    self.pending.discard(candidate)
+                    if resume_scrub(candidate):
+                        self.active.add(candidate)
+                    else:
+                        self.pending.add(candidate)
+                        break
                 elif info.state in (
                     ScrubState.NONE,
                     ScrubState.FINISHED,

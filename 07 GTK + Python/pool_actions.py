@@ -21,7 +21,7 @@ from pools_page import (
     FLAG_REGISTERED, FLAG_UNREGISTERED,
 )
 from scrub_manager import (
-    start_scrub, pause_scrub, resume_scrub, stop_scrub,
+    start_scrub, pause_scrub, stop_scrub,
 )
 from pool_watch import PoolWatchWindow
 
@@ -425,15 +425,20 @@ def on_scrub_pause(app):
 
 
 def on_scrub_resume(app):
-    """Resume selected paused pools."""
+    """Return selected paused pools to the pending queue.
+
+    The scrub manager resumes them when a slot is available; they do not
+    preempt scrubs that are already running.
+    """
     pools = get_selected_pool_names(app.scrub_view)
     if not pools:
         log_msg("WARN: Select at least one pool to resume")
         return
     to_resume = [n for n in pools if n in app.scrub_queue.paused]
-    app.scrub_queue.resume_pools(pools)
-    for name in to_resume:
-        resume_scrub(name)
+    if not to_resume:
+        log_msg("WARN: Selected pools are not paused")
+        return
+    app.scrub_queue.resume_pools(to_resume)
     from pools_page import refresh_scrub_table, schedule_scrub_refresh_burst
     refresh_scrub_table(app)
     schedule_scrub_refresh_burst(app)

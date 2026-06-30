@@ -902,9 +902,9 @@ buttons to control them.
 
 | Button                      | Behavior                                                                                          |
 | --------------------------- | ------------------------------------------------------------------------------------------------- |
-| **Start Scrub**             | Adds selected pools to the pending queue. The manager automatically starts them up to the target. |
+| **Start Scrub**             | Adds selected pools to the pending queue. Pools that are currently paused are re-queued as pending. The manager automatically starts them up to the target. |
 | **Pause Scrub**             | Pauses selected active or pending scrubs (`zpool scrub -p`)                                       |
-| **Resume Scrub**            | Issues `zpool scrub` for selected paused pools and returns them to the pending queue so the manager can restart them |
+| **Resume Scrub**            | Returns selected paused pools to the pending queue. They resume when a scrub slot is available and do not preempt scrubs that are already running. |
 | **Stop Scrub**              | Stops selected scrubs (`zpool scrub -s`) and removes them from the queue                          |
 | **Add Profile to Schedule** | Saves selected pools and all settings as a scheduled profile                                      |
 
@@ -923,8 +923,9 @@ running on a dataset in the same pool.
    finished or canceled scrub; the manager still starts a fresh scrub. The manager starts pending pools until the simultaneous target is reached.
 2. **Active** — pools currently **scrubbing**.
 3. **Paused** — pools that were paused manually or by lowering the target.
-   Manually paused pools stay paused until you press **Resume Scrub**, even
-   if the simultaneous target would otherwise allow more active scrubs.
+   A manually paused pool stays paused until you press **Resume Scrub** or
+   **Start Scrub**; either action returns it to the pending queue. It then
+   waits for an available scrub slot and does not preempt running scrubs.
    Pools paused only because the target was lowered are resumed automatically
    when the target is raised again or a running scrub finishes.
 4. **Finished** — pools whose scrub completed or was canceled. Finished

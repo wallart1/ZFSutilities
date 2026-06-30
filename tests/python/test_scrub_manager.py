@@ -311,6 +311,15 @@ class TestScrubQueue(unittest.TestCase):
         self.assertIn("tank", q.pending)
         self.assertEqual(q.target, 1)
 
+    def test_add_pending_moves_paused_to_pending(self):
+        q = sm.ScrubQueue(target=1)
+        q.paused.add("tank")
+        q.paused_by_user.add("tank")
+        q.add_pending(["tank"])
+        self.assertIn("tank", q.pending)
+        self.assertNotIn("tank", q.paused)
+        self.assertNotIn("tank", q.paused_by_user)
+
     def test_set_target(self):
         q = sm.ScrubQueue(target=1)
         q.set_target(3)
@@ -446,16 +455,31 @@ class TestScrubQueue(unittest.TestCase):
         self.assertIn("tank", q.finished)
         self.assertNotIn("tank", q.active)
 
-    def test_tick_pending_paused_stays_pending(self):
-        """A pending pool that is still live-PAUSED must not be promoted to active."""
+    def test_tick_pending_paused_resumes_when_room(self):
+        """A pending pool that is still live-PAUSED is resumed when a slot is free."""
         q = sm.ScrubQueue(target=1)
         q.add_pending(["tank"])
         states = {"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)}
-        with patch.object(sm, "start_scrub") as mock_start:
+        with patch.object(sm, "resume_scrub", return_value=True) as mock_resume:
             q.tick(states)
+        mock_resume.assert_called_once_with("tank")
+        self.assertIn("tank", q.active)
+        self.assertNotIn("tank", q.pending)
+
+    def test_tick_pending_paused_stays_pending_when_target_full(self):
+        """A pending live-PAUSED pool must not preempt an active scrub."""
+        q = sm.ScrubQueue(target=1)
+        q.active.add("other")
+        q.add_pending(["tank"])
+        states = {
+            "other": sm.ScrubInfo(state=sm.ScrubState.SCANNING),
+            "tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED),
+        }
+        with patch.object(sm, "resume_scrub") as mock_resume:
+            q.tick(states)
+        mock_resume.assert_not_called()
         self.assertIn("tank", q.pending)
         self.assertNotIn("tank", q.active)
-        mock_start.assert_not_called()
 
 
 class TestParseScrubStatusMixed(unittest.TestCase):
@@ -479,8 +503,8 @@ class TestParseScrubStatusMixed(unittest.TestCase):
 
 class TestPoolActionsScrub(unittest.TestCase):
 
-    def test_on_scrub_resume_calls_resume_scrub_for_paused_pools(self):
-        """on_scrub_resume issues zpool scrub only for pools that were paused."""
+    def test_on_scrub_resume_queues_paused_pools_without_direct_resume(self):
+        """on_scrub_resume moves paused pools to pending without issuing zpool scrub."""
         from test_support import mock_gtk
 
         with mock_gtk():
@@ -493,15 +517,13 @@ class TestPoolActionsScrub(unittest.TestCase):
         with patch.object(
             pool_actions, "get_selected_pool_names", return_value=["tank", "data"]
         ):
-            with patch.object(pool_actions, "resume_scrub") as mock_resume:
-                with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
-                    with patch.object(
-                        pools_page, "schedule_scrub_refresh_burst"
-                    ) as mock_burst:
-                        pool_actions.on_scrub_resume(app)
+            with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
+                with patch.object(
+                    pools_page, "schedule_scrub_refresh_burst"
+                ) as mock_burst:
+                    pool_actions.on_scrub_resume(app)
 
-        mock_resume.assert_called_once_with("tank")
-        app.scrub_queue.resume_pools.assert_called_once_with(["tank", "data"])
+        app.scrub_queue.resume_pools.assert_called_once_with(["tank"])
         mock_refresh.assert_called_once_with(app)
         mock_burst.assert_called_once_with(app)
 
@@ -526,6 +548,25 @@ class TestPoolActionsScrub(unittest.TestCase):
         app.scrub_queue.add_pending.assert_called_once_with(["tank"])
         mock_refresh.assert_called_once_with(app)
         mock_burst.assert_called_once_with(app)
+
+    def test_on_scrub_start_requeues_paused_pool(self):
+        """Start Scrub on a paused pool moves it back to pending."""
+        from test_support import mock_gtk
+
+        with mock_gtk():
+            import pool_actions
+            import pools_page
+
+        app = MagicMock()
+        app.scrub_queue.paused = {"tank"}
+        with patch.object(
+            pool_actions, "get_selected_pool_names", return_value=["tank"]
+        ):
+            with patch.object(pools_page, "refresh_scrub_table"):
+                with patch.object(pools_page, "schedule_scrub_refresh_burst"):
+                    pool_actions.on_scrub_start(app)
+
+        app.scrub_queue.add_pending.assert_called_once_with(["tank"])
 
     def test_on_scrub_pause_schedules_refresh_burst(self):
         """Pause handler pauses pools and schedules a refresh burst."""

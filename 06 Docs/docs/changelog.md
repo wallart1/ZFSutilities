@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.59.2
+
+### Changed
+
+- **Scrub resume is queue-driven and non-preemptive** — In the Pools tab,
+  **Resume Scrub** and **Start Scrub** on a paused pool now return the pool to
+  the pending queue instead of issuing `zpool scrub` immediately. The scrub
+  manager resumes pending live-paused pools only when a scrub slot is available,
+  so resumed scrubs no longer preempt scrubs that are already running. Pools
+  paused only because the simultaneous target was lowered are still resumed
+  automatically when a slot frees up.
+
+### Tests
+
+- Expanded `tests/python/test_scrub_manager.py` and
+  `tests/python/test_pool_actions.py` to cover queue-driven resume, re-queueing
+  paused pools via **Start Scrub**, and non-preemptive pending-paused promotion.
+
 ## 0.59.1
 
 ### Changed
