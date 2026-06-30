@@ -212,5 +212,24 @@ class TestDashboardConfig(unittest.TestCase):
             self.assertEqual(config["dashboard"]["low_space_threshold"], 90)
 
 
+class TestConfigLocking(unittest.TestCase):
+    """Config load/save acquire the shared config lock."""
+
+    def test_save_config_acquires_write_lock(self):
+        with temp_config_dir():
+            import file_locking
+            lock_path = file_locking.CONFIG_LOCK_PATH
+            config_core.save_config({"test": "data"})
+            self.assertTrue(os.path.exists(lock_path))
+
+    def test_load_config_acquires_read_lock(self):
+        with temp_config_dir():
+            import file_locking
+            config_core.save_config({"test": "data"})
+            lock_path = file_locking.CONFIG_LOCK_PATH
+            config_core.load_config()
+            self.assertTrue(os.path.exists(lock_path))
+
+
 if __name__ == "__main__":
     unittest.main()

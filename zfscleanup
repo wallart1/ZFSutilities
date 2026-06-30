@@ -31,6 +31,7 @@ function cleanup {
     source $mydir/zfsbuildfsarray
     source $mydir/zfsretain
     source $mydir/zfsoverrides
+    source $mydir/zfslockmanager
 
     if [[ $autoproceed = '' ]]; then autoproceed='Y'; fi
     if [[ $dryrun = '' ]]; then dryrun="N"; fi
@@ -64,6 +65,8 @@ function cleanup {
     
     if [[ $4 != '' ]]; then overrides $4; fi
 
+    zfslock_init
+
     for pool in "${zfspoolarray[@]}"; do
         if ! zpool list $pool >/dev/null 2>&1; then continue; fi
         echo '--------------------------------'
@@ -83,7 +86,9 @@ function cleanup {
             read -p "$(log_msg) Press enter to continue."
         fi
         for retainfs in "${fsarray[@]}"; do
-            retain "$retainfs" "$zfscleanup_label"
+            if ! retain "$retainfs" "$zfscleanup_label"; then
+                log_msg "WARN: Skipped $retainfs due to lock conflict or error."
+            fi
         done
     done
     log_msg "INFO: zfscleanup completed."

@@ -20,6 +20,7 @@ import backup_config
 import config_core
 import cron_manager
 import feature_config
+import file_locking
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +181,16 @@ def temp_config_dir():
         orig_core_snapfile = feature_config.SNAPFILE
         orig_offsite_snapfile = backup_config.OFFSITE_SNAPFILE
         orig_core_offsite_snapfile = feature_config.OFFSITE_SNAPFILE
+        orig_snapname_lock = backup_config.SNAPNAME_LOCK
+        orig_core_snapname_lock = feature_config.SNAPNAME_LOCK
+        orig_snapname_reserved = backup_config.SNAPNAME_RESERVED
+        orig_core_snapname_reserved = feature_config.SNAPNAME_RESERVED
+        orig_config_lock = file_locking.CONFIG_LOCK_PATH
+        orig_history_lock = file_locking.HISTORY_LOCK_PATH
+        orig_log_index_lock = file_locking.LOG_INDEX_LOCK_PATH
+        orig_scrub_state_lock = file_locking.SCRUB_STATE_LOCK_PATH
+        import profile_runner
+        orig_profile_lock_dir = profile_runner.PROFILE_LOCK_DIR
         profiles_dir = os.path.join(tmpdir, "profiles")
         os.makedirs(profiles_dir, exist_ok=True)
         config_path = os.path.join(tmpdir, "zfsutilities.json")
@@ -188,10 +199,21 @@ def temp_config_dir():
         cron_manager.CRON_FILE = os.path.join(tmpdir, "zfsutilities.cron")
         snapfile = os.path.join(tmpdir, "zfsnextsnap")
         offsite_snapfile = os.path.join(tmpdir, "zfsnextsnap_offsite")
+        snapname_lock = os.path.join(tmpdir, "snapname.lock")
+        snapname_reserved = os.path.join(tmpdir, "snapname.reserved")
         backup_config.SNAPFILE = snapfile
         feature_config.SNAPFILE = snapfile
         backup_config.OFFSITE_SNAPFILE = offsite_snapfile
         feature_config.OFFSITE_SNAPFILE = offsite_snapfile
+        backup_config.SNAPNAME_LOCK = snapname_lock
+        feature_config.SNAPNAME_LOCK = snapname_lock
+        backup_config.SNAPNAME_RESERVED = snapname_reserved
+        feature_config.SNAPNAME_RESERVED = snapname_reserved
+        file_locking.CONFIG_LOCK_PATH = os.path.join(tmpdir, ".config.lock")
+        file_locking.HISTORY_LOCK_PATH = os.path.join(tmpdir, ".history.lock")
+        file_locking.LOG_INDEX_LOCK_PATH = os.path.join(tmpdir, ".log_index.lock")
+        file_locking.SCRUB_STATE_LOCK_PATH = os.path.join(tmpdir, ".scrub_state.lock")
+        profile_runner.PROFILE_LOCK_DIR = os.path.join(tmpdir, "profiles", "locks")
         try:
             yield tmpdir
         finally:
@@ -202,6 +224,34 @@ def temp_config_dir():
             feature_config.SNAPFILE = orig_core_snapfile
             backup_config.OFFSITE_SNAPFILE = orig_offsite_snapfile
             feature_config.OFFSITE_SNAPFILE = orig_core_offsite_snapfile
+            backup_config.SNAPNAME_LOCK = orig_snapname_lock
+            feature_config.SNAPNAME_LOCK = orig_core_snapname_lock
+            backup_config.SNAPNAME_RESERVED = orig_snapname_reserved
+            feature_config.SNAPNAME_RESERVED = orig_core_snapname_reserved
+            file_locking.CONFIG_LOCK_PATH = orig_config_lock
+            file_locking.HISTORY_LOCK_PATH = orig_history_lock
+            file_locking.LOG_INDEX_LOCK_PATH = orig_log_index_lock
+            file_locking.SCRUB_STATE_LOCK_PATH = orig_scrub_state_lock
+            profile_runner.PROFILE_LOCK_DIR = orig_profile_lock_dir
+
+
+@contextlib.contextmanager
+def temp_lock_dir():
+    """Route zfs_lock_manager lock files to a temporary directory."""
+    import zfs_lock_manager
+    with tempfile.TemporaryDirectory() as tmpdir:
+        orig_dir = zfs_lock_manager.ZFSLOCK_DIR
+        orig_locks = zfs_lock_manager.ZFSLOCK_LOCKS_DIR
+        orig_pids = zfs_lock_manager.ZFSLOCK_PIDS_DIR
+        zfs_lock_manager.ZFSLOCK_DIR = tmpdir
+        zfs_lock_manager.ZFSLOCK_LOCKS_DIR = os.path.join(tmpdir, ".locks")
+        zfs_lock_manager.ZFSLOCK_PIDS_DIR = os.path.join(tmpdir, ".pids")
+        try:
+            yield tmpdir
+        finally:
+            zfs_lock_manager.ZFSLOCK_DIR = orig_dir
+            zfs_lock_manager.ZFSLOCK_LOCKS_DIR = orig_locks
+            zfs_lock_manager.ZFSLOCK_PIDS_DIR = orig_pids
 
 
 def write_config(data):

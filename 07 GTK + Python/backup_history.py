@@ -10,6 +10,8 @@ import re
 import tempfile
 from datetime import datetime, timezone
 
+from file_locking import history_lock_read, history_lock_write
+
 HISTORY_PATH = "/root/.config/zfsutilities-history.json"
 
 # Regex: ^(\d+(?:\.\d+)?)\s*([kKMGTPE]?(?:i?B)?)$
@@ -90,11 +92,8 @@ def format_duration(seconds):
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def load_history():
-    """Load the history list from HISTORY_PATH.
-
-    Returns an empty list if the file does not exist or is unreadable.
-    """
+def _load_history_unlocked():
+    """Load history without acquiring a lock; caller must hold the lock."""
     if not os.path.exists(HISTORY_PATH):
         return []
     try:
@@ -107,12 +106,20 @@ def load_history():
     return []
 
 
-def save_history(entries):
-    """Write the history list to HISTORY_PATH atomically.
+def load_history():
+    """Load the history list from HISTORY_PATH.
 
-    Writes to a temporary file in the same directory and renames it to
-    avoid corrupting an existing history file on crash or power loss.
+    Returns an empty list if the file does not exist or is unreadable.
     """
+    try:
+        with history_lock_read():
+            return _load_history_unlocked()
+    except OSError:
+        return []
+
+
+def _save_history_unlocked(entries):
+    """Write history without acquiring a lock; caller must hold the lock."""
     config_dir = os.path.dirname(HISTORY_PATH)
     os.makedirs(config_dir, exist_ok=True)
     fd, temp_path = tempfile.mkstemp(dir=config_dir, prefix=".zfsutilities-history-")
@@ -125,6 +132,19 @@ def save_history(entries):
             os.remove(temp_path)
         except OSError:
             pass
+
+
+def save_history(entries):
+    """Write the history list to HISTORY_PATH atomically.
+
+    Writes to a temporary file in the same directory and renames it to
+    avoid corrupting an existing history file on crash or power loss.
+    """
+    try:
+        with history_lock_write():
+            _save_history_unlocked(entries)
+    except OSError:
+        pass
 
 
 def prune_history(entries, days):
@@ -160,13 +180,17 @@ def add_history_entry(entry):
     Pruning uses the default retention of 90 days if no explicit
     retention is configured elsewhere.
     """
-    entries = load_history()
-    entries.insert(0, entry)
-    # Default to 90 days if we cannot read a config value here.
-    # Callers that know the configured retention can call prune_history
-    # themselves before save_history.
-    entries = prune_history(entries, 90)
-    save_history(entries)
+    try:
+        with history_lock_write():
+            entries = _load_history_unlocked()
+            entries.insert(0, entry)
+            # Default to 90 days if we cannot read a config value here.
+            # Callers that know the configured retention can call prune_history
+            # themselves before save_history.
+            entries = prune_history(entries, 90)
+            _save_history_unlocked(entries)
+    except OSError:
+        pass
 
 
 def get_success_rate(entries, days):

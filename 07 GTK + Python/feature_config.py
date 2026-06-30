@@ -1,10 +1,14 @@
 """Per-feature configuration getters/setters and snapshot name helpers."""
 
+import fcntl
 import json
 import os
+import time
+from contextlib import contextmanager
 from datetime import datetime
 
 from config_core import save_config, _deep_copy, BACKUP_DEFAULTS
+from file_locking import scrub_state_lock_read, scrub_state_lock_write
 
 
 def get_backup_config(config):
@@ -289,8 +293,9 @@ def load_scrub_state():
     if not os.path.exists(SCRUB_STATE_PATH):
         return dict(defaults)
     try:
-        with open(SCRUB_STATE_PATH, "r") as f:
-            data = json.load(f)
+        with scrub_state_lock_read():
+            with open(SCRUB_STATE_PATH, "r") as f:
+                data = json.load(f)
         for key in defaults:
             if key not in data:
                 data[key] = defaults[key]
@@ -303,14 +308,18 @@ def save_scrub_state(state):
     """Persist scrub queue state to disk."""
     os.makedirs(os.path.dirname(SCRUB_STATE_PATH), exist_ok=True)
     try:
-        with open(SCRUB_STATE_PATH, "w") as f:
-            json.dump(state, f, indent=2)
+        with scrub_state_lock_write():
+            with open(SCRUB_STATE_PATH, "w") as f:
+                json.dump(state, f, indent=2)
     except OSError:
         pass
 
 
 SNAPFILE = "/root/.config/zfsutilities_nextsnap"
 OFFSITE_SNAPFILE = "/root/.config/zfsutilities_offsite_nextsnap"
+SNAPNAME_LOCK = "/run/lock/zfs/.snapname.lock"
+SNAPNAME_RESERVED = "/run/lock/zfs/.snapname.reserved"
+SNAPNAME_RESERVE_SECONDS = 60
 
 
 def _read_snapfile(path):
@@ -340,6 +349,106 @@ def _remove_snapfile(path):
         pass
 
 
+def _ensure_snapname_dirs():
+    """Create the directory that holds snapshot-name lock/reservation files."""
+    try:
+        os.makedirs(os.path.dirname(SNAPNAME_LOCK), exist_ok=True)
+    except OSError:
+        pass
+
+
+@contextmanager
+def _snapname_lock():
+    """Acquire the global snapshot-name generation lock."""
+    _ensure_snapname_dirs()
+    fd = -1
+    try:
+        fd = os.open(SNAPNAME_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        if fd >= 0:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _load_reservations():
+    """Load the snapshot-name reservation file.
+
+    Returns a dict mapping snapshot name to the epoch seconds when it was
+    reserved. Stale entries are dropped.
+    """
+    reservations = {}
+    if not os.path.exists(SNAPNAME_RESERVED):
+        return reservations
+    cutoff = time.time() - SNAPNAME_RESERVE_SECONDS
+    try:
+        with open(SNAPNAME_RESERVED, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        reserved_at = int(parts[1])
+                    except ValueError:
+                        continue
+                    if reserved_at >= cutoff:
+                        reservations[parts[0]] = reserved_at
+    except OSError:
+        pass
+    return reservations
+
+
+def _save_reservations(reservations):
+    """Write the snapshot-name reservation file."""
+    _ensure_snapname_dirs()
+    try:
+        with open(SNAPNAME_RESERVED, "w", encoding="utf-8") as f:
+            for name, reserved_at in reservations.items():
+                f.write(f"{name} {reserved_at}\n")
+    except OSError:
+        pass
+
+
+def _reserve_snapshot_name_unlocked(name):
+    """Record a snapshot name as reserved for one minute.
+
+    Caller must already hold the snapshot-name lock. The reservation file is
+    line-based so it can be shared with the bash zfssnapbuild implementation.
+    """
+    reservations = _load_reservations()
+    reservations[name] = int(time.time())
+    _save_reservations(reservations)
+
+
+def _reserve_snapshot_name(name):
+    """Record a snapshot name as reserved for one minute."""
+    with _snapname_lock():
+        _reserve_snapshot_name_unlocked(name)
+
+
+def _is_snapshot_name_reserved(name):
+    """Return True if *name* is still reserved (within the last minute)."""
+    with _snapname_lock():
+        reservations = _load_reservations()
+        reserved_at = reservations.get(name)
+        if reserved_at is None:
+            return False
+        if time.time() - reserved_at <= SNAPNAME_RESERVE_SECONDS:
+            return True
+        del reservations[name]
+        _save_reservations(reservations)
+        return False
+
+
 def save_snapshot_name(name):
     _write_snapfile(SNAPFILE, name)
 
@@ -359,7 +468,9 @@ def _build_snapshot_name(label):
 
 
 def generate_snapshot_name(label="dailybackup"):
-    name = _build_snapshot_name(label)
+    with _snapname_lock():
+        name = _build_snapshot_name(label)
+        _reserve_snapshot_name_unlocked(name)
     save_snapshot_name(name)
     return name
 
@@ -369,6 +480,8 @@ def save_offsite_snapshot_name(name):
 
 
 def generate_offsite_snapshot_name():
-    name = _build_snapshot_name("offsite")
+    with _snapname_lock():
+        name = _build_snapshot_name("offsite")
+        _reserve_snapshot_name_unlocked(name)
     save_offsite_snapshot_name(name)
     return name

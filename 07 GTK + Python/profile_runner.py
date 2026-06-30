@@ -5,6 +5,8 @@ Usage:
     python3 profile_runner.py run <profile_name>
 """
 
+import fcntl
+import json
 import os
 import re
 import shlex
@@ -44,6 +46,11 @@ from restore_runner import compute_restore_params, build_restore_command
 from profile_manager import load_profile
 from scrub_manager import ScrubQueue, get_all_pool_scrub_states, ScrubState, start_scrub, pause_scrub, resume_scrub, stop_scrub
 from cron_manager import _parse_weekday, _match_weekday_ordinal
+
+# Directory for per-profile advisory locks. Override for testing.
+PROFILE_LOCK_DIR = os.environ.get(
+    "ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles"
+)
 
 # Regex: received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds
 # Purpose: Match the final summary line emitted by `zfs receive` on stderr,
@@ -96,6 +103,92 @@ def _check_weekday_ordinal(weekday_field):
     if int(base) != wd:
         return False
     return _match_weekday_ordinal(today, wd, specs)
+
+
+def _profile_lock_path(profile_name):
+    """Return the lock file path for *profile_name*.
+
+    The profile name is sanitized so it can be used safely as a filename.
+    """
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", profile_name)
+    return os.path.join(PROFILE_LOCK_DIR, f"{safe}.lock")
+
+
+def acquire_profile_lock(profile_name, timeout=1.0):
+    """Acquire an exclusive advisory lock for *profile_name*.
+
+    Creates the lock directory and lock file if needed. Returns a tuple
+    (fd, lock_path) on success, or (None, lock_path) if the lock is already
+    held by another process. With *timeout* > 0, retry briefly with a short
+    sleep before giving up.
+    """
+    os.makedirs(PROFILE_LOCK_DIR, exist_ok=True)
+    lock_path = _profile_lock_path(profile_name)
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+    flags = fcntl.LOCK_EX | fcntl.LOCK_NB
+
+    if timeout is None:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError as exc:
+            os.close(fd)
+            raise
+        return fd, lock_path
+
+    deadline = time.time() + max(0.0, float(timeout))
+    acquired = False
+    while True:
+        try:
+            fcntl.flock(fd, flags)
+            acquired = True
+            break
+        except (BlockingIOError, OSError):
+            if time.time() >= deadline:
+                break
+            time.sleep(0.05)
+
+    if not acquired:
+        os.close(fd)
+        return None, lock_path
+
+    # Record metadata so the Dashboard can identify the owning profile and PID.
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    try:
+        with open(lock_path, "w") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "profile": profile_name,
+                        "pid": os.getpid(),
+                        "started": timestamp,
+                    }
+                )
+                + "\n"
+            )
+    except OSError:
+        pass
+
+    return fd, lock_path
+
+
+def release_profile_lock(fd, lock_path):
+    """Release a profile lock and close its file descriptor."""
+    if fd is None:
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    # Best-effort cleanup of the lock file; failure is harmless.
+    try:
+        if os.path.exists(lock_path):
+            os.unlink(lock_path)
+    except OSError:
+        pass
 
 
 def _is_dataset_encrypted(path):
@@ -559,70 +652,82 @@ def main():
         sys.exit(1)
 
     profile_name = sys.argv[2]
-    profile = load_profile(profile_name)
-    if profile is None:
-        log_msg(f"FATAL: Profile not found: {profile_name}")
-        sys.exit(1)
 
-    config = load_config()
-    prune_old_logs(config.get("log_retention_days", 30))
-
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    version_root = os.path.dirname(script_dir)
-    bin_dir = os.path.join(version_root, "bin")
-    parent_dir = bin_dir if os.path.isfile(os.path.join(bin_dir, "zfsdailybackup")) else version_root
-
-    tab_type = profile.get("tab_type", "")
-
-    global _session_start_time, _last_log_size_check
-    _session_start_time = time.time()
-    _last_log_size_check = time.time()
-    _create_session_log_file(tab_type, profile_name)
-
-    ctx = session_log_context(_session_log_file) if _session_log_file else nullcontext()
-    with ctx:
-        log_msg(f"INFO: Running profile: {profile_name} (type={tab_type})")
-
-        weekday_field = profile.get("cron", {}).get("weekday", "*")
-        if not _check_weekday_ordinal(weekday_field):
-            log_msg(
-                f"INFO: Skipping profile {profile_name}: today does not match "
-                f"weekday ordinal '{weekday_field}'"
-            )
-            _write_session_trailer(rc=0)
-            sys.exit(0)
-
-        runners = {
-            "backup": run_backup_profile,
-            "offsite": run_offsite_profile,
-            "restore": run_restore_profile,
-            "retention": run_retention_profile,
-            "scrub": run_scrub_profile,
-        }
-        runner = runners.get(tab_type)
-        if runner is None:
-            log_msg(f"FATAL: Unknown tab type: {tab_type}")
-            rc = 1
-        else:
-            rc = runner(profile, config, parent_dir, _session_log_file)
-
-        log_msg(f"INFO: Profile {profile_name} finished (rc={rc})")
-        _maybe_truncate_session_log(_session_log_file)
-        bytes_transferred = _parse_bytes_from_log(_session_log_file)
-        duration = time.time() - _session_start_time if _session_start_time else 0.0
-        result = "success" if rc == 0 else "failed"
-        entry = build_entry(
-            timestamp=datetime.now().isoformat(),
-            run_type=tab_type if tab_type else "backup",
-            name=profile_name,
-            duration=duration,
-            result=result,
-            bytes_transferred=bytes_transferred,
-            log_file=_session_log_file,
+    lock_fd, lock_path = acquire_profile_lock(profile_name, timeout=1.0)
+    if lock_fd is None:
+        log_msg(
+            f"INFO: Profile '{profile_name}' is already running; "
+            "skipping duplicate invocation"
         )
-        add_history_entry(entry)
-        _write_session_trailer(rc=rc, bytes_transferred=bytes_transferred)
-        sys.exit(rc)
+        sys.exit(0)
+
+    try:
+        profile = load_profile(profile_name)
+        if profile is None:
+            log_msg(f"FATAL: Profile not found: {profile_name}")
+            sys.exit(1)
+
+        config = load_config()
+        prune_old_logs(config.get("log_retention_days", 30))
+
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        version_root = os.path.dirname(script_dir)
+        bin_dir = os.path.join(version_root, "bin")
+        parent_dir = bin_dir if os.path.isfile(os.path.join(bin_dir, "zfsdailybackup")) else version_root
+
+        tab_type = profile.get("tab_type", "")
+
+        global _session_start_time, _last_log_size_check
+        _session_start_time = time.time()
+        _last_log_size_check = time.time()
+        _create_session_log_file(tab_type, profile_name)
+
+        ctx = session_log_context(_session_log_file) if _session_log_file else nullcontext()
+        with ctx:
+            log_msg(f"INFO: Running profile: {profile_name} (type={tab_type})")
+
+            weekday_field = profile.get("cron", {}).get("weekday", "*")
+            if not _check_weekday_ordinal(weekday_field):
+                log_msg(
+                    f"INFO: Skipping profile {profile_name}: today does not match "
+                    f"weekday ordinal '{weekday_field}'"
+                )
+                _write_session_trailer(rc=0)
+                sys.exit(0)
+
+            runners = {
+                "backup": run_backup_profile,
+                "offsite": run_offsite_profile,
+                "restore": run_restore_profile,
+                "retention": run_retention_profile,
+                "scrub": run_scrub_profile,
+            }
+            runner = runners.get(tab_type)
+            if runner is None:
+                log_msg(f"FATAL: Unknown tab type: {tab_type}")
+                rc = 1
+            else:
+                rc = runner(profile, config, parent_dir, _session_log_file)
+
+            log_msg(f"INFO: Profile {profile_name} finished (rc={rc})")
+            _maybe_truncate_session_log(_session_log_file)
+            bytes_transferred = _parse_bytes_from_log(_session_log_file)
+            duration = time.time() - _session_start_time if _session_start_time else 0.0
+            result = "success" if rc == 0 else "failed"
+            entry = build_entry(
+                timestamp=datetime.now().isoformat(),
+                run_type=tab_type if tab_type else "backup",
+                name=profile_name,
+                duration=duration,
+                result=result,
+                bytes_transferred=bytes_transferred,
+                log_file=_session_log_file,
+            )
+            add_history_entry(entry)
+            _write_session_trailer(rc=rc, bytes_transferred=bytes_transferred)
+            sys.exit(rc)
+    finally:
+        release_profile_lock(lock_fd, lock_path)
 
 
 if __name__ == "__main__":

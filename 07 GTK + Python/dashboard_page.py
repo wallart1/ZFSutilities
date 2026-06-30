@@ -101,6 +101,61 @@ _ENCRYPTED_LUN_RE = re.compile(r"^([^#\s][^:]*):([^:]+):(.+)$")
 ZFSLOCK_DIR = "/run/lock/zfs"
 ZFSLOCK_LOCKS_DIR = os.path.join(ZFSLOCK_DIR, ".locks")
 ZFSLOCK_PIDS_DIR = os.path.join(ZFSLOCK_DIR, ".pids")
+PROFILE_LOCK_DIR = os.environ.get(
+    "ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles"
+)
+
+
+def _read_json_lock(lock_path):
+    """Read a JSON lock file and return its dict, or None on error."""
+    try:
+        with open(lock_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _is_profile_lock_stale(lock_path):
+    """Return True if a profile lock file is stale (owner PID is dead)."""
+    data = _read_json_lock(lock_path)
+    if data is None:
+        return True
+    pid = data.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return True
+    return False
+
+
+def list_running_profiles():
+    """Return a list of running profile dicts from the profile lock directory.
+
+    Each dict contains: name, pid, started.
+    Stale locks are ignored.
+    """
+    if not os.path.isdir(PROFILE_LOCK_DIR):
+        return []
+
+    profiles = []
+    for entry in os.listdir(PROFILE_LOCK_DIR):
+        if not entry.endswith(".lock"):
+            continue
+        lock_path = os.path.join(PROFILE_LOCK_DIR, entry)
+        if not os.path.isfile(lock_path):
+            continue
+        if _is_profile_lock_stale(lock_path):
+            continue
+        data = _read_json_lock(lock_path) or {}
+        name = data.get("profile") or entry[:-5]
+        profiles.append({
+            "name": name,
+            "pid": data.get("pid"),
+            "started": data.get("started", "?"),
+        })
+    return profiles
 
 
 def _run_cmd(cmd, timeout=5):
@@ -644,13 +699,14 @@ def _cleanup_stale_locks():
     return removed
 
 
-def _get_warnings(pools, recent_history, threshold):
+def _get_warnings(pools, recent_history, threshold, running_profiles=None):
     """Compile warning strings from all sources.
 
     Args:
         pools: List of pool dicts from _get_pool_health().
         recent_history: Dict from _get_recent_history().
         threshold: Low-space warning threshold (int 0-100).
+        running_profiles: Optional list of running profile dicts.
 
     Returns a list of human-readable warning strings.
     """
@@ -670,6 +726,13 @@ def _get_warnings(pools, recent_history, threshold):
             summary = status_errors.get("errors_summary", "unknown error")
             warnings.append(
                 f'Pool "{p["name"]}" has ZFS errors: {summary}'
+            )
+
+    if running_profiles:
+        for profile in running_profiles:
+            warnings.append(
+                f"Profile '{profile['name']}' is running; concurrent GUI "
+                "operations may wait for dataset locks"
             )
 
     return warnings
@@ -906,8 +969,10 @@ def refresh_dashboard_page(app):
     from scrub_manager import get_all_pool_scrub_states
     scrub_states = get_all_pool_scrub_states()
 
+    running_profiles = list_running_profiles()
+
     # Build warnings: live checks + startup-style checks
-    warnings = _get_warnings(pools, recent, threshold)
+    warnings = _get_warnings(pools, recent, threshold, running_profiles)
     if not app.config.get("backup", {}).get("pull_steps") and not app.config.get("backup", {}).get("send_receive_steps"):
         warnings.append("No backup steps configured — configure in the Backup tab")
     if not app.config.get("offsite", {}).get("steps"):
@@ -1219,7 +1284,7 @@ def _on_fix_iscsi_clicked(_button, app):
 
 
 def _collect_running_tasks(app):
-    """Gather all currently running tasks: GUI runners, scrubs, scheduled.
+    """Gather all currently running tasks: GUI runners, scrubs, profiles.
 
     Returns a list of dicts with keys: name, type, status, task_key.
     """
@@ -1261,7 +1326,18 @@ def _collect_running_tasks(app):
                 "task_key": f"scrub:{pool_name}",
             })
 
-    # 3. Scheduled tasks (profile_runner.py processes)
+    # 3. Running scheduled profiles (advisory lock files)
+    for profile in list_running_profiles():
+        pid = profile.get("pid")
+        status = f"PID {pid}" if pid else "Running"
+        tasks.append({
+            "name": profile["name"],
+            "type": "Profile",
+            "status": status,
+            "task_key": f"profile:{profile['name']}",
+        })
+
+    # 4. Legacy scheduled tasks (profile_runner.py processes not yet using locks)
     try:
         result = subprocess.run(
             ["pgrep", "-f", "profile_runner.py"],
@@ -1287,6 +1363,9 @@ def _collect_running_tasks(app):
                             profile_name = parts[-1]
                 except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                     pass
+                # Skip if already shown as a profile task.
+                if any(t["type"] == "Profile" and t["name"] == profile_name for t in tasks):
+                    continue
                 tasks.append({
                     "name": f"Scheduled: {profile_name}",
                     "type": "Scheduled",
@@ -1370,6 +1449,12 @@ def _cancel_task(app, task_key):
         from scrub_manager import stop_scrub
         stop_scrub(pool_name)
         log_msg(f"INFO: Stopped scrub on '{pool_name}'")
+    elif task_key.startswith("profile:"):
+        profile_name = task_key.split(":", 1)[1]
+        log_msg(
+            f"INFO: To cancel profile '{profile_name}', use Cancel Selected "
+            "Tasks and then clean up its process if it does not stop"
+        )
     elif task_key.startswith("scheduled:"):
         pid_str = task_key.split(":", 1)[1]
         try:

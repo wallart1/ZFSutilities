@@ -396,6 +396,8 @@ A Python test harness lives in `tests/python/` and uses Python's built-in `unitt
 | `test_page_runners`       | 6     | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation           |
 | `test_profile_manager`    | 15    | Profile CRUD, name validation, listing, existence checks                                                       |
 | `test_profile_runner`     | 43    | Backup/offsite/restore/retention profile step building                                                         |
+| `test_profile_runner_concurrency` | 7 | Per-profile advisory locks, duplicate-invocation suppression, and metadata                                  |
+| `test_profile_integration` | 3    | Concurrent profile execution: disjoint datasets, same-dataset conflict, backup+prune serialization             |
 | `test_restore_runner`     | 11    | Restore destination computation and zfs-send-receive parameter mapping                                         |
 | `test_schedule_page`      | 15    | Schedule page path resolution for deployed vs repo layouts                                                     |
 | `test_scrub_manager`      | 24    | Scrub state parsing, queue/target management, tick logic, systemd timers                                       |
@@ -486,6 +488,11 @@ This project uses **bash** (not sh). Follow these conventions:
 
 - Start each script with a header comment describing purpose, usage, arguments/globals, and return values.
 
+- Any code path that creates a ZFS snapshot must hold a `w` lock on the target
+  dataset (via `zfslockmanager` or `zfs_lock_manager`) before calling
+  `zfs snapshot`.  This prevents concurrent jobs from creating out-of-sequence
+  snapshots that would force an incremental receive with `-F` to roll back.
+
 - Use arrays for include/exclude lists: `includes=('proxmox')`, `excludes=('temp/temp')`; empty arrays are `includes=()`.
 
 ### Python
@@ -523,6 +530,38 @@ log_msg("DEBUG: variable =", value)
 - Each line is prefixed with `file:line:` via `inspect`
 
 ---
+
+## Recent Session Notes (2026-06-29)
+
+- Phase 4 file-locking: Added `07 GTK + Python/file_locking.py` to serialize
+  access to shared JSON/state files (`/root/.config/zfsutilities.json`,
+  `zfsutilities-history.json`, `scrub_state.json`, and the session-log index).
+  Python modules use `fcntl.flock` context managers; the bash `zfsconfig`
+  helper uses the system `flock` command on the same lock files. Lock paths are
+  overridable via environment variables for testing. `add_history_entry()` now
+  performs its read-modify-write under a single exclusive lock so concurrent
+  runners cannot lose history entries.
+- Phase 5 profile-level concurrency: Added per-profile advisory locks in
+  `profile_runner.py` under `/run/lock/zfs/profiles/<profile>.lock`. A second
+  invocation of the same profile exits 0 without running, so cron does not mail
+  on the expected duplicate-run case. `cron_manager.py` wraps scheduled profile
+  lines with `flock -n -E 0` for the same behavior from cron. The Dashboard
+  Running Tasks list now shows "Profile" entries and warns when a profile is
+  active. The lock directory is overridable via
+  `ZFSUTILITIES_PROFILE_LOCK_DIR` for testing.
+
+## Recent Session Notes (2026-06-29)
+
+- Phase 6 integration testing and documentation: Added
+  `tests/python/test_profile_integration.py`, which runs concurrent profiles in
+  separate subprocesses and verifies that disjoint datasets run in parallel,
+  same-dataset conflicts fail safely, and backup+prune operations serialize.
+  Created `06 Docs/docs/user-guide/profiles.md` to explain profiles, scheduling,
+  concurrent execution, and conflict resolution. Updated
+  `06 Docs/docs/developer-guide/concurrency-collisions.md` to mark the
+  Phase 1/5 gaps (two prunes on the same pool, two restores to the same
+  destination, scrub path coordination, and headless profile overlap) as
+  resolved.
 
 ## Recent Session Notes (2026-06-27)
 

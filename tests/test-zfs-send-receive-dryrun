@@ -823,6 +823,67 @@ test_dailybackup_trailer_suppressed_with_inherit() {
 }
 
 # ---------------------------------------------------------------------------
+# Test lock acquisition happens before snapshot creation
+# ---------------------------------------------------------------------------
+
+test_lock_before_snapshot_creation() {
+    test_start "Locks are acquired before snapshot creation"
+
+    reset_mocks
+    set_msg_level INFO
+
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/pool/src/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/pool/src/data"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_snap_lists["pool/dest/pool/src/data"]="pool/dest/pool/src/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/pool/src/data"]="guid1"
+    _mock_zfs_send_size="1000000"
+
+    nextsnap="@test-2025-06-15T10:00-04:00-d"
+
+    # Override the lock mock so we can record acquisition order.
+    zfslock_wait_or_resolve() {
+        log_msg "INFO: LOCK_TEST acquired $1"
+        ZFSLOCK_ID="/tmp/mock_lock_$$"
+        return 0
+    }
+
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=0" || true
+    restore_stderr
+
+    # Restore the test harness lock mock for subsequent tests.
+    zfslock_wait_or_resolve() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+
+    local log
+    log=$(get_stderr_log)
+
+    local src_lock_line dest_lock_line snap_line
+    src_lock_line=$(echo "$log" | grep -n "LOCK_TEST acquired pool/src" | head -1 | cut -d: -f1)
+    dest_lock_line=$(echo "$log" | grep -n "LOCK_TEST acquired pool/dest/pool/src/data" | head -1 | cut -d: -f1)
+    snap_line=$(echo "$log" | grep -n "Dry-run: Would create snapshot" | head -1 | cut -d: -f1)
+
+    if [[ -z "$src_lock_line" || -z "$dest_lock_line" || -z "$snap_line" ]]; then
+        test_fail "Missing expected markers; log='$log'"
+        return
+    fi
+
+    if [[ "$src_lock_line" -lt "$snap_line" && "$dest_lock_line" -lt "$snap_line" ]]; then
+        test_pass
+    else
+        test_fail "Snapshot logged before locks; log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -848,5 +909,6 @@ test_trailer_written_without_inherit
 test_trailer_suppressed_with_inherit
 test_dailybackup_trailer_written_without_inherit
 test_dailybackup_trailer_suppressed_with_inherit
+test_lock_before_snapshot_creation
 
 test_summary

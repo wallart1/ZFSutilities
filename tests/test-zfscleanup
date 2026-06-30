@@ -31,12 +31,17 @@ EOF
 
 cat > "$mock_mydir/zfsbuildfsarray" <<'EOF'
 buildfsarray() {
-    fsarray=("$1")
+    if [[ ${#_mock_fsarray[@]} -gt 0 ]]; then
+        fsarray=("${_mock_fsarray[@]}")
+    else
+        fsarray=("$1")
+    fi
 }
 EOF
 
 cat > "$mock_mydir/zfsretain" <<'EOF'
 retain() {
+    if [[ "$1" == "${_mock_retain_conflict:-}" ]]; then return 1; fi
     zfscleanup_processed+=("$1 $2")
 }
 EOF
@@ -45,12 +50,21 @@ cat > "$mock_mydir/zfsoverrides" <<'EOF'
 overrides() { true; }
 EOF
 
+cat > "$mock_mydir/zfslockmanager" <<'EOF'
+zfslock_init() { true; }
+zfslock_acquire() { ZFSLOCK_ID="/tmp/mock_lock"; return 0; }
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+
 source "$old_mydir/zfscleanup"
 
 reset_state() {
     zfscleanup_processed=()
     zfscleanup_test_pools=()
     _mock_zpool_list=""
+    _mock_fsarray=()
+    _mock_retain_conflict=""
     autoproceed='Y'
     dryrun='N'
     releaseholds='N'
@@ -114,6 +128,17 @@ test_fallback_with_empty_array() {
     assert_equals "tank @dailybackup" "${zfscleanup_processed[*]}"
 }
 
+test_continues_after_retain_lock_conflict() {
+    test_start "Continues with next dataset when retain reports a lock conflict"
+    reset_state
+    zfscleanup_test_pools=(pool)
+    _mock_zpool_list=$'pool'
+    _mock_fsarray=(pool/a pool/b)
+    _mock_retain_conflict="pool/a"
+    cleanup "" "" "dailybackup"
+    assert_equals "pool/b @dailybackup" "${zfscleanup_processed[*]}"
+}
+
 # -----------------------------------------------------------------------------
 # Run tests
 # -----------------------------------------------------------------------------
@@ -123,6 +148,7 @@ test_uses_configured_pools
 test_explicit_pool_argument_wins
 test_skips_offline_pools
 test_fallback_with_empty_array
+test_continues_after_retain_lock_conflict
 
 rm -rf "$mock_mydir"
 mydir="$old_mydir"

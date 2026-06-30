@@ -3,7 +3,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
@@ -11,6 +11,7 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 from test_support import mock_gtk
+import zfs_lock_manager as zlm
 
 
 def _import_retention_actions():
@@ -19,6 +20,60 @@ def _import_retention_actions():
     with mock_gtk():
         import retention_actions
         return retention_actions
+
+
+class TestOnRetentionPruneLocking(unittest.TestCase):
+    """on_retention_prune checks for lock conflicts before launching zfscleanup."""
+
+    def setUp(self):
+        zlm._lock_refcounts.clear()
+
+    def test_checks_lock_for_each_selected_pool(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["archive", "ONLINE"], ["tank", "ONLINE"]],
+            selected_paths=[0, 1],
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+
+        with patch.object(ra, "_show_error") as mock_error, \
+             patch.object(ra, "log_msg"), \
+             patch.object(ra, "zlm", autospec=True) as zlm_mock:
+            zlm_mock.check.return_value = True
+            zlm_mock.lock.return_value.__enter__ = MagicMock(return_value="lock-id")
+            zlm_mock.lock.return_value.__exit__ = MagicMock(return_value=False)
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        zlm_mock.check.assert_has_calls([
+            call("archive", "w"),
+            call("tank", "w"),
+        ])
+
+    def test_aborts_when_pool_locked(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["archive", "ONLINE"], ["tank", "ONLINE"]],
+            selected_paths=[0, 1],
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+
+        with patch.object(ra, "_show_error") as mock_error, \
+             patch.object(ra, "log_msg") as mock_log, \
+             patch.object(ra, "zlm") as zlm_mock:
+            zlm_mock.check.side_effect = [True, False]
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        zlm_mock.check.assert_called_with("tank", "w")
+        mock_log.assert_any_call(
+            "WARN: cannot prune tank: pool is locked by another operation"
+        )
+        app.retention_runner.set_steps.assert_not_called()
+        app.retention_runner.start.assert_not_called()
+
 
 
 class TestOnRetentionAddPolicy(unittest.TestCase):
@@ -113,26 +168,28 @@ class _FakePruneModel:
         return self._rows[idx]
 
 
+def _make_prune_app(model_rows, selected_paths):
+    """Return a minimal app mock for prune tests."""
+    app = MagicMock()
+    app._ret_prune_label_entry = MagicMock()
+    app._ret_prune_label_entry.get_text.return_value = "dailybackup"
+    app._dry_run_active = False
+    app.retention_runner = MagicMock()
+    app.retention_runner.running = False
+
+    model = _FakePruneModel(model_rows)
+    selection = MagicMock()
+    selection.get_selected_rows.return_value = (model, selected_paths)
+    app._ret_prune_view.get_selection.return_value = selection
+    return app, model
+
+
 class TestOnRetentionPruneOrder(unittest.TestCase):
     """Prune execution follows the visual list order, not selection order."""
 
-    def _make_app(self, model_rows, selected_paths):
-        app = MagicMock()
-        app._ret_prune_label_entry = MagicMock()
-        app._ret_prune_label_entry.get_text.return_value = "dailybackup"
-        app._dry_run_active = False
-        app.retention_runner = MagicMock()
-        app.retention_runner.running = False
-
-        model = _FakePruneModel(model_rows)
-        selection = MagicMock()
-        selection.get_selected_rows.return_value = (model, selected_paths)
-        app._ret_prune_view.get_selection.return_value = selection
-        return app, model
-
     def test_prune_follows_visual_order(self):
         ra = _import_retention_actions()
-        app, _model = self._make_app(
+        app, _model = _make_prune_app(
             [["archive", "ONLINE"], ["tank", "ONLINE"], ["backup", "ONLINE"]],
             selected_paths=[1, 2, 0],  # selected in arbitrary order
         )

@@ -791,6 +791,70 @@ class TestCollectRunningTasks(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["status"], "45.5% complete")
 
+    def test_running_profile_task(self):
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        app.scrub_queue = None
+        with patch.object(
+            dp, "list_running_profiles", return_value=[{"name": "Daily", "pid": 1234, "started": "2026-06-29T10:00:00"}]
+        ):
+            tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["name"], "Daily")
+        self.assertEqual(tasks[0]["type"], "Profile")
+        self.assertEqual(tasks[0]["status"], "PID 1234")
+        self.assertEqual(tasks[0]["task_key"], "profile:Daily")
+
+
+class TestListRunningProfiles(unittest.TestCase):
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.orig_dir = dp.PROFILE_LOCK_DIR
+        dp.PROFILE_LOCK_DIR = self.tmpdir
+
+    def tearDown(self):
+        dp.PROFILE_LOCK_DIR = self.orig_dir
+
+    def test_empty_when_no_locks(self):
+        self.assertEqual(dp.list_running_profiles(), [])
+
+    def test_returns_running_profile(self):
+        lock_path = os.path.join(self.tmpdir, "Daily.lock")
+        with open(lock_path, "w") as f:
+            import json
+            json.dump({"profile": "Daily", "pid": os.getpid(), "started": "2026-06-29T10:00:00"}, f)
+        profiles = dp.list_running_profiles()
+        self.assertEqual(len(profiles), 1)
+        self.assertEqual(profiles[0]["name"], "Daily")
+        self.assertEqual(profiles[0]["pid"], os.getpid())
+
+    def test_skips_stale_lock(self):
+        lock_path = os.path.join(self.tmpdir, "Old.lock")
+        with open(lock_path, "w") as f:
+            import json
+            json.dump({"profile": "Old", "pid": 999999, "started": "2026-06-29T10:00:00"}, f)
+        self.assertEqual(dp.list_running_profiles(), [])
+
+
+class TestProfileConflictWarnings(unittest.TestCase):
+
+    def test_adds_warning_when_profiles_running(self):
+        pools = []
+        profiles = [{"name": "Daily", "pid": 1234, "started": "?"}]
+        warnings = dp._get_warnings(pools, [], 80, profiles)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Daily", warnings[0])
+        self.assertIn("concurrent GUI operations", warnings[0])
+
+    def test_no_warning_when_no_profiles_running(self):
+        pools = []
+        warnings = dp._get_warnings(pools, [], 80, [])
+        self.assertEqual(warnings, [])
+
 
 class TestCancelTask(unittest.TestCase):
 

@@ -208,7 +208,41 @@ zfslock_check_hierarchy() {
 }
 ```
 
-### Path Encoding
+### Acquiring Multiple Locks
+
+When a script needs to lock several datasets at once, it must acquire them in a
+deterministic order to avoid deadlocks. Use:
+
+```bash
+zfslock_acquire_multiple <type> <dataset> [<dataset> ...]
+```
+
+- `<type>` is one of `r`, `w`, or `x`.
+- Returns `0` on success, `1` on conflict, and `2` on error.
+- On success, the global array `ZFSLOCK_IDS` contains the acquired lock file
+  paths.
+- If any individual lock cannot be acquired, all locks acquired during the
+  call are released before returning, so the caller never holds a partial set.
+
+### Ordering rule
+
+1. Sort requested datasets by path depth (shallowest first), then
+   lexicographically within the same depth.
+2. Remove duplicates.
+3. If one requested path is an ancestor of another requested path, keep only
+   the most specific (deepest) path. A lock on the deepest dataset blocks the
+   same conflicting operations on its ancestors through the hierarchical rules,
+   so the broader lock is redundant.
+4. Acquire the remaining locks in sorted order.
+
+Example:
+
+```bash
+zfslock_acquire_multiple w "pool/a" "pool/b/child" "pool/a/grandchild"
+# Acquires only "pool/a/grandchild" and "pool/b/child", in that order.
+```
+
+## Path Encoding
 
 Dataset paths are URL-encoded for safe filenames:
 
@@ -219,12 +253,14 @@ Dataset paths are URL-encoded for safe filenames:
 
 Scripts that have lock integration:
 
-| Script           | Lock Type | Dataset(s)                  |
-| ---------------- | --------- | --------------------------- |
-| zfs-send-receive | `w`       | source, destination         |
-| zfsretain        | `r`       | filesystem being retained   |
-| zfsdelsnap       | `w`       | snapshot's parent dataset   |
-| zfsdelallsnaps   | `x`       | filesystem                  |
-| zfsdelfs         | `x`       | dataset and all descendants |
-| zfsdailybackup   |           | orchestrates other scripts  |
-| zfssendoffsite   |           | orchestrates other scripts  |
+| Script           | Lock Type | Dataset(s) / pools               |
+| ---------------- | --------- | -------------------------------- |
+| zfs-send-receive | `w`       | source, destination              |
+| zfsretain        | `w`       | filesystem being retained        |
+| zfscleanup       | `w`       | per dataset (via `zfsretain`)    |
+| zfsdelsnap       | `w`       | snapshot's parent dataset        |
+| zfsdelallsnaps   | `w`       | parent dataset (via `zfsdelsnap`)|
+| zfsdelfs         | `x`       | top-level dataset being destroyed|
+| zfsscruball      | `w`       | pool being scrubbed              |
+| zfsdailybackup   |           | orchestrates other scripts       |
+| zfssendoffsite   |           | orchestrates other scripts       |

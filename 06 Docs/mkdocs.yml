@@ -44,6 +44,7 @@ nav:
     - Offsite Backup: 'user-guide/offsite-backup.md'
     - Restore Operations: 'user-guide/restore.md'
     - Retention Policies: 'user-guide/retention.md'
+    - Profiles: 'user-guide/profiles.md'
     - Proxmox Integration: 'user-guide/proxmox-integration.md'
     - GTK GUI Reference: 'user-guide/gtk-gui.md'
   - Developer Guide:

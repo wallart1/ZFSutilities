@@ -93,7 +93,7 @@ the GUI tabs and the bash scripts.
 | Structure | Reference |
 | --------- | --------- |
 | JSON config feature sections | [backup/offsite/restore/pools/retention/checkagainst/scrub][ds-json] |
-| Snapshot name persistence (`/tmp/zfsnextsnap_*`) | [Snapshot name persistence][ds-snapfile] |
+| Snapshot name persistence and one-minute reservation | [Snapshot name persistence][ds-snapfile] |
 
 ---
 
@@ -363,17 +363,22 @@ as the GUI runners but writes its own session logs and history entries.
 | `run_retention_profile(profile)` | Run retention/cleanup for configured pools |
 | `run_scrub_profile(profile)` | Queue and poll scrubs for configured pools |
 | `_check_weekday_ordinal(weekday_field)` | Runtime guard for weekday ordinal expressions |
+| `_profile_lock_path(profile_name)` | Path to the per-profile lock file |
+| `acquire_profile_lock(profile_name, timeout=1.0)` | Acquire the profile lock; suppress duplicate runs |
+| `release_profile_lock(fd, lock_path)` | Release the profile lock |
 | `main()` | CLI entry point for cron execution |
 
 **Internal flow:**
 
 1. Load the requested profile from disk.
-2. If the profile's cron weekday field contains an ordinal expression
+2. Acquire a per-profile advisory lock so a duplicate cron invocation exits
+   cleanly instead of running the profile twice.
+3. If the profile's cron weekday field contains an ordinal expression
    (`#1`–`#5` or `#L`), verify today matches it; otherwise skip the run.
-3. Generate snapshot names and build `BashStep` lists using the same helpers
+4. Generate snapshot names and build `BashStep` lists using the same helpers
    as the GUI pages.
-4. Create a session log and run each step.
-5. Write the trailer and append a history entry.
+5. Create a session log and run each step.
+6. Write the trailer and append a history entry.
 
 **Called modules / imported helpers:**
 
@@ -935,6 +940,8 @@ Scrub state parsing, queue management, and start/pause/resume/stop actions.
 | Module | Purpose in this module |
 | ------ | ------------------------ |
 | `zfs_repository` | Pool status and scrub commands |
+| `file_locking` | `scrub_state_*` lock helpers |
+| `zfs_lock_manager` | Per-pool scrub locks |
 | `backup_config` | `log_msg` |
 
 **Data structures consumed / produced:**
@@ -988,6 +995,7 @@ and unmount snapshots.
 | `gui_helpers` | Dialogs, busy-process diagnosis |
 | `datasets_page` | Refresh tree and button sensitivity |
 | `command_builders` | `BashStep` for destructive operations |
+| `zfs_lock_manager` | Pre-flight lock checks and direct locks |
 | `logging_config` | `log_msg` |
 
 **Data structures consumed / produced:**
@@ -1055,6 +1063,7 @@ buckets, run prune, and dirty-state tracking.
 | `retention_page` | Page helpers and constants |
 | `command_builders` | Build retention `BashStep` |
 | `gui_helpers` | Button markup helpers |
+| `zfs_lock_manager` | Pre-flight pool lock checks |
 | `logging_config` | `log_msg` |
 
 **Data structures consumed / produced:**
@@ -1158,6 +1167,58 @@ every log file on refresh.
 | Structure | Reference |
 | --------- | --------- |
 | Session log index | [Session log index][ds-log] |
+
+---
+
+### `file_locking.py`
+
+Advisory `flock` wrappers for the shared JSON and state files used by both
+Python and bash code.
+
+**Key functions / context managers:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `file_lock(path, lock_type, timeout=None)` | Acquire `LOCK_SH`/`LOCK_EX` on `path` |
+| `config_lock_read()` / `config_lock_write()` | Lock the JSON config file |
+| `history_lock_read()` / `history_lock_write()` | Lock the backup history file |
+| `log_index_lock_read()` / `log_index_lock_write()` | Lock the session-log index |
+| `scrub_state_lock_read()` / `scrub_state_lock_write()` | Lock the scrub queue state |
+
+**Called modules / imported helpers:** none (stdlib only).
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| JSON config / history / log index / scrub state | [JSON config][ds-json], [Backup history][ds-history], [Session log index][ds-log], [Scrub state][ds-scrub] |
+
+---
+
+### `zfs_lock_manager.py`
+
+Python client for the same advisory-lock scheme that `zfslockmanager` uses.
+Python mutators use this module so they can interoperate with bash scripts
+without conflicting on the same lock files.
+
+**Key functions / context managers:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `check(dataset, lock_type)` | Return whether a lock can be acquired |
+| `acquire(dataset, lock_type, description="")` | Acquire a lock and return a lock ID |
+| `acquire_multiple(lock_type, datasets)` | Acquire several locks in deadlock-free order |
+| `release(lock_id)` / `release_all()` | Release one lock or all locks held by this process |
+| `lock(dataset, lock_type, description="")` | Context manager for a single lock |
+| `locks(lock_type, datasets)` | Context manager for multiple locks |
+
+**Called modules / imported helpers:** none (stdlib only).
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| Lock files | [Lock files](../developer-guide/data-structures.md#lock-files) |
 
 ---
 

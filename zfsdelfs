@@ -235,6 +235,7 @@ function delfs {
     source $mydir/zfsdelallsnaps
     source $mydir/zfsoverrides
     source $mydir/zfs-diagnose-busy
+    source $mydir/zfslockmanager
 
     if [[ $autoproceed = '' ]]; then autoproceed='N'; fi
     depth=''
@@ -275,6 +276,15 @@ function delfs {
     fi
 
     if [[ $5 != '' ]]; then overrides $5; fi
+
+    zfslock_init
+    zfslock_wait_or_resolve "$sourcefs" "x" "destroy dataset $sourcefs"
+    local lock_rc=$?
+    if [[ $lock_rc -ne 0 ]]; then
+        log_msg "FATAL: Cannot acquire destroy lock on $sourcefs; aborting."
+        restore-caller-filter-state
+        exit 8
+    fi
 
     buildfsarray "$sourcefs" bottomup       # bottomup = list descendents before parents.
 

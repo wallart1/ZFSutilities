@@ -98,6 +98,85 @@ cleanup_test_locks() {
 # Basic Acquire / Release
 # ---------------------------------------------------------------------------
 
+test_multi_lock_acquisition() {
+    echo ""
+    echo "=== Multi-Lock Acquisition Tests ==="
+    cleanup_test_locks
+
+    test_start "Acquire multiple locks in sorted order"
+    if zfslock_acquire_multiple w "test/z/b" "test/a" "test/a/child"; then
+        local datasets=()
+        local id
+        for id in "${ZFSLOCK_IDS[@]}"; do
+            datasets+=("$(_zfslock_read_field "$id" "dataset")")
+        done
+        assert_equals "test/a/child test/z/b" "${datasets[*]}"
+    else
+        test_fail "zfslock_acquire_multiple returned $rc"
+    fi
+    zfslock_release_all
+    cleanup_test_locks
+
+    test_start "Ancestor redundancy keeps only most specific lock"
+    if zfslock_acquire_multiple w "pool/parent" "pool/parent/child" "pool/other"; then
+        local datasets=()
+        local id
+        for id in "${ZFSLOCK_IDS[@]}"; do
+            datasets+=("$(_zfslock_read_field "$id" "dataset")")
+        done
+        assert_equals "pool/other pool/parent/child" "${datasets[*]}"
+    else
+        test_fail "zfslock_acquire_multiple returned $rc"
+    fi
+    zfslock_release_all
+    cleanup_test_locks
+
+    test_start "Conflict on one requested dataset returns 1"
+    _bg_lock_start "test/multi/conflict" "w" "background lock" 3600
+    local bg_rc=$(_bg_lock_wait_rc)
+    if [[ "$bg_rc" -ne 0 ]]; then
+        _bg_lock_kill
+        test_fail "Background lock could not be acquired (rc=$bg_rc)"
+        return
+    fi
+    local rc
+    rc=$(zfslock_acquire_multiple w "test/a" "test/multi/conflict" "test/b" >/dev/null 2>&1; echo $?)
+    assert_rc 1 "$rc"
+    _bg_lock_kill
+    zfslock_release_all
+    cleanup_test_locks
+
+    test_start "No partial acquisition on conflict"
+    _bg_lock_start "test/multi/late" "w" "background lock" 3600
+    bg_rc=$(_bg_lock_wait_rc)
+    if [[ "$bg_rc" -ne 0 ]]; then
+        _bg_lock_kill
+        test_fail "Background lock could not be acquired (rc=$bg_rc)"
+        return
+    fi
+    rc=$(zfslock_acquire_multiple w "test/first" "test/multi/late" "test/last" >/dev/null 2>&1; echo $?)
+    local first_lock
+    first_lock=$(_zfslock_file "test/first")
+    if [[ "$rc" -eq 1 && ! -f "$first_lock" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc and first_lock present=$([[ -f "$first_lock" ]] && echo Y || echo N)"
+    fi
+    _bg_lock_kill
+    zfslock_release_all
+    cleanup_test_locks
+
+    test_start "Invalid type or empty dataset list returns 2"
+    local rc_bad rc_empty
+    rc_bad=$(zfslock_acquire_multiple bad "test/x" >/dev/null 2>&1; echo $?)
+    rc_empty=$(zfslock_acquire_multiple w >/dev/null 2>&1; echo $?)
+    if [[ "$rc_bad" -eq 2 && "$rc_empty" -eq 2 ]]; then
+        test_pass
+    else
+        test_fail "rc_bad=$rc_bad rc_empty=$rc_empty"
+    fi
+}
+
 test_basic_acquire_release() {
     echo ""
     echo "=== Basic Acquire/Release Tests ==="
@@ -575,5 +654,6 @@ test_conflict_message
 test_wait_loop
 test_retry_option
 test_wait_interval_minimum
+test_multi_lock_acquisition
 
 test_summary

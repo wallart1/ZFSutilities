@@ -18,6 +18,7 @@ from gui_helpers import (
 )
 from datasets_page import refresh_datasets_page, update_ds_button_sensitivity
 from command_builders import BashStep
+import zfs_lock_manager as zlm
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +28,18 @@ from command_builders import BashStep
 def _repo(app):
     """Return the ZFS repository from the application context."""
     return app.ctx.zfs_repository
+
+
+def _unique_parent_datasets(snapshot_items: list) -> list:
+    """Return the unique parent datasets for a list of snapshot items."""
+    seen = set()
+    parents = []
+    for s in snapshot_items:
+        parent = s["dataset"]
+        if parent not in seen:
+            seen.add(parent)
+            parents.append(parent)
+    return parents
 
 
 def _input_dialog(parent, title, widgets, default=""):
@@ -97,11 +110,14 @@ def on_datasets_snapshot(app):
     full_snap = f"{dataset}@{snap_name}"
     log_msg(f"INFO: Creating snapshot: {full_snap}")
     try:
-        if _repo(app).snapshot(full_snap):
-            log_msg(f"INFO: Snapshot created: {full_snap}")
-            refresh_datasets_page(app)
-        else:
-            log_msg("WARN: Error creating snapshot")
+        with zlm.lock(dataset, "w", f"snapshot {full_snap}"):
+            if _repo(app).snapshot(full_snap):
+                log_msg(f"INFO: Snapshot created: {full_snap}")
+                refresh_datasets_page(app)
+            else:
+                log_msg("WARN: Error creating snapshot")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot snapshot {dataset}: {exc}")
     except FileNotFoundError:
         log_msg("WARN: Error: zfs command not found")
 
@@ -182,6 +198,12 @@ def _delete_datasets(app, datasets):
     if warnings:
         lines.extend(["WARNINGS:"] + [f"  ⚠ {w}" for w in warnings] + [""])
 
+    for ds_info in details:
+        ds_name = ds_info["name"]
+        if not zlm.check(ds_name, "x"):
+            log_msg(f"WARN: cannot destroy {ds_name}: dataset is locked by another operation")
+            return
+
     body = "\n".join(lines)
 
     dialog = create_dialog("Destroy Dataset(s)", app, [
@@ -190,7 +212,10 @@ def _delete_datasets(app, datasets):
     ])
     content = dialog.get_content_area()
     header = Gtk.Label()
-    header.set_markup(f"<b>About to destroy {len(details)} dataset(s), {total_snaps} snapshot(s), and release {total_holds} hold(s).</b>")
+    header.set_markup(
+        f"<b>About to destroy {len(details)} dataset(s), {total_snaps} "
+        f"snapshot(s), and release {total_holds} hold(s).</b>"
+    )
     header.set_halign(Gtk.Align.START)
     content.add(header)
     add_scrolled_text_view(content, body, min_height=250)
@@ -257,16 +282,21 @@ def _delete_snapshots(app, snaps):
                            f"  {display}\n\nThis cannot be undone."):
         return
 
-    errors = 0
-    for full in snap_names:
-        if repo.destroy(full):
-            log_msg(f"INFO: Deleted: {full}")
-        else:
-            log_msg(f"WARN: Error deleting {full}")
-            diagnose_dataset_busy(full, repo=repo)
-            errors += 1
-    if not errors:
-        log_msg(f"INFO: Deleted {len(snap_names)} snapshot(s)")
+    parents = _unique_parent_datasets(snaps)
+    try:
+        with zlm.locks("w", parents):
+            errors = 0
+            for full in snap_names:
+                if repo.destroy(full):
+                    log_msg(f"INFO: Deleted: {full}")
+                else:
+                    log_msg(f"WARN: Error deleting {full}")
+                    diagnose_dataset_busy(full, repo=repo)
+                    errors += 1
+            if not errors:
+                log_msg(f"INFO: Deleted {len(snap_names)} snapshot(s)")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot delete snapshots: {exc}")
     refresh_datasets_page(app)
 
 
@@ -279,12 +309,17 @@ def _release_holds(app, holds):
     if not _confirm_yes_no(app, f"Release {len(holds)} hold(s)?", f"  {names}"):
         return
 
-    for h in holds:
-        full = f"{h['dataset']}@{h['snapshot']}"
-        if repo.release(h["tag"], full):
-            log_msg(f"INFO: Released '{h['tag']}' on {full}")
-        else:
-            log_msg(f"WARN: Error releasing '{h['tag']}' on {full}")
+    parents = _unique_parent_datasets(holds)
+    try:
+        with zlm.locks("w", parents):
+            for h in holds:
+                full = f"{h['dataset']}@{h['snapshot']}"
+                if repo.release(h["tag"], full):
+                    log_msg(f"INFO: Released '{h['tag']}' on {full}")
+                else:
+                    log_msg(f"WARN: Error releasing '{h['tag']}' on {full}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot release holds: {exc}")
     refresh_datasets_page(app)
 
 
@@ -301,12 +336,17 @@ def on_datasets_hold(app):
     if response != Gtk.ResponseType.OK or not tag:
         return
 
-    for s in snaps:
-        full = f"{s['dataset']}@{s['name']}"
-        if repo.hold(tag, full):
-            log_msg(f"INFO: Hold '{tag}' set on {full}")
-        else:
-            log_msg(f"WARN: Error setting hold '{tag}' on {full}")
+    parents = _unique_parent_datasets(snaps)
+    try:
+        with zlm.locks("w", parents):
+            for s in snaps:
+                full = f"{s['dataset']}@{s['name']}"
+                if repo.hold(tag, full):
+                    log_msg(f"INFO: Hold '{tag}' set on {full}")
+                else:
+                    log_msg(f"WARN: Error setting hold '{tag}' on {full}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot set holds: {exc}")
     refresh_datasets_page(app)
 
 
@@ -327,10 +367,15 @@ def on_datasets_rollback(app):
     if not _confirm_yes_no(app, f"Rollback to {s['name']}?", detail):
         return
 
-    if repo.rollback(full):
-        log_msg(f"INFO: Rolled back to {full}")
-    else:
-        log_msg(f"WARN: Error rolling back to {full}")
+    dataset = s["dataset"]
+    try:
+        with zlm.lock(dataset, "w", f"rollback {full}"):
+            if repo.rollback(full):
+                log_msg(f"INFO: Rolled back to {full}")
+            else:
+                log_msg(f"WARN: Error rolling back to {full}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot rollback {dataset}: {exc}")
     refresh_datasets_page(app)
 
 

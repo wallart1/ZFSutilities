@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 
 from config_migrations import CONFIG_VERSION, run_migrations
+from file_locking import config_lock_read, config_lock_write
 from logging_config import log_msg, MSG_LEVELS
 
 CONFIG_PATH = "/root/.config/zfsutilities.json"
@@ -59,28 +60,33 @@ def _deep_copy(obj):
 
 def load_config():
     """Load JSON config from CONFIG_PATH. Returns defaults on any error."""
+    config = None
     if os.path.exists(CONFIG_PATH):
         try:
-            with open(CONFIG_PATH) as f:
-                config = json.load(f)
-            current_ver = config.get("config_version")
-            if current_ver is None:
-                config["config_version"] = CONFIG_VERSION
-                try:
-                    save_config(config)
-                except OSError:
-                    pass
-            elif current_ver < CONFIG_VERSION:
-                config = run_migrations(config, save_config)
-            elif current_ver > CONFIG_VERSION:
-                log_msg(
-                    f"WARN: Config version {current_ver} is newer than "
-                    f"software expects ({CONFIG_VERSION}). "
-                    f"Some features may not work correctly."
-                )
-            return config
+            with config_lock_read():
+                with open(CONFIG_PATH) as f:
+                    config = json.load(f)
         except (json.JSONDecodeError, OSError):
-            pass
+            config = None
+
+    if config is not None:
+        current_ver = config.get("config_version")
+        if current_ver is None:
+            config["config_version"] = CONFIG_VERSION
+            try:
+                save_config(config)
+            except OSError:
+                pass
+        elif current_ver < CONFIG_VERSION:
+            config = run_migrations(config, save_config)
+        elif current_ver > CONFIG_VERSION:
+            log_msg(
+                f"WARN: Config version {current_ver} is newer than "
+                f"software expects ({CONFIG_VERSION}). "
+                f"Some features may not work correctly."
+            )
+        return config
+
     config = {
         "backup": _deep_copy(BACKUP_DEFAULTS),
         "dashboard": _deep_copy(DASHBOARD_DEFAULTS),
@@ -97,8 +103,9 @@ def save_config(config):
     """Write config dict to CONFIG_PATH. Raises OSError on permission failure."""
     config_dir = os.path.dirname(CONFIG_PATH)
     os.makedirs(config_dir, exist_ok=True)
-    with open(CONFIG_PATH, 'w') as f:
-        json.dump(config, f, indent=2)
+    with config_lock_write():
+        with open(CONFIG_PATH, 'w') as f:
+            json.dump(config, f, indent=2)
 
 
 def save_msg_level(config, level):

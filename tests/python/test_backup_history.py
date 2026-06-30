@@ -5,8 +5,10 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timezone, timedelta
+from unittest.mock import patch
 
 import backup_history
+import file_locking
 
 
 class TestParseHumanSize(unittest.TestCase):
@@ -74,13 +76,18 @@ class TestLoadSaveHistory(unittest.TestCase):
 
     def setUp(self):
         self._orig_path = backup_history.HISTORY_PATH
+        self._orig_lock = file_locking.HISTORY_LOCK_PATH
         self._tmp_dir = tempfile.TemporaryDirectory()
         backup_history.HISTORY_PATH = os.path.join(
             self._tmp_dir.name, "test-history.json"
         )
+        file_locking.HISTORY_LOCK_PATH = os.path.join(
+            self._tmp_dir.name, ".history.lock"
+        )
 
     def tearDown(self):
         backup_history.HISTORY_PATH = self._orig_path
+        file_locking.HISTORY_LOCK_PATH = self._orig_lock
         self._tmp_dir.cleanup()
 
     def test_load_missing_file_returns_empty_list(self):
@@ -103,7 +110,7 @@ class TestLoadSaveHistory(unittest.TestCase):
         backup_history.save_history([])
         temp_files = [
             f for f in os.listdir(self._tmp_dir.name)
-            if f.startswith(".")
+            if f.startswith(".") and f != ".history.lock"
         ]
         self.assertEqual(temp_files, [])
 
@@ -181,13 +188,18 @@ class TestAddHistoryEntry(unittest.TestCase):
 
     def setUp(self):
         self._orig_path = backup_history.HISTORY_PATH
+        self._orig_lock = file_locking.HISTORY_LOCK_PATH
         self._tmp_dir = tempfile.TemporaryDirectory()
         backup_history.HISTORY_PATH = os.path.join(
             self._tmp_dir.name, "test-history.json"
         )
+        file_locking.HISTORY_LOCK_PATH = os.path.join(
+            self._tmp_dir.name, ".history.lock"
+        )
 
     def tearDown(self):
         backup_history.HISTORY_PATH = self._orig_path
+        file_locking.HISTORY_LOCK_PATH = self._orig_lock
         self._tmp_dir.cleanup()
 
     def test_adds_entry_to_front(self):
@@ -225,6 +237,68 @@ class TestAddHistoryEntry(unittest.TestCase):
         names = [e["name"] for e in loaded]
         self.assertNotIn("Old", names)
         self.assertIn("New", names)
+
+
+class TestHistoryLocking(unittest.TestCase):
+    """History load/save/add acquire the shared history lock."""
+
+    def test_save_history_acquires_write_lock(self):
+        self._orig_path = backup_history.HISTORY_PATH
+        self._orig_lock = file_locking.HISTORY_LOCK_PATH
+        tmpdir = tempfile.TemporaryDirectory()
+        try:
+            backup_history.HISTORY_PATH = os.path.join(tmpdir.name, "history.json")
+            file_locking.HISTORY_LOCK_PATH = os.path.join(
+                tmpdir.name, ".history.lock"
+            )
+            backup_history.save_history([])
+            self.assertTrue(os.path.exists(file_locking.HISTORY_LOCK_PATH))
+        finally:
+            backup_history.HISTORY_PATH = self._orig_path
+            file_locking.HISTORY_LOCK_PATH = self._orig_lock
+            tmpdir.cleanup()
+
+    def test_add_history_entry_atomic_under_write_lock(self):
+        """Concurrent add_history_entry calls must not lose entries."""
+        import multiprocessing
+
+        orig_path = backup_history.HISTORY_PATH
+        orig_lock = file_locking.HISTORY_LOCK_PATH
+        tmpdir = tempfile.TemporaryDirectory()
+        try:
+            backup_history.HISTORY_PATH = os.path.join(tmpdir.name, "history.json")
+            file_locking.HISTORY_LOCK_PATH = os.path.join(
+                tmpdir.name, ".history.lock"
+            )
+
+            def add_one(name):
+                entry = backup_history.build_entry(
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    run_type="backup",
+                    name=name,
+                    duration=1.0,
+                    result="success",
+                )
+                backup_history.add_history_entry(entry)
+
+            procs = [
+                multiprocessing.Process(target=add_one, args=(f"run-{i}",))
+                for i in range(4)
+            ]
+            for p in procs:
+                p.start()
+            for p in procs:
+                p.join(timeout=10)
+
+            entries = backup_history.load_history()
+            names = {e["name"] for e in entries}
+            self.assertEqual(len(names), 4)
+            for i in range(4):
+                self.assertIn(f"run-{i}", names)
+        finally:
+            backup_history.HISTORY_PATH = orig_path
+            file_locking.HISTORY_LOCK_PATH = orig_lock
+            tmpdir.cleanup()
 
 
 class TestBuildEntry(unittest.TestCase):

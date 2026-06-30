@@ -2,6 +2,8 @@
 
 import os
 import sys
+import threading
+import time
 import unittest
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -207,6 +209,61 @@ class TestSnapshotNameGeneration(unittest.TestCase):
             name = feature_config.generate_snapshot_name("dailybackup")
             self.assertTrue(name.startswith("@dailybackup-"))
             self.assertEqual(feature_config._read_snapfile(feature_config.SNAPFILE), name)
+
+    def test_generate_snapshot_name_records_reservation(self):
+        with temp_config_dir():
+            name = feature_config.generate_snapshot_name("dailybackup")
+            self.assertTrue(feature_config._is_snapshot_name_reserved(name))
+            reservations = feature_config._load_reservations()
+            self.assertIn(name, reservations)
+
+    def test_generate_offsite_snapshot_name_records_reservation(self):
+        with temp_config_dir():
+            name = feature_config.generate_offsite_snapshot_name()
+            self.assertTrue(name.startswith("@offsite-"))
+            self.assertTrue(feature_config._is_snapshot_name_reserved(name))
+
+    def test_reservation_expires_after_one_minute(self):
+        with temp_config_dir():
+            name = "@dailybackup-2025-01-01T00:00-04:00-d"
+            feature_config._reserve_snapshot_name(name)
+            self.assertTrue(feature_config._is_snapshot_name_reserved(name))
+            # Forge a stale timestamp.
+            feature_config._save_reservations({name: int(time.time()) - 120})
+            self.assertFalse(feature_config._is_snapshot_name_reserved(name))
+            self.assertEqual(feature_config._load_reservations(), {})
+
+    def test_reservation_file_is_line_based(self):
+        with temp_config_dir():
+            name = "@dailybackup-2025-01-01T00:00-04:00-d"
+            feature_config._reserve_snapshot_name(name)
+            with open(feature_config.SNAPNAME_RESERVED, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertTrue(content.startswith(name + " "))
+
+    def test_concurrent_generation_completes_safely(self):
+        with temp_config_dir():
+            names = []
+            errors = []
+
+            def run(label):
+                try:
+                    names.append(feature_config.generate_snapshot_name(label))
+                except Exception as exc:
+                    errors.append(exc)
+
+            t1 = threading.Thread(target=run, args=("dailybackup",))
+            t2 = threading.Thread(target=run, args=("offsite",))
+            t1.start()
+            t2.start()
+            t1.join(timeout=10)
+            t2.join(timeout=10)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(len(names), 2)
+            reservations = feature_config._load_reservations()
+            for name in names:
+                self.assertIn(name, reservations)
 
 
 class TestScrubManagerConfig(unittest.TestCase):

@@ -42,6 +42,16 @@ across multiple invocations.
 snapfile at the end of a successful run. In dry-run mode the snapfile is left in
 place.
 
+## Snapshot-name reservation
+
+To prevent two concurrent jobs from generating a snapshot name at the exact same
+instant, both `zfssnapbuild` and `feature_config.generate_snapshot_name()` acquire
+a brief global lock (`/run/lock/zfs/.snapname.lock`) while building the name and
+recording it in a one-minute reservation file
+(`/run/lock/zfs/.snapname.reserved`). The reservation records the most recently
+issued name for each label/bucket with a timestamp; stale entries expire after 60
+seconds. The lock is released immediately after the reservation is written.
+
 ## `fss` table (in-memory rows from [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) JSON)
 
 Used by [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst)

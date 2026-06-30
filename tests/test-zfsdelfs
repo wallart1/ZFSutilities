@@ -212,6 +212,93 @@ test_teardown_skips_non_vm_disk() {
 }
 
 # ------------------------------------------------------------------
+# Locking tests for delfs()
+# ------------------------------------------------------------------
+
+run_delfs_locked() {
+    local _state_dir="$1"
+    local _mock_mydir="$_state_dir/mockmods"
+    mkdir -p "$_mock_mydir"
+
+    cat > "$_mock_mydir/zfsbuildfsarray" <<'EOF'
+buildfsarray() { fsarray=("${_mock_delfs_fsarray[@]}"); }
+EOF
+    cat > "$_mock_mydir/zfsdelallsnaps" <<'EOF'
+delallsnaps() { return 0; }
+EOF
+    cat > "$_mock_mydir/zfsoverrides" <<'EOF'
+overrides() { true; }
+EOF
+    cat > "$_mock_mydir/zfs-diagnose-busy" <<'EOF'
+diagnose_dataset_busy() { true; }
+EOF
+    cat > "$_mock_mydir/zfslockmanager" <<EOF
+zfslock_init() { true; }
+zfslock_wait_or_resolve() {
+    echo "\$1 \$2" >> "$_state_dir/lock.log"
+    if [[ "\${_mock_lock_conflict:-}" == "\$1" ]]; then return 1; fi
+    ZFSLOCK_ID="$_state_dir/lock_\${1//\\//_}"
+    return 0
+}
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+    cat > "$_state_dir/node.conf" <<'EOF'
+NODE_MODE=single-node
+EOF
+
+    local _old_mydir="$mydir"
+    (
+        NODE_CONF="$_state_dir/node.conf"
+        mydir="$_mock_mydir"
+        # shellcheck source=/dev/null
+        source "$_old_mydir/zfsdelfs"
+        autoproceed='Y'
+        _mock_delfs_fsarray=(pool/data)
+        mock_zfs_dataset_exists "pool/data"
+        (delfs "pool/data" >"$_state_dir/out" 2>"$_state_dir/err")
+        echo $? > "$_state_dir/rc"
+    )
+}
+
+test_delfs_acquires_destroy_lock() {
+    reset_mocks
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/delfs_lock_test"
+    mkdir -p "$_state_dir"
+    : > "$_state_dir/lock.log"
+    run_delfs_locked "$_state_dir"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    test_start "delfs acquires an x lock on the top-level dataset"
+    if [[ "$rc" -eq 0 && -f "$_state_dir/lock.log" ]] && grep -q '^pool/data x$' "$_state_dir/lock.log"; then
+        test_pass
+    else
+        test_fail "Expected rc=0 and x lock on pool/data, got rc=$rc, log=$(cat "$_state_dir/lock.log" 2>/dev/null)"
+    fi
+}
+
+test_delfs_aborts_when_locked() {
+    reset_mocks
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/delfs_conflict_test"
+    mkdir -p "$_state_dir"
+    : > "$_state_dir/lock.log"
+    (
+        export _mock_lock_conflict="pool/data"
+        run_delfs_locked "$_state_dir"
+    )
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    test_start "delfs aborts when it cannot acquire destroy lock"
+    if [[ "$rc" -eq 8 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=8 when lock conflict, got rc=$rc"
+    fi
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_teardown_removes_expected_backstore
@@ -221,5 +308,7 @@ test_teardown_records_unencrypted_flag
 test_manifest_add_backstore
 test_encrypted_conf_add_backstore
 test_teardown_skips_non_vm_disk
+test_delfs_acquires_destroy_lock
+test_delfs_aborts_when_locked
 
 test_summary

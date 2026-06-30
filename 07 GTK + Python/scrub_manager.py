@@ -19,7 +19,9 @@ from enum import Enum
 from typing import Dict, List, Optional, Set
 
 from backup_config import log_msg
+from file_locking import scrub_state_lock_read, scrub_state_lock_write
 from zfs_repository import get_default_repository
+import zfs_lock_manager as zlm
 
 
 # ---------------------------------------------------------------------------
@@ -226,9 +228,14 @@ def start_scrub(pool_name: str, repo=None) -> bool:
     """Start a scrub. Returns True on success."""
     repo = repo or get_default_repository()
     log_msg(f"INFO: Starting scrub on pool '{pool_name}'")
-    if repo.start_scrub(pool_name, timeout=30):
-        log_msg(f"INFO: Scrub started on '{pool_name}'")
-        return True
+    try:
+        with zlm.lock(pool_name, "w", f"start scrub {pool_name}"):
+            if repo.start_scrub(pool_name, timeout=30):
+                log_msg(f"INFO: Scrub started on '{pool_name}'")
+                return True
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot start scrub on '{pool_name}': {exc}")
+        return False
     log_msg(f"WARN: Failed to start scrub on '{pool_name}'")
     return False
 
@@ -237,9 +244,14 @@ def pause_scrub(pool_name: str, repo=None) -> bool:
     """Pause a scrub. Returns True on success."""
     repo = repo or get_default_repository()
     log_msg(f"INFO: Pausing scrub on pool '{pool_name}'")
-    if repo.pause_scrub(pool_name, timeout=30):
-        log_msg(f"INFO: Scrub paused on '{pool_name}'")
-        return True
+    try:
+        with zlm.lock(pool_name, "w", f"pause scrub {pool_name}"):
+            if repo.pause_scrub(pool_name, timeout=30):
+                log_msg(f"INFO: Scrub paused on '{pool_name}'")
+                return True
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot pause scrub on '{pool_name}': {exc}")
+        return False
     log_msg(f"WARN: Failed to pause scrub on '{pool_name}'")
     return False
 
@@ -248,9 +260,14 @@ def resume_scrub(pool_name: str, repo=None) -> bool:
     """Resume a scrub. Returns True on success."""
     repo = repo or get_default_repository()
     log_msg(f"INFO: Resuming scrub on pool '{pool_name}'")
-    if repo.resume_scrub(pool_name, timeout=30):
-        log_msg(f"INFO: Scrub resumed on '{pool_name}'")
-        return True
+    try:
+        with zlm.lock(pool_name, "w", f"resume scrub {pool_name}"):
+            if repo.resume_scrub(pool_name, timeout=30):
+                log_msg(f"INFO: Scrub resumed on '{pool_name}'")
+                return True
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot resume scrub on '{pool_name}': {exc}")
+        return False
     log_msg(f"WARN: Failed to resume scrub on '{pool_name}'")
     return False
 
@@ -259,9 +276,14 @@ def stop_scrub(pool_name: str, repo=None) -> bool:
     """Stop a scrub. Returns True on success."""
     repo = repo or get_default_repository()
     log_msg(f"INFO: Stopping scrub on pool '{pool_name}'")
-    if repo.stop_scrub(pool_name, timeout=30):
-        log_msg(f"INFO: Scrub stopped on '{pool_name}'")
-        return True
+    try:
+        with zlm.lock(pool_name, "w", f"stop scrub {pool_name}"):
+            if repo.stop_scrub(pool_name, timeout=30):
+                log_msg(f"INFO: Scrub stopped on '{pool_name}'")
+                return True
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot stop scrub on '{pool_name}': {exc}")
+        return False
     log_msg(f"WARN: Failed to stop scrub on '{pool_name}'")
     return False
 
@@ -289,8 +311,9 @@ def load_scrub_state() -> dict:
     if not os.path.exists(SCRUB_STATE_PATH):
         return dict(defaults)
     try:
-        with open(SCRUB_STATE_PATH, "r") as f:
-            data = json.load(f)
+        with scrub_state_lock_read():
+            with open(SCRUB_STATE_PATH, "r") as f:
+                data = json.load(f)
         for key in defaults:
             if key not in data:
                 data[key] = defaults[key]
@@ -308,8 +331,9 @@ def save_scrub_state(state: dict) -> None:
     """Persist scrub queue state to disk."""
     _ensure_state_dir()
     try:
-        with open(SCRUB_STATE_PATH, "w") as f:
-            json.dump(state, f, indent=2)
+        with scrub_state_lock_write():
+            with open(SCRUB_STATE_PATH, "w") as f:
+                json.dump(state, f, indent=2)
     except OSError as e:
         log_msg(f"WARN: Could not save scrub state: {e}")
 

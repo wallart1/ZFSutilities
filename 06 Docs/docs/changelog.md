@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.58.0
+
+### Added
+
+- **Phase 4 shared-state file locking** — New `07 GTK + Python/file_locking.py`
+  provides advisory `flock` context managers for the JSON config, backup
+  history, session-log index, and scrub state files. The `zfsconfig` bash
+  helper uses the same lock files so Python and bash interoperate.
+  `add_history_entry()` now performs its read-modify-write under a single
+  exclusive lock.
+- **Phase 5 per-profile advisory locks** — `profile_runner.py` acquires a
+  profile-specific lock under `/run/lock/zfs/profiles/`. Duplicate cron
+  invocations exit with code `0` and an informative log, preventing duplicate-run
+  email. `cron_manager.py` wraps scheduled profile lines with `flock -n -E 0`,
+  and the Dashboard Running Tasks list shows active profiles.
+- **Phase 6 profile integration tests** — New
+  `tests/python/test_profile_integration.py` runs concurrent profiles in
+  separate subprocesses and verifies disjoint datasets run in parallel,
+  same-dataset conflicts fail safely, and backup+prune operations serialize.
+- **Python lock client** — New `07 GTK + Python/zfs_lock_manager.py` reads and
+  writes the same JSON lock files as `zfslockmanager`, so Python mutators
+  participate in the same lock hierarchy as bash scripts.
+- **Snapshot-name coordination** — `zfssnapbuild` and
+  `feature_config.generate_snapshot_name()` now acquire a brief global lock
+  (`/run/lock/zfs/.snapname.lock`) and record the issued name in a one-minute
+  reservation file (`/run/lock/zfs/.snapname.reserved`) shared between bash and
+  Python.
+- **Profile user guide** — New `06 Docs/docs/user-guide/profiles.md` documents
+  creating, scheduling, running, and resolving conflicts for profiles.
+
+### Changed
+
+- **Lock-before-snapshot ordering** — `zfs-send-receive` now acquires `w` locks
+  on the source and destination datasets before creating or selecting a
+  snapshot, closing the race where concurrent jobs could force an incremental
+  receive with `-F` to roll back a newer snapshot.
+- **Per-operation lock coverage** — `zfscleanup`, `zfsretain`, `zfsdelfs`, and
+  `zfsscruball` now acquire the appropriate dataset or pool locks through
+  `zfslockmanager` or `zfs_lock_manager`.
+- **`<offsite>` placeholder expansion** — `zfscheckagainst` now allows the
+  `<offsite>` placeholder in either the Dataset or Counterpart column of the fss
+  table, expands every occurrence at run-time, and skips the meaningless
+  self-check against the source pool.
+- **Session-log defenses** — Python runners enforce a 1 GB session-log cap with
+  100 MB tail + 64 KB start retention when the cap is exceeded. The Logs tab
+  opens files larger than 1 MB tail-first and offers a "Load Full Log" button.
+- **`zfslockmanager` multiple-lock helper** — Added
+  `zfslock_acquire_multiple <type> <dataset> ...` for deadlock-free acquisition
+  of several locks.
+
+### Tests
+
+- Added `tests/python/test_file_locking.py`,
+  `tests/python/test_zfs_lock_manager.py`,
+  `tests/python/test_profile_runner_concurrency.py`,
+  `tests/python/test_profile_integration.py`, and `tests/test-zfsscruball`.
+- Expanded lock, file-locking, snapshot-name, profile concurrency, and offsite
+  placeholder coverage across the existing bash and Python test suites.
+
 ## 0.57.0
 
 ### Added

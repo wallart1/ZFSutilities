@@ -7,6 +7,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+import file_locking
+
 from test_support import mock_gtk
 
 with mock_gtk():
@@ -204,6 +206,17 @@ class TestUpdateEntryIncrementally(unittest.TestCase):
 
 
 class TestLogIndex(unittest.TestCase):
+
+    def setUp(self):
+        self._orig_lock = file_locking.LOG_INDEX_LOCK_PATH
+        self._lock_tmp = tempfile.TemporaryDirectory()
+        file_locking.LOG_INDEX_LOCK_PATH = os.path.join(
+            self._lock_tmp.name, ".log_index.lock"
+        )
+
+    def tearDown(self):
+        file_locking.LOG_INDEX_LOCK_PATH = self._orig_lock
+        self._lock_tmp.cleanup()
 
     def test_load_save_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -410,6 +423,14 @@ class TestLogIndex(unittest.TestCase):
 
         self.assertEqual(entry["size"], original_size)
         self.assertNotEqual(entry["mtime"], original_mtime)
+
+    def test_save_creates_lock_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                index = li.LogIndex()
+                index._set("foo.log", li._empty_entry())
+                index.save()
+                self.assertTrue(os.path.exists(file_locking.LOG_INDEX_LOCK_PATH))
 
 
 class TestParseLines(unittest.TestCase):

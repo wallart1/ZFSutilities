@@ -362,6 +362,76 @@ zfslock_acquire() {
     return 0
 }
 
+# Acquire locks on multiple datasets in a deadlock-free order.
+# Returns: 0=success, 1=conflict, 2=error
+# Sets: ZFSLOCK_IDS array with the lock-file paths of all acquired locks.
+zfslock_acquire_multiple() {
+    local type="$1"
+    shift
+    local -a datasets=("$@")
+    local -a sorted=()
+    local -a kept=()
+    local -a acquired=()
+    local ds other i j held
+    local depth slashes sorted_keys
+
+    ZFSLOCK_IDS=()
+
+    if [[ -z "$type" || ${#datasets[@]} -eq 0 ]]; then
+        log_msg "WARN: zfslock_acquire_multiple requires a type and at least one dataset"
+        return 2
+    fi
+
+    if [[ ! "$type" =~ ^[rwx]$ ]]; then
+        log_msg "WARN: Invalid lock type '$type'. Must be r, w, or x."
+        return 2
+    fi
+
+    # Sort by path depth (shallowest first), then lexicographically.
+    local -a sort_keys=()
+    for ds in "${datasets[@]}"; do
+        slashes="${ds//[^\/]/}"
+        depth=${#slashes}
+        sort_keys+=("$(printf '%08d\t%s' "$depth" "$ds")")
+    done
+
+    readarray -t sorted < <(
+        printf '%s\n' "${sort_keys[@]}" | sort -k1,1n -k2,2 | cut -f2-
+    )
+
+    # Remove ancestor paths that have a descendant also requested.
+    # Keep only the most specific (deepest) dataset.
+    for ((i = 0; i < ${#sorted[@]}; i++)); do
+        ds="${sorted[i]}"
+        local redundant=0
+        for ((j = i + 1; j < ${#sorted[@]}; j++)); do
+            if [[ "${sorted[j]}" == "$ds" || "${sorted[j]}" == "${ds}/"* ]]; then
+                redundant=1
+                break
+            fi
+        done
+        if [[ $redundant -eq 0 ]]; then
+            kept+=("$ds")
+        fi
+    done
+
+    # Acquire all locks in order, rolling back on any failure.
+    for ds in "${kept[@]}"; do
+        if zfslock_acquire "$ds" "$type"; then
+            acquired+=("$ZFSLOCK_ID")
+        else
+            local fail_rc=$?
+            for held in "${acquired[@]}"; do
+                zfslock_release "$held"
+            done
+            return "$fail_rc"
+        fi
+    done
+
+    ZFSLOCK_IDS=("${acquired[@]}")
+    return 0
+}
+
 # Release a specific lock
 zfslock_release() {
     local lock_id="$1"

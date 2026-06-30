@@ -8,6 +8,8 @@ source "$mydir/zfsconfig"
 
 ZFSCONFIG_PATH=$(mktemp)
 export ZFSCONFIG_PATH
+ZFSLOCK_DIR=$(mktemp -d)
+export ZFSLOCK_DIR
 
 clear_zfsconfig_cache() {
     unset _ZFSCONFIG_POOLS_CACHE _ZFSCONFIG_OFFSITE_CACHE _ZFSCONFIG_CA_CACHE
@@ -186,6 +188,34 @@ test_get_checkagainst_defaults_counterpart_to_dash() {
 }
 
 # ------------------------------------------------------------------------------
+# Locking
+# ------------------------------------------------------------------------------
+
+test_set_pools_creates_lock_file() {
+    test_start "Set pools creates and uses the config lock file"
+    write_config '{}'
+    rm -f "$ZFSLOCK_DIR/.config.lock"
+    zfsconfig_set_pools tank fivebays
+    if [[ -f "$ZFSLOCK_DIR/.config.lock" ]]; then
+        test_pass
+    else
+        test_fail "Lock file $ZFSLOCK_DIR/.config.lock was not created"
+    fi
+}
+
+test_get_pools_uses_shared_lock() {
+    test_start "Get pools uses the config lock file"
+    write_config '{"pools": ["tank"]}'
+    rm -f "$ZFSLOCK_DIR/.config.lock"
+    local result
+    result=$(zfsconfig_get_pools)
+    assert_equals "tank" "$result"
+    if [[ ! -f "$ZFSLOCK_DIR/.config.lock" ]]; then
+        test_fail "Lock file $ZFSLOCK_DIR/.config.lock was not created"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
 
@@ -202,8 +232,11 @@ test_offsite_candidates_ignores_missing_pools
 test_get_checkagainst_emits_fields
 test_get_checkagainst_skips_incomplete_entries
 test_get_checkagainst_defaults_counterpart_to_dash
+test_set_pools_creates_lock_file
+test_get_pools_uses_shared_lock
 
 rm -f "$ZFSCONFIG_PATH"
+rm -rf "$ZFSLOCK_DIR"
 
 test_summary
 teardown_test_env

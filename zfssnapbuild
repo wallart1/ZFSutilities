@@ -6,11 +6,40 @@
 
 # $1 = Optional label value, with or without a leading "@". $label may also be set before sourcing this script. Default = "@dailybackup". Empty label is not allowed.
 
+# Paths for the global snapshot-name reservation mechanism. These can be
+# overridden by callers/tests via environment variables.
+SNAPNAME_LOCK="${SNAPNAME_LOCK:-/run/lock/zfs/.snapname.lock}"
+SNAPNAME_RESERVED="${SNAPNAME_RESERVED:-/run/lock/zfs/.snapname.reserved}"
+SNAPNAME_RESERVE_SECONDS="${SNAPNAME_RESERVE_SECONDS:-60}"
+
 function buildsnapfilename {
     local caller="${BASH_SOURCE[1]}"        # Who called?
     local caller_sanitized
     caller_sanitized=$(basename "$caller" | tr -c 'A-Za-z0-9_' '_')  # Sanitize for valid filename
     echo "/tmp/zfsnextsnap_$caller_sanitized"
+}
+
+# Update the reservation file with the just-generated name. The file is
+# line-based (name epoch-seconds) so both bash and Python can read it.
+function _snapname_update_reservation {
+    local name="$1"
+    local epoch
+    epoch=$(date +%s)
+    local cutoff=$(( epoch - SNAPNAME_RESERVE_SECONDS ))
+    local reserved_dir
+    reserved_dir=$(dirname "$SNAPNAME_RESERVED")
+    mkdir -p "$reserved_dir"
+    local tmpfile="${SNAPNAME_RESERVED}.tmp.$$"
+    if [[ -f "$SNAPNAME_RESERVED" ]]; then
+        awk -v name="$name" -v epoch="$epoch" -v cutoff="$cutoff" '
+            $1 == name { next }
+            $2 >= cutoff { print }
+            END { print name " " epoch }
+        ' "$SNAPNAME_RESERVED" > "$tmpfile"
+    else
+        echo "$name $epoch" > "$tmpfile"
+    fi
+    mv "$tmpfile" "$SNAPNAME_RESERVED"
 }
 
 zfssnapbuild() {
@@ -36,7 +65,16 @@ zfssnapbuild() {
             rm $snapfile
         fi
     fi
-    # Generate a new snapshot name
+    # Generate a new snapshot name under the global snapshot-name lock.
+    local lock_dir
+    lock_dir=$(dirname "$SNAPNAME_LOCK")
+    mkdir -p "$lock_dir"
+    local lock_fd
+    exec {lock_fd}>"$SNAPNAME_LOCK"
+    if ! flock -x "$lock_fd"; then
+        exec {lock_fd}>&-
+        return 1
+    fi
     if [[ $1 != "" ]];              then local label=$1; fi
     if [[ $label = "" ]];           then local label="@dailybackup"; fi
     if [[ ${label:0:1} != '@' ]];   then local label='@'$label; fi
@@ -57,6 +95,9 @@ zfssnapbuild() {
     fi
     if [[ $label = '@offsite' ]];   then bucket='s'; fi
     local nextsnap="$label-$currdate-$bucket"
+    _snapname_update_reservation "$nextsnap"
+    flock -u "$lock_fd"
+    exec {lock_fd}>&-
     echo "$nextsnap" > "$snapfile"      # Save snapshot name for possible later reuse.
     echo "$nextsnap"
 }

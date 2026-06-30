@@ -928,18 +928,24 @@ class TestMainHistoryEntry(unittest.TestCase):
             "tab_type": "backup",
             "config": {"variables": {"label": "dailybackup"}},
         }
-        with ExitStack() as stack:
-            stack.enter_context(patch.object(sys, "argv", ["profile_runner.py", "run", "Daily"]))
-            stack.enter_context(patch("profile_runner.load_profile", return_value=profile))
-            stack.enter_context(patch("profile_runner.load_config", return_value={}))
-            stack.enter_context(patch("profile_runner.prune_old_logs"))
-            mock_add = stack.enter_context(patch("profile_runner.add_history_entry"))
-            stack.enter_context(patch("profile_runner._write_session_trailer"))
-            stack.enter_context(patch("profile_runner.sys.exit"))
-            stack.enter_context(patch("profile_runner.SESSION_LOG_DIR", session_log_dir))
-            stack.enter_context(runner_patch)
-            profile_runner.main()
-        return mock_add
+        with tempfile.TemporaryDirectory() as lock_dir:
+            orig_lock_dir = profile_runner.PROFILE_LOCK_DIR
+            profile_runner.PROFILE_LOCK_DIR = lock_dir
+            try:
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(sys, "argv", ["profile_runner.py", "run", "Daily"]))
+                    stack.enter_context(patch("profile_runner.load_profile", return_value=profile))
+                    stack.enter_context(patch("profile_runner.load_config", return_value={}))
+                    stack.enter_context(patch("profile_runner.prune_old_logs"))
+                    mock_add = stack.enter_context(patch("profile_runner.add_history_entry"))
+                    stack.enter_context(patch("profile_runner._write_session_trailer"))
+                    stack.enter_context(patch("profile_runner.sys.exit"))
+                    stack.enter_context(patch("profile_runner.SESSION_LOG_DIR", session_log_dir))
+                    stack.enter_context(runner_patch)
+                    profile_runner.main()
+                return mock_add
+            finally:
+                profile_runner.PROFILE_LOCK_DIR = orig_lock_dir
 
     def test_main_records_log_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:

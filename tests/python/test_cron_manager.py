@@ -19,6 +19,8 @@ class TestGenerateCronLine(unittest.TestCase):
         self.assertIn("root-backup-daily", line)
         self.assertIn("0 2 * * *", line)
         self.assertIn("python3 /opt/runner.py", line)
+        self.assertIn("flock -n -E 0", line)
+        self.assertIn("/run/lock/zfs/profiles/root-backup-daily.lock", line)
 
     def test_specific_weekday(self):
         profile = {
@@ -27,6 +29,15 @@ class TestGenerateCronLine(unittest.TestCase):
         }
         line = cron_manager.generate_cron_line(profile, "/run.py")
         self.assertIn("30 4 * * 0", line)
+        self.assertIn("flock -n -E 0", line)
+
+    def test_profile_name_with_spaces_sanitized(self):
+        profile = {
+            "profile_name": "Daily Backup #1",
+            "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+        }
+        line = cron_manager.generate_cron_line(profile, "/run.py")
+        self.assertIn("/run/lock/zfs/profiles/Daily_Backup__1.lock", line)
 
 
 class TestInterpretCron(unittest.TestCase):

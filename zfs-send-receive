@@ -309,14 +309,6 @@ function send-receive {
         fs=${fsarray[i]}
         echo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
         log_msg "INFO: Processing $fs."
-        if [[ "$nextsnap" == 'notneeded' ]]; then
-            local _newest_snap=$(zfs list -t snap -o name -S createtxg -H -d1 "$fs" 2>/dev/null | head -1)
-            [[ -z "$_newest_snap" ]] && { log_msg "WARN: No snapshots found on $fs (nextsnap=notneeded). Skipping."; continue; }
-            nextsnap="@${_newest_snap##*@}"
-        elif ! zfs list -t snapshot "$fs""$nextsnap" > /dev/null 2>&1; then
-            [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: Would create snapshot $fs$nextsnap"
-            [[ $dryrun = 'N' ]] && ! zfs snapshot "$fs""$nextsnap" && { log_msg "FATAL: Unable to create the required snapshot $fs$nextsnap."; exit 8; }
-        fi
         restorefs=$(remove_leading_qualifiers "$sourcefsremovequalifiers" "$fs")
         [[ $restorefs != '' && ${restorefs:0:1} != '/' ]] && restorefs="/$restorefs"
 
@@ -342,6 +334,15 @@ function send-receive {
             log_msg "INFO: Skipping dataset $fs (lock conflict on destination)."; zfslock_release "$lock_source"; continue
         fi
         lock_dest="$ZFSLOCK_ID"
+
+        if [[ "$nextsnap" == 'notneeded' ]]; then
+            local _newest_snap=$(zfs list -t snap -o name -S createtxg -H -d1 "$fs" 2>/dev/null | head -1)
+            [[ -z "$_newest_snap" ]] && { log_msg "WARN: No snapshots found on $fs (nextsnap=notneeded). Skipping."; zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue; }
+            nextsnap="@${_newest_snap##*@}"
+        elif ! zfs list -t snapshot "$fs""$nextsnap" > /dev/null 2>&1; then
+            [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: Would create snapshot $fs$nextsnap"
+            [[ $dryrun = 'N' ]] && ! zfs snapshot "$fs""$nextsnap" && { log_msg "FATAL: Unable to create the required snapshot $fs$nextsnap."; zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8; }
+        fi
 
         if ! zfs list "$destfs""$restorefs" > /dev/null 2>&1; then
             [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: Would create destination dataset $destfs$restorefs"

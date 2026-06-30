@@ -809,6 +809,7 @@ functions. Used by `zfs-send-receive`, `zfsdelsnap`, and others.
 source $mydir/zfslockmanager
 zfslock_init
 zfslock_acquire <dataset> <type> [description]   # 0=ok, 1=conflict, 2=error
+zfslock_acquire_multiple <type> <dataset> ...    # acquire several locks safely
 zfslock_release <lock-id>
 zfslock_release_all                               # release all locks for current PID
 zfslock_check <dataset> <type>                    # 0=no conflict, 1=conflict
@@ -819,8 +820,9 @@ zfslock_check <dataset> <type>                    # 0=no conflict, 1=conflict
 | Function              | Arguments                        | Purpose                                   |
 | --------------------- | -------------------------------- | ----------------------------------------- |
 | `zfslock_init`        | —                                | Create the lock directory if missing      |
-| `zfslock_acquire`     | `<dataset> <type> [description]` | Acquire a lock; prints lock-id on success |
-| `zfslock_release`     | `<lock-id>`                      | Release a specific lock                   |
+| `zfslock_acquire`           | `<dataset> <type> [description]` | Acquire a lock; prints lock-id on success |
+| `zfslock_acquire_multiple`  | `<type> <dataset> ...`           | Acquire several locks in sorted order     |
+| `zfslock_release`           | `<lock-id>`                      | Release a specific lock                   |
 | `zfslock_release_all` | —                                | Release all locks for the current PID     |
 | `zfslock_check`       | `<dataset> <type>`               | Report whether a lock would conflict      |
 
@@ -1060,6 +1062,7 @@ Delegates each deletion to [`zfsdelsnap`](#zfsdelsnap), which runs
 | `zfsconfig`                | Load pool retention policy and offsite candidates|
 | `zfsdelsnap`               | Delete individual snapshots safely               |
 | `zfsremoveleadingqualifiers`| Strip leading qualifiers for `checkagainst`     |
+| `zfslockmanager`           | Acquire a write lock on the dataset being pruned |
 
 **Return codes:**
 
@@ -1073,7 +1076,10 @@ Delegates each deletion to [`zfsdelsnap`](#zfsdelsnap), which runs
 ### `zfs-send-receive`
 
 The core ZFS send/receive engine. Handles full copies, incremental transfers,
-resume tokens, space validation, VM checks, and dataset locking.
+resume tokens, space validation, VM checks, and dataset locking.  Locks are
+acquired on the source and destination datasets before a snapshot is created
+or selected, so concurrent jobs cannot insert a newer snapshot after the
+common snapshot has been chosen.
 
 ```bash
 source $mydir/zfs-send-receive
@@ -1241,15 +1247,18 @@ Format: `@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>`
 2. If the snapfile exists and contains a snapshot name, prompt the user to
    reuse it. Reusing keeps incremental chains stable across interrupted runs.
 3. If reuse is declined, delete the snapfile and generate a new name.
-4. Normalize `$label`: default to `@dailybackup`, ensure it starts with `@`.
-5. Compute the bucket if `$bucket` is unset:
+4. Acquire the global snapshot-name lock (`/run/lock/zfs/.snapname.lock`). The
+   lock is held only while the name is being generated and recorded.
+5. Normalize `$label`: default to `@dailybackup`, ensure it starts with `@`.
+6. Compute the bucket if `$bucket` is unset:
    - `m` if the current day is the 1st of the month (takes precedence over Sunday).
    - `w` if the current day is Sunday.
    - `d` otherwise.
    - Hard-code `s` when the label is `@offsite`.
-6. Build the name as `@<label>-<ISO-8601-minutes>-<bucket>`, write it to the
-   snapfile, and print it.
-7. `removesnapfile` deletes the snapfile; orchestrators such as
+7. Build the name as `@<label>-<ISO-8601-minutes>-<bucket>`, record it in the
+   one-minute reservation file (`/run/lock/zfs/.snapname.reserved`), release the
+   lock, write the name to the snapfile, and print it.
+8. `removesnapfile` deletes the snapfile; orchestrators such as
    `zfsdailybackup` call it after a successful run.
 
 **Called modules:** none.

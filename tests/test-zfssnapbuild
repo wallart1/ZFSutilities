@@ -4,6 +4,9 @@
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
 setup_test_env
 
+export SNAPNAME_LOCK="/tmp/zfs_snapname_lock_test_$$"
+export SNAPNAME_RESERVED="/tmp/zfs_snapname_reserved_test_$$"
+
 source "$mydir/zfssnapbuild"
 
 # Override snapfile path so tests do not collide with root-owned files.
@@ -111,6 +114,51 @@ test_removesnapfile() {
     [[ ! -f "$TEST_SNAPFILE" ]] && test_pass || test_fail "Snapfile should be removed"
 }
 
+test_generation_records_reservation() {
+    rm -f "$TEST_SNAPFILE" "$SNAPNAME_RESERVED"
+    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    bucket=""
+    local result
+    result=$(zfssnapbuild)
+    test_start "Generation records name in reservation file"
+    if [[ -f "$SNAPNAME_RESERVED" && "$(cat "$SNAPNAME_RESERVED")" == "$result"* ]]; then
+        test_pass
+    else
+        test_fail "Reservation file missing or does not contain generated name"
+    fi
+}
+
+test_reservation_file_is_line_based() {
+    rm -f "$TEST_SNAPFILE" "$SNAPNAME_RESERVED"
+    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    bucket=""
+    local result
+    result=$(zfssnapbuild)
+    test_start "Reservation file is line-based name epoch format"
+    local line
+    line=$(head -n1 "$SNAPNAME_RESERVED")
+    if [[ "$line" =~ ^$result\ [0-9]+$ ]]; then
+        test_pass
+    else
+        test_fail "Unexpected reservation line '$line'"
+    fi
+}
+
+test_lock_file_is_created() {
+    rm -f "$TEST_SNAPFILE" "$SNAPNAME_LOCK" "$SNAPNAME_RESERVED"
+    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    bucket=""
+    local result
+    result=$(zfssnapbuild)
+    test_start "Generation creates or uses lock file"
+    # flock creates the lock file on demand; just verify generation succeeded.
+    if [[ -n "$result" && -f "$SNAPNAME_RESERVED" ]]; then
+        test_pass
+    else
+        test_fail "Lock/reservation files not established"
+    fi
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -125,7 +173,10 @@ main() {
     test_snapfile_reuse_yes
     test_snapfile_reuse_no
     test_removesnapfile
-    rm -f "$TEST_SNAPFILE"
+    test_generation_records_reservation
+    test_reservation_file_is_line_based
+    test_lock_file_is_created
+    rm -f "$TEST_SNAPFILE" "$SNAPNAME_LOCK" "$SNAPNAME_RESERVED"
     teardown_test_env
     test_summary
 }

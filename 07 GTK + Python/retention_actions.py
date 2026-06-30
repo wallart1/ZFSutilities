@@ -14,6 +14,7 @@ from backup_config import (
 )
 from command_builders import _dryrun_assignments, BashStep
 from gui_helpers import set_button_markup_red
+import zfs_lock_manager as zlm
 from retention_page import (
     _get_online_pool_names, _show_error, _update_ret_status,
     _load_pool_into_store, _on_ret_save, _on_ret_revert,
@@ -177,6 +178,13 @@ def on_retention_prune(app, ctx):
 
     if dryrun:
         log_msg("INFO: Dry run mode enabled — no changes will be made")
+
+    for pool in pools:
+        if not zlm.check(pool, "w"):
+            log_msg(
+                f"WARN: cannot prune {pool}: pool is locked by another operation"
+            )
+            return
 
     steps = []
     for pool in pools:

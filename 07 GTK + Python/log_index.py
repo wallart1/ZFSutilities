@@ -11,6 +11,7 @@ import tempfile
 import time
 
 from config_core import SESSION_LOG_DIR
+from file_locking import log_index_lock_read, log_index_lock_write
 from logging_config import log_msg, parse_msg_level, MSG_LEVELS
 
 def index_file():
@@ -38,8 +39,9 @@ def _load_index_data():
     if not os.path.isfile(path):
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        with log_index_lock_read():
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
         if isinstance(data, dict):
             return data
     except (OSError, json.JSONDecodeError) as e:
@@ -58,7 +60,8 @@ def _save_index_data(data):
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
-        os.replace(tmp_path, final_path)
+        with log_index_lock_write():
+            os.replace(tmp_path, final_path)
     except OSError as e:
         log_msg(f"WARN: Could not save log index: {e}")
         try:

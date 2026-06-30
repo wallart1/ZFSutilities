@@ -27,6 +27,20 @@ EOF
 
 cp "$old_mydir/zfsremoveleadingqualifiers" "$mock_mydir/zfsremoveleadingqualifiers"
 
+cat > "$mock_mydir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_acquire() {
+    _mock_lock_acquisitions+=("$1 $2")
+    if [[ "${_mock_lock_conflict:-}" == "$1" ]]; then
+        return 1
+    fi
+    ZFSLOCK_ID="/tmp/mock_lock_${1//\//_}"
+    return 0
+}
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+
 source "$old_mydir/zfsretain"
 
 # =============================================================================
@@ -39,6 +53,8 @@ reset_mocks() {
     _mock_zfs_snap_list_creation=""
     _mock_zfs_snap_list=""
     _mock_zfs_props=()
+    _mock_lock_acquisitions=()
+    _mock_lock_conflict=""
     dryrun="N"
     autoproceed="Y"
     skipbusy="Y"
@@ -236,6 +252,38 @@ test_wrong_label_skipped() {
     fi
 }
 
+test_retain_acquires_write_lock() {
+    echo "=== Locking: acquires write lock ==="
+    reset_mocks
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
+    retain "pool/fs" "dailybackup"
+    test_start "Acquires write lock on dataset"
+    if [[ "${_mock_lock_acquisitions[*]}" == *"pool/fs w"* ]]; then
+        test_pass
+    else
+        test_fail "Expected lock acquisition 'pool/fs w', got: ${_mock_lock_acquisitions[*]}"
+    fi
+}
+
+test_retain_skips_when_locked() {
+    echo "=== Locking: skips dataset when lock conflict ==="
+    reset_mocks
+    _mock_lock_conflict="pool/fs"
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    retain "pool/fs" "dailybackup"
+    local rc=$?
+    test_start "Skips pruning when lock is already held"
+    if [[ $rc -eq 1 && ${#_mock_delsnap_calls[@]} -eq 0 && "${_mock_lock_acquisitions[*]}" == *"pool/fs w"* ]]; then
+        test_pass
+    else
+        test_fail "Expected skip rc=1 with no deletions, got rc=$rc, deletions=${_mock_delsnap_calls[*]}"
+    fi
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -251,6 +299,8 @@ main() {
     test_skip_clone_and_c_bucket
     test_phase0_offsite_monthly
     test_wrong_label_skipped
+    test_retain_acquires_write_lock
+    test_retain_skips_when_locked
     mydir="$old_mydir"
     rm -rf "$mock_mydir"
     teardown_test_env

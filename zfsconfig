@@ -20,18 +20,25 @@
 #
 # Environment:
 #   ZFSCONFIG_PATH  override config path (default: /root/.config/zfsutilities.json)
+#   ZFSLOCK_DIR     override lock directory (default: /run/lock/zfs)
 #
 # Cached in the shell for speed: _ZFSCONFIG_POOLS_CACHE,
 # _ZFSCONFIG_OFFSITE_CACHE, _ZFSCONFIG_CA_CACHE.
 # Unset them to force a re-read, or call zfsconfig_invalidate.
 
 ZFSCONFIG_PATH="${ZFSCONFIG_PATH:-/root/.config/zfsutilities.json}"
+ZFSLOCK_DIR="${ZFSLOCK_DIR:-/run/lock/zfs}"
 
 _zfsconfig_ensure() {
     if [[ ! -f "$ZFSCONFIG_PATH" ]]; then
         mkdir -p "$(dirname "$ZFSCONFIG_PATH")"
         echo '{}' > "$ZFSCONFIG_PATH"
     fi
+}
+
+_zfsconfig_lock_file() {
+    mkdir -p "$ZFSLOCK_DIR"
+    printf '%s/.config.lock' "$ZFSLOCK_DIR"
 }
 
 zfsconfig_invalidate() {
@@ -41,7 +48,11 @@ zfsconfig_invalidate() {
 zfsconfig_get_pools() {
     if [[ -z "${_ZFSCONFIG_POOLS_CACHE+x}" ]]; then
         _zfsconfig_ensure
+        local lock_file
+        lock_file="$(_zfsconfig_lock_file)"
         _ZFSCONFIG_POOLS_CACHE=$(
+            exec 200<>"$lock_file"
+            flock -s 200
             CFG_PATH="$ZFSCONFIG_PATH" python3 - <<'PYEOF'
 import json, os, sys
 try:
@@ -66,7 +77,11 @@ PYEOF
 zfsconfig_get_offsite_candidates() {
     if [[ -z "${_ZFSCONFIG_OFFSITE_CACHE+x}" ]]; then
         _zfsconfig_ensure
+        local lock_file
+        lock_file="$(_zfsconfig_lock_file)"
         _ZFSCONFIG_OFFSITE_CACHE=$(
+            exec 200<>"$lock_file"
+            flock -s 200
             CFG_PATH="$ZFSCONFIG_PATH" python3 - <<'PYEOF'
 import json, os, sys
 try:
@@ -90,7 +105,12 @@ PYEOF
 
 zfsconfig_set_pools() {
     _zfsconfig_ensure
-    CFG_PATH="$ZFSCONFIG_PATH" ZFS_POOL_ARGS="$*" python3 - <<'PYEOF'
+    local lock_file
+    lock_file="$(_zfsconfig_lock_file)"
+    (
+        exec 200<>"$lock_file"
+        flock -x 200
+        CFG_PATH="$ZFSCONFIG_PATH" ZFS_POOL_ARGS="$*" python3 - <<'PYEOF'
 import json, os
 path = os.environ["CFG_PATH"]
 pools = os.environ["ZFS_POOL_ARGS"].split()
@@ -103,13 +123,18 @@ cfg["pools"] = pools
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
 PYEOF
+    )
     zfsconfig_invalidate
 }
 
 zfsconfig_get_checkagainst() {
     if [[ -z "${_ZFSCONFIG_CA_CACHE+x}" ]]; then
         _zfsconfig_ensure
+        local lock_file
+        lock_file="$(_zfsconfig_lock_file)"
         _ZFSCONFIG_CA_CACHE=$(
+            exec 200<>"$lock_file"
+            flock -s 200
             CFG_PATH="$ZFSCONFIG_PATH" python3 - <<'PYEOF'
 import json, os
 try:
@@ -135,7 +160,12 @@ PYEOF
 zfsconfig_set_checkagainst_file() {
     local src="$1"
     _zfsconfig_ensure
-    CFG_PATH="$ZFSCONFIG_PATH" SRC_PATH="$src" python3 - <<'PYEOF'
+    local lock_file
+    lock_file="$(_zfsconfig_lock_file)"
+    (
+        exec 200<>"$lock_file"
+        flock -x 200
+        CFG_PATH="$ZFSCONFIG_PATH" SRC_PATH="$src" python3 - <<'PYEOF'
 import json, os
 path = os.environ["CFG_PATH"]
 src  = os.environ["SRC_PATH"]
@@ -163,6 +193,7 @@ cfg["checkagainst"] = entries
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
 PYEOF
+    )
     zfsconfig_invalidate
 }
 
@@ -176,7 +207,13 @@ zfsconfig_get_retention() {
     local pool="$1"
     local legacy_dir="${ZFSCONFIG_LEGACY_DIR:-$(dirname "${BASH_SOURCE[0]}")}"
     _zfsconfig_ensure
-    CFG_PATH="$ZFSCONFIG_PATH" POOL="$pool" LEGACY_DIR="$legacy_dir" python3 - <<'PYEOF'
+    local lock_file
+    lock_file="$(_zfsconfig_lock_file)"
+    (
+        exec 200<>"$lock_file"
+        flock -s 200
+        CFG_PATH="$ZFSCONFIG_PATH" POOL="$pool" LEGACY_DIR="$legacy_dir" \
+        python3 - <<'PYEOF'
 import json, os, re, sys
 
 path = os.environ["CFG_PATH"]
@@ -229,6 +266,7 @@ for i, b in enumerate(buckets):
         continue
     print(f"bktname[{i}]='{bname}'; bktretain[{i}]={retain}; minage[{i}]={minage}")
 PYEOF
+    )
 }
 
 # poolarray — fills $zfspoolarray from the JSON pool list.

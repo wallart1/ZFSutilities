@@ -3,15 +3,16 @@
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk
+from test_support import mock_gtk, temp_lock_dir
 from command_builders import BashStep
+import zfs_lock_manager as zlm
 
 
 _MISSING_RUNNER = object()
@@ -34,12 +35,19 @@ def _make_app(runner=_MISSING_RUNNER, parent_dir="/repo"):
 
 def _patch_module():
     """Patch the external dependencies of dataset_actions._delete_datasets."""
+    zlm_mock = MagicMock()
+    zlm_mock.check.return_value = True
+    zlm_mock.lock.return_value.__enter__ = MagicMock(return_value="lock-id")
+    zlm_mock.lock.return_value.__exit__ = MagicMock(return_value=False)
+    zlm_mock.locks.return_value.__enter__ = MagicMock(return_value=["lock-id"])
+    zlm_mock.locks.return_value.__exit__ = MagicMock(return_value=False)
     return patch.multiple(
         "dataset_actions",
         create_dialog=MagicMock(),
         add_scrolled_text_view=MagicMock(),
         refresh_datasets_page=MagicMock(),
         log_msg=MagicMock(),
+        zlm=zlm_mock,
     )
 
 
@@ -59,6 +67,9 @@ def _configure_dialog_cancel(module):
 
 class TestDeleteDatasetsRunner(unittest.TestCase):
     """_delete_datasets delegates to app.dataset_runner via BashStep."""
+
+    def setUp(self):
+        zlm._lock_refcounts.clear()
 
     def _import_under_mock(self):
         with mock_gtk():
@@ -163,6 +174,43 @@ class TestDeleteDatasetsRunner(unittest.TestCase):
         app.dataset_runner.set_steps.assert_not_called()
         app.dataset_runner.start.assert_not_called()
         patched_refresh.assert_not_called()
+
+    def test_checks_lock_before_destroying(self):
+        da = self._import_under_mock()
+
+        app = _make_app()
+        datasets = [
+            {"name": "tank/vm-100", "type": "dataset"},
+            {"name": "tank/vm-200", "type": "dataset"},
+        ]
+
+        with _patch_module():
+            _configure_dialog_ok(da)
+            da._delete_datasets(app, datasets)
+            zlm_mock = da.zlm
+
+        zlm_mock.check.assert_has_calls([
+            call("tank/vm-100", "x"),
+            call("tank/vm-200", "x"),
+        ])
+
+    def test_aborts_when_dataset_locked(self):
+        da = self._import_under_mock()
+
+        app = _make_app()
+        datasets = [{"name": "tank/vm-100", "type": "dataset"}]
+
+        with _patch_module():
+            _configure_dialog_ok(da)
+            da.zlm.check.return_value = False
+            da._delete_datasets(app, datasets)
+            patched_log_msg = da.log_msg
+
+        patched_log_msg.assert_called_with(
+            "WARN: cannot destroy tank/vm-100: dataset is locked by another operation"
+        )
+        app.dataset_runner.set_steps.assert_not_called()
+        app.dataset_runner.start.assert_not_called()
 
 
 if __name__ == "__main__":

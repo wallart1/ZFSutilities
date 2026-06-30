@@ -13,9 +13,70 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
+import zfs_lock_manager as zlm
+
 from test_support import temp_config_dir, capture_logs
 
+import file_locking
+
 import scrub_manager as sm
+
+
+class TestScrubControlLocking(unittest.TestCase):
+    """Scrub control functions acquire and release pool-level locks."""
+
+    def setUp(self):
+        zlm._lock_refcounts.clear()
+
+    def _run_locked(self, func, repo, expected_description):
+        with patch.object(sm, "zlm") as zlm_mock:
+            zlm_mock.lock.return_value.__enter__ = MagicMock(return_value="lock-id")
+            zlm_mock.lock.return_value.__exit__ = MagicMock(return_value=False)
+            result = func("tank", repo=repo)
+        zlm_mock.lock.assert_called_once_with(
+            "tank", "w", expected_description
+        )
+        zlm_mock.lock.return_value.__exit__.assert_called_once()
+        return result
+
+    def test_start_scrub_acquires_pool_lock(self):
+        repo = MagicMock()
+        repo.start_scrub.return_value = True
+        self.assertTrue(
+            self._run_locked(sm.start_scrub, repo, "start scrub tank")
+        )
+        repo.start_scrub.assert_called_once_with("tank", timeout=30)
+
+    def test_start_scrub_releases_lock_on_failure(self):
+        repo = MagicMock()
+        repo.start_scrub.return_value = False
+        self.assertFalse(
+            self._run_locked(sm.start_scrub, repo, "start scrub tank")
+        )
+
+    def test_pause_scrub_acquires_pool_lock(self):
+        repo = MagicMock()
+        repo.pause_scrub.return_value = True
+        self.assertTrue(
+            self._run_locked(sm.pause_scrub, repo, "pause scrub tank")
+        )
+        repo.pause_scrub.assert_called_once_with("tank", timeout=30)
+
+    def test_resume_scrub_acquires_pool_lock(self):
+        repo = MagicMock()
+        repo.resume_scrub.return_value = True
+        self.assertTrue(
+            self._run_locked(sm.resume_scrub, repo, "resume scrub tank")
+        )
+        repo.resume_scrub.assert_called_once_with("tank", timeout=30)
+
+    def test_stop_scrub_acquires_pool_lock(self):
+        repo = MagicMock()
+        repo.stop_scrub.return_value = True
+        self.assertTrue(
+            self._run_locked(sm.stop_scrub, repo, "stop scrub tank")
+        )
+        repo.stop_scrub.assert_called_once_with("tank", timeout=30)
 
 
 class TestParseScrubStatus(unittest.TestCase):
@@ -124,10 +185,15 @@ class TestScrubQueue(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.state_path = os.path.join(self.tmpdir.name, "scrub_state.json")
         self._orig_path = sm.SCRUB_STATE_PATH
+        self._orig_lock = file_locking.SCRUB_STATE_LOCK_PATH
         sm.SCRUB_STATE_PATH = self.state_path
+        file_locking.SCRUB_STATE_LOCK_PATH = os.path.join(
+            self.tmpdir.name, ".scrub_state.lock"
+        )
 
     def tearDown(self):
         sm.SCRUB_STATE_PATH = self._orig_path
+        file_locking.SCRUB_STATE_LOCK_PATH = self._orig_lock
         self.tmpdir.cleanup()
 
     def test_add_pending_and_target(self):
@@ -195,6 +261,11 @@ class TestScrubQueue(unittest.TestCase):
         self.assertEqual(q2.target, 2)
         self.assertIn("tank", q2.pending)
         self.assertIn("data", q2.pending)
+
+    def test_save_creates_lock_file(self):
+        q = sm.ScrubQueue(target=1)
+        q.add_pending(["tank"])
+        self.assertTrue(os.path.exists(file_locking.SCRUB_STATE_LOCK_PATH))
 
     def test_resume_pools(self):
         q = sm.ScrubQueue(target=1)

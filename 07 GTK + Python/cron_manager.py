@@ -6,6 +6,7 @@ Manages /etc/cron.d/zfsutilities as a drop-in file exclusively for zfsutilities.
 
 import os
 import re
+import shlex
 from datetime import datetime, timedelta
 
 from backup_config import log_msg
@@ -63,15 +64,20 @@ def generate_cron_line(profile, runner_path):
         weekday = weekday.split("#", 1)[0].strip()
     name = profile["profile_name"]
     quoted_runner = shlex_quote(runner_path)
+    safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", name)
+    lock_path = shlex_quote(
+        f"/run/lock/zfs/profiles/{safe_name}.lock"
+    )
+    inner = f"python3 {quoted_runner} run {shlex_quote(name)}"
+    # flock -n -E 0 exits 0 when the lock is held so cron does not mail.
     return (
         f'{minute} {hour} {day} {month} {weekday} '
-        f'root python3 {quoted_runner} run {shlex_quote(name)}'
+        f'root flock -n -E 0 {lock_path} -c {shlex_quote(inner)}'
     )
 
 
 def shlex_quote(s):
     """Minimal shlex.quote equivalent (Python 3.3+ has shlex.quote)."""
-    import shlex
     return shlex.quote(s)
 
 
