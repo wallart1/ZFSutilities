@@ -301,11 +301,12 @@ def _update_next_run_for_iter(app, tree_iter):
 
 
 def _on_selection_changed(selection, app):
-    model, tree_iter = selection.get_selected()
-    if tree_iter is None:
+    model, paths = selection.get_selected_rows()
+    if not paths:
         app.schedule_detail_box.hide()
         return
 
+    tree_iter = model.get_iter(paths[0])
     profile_name = model.get_value(tree_iter, COL_NAME)
     profile = load_profile(profile_name)
     if profile is None:
@@ -361,10 +362,11 @@ def _on_cron_entry_changed(entry, app):
     _update_interpretation(app)
 
     selection = app.schedule_view.get_selection()
-    model, tree_iter = selection.get_selected()
-    if tree_iter is None:
+    model, paths = selection.get_selected_rows()
+    if not paths:
         return
 
+    tree_iter = model.get_iter(paths[0])
     profile_name = model.get_value(tree_iter, COL_NAME)
     profile = load_profile(profile_name)
     if profile is None:
@@ -573,8 +575,9 @@ def on_schedule_revert(app):
         app._schedule_pending.clear()
 
     selection = app.schedule_view.get_selection()
-    model, tree_iter = selection.get_selected()
-    if tree_iter is not None:
+    model, paths = selection.get_selected_rows()
+    if paths:
+        tree_iter = model.get_iter(paths[0])
         profile_name = model.get_value(tree_iter, COL_NAME)
         profile = load_profile(profile_name)
         if profile is not None:
@@ -616,11 +619,12 @@ def _find_iter_by_name(app, profile_name):
 
 def on_schedule_delete(app):
     selection = app.schedule_view.get_selection()
-    model, tree_iter = selection.get_selected()
-    if tree_iter is None:
+    model, paths = selection.get_selected_rows()
+    if not paths:
         log_msg("WARN: No profile selected")
         return
 
+    tree_iter = model.get_iter(paths[0])
     profile_name = model.get_value(tree_iter, COL_NAME)
 
     dlg = Gtk.MessageDialog(

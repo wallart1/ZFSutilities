@@ -150,8 +150,8 @@ class TestScheduleDirtyTracking(unittest.TestCase):
     def _make_app(self, rows):
         app = MagicMock()
         app.schedule_store = FakeScheduleStore(rows)
-        app.schedule_view.get_selection.return_value.get_selected.return_value = (
-            app.schedule_store, 0,
+        app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
+            app.schedule_store, [FakeTreePath(0)],
         )
         app._schedule_save_button = MagicMock()
         app._schedule_pending = {}
@@ -246,9 +246,6 @@ class TestScheduleDirtyTracking(unittest.TestCase):
             [True, "p2", "offsite", "* * * * *", "next", ""],
         ]
         app = self._make_app(rows)
-        app.schedule_view.get_selection.return_value.get_selected.return_value = (
-            app.schedule_store, 0,
-        )
         profiles = {
             "p1": {"profile_name": "p1", "active": True, "cron": {"minute": "0"}},
             "p2": {"profile_name": "p2", "active": False, "cron": {"minute": "0"}},
@@ -318,8 +315,8 @@ class TestConfigSummary(unittest.TestCase):
     def _make_app(self, rows):
         app = MagicMock()
         app.schedule_store = FakeScheduleStore(rows)
-        app.schedule_view.get_selection.return_value.get_selected.return_value = (
-            app.schedule_store, 0,
+        app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
+            app.schedule_store, [FakeTreePath(0)],
         )
         app._schedule_save_button = MagicMock()
         app._schedule_pending = {}
@@ -355,7 +352,7 @@ class TestConfigSummary(unittest.TestCase):
         }
 
         selection = MagicMock()
-        selection.get_selected.return_value = (app.schedule_store, 0)
+        selection.get_selected_rows.return_value = (app.schedule_store, [FakeTreePath(0)])
 
         with patch("schedule_page.load_profile", return_value=saved_profile):
             schedule_page._on_selection_changed(selection, app)
@@ -379,7 +376,7 @@ class TestConfigSummary(unittest.TestCase):
             "dry_run": True,
         }
         selection = MagicMock()
-        selection.get_selected.return_value = (app.schedule_store, 0)
+        selection.get_selected_rows.return_value = (app.schedule_store, [FakeTreePath(0)])
 
         with patch("schedule_page.load_profile", return_value=saved_profile):
             schedule_page._on_selection_changed(selection, app)
@@ -690,6 +687,92 @@ class TestRunNow(unittest.TestCase):
             any("[p1] line2" in msg for msg in captured),
             f"Expected prefixed line2 in {captured}"
         )
+
+
+class TestScheduleDelete(unittest.TestCase):
+    """Verify the Delete button works with the MULTIPLE-selection TreeView."""
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+            return schedule_page
+
+    def _make_app(self, rows, selected_paths):
+        app = MagicMock()
+        app.schedule_store = FakeScheduleStore(rows)
+        app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
+            app.schedule_store, [FakeTreePath(p) for p in selected_paths],
+        )
+        app._schedule_save_button = MagicMock()
+        app._schedule_pending = {}
+        app._schedule_ignore_changes = False
+        app.schedule_cron_entries = {
+            "minute": MagicMock(),
+            "hour": MagicMock(),
+            "day": MagicMock(),
+            "month": MagicMock(),
+            "weekday": MagicMock(),
+        }
+        return app
+
+    @patch("schedule_page.set_button_markup_red")
+    @patch("schedule_page._refresh_profile_list")
+    @patch("schedule_page._regenerate_cron")
+    @patch("schedule_page.delete_profile")
+    @patch("schedule_page.Gtk.MessageDialog")
+    def test_delete_removes_first_selected_profile(
+        self, mock_dialog, mock_delete, mock_regenerate, mock_refresh, _mock_red
+    ):
+        schedule_page = self._import_schedule_page()
+        rows = [
+            [True, "p1", "backup", "0 2 * * *", "next", ""],
+            [False, "p2", "offsite", "0 3 * * *", "next", ""],
+        ]
+        app = self._make_app(rows, [0, 1])
+        mock_dialog.return_value.run.return_value = schedule_page.Gtk.ResponseType.YES
+
+        schedule_page.on_schedule_delete(app)
+
+        mock_delete.assert_called_once_with("p1")
+        mock_regenerate.assert_called_once_with(app)
+        mock_refresh.assert_called_once_with(app)
+
+    @patch("schedule_page.set_button_markup_red")
+    @patch("schedule_page._refresh_profile_list")
+    @patch("schedule_page._regenerate_cron")
+    @patch("schedule_page.delete_profile")
+    @patch("schedule_page.Gtk.MessageDialog")
+    def test_delete_cancel_does_nothing(
+        self, mock_dialog, mock_delete, mock_regenerate, mock_refresh, _mock_red
+    ):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "0 2 * * *", "next", ""]]
+        app = self._make_app(rows, [0])
+        mock_dialog.return_value.run.return_value = schedule_page.Gtk.ResponseType.NO
+
+        schedule_page.on_schedule_delete(app)
+
+        mock_delete.assert_not_called()
+        mock_regenerate.assert_not_called()
+        mock_refresh.assert_not_called()
+
+    @patch("schedule_page.set_button_markup_red")
+    @patch("schedule_page._refresh_profile_list")
+    @patch("schedule_page._regenerate_cron")
+    @patch("schedule_page.delete_profile")
+    @patch("schedule_page.log_msg")
+    def test_delete_with_no_selection_warns(
+        self, mock_log, mock_delete, mock_regenerate, mock_refresh, _mock_red
+    ):
+        schedule_page = self._import_schedule_page()
+        app = self._make_app([], [])
+
+        schedule_page.on_schedule_delete(app)
+
+        mock_log.assert_called_once_with("WARN: No profile selected")
+        mock_delete.assert_not_called()
+        mock_regenerate.assert_not_called()
+        mock_refresh.assert_not_called()
 
 
 if __name__ == "__main__":

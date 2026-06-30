@@ -625,7 +625,8 @@ The top pane lists every saved profile with columns:
 
 Click any column header to sort by **Profile Name**, **Type**, or **Next Run**.
 Click any row to select it; use **Ctrl**/**Shift**-click to select multiple rows.
-The detail pane below populates with the last selected profile's cron settings.
+The detail pane below populates with the first selected profile's cron settings
+(the first row in tree order when multiple rows are selected).
 
 ### Run Now
 

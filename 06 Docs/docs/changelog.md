@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.59.1
+
+### Changed
+
+- **Schedule tab multi-selection** — The profile list now uses GTK multi-selection
+  consistently. The detail pane, cron edits, revert, and delete actions read the
+  first selected row (in tree order) when multiple rows are selected. **Run Now**
+  continues to execute every selected profile.
+
+### Tests
+
+- Updated `tests/python/test_schedule_page.py` mocks and added
+  `TestScheduleDelete` to cover the new multi-selection Delete behavior.
+
 ## 0.59.0
 
 ### Added
