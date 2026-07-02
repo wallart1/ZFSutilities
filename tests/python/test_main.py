@@ -277,6 +277,24 @@ class TestMainSingleInstance(unittest.TestCase):
         first_app.run.assert_not_called()
         second_app.run.assert_not_called()
 
+    def test_pid_file_removed_without_post_run_is_remote_check(self):
+        app = self._make_app(remote=False)
+
+        def fail_if_called_after_run(*args, **kwargs):
+            raise AssertionError("get_is_remote() called after app.run()")
+
+        def mark_run_called(*args, **kwargs):
+            app.get_is_remote.side_effect = fail_if_called_after_run
+
+        app.run.side_effect = mark_run_called
+        app_class = self._make_app_class(app)
+        result = self._run_main(
+            ["main.py"], app_class,
+            alive_pids=set(), our_pids=set(), pid_states={}
+        )
+        app.run.assert_called_once()
+        self.assertFalse(os.path.exists(self._pid_path))
+
     def test_replace_passed_through_pkexec(self):
         result = self._run_main(
             ["main.py", "--replace"],

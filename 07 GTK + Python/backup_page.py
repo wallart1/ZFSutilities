@@ -485,12 +485,6 @@ def _is_dataset_encrypted(path):
 def on_backup_run(app, ctx):
     """Build step list and start backup execution."""
     app.clear_log_status()
-    if app.offsite_runner and app.offsite_runner.running:
-        log_msg("WARN: Cannot start backup while offsite backup is running")
-        return
-    if app.restore_runner and app.restore_runner.running:
-        log_msg("WARN: Cannot start backup while restore is running")
-        return
 
     nextsnap = app.backup_nextsnap_entry.get_text().strip()
     if not nextsnap:
@@ -612,6 +606,7 @@ def on_backup_run(app, ctx):
             attach_step_scrub_callbacks(
                 sr_step, row[1], row[2],
                 enabled=pause_scrubs, dry_run=dryrun,
+                log_func=app.backup_runner._runner_log,
             )
             steps.append(sr_step)
 

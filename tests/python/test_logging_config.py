@@ -152,6 +152,29 @@ class TestLogMsg(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_log_msg_session_log_file_kwarg(self):
+        """log_msg(session_log_file=...) overrides the env log target."""
+        sink = MagicMock()
+        set_log_sink(sink)
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_f:
+            env_path = env_f.name
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as explicit_f:
+            explicit_path = explicit_f.name
+        try:
+            os.environ["ZFSUTILITIES_LOG_FILE"] = env_path
+            log_msg("INFO: runner-local message", session_log_file=explicit_path)
+            self.assertTrue(
+                any("runner-local message" in m for m in
+                    [call[0][0] for call in sink.call_args_list])
+            )
+            with open(explicit_path) as fh:
+                self.assertIn("runner-local message", fh.read())
+            with open(env_path) as fh:
+                self.assertNotIn("runner-local message", fh.read())
+        finally:
+            os.unlink(env_path)
+            os.unlink(explicit_path)
+
     def test_log_msg_returns_full_message(self):
         result = log_msg("INFO: return value")
         self.assertIsNotNone(result)

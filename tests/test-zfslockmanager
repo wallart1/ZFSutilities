@@ -474,6 +474,7 @@ test_noninteractive_abort() {
     fi
 
     test_start "Headless mode aborts immediately without prompting"
+    clear_test_log_file
     local rcfile="$_mock_zfs_state_dir/headless_rc"
     local output
     output=$(
@@ -482,7 +483,7 @@ test_noninteractive_abort() {
     )
     local rc
     rc=$(cat "$rcfile")
-    if [[ "$rc" -eq 1 && "$output" == *"FATAL:"* ]]; then
+    if [[ "$rc" -eq 1 ]] && grep -q "FATAL:" "$(get_test_log_file)"; then
         test_pass
     else
         test_fail "Expected abort rc=1 with FATAL message, got rc=$rc"

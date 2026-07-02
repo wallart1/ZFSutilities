@@ -20,7 +20,7 @@ You are a meticulous coding agent. For every task:
 4. Execute only the approved plan.
 5. Always test and debug your work after executing the plan and before responding.
 6. Use concise, professional language.
-7. When displaying a plan file, DO NOT enclose it in a box. This will make copy/paste much easier.
+7. Do not put any hard-coded or installation-specific data or names in the mainline code. These must be entered by the user at runtime using text-based and GUI dialogs and will usually be saved in a saved configuration file.
 
 ## Hard Rules
 
@@ -305,7 +305,7 @@ If, when running the tests, the output is truncated, then break up the tests so 
 | `test-zfs-diagnose-busy`       | 8     | Diagnostic output from `zfs-diagnose-busy` — busy dataset causes                                              |
 | `test-zfsdelfs`                | 7     | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs`                                                        |
 | `test-zfsdelsnap`              | 7     | Snapshot deletion safety checks, hold release, and `zfscheckagainst` dependency sourcing                      |
-| `test-zfslockmanager`          | 33    | Lock acquire/release, conflict detection, hierarchy, stale cleanup                                            |
+| `test-zfslockmanager`          | 35    | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition |
 | `test-zfsretain`               | 10    | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
 | `test-zfs-send-receive-dryrun` | 19    | Dry-run logging, space checks, resume-token helpers, clone messages                                           |
 | `test-zfssnapbuild`            | 9     | Snapshot name generation, bucket logic, snapfile handling                                                     |

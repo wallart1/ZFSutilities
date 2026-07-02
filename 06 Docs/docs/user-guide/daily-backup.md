@@ -20,6 +20,10 @@ from the GUI's Backup tab.
 sudo zfsdailybackup
 ```
 
+The daily backup is not globally serialized with offsite or restore jobs.
+Multiple operations can run at the same time when they operate on disjoint
+datasets; per-dataset locks still prevent collisions on the same datasets.
+
 ## Step Failure Handling
 
 Different steps have different consequences when they fail:

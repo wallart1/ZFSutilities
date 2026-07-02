@@ -21,6 +21,10 @@ tab to configure the equivalent workflow.
    sudo zfssendoffsite
    ```
 
+   Offsite backups are not globally serialized with daily backups or restores.
+   Multiple operations can run concurrently when they operate on disjoint
+   datasets; per-dataset locks still prevent collisions on the same datasets.
+
 3. Export and remove the pool:
    
    ```bash

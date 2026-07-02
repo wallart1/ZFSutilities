@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.59.4
+
+### Added
+
+- **Concurrent Backup/Offsite/Restore GUI runners** — The Backup, Offsite, and
+  Restore tabs are no longer globally serialized. Multiple GUI runners can now
+  execute at the same time when they operate on disjoint datasets; per-dataset
+  locks still prevent collisions on the same datasets.
+- **Per-runner session logging** — `backup_runner.py` now routes its Python-level
+  log output through a runner-specific session log file via the new
+  `_runner_log()` helper and the `session_log_file=` keyword argument added to
+  `logging_config.log_msg()`. Concurrent runners no longer cross-write their
+  Python log messages into each other's session logs.
+- **Scrub callback log routing** — `scrub_manager.py` `pause_scrubs_for_pools()`,
+  `resume_scrubs_for_pools()`, and `attach_step_scrub_callbacks()` now accept an
+  optional `log_func` callback. Backup, Offsite, and Restore tabs pass the
+  runner's own log function so scrub pause/resume messages appear in the
+  correct session log.
+
+### Changed
+
+- **`move-vm-disk` zvol discovery** — The script now searches the entire target
+  pool for the backing zvol (not only the `proxmox` dataset) and places the
+  destination zvol in the same parent dataset as the source zvol. This supports
+  VMs whose disks live outside the `proxmox` dataset.
+- **`zfslockmanager` stale cleanup** — `zfslock_cleanup_stale()` now always
+  returns `0` and logs only when it actually removes stale lock files.
+- **GUI PID file cleanup** — `main.py` now removes the PID file only when this
+  process actually wrote it, avoiding an `is_remote()` check after `app.run()`
+  has already finalized the application object.
+
+### Tests
+
+- Added `tests/python/test_scrub_manager.py` tests for the `log_func` parameter
+  on `pause_scrubs_for_pools()`, `resume_scrubs_for_pools()`, and
+  `attach_step_scrub_callbacks()`.
+- Existing tests for `backup_page.py`, `backup_runner.py`, `logging_config.py`,
+  `main.py`, `offsite_page.py`, `restore_page.py`, and `test-zfslockmanager`
+  were updated to cover the concurrent-runner, per-runner logging, and stale-lock
+  cleanup changes.
+
+### Documentation
+
+- Updated `06 Docs/docs/user-guide/gtk-gui.md`, `daily-backup.md`,
+  `offsite-backup.md`, and `restore.md` to describe concurrent GUI runners and
+  per-runner session logs.
+- Updated `06 Docs/docs/developer-guide/concurrency-collisions.md` to reflect
+  that the GUI no longer globally serializes Backup/Offsite/Restore.
+- Updated `06 Docs/docs/commands-and-modules/two-node.md` `move-vm-disk` section
+  to describe the broader zvol discovery and destination-parent behavior.
+
 ## 0.59.3
 
 ### Added

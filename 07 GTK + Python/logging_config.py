@@ -211,12 +211,16 @@ def viewer_should_show(level, min_level):
     return _MSG_PRIORITY[level] >= _MSG_PRIORITY[min_level]
 
 
-def log_msg(*parts):
+def log_msg(*parts, session_log_file=None):
     """Log a message with file:line prefix, GUI sink, and session log file.
 
     All messages are always emitted (to the GUI sink or stderr) and appended
     to the session log file when one is configured. Filtering by message level
     is performed by the GUI log viewers.
+
+    If *session_log_file* is provided, it is used as the session log target
+    instead of the ``ZFSUTILITIES_LOG_FILE`` environment variable. This lets
+    concurrent runners keep their Python-level messages in their own logs.
     """
     msg = " ".join(str(p) for p in parts)
 
@@ -256,7 +260,8 @@ def log_msg(*parts):
         else:
             print(full, file=sys.stderr)
 
-    log_file = os.environ.get("ZFSUTILITIES_LOG_FILE")
+    log_file = session_log_file if session_log_file is not None \
+        else os.environ.get("ZFSUTILITIES_LOG_FILE")
     if log_file:
         try:
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

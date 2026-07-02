@@ -174,7 +174,7 @@ class BackupRunner:
             )
             index.save()
         except Exception as e:
-            log_msg(f"WARN: Could not update log index: {e}")
+            self._runner_log(f"WARN: Could not update log index: {e}")
 
     def _maybe_truncate_session_log(self):
         """Truncate the session log if it has grown beyond the cap.
@@ -187,17 +187,25 @@ class BackupRunner:
         if not self._session_log_file:
             return
         if truncate_session_log(self._session_log_file):
-            log_msg("WARN: Session log exceeded size cap and was truncated")
+            self._runner_log("WARN: Session log exceeded size cap and was truncated")
             try:
                 index = LogIndex.load()
                 index.remove(self._session_log_file)
                 index.save()
             except Exception as e:
-                log_msg(f"WARN: Could not reset log index after truncation: {e}")
+                self._runner_log(f"WARN: Could not reset log index after truncation: {e}")
 
     def _log(self, msg):
         """Log to the GUI panel and session log file."""
-        log_msg(msg)
+        self._runner_log(msg)
+
+    def _runner_log(self, msg):
+        """Log *msg* to the GUI sink and this runner's session log.
+
+        Uses the runner's own session log file so concurrent runners do not
+        write Python-level messages into each other's logs.
+        """
+        log_msg(msg, session_log_file=self._session_log_file)
 
     def start(self, on_complete=None):
         if self.running:
@@ -397,7 +405,7 @@ class BackupRunner:
                             self._in_lock_wait = True
                         elif "Lock is now available" in line or "Wait interrupted" in line:
                             self._in_lock_wait = False
-                        self.log(line)
+                        self._runner_log(line)
                         self._write_raw_line(line)
                     return True
             except OSError:
@@ -445,7 +453,7 @@ class BackupRunner:
                                 self._in_lock_wait = True
                             elif "Lock is now available" in segment or "Wait interrupted" in segment:
                                 self._in_lock_wait = False
-                            self.log(segment)
+                            self._runner_log(segment)
                             self._write_raw_line(segment)
                     return True
             except OSError:
@@ -475,7 +483,7 @@ class BackupRunner:
                     for line in data.decode("utf-8", errors="replace").splitlines():
                         if line.strip():
                             formatted = f"{desc}: {line}"
-                            self.log(formatted)
+                            self._runner_log(formatted)
                             self._write_raw_line(formatted)
                     return True
             except OSError:
@@ -582,7 +590,7 @@ class BackupRunner:
                                     self._total_bytes_received += _parse_human_size(
                                         received_match.group(1)
                                     )
-                                self.log(line)
+                                self._runner_log(line)
                                 self._write_raw_line(line)
             except (OSError, ValueError):
                 pass

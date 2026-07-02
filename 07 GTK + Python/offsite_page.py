@@ -404,12 +404,6 @@ def _on_step_remove(button, app):
 def on_offsite_run(app, ctx):
     """Build step list and start offsite backup execution."""
     app.clear_log_status()
-    if app.backup_runner and app.backup_runner.running:
-        log_msg("WARN: Cannot start offsite backup while daily backup is running")
-        return
-    if app.restore_runner and app.restore_runner.running:
-        log_msg("WARN: Cannot start offsite backup while restore is running")
-        return
 
     nextsnap = app.offsite_nextsnap_entry.get_text().strip()
     if not nextsnap:
@@ -476,6 +470,7 @@ def on_offsite_run(app, ctx):
         attach_step_scrub_callbacks(
             offsite_step, source, dest,
             enabled=pause_scrubs, dry_run=dryrun,
+            log_func=app.offsite_runner._runner_log,
         )
         steps.append(offsite_step)
 

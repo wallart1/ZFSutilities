@@ -77,6 +77,27 @@ class TestPrepareSessionLog(unittest.TestCase):
             if "ZFSUTILITIES_LOG_INHERIT" in os.environ:
                 del os.environ["ZFSUTILITIES_LOG_INHERIT"]
 
+    def test_runner_log_uses_own_session_log(self):
+        """_runner_log writes to the runner's file even if env points elsewhere."""
+        runner = self._runner()
+        other_log = os.path.join(tempfile.gettempdir(), "other-runner.log")
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                with _patch_log_dirs(tmpdir):
+                    runner.prepare_session_log()
+                    own_log = runner._session_log_file
+                    os.environ["ZFSUTILITIES_LOG_FILE"] = other_log
+                    runner._runner_log("INFO: own-log message")
+                    with open(own_log) as fh:
+                        self.assertIn("own-log message", fh.read())
+        finally:
+            if os.path.isfile(other_log):
+                os.unlink(other_log)
+            if "ZFSUTILITIES_LOG_FILE" in os.environ:
+                del os.environ["ZFSUTILITIES_LOG_FILE"]
+            if "ZFSUTILITIES_LOG_INHERIT" in os.environ:
+                del os.environ["ZFSUTILITIES_LOG_INHERIT"]
+
 
 class TestReceivedByteCounting(unittest.TestCase):
     """Byte counting works from stderr, stdout, and drain_remaining."""

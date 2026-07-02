@@ -208,5 +208,59 @@ class TestSourceChanged(unittest.TestCase):
         self.assertEqual(app.restore_dest_entry.get_text(), "manual-dest")
 
 
+class TestRestoreRunDialog(unittest.TestCase):
+    """Tests for on_restore_run() confirmation and start behaviour."""
+
+    def _make_app(self):
+        app = _restore_app(
+            source="backuppool/threeamigos/data",
+            dest="threeamigos/data",
+        )
+        app.backup_runner = MagicMock()
+        app.backup_runner.running = False
+        app.offsite_runner = MagicMock()
+        app.offsite_runner.running = False
+        app.restore_runner = MagicMock()
+        app.restore_runner.running = False
+        app.restore_runner._runner_log = MagicMock()
+        app.clear_log_status = MagicMock()
+        app.update_action_buttons = MagicMock()
+        app._dry_run_active = False
+        return app
+
+    def test_restore_runs_while_backup_active(self):
+        """Restore should not bail out just because backup is running."""
+        app = self._make_app()
+        app.backup_runner.running = True
+        app.restore_part1_check._active = True
+
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = rp.Gtk.ResponseType.OK
+
+        with patch.object(rp.Gtk, "MessageDialog", return_value=dialog_mock), \
+             patch.object(rp, "collect_restore_config", return_value={
+                 "source": "backuppool/threeamigos/data",
+                 "dest": "threeamigos/data",
+                 "auto_dest": False,
+                 "do_part1": True,
+                 "do_part2": False,
+                 "variables": {},
+                 "pause_scrubs": False,
+             }), \
+             patch.object(rp, "build_restore_command") as mock_build, \
+             patch.object(rp, "attach_step_scrub_callbacks"):
+            mock_build.return_value = MagicMock()
+            with patch.object(rp, "log_msg") as mock_log:
+                rp.on_restore_run(app, app.ctx)
+
+        app.restore_runner.prepare_session_log.assert_called_once()
+        app.restore_runner.set_steps.assert_called_once()
+        app.restore_runner.start.assert_called_once()
+        for call in mock_log.call_args_list:
+            msg = call[0][0].lower()
+            self.assertNotIn("while backup", msg)
+            self.assertNotIn("cannot start", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

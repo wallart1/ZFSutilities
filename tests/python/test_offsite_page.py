@@ -294,6 +294,7 @@ class TestOffsiteRunDialog(unittest.TestCase):
         app.backup_runner.running = False
         app.offsite_runner = MagicMock()
         app.offsite_runner.running = False
+        app.offsite_runner._runner_log = MagicMock()
         app.restore_runner = MagicMock()
         app.restore_runner.running = False
         app._dry_run_active = False
@@ -341,6 +342,64 @@ class TestOffsiteRunDialog(unittest.TestCase):
 
         mock_generate.assert_not_called()
         app.offsite_runner.prepare_session_log.assert_not_called()
+
+    def test_offsite_runs_while_backup_active(self):
+        """Offsite should no longer bail out just because backup is running."""
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = _FakeComboBoxText
+
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = op.Gtk.ResponseType.OK
+
+        app = self._make_app()
+        app.backup_runner.running = True
+
+        with patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock), \
+             patch.object(op, "do_detect_offsite_pool", return_value="z40tb"), \
+             patch.object(op, "collect_offsite_config", return_value={
+                 "steps": [
+                     {"active": True, "source": "fivebays/a",
+                      "dest": "<offsite>/a", "includes": "", "excludes": ""},
+                 ],
+                 "variables": {},
+             }):
+            with patch.object(op, "log_msg") as mock_log:
+                op.on_offsite_run(app, app.ctx)
+
+        app.offsite_runner.prepare_session_log.assert_called_once()
+        app.offsite_runner.set_steps.assert_called_once()
+        app.offsite_runner.start.assert_called_once()
+        for call in mock_log.call_args_list:
+            self.assertNotIn("daily backup", call[0][0].lower())
+
+    def test_offsite_runs_while_restore_active(self):
+        """Offsite should no longer bail out just because restore is running."""
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = _FakeComboBoxText
+
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = op.Gtk.ResponseType.OK
+
+        app = self._make_app()
+        app.restore_runner.running = True
+
+        with patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock), \
+             patch.object(op, "do_detect_offsite_pool", return_value="z40tb"), \
+             patch.object(op, "collect_offsite_config", return_value={
+                 "steps": [
+                     {"active": True, "source": "fivebays/a",
+                      "dest": "<offsite>/a", "includes": "", "excludes": ""},
+                 ],
+                 "variables": {},
+             }):
+            with patch.object(op, "log_msg") as mock_log:
+                op.on_offsite_run(app, app.ctx)
+
+        app.offsite_runner.prepare_session_log.assert_called_once()
+        app.offsite_runner.set_steps.assert_called_once()
+        app.offsite_runner.start.assert_called_once()
+        for call in mock_log.call_args_list:
+            self.assertNotIn("restore", call[0][0].lower())
 
 
 if __name__ == "__main__":

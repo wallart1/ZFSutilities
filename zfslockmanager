@@ -228,7 +228,10 @@ zfslock_cleanup_stale() {
         [[ -f "$pidfile" ]] || continue
         kill -0 "$(basename "$pidfile")" 2>/dev/null || rm -f "$pidfile"
     done
-    [[ $removed -gt 0 ]] && log_msg "INFO: Removed $removed stale lock(s)"
+    if [[ $removed -gt 0 ]]; then
+        log_msg "INFO: Removed $removed stale lock(s)"
+    fi
+    return 0
 }
 
 # Check a single lock file for conflict or re-entry.

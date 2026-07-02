@@ -389,12 +389,6 @@ def _set_button_markup(widget, markup):
 def on_restore_run(app, ctx):
     """Build restore command and start execution."""
     app.clear_log_status()
-    if app.backup_runner and app.backup_runner.running:
-        log_msg("WARN: Cannot start restore while backup is running")
-        return
-    if app.offsite_runner and app.offsite_runner.running:
-        log_msg("WARN: Cannot start restore while offsite backup is running")
-        return
 
     restore_cfg = collect_restore_config(app)
     source = restore_cfg["source"]
@@ -480,6 +474,7 @@ def on_restore_run(app, ctx):
     attach_step_scrub_callbacks(
         step, source, dest,
         enabled=restore_cfg.get("pause_scrubs", False), dry_run=dryrun,
+        log_func=app.restore_runner._runner_log,
     )
     log_msg(f"INFO: Starting restore: {source} -> {dest}")
     app.restore_runner.set_steps([step])

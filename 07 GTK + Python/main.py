@@ -469,6 +469,7 @@ def main():
         _terminate_with_wait(matching_pid)
 
     app = None
+    own_pid_file = False
     try:
         app = ZFSUtilitiesApp(flags=flags)
         app.register(cancellable=None)
@@ -495,6 +496,7 @@ def main():
                     "startup aborted"
                 )
                 return
+        own_pid_file = True
         _write_pid_file(our_pid)
         app.run(None)
     except Exception:
@@ -504,7 +506,7 @@ def main():
             traceback.print_exc(file=f)
         raise
     finally:
-        if app is not None and not app.get_is_remote():
+        if own_pid_file:
             _remove_pid_file_if_ours(our_pid)
 
 

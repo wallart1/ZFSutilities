@@ -772,6 +772,80 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         self.assertIsNone(step.pre_callback)
         self.assertIsNone(step.post_callback)
 
+    def test_pause_scrubs_for_pools_uses_custom_log_func(self):
+        """pause_scrubs_for_pools routes messages through log_func when given."""
+        repo = MagicMock()
+        repo.pause_scrub.return_value = True
+        states = {"src": self._state(sm.ScrubState.SCANNING)}
+        custom_log = MagicMock()
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                with patch.object(
+                    sm, "get_all_pool_scrub_states", return_value=states
+                ):
+                    paused = sm.pause_scrubs_for_pools(
+                        ["src"], repo=repo, dry_run=False, log_func=custom_log
+                    )
+                self.assertEqual(paused, ["src"])
+                self.assertTrue(
+                    any("Pausing scrub" in call[0][0]
+                        for call in custom_log.call_args_list)
+                )
+                self.assertTrue(
+                    any("Scrub paused" in call[0][0]
+                        for call in custom_log.call_args_list)
+                )
+
+    def test_resume_scrubs_for_pools_uses_custom_log_func(self):
+        """resume_scrubs_for_pools routes messages through log_func when given."""
+        repo = MagicMock()
+        repo.resume_scrub.return_value = True
+        states = {"src": self._state(sm.ScrubState.PAUSED)}
+        custom_log = MagicMock()
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                with patch.object(
+                    sm, "get_all_pool_scrub_states", return_value=states
+                ):
+                    sm.resume_scrubs_for_pools(
+                        ["src"], repo=repo, dry_run=False, log_func=custom_log
+                    )
+                self.assertTrue(
+                    any("Resuming scrub" in call[0][0]
+                        for call in custom_log.call_args_list)
+                )
+                self.assertTrue(
+                    any("Scrub resumed" in call[0][0]
+                        for call in custom_log.call_args_list)
+                )
+
+    def test_attach_step_scrub_callbacks_passes_log_func_to_callbacks(self):
+        """Callbacks created by attach_step_scrub_callbacks use the supplied log_func."""
+        from command_builders import BashStep
+
+        step = BashStep([], "send")
+        custom_log = MagicMock()
+        repo = MagicMock()
+        repo.pause_scrub.return_value = True
+        states = {"src": self._state(sm.ScrubState.SCANNING)}
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                with patch.object(
+                    sm, "get_all_pool_scrub_states", return_value=states
+                ):
+                    sm.attach_step_scrub_callbacks(
+                        step, "src/a", "src/b",
+                        enabled=True, dry_run=False, log_func=custom_log
+                    )
+                    step.pre_callback()
+        self.assertTrue(
+            any("Pausing scrub" in call[0][0]
+                for call in custom_log.call_args_list)
+        )
+
 
 class TestSystemScrubHelpers(unittest.TestCase):
 

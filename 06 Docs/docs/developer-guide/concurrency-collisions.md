@@ -28,8 +28,10 @@ Only two modules currently use the lock manager:
 * **`zfsdelsnap`** acquires a `w` lock on the parent dataset before deleting a
   snapshot.
 
-The GUI also prevents `Backup`, `Offsite`, and `Restore` runners from starting
-while another of those three is already running.
+The GUI no longer globally serializes `Backup`, `Offsite`, and `Restore`.
+All three may run concurrently; per-dataset locks still serialize them when
+they touch the same datasets. Each GUI runner keeps its Python-level log
+output in its own session log so concurrent runs do not cross-write.
 
 Everything else runs without coordination.
 

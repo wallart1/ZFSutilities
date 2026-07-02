@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 from backup_config import log_msg
 from file_locking import scrub_state_lock_read, scrub_state_lock_write
@@ -350,14 +350,19 @@ def _pool_from_dataset(dataset: str) -> Optional[str]:
 
 
 def pause_scrubs_for_pools(pool_names: List[str], repo=None,
-                           dry_run: bool = False) -> List[str]:
+                           dry_run: bool = False,
+                           log_func: Optional[Callable] = None) -> List[str]:
     """Pause any running scrubs on *pool_names* and mark them user-paused.
 
     Returns the list of pools whose scrubs were actually paused (only pools
     that were scanning are paused). In dry-run mode no system state is changed
     and the returned list contains the pools that would have been paused.
+
+    If *log_func* is provided, it is used instead of the global ``log_msg``
+    for all messages produced by this call.
     """
     repo = repo or get_default_repository()
+    _log = log_func or log_msg
     names = [n for n in pool_names if n]
     if not names:
         return []
@@ -375,38 +380,43 @@ def pause_scrubs_for_pools(pool_names: List[str], repo=None,
     for name in names:
         info = states.get(name)
         if info is None:
-            log_msg(f"INFO: Pool '{name}' is not online; skipping scrub pause")
+            _log(f"INFO: Pool '{name}' is not online; skipping scrub pause")
             continue
         if info.state != ScrubState.SCANNING:
-            log_msg(
+            _log(
                 f"INFO: Scrub on '{name}' is {info.state.value}; "
                 f"not pausing"
             )
             continue
         if dry_run:
-            log_msg(f"INFO: Dry-run: would pause scrub on '{name}'")
+            _log(f"INFO: Dry-run: would pause scrub on '{name}'")
             paused.append(name)
             continue
-        log_msg(f"INFO: Pausing scrub on '{name}'")
+        _log(f"INFO: Pausing scrub on '{name}'")
         try:
             if repo.pause_scrub(name, timeout=30):
-                log_msg(f"INFO: Scrub paused on '{name}'")
+                _log(f"INFO: Scrub paused on '{name}'")
                 paused.append(name)
             else:
-                log_msg(f"WARN: Failed to pause scrub on '{name}'")
+                _log(f"WARN: Failed to pause scrub on '{name}'")
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            log_msg(f"WARN: cannot pause scrub on '{name}': {exc}")
+            _log(f"WARN: cannot pause scrub on '{name}': {exc}")
     return paused
 
 
 def resume_scrubs_for_pools(pool_names: List[str], repo=None,
-                            dry_run: bool = False) -> None:
+                            dry_run: bool = False,
+                            log_func: Optional[Callable] = None) -> None:
     """Resume scrubs that were paused by pause_scrubs_for_pools().
 
     Pools that were not actually paused (e.g., already finished or paused)
     are left alone. In dry-run mode no system state is changed.
+
+    If *log_func* is provided, it is used instead of the global ``log_msg``
+    for all messages produced by this call.
     """
     repo = repo or get_default_repository()
+    _log = log_func or log_msg
     names = [n for n in pool_names if n]
     if not names:
         return
@@ -422,35 +432,39 @@ def resume_scrubs_for_pools(pool_names: List[str], repo=None,
     for name in names:
         info = states.get(name)
         if info is None:
-            log_msg(f"INFO: Pool '{name}' is not online; skipping scrub resume")
+            _log(f"INFO: Pool '{name}' is not online; skipping scrub resume")
             continue
         if info.state != ScrubState.PAUSED:
-            log_msg(
+            _log(
                 f"INFO: Scrub on '{name}' is {info.state.value}; "
                 f"not resuming"
             )
             continue
         if dry_run:
-            log_msg(f"INFO: Dry-run: would resume scrub on '{name}'")
+            _log(f"INFO: Dry-run: would resume scrub on '{name}'")
             continue
-        log_msg(f"INFO: Resuming scrub on '{name}'")
+        _log(f"INFO: Resuming scrub on '{name}'")
         try:
             if repo.resume_scrub(name, timeout=30):
-                log_msg(f"INFO: Scrub resumed on '{name}'")
+                _log(f"INFO: Scrub resumed on '{name}'")
             else:
-                log_msg(f"WARN: Failed to resume scrub on '{name}'")
+                _log(f"WARN: Failed to resume scrub on '{name}'")
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            log_msg(f"WARN: cannot resume scrub on '{name}': {exc}")
+            _log(f"WARN: cannot resume scrub on '{name}': {exc}")
 
 
 def attach_step_scrub_callbacks(step, source: str, dest: str,
-                                enabled: bool, dry_run: bool = False) -> None:
+                                enabled: bool, dry_run: bool = False,
+                                log_func: Optional[Callable] = None) -> None:
     """Attach pre/post callbacks to a BashStep to pause/resume scrubs.
 
     The callbacks pause scrubs on the pools referenced by *source* and *dest*
     immediately before the step runs and resume them after the step finishes.
     If *enabled* is False, or if no local pools are found, the callbacks are
     left unset.
+
+    If *log_func* is provided, scrub pause/resume messages are routed through
+    it instead of the global ``log_msg``.
     """
     if not enabled:
         return
@@ -465,13 +479,14 @@ def attach_step_scrub_callbacks(step, source: str, dest: str,
     def pre_callback():
         nonlocal paused_pools
         paused_pools = pause_scrubs_for_pools(
-            pools, dry_run=dry_run
+            pools, dry_run=dry_run, log_func=log_func
         )
 
     def post_callback():
         nonlocal paused_pools
         if paused_pools:
-            resume_scrubs_for_pools(paused_pools, dry_run=dry_run)
+            resume_scrubs_for_pools(paused_pools, dry_run=dry_run,
+                                    log_func=log_func)
             paused_pools = []
 
     step.pre_callback = pre_callback

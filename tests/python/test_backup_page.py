@@ -283,6 +283,7 @@ class _FakeBackupApp:
     def __init__(self):
         self.backup_runner = MagicMock()
         self.backup_runner.running = False
+        self.backup_runner._runner_log = MagicMock()
         self.offsite_runner = MagicMock()
         self.offsite_runner.running = False
         self.restore_runner = MagicMock()
@@ -407,6 +408,58 @@ class TestBackupRunDialog(unittest.TestCase):
                 dryrun=False,
                 fatal=False,
             )
+
+    def test_backup_runs_while_offsite_active(self):
+        """Backup should no longer bail out just because offsite is running."""
+        with mock_gtk():
+            import backup_page
+
+        app = _FakeBackupApp()
+        app.backup_nextsnap_entry.set_text("@daily-2026-06-11T12:00-d")
+        app.offsite_runner.running = True
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
+        backup_page.Gtk.MessageDialog.return_value = dialog_mock
+
+        with self._patch_run(backup_page):
+            backup_page.collect_backup_config.return_value = {
+                "variables": {},
+                "post_steps": {"run_retention": True, "remove_snapfile": False},
+            }
+            with patch.object(backup_page, "log_msg") as mock_log:
+                backup_page.on_backup_run(app, app.ctx)
+
+        app.backup_runner.prepare_session_log.assert_called_once()
+        app.backup_runner.set_steps.assert_called_once()
+        app.backup_runner.start.assert_called_once()
+        for call in mock_log.call_args_list:
+            self.assertNotIn("offsite", call[0][0].lower())
+
+    def test_backup_runs_while_restore_active(self):
+        """Backup should no longer bail out just because restore is running."""
+        with mock_gtk():
+            import backup_page
+
+        app = _FakeBackupApp()
+        app.backup_nextsnap_entry.set_text("@daily-2026-06-11T12:00-d")
+        app.restore_runner.running = True
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
+        backup_page.Gtk.MessageDialog.return_value = dialog_mock
+
+        with self._patch_run(backup_page):
+            backup_page.collect_backup_config.return_value = {
+                "variables": {},
+                "post_steps": {"run_retention": True, "remove_snapfile": False},
+            }
+            with patch.object(backup_page, "log_msg") as mock_log:
+                backup_page.on_backup_run(app, app.ctx)
+
+        app.backup_runner.prepare_session_log.assert_called_once()
+        app.backup_runner.set_steps.assert_called_once()
+        app.backup_runner.start.assert_called_once()
+        for call in mock_log.call_args_list:
+            self.assertNotIn("restore", call[0][0].lower())
 
 
 if __name__ == "__main__":

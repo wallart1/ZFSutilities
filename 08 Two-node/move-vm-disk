@@ -471,7 +471,9 @@ else
     if [[ "$SRC_LINE" =~ ^${SRCKEY}:\ *([^:]+):vm-([0-9]+)-disk-([0-9]+) ]]; then
         POOL="${BASH_REMATCH[1]}"
         SRCBACKSTORE="vm-${BASH_REMATCH[2]}-disk-${BASH_REMATCH[3]}"
-        SRCZVOL="${POOL}/proxmox/${SRCBACKSTORE}"
+        SRCZVOL=$(zfs list -H -t volume -o name -r "${POOL}" 2>/dev/null \
+            | grep "/${SRCBACKSTORE}$" | head -1)
+        [[ -n "$SRCZVOL" ]] || die "Could not find zvol ${SRCBACKSTORE} under pool ${POOL}"
     else
         die "Disk line for $SRCKEY does not look like a ZFS-backed disk in VM $SRCVMID:\n  $SRC_LINE"
     fi
@@ -492,7 +494,7 @@ backstore=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
     | head -1)
 [[ -n "$backstore" ]] || { echo "ERROR:BACKSTORE_NOT_FOUND" >&2; exit 1; }
 
-zvol=$(zfs list -H -t volume -o name -r "${POOL}/proxmox" 2>/dev/null | grep "/proxmox/${backstore}$" | head -1)
+zvol=$(zfs list -H -t volume -o name -r "${POOL}" 2>/dev/null | grep "/${backstore}$" | head -1)
 [[ -n "$zvol" ]] || { echo "ERROR:ZVOL_NOT_FOUND" >&2; exit 1; }
 
 size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
@@ -522,7 +524,9 @@ fi
 
 DISKNUM=$(disk_num_from_key "$DSTKEY")
 DSTBACKSTORE="vm-${DSTVMID}-disk-${DISKNUM}"
-DSTZVOL="${POOL}/proxmox/${DSTBACKSTORE}"
+# Place the destination zvol in the same parent dataset as the source zvol.
+SRC_DATASET="${SRCZVOL%/*}"
+DSTZVOL="${SRC_DATASET}/${DSTBACKSTORE}"
 
 check_dst_zvol_free
 

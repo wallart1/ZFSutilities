@@ -116,6 +116,10 @@ for details on the priority tokens.
     (dataset lists, `zfs receive` progress, separator lines, etc.). Use the
     [Logs tab](#logs-tab) to browse and search them.
 
+    When multiple GUI runners are active at the same time (for example, a Backup
+    and an Offsite job running concurrently), each runner writes its Python-level
+    messages to its own session log so the logs do not cross-write.
+
     Scheduled backup profiles also stream rsync pull-step output (both remote
     pulls and local pulls that resolve to the current host) to
     `/var/log/zfsutilities/rsync-pull.log` instead of the session log, so the
@@ -510,6 +514,12 @@ While a backup runs, messages stream to the log panel and any interactive
 prompts from the job may be responded to in the **Input** entry next to the
 **Send** button.
 
+!!! note "Concurrent GUI runners"
+    The Backup, Offsite, and Restore tabs are no longer globally serialized.
+    You can start a backup while an offsite or restore job is running, provided
+    they operate on disjoint datasets. Per-dataset locks still prevent two jobs
+    from modifying the same dataset at the same time.
+
 ---
 
 ## Offsite Tab
@@ -545,6 +555,11 @@ This tab configures offsite backups ([`zfssendoffsite`](../commands-and-modules/
 | **Revert Config**            | Reloads from JSON and refreshes the detected pool label                                                                                                                                                                                                          |
 | **Add Profile to Schedule**  | Saves a copy of the current offsite settings as a profile in the Schedule tab.                                                                                                                                                                                              |
 | **Recall Profile**           | Loads a previously-saved offsite profile into this tab for editing or on-demand execution                                                                                                                                                                        |
+
+!!! note "Concurrent GUI runners"
+    The Offsite tab can run at the same time as the Backup or Restore tabs when
+    the operations touch disjoint datasets. Per-dataset locks prevent collisions
+    on the same datasets.
 
 ---
 
@@ -595,6 +610,11 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
 | **Revert Config**           | Reloads from saved settings                                                                                                                                           |
 | **Add Profile to Schedule** | Saves the current restore settings as a profile in the Schedule tab.                                                                                            |
 | **Recall Profile**          | Loads a previously-saved Schedule tab profile into this tab for editing or on-demand execution. Click the Add Profile to Schedule button to save changes to the schedule. |
+
+!!! note "Concurrent GUI runners"
+    The Restore tab can run at the same time as the Backup or Offsite tabs when
+    the operations touch disjoint datasets. Per-dataset locks prevent collisions
+    on the same datasets.
 
 ### Scrub profiles
 

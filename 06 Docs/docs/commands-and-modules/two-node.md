@@ -649,6 +649,8 @@ sudo move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
 
 1. Validate arguments; `--continue`/`--rollback` must run on the compute host.
 2. Parse the source disk line to determine pool, target, LUN, and backing zvol.
+   The zvol is discovered by searching the entire pool for the backstore name,
+   so disks living outside the `proxmox` dataset are handled correctly.
 3. Verify both VMs are stopped and the destination zvol name is free.
 4. Write an initial state file (`/tmp/move-vm-disk-<src>-<dst>-<timestamp>.state`).
 5. Prompt for confirmation.
@@ -657,6 +659,8 @@ sudo move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
    - Remove the source entry from `expected-backstores.txt` and
      `iscsi-encrypted-luns.conf` if encrypted.
    - `zfs rename` the zvol to the destination name.
+   - The destination zvol is placed in the same parent dataset as the source
+     zvol (for example, `pool/custom/vm-100-disk-0` → `pool/custom/vm-200-disk-0`).
    - Create the new backstore and LUN, reusing the original LUN number if possible.
    - Add the destination entry to the manifests.
    - Save iSCSI config via `safe-iscsi-save`.

@@ -44,6 +44,10 @@ common snapshot followed by an incremental copy that brings the destination up
 to date. Customize and use [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore),
 which automates this two-step process.
 
+Restore operations are not globally serialized with daily or offsite backups.
+Multiple operations can run concurrently when they operate on disjoint datasets;
+per-dataset locks still prevent collisions on the same datasets.
+
 For details of the two-step restore, see the
 [Architecture - Restore Flow](../developer-guide/architecture.md#restore-flow).
 
