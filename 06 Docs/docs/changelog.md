@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.59.3
+
+### Added
+
+- **Scrub command debug logging** — `zfs_repository.py` and `zfsscruball` now
+  log the exact `zpool scrub` command they are about to issue at `DEBUG` level,
+  making it easier to trace scrub lifecycle in session logs.
+
+### Changed
+
+- **ZFS step output ordering in session logs** — `backup_runner.py` now merges
+  child `stdout` into `stderr` for non-rsync steps. This keeps bash `echo`
+  separators and `log_msg` / `zfs` output in their original interleaved order
+  in the captured session log. Rsync steps keep separate stdout and stderr
+  streams because rsync stdout is written to a dedicated log file.
+
+### Fixed
+
+- **`move-vm-disk` zvol lookup scope** — The script now searches for the backing
+  zvol only under the target pool's `proxmox` dataset (`zfs list -r
+  ${POOL}/proxmox`) instead of scanning every volume on the system, avoiding
+  mismatches when the same backstore name exists on multiple pools.
+
+### Tests
+
+- Added `test_merged_output_preserves_input_order`,
+  `test_non_rsync_merges_stderr_into_stdout`, and
+  `test_rsync_keeps_separate_stdout_and_stderr` to
+  `tests/python/test_backup_runner.py`.
+- Added scrub-command debug-log tests to `tests/python/test_zfs_repository.py`.
+- Updated `tests/test-zfsscruball` to assert the new `DEBUG` messages before
+  `zpool scrub -w` and `zpool scrub -p`.
+
 ## 0.59.2
 
 ### Changed

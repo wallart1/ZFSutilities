@@ -291,10 +291,21 @@ class BackupRunner:
             child_env = os.environ.copy()
             if self._session_log_file:
                 child_env["ZFSUTILITIES_LOG_INHERIT"] = "Y"
-            self.process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=slave_fd,
-                env=child_env,
-            )
+            # For ZFS steps, merge stdout into stderr so that bash stdout
+            # (echo separators) and stderr (log_msg / zfs output) keep their
+            # original order in the captured session log. Rsync steps keep
+            # separate streams because rsync stdout is written to a dedicated
+            # log file.
+            if is_rsync:
+                self.process = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    stdin=slave_fd, env=child_env,
+                )
+            else:
+                self.process = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    stdin=slave_fd, env=child_env,
+                )
         except (OSError, FileNotFoundError) as e:
             os.close(master_fd)
             os.close(slave_fd)
@@ -307,7 +318,8 @@ class BackupRunner:
         self.set_stdin_enabled(True)
 
         os.set_blocking(self.process.stdout.fileno(), False)
-        os.set_blocking(self.process.stderr.fileno(), False)
+        if self.process.stderr is not None:
+            os.set_blocking(self.process.stderr.fileno(), False)
 
         if is_rsync:
             _ensure_rsync_log_dir()
@@ -317,16 +329,23 @@ class BackupRunner:
             except OSError:
                 self._rsync_log_fh = None
 
-        out_cb = self._on_rsync_stdout if is_rsync else self._on_stdout
-        err_cb = self._on_rsync_stderr if is_rsync else self._on_stderr
-        self._stdout_source = GLib.io_add_watch(
-            self.process.stdout.fileno(), GLib.PRIORITY_DEFAULT,
-            GLib.IOCondition.IN | GLib.IOCondition.HUP, out_cb,
-        )
-        self._stderr_source = GLib.io_add_watch(
-            self.process.stderr.fileno(), GLib.PRIORITY_DEFAULT,
-            GLib.IOCondition.IN | GLib.IOCondition.HUP, err_cb,
-        )
+        if is_rsync:
+            out_cb = self._on_rsync_stdout
+            err_cb = self._on_rsync_stderr
+            self._stdout_source = GLib.io_add_watch(
+                self.process.stdout.fileno(), GLib.PRIORITY_DEFAULT,
+                GLib.IOCondition.IN | GLib.IOCondition.HUP, out_cb,
+            )
+            self._stderr_source = GLib.io_add_watch(
+                self.process.stderr.fileno(), GLib.PRIORITY_DEFAULT,
+                GLib.IOCondition.IN | GLib.IOCondition.HUP, err_cb,
+            )
+        else:
+            # Merged output: everything arrives via stdout.
+            self._stdout_source = GLib.io_add_watch(
+                self.process.stdout.fileno(), GLib.PRIORITY_DEFAULT,
+                GLib.IOCondition.IN | GLib.IOCondition.HUP, self._on_stderr,
+            )
         GLib.timeout_add(250, self._check_process)
         return True
 

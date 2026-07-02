@@ -66,6 +66,7 @@ function do_pause {
     for pool in $(zpool list -Ho name); do
         if zpool status "$pool" 2>/dev/null | grep -q "scrub in progress"; then
             log_msg "INFO: Pausing scrub on $pool."
+            log_msg "DEBUG: issuing zpool scrub command: zpool scrub -p $pool"
             zpool scrub -p "$pool"
             found=1
         fi
@@ -170,6 +171,7 @@ function do_scrubs {
             bash -c '
                 source ~/bashinit
                 log_msg "INFO: Started scrubbing $1."
+                log_msg "DEBUG: issuing zpool scrub command: ionice -c3 zpool scrub -w $1"
                 ionice -c3 zpool scrub -w "$1" \
                 && { log_msg "INFO: ✓ Finished scrubbing $1."; echo "$1" >> "$STATEFILE"; } \
                 || log_msg "WARN: ✗ Failed to scrub $1."

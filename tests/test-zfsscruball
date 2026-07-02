@@ -55,7 +55,8 @@ test_scrub_runs_selected_pool() {
 
     poolarray=(testpool)
     parallel=2
-    do_start
+    local output
+    output=$(do_start 2>&1)
 
     test_start "Runs zpool scrub -w on selected pool"
     if [[ -f "$ZFSLOCK_TEST_SCRUB_LOG" ]] && grep -q '^testpool$' "$ZFSLOCK_TEST_SCRUB_LOG"; then
@@ -63,6 +64,10 @@ test_scrub_runs_selected_pool() {
     else
         test_fail "Expected scrub log to contain 'testpool', got $(cat "$ZFSLOCK_TEST_SCRUB_LOG" 2>/dev/null)"
     fi
+
+    test_start "Logs DEBUG message before issuing zpool scrub -w"
+    assert_contains "$output" \
+        "DEBUG: issuing zpool scrub command: ionice -c3 zpool scrub -w testpool"
 }
 
 test_resume_skips_completed_pools() {
@@ -106,7 +111,8 @@ test_pause_scrubs_in_progress() {
 
     source "$old_mydir/zfsscruball"
 
-    do_pause
+    local output
+    output=$(do_pause 2>&1)
 
     test_start "Pauses pools with an in-progress scrub"
     if [[ -f "$ZFSLOCK_TEST_PAUSE_LOG" ]] && grep -q '^activepool$' "$ZFSLOCK_TEST_PAUSE_LOG"; then
@@ -114,6 +120,10 @@ test_pause_scrubs_in_progress() {
     else
         test_fail "Expected pause log to contain 'activepool', got $(cat "$ZFSLOCK_TEST_PAUSE_LOG" 2>/dev/null)"
     fi
+
+    test_start "Logs DEBUG message before issuing zpool scrub -p"
+    assert_contains "$output" \
+        "DEBUG: issuing zpool scrub command: zpool scrub -p activepool"
 }
 
 # ---------------------------------------------------------------------------

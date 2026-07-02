@@ -3,7 +3,7 @@
 import os
 import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import sys
 
@@ -11,6 +11,8 @@ REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
+
+from test_support import capture_logs
 
 from zfs_repository import (
     ZfsRepository,
@@ -269,6 +271,87 @@ class TestPoolStatusErrors(unittest.TestCase):
         errors = repo.pool_status_errors("tank")
         self.assertFalse(errors["has_errors"])
         self.assertEqual(errors["errors_summary"], "status unavailable")
+
+
+class TestScrubCommandsLogDebug(unittest.TestCase):
+    """ZfsRepository scrub methods must log the command at DEBUG level."""
+
+    def _mock_run(self):
+        """Return a mock subprocess.run that reports success."""
+        mock = MagicMock()
+        mock.return_value.returncode = 0
+        return mock
+
+    def _assert_scrub_log(self, logs, expected_cmd):
+        """Assert at least one captured log contains the expected DEBUG text."""
+        needle = f"DEBUG: issuing zpool scrub command: {expected_cmd}"
+        self.assertTrue(
+            any(needle in entry for entry in logs),
+            f"Expected log containing '{needle}', got: {logs}",
+        )
+
+    def test_start_scrub_logs_debug(self):
+        with patch("zfs_repository.subprocess.run", self._mock_run()) as mock_run:
+            with capture_logs() as logs:
+                repo = ZfsRepository()
+                self.assertTrue(repo.start_scrub("tank"))
+        mock_run.assert_called_once_with(
+            ["zpool", "scrub", "tank"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=None,
+        )
+        self._assert_scrub_log(logs, "zpool scrub tank")
+
+    def test_pause_scrub_logs_debug(self):
+        with patch("zfs_repository.subprocess.run", self._mock_run()) as mock_run:
+            with capture_logs() as logs:
+                repo = ZfsRepository()
+                self.assertTrue(repo.pause_scrub("tank"))
+        mock_run.assert_called_once_with(
+            ["zpool", "scrub", "-p", "tank"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=None,
+        )
+        self._assert_scrub_log(logs, "zpool scrub -p tank")
+
+    def test_resume_scrub_logs_debug(self):
+        with patch("zfs_repository.subprocess.run", self._mock_run()) as mock_run:
+            with capture_logs() as logs:
+                repo = ZfsRepository()
+                self.assertTrue(repo.resume_scrub("tank"))
+        mock_run.assert_called_once_with(
+            ["zpool", "scrub", "tank"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=None,
+        )
+        self._assert_scrub_log(logs, "zpool scrub tank")
+
+    def test_stop_scrub_logs_debug(self):
+        with patch("zfs_repository.subprocess.run", self._mock_run()) as mock_run:
+            with capture_logs() as logs:
+                repo = ZfsRepository()
+                self.assertTrue(repo.stop_scrub("tank"))
+        mock_run.assert_called_once_with(
+            ["zpool", "scrub", "-s", "tank"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=None,
+        )
+        self._assert_scrub_log(logs, "zpool scrub -s tank")
+
+    def test_sudo_scrub_logs_debug(self):
+        with patch("zfs_repository.subprocess.run", self._mock_run()):
+            with capture_logs() as logs:
+                repo = ZfsRepository(sudo=True)
+                repo.start_scrub("tank")
+        self._assert_scrub_log(logs, "sudo zpool scrub tank")
 
 
 if __name__ == "__main__":

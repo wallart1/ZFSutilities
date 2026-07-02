@@ -20,6 +20,7 @@ You are a meticulous coding agent. For every task:
 4. Execute only the approved plan.
 5. Always test and debug your work after executing the plan and before responding.
 6. Use concise, professional language.
+7. When displaying a plan file, DO NOT enclose it in a box. This will make copy/paste much easier.
 
 ## Hard Rules
 

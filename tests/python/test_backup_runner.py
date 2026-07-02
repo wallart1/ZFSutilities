@@ -2,6 +2,7 @@
 
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -494,6 +495,89 @@ class TestStepCallbacks(unittest.TestCase):
         runner._is_finally = True
         runner.cancel()
         post.assert_not_called()
+
+
+class TestStdoutStderrMerging(unittest.TestCase):
+    """Non-rsync steps merge stdout into stderr to preserve line ordering."""
+
+    def _runner(self):
+        return br.BackupRunner(MagicMock(), MagicMock())
+
+    @patch("backup_runner.os.close")
+    @patch("backup_runner.pty.openpty")
+    @patch("backup_runner.termios.tcgetattr")
+    @patch("backup_runner.termios.tcsetattr")
+    @patch("backup_runner.os.set_blocking")
+    @patch("backup_runner.GLib.io_add_watch")
+    @patch("backup_runner.GLib.timeout_add")
+    @patch("backup_runner.subprocess.Popen")
+    def test_non_rsync_merges_stderr_into_stdout(self, mock_popen, _mock_timeout,
+                                                  mock_io_add_watch, _mock_set_blocking,
+                                                  _mock_tcsetattr, _mock_tcgetattr,
+                                                  _mock_openpty, _mock_close):
+        fake_process = MagicMock()
+        fake_process.stdout.fileno.return_value = 3
+        fake_process.stderr = None
+        mock_popen.return_value = fake_process
+        fake_master_fd = 5
+        fake_slave_fd = 6
+        _mock_openpty.return_value = (fake_master_fd, fake_slave_fd)
+
+        runner = self._runner()
+        runner.steps = [BashStep(["zfs-send-receive"], "zfs step", is_rsync=False)]
+        runner.current_step = 0
+
+        result = runner._spawn_process("zfs step", ["zfs-send-receive"], is_rsync=False)
+
+        self.assertTrue(result)
+        mock_popen.assert_called_once()
+        _, kwargs = mock_popen.call_args
+        self.assertEqual(kwargs["stdout"], subprocess.PIPE)
+        self.assertEqual(kwargs["stderr"], subprocess.STDOUT)
+        mock_io_add_watch.assert_called_once()
+        args = mock_io_add_watch.call_args[0]
+        self.assertEqual(args[0], 3)
+        self.assertEqual(args[3], runner._on_stderr)
+
+    @patch("backup_runner.os.close")
+    @patch("backup_runner.pty.openpty")
+    @patch("backup_runner.termios.tcgetattr")
+    @patch("backup_runner.termios.tcsetattr")
+    @patch("backup_runner.os.set_blocking")
+    @patch("backup_runner.GLib.io_add_watch")
+    @patch("backup_runner.GLib.timeout_add")
+    @patch("backup_runner.subprocess.Popen")
+    def test_rsync_keeps_separate_stdout_and_stderr(self, mock_popen, _mock_timeout,
+                                                     mock_io_add_watch, _mock_set_blocking,
+                                                     _mock_tcsetattr, _mock_tcgetattr,
+                                                     _mock_openpty, _mock_close):
+        fake_process = MagicMock()
+        fake_process.stdout.fileno.return_value = 3
+        fake_process.stderr.fileno.return_value = 4
+        mock_popen.return_value = fake_process
+        fake_master_fd = 5
+        fake_slave_fd = 6
+        _mock_openpty.return_value = (fake_master_fd, fake_slave_fd)
+
+        runner = self._runner()
+        runner.steps = [BashStep(["rsync"], "rsync step", is_rsync=True)]
+        runner.current_step = 0
+
+        result = runner._spawn_process("rsync step", ["rsync"], is_rsync=True)
+
+        self.assertTrue(result)
+        _, kwargs = mock_popen.call_args
+        self.assertEqual(kwargs["stdout"], subprocess.PIPE)
+        self.assertEqual(kwargs["stderr"], subprocess.PIPE)
+        self.assertEqual(mock_io_add_watch.call_count, 2)
+
+    def test_merged_output_preserves_input_order(self):
+        """Regression: lines from the merged stream keep their original order."""
+        runner = self._runner()
+        runner._total_bytes_received = 0
+        with patch("os.read", return_value=b"separator\nINFO: Processing ds.\nreceived 1GiB stream in 1.00 seconds"):
+            runner._on_stderr(0, br.GLib.IOCondition.IN)
+        self.assertEqual(runner._total_bytes_received, 1024 ** 3)
 
 
 if __name__ == "__main__":

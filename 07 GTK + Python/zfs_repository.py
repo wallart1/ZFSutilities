@@ -7,9 +7,12 @@ handle errors; write methods swallow the exception and return success/failure.
 """
 
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+
+from logging_config import log_msg
 
 
 # Regex: ^[\s]*errors:\s*(.+?)\s*$
@@ -256,22 +259,30 @@ class ZfsRepository:
 
     def start_scrub(self, pool: str, timeout: Optional[int] = None) -> bool:
         """Start a scrub on *pool*."""
-        result = self._run(self._zpool("scrub", pool), check=False, timeout=timeout)
+        cmd = self._zpool("scrub", pool)
+        log_msg(f"DEBUG: issuing zpool scrub command: {shlex.join(cmd)}")
+        result = self._run(cmd, check=False, timeout=timeout)
         return result.returncode == 0
 
     def pause_scrub(self, pool: str, timeout: Optional[int] = None) -> bool:
         """Pause a scrub on *pool*."""
-        result = self._run(self._zpool("scrub", "-p", pool), check=False, timeout=timeout)
+        cmd = self._zpool("scrub", "-p", pool)
+        log_msg(f"DEBUG: issuing zpool scrub command: {shlex.join(cmd)}")
+        result = self._run(cmd, check=False, timeout=timeout)
         return result.returncode == 0
 
     def resume_scrub(self, pool: str, timeout: Optional[int] = None) -> bool:
         """Resume a scrub on *pool*."""
-        result = self._run(self._zpool("scrub", pool), check=False, timeout=timeout)
+        cmd = self._zpool("scrub", pool)
+        log_msg(f"DEBUG: issuing zpool scrub command: {shlex.join(cmd)}")
+        result = self._run(cmd, check=False, timeout=timeout)
         return result.returncode == 0
 
     def stop_scrub(self, pool: str, timeout: Optional[int] = None) -> bool:
         """Stop a scrub on *pool*."""
-        result = self._run(self._zpool("scrub", "-s", pool), check=False, timeout=timeout)
+        cmd = self._zpool("scrub", "-s", pool)
+        log_msg(f"DEBUG: issuing zpool scrub command: {shlex.join(cmd)}")
+        result = self._run(cmd, check=False, timeout=timeout)
         return result.returncode == 0
 
     # ------------------------------------------------------------------

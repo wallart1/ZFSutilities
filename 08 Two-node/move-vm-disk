@@ -492,7 +492,7 @@ backstore=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
     | head -1)
 [[ -n "$backstore" ]] || { echo "ERROR:BACKSTORE_NOT_FOUND" >&2; exit 1; }
 
-zvol=$(zfs list -H -t volume -o name 2>/dev/null | grep "/proxmox/${backstore}$" | head -1)
+zvol=$(zfs list -H -t volume -o name -r "${POOL}/proxmox" 2>/dev/null | grep "/proxmox/${backstore}$" | head -1)
 [[ -n "$zvol" ]] || { echo "ERROR:ZVOL_NOT_FOUND" >&2; exit 1; }
 
 size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
