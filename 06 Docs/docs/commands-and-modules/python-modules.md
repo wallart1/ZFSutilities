@@ -370,15 +370,16 @@ as the GUI runners but writes its own session logs and history entries.
 
 **Internal flow:**
 
-1. Load the requested profile from disk.
-2. Acquire a per-profile advisory lock so a duplicate cron invocation exits
+1. Load the requested profile from disk to determine its tab type.
+2. Create a session log so that lock-skip messages and early errors are
+   recorded.
+3. Acquire a per-profile advisory lock so a duplicate cron invocation exits
    cleanly instead of running the profile twice.
-3. If the profile's cron weekday field contains an ordinal expression
+4. If the profile's cron weekday field contains an ordinal expression
    (`#1`–`#5` or `#L`), verify today matches it; otherwise skip the run.
-4. Generate snapshot names and build `BashStep` lists using the same helpers
+5. Generate snapshot names and build `BashStep` lists using the same helpers
    as the GUI pages.
-5. Create a session log and run each step.
-6. Write the trailer and append a history entry.
+6. Run each step, write the trailer, and append a history entry.
 
 **Called modules / imported helpers:**
 

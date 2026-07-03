@@ -37,7 +37,10 @@ entries directly.  The GUI generates cron lines that run
 
 When a scheduled profile is still running and cron tries to start it again,
 the second invocation exits cleanly with code `0` and logs an informative
-message.  This prevents cron from sending duplicate-run email spam.
+message.  This prevents cron from sending duplicate-run email spam.  Cron
+stdout/stderr for every scheduled profile is appended to
+`/var/log/zfsutilities/cron.log` so that errors occurring before the runner
+creates its own session log remain visible.
 
 ## Running profiles from the command line
 

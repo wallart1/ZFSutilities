@@ -686,37 +686,44 @@ def main():
 
     profile_name = sys.argv[2]
 
-    lock_fd, lock_path = acquire_profile_lock(profile_name, timeout=1.0)
-    if lock_fd is None:
-        log_msg(
-            f"INFO: Profile '{profile_name}' is already running; "
-            "skipping duplicate invocation"
-        )
-        sys.exit(0)
+    # Load the profile early so the session log filename can reflect the tab
+    # type. Reading the profile JSON does not require the execution lock.
+    profile = load_profile(profile_name)
+    tab_type = profile.get("tab_type", "backup") if profile else "backup"
 
-    try:
-        profile = load_profile(profile_name)
+    global _session_log_file, _session_start_time, _last_log_size_check
+    # Reset the session log global so a patched/failed log creation does not
+    # inherit a stale path from a previous invocation (e.g., in tests).
+    _session_log_file = None
+    _session_start_time = time.time()
+    _last_log_size_check = time.time()
+    _create_session_log_file(tab_type, profile_name)
+
+    ctx = session_log_context(_session_log_file) if _session_log_file else nullcontext()
+    with ctx:
         if profile is None:
             log_msg(f"FATAL: Profile not found: {profile_name}")
+            _write_session_trailer(rc=1)
             sys.exit(1)
 
-        config = load_config()
-        prune_old_logs(config.get("log_retention_days", 30))
+        lock_fd, lock_path = acquire_profile_lock(profile_name, timeout=1.0)
+        if lock_fd is None:
+            log_msg(
+                f"INFO: Profile '{profile_name}' is already running; "
+                "skipping duplicate invocation"
+            )
+            _write_session_trailer(rc=0)
+            sys.exit(0)
 
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        version_root = os.path.dirname(script_dir)
-        bin_dir = os.path.join(version_root, "bin")
-        parent_dir = bin_dir if os.path.isfile(os.path.join(bin_dir, "zfsdailybackup")) else version_root
+        try:
+            config = load_config()
+            prune_old_logs(config.get("log_retention_days", 30))
 
-        tab_type = profile.get("tab_type", "")
+            script_dir = os.path.dirname(os.path.realpath(__file__))
+            version_root = os.path.dirname(script_dir)
+            bin_dir = os.path.join(version_root, "bin")
+            parent_dir = bin_dir if os.path.isfile(os.path.join(bin_dir, "zfsdailybackup")) else version_root
 
-        global _session_start_time, _last_log_size_check
-        _session_start_time = time.time()
-        _last_log_size_check = time.time()
-        _create_session_log_file(tab_type, profile_name)
-
-        ctx = session_log_context(_session_log_file) if _session_log_file else nullcontext()
-        with ctx:
             log_msg(f"INFO: Running profile: {profile_name} (type={tab_type})")
 
             weekday_field = profile.get("cron", {}).get("weekday", "*")
@@ -759,8 +766,8 @@ def main():
             add_history_entry(entry)
             _write_session_trailer(rc=rc, bytes_transferred=bytes_transferred)
             sys.exit(rc)
-    finally:
-        release_profile_lock(lock_fd, lock_path)
+        finally:
+            release_profile_lock(lock_fd, lock_path)
 
 
 if __name__ == "__main__":

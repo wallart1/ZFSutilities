@@ -973,6 +973,80 @@ class TestMainHistoryEntry(unittest.TestCase):
         self.assertNotIn("log_file", entry)
 
 
+class TestMainEarlyLogging(unittest.TestCase):
+    """main() creates a session log before acquiring the lock so that early
+    failures (missing profile, duplicate invocation) are recorded.
+    """
+
+    def _run_main_early_exit(self, session_log_dir, **patches):
+        with tempfile.TemporaryDirectory() as lock_dir:
+            orig_lock_dir = profile_runner.PROFILE_LOCK_DIR
+            profile_runner.PROFILE_LOCK_DIR = lock_dir
+            try:
+                with ExitStack() as stack:
+                    stack.enter_context(
+                        patch.object(sys, "argv", ["profile_runner.py", "run", "Daily"])
+                    )
+                    stack.enter_context(
+                        patch("profile_runner.SESSION_LOG_DIR", session_log_dir)
+                    )
+                    stack.enter_context(patch("profile_runner.load_config", return_value={}))
+                    stack.enter_context(patch("profile_runner.prune_old_logs"))
+                    stack.enter_context(patch("profile_runner.add_history_entry"))
+                    for target, kwargs in patches.items():
+                        stack.enter_context(patch(target, **kwargs))
+                    try:
+                        profile_runner.main()
+                    except SystemExit:
+                        pass
+            finally:
+                profile_runner.PROFILE_LOCK_DIR = orig_lock_dir
+
+    def test_missing_profile_creates_session_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("profile_runner._write_session_trailer") as mock_trailer:
+                self._run_main_early_exit(
+                    tmpdir,
+                    **{
+                        "profile_runner.load_profile": {"return_value": None},
+                    }
+                )
+            log_files = [n for n in os.listdir(tmpdir) if n.endswith(".log")]
+            self.assertEqual(len(log_files), 1)
+            path = os.path.join(tmpdir, log_files[0])
+            with open(path) as f:
+                content = f.read()
+            self.assertIn("FATAL: Profile not found: Daily", content)
+            mock_trailer.assert_called_once_with(rc=1)
+
+    def test_lock_held_creates_session_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile = {
+                "tab_type": "backup",
+                "config": {"variables": {"label": "dailybackup"}},
+            }
+
+            def held_lock(*args, **kwargs):
+                return None, os.path.join(tmpdir, "daily.lock")
+
+            with patch("profile_runner._write_session_trailer") as mock_trailer:
+                self._run_main_early_exit(
+                    tmpdir,
+                    **{
+                        "profile_runner.load_profile": {"return_value": profile},
+                        "profile_runner.acquire_profile_lock": {"side_effect": held_lock},
+                    }
+                )
+            log_files = [n for n in os.listdir(tmpdir) if n.endswith(".log")]
+            self.assertEqual(len(log_files), 1)
+            path = os.path.join(tmpdir, log_files[0])
+            with open(path) as f:
+                content = f.read()
+            self.assertIn("already running", content)
+            self.assertIn("skipping duplicate invocation", content)
+            mock_trailer.assert_called_once_with(rc=0)
+
+
 class TestCheckWeekdayOrdinal(unittest.TestCase):
 
     def _patch_now(self, year, month, day):

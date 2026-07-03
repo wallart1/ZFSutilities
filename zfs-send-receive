@@ -71,14 +71,19 @@ function send-receive {
             fi
         fi
 
+        # When resuming via -t <token>, the token already encodes the snapshot,
+        # so do not append "$fs$nextsnap" as an extra positional argument.
+        local -a send_cmd=(zfs send $sendopts)
+        [[ "$sendopts" != *"-t"* ]] && send_cmd+=("$fs$nextsnap")
+
         if [[ -n "$_pv_args" ]]; then
-            if ! zfs send $sendopts "$fs$nextsnap" | pv $_pv_args | zfs receive $recvopts "$destfs$restorefs"; then
+            if ! "${send_cmd[@]}" | pv $_pv_args | zfs receive $recvopts "$destfs$restorefs"; then
                 log_msg "FATAL: $desc failed. RC=$?"
                 [[ "$desc" == "Send/receive"* ]] && { log_msg "Are there holds on $destfs$restorefs snapshots?"; holds "$destfs" 1; holds "$destfs$restorefs" 1; }
                 zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8
             fi
         else
-            if ! zfs send $sendopts "$fs$nextsnap" | zfs receive $recvopts "$destfs$restorefs"; then
+            if ! "${send_cmd[@]}" | zfs receive $recvopts "$destfs$restorefs"; then
                 log_msg "FATAL: $desc failed. RC=$?"
                 [[ "$desc" == "Send/receive"* ]] && { log_msg "Are there holds on $destfs$restorefs snapshots?"; holds "$destfs" 1; holds "$destfs$restorefs" 1; }
                 zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8

@@ -539,6 +539,21 @@ log_msg("DEBUG: variable =", value)
 
 ---
 
+## Recent Session Notes (2026-07-03)
+
+- Fixed silent scheduled-profile skips: `cron_manager.py` no longer wraps
+  `profile_runner.py` with a `flock -n -E 0` cron command; the runner already
+  acquires its own advisory lock, and the cron wrapper caused double-locking
+  that made every cron invocation exit silently with no session log. Cron
+  output is now appended to `/var/log/zfsutilities/cron.log` instead of
+  `/dev/null` so pre-log errors remain visible. `profile_runner.py` creates
+  its session log before acquiring the profile lock, so "already running"
+  skips and "profile not found" failures are recorded in the session log.
+- Fixed resumable ZFS receive: `zfs-send-receive::do_transfer()` no longer
+  appends `"$fs$nextsnap"` when `$sendopts` contains `-t <resume-token>`,
+  because the token already encodes the snapshot. Previously this produced a
+  `too many arguments` error from `zfs send` and aborted the resume.
+
 ## Recent Session Notes (2026-06-30)
 
 - Pause scrubs during Backup/Offsite/Restore: Added a per-tab `pause_scrubs`
@@ -565,11 +580,9 @@ log_msg("DEBUG: variable =", value)
 - Phase 5 profile-level concurrency: Added per-profile advisory locks in
   `profile_runner.py` under `/run/lock/zfs/profiles/<profile>.lock`. A second
   invocation of the same profile exits 0 without running, so cron does not mail
-  on the expected duplicate-run case. `cron_manager.py` wraps scheduled profile
-  lines with `flock -n -E 0` for the same behavior from cron. The Dashboard
-  Running Tasks list now shows "Profile" entries and warns when a profile is
-  active. The lock directory is overridable via
-  `ZFSUTILITIES_PROFILE_LOCK_DIR` for testing.
+  on the expected duplicate-run case. The Dashboard Running Tasks list now shows
+  "Profile" entries and warns when a profile is active. The lock directory is
+  overridable via `ZFSUTILITIES_PROFILE_LOCK_DIR` for testing.
 
 ## Recent Session Notes (2026-06-29)
 

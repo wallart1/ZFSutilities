@@ -74,15 +74,22 @@ class TestMainDuplicateInvocation(unittest.TestCase):
         profile_runner.PROFILE_LOCK_DIR = self.orig_dir
 
     def test_second_main_exits_zero_when_profile_running(self):
+        profile = {
+            "tab_type": "backup",
+            "config": {"variables": {"label": "dailybackup"}},
+        }
         fd, lock_path = profile_runner.acquire_profile_lock("Daily", timeout=0.5)
         self.assertIsNotNone(fd)
         try:
-            with patch.object(profile_runner.sys, "argv", ["profile_runner.py", "run", "Daily"]):
-                with patch("profile_runner.load_config", return_value={}):
-                    with patch("profile_runner.prune_old_logs"):
-                        with capture_logs() as logs:
-                            with self.assertRaises(SystemExit) as cm:
-                                profile_runner.main()
+            with tempfile.TemporaryDirectory() as session_dir:
+                with patch.object(profile_runner.sys, "argv", ["profile_runner.py", "run", "Daily"]):
+                    with patch("profile_runner.load_profile", return_value=profile):
+                        with patch("profile_runner.SESSION_LOG_DIR", session_dir):
+                            with patch("profile_runner.load_config", return_value={}):
+                                with patch("profile_runner.prune_old_logs"):
+                                    with capture_logs() as logs:
+                                        with self.assertRaises(SystemExit) as cm:
+                                            profile_runner.main()
             self.assertEqual(cm.exception.code, 0)
             self.assertTrue(
                 any("already running" in msg for msg in logs),

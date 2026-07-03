@@ -10,8 +10,13 @@ import shlex
 from datetime import datetime, timedelta
 
 from backup_config import log_msg
+from config_core import SESSION_LOG_DIR
 
 CRON_FILE = "/etc/cron.d/zfsutilities"
+
+# Dedicated cron output log. Cron stderr/stdout are redirected here so that
+# failures before the runner creates its own session log are still visible.
+CRON_LOG_FILE = os.path.join(os.path.dirname(SESSION_LOG_DIR), "cron.log")
 
 # Directory for per-profile advisory locks. Override for testing.
 PROFILE_LOCK_DIR = os.environ.get(
@@ -70,19 +75,15 @@ def generate_cron_line(profile, runner_path):
         weekday = weekday.split("#", 1)[0].strip()
     name = profile["profile_name"]
     quoted_runner = shlex_quote(runner_path)
-    safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", name)
-    lock_path = shlex_quote(
-        f"{PROFILE_LOCK_DIR}/{safe_name}.lock"
-    )
     inner = f"python3 {quoted_runner} run {shlex_quote(name)}"
-    # flock -n -E 0 exits 0 when the lock is held so cron does not mail.
-    # Redirect all output to /dev/null; MAILTO="" alone is not honoured on
-    # every installation, and the runner already logs to the session log file.
+    # The runner acquires its own advisory lock and exits 0 when the profile is
+    # already running, so a cron-level flock wrapper is not needed. Redirect
+    # stdout/stderr to a persistent cron log so pre-log errors are visible.
     return (
         f'{minute} {hour} {day} {month} {weekday} '
-        f'root mkdir -p {shlex_quote(PROFILE_LOCK_DIR)} && '
-        f'flock -n -E 0 {lock_path} -c {shlex_quote(inner)} '
-        f'> /dev/null 2>&1'
+        f'root mkdir -p {shlex_quote(os.path.dirname(CRON_LOG_FILE))} '
+        f'{shlex_quote(PROFILE_LOCK_DIR)} && '
+        f'{inner} >> {shlex_quote(CRON_LOG_FILE)} 2>&1'
     )
 
 

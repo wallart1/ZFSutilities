@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.59.5
+
+### Fixed
+
+- **Silent scheduled-profile skips** — `cron_manager.py` no longer wraps
+  scheduled `profile_runner.py` invocations with a `flock -n -E 0` cron command.
+  The runner already acquires its own per-profile advisory lock, and the extra
+  cron-level flock caused every scheduled invocation to exit silently with no
+  session log.  Cron stdout/stderr is now appended to
+  `/var/log/zfsutilities/cron.log` so that errors occurring before the runner
+  creates its own session log remain visible.
+- **Resumable ZFS receive** — `zfs-send-receive::send-receive()` no longer
+  appends `"$fs$nextsnap"` as an extra positional argument when `$sendopts`
+  contains `-t <resume-token>`, because the token already encodes the snapshot.
+  This fixes the `too many arguments` error that aborted resume transfers.
+
+### Changed
+
+- **`profile_runner.py` early session logging** — The runner now creates its
+  session log before acquiring the per-profile advisory lock.  "Profile not
+  found" failures and "already running" skips are therefore recorded in a
+  session log instead of being lost.
+
+### Tests
+
+- Updated `tests/python/test_cron_manager.py` to reflect the removed flock
+  wrapper and the new `/var/log/zfsutilities/cron.log` redirect.
+- Added `tests/python/test_profile_runner.py::TestMainEarlyLogging` to verify
+  that missing-profile and duplicate-invocation scenarios both create session
+  logs and write the correct session trailer.
+- Updated `tests/python/test_profile_runner_concurrency.py` for the new
+  session-log creation order.
+- Added `tests/test-zfs-send-receive-dryrun` tests covering resume-token mode
+  (omits snapshot argument) and normal mode (includes snapshot argument).
+
+### Documentation
+
+- Updated `06 Docs/docs/commands-and-modules/python-modules.md` to describe the
+  new `profile_runner.py` internal flow (session log created before lock).
+- Updated `06 Docs/docs/user-guide/profiles.md` to document the cron-log output
+  destination.
+
 ## 0.59.4
 
 ### Added

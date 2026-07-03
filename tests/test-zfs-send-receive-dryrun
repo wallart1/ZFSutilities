@@ -206,6 +206,92 @@ test_do_transfer_dryrun() {
 }
 
 # ---------------------------------------------------------------------------
+# Test do_transfer omits snapshot when resuming via -t
+# ---------------------------------------------------------------------------
+
+test_do_transfer_resume_omits_snapshot() {
+    test_start "do_transfer omits snapshot argument in resume-token mode"
+
+    set_msg_level FATAL
+    dryrun='N'
+    fs="pool/src/data"
+    nextsnap="@snap-d"
+    destfs="pool/dest"
+    restorefs="/data"
+
+    local saved_zfs
+    saved_zfs=$(declare -f zfs)
+    local capture_file
+    capture_file="$_mock_zfs_state_dir/captured_send_args"
+    : > "$capture_file"
+    zfs() {
+        if [[ "$1" == "send" ]]; then
+            echo "$*" >> "$capture_file"
+            return 0
+        fi
+        return 0
+    }
+
+    clear_log
+    capture_stderr
+    do_transfer "-t test-resume-token" "-uv" "N" "0" "resume transfer"
+    restore_stderr
+
+    eval "$saved_zfs"
+
+    local captured_send
+    captured_send=$(cat "$capture_file" 2>/dev/null)
+    if [[ "$captured_send" == "send -t test-resume-token" ]]; then
+        test_pass
+    else
+        test_fail "Expected 'send -t test-resume-token', got '$captured_send'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test do_transfer still includes snapshot in normal mode
+# ---------------------------------------------------------------------------
+
+test_do_transfer_normal_includes_snapshot() {
+    test_start "do_transfer includes snapshot argument in normal mode"
+
+    set_msg_level FATAL
+    dryrun='N'
+    fs="pool/src/data"
+    nextsnap="@snap-d"
+    destfs="pool/dest"
+    restorefs="/data"
+
+    local saved_zfs
+    saved_zfs=$(declare -f zfs)
+    local capture_file
+    capture_file="$_mock_zfs_state_dir/captured_send_args"
+    : > "$capture_file"
+    zfs() {
+        if [[ "$1" == "send" ]]; then
+            echo "$*" >> "$capture_file"
+            return 0
+        fi
+        return 0
+    }
+
+    clear_log
+    capture_stderr
+    do_transfer "-cw -i @snap" "-uv" "N" "0" "Send/receive"
+    restore_stderr
+
+    eval "$saved_zfs"
+
+    local captured_send
+    captured_send=$(cat "$capture_file" 2>/dev/null)
+    if [[ "$captured_send" == "send -cw -i @snap pool/src/data@snap-d" ]]; then
+        test_pass
+    else
+        test_fail "Expected snapshot in send args, got '$captured_send'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Test check_space_available passes with ample space
 # ---------------------------------------------------------------------------
 
@@ -890,6 +976,8 @@ test_lock_before_snapshot_creation() {
 test_bootstrap_inner_functions
 test_autoproceed_n_prompts_once
 test_do_transfer_dryrun
+test_do_transfer_resume_omits_snapshot
+test_do_transfer_normal_includes_snapshot
 test_check_space_passes
 test_check_space_skips
 test_check_space_ask_yn_override
