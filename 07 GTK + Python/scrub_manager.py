@@ -380,11 +380,11 @@ def pause_scrubs_for_pools(pool_names: List[str], repo=None,
     for name in names:
         info = states.get(name)
         if info is None:
-            _log(f"INFO: Pool '{name}' is not online; skipping scrub pause")
+            _log(f"DEBUG: Pool '{name}' is not online; skipping scrub pause")
             continue
         if info.state != ScrubState.SCANNING:
             _log(
-                f"INFO: Scrub on '{name}' is {info.state.value}; "
+                f"DEBUG: Scrub on '{name}' is {info.state.value}; "
                 f"not pausing"
             )
             continue
@@ -432,11 +432,11 @@ def resume_scrubs_for_pools(pool_names: List[str], repo=None,
     for name in names:
         info = states.get(name)
         if info is None:
-            _log(f"INFO: Pool '{name}' is not online; skipping scrub resume")
+            _log(f"DEBUG: Pool '{name}' is not online; skipping scrub resume")
             continue
         if info.state != ScrubState.PAUSED:
             _log(
-                f"INFO: Scrub on '{name}' is {info.state.value}; "
+                f"DEBUG: Scrub on '{name}' is {info.state.value}; "
                 f"not resuming"
             )
             continue

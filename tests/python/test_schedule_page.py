@@ -346,7 +346,7 @@ class TestConfigSummary(unittest.TestCase):
 
         saved_profile = {
             "profile_name": "p1",
-            "active": True,
+            "active": False,
             "cron": {},
             "config": long_config,
         }
@@ -370,7 +370,7 @@ class TestConfigSummary(unittest.TestCase):
 
         saved_profile = {
             "profile_name": "p1",
-            "active": True,
+            "active": False,
             "cron": {},
             "config": {"source": "tank/src"},
             "dry_run": True,
@@ -383,6 +383,62 @@ class TestConfigSummary(unittest.TestCase):
 
         actual = app.schedule_summary_textview.get_buffer().set_text.call_args[0][0]
         self.assertTrue(actual.startswith("Dry run: Yes\n\n"))
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_crontab_entry_shown_for_active_profile(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "0 2 * * *", "next", ""]]
+        app = self._make_app(rows)
+
+        saved_profile = {
+            "profile_name": "p1",
+            "active": True,
+            "cron": {
+                "minute": "0", "hour": "2",
+                "day": "*", "month": "*", "weekday": "*",
+            },
+            "config": {"source": "tank/src"},
+        }
+        selection = MagicMock()
+        selection.get_selected_rows.return_value = (app.schedule_store, [FakeTreePath(0)])
+
+        with patch("schedule_page.load_profile", return_value=saved_profile), \
+             patch("schedule_page._resolve_profile_runner_path",
+                   return_value="/fake/profile_runner.py"):
+            schedule_page._on_selection_changed(selection, app)
+
+        actual = app.schedule_summary_textview.get_buffer().set_text.call_args[0][0]
+        expected_cron_line = schedule_page.generate_cron_line(
+            saved_profile, "/fake/profile_runner.py"
+        )
+        self.assertTrue(actual.startswith("Crontab entry:\n"))
+        self.assertIn(expected_cron_line, actual)
+        self.assertIn("Dry run: No\n\n", actual)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_no_crontab_entry_for_inactive_profile(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        app = self._make_app(rows)
+
+        saved_profile = {
+            "profile_name": "p1",
+            "active": False,
+            "cron": {
+                "minute": "0", "hour": "2",
+                "day": "*", "month": "*", "weekday": "*",
+            },
+            "config": {"source": "tank/src"},
+        }
+        selection = MagicMock()
+        selection.get_selected_rows.return_value = (app.schedule_store, [FakeTreePath(0)])
+
+        with patch("schedule_page.load_profile", return_value=saved_profile):
+            schedule_page._on_selection_changed(selection, app)
+
+        actual = app.schedule_summary_textview.get_buffer().set_text.call_args[0][0]
+        self.assertTrue(actual.startswith("Dry run: No\n\n"))
+        self.assertNotIn("Crontab entry", actual)
 
     @patch("schedule_page.Gtk")
     @patch("schedule_page.enable_textview_copy")

@@ -792,6 +792,7 @@ and enable/disable scheduled entries.
 | `collect_schedule_config()` / `load_schedule_config()` | UI ↔ cron dict |
 | `_regenerate_cron()` | Rewrite the cron drop-in file |
 | `_refresh_profile_list()` | Show all profiles of the current tab type |
+| `_on_selection_changed()` | Update the detail pane (cron entry + config summary) |
 | `on_schedule_save()` / `on_schedule_revert()` / `on_schedule_delete()` | Persist/revert/delete |
 
 **Called modules / imported helpers:**

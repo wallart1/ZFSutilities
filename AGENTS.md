@@ -307,7 +307,7 @@ If, when running the tests, the output is truncated, then break up the tests so 
 | `test-zfsdelsnap`              | 7     | Snapshot deletion safety checks, hold release, and `zfscheckagainst` dependency sourcing                      |
 | `test-zfslockmanager`          | 35    | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition |
 | `test-zfsretain`               | 10    | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
-| `test-zfs-send-receive-dryrun` | 19    | Dry-run logging, space checks, resume-token helpers, clone messages                                           |
+| `test-zfs-send-receive-dryrun` | 27    | Dry-run logging, space checks, resume-token helpers, clone messages, pv quiet in headless mode                |
 | `test-zfssnapbuild`            | 9     | Snapshot name generation, bucket logic, snapfile handling                                                     |
 | `test-module-dependencies`     | 1     | Static analysis: root-level bash modules source the modules whose functions they call                         |
 

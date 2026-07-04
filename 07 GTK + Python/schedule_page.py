@@ -21,7 +21,8 @@ from profile_manager import (
     list_profiles, load_profile, save_profile, delete_profile,
 )
 from cron_manager import (
-    write_cron_file, interpret_cron, format_next_runs, next_run_times,
+    write_cron_file, generate_cron_line, interpret_cron, format_next_runs,
+    next_run_times,
 )
 from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
 
@@ -349,6 +350,11 @@ def _on_selection_changed(selection, app):
     cfg = profile.get("config", {})
     dry_run = profile.get("dry_run", False)
     summary = f"Dry run: {'Yes' if dry_run else 'No'}\n\n{json.dumps(cfg, indent=2)}"
+    if profile.get("active", False):
+        runner_path = _resolve_profile_runner_path()
+        cron_line = generate_cron_line(profile, runner_path)
+        if cron_line:
+            summary = f"Crontab entry:\n{cron_line}\n\n{summary}"
     app.schedule_summary_textview.get_buffer().set_text(summary, -1)
 
     app.schedule_detail_box.set_no_show_all(False)

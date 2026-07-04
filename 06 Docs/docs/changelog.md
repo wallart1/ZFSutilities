@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.59.6
+
+### Fixed
+
+- **Headless `pv` behavior** — `zfs-send-receive::do_transfer()` no longer
+  forces a progress display through `pv` in non-interactive/headless mode.
+  When a rate limit is configured, `pv` is invoked as `pv -q -L <rate>` so the
+  transfer is throttled without emitting progress lines that no one sees.  When
+  no rate limit is configured, `pv` is skipped entirely in headless mode.
+- **Priority parsing for nested `file:line` prefixes** —
+  `logging_config.parse_msg_level()` now strips one or more leading
+  `file:line:` prefixes (plus an optional timestamp) before looking for the
+  `LEVEL:` token.  This fixes level filtering for lines emitted by a bash
+  subprocess and captured by a Python runner, where both layers prefix the line
+  with their own source location.
+
+### Changed
+
+- **Schedule tab crontab preview** — When an active scheduled profile is
+  selected, the detail pane now shows the exact crontab entry written to
+  `/etc/cron.d/zfsutilities` at the top of the summary, making it easy to verify
+  the cron schedule, runner path, and output redirect.
+- **Scrub pause/resume log noise reduction** — `scrub_manager.py` downgraded
+  "pool is not online" and "scrub is not in the expected state" messages from
+  `INFO` to `DEBUG` during `pause_scrubs_for_pools()` and
+  `resume_scrubs_for_pools()`.  These messages described skipped actions rather
+  than meaningful progress.
+
+### Tests
+
+- Added `tests/test-zfs-send-receive-dryrun` tests covering headless-mode `pv`
+  behavior: `pv -q -L <rate>` when a rate limit is set, and no `pv` invocation
+  when no rate limit is set.
+- Added `tests/python/test_logging_config.py` tests for nested `file:line`
+  prefix parsing and `VERB` level filtering.
+- Added `tests/python/test_schedule_page.py` tests verifying that active
+  profiles show their crontab entry in the summary pane and inactive profiles do
+  not.
+
+### Documentation
+
+- Updated `06 Docs/docs/user-guide/gtk-gui.md` to describe the Schedule tab
+  crontab entry preview.
+- Updated `06 Docs/docs/messages/index.md` to document nested `file:line:`
+  prefix handling.
+- Updated `06 Docs/docs/commands-and-modules/python-modules.md` to list
+  `_on_selection_changed()` in the `schedule_page.py` key-functions table.
+
 ## 0.59.5
 
 ### Fixed

@@ -208,6 +208,14 @@ class TestParseMsgLevel(unittest.TestCase):
         self.assertIsNone(parse_msg_level(""))
         self.assertIsNone(parse_msg_level(None))
 
+    def test_parses_nested_file_line_prefixes(self):
+        line = (
+            "2026-07-03 10:48:33 /usr/local/lib/zfsutilities/versions/0.59.4/"
+            "07 GTK + Python/backup_runner.py:208: /usr/local/lib/zfsutilities/"
+            "versions/0.59.4/bin/zfs-send-receive:477: VERB: zfs send -cw -i ..."
+        )
+        self.assertEqual(parse_msg_level(line), "VERB")
+
 
 class TestViewerShouldShow(unittest.TestCase):
 
@@ -220,6 +228,7 @@ class TestViewerShouldShow(unittest.TestCase):
         self.assertFalse(viewer_should_show("INFO", "WARN"))
         self.assertTrue(viewer_should_show("INFO", "INFO"))
         self.assertTrue(viewer_should_show("DEBUG", "DEBUG"))
+        self.assertFalse(viewer_should_show("VERB", "INFO"))
 
     def test_invalid_levels_are_visible(self):
         self.assertTrue(viewer_should_show("BOGUS", "INFO"))

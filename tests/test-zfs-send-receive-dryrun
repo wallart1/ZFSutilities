@@ -292,6 +292,114 @@ test_do_transfer_normal_includes_snapshot() {
 }
 
 # ---------------------------------------------------------------------------
+# Test do_transfer runs pv -q in headless mode with a rate limit
+# ---------------------------------------------------------------------------
+
+test_do_transfer_pv_quiet_in_headless_rate_limit() {
+    test_start "do_transfer runs pv -q in headless mode with a rate limit"
+
+    reset_mocks
+    set_msg_level FATAL
+    dryrun='N'
+    fs="pool/src/data"
+    nextsnap="@snap-d"
+    destfs="pool/dest"
+    restorefs="/data"
+    pv_rate_limit="50M"
+
+    local pv_capture="$_mock_zfs_state_dir/pv_args"
+    : > "$pv_capture"
+
+    local saved_zfs saved_pv
+    saved_zfs=$(declare -f zfs)
+    saved_pv=$(declare -f pv 2>/dev/null || true)
+    zfs() {
+        if [[ "$1" == "send" ]]; then
+            return 0
+        fi
+        return 0
+    }
+    pv() {
+        echo "$*" >> "$pv_capture"
+        cat
+    }
+
+    clear_log
+    capture_stderr
+    do_transfer "-cw -i @snap" "-uv" "Y" "5000000" "Send/receive" < /dev/null
+    restore_stderr
+
+    eval "$saved_zfs"
+    if [[ -n "$saved_pv" ]]; then
+        eval "$saved_pv"
+    else
+        unset -f pv 2>/dev/null || true
+    fi
+
+    local pv_args
+    pv_args=$(cat "$pv_capture" 2>/dev/null)
+    if [[ "$pv_args" == *"-q"* && "$pv_args" == *"-L 50M"* ]]; then
+        test_pass
+    else
+        test_fail "Expected pv args to contain '-q' and '-L 50M', got '$pv_args'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test do_transfer suppresses pv in headless mode without a rate limit
+# ---------------------------------------------------------------------------
+
+test_do_transfer_pv_suppressed_headless_no_rate_limit() {
+    test_start "do_transfer does not invoke pv in headless mode without rate limit"
+
+    reset_mocks
+    set_msg_level FATAL
+    dryrun='N'
+    fs="pool/src/data"
+    nextsnap="@snap-d"
+    destfs="pool/dest"
+    restorefs="/data"
+    pv_rate_limit=""
+
+    local pv_capture="$_mock_zfs_state_dir/pv_args2"
+    : > "$pv_capture"
+
+    local saved_zfs saved_pv
+    saved_zfs=$(declare -f zfs)
+    saved_pv=$(declare -f pv 2>/dev/null || true)
+    zfs() {
+        if [[ "$1" == "send" ]]; then
+            return 0
+        fi
+        return 0
+    }
+    pv() {
+        echo "$*" >> "$pv_capture"
+        cat
+    }
+
+    clear_log
+    capture_stderr
+    do_transfer "-cw -i @snap" "-uv" "Y" "5000000" "Send/receive" < /dev/null
+    restore_stderr
+
+    eval "$saved_zfs"
+    if [[ -n "$saved_pv" ]]; then
+        eval "$saved_pv"
+    else
+        unset -f pv 2>/dev/null || true
+    fi
+
+    local pv_args
+    pv_args=$(cat "$pv_capture" 2>/dev/null)
+    if [[ -z "$pv_args" ]]; then
+        test_pass
+    else
+        test_fail "Expected no pv invocation, got '$pv_args'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Test check_space_available passes with ample space
 # ---------------------------------------------------------------------------
 
@@ -978,6 +1086,8 @@ test_autoproceed_n_prompts_once
 test_do_transfer_dryrun
 test_do_transfer_resume_omits_snapshot
 test_do_transfer_normal_includes_snapshot
+test_do_transfer_pv_quiet_in_headless_rate_limit
+test_do_transfer_pv_suppressed_headless_no_rate_limit
 test_check_space_passes
 test_check_space_skips
 test_check_space_ask_yn_override

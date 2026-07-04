@@ -184,15 +184,19 @@ def get_msg_level(config):
 def parse_msg_level(text):
     """Return the level token at the start of *text*, or None.
 
-    The expected format is an optional timestamp and file:line prefix followed
-    by "LEVEL: ". Lines without a recognized level are treated as the implied
-    "(none)" level (highest priority, always displayed in viewers).
+    The expected format is an optional timestamp, followed by one or more
+    file:line prefixes (Python callers may wrap bash subprocess output that
+    already has its own prefix), and finally "LEVEL: ". Lines without a
+    recognized level are treated as the implied "(none)" level (highest
+    priority, always displayed in viewers).
     """
     if not text:
         return NONE_LEVEL
     # Strip optional leading timestamp: "YYYY-MM-DD HH:MM:SS  "
     stripped = re.sub(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+", "", text)
-    m = re.match(r"(?:[^:]+:\d+):\s+(DEBUG|VERB|INFO|WARN|FATAL):", stripped)
+    # Strip one or more leading file:line prefixes.
+    stripped = re.sub(r"^(\s*(?:[^:\n]+:\d+):\s*)+", "", stripped)
+    m = re.match(r"(DEBUG|VERB|INFO|WARN|FATAL):", stripped)
     if m:
         return m.group(1)
     return NONE_LEVEL

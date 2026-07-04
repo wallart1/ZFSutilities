@@ -706,6 +706,10 @@ after recalling.
 - **Interpretation** — live prose explanation of the cron expression
   (e.g. *"At 02:00 every day"* or *"Every 15 minutes on weekdays"*)
 - **Examples** — next three datetimes that match the expression
+- **Crontab entry** — for active profiles, the exact cron line that was written
+  to `/etc/cron.d/zfsutilities`. This is shown at the top of the detail pane so
+  you can verify the command, arguments, and output redirect without opening the
+  cron file manually.
 - **Config Summary** — collapsible, scrollable JSON dump of the full profile
   config. The text is selectable; right-click for **Copy** and **Select All**.
 

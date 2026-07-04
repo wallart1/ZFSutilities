@@ -25,6 +25,12 @@ or to **stderr** in CLI mode. Every message is prefixed with the source location
 /path/to/script:linenum: Message text here.
 ```
 
+When a Python runner wraps a bash subprocess, the raw line captured from the
+subprocess may already contain a bash `file:line:` prefix. The viewer's level
+parser strips one or more leading `file:line:` prefixes (plus an optional
+timestamp) before looking for the `LEVEL:` token, so nested prefixes do not
+prevent priority filtering.
+
 When a session is active, both bash and Python `log_msg` append messages to the
 session log file pointed to by the `ZFSUTILITIES_LOG_FILE` environment
 variable. Python code always writes to the file when the variable is set;

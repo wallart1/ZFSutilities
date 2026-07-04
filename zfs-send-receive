@@ -52,22 +52,25 @@ function send-receive {
         fi
 
         local _pv_args=""
-        # Progress display: natural in terminal, forced in GUI, suppressed in headless
+        local _pv_progress_desired="N"
+        # Progress display: natural in terminal, forced in GUI, suppressed otherwise
         if [[ "$use_pv" = 'Y' ]]; then
             if [[ -t 2 ]]; then
                 # Terminal available — natural progress display
                 _pv_args="-pterb -s $datatosend"
-            elif [[ -t 0 ]]; then
-                # GUI mode (stdin is PTY, stderr is pipe) — force output for parser
+                _pv_progress_desired="Y"
+            elif [[ -t 0 && "${ZFSUTILITIES_LOG_INHERIT:-}" = "Y" ]]; then
+                # GUI mode (stdin is PTY, stderr is captured) — force output for parser
                 _pv_args="-fpterb -s $datatosend"
+                _pv_progress_desired="Y"
             fi
         fi
-        # Rate limit (applied in both terminal and headless modes)
+        # Rate limit: visible in terminal/GUI, quiet in headless/non-interactive
         if [[ -n "$pv_rate_limit" ]]; then
-            if [[ -n "$_pv_args" ]]; then
+            if [[ "$_pv_progress_desired" = "Y" ]]; then
                 _pv_args="$_pv_args -L $pv_rate_limit"
             else
-                _pv_args="-L $pv_rate_limit"
+                _pv_args="-q -L $pv_rate_limit"
             fi
         fi
 
