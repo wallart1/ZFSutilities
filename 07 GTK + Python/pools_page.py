@@ -551,18 +551,20 @@ def _on_pools_drag_end(treeview, drag_context, app):
     if new_order == app.known_pools:
         return
 
-    # Preserve selection
+    # Preserve selection (pool_view is MULTIPLE)
     selection = treeview.get_selection()
-    selected_pool = None
-    model_sel, sel_iter = selection.get_selected()
-    if sel_iter:
-        selected_pool = model_sel.get_value(sel_iter, COL_NAME)
+    selected_pools = []
+    model_sel, pathlist = selection.get_selected_rows()
+    for path in pathlist:
+        sel_iter = model_sel.get_iter(path)
+        if sel_iter:
+            selected_pools.append(model_sel.get_value(sel_iter, COL_NAME))
 
     app.known_pools = new_order
     refresh_pools_page(app)
 
-    if selected_pool:
-        _select_pool_by_name(treeview, selected_pool)
+    for pool_name in selected_pools:
+        _select_pool_by_name(treeview, pool_name)
 
 
 def _on_offsite_toggled(renderer, path, app):

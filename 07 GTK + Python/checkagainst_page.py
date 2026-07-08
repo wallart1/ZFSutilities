@@ -13,7 +13,7 @@ from gi.repository import Gtk
 
 from logging_config import log_msg
 from feature_config import get_checkagainst, save_checkagainst
-from gui_helpers import configure_treeview_column
+from gui_helpers import configure_treeview_column, handle_editing_key_press
 
 # Column indices in the ListStore
 COL_DATASET     = 0
@@ -100,6 +100,7 @@ def create_checkagainst_page(app):
         renderer = Gtk.CellRendererText()
         renderer.set_property("editable", True)
         renderer.connect("edited", _on_cell_edited, app, col_idx)
+        renderer.connect("editing-started", _on_editing_started, tv, col_idx)
         col = Gtk.TreeViewColumn(title, renderer, text=col_idx)
         configure_treeview_column(col, width=width)
         col.set_widget(_build_header(title))
@@ -202,6 +203,14 @@ def _update_ca_status(app):
 def _on_cell_edited(renderer, path, new_text, app, col_idx):
     app._ca_store[path][col_idx] = new_text.strip()
     _update_ca_status(app)
+
+
+def _on_editing_started(renderer, editable, path, treeview, col_idx):
+    """Connect key-press on the editable to handle Tab/Shift+Tab."""
+    editable.connect(
+        "key-press-event", handle_editing_key_press,
+        treeview, path, col_idx,
+        [COL_DATASET, COL_QUALS, COL_COUNTERPART, COL_LABEL, COL_COMMENT])
 
 
 def _on_ca_add(btn, app):

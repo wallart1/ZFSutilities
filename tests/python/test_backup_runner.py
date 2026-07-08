@@ -601,5 +601,43 @@ class TestStdoutStderrMerging(unittest.TestCase):
         self.assertEqual(runner._total_bytes_received, 1024 ** 3)
 
 
+class TestSourceCleanup(unittest.TestCase):
+    """Non-rsync source IDs are cleared correctly to avoid GLib warnings."""
+
+    def _runner(self):
+        return br.BackupRunner(MagicMock(), MagicMock())
+
+    def test_on_stderr_hup_clears_stdout_source(self):
+        """When the merged stdout stream ends, _stdout_source is cleared."""
+        runner = self._runner()
+        runner._stdout_source = 12345
+        runner._stderr_source = None
+        with patch("os.read", side_effect=OSError):
+            result = runner._on_stderr(0, br.GLib.IOCondition.HUP)
+        self.assertFalse(result)
+        self.assertIsNone(runner._stdout_source)
+
+    def test_cleanup_io_skips_already_removed_sources(self):
+        """Defensive: _cleanup_io does not warn when a source is already gone."""
+        runner = self._runner()
+        runner._stdout_source = 111
+        runner._stderr_source = 222
+        runner.process = MagicMock()
+        runner.process.stdout = MagicMock()
+        runner.process.stderr = MagicMock()
+
+        ctx = MagicMock()
+        ctx.find_source_by_id.side_effect = lambda sid: None if sid == 111 else MagicMock()
+
+        with patch.object(br.GLib, "MainContext") as mock_mc, \
+             patch.object(br.GLib, "source_remove") as mock_remove:
+            mock_mc.get_default.return_value = ctx
+            runner._cleanup_io()
+
+        mock_remove.assert_called_once_with(222)
+        self.assertIsNone(runner._stdout_source)
+        self.assertIsNone(runner._stderr_source)
+
+
 if __name__ == "__main__":
     unittest.main()

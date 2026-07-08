@@ -1,0 +1,438 @@
+#!/usr/bin/bash
+# test-list-vm-disks — Unit tests for list-vm-disks
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# ------------------------------------------------------------------------------
+# Shared test environment
+# ------------------------------------------------------------------------------
+
+tmp_dir=$(mktemp -d)
+pve_dir="$tmp_dir/pve"
+by_path_dir="$tmp_dir/by-path"
+
+mkdir -p "$pve_dir" "$by_path_dir"
+
+# Override script paths so tests do not touch real Proxmox / iSCSI state.
+export LIST_VM_DISKS_CONF_DIR="$pve_dir"
+export LIST_VM_DISKS_BY_PATH_DIR="$by_path_dir"
+export LIST_VM_DISKS_SKIP_ROOT_CHECK="Y"
+
+# Make the script use the repo's node-lib.sh via NODE_CONF override.  We create
+# per-test node configs below and point NODE_CONF at them before sourcing.
+node_conf_single="$tmp_dir/node-single.conf"
+cat > "$node_conf_single" << 'EOF'
+NODE_MODE="single-node"
+EOF
+
+node_conf_two="$tmp_dir/node-two.conf"
+cat > "$node_conf_two" << 'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="tweety"
+STORAGE_IP="10.0.0.1"
+IQN_PREFIX="iqn.2026-02.local.storage-host"
+declare -A POOL_TARGET=(
+    [threeamigos]="threeamigos"
+)
+EOF
+
+# Fake iSCSI by-path symlinks pointing at real loop block devices so the -b
+# check in build_host_device_map succeeds without root privileges.
+ln -s /dev/loop0 \
+    "$by_path_dir/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0"
+ln -s /dev/loop1 \
+    "$by_path_dir/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1"
+
+# ------------------------------------------------------------------------------
+# Mock commands
+# ------------------------------------------------------------------------------
+
+# MY_HOST is set from hostname -s; override hostname so we can simulate either
+# the compute host or the storage host per test.
+hostname() {
+    if [[ "$1" == "-s" ]]; then
+        echo "$_test_hostname"
+    else
+        command hostname "$@"
+    fi
+}
+
+# targetcli output for the two-node gather-lun-info path.
+targetcli() {
+    local path="$1"
+    case "$path" in
+        "/backstores/block")
+            echo "  vm-100-disk-0  (/dev/zvol/threeamigos/proxmox/vm-100-disk-0) ..."
+            echo "  vm-200-disk-0  (/dev/zvol/threeamigos/proxmox/vm-200-disk-0) ..."
+            ;;
+        "/iscsi")
+            echo "  iqn.2026-02.local.storage-host:threeamigos"
+            ;;
+        "/iscsi/iqn.2026-02.local.storage-host:threeamigos/tpg1/luns")
+            echo "  lun0 block/vm-100-disk-0 ..."
+            echo "  lun1 block/vm-200-disk-0 ..."
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+# qm list / guest-exec / guest-exec-status mock.
+# Proxmox invocation forms:
+#   qm list
+#   qm guest exec <vmid> -- /bin/sh -c "..."
+#   qm guest exec-status <vmid> <pid>
+_qm_guest_output=""
+qm() {
+    local cmd="$1" subcmd="$2" vmid="$3"
+    case "$cmd" in
+        list)
+            echo "VMID NAME                 STATUS    MEM(MB)    BOOTDISK(GB) PID"
+            echo "100  webserver            running   4096       50             1234"
+            echo "200  dbserver             stopped   2048       100            -"
+            ;;
+        guest)
+            if [[ "$subcmd" == "exec" ]]; then
+                # Return a deterministic pid; tests never poll exec-status because
+                # we override the python3 parser to return the prepared output.
+                echo '{"pid": 12345}'
+            elif [[ "$subcmd" == "exec-status" ]]; then
+                if [[ -n "$_qm_guest_output" ]]; then
+                    printf '{"exited": true, "exitcode": 0, "out-data": "%s"}\n' "$_qm_guest_output"
+                else
+                    echo '{"exited": true, "exitcode": 0, "out-data": ""}'
+                fi
+            fi
+            ;;
+    esac
+}
+
+# ssh is used only for the internal gather modes.  Execute the requested gather
+# function directly in this shell so the test stays self-contained.
+ssh() {
+    local cmd="${!#}"
+    if [[ "$cmd" == *"--gather-lun-info"* ]]; then
+        emit_lun_data
+    elif [[ "$cmd" == *"--gather-vm-info"* ]]; then
+        emit_vm_data
+    else
+        command ssh "$@"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Load the script under test in source mode.  The main() guard prevents the
+# bottom-level execution flow from running during the source.
+# ------------------------------------------------------------------------------
+
+export NODE_CONF="$node_conf_two"
+_test_hostname="tweety"
+source "$old_mydir/08 Two-node/list-vm-disks"
+
+# ------------------------------------------------------------------------------
+# Reset helpers
+# ------------------------------------------------------------------------------
+
+reset_mocks() {
+    _mock_zfs_fs_list=""
+    _mock_zfs_props=()
+    _mock_zpool_list=""
+    _qm_guest_output=""
+    VM_MAP_VMID=()
+    VM_MAP_NAME=()
+    VM_MAP_KEY=()
+    HOST_DEV=()
+    HOST_BYPATH=()
+    GUEST_DEV=()
+    GUEST_BYPATH=()
+    RUNNING_VM=()
+}
+
+setup_two_node_zfs() {
+    mock_zfs_fs_list $'threeamigos/proxmox/vm-100-disk-0\nthreeamigos/proxmox/vm-200-disk-0'
+    mock_zfs_prop "threeamigos/proxmox/vm-100-disk-0" "volsize" "50G"
+    mock_zfs_prop "threeamigos/proxmox/vm-200-disk-0" "volsize" "100G"
+    mock_zfs_prop "threeamigos/proxmox/vm-100-disk-0" "origin" "-"
+    mock_zfs_prop "threeamigos/proxmox/vm-200-disk-0" "origin" "-"
+}
+
+write_two_node_configs() {
+    rm -f "$pve_dir"/*.conf
+    cat > "$pve_dir/100.conf" << 'EOF'
+name: webserver
+scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,discard=on,iothread=1,size=50G
+EOF
+    cat > "$pve_dir/200.conf" << 'EOF'
+name: dbserver
+scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1,format=raw,discard=on,iothread=1,size=100G
+EOF
+}
+
+# ------------------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------------------
+
+test_build_vm_disk_map_two_node() {
+    test_start "build_vm_disk_map parses two-node VM configs"
+    reset_mocks
+    write_two_node_configs
+
+    build_vm_disk_map
+
+    local ok=1
+    [[ "${VM_MAP_VMID[threeamigos:0]}" == "100" ]] || ok=0
+    [[ "${VM_MAP_NAME[threeamigos:0]}" == "webserver" ]] || ok=0
+    [[ "${VM_MAP_KEY[threeamigos:0]}" == "scsi0" ]] || ok=0
+    [[ "${VM_MAP_VMID[threeamigos:1]}" == "200" ]] || ok=0
+    [[ "${VM_MAP_NAME[threeamigos:1]}" == "dbserver" ]] || ok=0
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "VM map contents: $(declare -p VM_MAP_VMID VM_MAP_NAME VM_MAP_KEY)"
+    fi
+}
+
+test_build_vm_disk_map_moved_disk() {
+    test_start "build_vm_disk_map shows actual VMID after disk move"
+    reset_mocks
+    rm -f "$pve_dir"/*.conf
+    cat > "$pve_dir/300.conf" << 'EOF'
+name: moved-here
+scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,size=50G
+EOF
+
+    build_vm_disk_map
+
+    # The zvol is vm-100-disk-0 but the disk is attached to VM 300.
+    if [[ "${VM_MAP_VMID[threeamigos:0]}" == "300" && "${VM_MAP_NAME[threeamigos:0]}" == "moved-here" ]]; then
+        test_pass
+    else
+        test_fail "Expected VMID 300, got ${VM_MAP_VMID[threeamigos:0]} / ${VM_MAP_NAME[threeamigos:0]}"
+    fi
+}
+
+test_build_host_device_map() {
+    test_start "build_host_device_map maps LUNs to host /dev/sdX and by-path"
+    reset_mocks
+
+    build_host_device_map
+
+    local ok=1
+    [[ "${HOST_DEV[threeamigos:0]}" == "/dev/loop0" ]] || ok=0
+    [[ "${HOST_BYPATH[threeamigos:0]}" == "$by_path_dir/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0" ]] || ok=0
+    [[ "${HOST_DEV[threeamigos:1]}" == "/dev/loop1" ]] || ok=0
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Host map contents: $(declare -p HOST_DEV HOST_BYPATH)"
+    fi
+}
+
+test_build_running_vm_set() {
+    test_start "build_running_vm_set detects running VMs"
+    reset_mocks
+
+    build_running_vm_set
+
+    if [[ -n "${RUNNING_VM[100]:-}" && -z "${RUNNING_VM[200]:-}" ]]; then
+        test_pass
+    else
+        test_fail "RUNNING map contents: $(declare -p RUNNING_VM)"
+    fi
+}
+
+test_build_guest_device_map_running() {
+    test_start "build_guest_device_map queries guest agent for running VM"
+    reset_mocks
+    write_two_node_configs
+    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+
+    build_vm_disk_map
+    build_running_vm_set
+    build_guest_device_map
+
+    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" && "${GUEST_BYPATH[threeamigos:0]}" == "/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0" ]]; then
+        test_pass
+    else
+        test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
+    fi
+}
+
+test_build_guest_device_map_stopped() {
+    test_start "build_guest_device_map leaves stopped VM guest info empty"
+    reset_mocks
+    write_two_node_configs
+    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+
+    build_vm_disk_map
+    build_running_vm_set
+    build_guest_device_map
+
+    if [[ -z "${GUEST_DEV[threeamigos:1]:-}" && -z "${GUEST_BYPATH[threeamigos:1]:-}" ]]; then
+        test_pass
+    else
+        test_fail "Stopped VM should have no guest device: $(declare -p GUEST_DEV GUEST_BYPATH)"
+    fi
+}
+
+test_two_node_output_compute_host() {
+    test_start "run_two_node prints VMID, name, host and guest devices"
+    reset_mocks
+    setup_two_node_zfs
+    write_two_node_configs
+    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+    _test_hostname="tweety"
+
+    local output
+    output=$(run_two_node 2>&1)
+
+    local ok=1
+    [[ "$output" == *"VMID:   100"* ]] || ok=0
+    [[ "$output" == *"Name:   webserver"* ]] || ok=0
+    [[ "$output" == *"Host:   /dev/loop0"* ]] || ok=0
+    [[ "$output" == *"Guest:  /dev/sda"* ]] || ok=0
+    [[ "$output" == *"VMID:   200"* ]] || ok=0
+    [[ "$output" == *"Name:   dbserver"* ]] || ok=0
+    [[ "$output" == *"Host:   /dev/loop1"* ]] || ok=0
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Output missing expected fields:\n$output"
+    fi
+}
+
+test_two_node_output_storage_host() {
+    test_start "run_two_node works when invoked on the storage host"
+    reset_mocks
+    setup_two_node_zfs
+    write_two_node_configs
+    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+    _test_hostname="stewie"
+
+    local output
+    output=$(run_two_node 2>&1)
+
+    if [[ "$output" == *"VMID:   100"* && "$output" == *"Name:   webserver"* && "$output" == *"Host:   /dev/loop0"* ]]; then
+        test_pass
+    else
+        test_fail "Storage-host output missing expected fields:\n$output"
+    fi
+}
+
+test_single_node_output() {
+    test_start "run_single_node prints VM ownership and guest devices"
+    reset_mocks
+    export NODE_CONF="$node_conf_single"
+    _test_hostname="single"
+    rm -f "$pve_dir"/*.conf
+    cat > "$pve_dir/100.conf" << 'EOF'
+name: webserver
+scsi0: threeamigos:vm-100-disk-0,format=raw,size=50G
+EOF
+
+    mock_zpool_list $'threeamigos'
+    mock_zfs_fs_list $'threeamigos/proxmox/vm-100-disk-0'
+    mock_zfs_prop "threeamigos/proxmox/vm-100-disk-0" "volsize" "50G"
+    mock_zfs_prop "threeamigos/proxmox/vm-100-disk-0" "origin" "-"
+    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+
+    # Re-source node-lib.sh so is_single_node reflects the new config.
+    source /usr/local/lib/node-lib.sh
+
+    local output
+    output=$(run_single_node 2>&1)
+
+    local ok=1
+    [[ "$output" == *"VMID:   100"* ]] || ok=0
+    [[ "$output" == *"Name:   webserver"* ]] || ok=0
+    [[ "$output" == *"Guest:  /dev/sda"* ]] || ok=0
+    # Single-node has no iSCSI host line.
+    [[ "$output" != *"Host:"* ]] || ok=0
+
+    # Restore two-node config for remaining tests.
+    export NODE_CONF="$node_conf_two"
+    source /usr/local/lib/node-lib.sh
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Single-node output missing expected fields:\n$output"
+    fi
+}
+
+test_emit_vm_data_machine_readable() {
+    test_start "emit_vm_data produces expected machine-readable records"
+    reset_mocks
+    write_two_node_configs
+    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+    _test_hostname="tweety"
+
+    build_vm_disk_map
+    build_host_device_map
+    build_running_vm_set
+    build_guest_device_map
+
+    local output
+    output=$(emit_vm_data)
+
+    local ok=1
+    [[ "$output" == *"VM|threeamigos:0|100|webserver|scsi0"* ]] || ok=0
+    [[ "$output" == *"HOST|threeamigos:0|/dev/loop0|"* ]] || ok=0
+    [[ "$output" == *"RUNNING|100"* ]] || ok=0
+    [[ "$output" == *"GUEST|threeamigos:0|/dev/sda|/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"* ]] || ok=0
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Machine-readable output:\n$output"
+    fi
+}
+
+test_emit_lun_data_machine_readable() {
+    test_start "emit_lun_data produces expected machine-readable records"
+    reset_mocks
+    setup_two_node_zfs
+    _test_hostname="stewie"
+
+    local output
+    output=$(emit_lun_data)
+
+    if [[ "$output" == *"LUN|threeamigos|0|vm-100-disk-0|threeamigos/proxmox/vm-100-disk-0|50G"* ]]; then
+        test_pass
+    else
+        test_fail "Machine-readable LUN output:\n$output"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------------------
+
+test_build_vm_disk_map_two_node
+test_build_vm_disk_map_moved_disk
+test_build_host_device_map
+test_build_running_vm_set
+test_build_guest_device_map_running
+test_build_guest_device_map_stopped
+test_two_node_output_compute_host
+test_two_node_output_storage_host
+test_single_node_output
+test_emit_vm_data_machine_readable
+test_emit_lun_data_machine_readable
+
+# ------------------------------------------------------------------------------
+# Cleanup
+# ------------------------------------------------------------------------------
+
+rm -rf "$tmp_dir"
+
+test_summary
+teardown_test_env

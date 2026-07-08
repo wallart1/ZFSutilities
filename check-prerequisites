@@ -217,11 +217,15 @@ if [[ -z "$LIST_FAILURES" ]]; then
     echo "=== Documentation ==="
 fi
 check_cmd "docs" "pip3" "python3-pip"
-check_cmd "docs" "mkdocs" "mkdocs"
+if command -v mkdocs >/dev/null 2>&1; then
+    pass "mkdocs"
+else
+    warn "mkdocs not installed — the documentation-server step will install it"
+fi
 if python3 -c "import material" >/dev/null 2>&1; then
     pass "mkdocs-material"
 else
-    fail "docs" "mkdocs-material" "mkdocs-material" "theme package not installed"
+    warn "mkdocs-material not installed — the documentation-server step will install it"
 fi
 if [[ -z "$LIST_FAILURES" ]]; then
     echo ""

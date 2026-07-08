@@ -1,6 +1,7 @@
 #!/bin/bash
 # list-vm-disks [--with-devices]
-# Lists all zvols currently exported as iSCSI LUNs, with sizes and clone relationships.
+# Lists all zvols currently exported as iSCSI LUNs, with VM ownership,
+# sizes, clone relationships, and host/guest device names.
 #
 # Install to: /usr/local/lib/zfsutilities/bin/list-vm-disks on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
@@ -8,35 +9,394 @@
 source /usr/local/lib/node-lib.sh
 
 MY_HOST=$(hostname -s)
+: "${LIST_VM_DISKS_CONF_DIR:=/etc/pve/qemu-server}"
+PVE_CONF_DIR="$LIST_VM_DISKS_CONF_DIR"
+: "${LIST_VM_DISKS_BY_PATH_DIR:=/dev/disk/by-path}"
+
+: "${LIST_VM_DISKS_GUEST_POLL_MAX:=40}"
+: "${LIST_VM_DISKS_GUEST_POLL_SLEEP:=0.25}"
 
 die() {
     echo "✗ ERROR: $*" >&2
     exit 1
 }
 
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+warn() {
+    echo "⚠ $*" >&2
+}
 
-WITH_DEVICES=false
-[[ "${1}" == "--with-devices" ]] && WITH_DEVICES=true
+if [[ "${LIST_VM_DISKS_SKIP_ROOT_CHECK:-}" != "Y" ]]; then
+    [[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+fi
 
-# --- Single-node mode: list zvols directly ---
-if is_single_node; then
+# --- Argument parsing ---------------------------------------------------------
+# --with-devices is accepted for backward compatibility but no longer changes
+# output because device information is now included by default.
+GATHER_VM_INFO=false
+GATHER_LUN_INFO=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --with-devices) ;;
+        --gather-vm-info) GATHER_VM_INFO=true ;;
+        --gather-lun-info) GATHER_LUN_INFO=true ;;
+        *) die "Unknown argument: $arg" ;;
+    esac
+done
+
+# --- Lookup tables ------------------------------------------------------------
+declare -A VM_MAP_VMID
+declare -A VM_MAP_NAME
+declare -A VM_MAP_KEY
+declare -A HOST_DEV
+declare -A HOST_BYPATH
+declare -A GUEST_DEV
+declare -A GUEST_BYPATH
+declare -A RUNNING_VM
+
+# --- VM config parsing --------------------------------------------------------
+# Populates VM_MAP_* keyed by:
+#   two-node: <target_short>:<lun>
+#   single-node: <pool>:<zvol_vmid>:<zvol_disknum>
+build_vm_disk_map() {
+    local conf vmid name line key
+
+    for conf in "$PVE_CONF_DIR"/*.conf; do
+        [[ -f "$conf" ]] || continue
+
+        vmid=$(basename "$conf" .conf)
+        [[ "$vmid" =~ ^[0-9]+$ ]] || continue
+
+        name=$(grep '^name:' "$conf" 2>/dev/null | head -1 | cut -d: -f2- | sed 's/^[[:space:]]*//')
+        [[ -n "$name" ]] && name="${name%$'\r'}"
+        [[ -z "$name" ]] && name="-"
+
+        while IFS= read -r line; do
+            key="${line%%:*}"
+            [[ "$key" == "$line" ]] && continue
+            _parse_vm_disk_line "$vmid" "$name" "$key" "$line"
+        done < <(grep -E '^(scsi|ide|sata|virtio|efidisk)[0-9]+:' "$conf" 2>/dev/null)
+    done
+}
+
+_parse_vm_disk_line() {
+    local vmid="$1" name="$2" key="$3" line="$4"
+    local disk_id
+
+    if is_two_node; then
+        local targetshort lun
+        if [[ "$line" =~ ip-[^:]+:3260-iscsi-[^:]+:([^-[:space:]/]+)-lun-([0-9]+) ]]; then
+            targetshort="${BASH_REMATCH[1]}"
+            lun="${BASH_REMATCH[2]}"
+            disk_id="${targetshort}:${lun}"
+            VM_MAP_VMID["$disk_id"]="$vmid"
+            VM_MAP_NAME["$disk_id"]="$name"
+            VM_MAP_KEY["$disk_id"]="$key"
+        fi
+    else
+        local pool zvmid zdisk
+        if [[ "$line" =~ ^${key}:[[:space:]]*([^:]+):vm-([0-9]+)-disk-([0-9]+) ]]; then
+            pool="${BASH_REMATCH[1]}"
+            zvmid="${BASH_REMATCH[2]}"
+            zdisk="${BASH_REMATCH[3]}"
+            disk_id="${pool}:${zvmid}:${zdisk}"
+            VM_MAP_VMID["$disk_id"]="$vmid"
+            VM_MAP_NAME["$disk_id"]="$name"
+            VM_MAP_KEY["$disk_id"]="$key"
+        fi
+    fi
+}
+
+# --- Host device map (two-node only) ------------------------------------------
+# Maps <target_short>:<lun> to the compute host's /dev/sdX and by-path names.
+build_host_device_map() {
+    is_two_node || return 0
+
+    local target_re link name targetshort lun devpath dev
+    target_re="$(IFS='|'; echo "${POOL_TARGET[*]}")"
+    [[ -z "$target_re" ]] && return 0
+
+    while IFS= read -r link; do
+        name=$(basename "$link")
+        if [[ "$name" =~ :(${target_re})-lun-([0-9]+)$ ]]; then
+            targetshort="${BASH_REMATCH[1]}"
+            lun="${BASH_REMATCH[2]}"
+            devpath=$(readlink -f "$link" 2>/dev/null)
+            [[ -b "$devpath" ]] || continue
+            dev=$(basename "$devpath")
+            HOST_DEV["${targetshort}:${lun}"]="/dev/${dev}"
+            HOST_BYPATH["${targetshort}:${lun}"]="$link"
+        fi
+    done < <(ls "${LIST_VM_DISKS_BY_PATH_DIR}/ip-${STORAGE_IP}"* 2>/dev/null)
+}
+
+# --- Running VM detection -----------------------------------------------------
+build_running_vm_set() {
+    local vmid
+    while IFS= read -r vmid; do
+        [[ -n "$vmid" ]] && RUNNING_VM["$vmid"]=1
+    done < <(qm list 2>/dev/null | awk 'NR>1 && $3 == "running" {print $1}')
+}
+
+# --- Guest device map ---------------------------------------------------------
+# For each running VM's attached disk, query the guest agent for the /dev/sdX
+# and /dev/disk/by-path names seen inside the VM.  Only SCSI disks are mapped
+# reliably by their Proxmox disk key (scsiN -> scsi-0:0:N:0 in the guest).
+build_guest_device_map() {
+    local disk_id vmid disk_key
+    for disk_id in "${!VM_MAP_VMID[@]}"; do
+        vmid="${VM_MAP_VMID[$disk_id]}"
+        [[ -n "${RUNNING_VM[$vmid]:-}" ]] || continue
+        disk_key="${VM_MAP_KEY[$disk_id]}"
+        _query_guest_disk "$vmid" "$disk_key" "$disk_id"
+    done
+}
+
+_query_guest_disk() {
+    local vmid="$1" disk_key="$2" disk_id="$3"
+    local scsi_num=""
+
+    if [[ "$disk_key" =~ ^scsi([0-9]+)$ ]]; then
+        scsi_num="${BASH_REMATCH[1]}"
+    else
+        return 0
+    fi
+
+    # Proxmox scsiN maps to SCSI target/lun 0:0:N:0 inside a Linux guest.
+    local guest_cmd
+    guest_cmd=$(printf '%s' \
+        "for l in /dev/disk/by-path/*scsi-0:0:${scsi_num}:0; do " \
+        "[ -L \"\$l\" ] || continue; " \
+        "d=\$(readlink -f \"\$l\" 2>/dev/null); " \
+        "[ -b \"\$d\" ] && printf '%s\\n%s\\n' \"\$d\" \"\$l\" && break; " \
+        "done")
+
+    local exec_result pid
+    exec_result=$(qm guest exec "$vmid" -- /bin/sh -c "$guest_cmd" 2>/dev/null) || return 0
+    pid=$(echo "$exec_result" | grep -oP '"pid"\s*:\s*\K[0-9]+' 2>/dev/null)
+    [[ -n "$pid" ]] || return 0
+
+    local status out exited
+    local -i i
+    for (( i=1; i<=LIST_VM_DISKS_GUEST_POLL_MAX; i++ )); do
+        status=$(qm guest exec-status "$vmid" "$pid" 2>/dev/null) || return 0
+        exited=$(echo "$status" | grep -oP '"exited"\s*:\s*\K(true|false)' 2>/dev/null)
+        if [[ "$exited" == "true" ]]; then
+            out=$(echo "$status" | grep -oP '"out-data"\s*:\s*"\K[^"]*' 2>/dev/null)
+            if [[ -n "$out" ]]; then
+                out=$(printf '%s' "$out" | sed 's/\\n/\n/g')
+                GUEST_DEV["$disk_id"]=$(echo "$out" | head -1)
+                GUEST_BYPATH["$disk_id"]=$(echo "$out" | tail -1)
+            fi
+            return 0
+        fi
+        sleep "$LIST_VM_DISKS_GUEST_POLL_SLEEP"
+    done
+}
+
+# --- Machine-readable data emission -------------------------------------------
+emit_vm_data() {
+    local disk_id
+    for disk_id in "${!VM_MAP_VMID[@]}"; do
+        printf 'VM|%s|%s|%s|%s\n' \
+            "$disk_id" "${VM_MAP_VMID[$disk_id]}" "${VM_MAP_NAME[$disk_id]}" "${VM_MAP_KEY[$disk_id]}"
+    done
+    for disk_id in "${!HOST_DEV[@]}"; do
+        printf 'HOST|%s|%s|%s\n' "$disk_id" "${HOST_DEV[$disk_id]}" "${HOST_BYPATH[$disk_id]}"
+    done
+    for vmid in "${!RUNNING_VM[@]}"; do
+        printf 'RUNNING|%s\n' "$vmid"
+    done
+    for disk_id in "${!GUEST_DEV[@]}"; do
+        printf 'GUEST|%s|%s|%s\n' "$disk_id" "${GUEST_DEV[$disk_id]}" "${GUEST_BYPATH[$disk_id]}"
+    done
+}
+
+emit_lun_data() {
+    local backstores TARGET line LUN BSNAME ZVOL SIZE origin clone_info clone_list src_vmid targetshort
+    backstores=$(targetcli /backstores/block ls 2>/dev/null)
+
+    while IFS= read -r TARGET; do
+        targetshort="${TARGET##*:}"
+        while IFS= read -r line; do
+            LUN=$(echo "$line" | grep -oP 'lun\K[0-9]+')
+            BSNAME=$(echo "$line" | grep -oP 'block/\K[^\s/]+')
+            [[ -z "$LUN" || -z "$BSNAME" ]] && continue
+
+            ZVOL=$(echo "$backstores" | grep " ${BSNAME} " | grep -oP '/dev/zvol/\K[^ )]+')
+            [[ -z "$ZVOL" ]] && continue
+
+            SIZE=$(zfs get -H -o value volsize "$ZVOL" 2>/dev/null || echo "?")
+
+            clone_info=""
+            origin=$(zfs get -H -o value origin "$ZVOL" 2>/dev/null)
+            if [[ "$origin" != "-" && -n "$origin" ]]; then
+                src_vmid=$(echo "$origin" | grep -oP '/vm-\K[0-9]+(?=-disk-)')
+                [[ -n "$src_vmid" ]] && clone_info="[clone of vm-${src_vmid}]"
+            fi
+
+            clone_list=$(zfs list -H -t snapshot -o clones -r "$ZVOL" 2>/dev/null \
+                | grep -v '^-$' \
+                | grep -oP 'vm-\K[0-9]+(?=-disk-)' \
+                | sort -u \
+                | awk '{printf "%svm-%s", (NR>1?", ":""), $1}')
+            if [[ -n "$clone_list" ]]; then
+                clone_info+="${clone_info:+ }[cloned by: ${clone_list}]"
+            fi
+
+            printf 'LUN|%s|%s|%s|%s|%s|%s\n' \
+                "$targetshort" "$LUN" "$BSNAME" "$ZVOL" "$SIZE" "$clone_info"
+        done < <(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null)
+    done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+')
+}
+
+# --- Internal gather modes ----------------------------------------------------
+if [[ "$GATHER_VM_INFO" == true ]]; then
+    build_vm_disk_map
+    build_host_device_map
+    build_running_vm_set
+    build_guest_device_map
+    emit_vm_data
+    exit 0
+fi
+
+if [[ "$GATHER_LUN_INFO" == true ]]; then
+    emit_lun_data
+    exit 0
+fi
+
+# --- Data parsing from the remote helper --------------------------------------
+parse_vm_data() {
+    local data="$1"
+    local record_type disk_id
+
+    while IFS='|' read -r -a fields; do
+        record_type="${fields[0]}"
+        disk_id="${fields[1]}"
+        case "$record_type" in
+            VM)
+                VM_MAP_VMID["$disk_id"]="${fields[2]}"
+                VM_MAP_NAME["$disk_id"]="${fields[3]}"
+                VM_MAP_KEY["$disk_id"]="${fields[4]}"
+                ;;
+            HOST)
+                HOST_DEV["$disk_id"]="${fields[2]}"
+                HOST_BYPATH["$disk_id"]="${fields[3]}"
+                ;;
+            RUNNING)
+                RUNNING_VM["$disk_id"]=1
+                ;;
+            GUEST)
+                GUEST_DEV["$disk_id"]="${fields[2]}"
+                GUEST_BYPATH["$disk_id"]="${fields[3]}"
+                ;;
+        esac
+    done <<< "$data"
+}
+
+# --- Remote gathering wrappers ------------------------------------------------
+gather_vm_info() {
+    if [[ "$MY_HOST" == "$COMPUTE_HOST" ]]; then
+        build_vm_disk_map
+        build_host_device_map
+        build_running_vm_set
+        build_guest_device_map
+        emit_vm_data
+    else
+        ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
+            "/usr/local/lib/zfsutilities/bin/list-vm-disks --gather-vm-info" 2>&1
+    fi
+}
+
+gather_lun_info() {
+    if [[ "$MY_HOST" == "$STORAGE_HOST" ]]; then
+        emit_lun_data
+    else
+        ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" \
+            "/usr/local/lib/zfsutilities/bin/list-vm-disks --gather-lun-info" 2>&1
+    fi
+}
+
+# --- Output printing ----------------------------------------------------------
+print_disk_block() {
+    local disk_id="$1" bsname="$2" size="$3" clone_info="$4"
+    local vmid name disk_key host_dev host_bypath guest_dev guest_bypath
+
+    vmid="${VM_MAP_VMID[$disk_id]:--}"
+    name="${VM_MAP_NAME[$disk_id]:--}"
+    disk_key="${VM_MAP_KEY[$disk_id]:--}"
+    host_dev="${HOST_DEV[$disk_id]:--}"
+    host_bypath="${HOST_BYPATH[$disk_id]:--}"
+    guest_dev="${GUEST_DEV[$disk_id]:--}"
+    guest_bypath="${GUEST_BYPATH[$disk_id]:--}"
+
+    printf '  Disk:   %s\n' "$bsname"
+    printf '  VMID:   %s\n' "$vmid"
+    printf '  Name:   %s\n' "$name"
+    printf '  Key:    %s\n' "$disk_key"
+    printf '  Size:   %s\n' "$size"
+    if is_two_node; then
+        printf '  Host:   %s  %s\n' "$host_dev" "$host_bypath"
+    fi
+    printf '  Guest:  %s  %s\n' "$guest_dev" "$guest_bypath"
+    if [[ -n "$clone_info" ]]; then
+        printf '  Clone:  %s\n' "$clone_info"
+    fi
+    echo ""
+}
+
+print_two_node_output() {
+    local lun_data="$1"
+    local current_target=""
+    local -a fields
+
+    echo "=== VM Disk Inventory ==="
+    echo ""
+
+    while IFS='|' read -r -a fields; do
+        [[ "${fields[0]}" == "LUN" ]] || continue
+
+        local targetshort="${fields[1]}" lun="${fields[2]}" bsname="${fields[3]}"
+        local size="${fields[5]}" clone_info="${fields[6]}"
+        local disk_id="${targetshort}:${lun}"
+
+        if [[ "$current_target" != "$targetshort" ]]; then
+            [[ -n "$current_target" ]] && echo ""
+            echo "Target: ${IQN_PREFIX}:${targetshort}"
+            echo "---------------------------------------------------------------"
+            current_target="$targetshort"
+        fi
+
+        printf '  LUN:    lun%s\n' "$lun"
+        print_disk_block "$disk_id" "$bsname" "$size" "$clone_info"
+    done <<< "$lun_data"
+}
+
+# --- Single-node mode ---------------------------------------------------------
+run_single_node() {
+    build_vm_disk_map
+    build_running_vm_set
+    build_guest_device_map
+
     echo "=== VM Disk Inventory (single-node) ==="
     echo ""
 
+    local pool zvols zvol bsname SIZE disk_id origin clone_info clone_list src_vmid
     for pool in $(zpool list -H -o name 2>/dev/null); do
-        # Check if this pool has any vm- zvols
         zvols=$(zfs list -H -t volume -o name -r "$pool" 2>/dev/null | grep '/proxmox/vm-' || true)
         [[ -n "$zvols" ]] || continue
 
         echo "Pool: $pool"
         echo "---------------------------------------------------------------"
-        printf "  %-30s  %-8s  %s\n" "Disk Name" "Size" ""
-        printf "  %-30s  %-8s  %s\n" "---------" "----" ""
 
         while IFS= read -r zvol; do
             bsname="${zvol##*/}"
             SIZE=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "?")
+            disk_id=""
+
+            if [[ "$zvol" =~ /vm-([0-9]+)-disk-([0-9]+)$ ]]; then
+                disk_id="${pool}:${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
+            fi
 
             clone_info=""
             origin=$(zfs get -H -o value origin "$zvol" 2>/dev/null)
@@ -54,87 +414,31 @@ if is_single_node; then
                 clone_info+="${clone_info:+ }[cloned by: ${clone_list}]"
             fi
 
-            printf "  %-30s  %-8s  %s\n" "$bsname" "$SIZE" "$clone_info"
+            print_disk_block "$disk_id" "$bsname" "$SIZE" "$clone_info"
         done <<< "$zvols"
         echo ""
     done
-    exit 0
-fi
+}
 
-# --- If not on the storage host, get LUN list via SSH (two-node only) ---
-if [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
-    if [[ "$WITH_DEVICES" == true ]]; then
-        ssh root@"$STORAGE_HOST" "/usr/local/lib/zfsutilities/bin/list-vm-disks --with-devices" || exit 1
+# --- Two-node mode ------------------------------------------------------------
+run_two_node() {
+    local vm_data lun_data
+
+    vm_data=$(gather_vm_info) || die "Failed to gather VM info from $COMPUTE_HOST"
+    lun_data=$(gather_lun_info) || die "Failed to gather LUN info from $STORAGE_HOST"
+
+    parse_vm_data "$vm_data"
+    print_two_node_output "$lun_data"
+}
+
+main() {
+    if is_single_node; then
+        run_single_node
     else
-        ssh root@"$STORAGE_HOST" "/usr/local/lib/zfsutilities/bin/list-vm-disks" || exit 1
+        run_two_node
     fi
+}
 
-    if [[ "$WITH_DEVICES" == true ]]; then
-        echo ""
-        if [[ "$MY_HOST" == "$COMPUTE_HOST" ]]; then
-            /usr/local/lib/zfsutilities/bin/show-lun-map
-        else
-            ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/show-lun-map" 2>&1 \
-                || echo "⚠ Could not reach $COMPUTE_HOST — run 'sudo show-lun-map' on $COMPUTE_HOST manually"
-        fi
-    fi
-    exit 0
-fi
-
-# === Running on the storage host ===
-
-echo "=== VM Disk Inventory ==="
-echo ""
-
-# Cache backstores output once — used to derive zvol path from backstore name
-backstores=$(targetcli /backstores/block ls 2>/dev/null)
-
-# Enumerate all iSCSI targets dynamically — no pool names or IQNs hardcoded
-while IFS= read -r TARGET; do
-    echo "Target: $TARGET"
-    echo "---------------------------------------------------------------"
-    printf "  %-8s  %-30s  %-8s\n" "LUN" "Disk Name" "Size"
-    printf "  %-8s  %-30s  %-8s\n" "---" "---------" "----"
-
-    while IFS= read -r line; do
-        LUN=$(echo "$line" | grep -oP 'lun\K[0-9]+')
-        BSNAME=$(echo "$line" | grep -oP 'block/\K[^\s/]+')
-        [[ -z "$LUN" || -z "$BSNAME" ]] && continue
-
-        # Derive full zvol path from the backstore's device path
-        ZVOL=$(echo "$backstores" | grep " ${BSNAME} " | grep -oP '/dev/zvol/\K[^ )]+')
-        if [[ -z "$ZVOL" ]]; then
-            printf "  lun%-5s  %-30s  %-8s\n" "$LUN" "$BSNAME" "?"
-            continue
-        fi
-
-        SIZE=$(zfs get -H -o value volsize "$ZVOL" 2>/dev/null || echo "?")
-
-        # Clone relationship: is this zvol itself a clone?
-        origin=$(zfs get -H -o value origin "$ZVOL" 2>/dev/null)
-        clone_info=""
-        if [[ "$origin" != "-" && -n "$origin" ]]; then
-            src_vmid=$(echo "$origin" | grep -oP '/vm-\K[0-9]+(?=-disk-)')
-            [[ -n "$src_vmid" ]] && clone_info="[clone of vm-${src_vmid}]"
-        fi
-
-        # Clone relationship: do any of this zvol's snapshots have clone dependents?
-        clone_list=$(zfs list -H -t snapshot -o clones -r "$ZVOL" 2>/dev/null \
-            | grep -v '^-$' \
-            | grep -oP 'vm-\K[0-9]+(?=-disk-)' \
-            | sort -u \
-            | awk '{printf "%svm-%s", (NR>1?", ":""), $1}')
-        if [[ -n "$clone_list" ]]; then
-            clone_info+="${clone_info:+ }[cloned by: ${clone_list}]"
-        fi
-
-        printf "  lun%-5s  %-30s  %-8s  %s\n" "$LUN" "$BSNAME" "$SIZE" "$clone_info"
-    done < <(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null)
-
-    echo ""
-done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+')
-
-if [[ "$WITH_DEVICES" == true ]]; then
-    ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/show-lun-map" 2>&1 \
-        || echo "⚠ Could not reach $COMPUTE_HOST — run 'sudo show-lun-map' on $COMPUTE_HOST to see device map"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
 fi

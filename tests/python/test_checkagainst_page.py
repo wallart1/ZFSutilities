@@ -505,6 +505,88 @@ class TestStatusUpdateEmptyFields(unittest.TestCase):
         self.assertIn("empty required fields", markup)
 
 
+class TestTabNavigationWiring(unittest.TestCase):
+    """Editable cell renderers are wired for Tab/Shift+Tab navigation."""
+
+    def test_all_editable_renderers_connect_editing_started(self):
+        app = MagicMock()
+        app.config = {"checkagainst": []}
+        renderers = []
+
+        def _make_renderer():
+            r = MagicMock()
+            r._connections = []
+
+            def _connect(signal, callback, *args):
+                r._connections.append((signal, callback, args))
+
+            r.connect.side_effect = _connect
+            renderers.append(r)
+            return r
+
+        with patch.object(cap.Gtk, "CellRendererText", side_effect=_make_renderer), \
+             patch.object(cap, "_set_button_markup"):
+            cap.create_checkagainst_page(app)
+
+        self.assertEqual(len(renderers), 5)
+        expected_cols = [cap.COL_DATASET, cap.COL_QUALS, cap.COL_COUNTERPART,
+                         cap.COL_LABEL, cap.COL_COMMENT]
+        for idx, renderer in enumerate(renderers):
+            editing_connections = [
+                c for c in renderer._connections if c[0] == "editing-started"
+            ]
+            self.assertEqual(len(editing_connections), 1,
+                             f"Renderer {idx} should have one editing-started connection")
+            _signal, handler, args = editing_connections[0]
+            self.assertIs(handler, cap._on_editing_started)
+            self.assertEqual(args[1], expected_cols[idx])
+
+    def test_editing_started_handler_wires_key_press(self):
+        app = MagicMock()
+        app.config = {"checkagainst": []}
+        renderers = []
+
+        def _make_renderer():
+            r = MagicMock()
+            r._connections = []
+
+            def _connect(signal, callback, *args):
+                r._connections.append((signal, callback, args))
+
+            r.connect.side_effect = _connect
+            renderers.append(r)
+            return r
+
+        with patch.object(cap.Gtk, "CellRendererText", side_effect=_make_renderer), \
+             patch.object(cap, "_set_button_markup"):
+            cap.create_checkagainst_page(app)
+
+        renderer = renderers[0]
+        editing_connections = [
+            c for c in renderer._connections if c[0] == "editing-started"
+        ]
+        self.assertEqual(len(editing_connections), 1)
+        _signal, handler, args = editing_connections[0]
+        editable = MagicMock()
+        treeview = args[0]
+        col_idx = args[1]
+
+        with patch.object(cap, "handle_editing_key_press") as mock_handler:
+            handler(renderer, editable, "0", treeview, col_idx)
+
+        editable.connect.assert_called_once()
+        conn_args = editable.connect.call_args[0]
+        self.assertEqual(conn_args[0], "key-press-event")
+        self.assertIs(conn_args[1], mock_handler)
+        self.assertEqual(conn_args[2], treeview)
+        self.assertEqual(conn_args[3], "0")
+        self.assertEqual(conn_args[4], col_idx)
+        self.assertEqual(conn_args[5], [
+            cap.COL_DATASET, cap.COL_QUALS, cap.COL_COUNTERPART,
+            cap.COL_LABEL, cap.COL_COMMENT,
+        ])
+
+
 class TestActionHandlersEmptyFields(unittest.TestCase):
     """Save rejects empty required fields."""
 

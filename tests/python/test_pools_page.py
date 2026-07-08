@@ -256,27 +256,17 @@ class TestOffsiteToggle(unittest.TestCase):
 
 
 class TestDragEndPreservesFlags(unittest.TestCase):
-    """DND reorder preserves offsite_candidate flags."""
+    """DND reorder preserves offsite_candidate flags and selection."""
 
-    def test_reorder_keeps_flags(self):
-        pp = _import_pools_page()
+    def _make_drag_app(self, pp, known_pools, reversed_order):
         app = MagicMock()
-        app.known_pools = [
-            {"name": "tank", "offsite_candidate": True},
-            {"name": "z40tb", "offsite_candidate": False},
-        ]
+        app.known_pools = list(known_pools)
         app.pool_view = MagicMock()
-        app.pool_view.get_selection.return_value.get_selected.return_value = (
-            None, None
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
+            app.pool_view.get_model.return_value, []
         )
 
-        # Simulate rows in reversed order
-        rows = [
-            {"name": "z40tb", "flag": "registered"},
-            {"name": "tank", "flag": "registered"},
-        ]
-        row_iter = iter(rows)
-
+        row_iter = iter(reversed_order)
         model = app.pool_view.get_model.return_value
 
         def get_iter_first():
@@ -301,6 +291,21 @@ class TestDragEndPreservesFlags(unittest.TestCase):
         model.get_iter_first.side_effect = get_iter_first
         model.iter_next.side_effect = iter_next
         model.get_value.side_effect = get_value
+        model.get_iter.return_value = None
+        return app
+
+    def test_reorder_keeps_flags(self):
+        pp = _import_pools_page()
+        app = self._make_drag_app(pp,
+            [
+                {"name": "tank", "offsite_candidate": True},
+                {"name": "z40tb", "offsite_candidate": False},
+            ],
+            [
+                {"name": "z40tb", "flag": "registered"},
+                {"name": "tank", "flag": "registered"},
+            ],
+        )
 
         with patch.object(pp, "refresh_pools_page"):
             pp._on_pools_drag_end(app.pool_view, None, app)
@@ -308,6 +313,44 @@ class TestDragEndPreservesFlags(unittest.TestCase):
         self.assertEqual([p["name"] for p in app.known_pools], ["z40tb", "tank"])
         self.assertEqual(app.known_pools[0]["offsite_candidate"], False)
         self.assertEqual(app.known_pools[1]["offsite_candidate"], True)
+
+    def test_reorder_preserves_multiple_selections(self):
+        pp = _import_pools_page()
+        app = self._make_drag_app(pp,
+            [
+                {"name": "tank", "offsite_candidate": True},
+                {"name": "z40tb", "offsite_candidate": False},
+            ],
+            [
+                {"name": "z40tb", "flag": "registered"},
+                {"name": "tank", "flag": "registered"},
+            ],
+        )
+        model = app.pool_view.get_model.return_value
+        path_a = MagicMock()
+        path_b = MagicMock()
+        iter_a = {"name": "tank", "flag": "registered"}
+        iter_b = {"name": "z40tb", "flag": "registered"}
+
+        def get_iter(path):
+            if path is path_a:
+                return iter_a
+            if path is path_b:
+                return iter_b
+            return None
+
+        model.get_iter.side_effect = get_iter
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
+            model, [path_a, path_b]
+        )
+
+        with patch.object(pp, "refresh_pools_page"), \
+             patch.object(pp, "_select_pool_by_name") as mock_select:
+            pp._on_pools_drag_end(app.pool_view, None, app)
+
+        mock_select.assert_any_call(app.pool_view, "tank")
+        mock_select.assert_any_call(app.pool_view, "z40tb")
+        self.assertEqual(mock_select.call_count, 2)
 
 
 class TestScrubTogglesUsePoolNames(unittest.TestCase):

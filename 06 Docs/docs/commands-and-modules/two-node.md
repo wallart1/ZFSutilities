@@ -344,7 +344,10 @@ Handles both encrypted and non-encrypted LUNs. Preserves original LUN indexes so
 
 ### `list-vm-disks` (both)
 
-Lists all zvols currently exported as iSCSI LUNs, with sizes and clone relationships.
+Lists all zvols currently exported as iSCSI LUNs, together with the VM that
+owns each disk, the VM name, the host-side device names, and (when the VM is
+running and the QEMU guest agent is available) the device names seen inside the
+guest.
 
 ```bash
 sudo list-vm-disks [--with-devices]
@@ -354,33 +357,44 @@ sudo list-vm-disks [--with-devices]
 
 | Argument         | Description                                                                                                |
 | ---------------- | ---------------------------------------------------------------------------------------------------------- |
-| `--with-devices` | Also show the LUN-to-block-device map from the compute node ([`show-lun-map`](#show-lun-map-compute-node)) |
+| `--with-devices` | Accepted for backward compatibility; device information is now included by default. |
 
 **Globals:** node-config globals only.
 
 **Called modules / commands:**
 
-| Script | Purpose |
-| ------ | ------- |
-| `show-lun-map` (compute host) | Display LUN → `/dev/sdX` mapping when `--with-devices` |
+| Command | Purpose |
+| ------- | ------- |
+| `qm list` / `qm guest exec` (compute host) | Detect running VMs and query guest device names. |
+| `targetcli` (storage host) | Enumerate exported LUNs. |
 
 **Data structures consumed / produced:**
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
+| `/etc/pve/qemu-server/<vmid>.conf` | Map LUNs/zvols to actual VMID and name. | — |
+| `/dev/disk/by-path/ip-<storage-ip>*` | Map LUNs to compute-host `/dev/sdX` and by-path names. | — |
 | `zpool list` / `zfs list -t volume` | Enumerate local zvols (single-node) | — |
 | `targetcli` backstores/luns | Enumerate exported LUNs (two-node) | — |
 
 **Internal flow / algorithm:**
 
-1. In single-node mode, enumerate local pools and their `vm-*` zvols directly.
-2. In two-node mode, delegate to the storage host.
-3. For each iSCSI target, list LUNs and derive the backing zvol path from the
-   backstore device.
-4. Annotate each zvol with clone relationships:
+1. Scan `/etc/pve/qemu-server/*.conf` on the compute host to build a map from
+   LUN/zvol to the actual VMID, VM name, and Proxmox disk key.  This reflects
+   disks that have been moved between VMs.
+2. On the compute host, build a LUN-to-host-device map from
+   `/dev/disk/by-path/ip-${STORAGE_IP}*`.
+3. For running VMs, use `qm guest exec` to list the guest's
+   `/dev/disk/by-path` entries and resolve the symlink to the guest's
+   `/dev/sdX`.  SCSI disks are matched by disk key (`scsiN` →
+   `*scsi-0:0:N:0` inside the guest).
+4. In single-node mode, enumerate local pools and their `vm-*` zvols directly
+   and merge with the VM/guest maps.
+5. In two-node mode, gather LUN/zvol metadata from the storage host and merge
+   with the VM/guest maps from the compute host.
+6. Annotate each zvol with clone relationships:
    - `[clone of vm-N]` if the zvol is a ZFS clone.
    - `[cloned by: vm-N, vm-M]` if any of its snapshots have clone dependents.
-5. With `--with-devices`, also call `show-lun-map` on the compute host.
 
 **Return codes / side effects:**
 
@@ -390,6 +404,10 @@ sudo list-vm-disks [--with-devices]
 | `1`  | Error (e.g., SSH failure) |
 
 Side effects: read-only; no changes to ZFS or iSCSI state.
+
+Guest device information is best-effort: it is shown only when the VM is
+running and the QEMU guest agent responds.  Stopped VMs or guests without the
+agent show `-` for guest device names.
 
 ---
 

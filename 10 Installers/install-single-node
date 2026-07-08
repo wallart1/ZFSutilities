@@ -180,6 +180,10 @@ DEPLOY_VERSION="$REPO_DIR/deploy-version"
 VERSION=$(cat "$REPO_DIR/VERSION")
 "$REPO_DIR/switch-version" "$VERSION"
 
+# Initialize retention profiles: new installs get only the default policy;
+# existing user-entered per-pool policies are preserved.
+ensure_retention_profiles
+
 echo ""
 
 # ------------------------------------------------------------------

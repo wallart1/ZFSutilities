@@ -20,6 +20,9 @@ _test_copy_logic() {
         [[ "$name" == installed-programs ]] && continue
         [[ "$name" == PROMPT* ]] && continue
         [[ "$name" == VERSION ]] && continue
+        if [[ "$name" == zfsretainpol-* && "$name" != zfsretainpol-default ]]; then
+            continue
+        fi
         if [[ -x "$script" ]]; then
             install -m 0755 "$script" "$dest_dir/"
             continue
@@ -167,14 +170,44 @@ test_directories_skipped() {
 test_data_file_executable_copied() {
     test_start "Executable data file (no shebang) is copied"
     local tmpdir=$(mktemp -d)
-    echo "bktname[0]='d'" > "$tmpdir/zfsretainpol-test"
-    chmod +x "$tmpdir/zfsretainpol-test"
+    echo "bktname[0]='d'" > "$tmpdir/mydatafile"
+    chmod +x "$tmpdir/mydatafile"
     local destdir=$(mktemp -d)
     _test_copy_logic "$tmpdir" "$destdir"
-    if [[ -f "$destdir/zfsretainpol-test" ]]; then
+    if [[ -f "$destdir/mydatafile" ]]; then
         test_pass
     else
-        test_fail "zfsretainpol-test should have been copied"
+        test_fail "mydatafile should have been copied"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_zfsretainpol_default_copied() {
+    test_start "zfsretainpol-default is copied"
+    local tmpdir=$(mktemp -d)
+    echo "bktname[0]='d'; bktretain[0]=3; minage[0]=0" > "$tmpdir/zfsretainpol-default"
+    chmod +x "$tmpdir/zfsretainpol-default"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ -f "$destdir/zfsretainpol-default" ]]; then
+        test_pass
+    else
+        test_fail "zfsretainpol-default should have been copied"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_zfsretainpol_pool_skipped() {
+    test_start "Pool-specific zfsretainpol-* files are skipped"
+    local tmpdir=$(mktemp -d)
+    echo "bktname[0]='d'; bktretain[0]=5; minage[0]=0" > "$tmpdir/zfsretainpol-fivebays"
+    chmod +x "$tmpdir/zfsretainpol-fivebays"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ ! -f "$destdir/zfsretainpol-fivebays" ]]; then
+        test_pass
+    else
+        test_fail "zfsretainpol-fivebays should have been skipped"
     fi
     rm -rf "$tmpdir" "$destdir"
 }
@@ -211,6 +244,8 @@ test_VERSION_skipped
 test_installed_programs_skipped
 test_directories_skipped
 test_data_file_executable_copied
+test_zfsretainpol_default_copied
+test_zfsretainpol_pool_skipped
 test_multiple_mixed_files
 
 # ------------------------------------------------------------------

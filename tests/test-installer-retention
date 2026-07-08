@@ -1,0 +1,89 @@
+#!/usr/bin/bash
+# test-installer-retention — Verify installer retention profile initialization.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+INSTALLER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../10 Installers/installer-lib.sh"
+[[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
+source "$INSTALLER_LIB"
+
+_ensure_retention_profiles() {
+    # Redirect normal output so the test harness stays quiet.
+    ensure_retention_profiles >/dev/null 2>&1
+}
+
+_get_retention_keys() {
+    python3 -c "import json; print(' '.join(json.load(open('$1'))['retention'].keys()))"
+}
+
+test_new_install_creates_default_only() {
+    test_start "New install creates default-only retention policy"
+    local tmpdir=$(mktemp -d)
+    export ZFSCONFIG_PATH="$tmpdir/zfsutilities.json"
+    _ensure_retention_profiles
+    local keys
+    keys=$(_get_retention_keys "$ZFSCONFIG_PATH")
+    unset ZFSCONFIG_PATH
+    rm -rf "$tmpdir"
+    if [[ "$keys" == "default" ]]; then
+        test_pass
+    else
+        test_fail "Expected only 'default', got: $keys"
+    fi
+}
+
+test_existing_config_preserves_user_profiles() {
+    test_start "Existing user profiles are preserved"
+    local tmpdir=$(mktemp -d)
+    export ZFSCONFIG_PATH="$tmpdir/zfsutilities.json"
+    python3 -c "
+import json
+cfg = {'retention': {
+    'default': [{'name': 'd', 'retain': 3, 'minage': 0}],
+    'tank': [{'name': 'd', 'retain': 7, 'minage': 0}],
+}}
+with open('$ZFSCONFIG_PATH', 'w') as f:
+    json.dump(cfg, f)
+"
+    _ensure_retention_profiles
+    local keys
+    keys=$(_get_retention_keys "$ZFSCONFIG_PATH")
+    unset ZFSCONFIG_PATH
+    rm -rf "$tmpdir"
+    if [[ "$keys" == *"tank"* && "$keys" == *"default"* ]]; then
+        test_pass
+    else
+        test_fail "Expected default and tank, got: $keys"
+    fi
+}
+
+test_existing_config_missing_default_adds_default() {
+    test_start "Existing config missing default retention gets default added"
+    local tmpdir=$(mktemp -d)
+    export ZFSCONFIG_PATH="$tmpdir/zfsutilities.json"
+    python3 -c "
+import json
+cfg = {'retention': {'tank': [{'name': 'd', 'retain': 7, 'minage': 0}]}}
+with open('$ZFSCONFIG_PATH', 'w') as f:
+    json.dump(cfg, f)
+"
+    _ensure_retention_profiles
+    local keys
+    keys=$(_get_retention_keys "$ZFSCONFIG_PATH")
+    unset ZFSCONFIG_PATH
+    rm -rf "$tmpdir"
+    if [[ "$keys" == *"default"* && "$keys" == *"tank"* ]]; then
+        test_pass
+    else
+        test_fail "Expected default and tank, got: $keys"
+    fi
+}
+
+test_new_install_creates_default_only
+test_existing_config_preserves_user_profiles
+test_existing_config_missing_default_adds_default
+
+test_summary
+teardown_test_env

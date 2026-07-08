@@ -2480,3 +2480,184 @@ class TestTreeSearchGotoMatch(unittest.TestCase):
 
             self.assertEqual(ts._matches, ["0:0"])
             self.assertEqual(ts._current_idx, 0)
+
+
+class _FakeTreePath:
+    """Minimal TreePath stand-in for handle_editing_key_press tests."""
+
+    def __init__(self, value):
+        if isinstance(value, list):
+            self._indices = list(value)
+        elif isinstance(value, str):
+            self._indices = [int(value)]
+        else:
+            self._indices = [value]
+
+    @staticmethod
+    def new_from_string(s):
+        return _FakeTreePath([int(s)])
+
+    @staticmethod
+    def new_from_indices(indices):
+        return _FakeTreePath(list(indices))
+
+    def __getitem__(self, idx):
+        return self._indices[idx]
+
+
+class TestHandleEditingKeyPress(unittest.TestCase):
+    """Unit tests for gui_helpers.handle_editing_key_press."""
+
+    def _make_event(self, keyval):
+        event = MagicMock()
+        event.keyval = keyval
+        return event
+
+    def _setup(self, gh, keyval, path_str, col_idx, editable_cols,
+               has_next=True):
+        widget = MagicMock()
+        treeview = MagicMock()
+        model = MagicMock()
+        treeview.get_model.return_value = model
+
+        if has_next:
+            nxt = MagicMock()
+            model.iter_next.return_value = nxt
+            model.get_path.return_value = _FakeTreePath([int(path_str) + 1])
+        else:
+            model.iter_next.return_value = None
+
+        event = self._make_event(keyval)
+        gh.Gtk.TreePath = _FakeTreePath
+        gh.GLib.idle_add = lambda fn, *a, **k: fn(*a, **k) or False
+        return widget, treeview, model, event
+
+    def test_tab_moves_to_next_editable_column(self):
+        with mock_gtk():
+            import gui_helpers as gh
+            gh.Gdk.KEY_Tab = 1
+            gh.Gdk.KEY_ISO_Left_Tab = 2
+
+            widget, treeview, _model, event = self._setup(
+                gh, 1, "0", 0, [0, 1, 2])
+
+            result = gh.handle_editing_key_press(
+                widget, event, treeview, "0", 0, [0, 1, 2])
+
+            self.assertTrue(result)
+            widget.editing_done.assert_called_once()
+            widget.remove_widget.assert_called_once()
+            treeview.set_cursor.assert_called_once()
+            args = treeview.set_cursor.call_args[0]
+            self.assertEqual(args[0]._indices, [0])
+            self.assertEqual(args[1], treeview.get_column.return_value)
+            self.assertTrue(args[2])
+            treeview.get_column.assert_called_once_with(1)
+
+    def test_tab_at_last_editable_column_moves_to_next_row_first_column(self):
+        with mock_gtk():
+            import gui_helpers as gh
+            gh.Gdk.KEY_Tab = 1
+            gh.Gdk.KEY_ISO_Left_Tab = 2
+
+            widget, treeview, model, event = self._setup(
+                gh, 1, "0", 2, [0, 1, 2], has_next=True)
+
+            result = gh.handle_editing_key_press(
+                widget, event, treeview, "0", 2, [0, 1, 2])
+
+            self.assertTrue(result)
+            model.iter_next.assert_called_once()
+            treeview.set_cursor.assert_called_once()
+            args = treeview.set_cursor.call_args[0]
+            self.assertEqual(args[0]._indices, [1])
+            treeview.get_column.assert_called_once_with(0)
+
+    def test_tab_at_last_column_last_row_does_not_advance(self):
+        with mock_gtk():
+            import gui_helpers as gh
+            gh.Gdk.KEY_Tab = 1
+            gh.Gdk.KEY_ISO_Left_Tab = 2
+
+            widget, treeview, model, event = self._setup(
+                gh, 1, "0", 2, [0, 1, 2], has_next=False)
+
+            result = gh.handle_editing_key_press(
+                widget, event, treeview, "0", 2, [0, 1, 2])
+
+            self.assertTrue(result)
+            widget.editing_done.assert_called_once()
+            widget.remove_widget.assert_called_once()
+            treeview.set_cursor.assert_not_called()
+
+    def test_shift_tab_moves_to_previous_editable_column(self):
+        with mock_gtk():
+            import gui_helpers as gh
+            gh.Gdk.KEY_Tab = 1
+            gh.Gdk.KEY_ISO_Left_Tab = 2
+
+            widget, treeview, _model, event = self._setup(
+                gh, 2, "0", 1, [0, 1, 2])
+
+            result = gh.handle_editing_key_press(
+                widget, event, treeview, "0", 1, [0, 1, 2])
+
+            self.assertTrue(result)
+            widget.editing_done.assert_called_once()
+            widget.remove_widget.assert_called_once()
+            treeview.set_cursor.assert_called_once()
+            args = treeview.set_cursor.call_args[0]
+            self.assertEqual(args[0]._indices, [0])
+            treeview.get_column.assert_called_once_with(0)
+
+    def test_shift_tab_at_first_editable_column_moves_to_previous_row_last(self):
+        with mock_gtk():
+            import gui_helpers as gh
+            gh.Gdk.KEY_Tab = 1
+            gh.Gdk.KEY_ISO_Left_Tab = 2
+
+            widget, treeview, _model, event = self._setup(
+                gh, 2, "1", 0, [0, 1, 2])
+
+            result = gh.handle_editing_key_press(
+                widget, event, treeview, "1", 0, [0, 1, 2])
+
+            self.assertTrue(result)
+            treeview.set_cursor.assert_called_once()
+            args = treeview.set_cursor.call_args[0]
+            self.assertEqual(args[0]._indices, [0])
+            treeview.get_column.assert_called_once_with(2)
+
+    def test_shift_tab_at_first_row_first_column_does_not_advance(self):
+        with mock_gtk():
+            import gui_helpers as gh
+            gh.Gdk.KEY_Tab = 1
+            gh.Gdk.KEY_ISO_Left_Tab = 2
+
+            widget, treeview, _model, event = self._setup(
+                gh, 2, "0", 0, [0, 1, 2])
+
+            result = gh.handle_editing_key_press(
+                widget, event, treeview, "0", 0, [0, 1, 2])
+
+            self.assertTrue(result)
+            widget.editing_done.assert_called_once()
+            widget.remove_widget.assert_called_once()
+            treeview.set_cursor.assert_not_called()
+
+    def test_unhandled_key_returns_false(self):
+        with mock_gtk():
+            import gui_helpers as gh
+            gh.Gdk.KEY_Tab = 1
+            gh.Gdk.KEY_ISO_Left_Tab = 2
+
+            widget = MagicMock()
+            treeview = MagicMock()
+            event = self._make_event(99)
+
+            result = gh.handle_editing_key_press(
+                widget, event, treeview, "0", 0, [0, 1, 2])
+
+            self.assertFalse(result)
+            widget.editing_done.assert_not_called()
+            widget.remove_widget.assert_not_called()

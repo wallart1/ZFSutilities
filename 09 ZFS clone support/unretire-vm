@@ -133,7 +133,7 @@ ARCHIVE_BASE="${POS_ARGS[1]:-}"
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
     new_vmid_arg=""
     [[ -n "$NEWVMID" ]] && new_vmid_arg=" --new-vmid '$NEWVMID'"
-    exec ssh root@"$COMPUTE_HOST" \
+    exec ssh -t root@"$COMPUTE_HOST" \
         "/usr/local/lib/zfsutilities/bin/unretire-vm '$VMID' '$ARCHIVE_BASE'${new_vmid_arg}"
 fi
 

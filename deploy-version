@@ -221,6 +221,11 @@ deploy_to_host() {
         [[ "$name" == installed-programs ]] && continue
         [[ "$name" == PROMPT* ]] && continue
         [[ "$name" == VERSION ]] && continue
+        # Only ship the default legacy retention policy; pool-specific sample
+        # policies should not be installed on new systems.
+        if [[ "$name" == zfsretainpol-* && "$name" != zfsretainpol-default ]]; then
+            continue
+        fi
         # Accept executable files OR files with a shebang
         if [[ -x "$script" ]]; then
             install -m 0755 "$script" "$VERSION_DIR/bin/"

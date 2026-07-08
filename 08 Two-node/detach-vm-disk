@@ -41,7 +41,7 @@ DISKKEY="$2"
 
 # --- Delegate to compute host if run on storage node (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    exec ssh root@"$COMPUTE_HOST" \
+    exec ssh -t root@"$COMPUTE_HOST" \
         "/usr/local/lib/zfsutilities/bin/detach-vm-disk '$VMID' '$DISKKEY'"
 fi
 

@@ -213,6 +213,12 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
     def update_action_buttons(self, page_name):
         """Update action buttons based on the current page."""
+        # Ignore stale rebuild requests from asynchronous runner/profile
+        # completion callbacks when the user has already switched to another tab.
+        current = self.stack.get_visible_child_name() if self.stack else None
+        if current != page_name:
+            return
+
         for child in self.action_box.get_children():
             self.action_box.remove(child)
 

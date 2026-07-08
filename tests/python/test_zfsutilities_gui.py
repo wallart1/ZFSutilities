@@ -326,5 +326,70 @@ class TestOnPageChanged(unittest.TestCase):
         mock_refresh.assert_called_once_with(window)
 
 
+class TestUpdateActionButtonsGuard(unittest.TestCase):
+    """update_action_buttons() only rebuilds the panel for the visible page."""
+
+    def _make_window(self, visible_page="retention"):
+        """Create a ZFSUtilitiesWindow with __init__ bypassed."""
+        gui = _import_gui_under_mock()
+        with patch.object(
+            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
+        ):
+            window = gui.ZFSUtilitiesWindow()
+            window.action_box = MagicMock()
+            window.action_box.get_children.return_value = [MagicMock()]
+            window.stack = MagicMock()
+            window.stack.get_visible_child_name.return_value = visible_page
+            window._dry_run_active = False
+            return window, gui
+
+    def test_rebuilds_when_requested_page_is_visible(self):
+        """A synchronous call for the current page rebuilds the action panel."""
+        window, gui = self._make_window("retention")
+        fake_specs = {
+            "retention": {
+                "buttons": [("Save", "document-save", "_ret_save_button")],
+            },
+        }
+        with patch.object(gui, "PAGE_SPECS", fake_specs):
+            window.update_action_buttons("retention")
+
+        window.action_box.remove.assert_called_once()
+        window.action_box.show_all.assert_called_once()
+
+    def test_ignores_stale_request_for_hidden_page(self):
+        """An async callback for a page no longer visible must not overwrite
+        the current page's action buttons."""
+        window, gui = self._make_window("logs")
+        fake_specs = {
+            "retention": {
+                "buttons": [("Save", "document-save", "_ret_save_button")],
+            },
+        }
+        with patch.object(gui, "PAGE_SPECS", fake_specs):
+            window.update_action_buttons("retention")
+
+        window.action_box.remove.assert_not_called()
+        window.action_box.show_all.assert_not_called()
+
+    def test_rebuilds_after_switching_back_to_page(self):
+        """When the user returns to the original page, the panel refreshes."""
+        window, gui = self._make_window("logs")
+        fake_specs = {
+            "retention": {
+                "buttons": [("Save", "document-save", "_ret_save_button")],
+            },
+        }
+        with patch.object(gui, "PAGE_SPECS", fake_specs):
+            window.update_action_buttons("retention")
+            window.action_box.remove.assert_not_called()
+
+            window.stack.get_visible_child_name.return_value = "retention"
+            window.update_action_buttons("retention")
+
+        window.action_box.remove.assert_called()
+        window.action_box.show_all.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

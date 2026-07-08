@@ -27,7 +27,7 @@ handle the iSCSI rescan locally.
 | `remove-vm-disk <pool> <vmid> <disk-num>` | Remove LUN + destroy zvol |
 | `detach-vm-disk <vmid> <disk-key>` | Remove disk from VM config + tear down iSCSI (keeps zvol) |
 | `attach-vm-disk <zvol> <vmid> [dst-key]` | Attach existing zvol to a VM (rebuilds iSCSI if needed) |
-| `list-vm-disks [--with-devices]` | List all exported LUNs |
+| `list-vm-disks [--with-devices]` | List exported LUNs with VMID, VM name, host/guest device names |
 | `resize-vm-disk <pool> <vmid> <disk-num> <new-size>` | Grow zvol online |
 | `clone-vm <src_vmid> <dst_vmid> <new_name>` | Clone a VM (disks + config) |
 | `move-vm-disk <src_vmid> <src_key> <dst_vmid> [dst_key]` | Move a disk from one VM to another |

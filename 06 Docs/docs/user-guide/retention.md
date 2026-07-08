@@ -23,6 +23,13 @@ For the complete algorithm, see the
 The easiest way to edit policies is the GUI's **Retention** tab. You can also
 edit the JSON config with a text editor if you are comfortable doing so.
 
+### Fresh Install Behavior
+
+On a new installation, the installers create exactly one retention policy — the
+`default` policy — and do not install pool-specific sample policies. If you
+re-run the installer on a system where you have already added per-pool policies,
+those policies are left untouched.
+
 ### Example: Default Policy
 
 Typically configured as:

@@ -458,7 +458,9 @@ class BackupRunner:
                     return True
             except OSError:
                 pass
-        self._stderr_source = None
+        # This callback is registered on the merged stdout source for
+        # non-rsync steps, so clear the stdout source ID when the stream ends.
+        self._stdout_source = None
         return False
 
     def _on_rsync_stdout(self, fd, condition):
@@ -596,11 +598,14 @@ class BackupRunner:
                 pass
 
     def _cleanup_io(self):
+        ctx = GLib.MainContext.get_default()
         if self._stdout_source is not None:
-            GLib.source_remove(self._stdout_source)
+            if ctx.find_source_by_id(self._stdout_source) is not None:
+                GLib.source_remove(self._stdout_source)
             self._stdout_source = None
         if self._stderr_source is not None:
-            GLib.source_remove(self._stderr_source)
+            if ctx.find_source_by_id(self._stderr_source) is not None:
+                GLib.source_remove(self._stderr_source)
             self._stderr_source = None
         if self._pty_master_fd is not None:
             try:

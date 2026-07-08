@@ -52,11 +52,12 @@ def on_pools_watch(app):
 def on_pools_details(app):
     """Show zpool status output for the selected pool."""
     selection = app.pool_view.get_selection()
-    model, tree_iter = selection.get_selected()
-    if tree_iter is None:
+    model, pathlist = selection.get_selected_rows()
+    if not pathlist:
         log_msg("WARN: Select a pool to view details")
         return
 
+    tree_iter = model.get_iter(pathlist[0])
     pool_name = model.get_value(tree_iter, COL_NAME)
     status_text = app.ctx.zfs_repository.pool_status(pool_name)
     if not status_text:
@@ -78,8 +79,9 @@ def on_pools_add(app):
     """Add a pool to the registry."""
     prefill = ""
     selection = app.pool_view.get_selection()
-    model, tree_iter = selection.get_selected()
-    if tree_iter is not None:
+    model, pathlist = selection.get_selected_rows()
+    if pathlist:
+        tree_iter = model.get_iter(pathlist[0])
         flag = model.get_value(tree_iter, COL_FLAG)
         if flag == FLAG_UNREGISTERED:
             prefill = model.get_value(tree_iter, COL_NAME)

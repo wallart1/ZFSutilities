@@ -28,8 +28,40 @@ def _make_app(known_pools=None):
     app.config = {"pools": list(known_pools or [])}
     app.pools_dirty = False
     app.pool_view = MagicMock()
-    app.pool_view.get_selection.return_value.get_selected.return_value = (None, None)
     app.pool_view.get_selection.return_value.get_selected_rows.return_value = (None, [])
+    return app
+
+
+def _make_app_with_pool_selection(pa, known_pools, selected):
+    """Return an app whose pool_view has selected pool rows.
+
+    selected: list of dicts with 'name' and 'flag' keys.
+    """
+    app = _make_app(known_pools)
+    model = MagicMock()
+    paths = []
+    for row in selected:
+        path = MagicMock()
+        paths.append(path)
+
+    def get_iter(path):
+        for row, p in zip(selected, paths):
+            if p is path:
+                return row
+        return None
+
+    def get_value(it, col):
+        if col == pa.COL_NAME:
+            return it["name"]
+        if col == pa.COL_FLAG:
+            return it["flag"]
+        return None
+
+    model.get_iter.side_effect = get_iter
+    model.get_value.side_effect = get_value
+    app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
+        model, paths
+    )
     return app
 
 
@@ -57,8 +89,48 @@ def _patch_entry(pa, pool_name):
     pa.Gtk.Entry = MagicMock(return_value=entry_mock)
 
 
+class TestOnPoolsDetails(unittest.TestCase):
+    """on_pools_details shows zpool status for the first selected pool."""
+
+    def test_warns_when_nothing_selected(self):
+        pa = _import_pool_actions()
+        app = _make_app()
+        with patch.object(pa, "log_msg") as mock_log:
+            pa.on_pools_details(app)
+        mock_log.assert_called_once()
+        self.assertIn("Select a pool", mock_log.call_args[0][0])
+
+    def test_shows_details_for_first_selected_pool(self):
+        pa = _import_pool_actions()
+        app = _make_app_with_pool_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            [{"name": "tank", "flag": "registered"}],
+        )
+        app.ctx.zfs_repository.pool_status.return_value = "mock status"
+        with patch.object(pa, "create_dialog") as mock_create, \
+             patch.object(pa, "add_scrolled_text_view"):
+            pa.on_pools_details(app)
+        mock_create.assert_called_once()
+        self.assertIn("tank", mock_create.call_args[0][0])
+
+
 class TestOnPoolsAdd(unittest.TestCase):
     """on_pools_add appends dict pools and rejects duplicate names."""
+
+    def test_prefills_unregistered_pool_name(self):
+        pa = _import_pool_actions()
+        app = _make_app_with_pool_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            [{"name": "unknown", "flag": "unregistered"}],
+        )
+        dialog_mock = _make_add_dialog("unknown")
+        with patch.object(pa, "create_dialog", dialog_mock), \
+             patch.object(pa, "refresh_pools_page"):
+            _patch_entry(pa, "unknown")
+            pa.on_pools_add(app)
+        self.assertIn("unknown", app.known_pools[-1].values())
 
     def test_adds_dict_with_offsite_candidate_false(self):
         pa = _import_pool_actions()
@@ -132,9 +204,6 @@ class TestOnPoolsRemove(unittest.TestCase):
 
         app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
             model, paths
-        )
-        app.pool_view.get_selection.return_value.get_selected.return_value = (
-            model, None
         )
         return app, model, paths, selected
 
@@ -284,9 +353,6 @@ class TestOnPoolsImport(unittest.TestCase):
         app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
             model, paths
         )
-        app.pool_view.get_selection.return_value.get_selected.return_value = (
-            model, None
-        )
         return app
 
     def test_import_offline_selected_refreshes_scrub_table(self):
@@ -337,9 +403,6 @@ class TestOnPoolsExport(unittest.TestCase):
         model.get_value.side_effect = get_value
         app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
             model, paths
-        )
-        app.pool_view.get_selection.return_value.get_selected.return_value = (
-            model, None
         )
         return app
 

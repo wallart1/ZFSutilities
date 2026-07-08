@@ -428,7 +428,7 @@ fi
 
 # --- Delegate to compute host if run on storage node (two-node only, normal mode only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    exec ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/move-vm-disk '${POS_ARGS[0]}' '${POS_ARGS[1]}' '${POS_ARGS[2]}' '${POS_ARGS[3]:-}'"
+    exec ssh -t root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/move-vm-disk '${POS_ARGS[0]}' '${POS_ARGS[1]}' '${POS_ARGS[2]}' '${POS_ARGS[3]:-}'"
 fi
 
 # === Running on the compute host ===

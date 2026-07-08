@@ -418,9 +418,13 @@ zfs() {
 }
 
 zpool() {
-    if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" ]]; then
-        echo -e "$_mock_zpool_list"
-        return 0
+    if [[ "$1" == "list" ]]; then
+        # Support both "-Ho name" and "-H -o name" forms.
+        if [[ "$2" == "-Ho" && "$3" == "name" ]] || \
+           [[ "$2" == "-H" && "$3" == "-o" && "$4" == "name" ]]; then
+            echo -e "$_mock_zpool_list"
+            return 0
+        fi
     fi
     return 0
 }

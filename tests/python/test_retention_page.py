@@ -749,5 +749,114 @@ class TestRetentionPagePruneList(unittest.TestCase):
             self.assertEqual(app.ctx.config["prune_pools_order"], ["tank", "archive"])
 
 
+class TestTabNavigationWiring(unittest.TestCase):
+    """Editable spin renderers are wired for Tab/Shift+Tab navigation."""
+
+    def _fresh_module(self):
+        _clear_cached_modules("retention_page")
+        with mock_gtk():
+            import retention_page as rp
+            return rp
+
+    def test_spin_renderers_connect_editing_started(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+
+            renderers = []
+
+            def _make_spin():
+                r = MagicMock()
+                r._connections = []
+
+                def _connect(signal, callback, *args):
+                    r._connections.append((signal, callback, args))
+
+                r.connect.side_effect = _connect
+                renderers.append(r)
+                return r
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={"retention": {"default": []}},
+                script_dir="",
+                parent_dir=os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))
+                ),
+                version="dev",
+            )
+
+            with patch.object(rp.Gtk, "CellRendererSpin", side_effect=_make_spin), \
+                 patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            self.assertEqual(len(renderers), 2)
+            for idx, renderer in enumerate(renderers):
+                editing_connections = [
+                    c for c in renderer._connections if c[0] == "editing-started"
+                ]
+                self.assertEqual(len(editing_connections), 1,
+                                 f"Renderer {idx} should have one editing-started connection")
+                _signal, handler, args = editing_connections[0]
+                self.assertIs(handler, rp._on_editing_started)
+                self.assertEqual(args[1], 2 + idx)
+
+    def test_editing_started_handler_wires_key_press(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+
+            renderers = []
+
+            def _make_spin():
+                r = MagicMock()
+                r._connections = []
+
+                def _connect(signal, callback, *args):
+                    r._connections.append((signal, callback, args))
+
+                r.connect.side_effect = _connect
+                renderers.append(r)
+                return r
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={"retention": {"default": []}},
+                script_dir="",
+                parent_dir=os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))
+                ),
+                version="dev",
+            )
+
+            with patch.object(rp.Gtk, "CellRendererSpin", side_effect=_make_spin), \
+                 patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            renderer = renderers[0]
+            editing_connections = [
+                c for c in renderer._connections if c[0] == "editing-started"
+            ]
+            self.assertEqual(len(editing_connections), 1)
+            _signal, handler, args = editing_connections[0]
+            editable = MagicMock()
+            treeview = args[0]
+            col_idx = args[1]
+
+            with patch.object(rp, "handle_editing_key_press") as mock_handler:
+                handler(renderer, editable, "0", treeview, col_idx)
+
+            editable.connect.assert_called_once()
+            conn_args = editable.connect.call_args[0]
+            self.assertEqual(conn_args[0], "key-press-event")
+            self.assertIs(conn_args[1], mock_handler)
+            self.assertEqual(conn_args[2], treeview)
+            self.assertEqual(conn_args[3], "0")
+            self.assertEqual(conn_args[4], col_idx)
+            self.assertEqual(conn_args[5], [2, 3])
+
+
 if __name__ == "__main__":
     unittest.main()

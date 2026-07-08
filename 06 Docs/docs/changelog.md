@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.59.7
+
+### Added
+
+- **Installer retention-profile initialization** — New installs now initialize
+  the shared JSON config with exactly one retention policy, the `default`
+  policy. Pool-specific sample policies are no longer installed or imported on
+  fresh systems. Re-running the installer on an existing system preserves any
+  user-entered per-pool policies. Initialization is handled by the new
+  `10 Installers/installer_retention.py` helper, invoked from
+  `install-single-node` and `install-two-node` (including on the remote compute
+  host in two-node setups).
+- **`list-vm-disks` VM disk inventory** — `08 Two-node/list-vm-disks` now shows
+  the VM that owns each exported LUN/zvol, the VM name, the compute-host
+  `/dev/sdX` and `/dev/disk/by-path` names, and (for running VMs with a QEMU
+  guest agent) the device names seen inside the guest. Device information is now
+  included by default; `--with-devices` is accepted for backward compatibility.
+  New flags `--gather-vm-info` and `--gather-lun-info` are available for
+  selective inventory gathering.
+
+### Fixed
+
+- **GUI editable-cell Tab navigation** — The Checkagainst and Retention tables
+  now support Tab and Shift+Tab to move between editable cells while editing,
+  matching the behavior already provided for other editable lists.
+- **Pools page multi-selection handling** — Drag-reorder and pool action
+  handlers now use the multi-selection API correctly, preserving all selected
+  rows after a drag and avoiding crashes when no rows are selected.
+- **Backup runner I/O cleanup** — `backup_runner.py` now clears the correct
+  source ID when the merged stderr stream ends and checks that a GLib source is
+  still registered before removing it, preventing warnings from duplicate
+  removals.
+- **Stale action-button rebuilds** — `zfsutilities_gui.py` ignores asynchronous
+  runner/profile completion callbacks that request action-button rebuilds for a
+  tab the user has already left.
+- **Two-node interactive SSH delegation** — `attach-vm-disk`, `clone-vm`,
+  `detach-vm-disk`, `move-vm-disk`, `promote-vm-clone`, `retire-vm`,
+  `unretire-vm`, and `zfsclone-vm` now allocate a TTY (`ssh -t`) when
+  delegating to the compute host, improving behavior for interactive prompts.
+- **`check-prerequisites` documentation warnings** — `mkdocs` and
+  `mkdocs-material` are now reported as warnings rather than failures; the
+  installer will install them if needed.
+
+### Tests
+
+- Added `tests/test-installer-retention` and
+  `tests/python/test_installer_retention.py` covering default-profile creation,
+  new-install pool-specific policy clearing, and preservation of existing
+  user profiles.
+- Added `tests/test-list-vm-disks` covering VM config parsing, host/guest device
+  mapping, running-VM detection, and single-node/two-node output paths.
+- Updated `tests/test-deploy-version` to verify that only
+  `zfsretainpol-default` is shipped and pool-specific legacy policy files are
+  excluded.
+- Updated `tests/python/test_checkagainst_page.py`,
+  `test_gui_infrastructure.py`, `test_pool_actions.py`, `test_pools_page.py`,
+  `test_retention_page.py`, and `test_zfsutilities_gui.py` for the new Tab
+  navigation, multi-selection, backup-runner cleanup, and stale-rebuild fixes.
+
+### Documentation
+
+- Updated `06 Docs/docs/commands-and-modules/two-node.md` to describe the new
+  `list-vm-disks` output and flow.
+- Updated `06 Docs/docs/user-guide/retention.md` to document fresh-install
+  retention behavior and policy preservation.
+- Updated `AGENTS.md` to reflect the new installer retention-profile behavior,
+  deploy-version retention-policy filtering, and new test suites.
+
 ## 0.59.6
 
 ### Fixed

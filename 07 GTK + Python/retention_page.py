@@ -26,6 +26,7 @@ from feature_config import (
 from gui_helpers import (
     set_button_markup_red,
     configure_treeview_column, ACTIVE_COLUMN_WIDTH,
+    handle_editing_key_press,
 )
 
 # Human-readable bucket labels
@@ -192,6 +193,7 @@ def create_retention_page(app, ctx):
                                    step_increment=1, page_increment=10))
     r2.set_property("digits", 0)
     r2.connect("edited", _on_retain_edited, app)
+    r2.connect("editing-started", _on_editing_started, tv, 2)
     c2 = Gtk.TreeViewColumn("Retain Count", r2, text=2)
     configure_treeview_column(c2, width=90)
     tv.append_column(c2)
@@ -204,6 +206,7 @@ def create_retention_page(app, ctx):
                                    step_increment=1, page_increment=10))
     r3.set_property("digits", 0)
     r3.connect("edited", _on_minage_edited, app)
+    r3.connect("editing-started", _on_editing_started, tv, 3)
     c3 = Gtk.TreeViewColumn("Min Age (days)", r3, text=3)
     configure_treeview_column(c3, width=110)
     tv.append_column(c3)
@@ -469,6 +472,13 @@ def _on_minage_edited(renderer, path, new_text, app):
         return
     app._ret_store[path][3] = val
     _update_ret_status(app)
+
+
+def _on_editing_started(renderer, editable, path, treeview, col_idx):
+    """Connect key-press on the editable to handle Tab/Shift+Tab."""
+    editable.connect(
+        "key-press-event", handle_editing_key_press,
+        treeview, path, col_idx, [2, 3])
 
 
 def _on_ret_save(btn, app, ctx):

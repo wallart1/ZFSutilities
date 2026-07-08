@@ -198,8 +198,6 @@ prerequisite_description() {
         ssh)                  echo "OpenSSH client for remote two-node commands" ;;
         scp)                  echo "OpenSSH secure copy for remote two-node file transfer" ;;
         pip3)                 echo "Python package installer used to install MkDocs if apt packages are unavailable" ;;
-        mkdocs)               echo "Static site generator that builds the ZFSutilities documentation" ;;
-        mkdocs-material)      echo "Material theme for MkDocs, required by the documentation configuration" ;;
         *)                    echo "$name" ;;
     esac
 }
@@ -216,8 +214,8 @@ prerequisite_why_needed() {
         ssh|scp)
             echo "Required for two-node mode to communicate between storage and compute hosts"
             ;;
-        pip3|mkdocs|mkdocs-material)
-            echo "Required to build the ZFSutilities documentation site"
+        pip3)
+            echo "Required to build the ZFSutilities documentation site (used as a fallback by the documentation-server installer)"
             ;;
         *)
             echo "Required by ZFSutilities"
@@ -346,13 +344,14 @@ run_interactive_prerequisites() {
 # Installs without prompting. Returns 0 on success, non-zero on failure.
 ensure_doc_server() {
     echo "=== Documentation (MkDocs) ==="
-    explain_doc_server
 
     if command -v mkdocs >/dev/null 2>&1 && python3 -c "import material" >/dev/null 2>&1; then
         echo ""
         echo "  ✓ mkdocs and mkdocs-material are already available."
         return 0
     fi
+
+    explain_doc_server
 
     echo ""
     echo "  Installing mkdocs and mkdocs-material..."
@@ -376,3 +375,64 @@ ensure_doc_server() {
 
 # shellcheck source=desktop-launcher-lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/desktop-launcher-lib.sh"
+
+# ------------------------------------------------------------------
+# Retention profile initialization
+# ------------------------------------------------------------------
+
+# Ensure the shared JSON config has a default retention profile.
+# On a new install this also removes any pool-specific policies so only
+# `default` remains. Existing user-entered profiles are preserved.
+ensure_retention_profiles() {
+    local config_path="${ZFSCONFIG_PATH:-/root/.config/zfsutilities.json}"
+    local new_install="false"
+    if [[ ! -f "$config_path" ]]; then
+        new_install="true"
+    fi
+
+    local lib_dir
+    lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local helper="$lib_dir/installer_retention.py"
+
+    local python_src
+    if [[ -d "/usr/local/lib/zfsutilities/current/07 GTK + Python" ]]; then
+        python_src="/usr/local/lib/zfsutilities/current/07 GTK + Python"
+    else
+        python_src="$(cd "$lib_dir/../07 GTK + Python" && pwd)"
+    fi
+
+    local new_install_flag=""
+    if [[ "$new_install" == "true" ]]; then
+        new_install_flag="--new-install"
+    fi
+
+    echo "=== Retention Profiles ==="
+    if [[ "$new_install" == "true" ]]; then
+        echo "  New install — creating default retention profile..."
+    else
+        echo "  Ensuring retention profiles are initialized (existing profiles preserved)..."
+    fi
+
+    PYTHONPATH="${python_src}:${lib_dir}" \
+        python3 "$helper" --config-path "$config_path" ${new_install_flag}
+}
+
+# Run ensure_retention_profiles on a remote host via SSH.
+# Warnings only on failure so the install can continue.
+ensure_retention_profiles_remote() {
+    local host="$1"
+    local config_path="${ZFSCONFIG_PATH:-/root/.config/zfsutilities.json}"
+    local helper="/usr/local/lib/zfsutilities/current/10 Installers/installer_retention.py"
+    local python_src="/usr/local/lib/zfsutilities/current/07 GTK + Python"
+    local installer_src="/usr/local/lib/zfsutilities/current/10 Installers"
+
+    local new_install_flag=""
+    if ssh -o ConnectTimeout=5 "root@$host" "[[ ! -f '$config_path' ]]" >/dev/null 2>&1; then
+        new_install_flag="--new-install"
+    fi
+
+    echo "=== Retention Profiles on $host ==="
+    ssh -o ConnectTimeout=5 "root@$host" \
+        "PYTHONPATH='$python_src:$installer_src' python3 '$helper' --config-path '$config_path' $new_install_flag" \
+        || echo "  ⚠ Could not initialize retention profiles on $host" >&2
+}

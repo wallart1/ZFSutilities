@@ -137,13 +137,19 @@ list of bucket dicts:
 Legacy project-root files `zfsretainpol-<poolname>` or `zfsretainpol-default`
 are imported once into the JSON config and then ignored. On a new install, only
 `zfsretainpol-default` is kept; any pool-specific legacy policies are cleared
-so the Retention tab starts with a single default policy. Use the GUI Retention
-tab or `backup_config.get_retention` / `save_retention` to add or edit per-pool
-policies. The Prune list only shows online pools that have an explicit retention
-policy; pools without a policy are not pruned. When `zfscleanup` is run without a
-specific pool argument, it iterates over the pools registered in the JSON config
-(`config.pools`). If that list is empty, it falls back to all online pools so
-retention is not silently skipped.
+so the Retention tab starts with a single default policy. The installers
+(`install-single-node` and `install-two-node`) initialize the JSON config
+retention section with only the `default` policy when the config does not yet
+exist, leaving any existing user-entered per-pool policies untouched. The
+`deploy-version` script only ships `zfsretainpol-default` to the deployed `bin/`
+directory; pool-specific sample policy files are excluded so they cannot be
+re-imported later. Use the GUI Retention tab or `backup_config.get_retention` /
+`save_retention` to add or edit per-pool policies. The Prune list only shows
+online pools that have an explicit retention policy; pools without a policy are
+not pruned. When `zfscleanup` is run without a specific pool argument, it
+iterates over the pools registered in the JSON config (`config.pools`). If that
+list is empty, it falls back to all online pools so retention is not silently
+skipped.
 
 ### Parameter Override System
 
@@ -292,8 +298,9 @@ If, when running the tests, the output is truncated, then break up the tests so 
 
 | Suite                          | Tests | Description                                                                                                   |
 | ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------- |
-| `test-deploy-version`          | 16    | Root-level script selection, exclusions, critical-script validation, and no production wiring                 |
+| `test-deploy-version`          | 20    | Root-level script selection, exclusions, retention-policy file filtering, critical-script validation, and no production wiring |
 | `test-installer-checks`        | 12    | Installer prerequisite checks and desktop-launcher helper functions                                           |
+| `test-installer-retention`     | 3     | Installer default retention profile initialization and preservation of existing user profiles                 |
 | `test-move-vm-disk`            | 8     | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove                                        |
 | `test-restart-iscsi-services`  | 8     | VM running-state detection before iSCSI target restart                                                        |
 | `test-startdocserver`          | 15    | Server health checks, PID discovery, CWD mismatch, restart logic                                              |
@@ -350,7 +357,7 @@ Key mock state variables:
 - `_mock_zfs_snaps[<snapshot>]` — snapshot existence for `zfs list -t snapshot`
 - `_mock_zfs_datasets[<dataset>]` — dataset existence for `zfs list`
 - `_mock_zfs_send_size` — size returned by `zfs send -nP`
-- `_mock_zpool_list` — output for `zpool list -Ho name`
+- `_mock_zpool_list` — output for `zpool list -Ho name` and `zpool list -H -o name`
 
 ### Important Notes
 
@@ -396,6 +403,7 @@ A Python test harness lives in `tests/python/` and uses Python's built-in `unitt
 | `test_dashboard_page`     | 107   | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators                             |
 | `test_docs_integrity`     | 11    | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability  |
 | `test_gui_infrastructure` | 81    | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling            |
+| `test_installer_retention` | 5     | Installer retention profile initialization: default-only on new install and preservation of existing profiles |
 | `test_legacy_retention`   | 7     | Legacy `zfsretainpol-*` file parsing and pool scanning                                                         |
 | `test_logging_config`     | 24    | Message levels, GUI sink, session log env helpers, and session log truncation                                  |
 | `test_logs_page`          | 33    | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, and column-header label tooltips |
