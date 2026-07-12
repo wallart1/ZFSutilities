@@ -831,5 +831,169 @@ class TestScheduleDelete(unittest.TestCase):
         mock_refresh.assert_not_called()
 
 
+class TestRefreshSchedulePage(unittest.TestCase):
+    """Verify refresh_schedule_page updates Next Run and preserves state."""
+
+    COL_ACTIVE = 0
+    COL_NAME = 1
+    COL_TYPE = 2
+    COL_SCHEDULE = 3
+    COL_NEXT_RUN = 4
+    COL_NEXT_RUN_SORT = 5
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+            return schedule_page
+
+    def _make_app(self, rows, selected_paths=None):
+        app = MagicMock()
+        app.schedule_store = FakeScheduleStore(rows)
+        selection = MagicMock()
+        if selected_paths is None:
+            selection.get_selected_rows.return_value = (app.schedule_store, [])
+        else:
+            selection.get_selected_rows.return_value = (
+                app.schedule_store, [FakeTreePath(p) for p in selected_paths]
+            )
+        app.schedule_view.get_selection.return_value = selection
+        app._schedule_save_button = MagicMock()
+        app._schedule_pending = {}
+        app._schedule_ignore_changes = False
+        return app
+
+    @patch("schedule_page.log_msg")
+    @patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN])
+    @patch("schedule_page.load_profile")
+    @patch("schedule_page.set_button_markup_red")
+    def test_refresh_updates_next_run_in_place(
+        self, _mock_red, mock_load, _mock_next, _mock_log
+    ):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "old run", ""]]
+        app = self._make_app(rows)
+        profile = {
+            "profile_name": "p1",
+            "active": True,
+            "tab_type": "backup",
+            "cron": {"minute": "*", "hour": "*", "day": "*", "month": "*", "weekday": "*"},
+        }
+        mock_load.return_value = profile
+
+        with patch("schedule_page.list_profiles", return_value=[profile]):
+            schedule_page.refresh_schedule_page(app)
+
+        self.assertEqual(
+            app.schedule_store.get_value(0, self.COL_NEXT_RUN),
+            "Sun Jun 15 2025 10:00",
+        )
+        self.assertEqual(
+            app.schedule_store.get_value(0, self.COL_NEXT_RUN_SORT),
+            "2025-06-15 10:00",
+        )
+
+    @patch("schedule_page.log_msg")
+    @patch("schedule_page._refresh_profile_list")
+    @patch("schedule_page.set_button_markup_red")
+    def test_refresh_rebuilds_when_profile_list_changes(
+        self, _mock_red, mock_refresh, _mock_log
+    ):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        app = self._make_app(rows)
+        profiles = [
+            {
+                "profile_name": "p1",
+                "active": True,
+                "tab_type": "backup",
+                "cron": {"minute": "*", "hour": "*", "day": "*", "month": "*", "weekday": "*"},
+            },
+            {
+                "profile_name": "p2",
+                "active": False,
+                "tab_type": "offsite",
+                "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+            },
+        ]
+
+        with patch("schedule_page.list_profiles", return_value=profiles):
+            schedule_page.refresh_schedule_page(app)
+
+        mock_refresh.assert_called_once_with(app)
+
+    @patch("schedule_page.log_msg")
+    @patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN])
+    @patch("schedule_page.load_profile")
+    @patch("schedule_page.set_button_markup_red")
+    def test_refresh_preserves_pending_changes(
+        self, _mock_red, mock_load, _mock_next, _mock_log
+    ):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "old run", ""]]
+        app = self._make_app(rows)
+        app._schedule_pending = {"p1": {"active": False}}
+        profile = {
+            "profile_name": "p1",
+            "active": True,
+            "tab_type": "backup",
+            "cron": {"minute": "*", "hour": "*", "day": "*", "month": "*", "weekday": "*"},
+        }
+        mock_load.return_value = profile
+
+        with patch("schedule_page.list_profiles", return_value=[profile]):
+            schedule_page.refresh_schedule_page(app)
+
+        self.assertEqual(app._schedule_pending, {"p1": {"active": False}})
+
+    @patch("schedule_page.log_msg")
+    @patch("schedule_page._refresh_profile_list")
+    @patch("schedule_page.set_button_markup_red")
+    def test_refresh_clears_pending_for_deleted_profile(
+        self, mock_red, mock_refresh, _mock_log
+    ):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        app = self._make_app(rows)
+        app._schedule_pending = {"p1": {"active": False}, "p2": {"active": True}}
+        profiles = [
+            {
+                "profile_name": "p2",
+                "active": True,
+                "tab_type": "offsite",
+                "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+            },
+        ]
+
+        with patch("schedule_page.list_profiles", return_value=profiles):
+            schedule_page.refresh_schedule_page(app)
+
+        self.assertEqual(app._schedule_pending, {"p2": {"active": True}})
+        mock_red.assert_called_once_with(app._schedule_save_button, True)
+
+    @patch("schedule_page.log_msg")
+    @patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN])
+    @patch("schedule_page.load_profile")
+    def test_refresh_restores_selection(
+        self, mock_load, _mock_next, _mock_log
+    ):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "old run", ""]]
+        app = self._make_app(rows, selected_paths=[0])
+        profile = {
+            "profile_name": "p1",
+            "active": True,
+            "tab_type": "backup",
+            "cron": {"minute": "*", "hour": "*", "day": "*", "month": "*", "weekday": "*"},
+        }
+        mock_load.return_value = profile
+
+        with patch("schedule_page.list_profiles", return_value=[profile]):
+            schedule_page.refresh_schedule_page(app)
+
+        selection = app.schedule_view.get_selection()
+        selection.unselect_all.assert_called_once()
+        selection.select_iter.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

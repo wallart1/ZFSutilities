@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.59.10
+
+### Fixed
+
+- **Dashboard Cancel Selected Tasks** — The **Cancel Selected Tasks** button on
+  the Dashboard is now enabled only when the selection contains a real task.
+  Selecting the *"No running tasks"* placeholder row (or a mixed selection that
+  includes only placeholders) no longer leaves the button active.
+- **Schedule tab auto-refresh** — The Schedule tab now refreshes automatically
+  every 60 seconds while visible, and immediately when switching to the tab or
+  clicking **Refresh**. Next Run values are updated in place when the profile
+  list is unchanged; the list is rebuilt when profiles are added or removed
+  externally, preserving the current selection and any pending unsaved changes.
+- **Rsync backup log rotation** — `BackupRunner` no longer truncates
+  `/var/log/zfsutilities/rsync-backup.log` on every run. Instead, it truncates
+  the file once per day (when the file's mtime is from a previous day), keeping
+  one day of rsync output appended together while avoiding unbounded growth.
+
+### Tests
+
+- Added `TestRsyncLogDailyRotation` in `tests/python/test_backup_runner.py` to
+  verify the new daily truncation behavior.
+- Extended `tests/python/test_dashboard_page.py` to verify the Cancel button
+  state for placeholder-only, mixed, and real-task selections.
+- Added `TestRefreshSchedulePage` in `tests/python/test_schedule_page.py`
+  covering in-place Next Run updates, list rebuilds, pending-change
+  preservation, deleted-profile cleanup, and selection restore.
+- Added timer-lifecycle tests in `tests/python/test_zfsutilities_gui.py` for the
+  dashboard, scrub, and new schedule auto-refresh timers.
+
+### Documentation
+
+- Updated `06 Docs/docs/user-guide/gtk-gui.md` with the Dashboard Cancel button
+  behaviour and the Schedule tab auto-refresh behaviour.
+- Updated `06 Docs/docs/developer-guide/concurrency-collisions.md` to describe
+  the new daily truncation of `/var/log/zfsutilities/rsync-backup.log`.
+
 ## 0.59.9
 
 ### Fixed

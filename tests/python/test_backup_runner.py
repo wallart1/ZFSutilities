@@ -601,6 +601,54 @@ class TestStdoutStderrMerging(unittest.TestCase):
         self.assertEqual(runner._total_bytes_received, 1024 ** 3)
 
 
+class TestRsyncLogDailyRotation(unittest.TestCase):
+    """_truncate_rsync_log rotates the rsync log once per day."""
+
+    def _patch_rsync_log(self, tmpdir):
+        log_dir = os.path.join(tmpdir, "rsync-logs")
+        log_file = os.path.join(log_dir, "rsync-backup.log")
+        return patch("backup_runner.RSYNC_LOG_DIR", log_dir), \
+               patch("backup_runner.RSYNC_LOG_FILE", log_file)
+
+    def test_noop_when_file_mtime_is_today(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dir_patch, file_patch = self._patch_rsync_log(tmpdir)
+            with dir_patch, file_patch:
+                os.makedirs(br.RSYNC_LOG_DIR, exist_ok=True)
+                with open(br.RSYNC_LOG_FILE, "w") as fh:
+                    fh.write("earlier-today\n")
+                now = time.time()
+                os.utime(br.RSYNC_LOG_FILE, (now, now))
+
+                br._truncate_rsync_log()
+
+                with open(br.RSYNC_LOG_FILE, "r") as fh:
+                    self.assertEqual(fh.read(), "earlier-today\n")
+
+    def test_truncates_when_file_mtime_is_yesterday(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dir_patch, file_patch = self._patch_rsync_log(tmpdir)
+            with dir_patch, file_patch:
+                os.makedirs(br.RSYNC_LOG_DIR, exist_ok=True)
+                with open(br.RSYNC_LOG_FILE, "w") as fh:
+                    fh.write("yesterday\n")
+                yesterday = time.time() - 24 * 3600
+                os.utime(br.RSYNC_LOG_FILE, (yesterday, yesterday))
+
+                br._truncate_rsync_log()
+
+                self.assertEqual(os.path.getsize(br.RSYNC_LOG_FILE), 0)
+
+    def test_noop_when_file_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dir_patch, file_patch = self._patch_rsync_log(tmpdir)
+            with dir_patch, file_patch:
+                br._truncate_rsync_log()
+
+                self.assertTrue(os.path.isdir(br.RSYNC_LOG_DIR))
+                self.assertFalse(os.path.exists(br.RSYNC_LOG_FILE))
+
+
 class TestSourceCleanup(unittest.TestCase):
     """Non-rsync source IDs are cleared correctly to avoid GLib warnings."""
 

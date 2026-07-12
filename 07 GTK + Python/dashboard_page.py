@@ -1500,8 +1500,14 @@ def _on_dashboard_tasks_selection_changed(selection, app):
     button = getattr(app, "_cancel_selected_button", None)
     if button is None:
         return
-    _model, pathlist = selection.get_selected_rows()
-    button.set_sensitive(bool(pathlist))
+    model, pathlist = selection.get_selected_rows()
+    enable = False
+    for path in pathlist:
+        tree_iter = model.get_iter(path)
+        if model.get_value(tree_iter, 3):
+            enable = True
+            break
+    button.set_sensitive(enable)
 
 
 def _update_view_log_button(app, enabled):

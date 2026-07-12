@@ -263,6 +263,114 @@ class TestDatasetRunnerIntegration(unittest.TestCase):
             window.dataset_runner.send_input.assert_called_once_with("yes\n")
 
 
+class TestDashboardTimer(unittest.TestCase):
+    """Tests for ZFSUtilitiesWindow dashboard/scrub timer lifecycle."""
+
+    def _make_window(self):
+        """Create a ZFSUtilitiesWindow with __init__ bypassed."""
+        gui = _import_gui_under_mock()
+        with patch.object(
+            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
+        ):
+            window = gui.ZFSUtilitiesWindow()
+            window._dashboard_timer = None
+            window._scrub_timer = None
+            window.stack = MagicMock()
+            return window
+
+    @patch("zfsutilities_gui.GLib")
+    def test_dashboard_page_starts_timer(self, mock_glib):
+        """Switching to Dashboard starts a 30-second refresh timer."""
+        window = self._make_window()
+        mock_glib.timeout_add_seconds.return_value = 42
+        window._start_stop_dashboard_timer("dashboard")
+        mock_glib.timeout_add_seconds.assert_called_once_with(
+            30, window._on_dashboard_timer_tick
+        )
+        self.assertEqual(window._dashboard_timer, 42)
+
+    @patch("zfsutilities_gui.GLib")
+    def test_non_dashboard_page_stops_timer(self, mock_glib):
+        """Switching away from Dashboard removes the timer."""
+        window = self._make_window()
+        window._dashboard_timer = 7
+        window._start_stop_dashboard_timer("backup")
+        mock_glib.source_remove.assert_called_once_with(7)
+        self.assertIsNone(window._dashboard_timer)
+
+    @patch("zfsutilities_gui.GLib")
+    def test_dashboard_timer_replaces_existing_timer(self, mock_glib):
+        """Re-entering Dashboard cancels the old timer before starting a new one."""
+        window = self._make_window()
+        window._dashboard_timer = 7
+        mock_glib.timeout_add_seconds.return_value = 42
+        window._start_stop_dashboard_timer("dashboard")
+        mock_glib.source_remove.assert_called_once_with(7)
+        mock_glib.timeout_add_seconds.assert_called_once_with(
+            30, window._on_dashboard_timer_tick
+        )
+        self.assertEqual(window._dashboard_timer, 42)
+
+
+class TestScheduleTimer(unittest.TestCase):
+    """Tests for ZFSUtilitiesWindow schedule refresh timer lifecycle."""
+
+    def _make_window(self):
+        """Create a ZFSUtilitiesWindow with __init__ bypassed."""
+        gui = _import_gui_under_mock()
+        with patch.object(
+            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
+        ):
+            window = gui.ZFSUtilitiesWindow()
+            window._schedule_timer = None
+            window.stack = MagicMock()
+            return window
+
+    @patch("zfsutilities_gui.GLib")
+    def test_schedule_page_starts_timer(self, mock_glib):
+        """Switching to Schedule starts a 60-second refresh timer."""
+        window = self._make_window()
+        mock_glib.timeout_add_seconds.return_value = 42
+        window._start_stop_schedule_timer("schedule")
+        mock_glib.timeout_add_seconds.assert_called_once_with(
+            60, window._on_schedule_timer_tick
+        )
+        self.assertEqual(window._schedule_timer, 42)
+
+    @patch("zfsutilities_gui.GLib")
+    def test_non_schedule_page_stops_timer(self, mock_glib):
+        """Switching away from Schedule removes the timer."""
+        window = self._make_window()
+        window._schedule_timer = 7
+        window._start_stop_schedule_timer("backup")
+        mock_glib.source_remove.assert_called_once_with(7)
+        self.assertIsNone(window._schedule_timer)
+
+    @patch("zfsutilities_gui.GLib")
+    @patch("zfsutilities_gui.refresh_schedule_page")
+    def test_schedule_timer_tick_refreshes_when_visible(
+        self, mock_refresh, mock_glib
+    ):
+        """The timer callback refreshes Schedule only while it is visible."""
+        window = self._make_window()
+        window.stack.get_visible_child_name.return_value = "schedule"
+        result = window._on_schedule_timer_tick()
+        mock_refresh.assert_called_once_with(window)
+        self.assertTrue(result)
+
+    @patch("zfsutilities_gui.GLib")
+    @patch("zfsutilities_gui.refresh_schedule_page")
+    def test_schedule_timer_tick_skips_when_hidden(
+        self, mock_refresh, mock_glib
+    ):
+        """The timer callback does nothing when another tab is visible."""
+        window = self._make_window()
+        window.stack.get_visible_child_name.return_value = "backup"
+        result = window._on_schedule_timer_tick()
+        mock_refresh.assert_not_called()
+        self.assertTrue(result)
+
+
 class TestOnPageChanged(unittest.TestCase):
     """Tests for ZFSUtilitiesWindow.on_page_changed per-tab refresh hooks."""
 
@@ -281,6 +389,7 @@ class TestOnPageChanged(unittest.TestCase):
             window.update_action_buttons = MagicMock()
             window._start_stop_dashboard_timer = MagicMock()
             window._start_stop_scrub_timer = MagicMock()
+            window._start_stop_schedule_timer = MagicMock()
             return window
 
     def test_offsite_page_refreshes_detected_pool(self):
@@ -324,6 +433,19 @@ class TestOnPageChanged(unittest.TestCase):
 
         window.update_action_buttons.assert_called_once_with("restore")
         mock_refresh.assert_called_once_with(window)
+
+    @patch("zfsutilities_gui.refresh_schedule_page")
+    def test_schedule_page_refreshes(self, mock_refresh):
+        """Switching to the Schedule tab refreshes the profile list."""
+        window = self._make_window({"pools": []})
+        stack = MagicMock()
+        stack.get_visible_child_name.return_value = "schedule"
+
+        window.on_page_changed(stack, None)
+
+        window.update_action_buttons.assert_called_once_with("schedule")
+        mock_refresh.assert_called_once_with(window)
+        window._start_stop_schedule_timer.assert_called_once_with("schedule")
 
 
 class TestUpdateActionButtonsGuard(unittest.TestCase):

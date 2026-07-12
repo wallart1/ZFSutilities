@@ -1306,11 +1306,16 @@ class TestCreateDashboardPage(unittest.TestCase):
 class TestCancelSelectedButton(unittest.TestCase):
     """Dashboard Cancel Selected Tasks button tracks task selection."""
 
-    def _make_app_and_selection(self, pathlist):
+    def _make_app_and_selection(self, pathlist, task_keys=None):
         app = MagicMock()
         app._cancel_selected_button = MagicMock()
         tasks_selection = MagicMock()
-        tasks_selection.get_selected_rows.return_value = (MagicMock(), pathlist)
+        model = MagicMock()
+        task_keys = task_keys if task_keys is not None else [""] * len(pathlist)
+
+        model.get_iter.return_value = MagicMock()
+        model.get_value.side_effect = task_keys
+        tasks_selection.get_selected_rows.return_value = (model, pathlist)
         app.dashboard_tasks_view.get_selection.return_value = tasks_selection
 
         ops_selection = MagicMock()
@@ -1325,7 +1330,9 @@ class TestCancelSelectedButton(unittest.TestCase):
         app._cancel_selected_button.set_sensitive.assert_called_once_with(False)
 
     def test_enables_when_tasks_are_selected(self):
-        app, selection = self._make_app_and_selection([MagicMock()])
+        app, selection = self._make_app_and_selection(
+            [MagicMock()], task_keys=["runner:backup_runner"]
+        )
         dp.setup_dashboard_actions(app)
         app._cancel_selected_button.set_sensitive.assert_called_once_with(True)
 
@@ -1336,9 +1343,28 @@ class TestCancelSelectedButton(unittest.TestCase):
         app._cancel_selected_button.reset_mock()
 
         # Simulate a selection-change callback with a task selected
-        selection.get_selected_rows.return_value = (MagicMock(), [MagicMock()])
+        path = MagicMock()
+        model = selection.get_selected_rows.return_value[0]
+        model.get_value.side_effect = ["runner:backup_runner"]
+        selection.get_selected_rows.return_value = (model, [path])
         callback = selection.connect.call_args[0][1]
         callback(selection, app)
+        app._cancel_selected_button.set_sensitive.assert_called_once_with(True)
+
+    def test_disabled_when_only_placeholder_selected(self):
+        """Selecting the 'No running tasks' placeholder keeps Cancel disabled."""
+        app, selection = self._make_app_and_selection(
+            [MagicMock()], task_keys=[""]
+        )
+        dp.setup_dashboard_actions(app)
+        app._cancel_selected_button.set_sensitive.assert_called_once_with(False)
+
+    def test_enabled_with_mixed_placeholder_and_real_task(self):
+        """A mixed selection containing a real task enables Cancel."""
+        app, selection = self._make_app_and_selection(
+            [MagicMock(), MagicMock()], task_keys=["", "profile:Daily"]
+        )
+        dp.setup_dashboard_actions(app)
         app._cancel_selected_button.set_sensitive.assert_called_once_with(True)
 
     def test_no_button_attr_does_not_crash(self):

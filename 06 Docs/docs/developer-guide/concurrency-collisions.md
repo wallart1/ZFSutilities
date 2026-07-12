@@ -134,7 +134,7 @@ scope of this phase:
 |------|---------|---------|------|
 | `/etc/rtslib-fb-target/expected-backstores.txt` | `zfsdelfs`, `new-vm-disk`, `remove-vm-disk`, two-node scripts | Two-node target rebuild | Concurrent modifications can leave an inconsistent manifest. |
 | `/etc/iscsi-encrypted-luns.conf` | Same as above | Same as above | Encrypted LUN entries can be duplicated or lost. |
-| `/var/log/zfsutilities/rsync-backup.log` | rsync pull/push steps | Users | `BackupRunner` truncates this file when a runner starts; concurrent runners interleave or lose output. |
+| `/var/log/zfsutilities/rsync-backup.log` | rsync pull/push steps | Users | `BackupRunner` truncates this file once per day (when its mtime is from a previous day); concurrent runners append and may interleave output. |
 
 ### 6. Scrub jobs managed by multiple uncoordinated paths
 

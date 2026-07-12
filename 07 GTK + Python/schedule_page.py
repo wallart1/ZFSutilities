@@ -259,6 +259,48 @@ def _refresh_profile_list(app):
     app.schedule_detail_box.hide()
 
 
+def refresh_schedule_page(app):
+    """Refresh the Schedule tab from disk.
+
+    Updates Next Run values in place when the profile list is unchanged;
+    rebuilds the list when profiles have been added or removed outside the
+    Schedule tab. Preserves the current selection and any pending unsaved
+    changes.
+    """
+    if not hasattr(app, "schedule_store"):
+        return
+
+    selection = app.schedule_view.get_selection()
+    model, paths = selection.get_selected_rows()
+    selected_names = []
+    for path in paths:
+        tree_iter = model.get_iter(path)
+        selected_names.append(model.get_value(tree_iter, COL_NAME))
+
+    profiles = list_profiles()
+    profile_names = {p["profile_name"] for p in profiles}
+    store_names = {row[COL_NAME] for row in app.schedule_store}
+
+    if profile_names != store_names:
+        _refresh_profile_list(app)
+        for name in list(app._schedule_pending.keys()):
+            if name not in profile_names:
+                app._schedule_pending.pop(name, None)
+        _update_schedule_dirty(app)
+    else:
+        for row in app.schedule_store:
+            _update_next_run_for_iter(app, row.iter)
+
+    if selected_names:
+        selection.unselect_all()
+        for name in selected_names:
+            tree_iter = _find_iter_by_name(app, name)
+            if tree_iter is not None:
+                selection.select_iter(tree_iter)
+
+    log_msg("VERB: Schedule page refreshed")
+
+
 def _on_active_toggled(renderer, path, app):
     # Make the toggled row selected so Delete and the detail pane work even
     # when the user clicked the checkbox column rather than the row text.

@@ -37,7 +37,7 @@ from pools_page import create_pools_page, refresh_pools_page
 from datasets_page import create_datasets_page, refresh_datasets_page
 from retention_page import create_retention_page, refresh_prune_pools
 from checkagainst_page import create_checkagainst_page
-from schedule_page import create_schedule_page
+from schedule_page import create_schedule_page, refresh_schedule_page
 from logs_page import create_logs_page
 from action_dispatch import PAGE_SPECS, ACTION_HANDLERS
 from gui_helpers import (
@@ -191,6 +191,13 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
         # Connect to stack page changes to update action panel
         self.stack.connect("notify::visible-child-name", self.on_page_changed)
+
+        # Start/stop timers for the initial visible page (the notify signal
+        # does not fire for the page that is already visible when the handler
+        # is connected).
+        initial_page = self.stack.get_visible_child_name()
+        self._start_stop_dashboard_timer(initial_page)
+        self._start_stop_scrub_timer(initial_page)
 
     def add_stack_page(self, name, title, widget):
         """Add a page to the stack."""
@@ -510,8 +517,11 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             elif page_name == "restore":
                 from restore_page import refresh_restore_destination
                 refresh_restore_destination(self)
+            elif page_name == "schedule":
+                refresh_schedule_page(self)
             self._start_stop_dashboard_timer(page_name)
             self._start_stop_scrub_timer(page_name)
+            self._start_stop_schedule_timer(page_name)
             log_msg(f"VERB: Switched to: {page_name.title()}")
 
     def _start_stop_dashboard_timer(self, page_name):
@@ -519,9 +529,6 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         if getattr(self, '_dashboard_timer', None) is not None:
             GLib.source_remove(self._dashboard_timer)
             self._dashboard_timer = None
-        if getattr(self, '_scrub_timer', None) is not None:
-            GLib.source_remove(self._scrub_timer)
-            self._scrub_timer = None
         if page_name == "dashboard":
             self._dashboard_timer = GLib.timeout_add_seconds(
                 30, self._on_dashboard_timer_tick
@@ -555,6 +562,22 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             refresh_dashboard_page(self)
         return True
 
+    def _start_stop_schedule_timer(self, page_name):
+        """Start the schedule auto-refresh timer when on Schedule, stop otherwise."""
+        if getattr(self, '_schedule_timer', None) is not None:
+            GLib.source_remove(self._schedule_timer)
+            self._schedule_timer = None
+        if page_name == "schedule":
+            self._schedule_timer = GLib.timeout_add_seconds(
+                60, self._on_schedule_timer_tick
+            )
+
+    def _on_schedule_timer_tick(self):
+        """Callback for schedule auto-refresh. Returns True to keep timer alive."""
+        if self.stack.get_visible_child_name() == "schedule":
+            refresh_schedule_page(self)
+        return True
+
     def _on_main_destroy(self, _widget):
         """Clean up pop-out window and log timers when main window closes."""
         if self.popout_window is not None:
@@ -569,6 +592,9 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         if getattr(self, '_dashboard_timer', None) is not None:
             GLib.source_remove(self._dashboard_timer)
             self._dashboard_timer = None
+        if getattr(self, '_schedule_timer', None) is not None:
+            GLib.source_remove(self._schedule_timer)
+            self._schedule_timer = None
 
     def on_quit(self, widget):
         """Handle quit menu item."""
@@ -672,6 +698,9 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         elif page == "datasets":
             refresh_datasets_page(self)
             log_msg("INFO: Datasets refreshed")
+        elif page == "schedule":
+            refresh_schedule_page(self)
+            log_msg("INFO: Schedule refreshed")
         else:
             log_msg("INFO: Refreshing...")
 

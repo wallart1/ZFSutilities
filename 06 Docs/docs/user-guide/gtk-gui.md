@@ -395,7 +395,9 @@ The default is **80 %** (range 50–95 %).
 ### Running Tasks
 
 A unified view of all currently running operations. Select one or more rows
-and click **Cancel Selected Tasks** to stop them.
+and click **Cancel Selected Tasks** to stop them. The cancel button is enabled
+only when the selection contains at least one real task; selecting the
+*"No running tasks"* placeholder row keeps it disabled.
 
 | Task type     | Source                                                                   | Cancel behaviour                                |
 | ------------- | ------------------------------------------------------------------------ | ----------------------------------------------- |
@@ -651,6 +653,14 @@ Click any column header to sort by **Profile Name**, **Type**, or **Next Run**.
 Click any row to select it; use **Ctrl**/**Shift**-click to select multiple rows.
 The detail pane below populates with the first selected profile's cron settings
 (the first row in tree order when multiple rows are selected).
+
+The profile list refreshes automatically every **60 seconds** while the Schedule
+tab is visible, and immediately when you switch to the tab or click
+**Refresh**. If the set of profiles has not changed, the **Next Run** values are
+updated in place and the current selection is preserved. If profiles were added
+or removed outside the Schedule tab (for example, by another GUI instance or by
+editing the profile files directly), the list is rebuilt and any pending
+unsaved changes for deleted profiles are discarded.
 
 ### Run Now
 

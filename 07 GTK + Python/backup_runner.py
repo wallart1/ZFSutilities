@@ -28,7 +28,6 @@ from command_builders import BashStep
 
 RSYNC_LOG_DIR = "/var/log/zfsutilities"
 RSYNC_LOG_FILE = os.path.join(RSYNC_LOG_DIR, "rsync-backup.log")
-RSYNC_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB
 
 # How often to check the session log size while a runner is active.
 _SESSION_LOG_SIZE_CHECK_INTERVAL = 5  # seconds
@@ -55,10 +54,18 @@ def _ensure_rsync_log_dir():
 
 
 def _truncate_rsync_log():
+    """Clear the rsync log only when its mtime is from a previous day.
+
+    This keeps one day of rsync output appended together; the first backup
+    run of the day truncates the file, and later runs append.
+    """
     _ensure_rsync_log_dir()
     try:
-        if os.path.exists(RSYNC_LOG_FILE) and os.path.getsize(RSYNC_LOG_FILE) > RSYNC_LOG_MAX_BYTES:
-            os.truncate(RSYNC_LOG_FILE, 0)
+        if os.path.exists(RSYNC_LOG_FILE):
+            mtime_date = datetime.fromtimestamp(os.path.getmtime(RSYNC_LOG_FILE)).date()
+            today_date = datetime.now().date()
+            if mtime_date < today_date:
+                os.truncate(RSYNC_LOG_FILE, 0)
     except OSError:
         pass
 
