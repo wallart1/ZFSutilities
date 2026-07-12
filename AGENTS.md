@@ -547,6 +547,23 @@ log_msg("DEBUG: variable =", value)
 
 ---
 
+## Recent Session Notes (2026-07-11)
+
+- Added `repair-iscsi-luns` to diagnose and repair missing iSCSI LUN exports on
+  the storage host. It discovers all VM zvols in configured pools, ensures each
+  has a block backstore and LUN mapping while preserving existing LUN indexes,
+  regenerates `expected-backstores.txt`, saves the target config, and always
+  rescans the compute host. Use `--dry-run` to preview changes and
+  `--force-relogin` to re-log iSCSI sessions when a rescan alone does not reveal
+  all LUNs.
+- Fixed the Dashboard "Fix this" iSCSI button: it now runs `repair-iscsi-luns`
+  (instead of `iscsi-restore-luns`) and displays the command output.
+- Hardened `safe-iscsi-save`: after a successful save it regenerates
+  `expected-backstores.txt` from the current targetcli backstore list so the
+  manifest stays accurate when LUNs are moved or added.
+- Updated `08 Two-node/install-scripts` to deploy `repair-iscsi-luns` on the
+  storage host.
+
 ## Recent Session Notes (2026-07-03)
 
 - Fixed silent scheduled-profile skips: `cron_manager.py` no longer wraps

@@ -43,6 +43,7 @@ script uses one in a non-obvious way.
 - [`iscsi-add-encrypted-luns` (storage node)](#iscsi-add-encrypted-luns-storage-node)
 - [`iscsi-restore-luns` (storage node)](#iscsi-restore-luns-storage-node)
 - [`list-vm-disks` (both)](#list-vm-disks-both)
+- [`repair-iscsi-luns` (storage node)](#repair-iscsi-luns-storage-node)
 - [`lock-zfs-keys` (storage node)](#lock-zfs-keys-storage-node)
 - [`move-vm-disk` (both)](#move-vm-disk-both)
 - [`new-vm-disk` (both)](#new-vm-disk-both)
@@ -339,6 +340,70 @@ Side effects: recreates missing iSCSI resources; updates `saveconfig.json` and
 `saveconfig-boot.json`.
 
 Handles both encrypted and non-encrypted LUNs. Preserves original LUN indexes so compute node configs remain valid.
+
+---
+
+### `repair-iscsi-luns` (storage node)
+
+Diagnoses and repairs missing iSCSI LUN exports on the storage host. Discovers
+all VM zvols in the configured pools, ensures each one has a block backstore and
+a LUN mapping, preserves existing LUN indexes, regenerates the authoritative
+`expected-backstores.txt` manifest, saves the target config, and always rescans
+the compute host. Use `--dry-run` to preview changes and `--force-relogin` to
+re-log iSCSI sessions when a rescan alone does not reveal all LUNs.
+
+```bash
+sudo repair-iscsi-luns [--dry-run] [--force-relogin]
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `--dry-run` | Report what would be changed without making changes |
+| `--force-relogin` | Re-log iSCSI sessions if the rescan does not increase visible devices (briefly disconnects all LUNs) |
+
+**Globals:** node-config globals only.
+
+**Called modules / commands:**
+
+| Script | Purpose |
+| ------ | ------- |
+| `safe-iscsi-save` | Persist repaired config after verifying all expected LUNs are active |
+| `rescan-storage` | Make repaired LUNs visible on the compute host |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| `/etc/rtslib-fb-target/saveconfig.json` | Full targetcli config (backed up and overwritten) | [iSCSI boot-safe config](../developer-guide/data-structures.md#iscsi-boot-safe-config) |
+| `/etc/rtslib-fb-target/expected-backstores.txt` | Regenerated from current targetcli backstores | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
+
+**Internal flow / algorithm:**
+
+1. Exit silently in single-node mode.
+2. Parse current targetcli backstores and LUN mappings.
+3. Discover all VM zvols (`vm-<N>-disk-<N>`) under configured pools.
+4. For each discovered zvol, create the backstore and LUN mapping if missing.
+5. For each loaded backstore that is not mapped to a LUN, create the missing LUN
+   mapping at the next free index.
+6. If any target-side changes were made, back up `saveconfig.json`, regenerate
+   `expected-backstores.txt`, and save the config via `safe-iscsi-save`.
+7. If no target-side changes were needed, still regenerate
+   `expected-backstores.txt` to keep the manifest authoritative.
+8. Rescan the compute host. If `--force-relogin` is set and the visible device
+   count did not increase, re-log iSCSI sessions.
+
+**Return codes / side effects:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Repair completed (nothing added, or backstores/LUNs repaired) |
+| `1`  | Not running on the storage host, not running as root, or invalid option |
+
+Side effects: may create backstores/LUNs; updates `saveconfig.json`,
+`saveconfig-boot.json`, and `expected-backstores.txt`; triggers compute-host
+rescan (and optionally re-login).
 
 ---
 
@@ -1151,6 +1216,8 @@ sudo safe-iscsi-save
 6. Run `targetcli saveconfig`.
 7. Generate `saveconfig-boot.json` by stripping encrypted backstores listed in
    `iscsi-encrypted-luns.conf`.
+8. Regenerate `expected-backstores.txt` from the current list of loaded
+   backstores so the manifest stays authoritative after LUN moves or repairs.
 
 **Return codes / side effects:**
 
@@ -1159,18 +1226,20 @@ sudo safe-iscsi-save
 | `0`  | Config saved successfully |
 | `1`  | Missing files, degraded state, or save skipped |
 
-Side effects: overwrites `saveconfig.json`; regenerates `saveconfig-boot.json`.
+Side effects: overwrites `saveconfig.json`; regenerates `saveconfig-boot.json`;
+regenerates `expected-backstores.txt`.
 
 The manifest contains one backstore name per line (`vm-<vmid>-disk-<N>` format).
 Comments and blank lines are ignored. This file is the authoritative source of
 truth for expected LUN count — it is not derived from `saveconfig.json` or ZFS.
 
-| Script                                   | Manifest action                                                 |
-| ---------------------------------------- | --------------------------------------------------------------- |
-| [`new-vm-disk`](#new-vm-disk-both)       | Adds entry when creating a disk                                 |
-| [`remove-vm-disk`](#remove-vm-disk-both) | Removes entry when destroying a disk                            |
-| [`zfsdelfs`](commands.md#zfsdelfs)       | Removes entry during teardown; `zfs-send-receive` rebuild re-adds |
-| [`move-vm-disk`](#move-vm-disk-both)     | Removes source entry and adds destination entry                 |
+| Script                                      | Manifest action                                                   |
+| ------------------------------------------- | ----------------------------------------------------------------- |
+| [`new-vm-disk`](#new-vm-disk-both)          | Adds entry when creating a disk                                   |
+| [`remove-vm-disk`](#remove-vm-disk-both)    | Removes entry when destroying a disk                              |
+| [`zfsdelfs`](commands.md#zfsdelfs)          | Removes entry during teardown; `zfs-send-receive` rebuild re-adds |
+| [`move-vm-disk`](#move-vm-disk-both)        | Removes source entry and adds destination entry                   |
+| [`repair-iscsi-luns`](#repair-iscsi-luns-storage-node) | Regenerates the entire manifest from current targetcli backstores |
 
 Use `safe-iscsi-save` instead of `targetcli saveconfig` in any script that modifies
 iSCSI config.

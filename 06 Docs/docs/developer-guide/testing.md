@@ -42,7 +42,9 @@ The `./run-tests` harness detects whether a name starts with `test_` (Python) or
 | `test-installer-checks` | 12 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal |
 | `test-move-vm-disk` | 8 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove |
 | `test-switch-version` | 6 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, and `--list` |
+| `test-repair-iscsi-luns` | 9 | Backstore/LUN parsing, zvol discovery, gap-free LUN index allocation, missing backstore/LUN creation, dry-run mode, and compute-host rescan |
 | `test-restart-iscsi-services` | 8 | VM running-state detection before iSCSI target restart |
+| `test-safe-iscsi-save` | 5 | Degraded-config guard: refuses save when active backstores are missing, saves when counts match, and regenerates the manifest after a successful save |
 | `test-startdocserver` | 15 | Server health checks (`curl`), PID discovery (`lsof` / `fuser` / `pgrep` / `http.server`), CWD mismatch detection, `--restart` logic |
 | `test-unlock-zfs-keys` | 9 | ZFS key file loading and unlock helper functions |
 | `test-zfsbuildfsarray` | 14 | Dataset array building with includes, excludes, exact-match (`=` prefix), depth limits, `startwith` / `endwith`, clone skipping |

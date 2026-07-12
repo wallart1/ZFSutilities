@@ -1264,26 +1264,28 @@ def _refresh_iscsi_section(app, missing_luns, stale=False):
 
 
 def _on_fix_iscsi_clicked(_button, app):
-    """Run iscsi-add-encrypted-luns and refresh the dashboard."""
-    log_msg("INFO: Running iscsi-add-encrypted-luns...")
+    """Run repair-iscsi-luns and refresh the dashboard."""
+    log_msg("INFO: Running repair-iscsi-luns...")
     try:
         result = subprocess.run(
-            ["/usr/local/lib/zfsutilities/bin/iscsi-restore-luns"],
+            ["/usr/local/lib/zfsutilities/bin/repair-iscsi-luns"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=120,
         )
         if result.returncode == 0:
-            log_msg("INFO: iscsi-add-encrypted-luns completed successfully")
-            if result.stdout:
-                for line in result.stdout.strip().splitlines():
-                    log_msg(f"INFO: {line}")
+            log_msg("INFO: repair-iscsi-luns completed successfully")
         else:
-            log_msg(f"WARN: iscsi-add-encrypted-luns exited {result.returncode}")
-            if result.stderr:
-                log_msg(f"WARN: {result.stderr.strip()}")
+            log_msg(f"WARN: repair-iscsi-luns exited {result.returncode}")
+
+        if result.stdout:
+            for line in result.stdout.strip().splitlines():
+                log_msg(f"INFO: {line}")
+        if result.stderr:
+            for line in result.stderr.strip().splitlines():
+                log_msg(f"WARN: {line}")
     except (OSError, subprocess.TimeoutExpired) as e:
-        log_msg(f"WARN: iscsi-add-encrypted-luns failed: {e}")
+        log_msg(f"WARN: repair-iscsi-luns failed: {e}")
 
     refresh_dashboard_page(app)
 

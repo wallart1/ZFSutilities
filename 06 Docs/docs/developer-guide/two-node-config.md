@@ -162,7 +162,8 @@ is_single_node && { echo "Not applicable in single-node mode."; exit 0; }
 ```
 
 This applies to: [rescan-storage](../commands-and-modules/two-node.md#rescan-storage-both), [show-lun-map](../commands-and-modules/two-node.md#show-lun-map-compute-node), [safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node),
-[restart-iscsi-services](../commands-and-modules/two-node.md#restart-iscsi-services-storage-node), [iscsi-add-encrypted-luns](../commands-and-modules/two-node.md#iscsi-add-encrypted-luns-storage-node).
+[restart-iscsi-services](../commands-and-modules/two-node.md#restart-iscsi-services-storage-node), [iscsi-add-encrypted-luns](../commands-and-modules/two-node.md#iscsi-add-encrypted-luns-storage-node),
+[repair-iscsi-luns](../commands-and-modules/two-node.md#repair-iscsi-luns-storage-node).
 
 ## Repo-Root Scripts
 

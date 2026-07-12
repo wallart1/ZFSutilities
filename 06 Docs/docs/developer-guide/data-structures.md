@@ -396,6 +396,12 @@ re-created). [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk
 [zfsdelfs](../commands-and-modules/commands.md#zfsdelfs) iSCSI teardown (removes) keep the manifest in sync with
 destructive operations.
 
+[repair-iscsi-luns](../commands-and-modules/two-node.md#repair-iscsi-luns-storage-node) regenerates the entire
+manifest from the current targetcli backstore list, and
+[safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node) regenerates it after every
+successful save so the manifest stays authoritative when LUNs are moved or
+added.
+
 ## iSCSI encrypted-LUNs config
 
 ```

@@ -422,7 +422,11 @@ Each row also stores the operation's session-log path in a hidden column. The
 
 ### iSCSI Issues *(two-node only)*
 
-Compares the expected LUN list against `targetcli` backstores. If any LUN is missing, an orange warning row appears with a **Fix this** button that tries to restore LUNs with encrypted backstores.
+Compares the expected LUN list against `targetcli` backstores. If any LUN is
+missing, an orange warning row appears with a **Fix this** button that runs
+[`repair-iscsi-luns`](../commands-and-modules/two-node.md#repair-iscsi-luns-storage-node)
+on the storage host. The button output is displayed in the GUI log so you can
+see which backstores and LUN mappings were added or verified.
 
 This section is hidden entirely on single-node systems.
 

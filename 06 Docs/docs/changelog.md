@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.59.8
+
+### Added
+
+- **`repair-iscsi-luns` (storage node)** — New diagnostic/repair script that
+  discovers all VM zvols in configured pools, ensures each has a block backstore
+  and a LUN mapping, preserves existing LUN indexes, regenerates
+  `expected-backstores.txt`, saves the target config via `safe-iscsi-save`, and
+  always rescans the compute host. Supports `--dry-run` to preview changes and
+  `--force-relogin` to re-log iSCSI sessions when a rescan alone does not reveal
+  all LUNs.
+
+### Fixed
+
+- **Dashboard "Fix this" iSCSI button** — The button now runs
+  `repair-iscsi-luns` instead of `iscsi-restore-luns`, and it displays the
+  command's stdout and stderr in the GUI log so the result is visible.
+- **`safe-iscsi-save` manifest regeneration** — After a successful save,
+  `safe-iscsi-save` now regenerates `expected-backstores.txt` from the current
+  targetcli backstore list. This keeps the manifest accurate when LUNs are moved
+  between VMs or when `repair-iscsi-luns` adds missing LUNs.
+- **`safe-iscsi-save` active-count arithmetic** — Fixed a bug where `grep -c`
+  returning `1` for no matches, combined with a fallback `|| echo "0"`, could
+  produce a two-line string that broke the active-backstore count comparison.
+
+### Tests
+
+- Added `tests/test-repair-iscsi-luns` covering backstore/LUN parsing, zvol
+  discovery, gap-free LUN index allocation, missing backstore/LUN creation,
+  existing-backstore LUN mapping, dry-run mode, and compute-host rescan.
+- Added `tests/test-safe-iscsi-save` covering the degraded-config guard and
+  manifest regeneration after a successful save.
+- Updated `tests/python/test_dashboard_page.py` for the new
+  `repair-iscsi-luns` "Fix this" button behavior.
+
+### Documentation
+
+- Updated `06 Docs/docs/commands-and-modules/two-node.md` with the new
+  `repair-iscsi-luns` section and updated `safe-iscsi-save` flow.
+- Updated `06 Docs/docs/user-guide/gtk-gui.md` to describe the new
+  `repair-iscsi-luns` "Fix this" button behavior.
+- Updated `06 Docs/docs/developer-guide/testing.md`,
+  `two-node-config.md`, and `data-structures.md` to reference the new script,
+  tests, and manifest-regeneration behavior.
+
 ## 0.59.7
 
 ### Added

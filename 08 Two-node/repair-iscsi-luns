@@ -1,0 +1,452 @@
+#!/bin/bash
+# repair-iscsi-luns
+# Idempotent repair of iSCSI LUN export on the storage host.
+#
+# 1. Ensures every VM zvol in the configured pools is exported as an iSCSI
+#    backstore + LUN mapping.
+# 2. Preserves existing LUN indexes so working VMs are not disrupted.
+# 3. Always rescans the compute host so newly added or existing-but-unseen
+#    LUNs appear.
+# 4. Optionally re-logs iSCSI sessions if a rescan alone does not reveal all
+#    expected LUNs (use --force-relogin; this briefly disconnects all LUNs).
+#
+# Usage: sudo repair-iscsi-luns [--dry-run] [--force-relogin]
+# Install to: /usr/local/lib/zfsutilities/bin/repair-iscsi-luns on the storage host
+
+source /usr/local/lib/node-lib.sh
+
+# iSCSI-only script — exit silently in single-node mode
+is_single_node && exit 0
+
+MY_HOST=$(hostname -s)
+
+usage() {
+    echo "Usage: repair-iscsi-luns [--dry-run] [--force-relogin]"
+    echo ""
+    echo "  --dry-run         Report what would be changed without making changes"
+    echo "  --force-relogin   Re-log iSCSI sessions if rescan does not reveal all LUNs"
+    echo "                    (briefly disconnects all LUNs on the compute host)"
+    exit 1
+}
+
+DRY_RUN=false
+FORCE_RELOGIN=false
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)       DRY_RUN=true ;;
+        --force-relogin) FORCE_RELOGIN=true ;;
+        -h|--help)       usage ;;
+        *)
+            echo "✗ Unknown option: $arg" >&2
+            usage
+            ;;
+    esac
+done
+
+# Verify we're on the storage host
+if [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
+    echo "✗ ERROR: Must run on the storage host ($STORAGE_HOST), not $MY_HOST" >&2
+    exit 1
+fi
+
+[[ $EUID -eq 0 ]] || [[ "${REPAIR_ISCSI_LUNS_SKIP_ROOT:-}" == "Y" ]] || {
+    echo "✗ ERROR: Must run as root (use sudo)" >&2
+    exit 1
+}
+
+SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
+MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+
+# ------------------------------------------------------------------
+# Logging helpers
+# ------------------------------------------------------------------
+log_info()  { echo "  $*"; }
+log_warn()  { echo "  ⚠ $*" >&2; }
+log_error() { echo "  ✗ $*" >&2; }
+log_ok()    { echo "  ✓ $*"; }
+
+# ------------------------------------------------------------------
+# Target state discovery
+# ------------------------------------------------------------------
+
+# Parse targetcli backstore list into a newline-separated list of:
+#   backstore_name device_path
+# Output variables:
+#   _bs_names[]      array of backstore names
+#   _bs_devs[name]   associative array of device paths
+parse_backstores() {
+    _bs_names=()
+    unset -v _bs_devs
+    declare -gA _bs_devs=()
+
+    local raw
+    raw=$(targetcli /backstores/block ls 2>/dev/null) || return 0
+
+    local line name dev
+    while IFS= read -r line; do
+        # Match lines like:
+        #   o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) ...]
+        if [[ "$line" =~ ^[[:space:]]+o-\ (vm-[0-9]+-disk-[0-9]+)[[:space:]].*\[(/dev/zvol/[^[:space:]]+) ]]; then
+            name="${BASH_REMATCH[1]}"
+            dev="${BASH_REMATCH[2]}"
+            _bs_names+=("$name")
+            _bs_devs["$name"]="$dev"
+        fi
+    done <<< "$raw"
+}
+
+# Parse targetcli LUN list for a given target IQN.
+# Output variables:
+#   _lun_indexes[name]   associative array: backstore name -> LUN index
+#   _used_indexes[]      sorted array of indexes already in use
+parse_target_luns() {
+    local iqn="$1"
+    _used_indexes=()
+    unset -v _lun_indexes
+    declare -gA _lun_indexes=()
+
+    local raw
+    raw=$(targetcli "/iscsi/${iqn}/tpg1/luns" ls 2>/dev/null) || return 0
+
+    local line idx name
+    while IFS= read -r line; do
+        # Match lines like:
+        #   | o- lun19 ..... [block/vm-207-disk-2 (/dev/zvol/...) (...)]
+        if [[ "$line" =~ lun([0-9]+)[[:space:]].*block/(vm-[0-9]+-disk-[0-9]+) ]]; then
+            idx="${BASH_REMATCH[1]}"
+            name="${BASH_REMATCH[2]}"
+            _lun_indexes["$name"]="$idx"
+            _used_indexes+=("$idx")
+        fi
+    done <<< "$raw"
+}
+
+# Discover all VM zvols in configured pools.
+# Output variable: _zvols[] array of "pool/dataset" strings.
+discover_zvols() {
+    _zvols=()
+    local pool
+    while IFS= read -r pool; do
+        [[ -z "$pool" ]] && continue
+        local ds
+        while IFS= read -r ds; do
+            [[ -z "$ds" ]] && continue
+            _zvols+=("$ds")
+        done < <(zfs list -H -o name -r "${pool}/proxmox" 2>/dev/null \
+                 | grep -E '^[^/]+/proxmox/vm-[0-9]+-disk-[0-9]+$')
+    done < <(pool_list)
+}
+
+# ------------------------------------------------------------------
+# Repair actions
+# ------------------------------------------------------------------
+
+# Compute the next free LUN index for a target, given the used indexes.
+next_free_lun_index() {
+    local idx=0
+    local used_sorted
+    used_sorted=$(printf '%s\n' "${_used_indexes[@]}" | sort -n)
+    while IFS= read -r used; do
+        [[ -z "$used" ]] && continue
+        if [[ "$idx" -lt "$used" ]]; then
+            break
+        fi
+        idx=$((idx + 1))
+    done <<< "$used_sorted"
+    echo "$idx"
+}
+
+# Create a backstore for a zvol if it does not exist.
+# Arguments: name dev_path pool
+# Returns 0 on success or if already exists.
+create_backstore() {
+    local name="$1" dev="$2"
+    if [[ -n "${_bs_devs[$name]:-}" ]]; then
+        log_info "Backstore $name already exists"
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[dry-run] Would create backstore $name -> $dev"
+        return 0
+    fi
+
+    if targetcli /backstores/block create "$name" "$dev" >/dev/null 2>&1; then
+        targetcli "/backstores/block/${name}" set attribute emulate_tpu=1 >/dev/null 2>&1
+        log_ok "Created backstore $name -> $dev"
+        _bs_names+=("$name")
+        _bs_devs["$name"]="$dev"
+        return 0
+    fi
+
+    log_error "Failed to create backstore $name"
+    return 1
+}
+
+# Create a LUN mapping for a backstore if it is not already mapped.
+# Arguments: name iqn
+# Uses and updates _used_indexes and _lun_indexes.
+create_lun_mapping() {
+    local name="$1" iqn="$2"
+    if [[ -n "${_lun_indexes[$name]:-}" ]]; then
+        log_info "LUN mapping for $name already exists (${_lun_indexes[$name]}): $name"
+        return 0
+    fi
+
+    local idx
+    idx=$(next_free_lun_index)
+
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[dry-run] Would map $name to ${iqn}/tpg1/lun$idx"
+        _used_indexes+=("$idx")
+        _lun_indexes["$name"]="$idx"
+        return 0
+    fi
+
+    if targetcli "/iscsi/${iqn}/tpg1/luns" create "/backstores/block/${name}" "$idx" >/dev/null 2>&1; then
+        log_ok "Mapped $name to ${iqn}/tpg1/lun$idx"
+        _used_indexes+=("$idx")
+        _lun_indexes["$name"]="$idx"
+        return 0
+    fi
+
+    log_error "Failed to map $name to ${iqn}/tpg1/lun$idx"
+    return 1
+}
+
+# Back up saveconfig.json before mutation.
+backup_saveconfig() {
+    [[ -f "$SAVEFILE" ]] || return 0
+    local backup
+    backup="${SAVEFILE}.backup.$(date +%Y%m%d-%H%M%S)"
+    cp -f "$SAVEFILE" "$backup"
+    log_info "Backed up saveconfig.json to $backup"
+}
+
+# Regenerate expected-backstores.txt from the current list of loaded backstores.
+# This keeps the manifest accurate after adds/moves.
+regenerate_manifest() {
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[dry-run] Would regenerate $MANIFEST"
+        return 0
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp)
+    {
+        echo "# Expected iSCSI backstores - authoritative manifest"
+        echo "# Format: one backstore name per line (vm-<vmid>-disk-<N>)"
+        echo "# Updated: $(date -Iseconds)"
+        echo "# Source: Generated by repair-iscsi-luns from current targetcli state"
+        echo ""
+        printf '%s\n' "${_bs_names[@]}" | sort -V
+    } > "$tmpfile"
+
+    mv -f "$tmpfile" "$MANIFEST"
+    log_ok "Regenerated $MANIFEST"
+}
+
+# ------------------------------------------------------------------
+# Compute host visibility
+# ------------------------------------------------------------------
+
+# Count how many iSCSI by-path devices are visible on the compute host.
+count_visible_devices() {
+    ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
+        "ls /dev/disk/by-path/ip-${STORAGE_IP}* 2>/dev/null | wc -l" 2>/dev/null
+}
+
+# Rescan the compute host. Always runs.
+rescan_compute_host() {
+    log_info "Rescanning compute host ($COMPUTE_HOST)..."
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[dry-run] Would run rescan-storage on $COMPUTE_HOST"
+        return 0
+    fi
+
+    if rescan-storage; then
+        log_ok "Compute host rescan complete"
+    else
+        log_warn "Compute host rescan returned non-zero"
+    fi
+}
+
+# Re-log iSCSI sessions on the compute host.
+# This briefly disconnects all LUNs and should be used with care.
+relogin_compute_host() {
+    log_warn "Re-logging iSCSI sessions on $COMPUTE_HOST (all LUNs will briefly disconnect)"
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[dry-run] Would re-log iSCSI sessions"
+        return 0
+    fi
+
+    ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" bash -s -- "$STORAGE_IP" <<'SSHEOF'
+        STORAGE_IP="$1"
+        iscsiadm -m node -p "${STORAGE_IP}:3260" -u
+        sleep 1
+        iscsiadm -m node -p "${STORAGE_IP}:3260" -l
+SSHEOF
+
+    log_ok "Re-login complete"
+}
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+main() {
+
+echo "=== repair-iscsi-luns ==="
+echo ""
+
+# Gather current target state
+parse_backstores
+log_info "Loaded backstores: ${#_bs_names[@]}"
+
+# Gather zvols and expected state
+discover_zvols
+log_info "Discovered VM zvols: ${#_zvols[@]}"
+echo ""
+
+# Track whether we made any target-side changes
+TARGET_CHANGED=false
+MISSING_BACKSTORES=()
+MISSING_LUNS=()
+UNMAPPED_ZVOLS=()
+
+# Ensure each zvol has a backstore and a LUN mapping
+for zvol in "${_zvols[@]}"; do
+    [[ -z "$zvol" ]] && continue
+
+    # Extract pool and backstore name from zvol path
+    zvol_pool="${zvol%%/*}"
+    zvol_name="${zvol##*/}"
+    zvol_dev="/dev/zvol/${zvol}"
+    zvol_iqn=$(pool_to_target "$zvol_pool") || continue
+
+    if [[ ! -e "$zvol_dev" ]] && [[ "${REPAIR_ISCSI_LUNS_TEST_MODE:-}" != "Y" ]]; then
+        log_warn "Device not available: $zvol_dev (skipping $zvol_name)"
+        continue
+    fi
+
+    # Make sure target LUN state is loaded for this pool
+    parse_target_luns "$zvol_iqn"
+
+    if [[ -z "${_bs_devs[$zvol_name]:-}" ]]; then
+        MISSING_BACKSTORES+=("$zvol_name")
+        if create_backstore "$zvol_name" "$zvol_dev"; then
+            TARGET_CHANGED=true
+        fi
+    fi
+
+    if [[ -z "${_lun_indexes[$zvol_name]:-}" ]]; then
+        MISSING_LUNS+=("$zvol_name")
+        if create_lun_mapping "$zvol_name" "$zvol_iqn"; then
+            TARGET_CHANGED=true
+        fi
+    fi
+done
+
+# Find loaded backstores that are not mapped to any LUN
+for bs_name in "${_bs_names[@]}"; do
+    [[ -z "$bs_name" ]] && continue
+
+    # Determine which target this backstore belongs to from its device path
+    bs_dev="${_bs_devs[$bs_name]}"
+    bs_pool=""
+    if [[ "$bs_dev" =~ /dev/zvol/([^/]+)/proxmox/ ]]; then
+        bs_pool="${BASH_REMATCH[1]}"
+    fi
+    [[ -z "$bs_pool" ]] && continue
+
+    bs_iqn=$(pool_to_target "$bs_pool") || continue
+    parse_target_luns "$bs_iqn"
+
+    if [[ -z "${_lun_indexes[$bs_name]:-}" ]]; then
+        MISSING_LUNS+=("$bs_name")
+        if create_lun_mapping "$bs_name" "$bs_iqn"; then
+            TARGET_CHANGED=true
+        fi
+    fi
+done
+
+# Find zvols that exist but are not exported
+for zvol in "${_zvols[@]}"; do
+    zvol_name="${zvol##*/}"
+    if [[ -z "${_bs_devs[$zvol_name]:-}" ]]; then
+        UNMAPPED_ZVOLS+=("$zvol")
+    fi
+done
+
+# Report unexported zvols (do not auto-export unless requested)
+if [[ ${#UNMAPPED_ZVOLS[@]} -gt 0 ]]; then
+    echo ""
+    log_warn "The following zvols exist but are not exported as iSCSI LUNs:"
+    for zvol in "${UNMAPPED_ZVOLS[@]}"; do
+        echo "    $zvol"
+    done
+    echo "  (They will be exported if they are added to a VM config and new-vm-disk/attach-vm-disk is used.)"
+fi
+
+# Persist changes
+if [[ "$TARGET_CHANGED" == true ]]; then
+    echo ""
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[dry-run] Would back up saveconfig.json, regenerate manifest, and save config"
+    else
+        backup_saveconfig
+        regenerate_manifest
+        if safe-iscsi-save; then
+            log_ok "iSCSI configuration saved"
+        else
+            log_error "safe-iscsi-save failed — configuration may not be persistent"
+        fi
+    fi
+else
+    echo ""
+    log_info "No target-side changes needed"
+    if [[ "$DRY_RUN" != true ]]; then
+        regenerate_manifest
+    fi
+fi
+
+# Compute-side repair: always rescan, optionally re-login if requested/needed
+echo ""
+VISIBLE_BEFORE=$(count_visible_devices)
+log_info "Visible iSCSI devices on $COMPUTE_HOST before rescan: ${VISIBLE_BEFORE:-?}"
+
+rescan_compute_host
+
+VISIBLE_AFTER=$(count_visible_devices)
+log_info "Visible iSCSI devices on $COMPUTE_HOST after rescan: ${VISIBLE_AFTER:-?}"
+
+if [[ "$FORCE_RELOGIN" == true ]] && [[ "${VISIBLE_AFTER:-0}" -le "${VISIBLE_BEFORE:-0}" ]]; then
+    echo ""
+    log_warn "Device count did not increase after rescan; attempting re-login"
+    relogin_compute_host
+    VISIBLE_AFTER=$(count_visible_devices)
+    log_info "Visible iSCSI devices after re-login: ${VISIBLE_AFTER:-?}"
+fi
+
+# Summary
+echo ""
+echo "=== Summary ==="
+if [[ ${#MISSING_BACKSTORES[@]} -gt 0 ]]; then
+    log_ok "Backstores added/verified: ${#MISSING_BACKSTORES[@]}"
+fi
+if [[ ${#MISSING_LUNS[@]} -gt 0 ]]; then
+    log_ok "LUN mappings added/verified: ${#MISSING_LUNS[@]}"
+fi
+if [[ ${#UNMAPPED_ZVOLS[@]} -gt 0 ]]; then
+    log_warn "Unexported zvols: ${#UNMAPPED_ZVOLS[@]}"
+fi
+log_info "Visible devices on $COMPUTE_HOST: ${VISIBLE_AFTER:-?}"
+log_ok "Done"
+echo ""
+
+} # end main
+
+# Run main only when executed directly, not when sourced for tests.
+if [[ -z "${REPAIR_ISCSI_LUNS_TEST_MODE:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main
+fi

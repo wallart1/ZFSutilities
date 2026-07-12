@@ -1,0 +1,161 @@
+#!/usr/bin/bash
+# test-safe-iscsi-save — Unit tests for the degraded-config guard.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Run safe-iscsi-save from a temp copy with paths rewritten and
+# targetcli/generate_boot_config mocked inside the subshell.
+# ------------------------------------------------------------------
+_run_safe_iscsi_save() {
+    local manifest="$1"
+    local savefile="$2"
+    local backstore_count="$3"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local script_copy="$tmpdir/safe-iscsi-save"
+
+    sed \
+        -e "s|/etc/rtslib-fb-target/saveconfig\.json|$savefile|g" \
+        -e "s|/etc/rtslib-fb-target/saveconfig-boot\.json|${savefile}.boot|g" \
+        -e "s|/etc/rtslib-fb-target/expected-backstores\.txt|$manifest|g" \
+        -e "s|/etc/iscsi-encrypted-luns\.conf||g" \
+        "$mydir/08 Two-node/safe-iscsi-save" > "$script_copy"
+
+    cat > "$tmpdir/runner" << RUNNEREOF
+#!/bin/bash
+BACKSTORE_COUNT=$backstore_count
+SAVECONFIG_CALLED=""
+targetcli() {
+    case "\$*" in
+        "/backstores/block ls")
+            if [[ "\$BACKSTORE_COUNT" -eq 0 ]]; then
+                true
+            else
+                for (( i=0; i<\$BACKSTORE_COUNT; i++ )); do
+                    echo "  vm-10\$i-disk-0     /dev/zvol/threeamigos/proxmox/vm-10\$i-disk-0   50G"
+                done
+            fi
+            ;;
+        "saveconfig")
+            SAVECONFIG_CALLED="yes"
+            ;;
+        *)
+            true
+            ;;
+    esac
+}
+generate_boot_config() { true; }
+source "$script_copy"
+[[ "\$SAVECONFIG_CALLED" == "yes" ]] && echo "SAVECONFIG_CALLED"
+RUNNEREOF
+
+    bash "$tmpdir/runner" 2>&1
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_zero_active_backstores_refuses_save() {
+    test_start "Zero active backstores refuses to save"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    echo '{"storage_objects":[],"targets":[]}' > "$tmpdir/saveconfig.json"
+    printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$tmpdir/expected-backstores.txt"
+
+    local output rc=0
+    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 0) || rc=$?
+
+    if [[ "$rc" -ne 0 ]] && [[ "$output" != *"SAVECONFIG_CALLED"* ]]; then
+        test_pass
+    else
+        test_fail "Expected non-zero rc and no save, got rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_active_count_equals_expected_saves() {
+    test_start "Active count equal to expected saves config"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    echo '{"storage_objects":[],"targets":[]}' > "$tmpdir/saveconfig.json"
+    printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$tmpdir/expected-backstores.txt"
+
+    local output rc=0
+    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 2) || rc=$?
+
+    if [[ "$rc" -eq 0 ]] && [[ "$output" == *"SAVECONFIG_CALLED"* ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 and save called, got rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_active_less_than_expected_refuses_save() {
+    test_start "Active count less than expected refuses to save"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    echo '{"storage_objects":[],"targets":[]}' > "$tmpdir/saveconfig.json"
+    printf 'vm-100-disk-0\nvm-101-disk-0\nvm-102-disk-0\n' > "$tmpdir/expected-backstores.txt"
+
+    local output rc=0
+    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 2) || rc=$?
+
+    if [[ "$rc" -ne 0 ]] && [[ "$output" != *"SAVECONFIG_CALLED"* ]]; then
+        test_pass
+    else
+        test_fail "Expected non-zero rc and no save, got rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_empty_manifest_refuses_save() {
+    test_start "Empty manifest refuses to save"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    echo '{"storage_objects":[],"targets":[]}' > "$tmpdir/saveconfig.json"
+    printf '# empty manifest\n' > "$tmpdir/expected-backstores.txt"
+
+    local output rc=0
+    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 0) || rc=$?
+
+    if [[ "$rc" -ne 0 ]] && [[ "$output" != *"SAVECONFIG_CALLED"* ]]; then
+        test_pass
+    else
+        test_fail "Expected non-zero rc and no save, got rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_manifest_regenerated_after_save() {
+    test_start "Manifest is regenerated after successful save"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    echo '{"storage_objects":[],"targets":[]}' > "$tmpdir/saveconfig.json"
+    printf 'vm-999-disk-0\n' > "$tmpdir/expected-backstores.txt"
+
+    _run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 2 >/dev/null
+
+    local content
+    content=$(grep -v '^#' "$tmpdir/expected-backstores.txt" | grep -v '^$' | sort)
+    if [[ "$content" == $'vm-100-disk-0\nvm-101-disk-0' ]]; then
+        test_pass
+    else
+        test_fail "Manifest not regenerated correctly: '$content'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_zero_active_backstores_refuses_save
+test_active_count_equals_expected_saves
+test_active_less_than_expected_refuses_save
+test_empty_manifest_refuses_save
+test_manifest_regenerated_after_save
+
+test_summary

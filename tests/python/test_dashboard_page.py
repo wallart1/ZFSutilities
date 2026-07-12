@@ -1483,5 +1483,53 @@ class TestRefreshConfigSection(unittest.TestCase):
         self.assertTrue(self._find_label_with_text(gtk_mock, expected))
 
 
+class TestFixIscsiButton(unittest.TestCase):
+    """Tests for the Dashboard "Fix this" iSCSI repair button."""
+
+    def _create_app(self):
+        app = MagicMock()
+        app.config = {}
+        return app
+
+    def test_fix_iscsi_runs_repair_script(self):
+        app = self._create_app()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "rescan complete\n"
+            mock_run.return_value.stderr = ""
+            with patch.object(dp, "refresh_dashboard_page") as mock_refresh:
+                dp._on_fix_iscsi_clicked(None, app)
+
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args[0], "/usr/local/lib/zfsutilities/bin/repair-iscsi-luns")
+        mock_refresh.assert_called_once_with(app)
+
+    def test_fix_iscsi_logs_nonzero_exit(self):
+        app = self._create_app()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = ""
+            mock_run.return_value.stderr = "something failed"
+            with patch.object(dp, "refresh_dashboard_page"):
+                with capture_logs() as logs:
+                    dp._on_fix_iscsi_clicked(None, app)
+
+        self.assertTrue(
+            any("repair-iscsi-luns exited 1" in msg for msg in logs)
+        )
+
+    def test_fix_iscsi_logs_failure(self):
+        app = self._create_app()
+        with patch("subprocess.run", side_effect=OSError("no such file")):
+            with patch.object(dp, "refresh_dashboard_page"):
+                with capture_logs() as logs:
+                    dp._on_fix_iscsi_clicked(None, app)
+
+        self.assertTrue(
+            any("repair-iscsi-luns failed" in msg for msg in logs)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
