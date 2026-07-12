@@ -39,14 +39,16 @@ nav:
     - ZFS Key Handling: 'installation/zfs-keys.md'
   - User Guide:
     - Overview: 'user-guide/index.md'
-    - Concepts and Terminology: 'user-guide/concepts.md'
-    - Daily Backup: 'user-guide/daily-backup.md'
-    - Offsite Backup: 'user-guide/offsite-backup.md'
-    - Restore Operations: 'user-guide/restore.md'
-    - Retention Policies: 'user-guide/retention.md'
-    - Profiles: 'user-guide/profiles.md'
-    - Proxmox Integration: 'user-guide/proxmox-integration.md'
+    - Concepts and Terminology:
+      - Overview: 'user-guide/concepts.md'
+      - Profiles: 'user-guide/profiles.md'
     - GTK GUI Reference: 'user-guide/gtk-gui.md'
+    - Command Line Reference:
+      - Daily Backup: 'user-guide/daily-backup.md'
+      - Offsite Backup: 'user-guide/offsite-backup.md'
+      - Restore Operations: 'user-guide/restore.md'
+      - Retention Policies: 'user-guide/retention.md'
+      - Proxmox Integration: 'user-guide/proxmox-integration.md'
   - Developer Guide:
     - Overview: 'developer-guide/index.md'
     - Architecture: 'developer-guide/architecture.md'
@@ -68,6 +70,9 @@ nav:
     - Python Modules: 'commands-and-modules/python-modules.md'
   - Messages:
     - Overview: 'messages/index.md'
+
+extra_css:
+  - assets/stylesheets/extra.css
 
 markdown_extensions:
   - admonition

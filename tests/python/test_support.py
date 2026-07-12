@@ -517,7 +517,15 @@ def mock_gtk():
     webkit_mock = MagicMock()
     webkit_mock.WebView = MagicMock()
     webkit_mock.WebView.new_with_user_content_manager = MagicMock()
+    webkit_mock.WebView.evaluate_javascript = MagicMock()
+    webkit_mock.WebView.evaluate_javascript_finish = MagicMock()
     webkit_mock.WebView.return_value.get_settings.return_value = MagicMock()
+    webkit_mock.WebView.return_value.evaluate_javascript = MagicMock()
+    webkit_mock.WebView.return_value.evaluate_javascript_finish = MagicMock()
+    webkit_mock.NavigationPolicyDecision = MagicMock()
+    webkit_mock.NavigationPolicyDecision.get_navigation_action = MagicMock(
+        return_value=MagicMock(get_request=MagicMock(return_value=MagicMock(get_uri=MagicMock())))
+    )
     webkit_mock.PolicyDecisionType = MagicMock()
     webkit_mock.PolicyDecisionType.NAVIGATION_ACTION = 0
     webkit_mock.PolicyDecisionType.NEW_WINDOW_ACTION = 1

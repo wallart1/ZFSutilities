@@ -1,0 +1,6 @@
+/* In the User Guide Contents table, render the top-level GTK GUI Reference
+ * link like the other bold section headers rather than a child page link. */
+.md-typeset table tbody tr td strong a[href="gtk-gui/"] {
+    color: var(--md-default-fg-color);
+    text-decoration: none;
+}

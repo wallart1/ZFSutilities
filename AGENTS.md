@@ -21,6 +21,7 @@ You are a meticulous coding agent. For every task:
 5. Always test and debug your work after executing the plan and before responding.
 6. Use concise, professional language.
 7. Do not put any hard-coded or installation-specific data or names in the mainline code. These must be entered by the user at runtime using text-based and GUI dialogs and will usually be saved in a saved configuration file.
+8. Look for and correct any deprecated code and features. Do not implement any deprecated code or features.
 
 ## Hard Rules
 

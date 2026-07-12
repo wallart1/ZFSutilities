@@ -13,15 +13,18 @@ before reading the task pages.
 
 ## Contents
 
-| Page                                          | Description                                                                                                |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| [Concepts and Terminology](concepts.md)       | ZFS fundamentals, naming conventions, the backup chain                                                     |
-| [Daily Backup](daily-backup.md)               | Run or troubleshoot the nightly backup job                                                                 |
-| [Offsite Backup](offsite-backup.md)           | Copy backups to a removable pool for offsite storage                                                       |
-| [Restore Operations](restore.md)              | Recover a dataset or file from a snapshot                                                                  |
-| [Retention Policies](retention.md)            | Understand and configure how long snapshots are kept                                                       |
-| [Proxmox Integration](proxmox-integration.md) | Use ZFS Utilities with Proxmox VE                                                                          |
-| [GTK GUI Reference](gtk-gui.md)               | Tabs, color conventions, Pool Watch windows, session Logs, Retention runner, embedded documentation viewer |
+| Page                                                      | Description                                                                                                |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Concepts and Terminology**                              |                                                                                                            |
+| &nbsp;&nbsp;[Overview](concepts.md)                       | ZFS fundamentals, naming conventions, the backup chain                                                     |
+| &nbsp;&nbsp;[Profiles](profiles.md)                       | Save, recall, and schedule reusable backup/offsite/restore configurations                                  |
+| **[GTK GUI Reference](gtk-gui.md)**                       | Tabs, color conventions, Pool Watch windows, session Logs, Retention runner, embedded documentation viewer |
+| **Command Line Reference**                                | The same workflows invoked from the shell                                                                  |
+| &nbsp;&nbsp;[Daily Backup](daily-backup.md)               | Run or troubleshoot the nightly backup job                                                                 |
+| &nbsp;&nbsp;[Offsite Backup](offsite-backup.md)           | Copy backups to a removable pool for offsite storage                                                       |
+| &nbsp;&nbsp;[Restore Operations](restore.md)              | Recover a dataset or file from a snapshot                                                                  |
+| &nbsp;&nbsp;[Retention Policies](retention.md)            | Understand and configure how long snapshots are kept                                                       |
+| &nbsp;&nbsp;[Proxmox Integration](proxmox-integration.md) | Use ZFS Utilities with Proxmox VE                                                                          |
 
 ## Prerequisites
 

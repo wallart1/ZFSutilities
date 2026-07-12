@@ -22,7 +22,10 @@ from gi.repository import GLib
 try:
     gi.require_version('WebKit2', '4.1')
     from gi.repository import WebKit2
-    _WEBKIT_AVAILABLE = True
+    _WEBKIT_AVAILABLE = (
+        hasattr(WebKit2.WebView, 'evaluate_javascript')
+        and hasattr(WebKit2.NavigationPolicyDecision, 'get_navigation_action')
+    )
 except (ValueError, ImportError):
     _WEBKIT_AVAILABLE = False
 
@@ -317,7 +320,7 @@ class DocsViewerWindow(Gtk.Window):
             "document.body.setAttribute('data-md-color-scheme', scheme); "
             "})()"
         )
-        self._webview.run_javascript(js, None, None, None)
+        self._webview.evaluate_javascript(js, -1, None, None, None, None, None)
 
     def _preload_theme(self, uri):
         """Seed localStorage for the target URI before it loads.
@@ -354,7 +357,7 @@ class DocsViewerWindow(Gtk.Window):
             "} "
             "})(" + uri_json + ", " + scheme_json + ")"
         )
-        self._webview.run_javascript(js, None, None, None)
+        self._webview.evaluate_javascript(js, -1, None, None, None, None, None)
 
     @staticmethod
     def _js_string(value):
@@ -382,15 +385,16 @@ class DocsViewerWindow(Gtk.Window):
             "return document.body.getAttribute('data-md-color-scheme') || 'default'; "
             "})()"
         )
-        self._webview.run_javascript(js, None, self._on_theme_captured, None)
+        self._webview.evaluate_javascript(
+            js, -1, None, None, None, self._on_theme_captured, None
+        )
         return True
 
     def _on_theme_captured(self, _webview, result, _user_data=None):
         """Store the scheme reported by the page and persist it if it changed."""
         scheme = "default"
         try:
-            js_result = self._webview.run_javascript_finish(result)
-            value = js_result.get_js_value()
+            value = self._webview.evaluate_javascript_finish(result)
             scheme = value.to_string() or "default"
         except Exception:
             pass
@@ -605,7 +609,7 @@ class DocsViewerWindow(Gtk.Window):
         if decision_type != WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
             return False
 
-        uri = decision.get_request().get_uri()
+        uri = decision.get_navigation_action().get_request().get_uri()
 
         # Rewrite file:// directory URLs to index.html (file:// lacks auto-index)
         if uri.startswith("file://"):
@@ -723,7 +727,7 @@ class DocsViewerWindow(Gtk.Window):
     def _scroll_to_anchor(self, anchor):
         """Scroll the webview to the element with the given id."""
         js = f"var e=document.getElementById('{anchor}');if(e)e.scrollIntoView();"
-        self._webview.run_javascript(js, None, None, None)
+        self._webview.evaluate_javascript(js, -1, None, None, None, None, None)
 
     def _launch_editor(self, path):
         """Open the given markdown file in the user's configured editor."""

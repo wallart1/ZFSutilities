@@ -109,8 +109,8 @@ class TestDocsViewerNavigation(unittest.TestCase):
             win.navigate_to_anchor("backup-tab")
 
             win._webview.load_uri.assert_not_called()
-            win._webview.run_javascript.assert_called_once()
-            args, _ = win._webview.run_javascript.call_args
+            win._webview.evaluate_javascript.assert_called_once()
+            args, _ = win._webview.evaluate_javascript.call_args
             self.assertIn("backup-tab", args[0])
             self.assertIn("scrollIntoView", args[0])
 
@@ -123,7 +123,7 @@ class TestDocsViewerNavigation(unittest.TestCase):
             win.navigate_to_anchor("restore-tab")
 
             win._webview.load_uri.assert_called_once_with(win._gui_uri)
-            win._webview.run_javascript.assert_not_called()
+            win._webview.evaluate_javascript.assert_not_called()
             self.assertEqual(win._pending_anchor, "restore-tab")
 
     def test_navigate_when_on_different_page(self):
@@ -135,7 +135,7 @@ class TestDocsViewerNavigation(unittest.TestCase):
             win.navigate_to_anchor("pools-tab")
 
             win._webview.load_uri.assert_called_once_with(win._gui_uri)
-            win._webview.run_javascript.assert_not_called()
+            win._webview.evaluate_javascript.assert_not_called()
             self.assertEqual(win._pending_anchor, "pools-tab")
 
     def test_pending_anchor_scrolls_after_load_finished(self):
@@ -147,8 +147,8 @@ class TestDocsViewerNavigation(unittest.TestCase):
             win._on_load_changed(win._webview, self._FINISHED)
 
             # Theme apply + scroll are also run on FINISHED.
-            self.assertEqual(win._webview.run_javascript.call_count, 2)
-            args, _ = win._webview.run_javascript.call_args
+            self.assertEqual(win._webview.evaluate_javascript.call_count, 2)
+            args, _ = win._webview.evaluate_javascript.call_args
             self.assertIn("retention-tab", args[0])
             self.assertIn("scrollIntoView", args[0])
             self.assertIsNone(win._pending_anchor)
@@ -212,6 +212,56 @@ class TestDocsViewerNavigation(unittest.TestCase):
             win._zoom_level = 0.5
             win._on_zoom_out(None)
             self.assertEqual(win._zoom_level, 0.5)
+
+    def _make_decision(self, uri):
+        from unittest.mock import MagicMock
+        decision = MagicMock()
+        decision.get_navigation_action.return_value.get_request.return_value.get_uri.return_value = uri
+        return decision
+
+    def test_on_decide_policy_uses_navigation_action(self):
+        with mock_gtk() as gtk_mock:
+            from gi.repository import WebKit2
+            win = self._make_window(gtk_mock)
+            decision = self._make_decision("http://127.0.0.1:8000/user-guide/gtk-gui/")
+
+            result = win._on_decide_policy(win._webview, decision, WebKit2.PolicyDecisionType.NAVIGATION_ACTION)
+
+            decision.get_navigation_action.assert_called_once()
+            self.assertFalse(result)
+
+    def test_on_decide_policy_allows_allowed_scheme(self):
+        with mock_gtk() as gtk_mock:
+            from gi.repository import WebKit2
+            win = self._make_window(gtk_mock)
+            decision = self._make_decision("http://127.0.0.1:8000/user-guide/daily-backup/")
+
+            result = win._on_decide_policy(win._webview, decision, WebKit2.PolicyDecisionType.NAVIGATION_ACTION)
+
+            decision.ignore.assert_not_called()
+            self.assertFalse(result)
+
+    def test_on_decide_policy_blocks_unknown_scheme(self):
+        with mock_gtk() as gtk_mock:
+            from gi.repository import WebKit2
+            win = self._make_window(gtk_mock)
+            decision = self._make_decision("mailto:test@example.com")
+
+            result = win._on_decide_policy(win._webview, decision, WebKit2.PolicyDecisionType.NAVIGATION_ACTION)
+
+            decision.ignore.assert_called_once()
+            self.assertTrue(result)
+
+    def test_on_decide_policy_non_navigation_returns_false(self):
+        with mock_gtk() as gtk_mock:
+            from gi.repository import WebKit2
+            win = self._make_window(gtk_mock)
+            decision = self._make_decision("http://127.0.0.1:8000/")
+
+            result = win._on_decide_policy(win._webview, decision, WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION)
+
+            decision.get_navigation_action.assert_not_called()
+            self.assertFalse(result)
 
 
 class TestDocsViewerStatePersistence(unittest.TestCase):
@@ -287,8 +337,8 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
 
             win._apply_theme("slate")
 
-            win._webview.run_javascript.assert_called_once()
-            args, _ = win._webview.run_javascript.call_args
+            win._webview.evaluate_javascript.assert_called_once()
+            args, _ = win._webview.evaluate_javascript.call_args
             js = args[0]
             self.assertIn("input[type=\\\"radio\\\"][name=\\\"__palette\\\"]", js)
             self.assertIn("data-md-color-scheme", js)
@@ -299,9 +349,8 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
         with mock_gtk() as gtk_mock:
             win = self._make_window(gtk_mock)
             win._webview = MagicMock()
-            win._webview.run_javascript_finish.return_value = MagicMock()
-            win._webview.run_javascript_finish.return_value.get_js_value.return_value = MagicMock()
-            win._webview.run_javascript_finish.return_value.get_js_value.return_value.to_string.return_value = '"slate"'
+            win._webview.evaluate_javascript_finish.return_value = MagicMock()
+            win._webview.evaluate_javascript_finish.return_value.to_string.return_value = '"slate"'
             win._config = None  # avoid writing config while testing parsing
 
             win._on_theme_captured(win._webview, MagicMock(), None)
@@ -316,8 +365,8 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
 
             win._preload_theme("http://127.0.0.1:8000/user-guide/gtk-gui/index.html")
 
-            win._webview.run_javascript.assert_called_once()
-            args, _ = win._webview.run_javascript.call_args
+            win._webview.evaluate_javascript.assert_called_once()
+            args, _ = win._webview.evaluate_javascript.call_args
             js = args[0]
             self.assertIn("localStorage.setItem", js)
             self.assertIn("/user-guide/gtk-gui/", js)

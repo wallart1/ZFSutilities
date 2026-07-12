@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.59.11
+
+### Fixed
+
+- **Docs viewer WebKit2 deprecation** — `docs_viewer.py` now uses the modern
+  `WebKit2.WebView.evaluate_javascript()` / `evaluate_javascript_finish()` APIs
+  instead of the deprecated `run_javascript()` / `run_javascript_finish()`
+  methods. Navigation-policy decisions now read the request through
+  `NavigationPolicyDecision.get_navigation_action()`, matching current WebKit2
+  4.1 bindings. This prevents runtime warnings and future breakage on newer
+  distributions.
+
+### Changed
+
+- **User Guide organization** — `06 Docs/docs/user-guide/index.md` and
+  `06 Docs/mkdocs.yml` now group the User Guide into **Concepts and
+  Terminology**, **GTK GUI Reference**, and **Command Line Reference** sections.
+  The new **Profiles** page is listed under Concepts. A new
+  `06 Docs/docs/assets/stylesheets/extra.css` file ensures the top-level
+  "GTK GUI Reference" link renders consistently with the other section headers.
+- **Agent guidance** — `AGENTS.md` now instructs coding assistants to look for
+  and correct deprecated code and features, and not to implement new deprecated
+  code.
+
+### Tests
+
+- Added `tests/python/test_gui_infrastructure.py` tests for
+  `DocsViewerWindow._on_decide_policy()`: navigation-action URI extraction,
+  allowed-scheme passthrough, unknown-scheme blocking, and non-navigation
+  decision handling. Updated the WebKit2 mock in
+  `tests/python/test_support.py` to provide `evaluate_javascript`,
+  `evaluate_javascript_finish`, and `NavigationPolicyDecision.get_navigation_action`.
+
 ## 0.59.10
 
 ### Fixed
