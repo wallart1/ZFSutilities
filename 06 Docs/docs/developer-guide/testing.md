@@ -38,7 +38,7 @@ The `./run-tests` harness detects whether a name starts with `test_` (Python) or
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| `test-deploy-version` | 16 | Root-level script selection logic: executable files, shebang files, exclusions; validation of critical scripts; GUI and docs launcher symlinks; no production wiring |
+| `test-deploy-version` | 22 | Root-level script selection logic: executable files, shebang files, exclusions; validation of critical scripts; Two-node script symlinks including `repair-iscsi-luns` and `iscsi-restore-luns`; GUI and docs launcher symlinks; no production wiring |
 | `test-installer-checks` | 12 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal |
 | `test-move-vm-disk` | 8 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove |
 | `test-switch-version` | 6 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, and `--list` |

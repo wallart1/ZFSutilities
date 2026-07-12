@@ -312,6 +312,7 @@ _test_two_node_symlink_logic() {
         new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk
         rescan-storage show-lun-map clone-vm move-vm-disk
         safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns
+        iscsi-restore-luns repair-iscsi-luns
         unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys
         install-scripts enroll-efi-keys-vm
     )
@@ -366,6 +367,33 @@ test_enroll_efi_keys_vm_in_deploy_list() {
 
 test_enroll_efi_keys_vm_symlinked
 test_enroll_efi_keys_vm_in_deploy_list
+
+test_repair_iscsi_luns_in_deploy_list() {
+    test_start "deploy-version TWO_NODE_SCRIPTS includes repair-iscsi-luns"
+    local deploy_script
+    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+
+    if grep -qE '\brepair-iscsi-luns\b' "$deploy_script"; then
+        test_pass
+    else
+        test_fail "repair-iscsi-luns not found in deploy-version TWO_NODE_SCRIPTS"
+    fi
+}
+
+test_iscsi_restore_luns_in_deploy_list() {
+    test_start "deploy-version TWO_NODE_SCRIPTS includes iscsi-restore-luns"
+    local deploy_script
+    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+
+    if grep -qE '\biscsi-restore-luns\b' "$deploy_script"; then
+        test_pass
+    else
+        test_fail "iscsi-restore-luns not found in deploy-version TWO_NODE_SCRIPTS"
+    fi
+}
+
+test_repair_iscsi_luns_in_deploy_list
+test_iscsi_restore_luns_in_deploy_list
 
 # ------------------------------------------------------------------
 # Launcher symlinks (from deploy-version deploy_to_host)

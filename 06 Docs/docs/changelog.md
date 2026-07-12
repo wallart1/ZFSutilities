@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.59.9
+
+### Fixed
+
+- **`deploy-version` Two-node script list** — Added `repair-iscsi-luns` and
+  `iscsi-restore-luns` to the `TWO_NODE_SCRIPTS` array so they are symlinked
+  into the deployed `bin/` directory. Previously they were copied into
+  `08 Two-node/` but were not on `PATH`, causing `repair-iscsi-luns: command not
+  found` after switching to v0.59.8.
+
+### Tests
+
+- Updated `tests/test-deploy-version` to include `repair-iscsi-luns` and
+  `iscsi-restore-luns` in the Two-node symlink simulation and added explicit
+  tests verifying both scripts are listed in `deploy-version`.
+
+### Documentation
+
+- Updated `06 Docs/docs/developer-guide/testing.md` test count for
+  `test-deploy-version`.
+
 ## 0.59.8
 
 ### Added

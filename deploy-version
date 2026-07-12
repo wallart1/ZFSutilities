@@ -126,6 +126,7 @@ TWO_NODE_SCRIPTS=(
     new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk
     rescan-storage show-lun-map clone-vm move-vm-disk
     safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns
+    iscsi-restore-luns repair-iscsi-luns
     unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys
     install-scripts enroll-efi-keys-vm
 )
