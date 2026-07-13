@@ -808,6 +808,104 @@ class TestCollectRunningTasks(unittest.TestCase):
         self.assertEqual(tasks[0]["status"], "PID 1234")
         self.assertEqual(tasks[0]["task_key"], "profile:Daily")
 
+    @patch("scrub_manager.get_all_pool_scrub_states")
+    def test_finished_scrub_removed_from_running_tasks(self, mock_states):
+        """A stale queue.active entry whose live state is FINISHED is not shown."""
+        from scrub_manager import ScrubQueue, ScrubState
+        import scrub_manager as sm
+        import tempfile
+
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as fh:
+            fh.write("{}")
+            state_path = fh.name
+        try:
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                queue = ScrubQueue(target=1)
+                queue.active.add("fivebays")
+                queue._save()
+
+                mock_states.return_value = {
+                    "fivebays": MagicMock(
+                        state=ScrubState.FINISHED,
+                        progress_percent=None,
+                        eta=None,
+                    ),
+                }
+
+                app.scrub_queue = queue
+                tasks = dp._collect_running_tasks(app)
+        finally:
+            try:
+                os.unlink(state_path)
+            except OSError:
+                pass
+
+        self.assertEqual(tasks, [])
+        self.assertNotIn("fivebays", queue.active)
+        self.assertIn("fivebays", queue.finished)
+
+    @patch("scrub_manager.get_all_pool_scrub_states")
+    def test_running_tasks_matches_live_state_after_stale_queue(self, mock_states):
+        """Mixed live state reconciles stale queue.active: only scanning shown."""
+        from scrub_manager import ScrubQueue, ScrubState
+        import scrub_manager as sm
+        import tempfile
+
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as fh:
+            fh.write("{}")
+            state_path = fh.name
+        try:
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                queue = ScrubQueue(target=1)
+                # Stale in-memory state: both were active when the backup started.
+                queue.active.update({"fivebays", "threeamigos"})
+                queue._save()
+
+                fixed_eta = datetime(2026, 7, 13, 10, 0, 0)
+                mock_states.return_value = {
+                    "fivebays": MagicMock(
+                        state=ScrubState.FINISHED,
+                        progress_percent=None,
+                        eta=None,
+                    ),
+                    "threeamigos": MagicMock(
+                        state=ScrubState.SCANNING,
+                        progress_percent=62.5,
+                        eta=fixed_eta,
+                    ),
+                }
+
+                app.scrub_queue = queue
+                tasks = dp._collect_running_tasks(app)
+        finally:
+            try:
+                os.unlink(state_path)
+            except OSError:
+                pass
+
+        scrub_tasks = [t for t in tasks if t["type"] == "Scrub"]
+        self.assertEqual(len(scrub_tasks), 1)
+        self.assertEqual(scrub_tasks[0]["name"], "Scrub: threeamigos")
+        self.assertEqual(
+            scrub_tasks[0]["status"],
+            "62.5% complete (ETA 2026-07-13 10:00)",
+        )
+        self.assertNotIn("fivebays", queue.active)
+        self.assertIn("fivebays", queue.finished)
+        self.assertIn("threeamigos", queue.active)
+
 
 class TestListRunningProfiles(unittest.TestCase):
 

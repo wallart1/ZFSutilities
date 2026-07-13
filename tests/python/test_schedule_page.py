@@ -744,6 +744,84 @@ class TestRunNow(unittest.TestCase):
             f"Expected prefixed line2 in {captured}"
         )
 
+    @patch("schedule_page.set_button_markup_red")
+    @patch("schedule_page.os.set_blocking")
+    @patch("schedule_page.GLib.io_add_watch")
+    @patch("schedule_page.GLib.child_watch_add")
+    def test_run_now_child_watch_uses_new_signature(self, mock_child_watch,
+                                                    mock_io_add_watch,
+                                                    _mock_set_blocking,
+                                                    _mock_red):
+        """Regression: child_watch_add must use the modern GLib signature."""
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        app = self._make_app(rows, [0])
+        process = self._make_popen()
+
+        with patch("schedule_page.subprocess.Popen", return_value=process), \
+             patch("schedule_page._resolve_profile_runner_path",
+                   return_value="/fake/profile_runner.py"):
+            schedule_page.on_schedule_run_now(app)
+
+        self.assertEqual(mock_child_watch.call_count, 1)
+        args = mock_child_watch.call_args[0]
+        self.assertEqual(args[0], schedule_page.GLib.PRIORITY_DEFAULT)
+        self.assertEqual(args[1], process.pid)
+        self.assertIs(args[2], schedule_page._on_profile_finished)
+        self.assertIs(args[3][0], app)
+        self.assertEqual(args[3][1], "p1")
+        self.assertIs(args[3][2], process)
+
+    @patch("schedule_page.log_msg")
+    def test_on_profile_finished_reaps_and_updates_state(self, mock_log):
+        """_on_profile_finished must unpack the tuple user_data correctly."""
+        schedule_page = self._import_schedule_page()
+        app = self._make_app([], [])
+        app._running_profiles.add("p1")
+        process = MagicMock()
+
+        schedule_page._on_profile_finished(12345, 0, (app, "p1", process))
+
+        process.wait.assert_called_once()
+        self.assertNotIn("p1", app._running_profiles)
+        mock_log.assert_called_once_with("INFO: Profile finished: p1")
+        app.update_action_buttons.assert_called_once_with("schedule")
+
+    @patch("schedule_page.set_button_markup_red")
+    @patch("schedule_page.os.set_blocking")
+    @patch("schedule_page.GLib.io_add_watch")
+    @patch("schedule_page.GLib.child_watch_add")
+    @patch("schedule_page.log_msg")
+    def test_run_now_watch_failure_is_fatal(self, mock_log, mock_child_watch,
+                                            _mock_io_add_watch,
+                                            _mock_set_blocking, _mock_red):
+        """If GLib watch setup fails, the run aborts and a FATAL is logged."""
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        app = self._make_app(rows, [0])
+        process = self._make_popen()
+        mock_child_watch.side_effect = TypeError(
+            "expected at most 4 positional arguments"
+        )
+
+        with patch("schedule_page.subprocess.Popen", return_value=process), \
+             patch("schedule_page._resolve_profile_runner_path",
+                   return_value="/fake/profile_runner.py"):
+            schedule_page.on_schedule_run_now(app)
+
+        process.terminate.assert_called_once()
+        self.assertNotIn("p1", app._running_profiles)
+        app.update_action_buttons.assert_called_with("schedule")
+        fatal_calls = [
+            c for c in mock_log.call_args_list
+            if c[0] and c[0][0].startswith("FATAL:")
+        ]
+        self.assertEqual(len(fatal_calls), 1)
+        self.assertIn(
+            "expected at most 4 positional arguments",
+            fatal_calls[0][0][0],
+        )
+
 
 class TestScheduleDelete(unittest.TestCase):
     """Verify the Delete button works with the MULTIPLE-selection TreeView."""

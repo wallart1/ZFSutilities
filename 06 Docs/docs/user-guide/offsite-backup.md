@@ -94,6 +94,8 @@ the offsite copy and resumes scrubs automatically when the step finishes.
 - Enable it in the Offsite tab → **Advanced** →
   **Pause scrubs on source/destination pools during each step**.
 - Only the pools used by the current step are paused.
+- Pools whose scrub has already finished or that are not online are skipped;
+  they are not marked as user-paused.
 - In dry-run mode the option logs what it would pause/resume but does not
   change scrub state.
 

@@ -704,7 +704,36 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
 
                 queue = sm.ScrubQueue()
                 self.assertIn("src", queue.paused_by_user)
-                self.assertIn("dst", queue.paused_by_user)
+                # dst is already live-paused; we do not mark it user-paused
+                # because no ZFS pause was issued for it.
+                self.assertNotIn("dst", queue.paused_by_user)
+
+    def test_pause_scrubs_for_pools_skips_finished_pools(self):
+        """Finished pools are not moved to paused or marked user-paused."""
+        repo = MagicMock()
+        repo.pause_scrub.return_value = True
+        states = {
+            "finished": self._state(sm.ScrubState.FINISHED),
+            "scanning": self._state(sm.ScrubState.SCANNING),
+        }
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+                with patch.object(
+                    sm, "get_all_pool_scrub_states", return_value=states
+                ):
+                    paused = sm.pause_scrubs_for_pools(
+                        ["finished", "scanning"], repo=repo, dry_run=False
+                    )
+                self.assertEqual(paused, ["scanning"])
+                repo.pause_scrub.assert_called_once_with("scanning", timeout=30)
+
+                # Re-load the persisted queue to verify disk state.
+                queue = sm.ScrubQueue()
+                self.assertIn("scanning", queue.paused)
+                self.assertIn("scanning", queue.paused_by_user)
+                self.assertNotIn("finished", queue.paused)
+                self.assertNotIn("finished", queue.paused_by_user)
 
     def test_pause_scrubs_for_pools_dry_run_does_not_call_repo(self):
         repo = MagicMock()

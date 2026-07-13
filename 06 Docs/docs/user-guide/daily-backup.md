@@ -175,6 +175,8 @@ resume automatically when the step finishes.
 - The option is off by default; enable it in the Backup tab → **Advanced** →
   **Pause scrubs on source/destination pools during each step**.
 - Only the pools used by the current step are paused, not every pool in the job.
+- Pools whose scrub has already finished or that are not online are skipped;
+  they are not marked as user-paused.
 - Pre/post scripts, rsync pulls, and retention are not affected.
 - In dry-run mode the option logs what it would pause/resume but does not
   change scrub state.

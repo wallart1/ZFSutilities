@@ -60,6 +60,8 @@ when the restore finishes.
 
 - Enable it in the Restore tab → **Restore Steps** →
   **Pause scrubs on source/destination pools during each step**.
+- Pools whose scrub has already finished or that are not online are skipped;
+  they are not marked as user-paused.
 - In dry-run mode the option logs what it would pause/resume but does not
   change scrub state.
 

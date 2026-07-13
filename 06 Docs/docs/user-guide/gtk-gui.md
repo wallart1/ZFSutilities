@@ -403,7 +403,13 @@ only when the selection contains at least one real task; selecting the
 | ------------- | ------------------------------------------------------------------------ | ----------------------------------------------- |
 | **GUI**       | Backup, Offsite, Restore, or Prune started from their respective tabs    | Graceful cancel (SIGTERM the runner subprocess) |
 | **Scrub**     | Pool scrubs started from the Pools tab or detected as externally running | `zpool scrub -s <pool>`. While running, the progress text includes an ETA when `zpool status` reports remaining time. |
+| **Profile**   | `profile_runner.py` jobs launched by **Run Now** in the Schedule tab       | SIGTERM the profile-runner process              |
 | **Scheduled** | `profile_runner.py` jobs launched by cron                                | SIGTERM the profile-runner process              |
+
+The scrub list is reconciled against live `zpool status` on every refresh, so
+scrubs that finish or are paused externally — for example, by a headless
+profile that uses the **Pause scrubs during each step** option — do not keep
+showing as running after the actual scrub state changes.
 
 ### Recent Operations
 

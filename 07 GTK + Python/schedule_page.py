@@ -499,8 +499,9 @@ def _log_profile_line(fd, condition, app, profile_name, prefix):
     return False
 
 
-def _on_profile_finished(pid, status, app, profile_name, process):
+def _on_profile_finished(pid, status, user_data):
     """GLib child_watch_add callback: reap finished profile run."""
+    app, profile_name, process = user_data
     try:
         process.wait()
     except Exception:
@@ -546,10 +547,12 @@ def _run_profile_now(app, profile_name):
             GLib.IOCondition.IN | GLib.IOCondition.HUP,
             _log_profile_line, app, profile_name, prefix,
         )
-        GLib.child_watch_add(process.pid, _on_profile_finished,
-                             app, profile_name, process)
+        GLib.child_watch_add(
+            GLib.PRIORITY_DEFAULT, process.pid, _on_profile_finished,
+            (app, profile_name, process),
+        )
     except Exception as exc:
-        log_msg(f"WARN: Could not watch profile {profile_name} output: {exc}")
+        log_msg(f"FATAL: Could not watch profile {profile_name} output: {exc}")
         try:
             process.terminate()
         except Exception:

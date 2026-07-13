@@ -1318,6 +1318,10 @@ def _collect_running_tasks(app):
     if queue:
         from scrub_manager import get_all_pool_scrub_states, ScrubState
         scrub_states = get_all_pool_scrub_states()
+        # Reconcile queue against live zpool status so finished or paused
+        # scrubs are not still shown as running when the in-memory queue
+        # is stale (e.g., after a headless profile paused/resumed scrubs).
+        queue.tick(scrub_states)
         for pool_name in queue.active:
             info = scrub_states.get(pool_name)
             status = "Running"

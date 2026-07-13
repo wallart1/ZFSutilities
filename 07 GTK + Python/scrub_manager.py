@@ -371,10 +371,26 @@ def pause_scrubs_for_pools(pool_names: List[str], repo=None,
 
     if not dry_run:
         queue = ScrubQueue()
-        queue.pause_pools(names)
+        # Only mark pools as user-paused if they have a live scrub or are
+        # already queued to start. Finished/unknown pools have nothing to
+        # pause and should not be logged as paused.
+        to_pause_in_queue = []
         for name in names:
-            queue.paused_by_user.add(name)
-        queue._save()
+            info = states.get(name)
+            if info and info.state == ScrubState.SCANNING:
+                to_pause_in_queue.append(name)
+            elif name in queue.pending:
+                to_pause_in_queue.append(name)
+        if to_pause_in_queue:
+            for name in to_pause_in_queue:
+                queue.active.discard(name)
+                queue.pending.discard(name)
+                queue.paused.add(name)
+                queue.paused_by_user.add(name)
+            _log(
+                f"INFO: Pools paused: {', '.join(sorted(to_pause_in_queue))}"
+            )
+            queue._save()
 
     paused = []
     for name in names:

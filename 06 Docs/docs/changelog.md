@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.59.12
+
+### Fixed
+
+- **Dashboard Running Tasks stale scrub display** — `dashboard_page.py` now
+  reconciles the scrub queue against live `zpool status` before listing running
+  tasks. Scrubs that finished or were paused externally (for example, by a
+  headless profile using **Pause scrubs during each step**) no longer remain in
+  the **Running Tasks** list with a stale in-memory queue entry.
+- **Scrub pause filtering** — `scrub_manager.py` `pause_scrubs_for_pools()` now
+  marks pools as user-paused only when they have a live scrub in progress or are
+  already queued to start. Finished, unknown, or offline pools are skipped and
+  are no longer logged as paused.
+- **Schedule Run Now child-watch signature** — `schedule_page.py` now uses the
+  modern `GLib.child_watch_add(priority, pid, callback, user_data)` signature,
+  packing `app`, `profile_name`, and `process` into a single `user_data` tuple.
+  If GLib watch setup fails, the launched profile is terminated and a `FATAL`
+  message is logged instead of silently leaving the process unwatched.
+
+### Changed
+
+- **Agent guidance** — `AGENTS.md` now describes the agent as a "meticulous and
+  expert coding agent" and adds a rule to take the correct approach even when
+  it is more difficult. The `test_schedule_page` test count was updated to 35.
+
+### Tests
+
+- Added `tests/python/test_dashboard_page.py` tests verifying that finished
+  scrubs are removed from **Running Tasks** and that mixed stale/live queue
+  states display only the still-running scrubs.
+- Added `tests/python/test_schedule_page.py` tests for the modern
+  `GLib.child_watch_add` signature, `_on_profile_finished` tuple unpacking, and
+  FATAL logging when watch setup fails.
+- Added `tests/python/test_scrub_manager.py` tests verifying that finished
+  pools are not moved to the paused queue and not marked user-paused.
+
+### Documentation
+
+- Updated `06 Docs/docs/user-guide/gtk-gui.md` **Running Tasks** section to list
+  the **Profile** task type and to explain scrub-task reconciliation against
+  live `zpool status`.
+- Updated `06 Docs/docs/user-guide/daily-backup.md`,
+  `offsite-backup.md`, and `restore.md` to note that pools whose scrub has
+  already finished or that are not online are skipped during automatic scrub
+  pause/resume.
+
 ## 0.59.11
 
 ### Fixed
