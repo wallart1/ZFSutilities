@@ -169,6 +169,47 @@ class TestDocsViewerNavigation(unittest.TestCase):
             self.assertTrue(hasattr(win, "_btn_zoom_out"))
             self.assertTrue(hasattr(win, "_btn_zoom_reset"))
 
+    def test_toolbar_buttons_use_symbolic_icons(self):
+        with mock_gtk() as gtk_mock:
+            import docs_viewer
+            import importlib
+            importlib.reload(docs_viewer)
+            gtk_mock.Image.new_from_icon_name.reset_mock()
+            script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
+            win = docs_viewer.DocsViewerWindow(script_dir)
+            try:
+                calls = gtk_mock.Image.new_from_icon_name.call_args_list
+                icon_names = {c.args[0] for c in calls}
+                expected = {
+                    "go-previous-symbolic",
+                    "go-next-symbolic",
+                    "view-refresh-symbolic",
+                    "go-home-symbolic",
+                    "list-add-symbolic",
+                    "list-remove-symbolic",
+                }
+                self.assertTrue(expected.issubset(icon_names))
+            finally:
+                win._docs_server.stop()
+
+    def test_tool_button_can_use_text_label(self):
+        with mock_gtk() as gtk_mock:
+            import docs_viewer
+            import importlib
+            importlib.reload(docs_viewer)
+            win = self._make_window(gtk_mock)
+            gtk_mock.Label.reset_mock()
+            docs_viewer.DocsViewerWindow._make_tool_button(
+                win, None, "Reset zoom", lambda _btn: None, label_text="1"
+            )
+            gtk_mock.Label.assert_called_once_with(label="1")
+            label = gtk_mock.Label.return_value
+            set_image_calls = gtk_mock.Button.return_value.set_image.call_args_list
+            self.assertTrue(
+                any(call.args[0] is label for call in set_image_calls),
+                "Label widget was not set as button image",
+            )
+
     def test_zoom_in(self):
         with mock_gtk() as gtk_mock:
             win = self._make_window(gtk_mock)
@@ -212,6 +253,68 @@ class TestDocsViewerNavigation(unittest.TestCase):
             win._zoom_level = 0.5
             win._on_zoom_out(None)
             self.assertEqual(win._zoom_level, 0.5)
+
+    def test_back_button_navigates_back_when_possible(self):
+        with mock_gtk() as gtk_mock:
+            win = self._make_window(gtk_mock)
+            win._webview.can_go_back.return_value = True
+
+            win._on_back(None)
+
+            win._webview.go_back.assert_called_once()
+
+    def test_back_button_does_nothing_when_cannot_go_back(self):
+        with mock_gtk() as gtk_mock:
+            win = self._make_window(gtk_mock)
+            win._webview.can_go_back.return_value = False
+
+            win._on_back(None)
+
+            win._webview.go_back.assert_not_called()
+
+    def test_forward_button_navigates_forward_when_possible(self):
+        with mock_gtk() as gtk_mock:
+            win = self._make_window(gtk_mock)
+            win._webview.can_go_forward.return_value = True
+
+            win._on_forward(None)
+
+            win._webview.go_forward.assert_called_once()
+
+    def test_forward_button_does_nothing_when_cannot_go_forward(self):
+        with mock_gtk() as gtk_mock:
+            win = self._make_window(gtk_mock)
+            win._webview.can_go_forward.return_value = False
+
+            win._on_forward(None)
+
+            win._webview.go_forward.assert_not_called()
+
+    def test_update_nav_buttons_sets_sensitivity(self):
+        with mock_gtk() as gtk_mock:
+            win = self._make_window(gtk_mock)
+            win._btn_back = MagicMock()
+            win._btn_forward = MagicMock()
+            win._webview.can_go_back.return_value = True
+            win._webview.can_go_forward.return_value = False
+
+            win._update_nav_buttons()
+
+            win._btn_back.set_sensitive.assert_called_once_with(True)
+            win._btn_forward.set_sensitive.assert_called_once_with(False)
+
+    def test_tool_button_is_configured_for_toolbar(self):
+        with mock_gtk() as gtk_mock:
+            import docs_viewer
+            win = self._make_window(gtk_mock)
+            btn = docs_viewer.DocsViewerWindow._make_tool_button(
+                win, "go-previous-symbolic", "Go back", lambda _btn: None
+            )
+            btn.set_always_show_image.assert_called_with(True)
+            btn.set_focus_on_click.assert_called_with(False)
+            btn.get_style_context().add_class.assert_called_with(
+                "docs-toolbar-btn"
+            )
 
     def _make_decision(self, uri):
         from unittest.mock import MagicMock

@@ -8,7 +8,10 @@ from config_migrations import CONFIG_VERSION, run_migrations
 from file_locking import config_lock_read, config_lock_write
 from logging_config import log_msg, MSG_LEVELS
 
-CONFIG_PATH = "/root/.config/zfsutilities.json"
+CONFIG_PATH = os.environ.get(
+    "ZFSUTILITIES_CONFIG_PATH",
+    os.path.expanduser("~/.config/zfsutilities.json"),
+)
 
 
 BACKUP_DEFAULTS = {

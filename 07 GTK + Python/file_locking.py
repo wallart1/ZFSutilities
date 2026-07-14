@@ -11,17 +11,30 @@ import time
 from contextlib import contextmanager
 
 
+def _default_lock_dir():
+    """Return root-owned lock dir for root, user-writable dir otherwise."""
+    if os.geteuid() == 0:
+        return "/run/lock/zfs"
+    return os.path.expanduser("~/.cache/zfsutilities")
+
+
+_DEFAULT_LOCK_DIR = _default_lock_dir()
+
 CONFIG_LOCK_PATH = os.environ.get(
-    "ZFSUTILITIES_CONFIG_LOCK_PATH", "/run/lock/zfs/.config.lock"
+    "ZFSUTILITIES_CONFIG_LOCK_PATH",
+    os.path.join(_DEFAULT_LOCK_DIR, ".config.lock"),
 )
 HISTORY_LOCK_PATH = os.environ.get(
-    "ZFSUTILITIES_HISTORY_LOCK_PATH", "/run/lock/zfs/.history.lock"
+    "ZFSUTILITIES_HISTORY_LOCK_PATH",
+    os.path.join(_DEFAULT_LOCK_DIR, ".history.lock"),
 )
 LOG_INDEX_LOCK_PATH = os.environ.get(
-    "ZFSUTILITIES_LOG_INDEX_LOCK_PATH", "/run/lock/zfs/.log_index.lock"
+    "ZFSUTILITIES_LOG_INDEX_LOCK_PATH",
+    os.path.join(_DEFAULT_LOCK_DIR, ".log_index.lock"),
 )
 SCRUB_STATE_LOCK_PATH = os.environ.get(
-    "ZFSUTILITIES_SCRUB_STATE_LOCK_PATH", "/run/lock/zfs/.scrub_state.lock"
+    "ZFSUTILITIES_SCRUB_STATE_LOCK_PATH",
+    os.path.join(_DEFAULT_LOCK_DIR, ".scrub_state.lock"),
 )
 
 

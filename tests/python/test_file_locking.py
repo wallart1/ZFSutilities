@@ -11,19 +11,28 @@ import file_locking as fl
 
 
 class TestLockPathDefaults(unittest.TestCase):
-    """Default lock paths follow the /run/lock/zfs/ convention."""
+    """Default lock paths are root-owned for root, user-writable otherwise."""
+
+    def _expected_default_dir(self):
+        if os.geteuid() == 0:
+            return "/run/lock/zfs"
+        return os.path.expanduser("~/.cache/zfsutilities")
 
     def test_config_lock_path_default(self):
-        self.assertEqual(fl.CONFIG_LOCK_PATH, "/run/lock/zfs/.config.lock")
+        expected = os.path.join(self._expected_default_dir(), ".config.lock")
+        self.assertEqual(fl.CONFIG_LOCK_PATH, expected)
 
     def test_history_lock_path_default(self):
-        self.assertEqual(fl.HISTORY_LOCK_PATH, "/run/lock/zfs/.history.lock")
+        expected = os.path.join(self._expected_default_dir(), ".history.lock")
+        self.assertEqual(fl.HISTORY_LOCK_PATH, expected)
 
     def test_log_index_lock_path_default(self):
-        self.assertEqual(fl.LOG_INDEX_LOCK_PATH, "/run/lock/zfs/.log_index.lock")
+        expected = os.path.join(self._expected_default_dir(), ".log_index.lock")
+        self.assertEqual(fl.LOG_INDEX_LOCK_PATH, expected)
 
     def test_scrub_state_lock_path_default(self):
-        self.assertEqual(fl.SCRUB_STATE_LOCK_PATH, "/run/lock/zfs/.scrub_state.lock")
+        expected = os.path.join(self._expected_default_dir(), ".scrub_state.lock")
+        self.assertEqual(fl.SCRUB_STATE_LOCK_PATH, expected)
 
 
 class TestEnvironmentOverrides(unittest.TestCase):

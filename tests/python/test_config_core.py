@@ -21,7 +21,8 @@ class TestConfigPathDefaults(unittest.TestCase):
     """Module-level paths point at the documented locations."""
 
     def test_config_path_default(self):
-        self.assertEqual(config_core.CONFIG_PATH, "/root/.config/zfsutilities.json")
+        expected = os.path.expanduser("~/.config/zfsutilities.json")
+        self.assertEqual(config_core.CONFIG_PATH, expected)
 
     def test_session_log_dir_default(self):
         self.assertEqual(config_core.SESSION_LOG_DIR, "/var/log/zfsutilities/sessions")

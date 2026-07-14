@@ -43,3 +43,9 @@ identifies exactly where the message was issued:
 
 For a full explanation of any message, see the
 [Messages](../messages/index.md) reference.
+
+For problems or feature requests, open an issue on the
+[ZFSutilities GitHub Issues](https://github.com/wallart1/ZFSutilities/issues) page.
+
+For questions, troubleshooting help, or general discussion, visit the
+[ZFSutilities GitHub Discussions](https://github.com/wallart1/ZFSutilities/discussions) board.

@@ -8,7 +8,6 @@ import shlex
 import shutil
 import socket
 import subprocess
-import sys
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
@@ -460,6 +459,8 @@ class DocsViewerWindow(Gtk.Window):
         self.add(vbox)
 
         # --- Toolbar ---
+        self._setup_toolbar_css()
+
         toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
         toolbar.set_margin_top(5)
         toolbar.set_margin_start(5)
@@ -467,16 +468,16 @@ class DocsViewerWindow(Gtk.Window):
         toolbar.set_margin_bottom(5)
 
         self._btn_back = self._make_tool_button(
-            "go-previous", "Go back", self._on_back
+            "go-previous-symbolic", "Go back", self._on_back
         )
         self._btn_forward = self._make_tool_button(
-            "go-next", "Go forward", self._on_forward
+            "go-next-symbolic", "Go forward", self._on_forward
         )
         self._btn_refresh = self._make_tool_button(
-            "view-refresh", "Refresh page", self._on_refresh
+            "view-refresh-symbolic", "Refresh page", self._on_refresh
         )
         self._btn_home = self._make_tool_button(
-            "go-home", "Go to documentation home", self._on_home
+            "go-home-symbolic", "Go to documentation home", self._on_home
         )
 
         toolbar.pack_start(self._btn_back, False, False, 0)
@@ -485,13 +486,13 @@ class DocsViewerWindow(Gtk.Window):
         toolbar.pack_start(self._btn_home, False, False, 0)
 
         self._btn_zoom_in = self._make_tool_button(
-            "zoom-in", "Zoom in (Ctrl++)", self._on_zoom_in
+            "list-add-symbolic", "Zoom in (Ctrl++)", self._on_zoom_in
         )
         self._btn_zoom_out = self._make_tool_button(
-            "zoom-out", "Zoom out (Ctrl+-)", self._on_zoom_out
+            "list-remove-symbolic", "Zoom out (Ctrl+-)", self._on_zoom_out
         )
         self._btn_zoom_reset = self._make_tool_button(
-            "zoom-original", "Reset zoom (Ctrl+0)", self._on_zoom_reset
+            None, "Reset zoom (Ctrl+0)", self._on_zoom_reset, label_text="1"
         )
 
         toolbar.pack_start(self._btn_zoom_in, False, False, 0)
@@ -573,13 +574,79 @@ class DocsViewerWindow(Gtk.Window):
 
         self.show_all()
 
-    def _make_tool_button(self, icon_name, tooltip, callback):
-        """Create a toolbar button with an icon."""
+    def _setup_toolbar_css(self):
+        """Load a shared CSS style so every toolbar button looks identical.
+
+        The docs viewer is shown against a dark theme in the screenshots, and
+        the default GTK button rendering plus mixed icon art made the zoom
+        buttons look different from the navigation buttons. A single CSS class
+        gives all toolbar buttons the same background, border, radius, and
+        padding regardless of icon shape.
+        """
+        css = b"""
+        .docs-toolbar-btn {
+            background-image: none;
+            background-color: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 5px;
+            padding: 4px;
+            margin: 0px;
+            box-shadow: none;
+            color: inherit;
+            -gtk-icon-shadow: none;
+        }
+        .docs-toolbar-btn:hover {
+            background-color: rgba(255, 255, 255, 0.20);
+            border-color: rgba(255, 255, 255, 0.28);
+        }
+        .docs-toolbar-btn:active,
+        .docs-toolbar-btn:checked {
+            background-color: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+        .docs-toolbar-btn image,
+        .docs-toolbar-btn label {
+            color: inherit;
+        }
+        .docs-toolbar-btn label {
+            font-weight: bold;
+            padding: 0 2px;
+        }
+        """
+        provider = Gtk.CssProvider()
+        try:
+            provider.load_from_data(css)
+        except Exception as exc:
+            log_msg(f"WARN: Failed to load docs viewer toolbar CSS: {exc}")
+            return
+        screen = Gdk.Screen.get_default()
+        if screen is not None:
+            Gtk.StyleContext.add_provider_for_screen(
+                screen,
+                provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+            )
+        self._toolbar_css_provider = provider
+
+    def _make_tool_button(self, icon_name, tooltip, callback, label_text=None):
+        """Create a toolbar button with an icon or a text label.
+
+        The image/label is made insensitive and focus-on-click is disabled so
+        that toolbar clicks reliably activate the button without stealing focus
+        from the WebView. A shared CSS class gives every toolbar button the
+        same background/border/radius.
+        """
         btn = Gtk.Button()
-        btn.set_image(
-            Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.LARGE_TOOLBAR)
-        )
+        if label_text is not None:
+            widget = Gtk.Label(label=label_text)
+        else:
+            widget = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.LARGE_TOOLBAR)
+            widget.set_sensitive(False)
+        btn.set_image(widget)
+        btn.set_always_show_image(True)
+        btn.set_focus_on_click(False)
         btn.set_tooltip_text(tooltip)
+        btn.get_style_context().add_class("docs-toolbar-btn")
         btn.connect("clicked", callback)
         return btn
 
@@ -784,23 +851,6 @@ class DocsViewerWindow(Gtk.Window):
 
 def main():
     """Launch the standalone documentation viewer."""
-    if os.geteuid() != 0:
-        # Re-launch with pkexec, preserving the X11/Wayland display environment.
-        display = os.environ.get('DISPLAY', ':0')
-        xauthority = os.environ.get('XAUTHORITY', '')
-        wayland = os.environ.get('WAYLAND_DISPLAY', '')
-        cmd = [
-            'pkexec', 'env',
-            f'DISPLAY={display}',
-        ]
-        if xauthority:
-            cmd.append(f'XAUTHORITY={xauthority}')
-        if wayland:
-            cmd.append(f'WAYLAND_DISPLAY={wayland}')
-        cmd.append(sys.executable)
-        cmd.extend(sys.argv)
-        os.execvp('pkexec', cmd)
-
     import gi
     gi.require_version('Gtk', '3.0')
     from gi.repository import Gtk

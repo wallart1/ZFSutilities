@@ -287,6 +287,12 @@ deploy_to_host() {
             echo "  ⚠ Documentation build failed (static fallback may be stale)"
     fi
 
+    # Ensure the built documentation site is readable by non-root users
+    if [[ -d "$VERSION_DIR/06 Docs/site" ]]; then
+        find "$VERSION_DIR/06 Docs/site" -type d -exec chmod 0755 {} \;
+        find "$VERSION_DIR/06 Docs/site" -type f -exec chmod 0644 {} \;
+    fi
+
     # Verify critical root-level scripts were copied
     validate_critical_scripts
 

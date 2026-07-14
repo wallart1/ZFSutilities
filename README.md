@@ -1,61 +1,105 @@
-# ZFSutilities
+# ZFS Utilities
 
-ZFSutilities is a library of task-oriented scripts for managing ZFS backups,
-snapshots, retention, and storage operations.
+A task-oriented toolkit for managing ZFS backups, snapshots, retention, and
+storage operations on small and medium-sized Debian Linux-based installations.
 
-It is intended to make life easier for beginning and mid-level ZFS system
-administrators. It is designed for small and medium-sized installations.
-
----
-
-![ZFSutilities GUI](<06 Docs/images/Screenshot from 0-54-0.png>)
-
-## Primary Features
-
-- **GTK3 GUI front-end** — A graphical interface that makes ZFS operations more
-  comprehensible and accessible.
-
-- **Full suite of task-oriented scripts** — Text-based tools for daily backups,
-  offsite replication, snapshot management, retention policies, scrubbing,
-  locking, and more.
-
-- **Thorough documentation** — User guides, developer guides, and a complete
-  command and module reference, built with MkDocs.
-
-- **Proxmox VE support** — VM detection, iSCSI-backed zvols, and VM disk
-  lifecycle management for Proxmox environments.
-
-- **Single-node and two-node configurations** — Run on a single host, or split
-  compute and storage workloads across two hosts connected by iSCSI.
+ZFS Utilities provides both a GTK3 graphical interface and a comprehensive set
+of command-line scripts. It is designed for system administrators who want
+the power of ZFS backups without memorizing every `zfs` and `zpool`
+option, and also for Proxmox VE users who need safe VM disk lifecycle management.
 
 ---
+
+![ZFS Utilities GUI](<06 Docs/images/Screenshot from 2026-07-13 20-22-13.png>)
+
+## What is ZFS Utilities?
+
+ZFS Utilities wraps common ZFS workflows in safety-checked scripts and a
+guided GUI:
+
+- **Daily backups** — Pull files with rsync (even remote systems), snapshot
+  source datasets, and incrementally copy them to local backup pools.
+- **Offsite rotation** — Copy snapshots to removable pools, manage offsite
+  holds, and detect the currently attached offsite pool automatically.
+- **Restore** — Recover datasets from backups with a two-part full +
+  incremental workflow.
+- **Retention policies** — Prune snapshots by daily, weekly, monthly, and
+  offsite buckets with per-pool policies.
+- **Pool health and scrubbing** — Monitor pool status, start/pause/resume
+  scrubs, and manage a scrub queue from the GUI.
+- **VM disk lifecycle** *(Proxmox VE / two-node)* — Create, resize, move,
+  clone, promote, retire, and remove VM disks backed by iSCSI zvols.
+- **Schedule** — Jobs can be scheduled to run in the background even when you
+  are not logged in or when the GUI is not running.
+
+All operations run as `root` and are coordinated by a file-based lock manager
+so concurrent jobs do not collide on the same datasets.
+
+## Highlights
+
+- **GTK3 GUI** — Ten tabs covering Dashboard, Backup, Offsite, Restore,
+  Schedule, Checkagainst, Pools, Datasets, Retention, and Logs. The GUI
+  includes an embedded documentation viewer, live log panel, and session log
+  browser.
+- **Profiles and scheduling** — Save many tab configurations as reusable
+  profiles, schedule them with cron syntax, and/or run them on demand from the
+  Schedule tab or the command line.
+- **Dry-run mode** — Preview what Backup, Offsite, Restore, and Retention
+  operations would do before making changes.
+- **Versioned deployment** — Multiple installed versions coexist under
+  `/usr/local/lib/zfsutilities/versions/`; switch or roll back instantly with
+  `switch-version`.
+- **Single-node and two-node** — Run everything on one host, or split compute
+  and storage across two hosts connected by iSCSI.
+- **Session logging** — Every run creates a timestamped log file; the Logs tab
+  browses, searches, and prunes them.
+- **Test harness** — Bash and Python test suites help verify changes before
+  deployment.
+
+### Scheduling Profiles
+
+Save a tab configuration as a reusable profile and schedule it with standard
+cron syntax:
+
+![Schedule tab](<06 Docs/images/Screenshot from 2026-07-13 20-24-10.png>)
 
 ## Requirements
 
 - Debian-based Linux (Linux Mint, Ubuntu, Proxmox VE, etc.)
+
 - Bash 4.0 or later
+
+- Python 3 (for the GTK GUI)
+
 - ZFS userland utilities (`zfsutils-linux`)
+
 - `pv` (progress visualization)
+
 - `rsync`
-- Root privileges for all ZFS operations
-- ZFS pools already set up and running
-- MkDocs and the Material theme (installed automatically by the installer):
-  
-  ```bash
-  pip install mkdocs mkdocs-material
-  ```
-- For the GUI:
+
+- A GTK3-capable desktop environment or window manager (X11 or Wayland)
+
+- WebKit2 for the embedded documentation viewer:
   
   ```bash
   apt install gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0
   ```
-- For a **two-node** setup:
-  - Passwordless SSH root access in **both directions** between the storage
-    host and the compute host.
-  - Proxmox VE on the compute host. (This requirement will be relaxed in a
-    future release.)
 
----
+- Root privileges for all ZFS operations
+
+- ZFS pools already created and online (may be imported on the Pools tab)
+
+- MkDocs and the Material theme (required; the installer builds the HTML
+  documentation site from `06 Docs/docs/`):
+  
+  ```bash
+  pip install mkdocs mkdocs-material
+  ```
+
+The installers will check for prerequisites and will offer to install them for you.
+
+For a **two-node** setup you also need passwordless SSH root access in both
+directions between the storage host and the compute host.
 
 ## Download and Install
 
@@ -68,8 +112,7 @@ administrators. It is designed for small and medium-sized installations.
 
 2. Run the appropriate installer as root:
    
-   For a **single-node** setup (compute and storage roles on the same host;
-   VMs are optional):
+   For a **single-node** setup (compute and storage on the same host):
    
    ```bash
    sudo ./10\ Installers/install-single-node
@@ -82,87 +125,118 @@ administrators. It is designed for small and medium-sized installations.
    ```
    
    The installer deploys a versioned installation under
-   `/usr/local/lib/zfsutilities/`, sets up `PATH` configuration, and creates
-   two launcher symlinks in the desktop user's home directory:
-   `~/ZFSutilities GUI` and `~/ZFSutilities Documentation`.
+   `/usr/local/lib/zfsutilities/`, configures `PATH`, and creates two desktop
+   launcher symlinks in the installing user's home directory:
+   **ZFSutilities GUI** and **ZFSutilities Documentation**.
 
 3. Launch the GUI from the terminal:
-   
-   After installation the GUI is on `PATH`:
    
    ```bash
    sudo zfsutilities-gui
    ```
    
-   If you are running a local copy that is not yet in `PATH`, prefix the
-   command:
+   Or launch the standalone documentation viewer:
    
    ```bash
-   sudo ~/zfsutilities-gui
+   zfsutilities-docs
    ```
    
-   Or run individual scripts directly. For example:
+   Individual scripts are also available on `PATH` after installation:
    
    ```bash
    sudo zfsdailybackup
+   sudo zfssendoffsite
+   sudo zfsrestore
    ```
 
----
+## Versioned Upgrades
+
+Deploy a new version without touching the running system:
+
+```bash
+cd /path/to/ZFSutilities
+sudo ./deploy-version
+sudo switch-version <version>
+```
+
+Roll back instantly:
+
+```bash
+sudo switch-version previous
+```
+
+List deployed versions:
+
+```bash
+sudo switch-version --list
+```
 
 ## Documentation
 
-The documentation source lives in `06 Docs/docs/` and is built with MkDocs.
-During installation, `deploy-version` builds the HTML documentation site
-automatically when MkDocs is available, so the installed system has a local
-copy of the docs ready for the GUI viewer or a browser.
+The full documentation is built with MkDocs from `06 Docs/docs/` and is
+included with the installed system. The GUI's **Help → Documentation** menu
+opens the same docs in an embedded browser.
 
-### View the documentation before installing
+Key sections:
 
-If you want to browse the docs directly from the cloned repository, build and
-serve them locally:
+- [Installation Guide](<06 Docs/docs/installation/index.md>) — single-node and
+  two-node setup details
+- [User Guide](<06 Docs/docs/user-guide/index.md>) — day-to-day operating
+  procedures
+- [Developer Guide](<06 Docs/docs/developer-guide/index.md>) — architecture,
+  conventions, and testing
+- [Commands & Modules Reference](<06 Docs/docs/commands-and-modules/index.md>)
+  — complete script and module reference
+
+To browse the docs directly from a clone:
 
 ```bash
-cd "06 Docs"
-mkdocs build
-startdocserver
+sudo startdocserver
 ```
 
-Then open a regular web browser to:
+Then open `http://localhost:8000` in a browser.
 
+## Testing
+
+ZFS Utilities includes both bash and Python test suites.
+
+Run all tests:
+
+```bash
+./run-tests
 ```
-http://localhost:8000
+
+Run a specific suite:
+
+```bash
+./run-tests test-zfsretain
 ```
 
-`startdocserver` runs MkDocs in live-reload mode when MkDocs is available, so
-edits to the source files appear automatically on refresh.
+Run the Python tests:
 
-### Key sections
+```bash
+./tests/run-python-tests
+```
 
-- User Guide — day-to-day operating procedures
-- Developer Guide — architecture, conventions, and testing
-- Commands & Modules Reference — complete script reference
-- Installation Guide — single-node and two-node setup details
-
----
+See [developer-guide/testing.md](<06 Docs/docs/developer-guide/testing.md>)
+for details on writing new tests.
 
 ## Support
 
-Support is provided through GitHub:
-
-- Report bugs and request features via [GitHub Issues](https://github.com/wallart1/ZFSutilities/issues).
-- Contributions are welcome via [Pull Requests](https://github.com/wallart1/ZFSutilities/pulls).
-
----
+- Report bugs and request features via
+  [GitHub Issues](https://github.com/wallart1/ZFSutilities/issues).
+- Ask questions and discuss usage on
+  [GitHub Discussions](https://github.com/wallart1/ZFSutilities/discussions).
+- Contributions are welcome via
+  [Pull Requests](https://github.com/wallart1/ZFSutilities/pulls).
 
 ## Security
 
-ZFSutilities operates directly on live ZFS pools and is designed to run as
+ZFS Utilities operates directly on live ZFS pools and is designed to run as
 `root`. Review any script before running it in production, and ensure you have
 backups of data you cannot afford to lose.
 
----
-
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file
-for details.
+This project is licensed under the MIT License. See the
+[LICENSE](LICENSE) file for details.

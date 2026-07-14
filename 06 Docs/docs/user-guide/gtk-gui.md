@@ -145,7 +145,7 @@ The **Help** menu contains:
 documentation website using an embedded browser. 
 
 The installer creates a symbolic link named **ZFSutilities Documentation**
-in the installing user's home directory. This can be used to open the documentation viewer independently of the GUI. Open the link directly, or run `zfsutilities-docs`; either will prompt for authorization if needed.
+in the installing user's home directory. This can be used to open the documentation viewer independently of the GUI. Open the link directly, or run `zfsutilities-docs`; the documentation viewer does not require root.
 
 The viewer window includes a toolbar:
 

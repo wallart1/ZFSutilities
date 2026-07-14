@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.59.13
+
+### Changed
+
+- **Standalone documentation viewer no longer requires root** —
+  `docs_viewer.py` no longer relaunches itself through `pkexec` when run as a
+  normal user. The viewer now stores its config and lock files under the
+  running user's home directory, so users can open `zfsutilities-docs` or the
+  **ZFSutilities Documentation** desktop shortcut without elevation. The
+  embedded viewer inside the GTK GUI still runs with the GUI's privileges.
+- **Configuration and lock paths respect the running user** —
+  `config_core.py` defaults `CONFIG_PATH` to `~/.config/zfsutilities.json`
+  (overridable with `ZFSUTILITIES_CONFIG_PATH`). `file_locking.py` defaults
+  lock files to `/run/lock/zfs/` for root and `~/.cache/zfsutilities/` for
+  non-root users (existing environment overrides continue to work).
+- **Documentation viewer toolbar styling** — Toolbar buttons now use
+  symbolic icons and a shared CSS class so they render consistently against
+  dark themes. The zoom-reset button uses a text label (`1`) for clarity.
+- **README refresh** — Rewrote `README.md` with an expanded project
+  description, feature overview, and updated GUI screenshot.
+- **Terminal width guidance** — `AGENTS.md` now records the calibrated
+  terminal width for this environment (95 columns → 85-character response
+  target).
+
+### Fixed
+
+- **Deployed documentation permissions** — `deploy-version` now sets
+  `0755`/`0644` permissions on the built MkDocs `site/` directory so the
+  non-root documentation viewer can read all pages and assets.
+
+### Tests
+
+- Replaced `docs_viewer.py` root-elevation tests with tests that verify the
+  viewer launches without `pkexec` when run as a normal user.
+- Updated `tests/python/test_config_core.py` and
+  `tests/python/test_file_locking.py` to assert user-aware default paths.
+- Added `tests/python/test_gui_infrastructure.py` tests for symbolic toolbar
+  icons, text-label toolbar buttons, and navigation-button behavior.
+- Updated `tests/python/test_docs_viewer.py` to reflect the removal of
+  `pkexec` elevation logic.
+
+### Documentation
+
+- Updated `06 Docs/docs/user-guide/gtk-gui.md` to state that the standalone
+  documentation viewer does not require root.
+- Added GitHub Issues and Discussions links to
+  `06 Docs/docs/user-guide/index.md`.
+
 ## 0.59.12
 
 ### Fixed
