@@ -33,8 +33,58 @@ The library also defines helper functions used throughout these scripts:
 The script-specific Arguments and Globals tables below omit these unless a
 script uses one in a non-obvious way.
 
+## Dashboard iSCSI Issues (two-node GUI)
+
+In two-node mode the Dashboard shows an **iSCSI Issues** box that compares the
+authoritative [`expected-backstores.txt`](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest)
+manifest against the backstores currently loaded in `targetcli`.
+
+### What "not exported" means
+
+Each VM disk is a ZFS zvol that is shared to the compute node over iSCSI. When
+the Dashboard reports that a disk is **not exported**, the disk is still listed
+as expected but is not currently loaded in the iSCSI target. The affected VM
+may not be able to see or use the disk until the export is restored.
+
+A message like:
+
+```text
+VM 207 disk 2 (vm-207-disk-2) is not exported as an iSCSI LUN on target
+threeamigos. The VM may not see this disk.
+```
+
+means VM 207's second disk should be exported from the pool/target named
+`threeamigos`, but the iSCSI backstore or LUN mapping is missing.
+
+### Common causes
+
+- **Detached disk** — the disk was removed from a VM with `detach-vm-disk` but
+  the expected-backstores manifest was not updated.
+- **Encryption key not loaded** — the backing zvol is encrypted and its key has
+  not been loaded yet.
+- **Pool not imported** — the source pool is offline or not imported.
+- **Missing backstore/LUN** — the iSCSI export was never created or was deleted
+  manually.
+
+### Fix this button
+
+Clicking **Fix this** runs [`repair-iscsi-luns`](#repair-iscsi-luns-storage-node)
+on the storage host. It recreates any missing backstores/LUNs for entries in the
+manifest, regenerates the manifest, saves the target configuration, and rescans
+the compute host.
+
+### Intentionally detached disks
+
+A disk that has been deliberately detached from a VM should **not** appear as an
+issue. [`detach-vm-disk`](#detach-vm-disk-both) removes the backstore/LUN from
+the target and also removes the entry from `expected-backstores.txt`, so the
+Dashboard will not warn about it. [`repair-iscsi-luns`](#repair-iscsi-luns-storage-node)
+only exports disks that are listed in the manifest, so detached disks stay
+detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
+
 ## Jump to
 
+- [Dashboard iSCSI Issues](#dashboard-iscsi-issues-two-node-gui)
 - [`attach-vm-disk` (both)](#attach-vm-disk-both)
 - [`clone-vm` (both)](#clone-vm-both)
 - [`deploy-version` (repo root)](#deploy-version-repo-root)
@@ -171,7 +221,7 @@ sudo ./deploy-version [version] [group ...]
 4. Symlink two-node, clone, installer, and versioning scripts into `bin/`.
 5. Copy root-level scripts that are executable or have a shebang, with named exclusions.
 6. Copy project subdirectories (`06 Docs`, `07 GTK + Python`, `08 Two-node`, etc.) via `rsync`.
-7. Rebuild the static MkDocs site if `mkdocs` is available.
+7. Rebuild the static MkDocs site.
 8. Validate that critical root-level scripts are present in the deployed `bin/` directory.
 9. `rsync` the version directory to each remote host in the selected groups.
 
@@ -223,9 +273,8 @@ directory contains `.git/` or `VERSION`). This prevents accidentally deploying
 an incomplete set of files when the script is invoked from `$PATH` rather than
 the repository root.
 
-If MkDocs is available, `deploy-version` also rebuilds the static documentation
-site in the deployed directory so the pre-built fallback carries the correct
-version stamp.
+`deploy-version` also rebuilds the static documentation site in the deployed
+directory so the built site carries the correct version stamp.
 
 `deploy-version` creates two launcher symlinks in the versioned `bin/`
 directory:
@@ -349,8 +398,10 @@ Diagnoses and repairs missing iSCSI LUN exports on the storage host. Discovers
 all VM zvols in the configured pools, ensures each one has a block backstore and
 a LUN mapping, preserves existing LUN indexes, regenerates the authoritative
 `expected-backstores.txt` manifest, saves the target config, and always rescans
-the compute host. Use `--dry-run` to preview changes and `--force-relogin` to
-re-log iSCSI sessions when a rescan alone does not reveal all LUNs.
+the compute host. It only exports disks that are listed in the manifest, so
+intentionally detached disks stay detached. Use `--dry-run` to preview changes
+and `--force-relogin` to re-log iSCSI sessions when a rescan alone does not
+reveal all LUNs.
 
 ```bash
 sudo repair-iscsi-luns [--dry-run] [--force-relogin]
@@ -384,15 +435,21 @@ sudo repair-iscsi-luns [--dry-run] [--force-relogin]
 1. Exit silently in single-node mode.
 2. Parse current targetcli backstores and LUN mappings.
 3. Discover all VM zvols (`vm-<N>-disk-<N>`) under configured pools.
-4. For each discovered zvol, create the backstore and LUN mapping if missing.
-5. For each loaded backstore that is not mapped to a LUN, create the missing LUN
-   mapping at the next free index.
-6. If any target-side changes were made, back up `saveconfig.json`, regenerate
+4. Read `/etc/rtslib-fb-target/expected-backstores.txt`. If the manifest is
+   missing, fall back to the discovered zvol list. If it exists but is empty,
+   treat it as authoritative (nothing expected).
+5. For each expected backstore that has a corresponding zvol, create the
+   backstore and LUN mapping if missing.
+6. For each loaded backstore that is listed in the manifest but not mapped to a
+   LUN, create the missing LUN mapping at the next free index.
+7. Report any zvols that exist but are not in the manifest without exporting
+   them.
+8. If any target-side changes were made, back up `saveconfig.json`, regenerate
    `expected-backstores.txt`, and save the config via `safe-iscsi-save`.
-7. If no target-side changes were needed, still regenerate
+9. If no target-side changes were needed, still regenerate
    `expected-backstores.txt` to keep the manifest authoritative.
-8. Rescan the compute host. If `--force-relogin` is set and the visible device
-   count did not increase, re-log iSCSI sessions.
+10. Rescan the compute host. If `--force-relogin` is set and the visible device
+    count did not increase, re-log iSCSI sessions.
 
 **Return codes / side effects:**
 
@@ -602,16 +659,28 @@ sudo detach-vm-disk <vmid> <disk-key>
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | `/etc/pve/qemu-server/<vmid>.conf` | Source VM config | — |
+| `/etc/rtslib-fb-target/expected-backstores.txt` | Backstore removed so the detached disk is no longer expected | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
 
 **Internal flow / algorithm:**
 
 1. Validate arguments and delegate to the compute host in two-node mode.
+   When delegating, the script resolves the compute host's active
+   `/usr/local/lib/zfsutilities/current` symlink so the remote copy of
+   `detach-vm-disk` is invoked from the active deployed version rather than a
+   hardcoded path.
 2. Read the VM config and locate the requested disk line.
 3. Warn if the VM is running; prompt for confirmation.
 4. Remove the disk line from the VM config.
-5. In two-node mode, parse the target and LUN from the disk line, remove the
-   LUN mapping and backstore on the storage host, save iSCSI config, and
-   trigger a compute-host rescan.
+5. In two-node mode:
+   - Parse the target and LUN from the disk line and remove the LUN mapping and
+     backstore on the storage host.
+   - Remove the backstore name from `expected-backstores.txt` so the Dashboard
+     does not report the detached disk as missing and `safe-iscsi-save` can
+     save the degraded-but-intentional config.
+   - Save the iSCSI config via `safe-iscsi-save` (found relative to this
+     script).
+   - Resolve the compute host's active deployed version again and trigger a
+     compute-host rescan using that version's `rescan-storage`.
 
 **Return codes / side effects:**
 
@@ -621,7 +690,8 @@ sudo detach-vm-disk <vmid> <disk-key>
 | `1`  | Validation or targetcli failure |
 
 Side effects: removes the disk line from the VM config; removes the iSCSI LUN
-and backstore in two-node mode. The zvol is **not** destroyed.
+and backstore in two-node mode; removes the backstore entry from
+`expected-backstores.txt`. The zvol is **not** destroyed.
 
 ---
 

@@ -6,7 +6,11 @@
 # Install to: /usr/local/lib/zfsutilities/bin/detach-vm-disk on BOTH hosts
 # Run from:   the compute host (or storage host — delegates via SSH)
 
-source /usr/local/lib/node-lib.sh
+# Resolve our directory so helpers can be found relative to this script.
+# This supports running from the repo, a deployed version, or through a symlink.
+mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+
+source "$mydir/node-lib.sh"
 
 MY_HOST=$(hostname -s)
 PVE_CONF_DIR="/etc/pve/qemu-server"
@@ -28,6 +32,24 @@ die() {
     exit 1
 }
 
+# Resolve the active zfsutilities bin directory on a remote host.
+# Uses the versioned deployment's /usr/local/lib/zfsutilities/current symlink
+# so SSH calls run the remote host's active version rather than a hardcoded
+# path. Falls back to /usr/local/lib/zfsutilities/bin if the symlink cannot be
+# resolved.
+remote_zfsutilities_bin() {
+    local host="$1"
+    local version_dir
+    version_dir=$(ssh -o ConnectTimeout=10 root@"$host" \
+        "realpath /usr/local/lib/zfsutilities/current 2>/dev/null || \
+         readlink -f /usr/local/lib/zfsutilities/current 2>/dev/null" 2>/dev/null)
+    if [[ -n "$version_dir" ]]; then
+        echo "${version_dir}/bin"
+    else
+        echo "/usr/local/lib/zfsutilities/bin"
+    fi
+}
+
 # --- Argument validation ---
 [[ $# -eq 2 ]] || usage
 
@@ -41,8 +63,9 @@ DISKKEY="$2"
 
 # --- Delegate to compute host if run on storage node (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    REMOTE_BIN=$(remote_zfsutilities_bin "$COMPUTE_HOST")
     exec ssh -t root@"$COMPUTE_HOST" \
-        "/usr/local/lib/zfsutilities/bin/detach-vm-disk '$VMID' '$DISKKEY'"
+        "${REMOTE_BIN}/detach-vm-disk '$VMID' '$DISKKEY'"
 fi
 
 # === Running on the compute host ===
@@ -146,15 +169,26 @@ if is_two_node && [[ -n "$BACKSTORE_NAME" ]]; then
         echo "⚠ Backstore not found — skipping"
     fi
 
+    # Remove from expected-backstores manifest before saving, otherwise
+    # safe-iscsi-save sees fewer active backstores than expected and refuses
+    # to save, leaving the manifest stale and the Dashboard reporting the
+    # detached disk as missing.
+    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+    if [[ -f "$MANIFEST" ]] && grep -q "^${BACKSTORE_NAME}$" "$MANIFEST"; then
+        sed -i "/^${BACKSTORE_NAME}$/d" "$MANIFEST"
+        echo "✓ Removed from expected-backstores manifest"
+    fi
+
     # Save config
     echo "Saving iSCSI configuration..."
-    /usr/local/lib/zfsutilities/bin/safe-iscsi-save
+    "$mydir/safe-iscsi-save"
     echo "✓ Configuration saved"
 
-    # Rescan
+    # Rescan on the compute host, using its active deployed version.
+    REMOTE_BIN=$(remote_zfsutilities_bin "$COMPUTE_HOST")
     echo "Triggering iSCSI rescan on $COMPUTE_HOST..."
     if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
-        "/usr/local/lib/zfsutilities/bin/rescan-storage" 2>&1; then
+        "${REMOTE_BIN}/rescan-storage" 2>&1; then
         echo "✓ Rescan triggered"
     else
         echo "⚠ Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' manually"

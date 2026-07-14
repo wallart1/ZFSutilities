@@ -143,7 +143,7 @@ Every bash and Python entry will use this section order where applicable:
 - Add any missing anchors to `data-structures.md` and `global-variables.md`.
 - Verify all relative paths are correct (`../developer-guide/...`).
 - Run `tests/run-python-tests test_docs_integrity`.
-- Optionally run `mkdocs build` from `06 Docs/`.
+- Run `mkdocs build` from `06 Docs/`.
 
 **Deliverable:** Clean build and passing tests.
 
@@ -168,7 +168,7 @@ Every bash and Python entry will use this section order where applicable:
 - `06 Docs/docs/commands-and-modules/index.md` (updated)
 - `06 Docs/mkdocs.yml` (updated nav)
 - `06 Docs/docs/developer-guide/data-structures.md` / `global-variables.md` (anchor additions only if needed)
-- Passing `test_docs_integrity` (and MkDocs build if available)
+- Passing `test_docs_integrity` (and MkDocs build)
 
 ## Notes / Constraints
 

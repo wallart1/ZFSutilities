@@ -21,6 +21,14 @@ from zfs_repository import get_default_repository
 
 
 # ---------------------------------------------------------------------------
+# Regex: ^vm-(\d+)-disk-(\d+)$
+# Purpose: Parse an iSCSI backstore name into VM ID and disk number.
+# Group 1: VM ID     e.g. "207"
+# Group 2: Disk num  e.g. "2"
+_ISCSI_BACKSTORE_RE = re.compile(r"^vm-(\d+)-disk-(\d+)$")
+
+
+# ---------------------------------------------------------------------------
 # Regex: ^[\s]*pool:\s+(\S+)
 # Purpose: Extract the pool name from the first line of `zpool status` output.
 # Group 1: Pool name  e.g. "fivebays"
@@ -1225,6 +1233,29 @@ def _refresh_ops_section(app, recent):
         app.dashboard_ops_store.append([ts, etype, name, outcome, log_file])
 
 
+def _format_iscsi_missing_message(lun):
+    """Convert a raw missing-LUN dict into user-friendly text.
+
+    Backstore names follow the convention ``vm-<vmid>-disk-<N>``. When possible,
+    the message is written in terms of the VM and disk number instead of iSCSI
+    jargon.
+    """
+    name = lun.get("name", "?")
+    target = lun.get("target", "?")
+    match = _ISCSI_BACKSTORE_RE.match(name)
+    if match:
+        vmid = match.group(1)
+        disk = match.group(2)
+        return (
+            f"VM {vmid} disk {disk} ({name}) is not exported as an iSCSI LUN "
+            f"on target {target}. The VM may not see this disk."
+        )
+    return (
+        f"Disk {name} is not exported as an iSCSI LUN on target {target}. "
+        f"The VM may not see this disk."
+    )
+
+
 def _refresh_iscsi_section(app, missing_luns, stale=False):
     """Clear and repopulate the iSCSI Issues box."""
     for child in app.dashboard_iscsi_box.get_children():
@@ -1239,24 +1270,33 @@ def _refresh_iscsi_section(app, missing_luns, stale=False):
         app.dashboard_iscsi_box.pack_start(stale_lbl, False, False, 0)
 
     if not missing_luns:
-        lbl = Gtk.Label(label="All LUNs are present.")
+        lbl = Gtk.Label(label="All VM disks are exported as iSCSI LUNs.")
         lbl.set_halign(Gtk.Align.START)
         app.dashboard_iscsi_box.pack_start(lbl, False, False, 0)
         return
+
+    tooltip_text = (
+        "Each VM disk is a ZFS zvol shared to the compute node over iSCSI. "
+        '"Not exported" means the disk is in the expected list but is not '
+        "currently loaded in the iSCSI target. Causes include: detached disk, "
+        "encryption key not loaded, pool not imported, or a missing "
+        "backstore/LUN. Click Fix this to run repair-iscsi-luns, which "
+        "recreates missing exports and rescans the compute node."
+    )
 
     for lun in missing_luns:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         row.set_halign(Gtk.Align.START)
 
+        msg = _format_iscsi_missing_message(lun)
         lbl = Gtk.Label()
-        lbl.set_markup(
-            f'<span foreground="#FF8C00">⚠</span> LUN '
-            f'"{lun["name"]}" missing on target {lun["target"]}'
-        )
+        lbl.set_markup(f'<span foreground="#FF8C00">⚠</span> {msg}')
         lbl.set_halign(Gtk.Align.START)
+        lbl.set_tooltip_text(tooltip_text)
         row.pack_start(lbl, False, False, 0)
 
         fix_btn = Gtk.Button(label="Fix this")
+        fix_btn.set_tooltip_text(tooltip_text)
         fix_btn.connect("clicked", _on_fix_iscsi_clicked, app)
         row.pack_start(fix_btn, False, False, 0)
 

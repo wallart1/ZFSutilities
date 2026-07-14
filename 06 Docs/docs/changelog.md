@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.59.15
+
+### Changed
+
+- **Dashboard iSCSI warnings are now user-friendly** — The Dashboard iSCSI Issues
+  box no longer reports raw "LUN missing on target" messages. It now shows plain
+  language such as "VM 207 disk 2 (vm-207-disk-2) is not exported as an iSCSI LUN
+  on target threeamigos." Labels and the Fix this button have tooltips that
+  explain what the warning means and what the repair action does.
+- **Intentionally detached disks no longer trigger iSCSI warnings** —
+  `detach-vm-disk` now removes the backstore from
+  `/etc/rtslib-fb-target/expected-backstores.txt` before saving the iSCSI config,
+  so the Dashboard does not report detached disks as missing.
+- **`repair-iscsi-luns` respects the expected-backstores manifest** — It now only
+  creates iSCSI backstores/LUNs for entries listed in `expected-backstores.txt`.
+  Zvols that exist but are not in the manifest are reported as unexported but are
+  not auto-exported, so detached disks stay detached. If the manifest is missing,
+  the script falls back to the previous behavior of repairing all discovered
+  zvols.
+- **`repair-iscsi-luns` finds helper scripts relative to itself** — Calls to
+  `safe-iscsi-save` and `rescan-storage` now resolve from the script's own
+  directory, so the script works when run directly from the repo, through a
+  deployed-version symlink, or from `/usr/local/lib/zfsutilities/bin`. This
+  fixes the "command not found" errors that occurred when the GUI invoked the
+  repair script with a minimal `PATH`.
+- **`detach-vm-disk` resolves the remote active version for SSH calls** —
+  Remote calls to `detach-vm-disk` and `rescan-storage` on the compute host no
+  longer hardcode `/usr/local/lib/zfsutilities/bin`. The script resolves the
+  remote host's `/usr/local/lib/zfsutilities/current` symlink to discover the
+  active version directory and runs the helper from there.
+- **Schedule tab warns when cron is out of sync** — `schedule_page.py` now
+  compares active profiles against `/etc/cron.d/zfsutilities` and logs warnings
+  when profiles are missing from the crontab or the crontab contains inactive
+  profiles.
+- **MkDocs is required** — The documentation server and static site build now
+  require MkDocs and the Material theme. `check-prerequisites` fails if they are
+  missing, `startdocserver` no longer falls back to a static `http.server`, and
+  the installers now install MkDocs unconditionally.
+
+### Documentation
+
+- Added a user-focused **Dashboard iSCSI Issues** section to `two-node.md` that
+  explains what a missing LUN means, common causes, the Fix this button, and how
+  intentionally detached disks are handled.
+- Updated `detach-vm-disk` and `repair-iscsi-luns` sections in `two-node.md` and
+  the `expected-backstores.txt` description in `data-structures.md` to reflect
+  manifest-driven repair and detached-disk handling.
+- Updated `commands.md` and `doc-server.md` to reflect that MkDocs is required
+  and that `startdocserver` no longer falls back to `http.server`.
+- Updated `installation/index.md` to describe MkDocs as a required component
+  installed by the installers.
+
+### Tests
+
+- Updated `tests/test-repair-iscsi-luns` for manifest-driven repair, including
+  fallback behavior and detached-zvol reporting.
+- Added `tests/test-detach-vm-disk` covering removal of the backstore entry from
+  `expected-backstores.txt`.
+- Updated `tests/python/test_dashboard_page.py` to cover the new user-friendly
+  iSCSI warning text and tooltips.
+- Updated `tests/python/test_schedule_page.py` to cover cron consistency checks.
+- Updated `tests/python/test_zfsutilities_gui.py` for recent GUI startup changes.
+- Updated `tests/test-startdocserver` for the MkDocs-only server behavior.
+
 ## 0.59.14
 
 ### Changed

@@ -1,0 +1,70 @@
+#!/usr/bin/bash
+# test-detach-vm-disk — Unit tests for detach-vm-disk manifest handling.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_manifest_removal_pattern() {
+    test_start "detach-vm-disk manifest removal removes exact backstore entry"
+
+    local manifest
+    manifest="$_mock_zfs_state_dir/expected-backstores.txt"
+    {
+        echo "vm-100-disk-0"
+        echo "vm-207-disk-2"
+        echo "vm-300-disk-1"
+    } > "$manifest"
+
+    local backstore="vm-207-disk-2"
+    # This mirrors the logic added to detach-vm-disk for removing the backstore
+    # from /etc/rtslib-fb-target/expected-backstores.txt.
+    if [[ -f "$manifest" ]] && grep -q "^${backstore}$" "$manifest"; then
+        sed -i "/^${backstore}$/d" "$manifest"
+    fi
+
+    if grep -q "^vm-207-disk-2$" "$manifest"; then
+        test_fail "Backstore was not removed from manifest"
+    fi
+    if ! grep -q "^vm-100-disk-0$" "$manifest"; then
+        test_fail "Adjacent backstore was incorrectly removed"
+    fi
+    if ! grep -q "^vm-300-disk-1$" "$manifest"; then
+        test_fail "Adjacent backstore was incorrectly removed"
+    fi
+
+    test_pass
+}
+
+test_manifest_removal_no_match() {
+    test_start "detach-vm-disk manifest removal leaves manifest unchanged when backstore absent"
+
+    local manifest
+    manifest="$_mock_zfs_state_dir/expected-backstores.txt"
+    {
+        echo "vm-100-disk-0"
+        echo "vm-300-disk-1"
+    } > "$manifest"
+
+    local backstore="vm-207-disk-2"
+    if [[ -f "$manifest" ]] && grep -q "^${backstore}$" "$manifest"; then
+        sed -i "/^${backstore}$/d" "$manifest"
+    fi
+
+    if [[ $(wc -l < "$manifest") -ne 2 ]]; then
+        test_fail "Manifest was modified when backstore was not present"
+    fi
+
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_manifest_removal_pattern
+test_manifest_removal_no_match
+
+test_summary

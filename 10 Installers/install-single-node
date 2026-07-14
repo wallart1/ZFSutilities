@@ -7,7 +7,7 @@
 #
 # This installer:
 #   1. Checks prerequisites interactively and offers to install missing items
-#   2. Optionally installs the documentation server (MkDocs)
+#   2. Installs the documentation server (MkDocs)
 #   3. Prompts for the minimum required information
 #   4. Generates /etc/zfsutilities-node.conf
 #   5. Deploys scripts as a versioned installation and sets up PATH

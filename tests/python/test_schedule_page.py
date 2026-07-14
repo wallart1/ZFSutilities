@@ -7,7 +7,7 @@ import unittest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 
-from test_support import temp_config_dir, mock_gtk, REPO_ROOT
+from test_support import temp_config_dir, mock_gtk, REPO_ROOT, capture_logs
 
 SAMPLE_NEXT_RUN = datetime(2025, 6, 15, 10, 0, tzinfo=timezone(-timedelta(hours=4)))
 
@@ -590,6 +590,113 @@ class TestSchedulePageFrames(unittest.TestCase):
         frame.set_label_widget.assert_called_once()
         expander.set_label.assert_not_called()
         expander.set_label_widget.assert_called_once()
+
+
+class TestScheduleSavedState(unittest.TestCase):
+    """Verify the Schedule tab dirty state is visible to action_dispatch."""
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+            return schedule_page
+
+    @patch("schedule_page.Gtk")
+    @patch("schedule_page.list_profiles", return_value=[])
+    def test_create_schedule_page_sets_saved_state(self, _lst, _mock_gtk):
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._ui_state.bind_treeview = MagicMock()
+
+        schedule_page.create_schedule_page(app)
+
+        self.assertTrue(hasattr(app, "_schedule_saved_state"))
+        self.assertTrue(app._schedule_saved_state)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_tab_switch_restyles_save_button_from_pending(self, mock_red):
+        """When the Schedule tab is selected, the Save button must reflect
+        any pending changes already in _schedule_pending."""
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._schedule_save_button = MagicMock()
+        app._schedule_pending = {"p1": {"active": True}}
+        app._schedule_saved_state = True
+
+        schedule_page.check_schedule_dirty(app)
+
+        mock_red.assert_called_once_with(app._schedule_save_button, True)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_tab_switch_clears_save_button_when_clean(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._schedule_save_button = MagicMock()
+        app._schedule_pending = {}
+        app._schedule_saved_state = True
+
+        schedule_page.check_schedule_dirty(app)
+
+        mock_red.assert_called_once_with(app._schedule_save_button, False)
+
+
+class TestCronConsistency(unittest.TestCase):
+    """Verify _check_cron_consistency warns when crontab is out of sync."""
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+            return schedule_page
+
+    def _profile(self, name, active=True, hour="12"):
+        return {
+            "profile_name": name,
+            "active": active,
+            "tab_type": "backup",
+            "cron": {
+                "minute": "0", "hour": hour,
+                "day": "*", "month": "*", "weekday": "*",
+            },
+        }
+
+    @patch("schedule_page._resolve_profile_runner_path",
+           return_value="/fake/profile_runner.py")
+    def test_missing_line_logged(self, _mock_runner):
+        schedule_page = self._import_schedule_page()
+        profiles = [self._profile("root-backup-dailybackup2")]
+        with temp_config_dir():
+            # Write a cron file with only a different profile
+            with open(cron_manager.CRON_FILE, "w") as f:
+                f.write("0 7 * * * root /fake/runner run root-backup-dailybackup\n")
+            with patch("schedule_page.list_profiles", return_value=profiles):
+                with capture_logs() as logs:
+                    schedule_page._check_cron_consistency(MagicMock())
+
+        self.assertTrue(
+            any("out of sync" in msg for msg in logs),
+            f"Expected 'out of sync' warning in logs: {logs}"
+        )
+        self.assertTrue(
+            any("root-backup-dailybackup2" in msg for msg in logs),
+            f"Expected missing profile in logs: {logs}"
+        )
+
+    @patch("schedule_page._resolve_profile_runner_path",
+           return_value="/fake/profile_runner.py")
+    def test_in_sync_no_warning(self, _mock_runner):
+        schedule_page = self._import_schedule_page()
+        profiles = [self._profile("root-backup-dailybackup2")]
+        with temp_config_dir():
+            line = schedule_page.generate_cron_line(profiles[0], "/fake/profile_runner.py")
+            with open(cron_manager.CRON_FILE, "w") as f:
+                f.write(line + "\n")
+            with patch("schedule_page.list_profiles", return_value=profiles):
+                with capture_logs() as logs:
+                    schedule_page._check_cron_consistency(MagicMock())
+
+        self.assertFalse(
+            any("out of sync" in msg for msg in logs),
+            f"Did not expect warning when cron file matches: {logs}"
+        )
 
 
 class TestRunNow(unittest.TestCase):

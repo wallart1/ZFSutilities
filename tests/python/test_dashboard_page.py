@@ -428,6 +428,118 @@ class TestGetIscsiMissingLuns(unittest.TestCase):
         self.assertIsNone(missing)
 
 
+class TestFormatIscsiMissingMessage(unittest.TestCase):
+    """_format_iscsi_missing_message() produces user-friendly text."""
+
+    def test_standard_backstore_name(self):
+        lun = {"name": "vm-207-disk-2", "target": "threeamigos"}
+        msg = dp._format_iscsi_missing_message(lun)
+        self.assertIn("VM 207 disk 2", msg)
+        self.assertIn("vm-207-disk-2", msg)
+        self.assertIn("threeamigos", msg)
+        self.assertIn("not exported", msg)
+
+    def test_unexpected_backstore_name(self):
+        lun = {"name": "custom-disk-1", "target": "threeamigos"}
+        msg = dp._format_iscsi_missing_message(lun)
+        self.assertIn("Disk custom-disk-1", msg)
+        self.assertIn("threeamigos", msg)
+
+    def test_missing_name_defaults_to_placeholder(self):
+        lun = {"target": "threeamigos"}
+        msg = dp._format_iscsi_missing_message(lun)
+        self.assertIn("Disk ?", msg)
+
+
+class TestRefreshIscsiSection(unittest.TestCase):
+    """_refresh_iscsi_section() renders user-friendly iSCSI warnings."""
+
+    def _run_refresh(self, missing_luns):
+        labels = []
+        label_kwargs = []
+        buttons = []
+        button_kwargs = []
+
+        def make_label(*args, **kwargs):
+            label_kwargs.append(kwargs)
+            lbl = MagicMock()
+            labels.append(lbl)
+            return lbl
+
+        def make_button(*args, **kwargs):
+            button_kwargs.append(kwargs)
+            btn = MagicMock()
+            buttons.append(btn)
+            return btn
+
+        with mock_gtk() as gtk_mock:
+            gtk_mock.Label.side_effect = make_label
+            gtk_mock.Button.side_effect = make_button
+            with patch.object(dp, "Gtk", gtk_mock):
+                app = MagicMock()
+                app.dashboard_iscsi_box.get_children.return_value = []
+                dp._refresh_iscsi_section(app, missing_luns)
+        return app, labels, label_kwargs, buttons, button_kwargs
+
+    def test_healthy_message(self):
+        _app, labels, label_kwargs, _buttons, _button_kwargs = self._run_refresh([])
+        label_texts = [
+            kwargs.get("label")
+            for kwargs in label_kwargs
+            if kwargs.get("label")
+        ]
+        label_texts.extend(
+            call.args[0]
+            for lbl in labels
+            for call in lbl.set_markup.call_args_list
+        )
+        self.assertTrue(
+            any("All VM disks are exported" in text for text in label_texts),
+            f"Expected healthy message in {label_texts}",
+        )
+
+    def test_missing_lun_label_is_user_friendly(self):
+        _app, labels, _label_kwargs, _buttons, _button_kwargs = self._run_refresh(
+            [{"name": "vm-207-disk-2", "target": "threeamigos"}]
+        )
+        markup_texts = [
+            call.args[0]
+            for lbl in labels
+            for call in lbl.set_markup.call_args_list
+        ]
+        self.assertTrue(
+            any("VM 207 disk 2" in text for text in markup_texts),
+            f"Expected user-friendly markup in {markup_texts}",
+        )
+        self.assertTrue(
+            any("vm-207-disk-2" in text for text in markup_texts),
+            f"Expected backstore name in {markup_texts}",
+        )
+
+    def test_tooltip_set_on_label_and_button(self):
+        _app, labels, _label_kwargs, buttons, _button_kwargs = self._run_refresh(
+            [{"name": "vm-207-disk-2", "target": "threeamigos"}]
+        )
+        label_tooltips = [
+            call.args[0]
+            for lbl in labels
+            for call in lbl.set_tooltip_text.call_args_list
+        ]
+        button_tooltips = [
+            call.args[0]
+            for btn in buttons
+            for call in btn.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(
+            any("Each VM disk is a ZFS zvol" in t for t in label_tooltips),
+            "Expected tooltip text on a label",
+        )
+        self.assertTrue(
+            any("Each VM disk is a ZFS zvol" in t for t in button_tooltips),
+            "Expected tooltip text on the Fix this button",
+        )
+
+
 class TestLockPid(unittest.TestCase):
     """_lock_pid() extracts PIDs from lock files."""
 

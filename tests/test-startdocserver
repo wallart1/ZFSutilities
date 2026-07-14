@@ -36,12 +36,6 @@ pgrep() {
             return 0
         fi
     fi
-    if [[ "$*" == *"http.server 8000"* ]]; then
-        if [[ -n "$_mock_pgrep_http_output" ]]; then
-            echo "$_mock_pgrep_http_output"
-            return 0
-        fi
-    fi
     return 1
 }
 
@@ -80,7 +74,6 @@ start_server() {
 reset_mocks() {
     _mock_curl_http_code=""
     _mock_pgrep_output=""
-    _mock_pgrep_http_output=""
     _mock_lsof_output=""
     _mock_fuser_output=""
     _mock_server_cwd=""
@@ -144,18 +137,6 @@ test_get_server_pid_pgrep() {
     assert_equals "11111" "$pid"
 }
 
-test_get_server_pid_http_server() {
-    reset_mocks
-    _mock_lsof_output=""
-    _mock_fuser_output=""
-    _mock_pgrep_output=""
-    _mock_pgrep_http_output="22222"
-    test_start "_get_server_pid falls back to pgrep for http.server"
-    local pid
-    pid=$(_get_server_pid)
-    assert_equals "22222" "$pid"
-}
-
 test_is_server_serving_expected_dir_match() {
     reset_mocks
     local tmpdir
@@ -167,21 +148,6 @@ test_is_server_serving_expected_dir_match() {
         test_pass
     else
         test_fail "Expected true for matching CWD"
-    fi
-    rm -rf "$tmpdir"
-}
-
-test_is_server_serving_expected_dir_site_match() {
-    reset_mocks
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    mkdir -p "$tmpdir/06 Docs/site"
-    _mock_server_cwd="$tmpdir/06 Docs/site"
-    test_start "_is_server_serving_expected_dir returns true on site/ match"
-    if _is_server_serving_expected_dir "1234" "$tmpdir/06 Docs"; then
-        test_pass
-    else
-        test_fail "Expected true for site/ CWD"
     fi
     rm -rf "$tmpdir"
 }
@@ -289,9 +255,7 @@ test_is_server_running_false
 test_get_server_pid_lsof
 test_get_server_pid_fuser
 test_get_server_pid_pgrep
-test_get_server_pid_http_server
 test_is_server_serving_expected_dir_match
-test_is_server_serving_expected_dir_site_match
 test_is_server_serving_expected_dir_mismatch
 test_is_server_serving_expected_dir_empty
 test_main_restarts_stale_server

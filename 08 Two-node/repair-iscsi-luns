@@ -2,18 +2,26 @@
 # repair-iscsi-luns
 # Idempotent repair of iSCSI LUN export on the storage host.
 #
-# 1. Ensures every VM zvol in the configured pools is exported as an iSCSI
+# 1. Reads /etc/rtslib-fb-target/expected-backstores.txt (the authoritative
+#    manifest) and ensures every backstore listed there is exported as an iSCSI
 #    backstore + LUN mapping.
 # 2. Preserves existing LUN indexes so working VMs are not disrupted.
-# 3. Always rescans the compute host so newly added or existing-but-unseen
+# 3. Reports zvols that exist but are not in the manifest without exporting
+#    them, so intentionally detached disks stay detached.
+# 4. Always rescans the compute host so newly added or existing-but-unseen
 #    LUNs appear.
-# 4. Optionally re-logs iSCSI sessions if a rescan alone does not reveal all
+# 5. Optionally re-logs iSCSI sessions if a rescan alone does not reveal all
 #    expected LUNs (use --force-relogin; this briefly disconnects all LUNs).
 #
 # Usage: sudo repair-iscsi-luns [--dry-run] [--force-relogin]
 # Install to: /usr/local/lib/zfsutilities/bin/repair-iscsi-luns on the storage host
 
-source /usr/local/lib/node-lib.sh
+# Resolve our directory so helpers can be found relative to this script.
+# This supports running from the repo, a deployed version, or through a symlink.
+mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+
+NODE_LIB="${REPAIR_ISCSI_LUNS_NODE_LIB:-$mydir/node-lib.sh}"
+source "$NODE_LIB"
 
 # iSCSI-only script — exit silently in single-node mode
 is_single_node && exit 0
@@ -55,7 +63,12 @@ fi
 }
 
 SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
-MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+MANIFEST="${REPAIR_ISCSI_LUNS_MANIFEST:-/etc/rtslib-fb-target/expected-backstores.txt}"
+
+# Helper scripts live in the same directory as this script. Override paths are
+# provided so unit tests can substitute mocks.
+SAFE_ISCSI_SAVE="${REPAIR_ISCSI_SAFE_ISCSI_SAVE:-$mydir/safe-iscsi-save}"
+RESCAN_STORAGE="${REPAIR_ISCSI_RESCAN_STORAGE:-$mydir/rescan-storage}"
 
 # ------------------------------------------------------------------
 # Logging helpers
@@ -135,6 +148,60 @@ discover_zvols() {
         done < <(zfs list -H -o name -r "${pool}/proxmox" 2>/dev/null \
                  | grep -E '^[^/]+/proxmox/vm-[0-9]+-disk-[0-9]+$')
     done < <(pool_list)
+}
+
+# ------------------------------------------------------------------
+# Manifest handling
+# ------------------------------------------------------------------
+
+# Read the authoritative expected-backstores manifest.
+# Output variables:
+#   _expected_bs_names[]   array of backstore names that should be exported
+#   _expected_bs[name]     associative array for fast membership tests
+#   _manifest_exists       true if the manifest file exists, false otherwise
+# If the manifest is missing, _expected_bs_names will be empty and callers
+# should fall back to another source (e.g. discovered zvols). An empty but
+# existing manifest is authoritative: nothing should be exported.
+read_manifest() {
+    _expected_bs_names=()
+    unset -v _expected_bs
+    declare -gA _expected_bs=()
+    _manifest_exists=false
+
+    if [[ ! -f "$MANIFEST" ]]; then
+        return 0
+    fi
+
+    _manifest_exists=true
+
+    local name
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        [[ "$name" == \#* ]] && continue
+        if [[ "$name" =~ ^vm-[0-9]+-disk-[0-9]+$ ]]; then
+            _expected_bs_names+=("$name")
+            _expected_bs["$name"]="1"
+        fi
+    done < "$MANIFEST"
+}
+
+# Return 0 if the given backstore name is in the expected manifest.
+is_expected_backstore() {
+    [[ -n "${_expected_bs[${1}]:-}" ]]
+}
+
+# Find the pool/dataset path for a backstore name from the discovered zvols.
+# Output: prints the zvol path, or nothing if not found.
+find_zvol_for_backstore() {
+    local name="$1"
+    local zvol
+    for zvol in "${_zvols[@]}"; do
+        if [[ "${zvol##*/}" == "$name" ]]; then
+            echo "$zvol"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # ------------------------------------------------------------------
@@ -264,7 +331,12 @@ rescan_compute_host() {
         return 0
     fi
 
-    if rescan-storage; then
+    if ! type -t "$RESCAN_STORAGE" >/dev/null 2>&1; then
+        log_warn "rescan-storage not available at $RESCAN_STORAGE"
+        return 1
+    fi
+
+    if "$RESCAN_STORAGE"; then
         log_ok "Compute host rescan complete"
     else
         log_warn "Compute host rescan returned non-zero"
@@ -306,6 +378,21 @@ log_info "Loaded backstores: ${#_bs_names[@]}"
 # Gather zvols and expected state
 discover_zvols
 log_info "Discovered VM zvols: ${#_zvols[@]}"
+
+# Read the authoritative manifest. If it is missing, fall back to the
+# discovered zvol list so legacy or newly-initialized systems still get repaired.
+# An existing but empty manifest is authoritative and means nothing is expected.
+read_manifest
+if [[ "${_manifest_exists}" == true ]]; then
+    log_info "Expected backstores from manifest: ${#_expected_bs_names[@]}"
+elif [[ ${#_zvols[@]} -gt 0 ]]; then
+    log_warn "Manifest missing; falling back to discovered zvols"
+    for zvol in "${_zvols[@]}"; do
+        _expected_bs_names+=("${zvol##*/}")
+        _expected_bs["${zvol##*/}"]="1"
+    done
+    log_info "Expected backstores from zvols: ${#_expected_bs_names[@]}"
+fi
 echo ""
 
 # Track whether we made any target-side changes
@@ -314,42 +401,49 @@ MISSING_BACKSTORES=()
 MISSING_LUNS=()
 UNMAPPED_ZVOLS=()
 
-# Ensure each zvol has a backstore and a LUN mapping
-for zvol in "${_zvols[@]}"; do
-    [[ -z "$zvol" ]] && continue
+# Ensure each expected backstore has a backstore and a LUN mapping.
+for bs_name in "${_expected_bs_names[@]}"; do
+    [[ -z "$bs_name" ]] && continue
 
-    # Extract pool and backstore name from zvol path
+    zvol=$(find_zvol_for_backstore "$bs_name") || true
+    if [[ -z "$zvol" ]]; then
+        log_warn "Expected backstore $bs_name has no corresponding zvol (skipping)"
+        continue
+    fi
+
+    # Extract pool and build the device path / IQN for this zvol
     zvol_pool="${zvol%%/*}"
-    zvol_name="${zvol##*/}"
     zvol_dev="/dev/zvol/${zvol}"
     zvol_iqn=$(pool_to_target "$zvol_pool") || continue
 
     if [[ ! -e "$zvol_dev" ]] && [[ "${REPAIR_ISCSI_LUNS_TEST_MODE:-}" != "Y" ]]; then
-        log_warn "Device not available: $zvol_dev (skipping $zvol_name)"
+        log_warn "Device not available: $zvol_dev (skipping $bs_name)"
         continue
     fi
 
     # Make sure target LUN state is loaded for this pool
     parse_target_luns "$zvol_iqn"
 
-    if [[ -z "${_bs_devs[$zvol_name]:-}" ]]; then
-        MISSING_BACKSTORES+=("$zvol_name")
-        if create_backstore "$zvol_name" "$zvol_dev"; then
+    if [[ -z "${_bs_devs[$bs_name]:-}" ]]; then
+        MISSING_BACKSTORES+=("$bs_name")
+        if create_backstore "$bs_name" "$zvol_dev"; then
             TARGET_CHANGED=true
         fi
     fi
 
-    if [[ -z "${_lun_indexes[$zvol_name]:-}" ]]; then
-        MISSING_LUNS+=("$zvol_name")
-        if create_lun_mapping "$zvol_name" "$zvol_iqn"; then
+    if [[ -z "${_lun_indexes[$bs_name]:-}" ]]; then
+        MISSING_LUNS+=("$bs_name")
+        if create_lun_mapping "$bs_name" "$zvol_iqn"; then
             TARGET_CHANGED=true
         fi
     fi
 done
 
-# Find loaded backstores that are not mapped to any LUN
+# Find loaded backstores that are not mapped to any LUN (limit to manifest
+# entries so detached/orphaned backstores are not silently re-mapped).
 for bs_name in "${_bs_names[@]}"; do
     [[ -z "$bs_name" ]] && continue
+    is_expected_backstore "$bs_name" || continue
 
     # Determine which target this backstore belongs to from its device path
     bs_dev="${_bs_devs[$bs_name]}"
@@ -370,22 +464,23 @@ for bs_name in "${_bs_names[@]}"; do
     fi
 done
 
-# Find zvols that exist but are not exported
+# Find zvols that exist but are not in the expected manifest. These are
+# intentionally detached or otherwise not meant to be exported.
 for zvol in "${_zvols[@]}"; do
     zvol_name="${zvol##*/}"
-    if [[ -z "${_bs_devs[$zvol_name]:-}" ]]; then
+    if ! is_expected_backstore "$zvol_name"; then
         UNMAPPED_ZVOLS+=("$zvol")
     fi
 done
 
-# Report unexported zvols (do not auto-export unless requested)
+# Report unexported zvols (do not auto-export; use attach-vm-disk/new-vm-disk).
 if [[ ${#UNMAPPED_ZVOLS[@]} -gt 0 ]]; then
     echo ""
-    log_warn "The following zvols exist but are not exported as iSCSI LUNs:"
+    log_warn "The following zvols exist but are not in the expected manifest:"
     for zvol in "${UNMAPPED_ZVOLS[@]}"; do
         echo "    $zvol"
     done
-    echo "  (They will be exported if they are added to a VM config and new-vm-disk/attach-vm-disk is used.)"
+    echo "  (They will not be exported. Use attach-vm-disk or new-vm-disk when you want to use them.)"
 fi
 
 # Persist changes
@@ -396,10 +491,14 @@ if [[ "$TARGET_CHANGED" == true ]]; then
     else
         backup_saveconfig
         regenerate_manifest
-        if safe-iscsi-save; then
-            log_ok "iSCSI configuration saved"
+        if type -t "$SAFE_ISCSI_SAVE" >/dev/null 2>&1; then
+            if "$SAFE_ISCSI_SAVE"; then
+                log_ok "iSCSI configuration saved"
+            else
+                log_error "safe-iscsi-save failed — configuration may not be persistent"
+            fi
         else
-            log_error "safe-iscsi-save failed — configuration may not be persistent"
+            log_error "safe-iscsi-save not available at $SAFE_ISCSI_SAVE — configuration may not be persistent"
         fi
     fi
 else

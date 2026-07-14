@@ -522,6 +522,8 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             self._start_stop_dashboard_timer(page_name)
             self._start_stop_scrub_timer(page_name)
             self._start_stop_schedule_timer(page_name)
+            if page_name == "dashboard":
+                refresh_dashboard_page(self)
             log_msg(f"VERB: Switched to: {page_name.title()}")
 
     def _start_stop_dashboard_timer(self, page_name):

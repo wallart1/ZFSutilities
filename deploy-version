@@ -281,10 +281,16 @@ deploy_to_host() {
         fi
     done
 
-    # Rebuild static documentation site so fallback is version-correct
-    if command -v mkdocs &>/dev/null && [[ -f "$VERSION_DIR/06 Docs/mkdocs.yml" ]]; then
-        (cd "$VERSION_DIR/06 Docs" && mkdocs build >/dev/null 2>&1) || \
-            echo "  ⚠ Documentation build failed (static fallback may be stale)"
+    # Rebuild static documentation site so it is version-correct
+    if ! command -v mkdocs &>/dev/null; then
+        echo "  ✗ ERROR: mkdocs is not installed. Cannot build documentation." >&2
+        return 1
+    fi
+    if [[ -f "$VERSION_DIR/06 Docs/mkdocs.yml" ]]; then
+        if ! (cd "$VERSION_DIR/06 Docs" && mkdocs build >/dev/null 2>&1); then
+            echo "  ✗ ERROR: Documentation build failed." >&2
+            return 1
+        fi
     fi
 
     # Ensure the built documentation site is readable by non-root users

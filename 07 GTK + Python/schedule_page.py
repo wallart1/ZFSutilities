@@ -20,6 +20,7 @@ from gui_helpers import (
 from profile_manager import (
     list_profiles, load_profile, save_profile, delete_profile,
 )
+import cron_manager
 from cron_manager import (
     write_cron_file, generate_cron_line, interpret_cron, format_next_runs,
     next_run_times,
@@ -159,6 +160,9 @@ def create_schedule_page(app):
         app.schedule_cron_entries[key] = entry
 
     app._schedule_pending = {}
+    # Sentinel used by action_dispatch.py to know the Schedule tab is
+    # initialized and its Save button should be restyled on tab switches.
+    app._schedule_saved_state = True
     app._schedule_ignore_changes = False
 
     app.schedule_interpret_label = Gtk.Label()
@@ -240,6 +244,75 @@ def _next_run_strings(cron):
     return dt.strftime("%a %b %d %Y %H:%M"), dt.strftime("%Y-%m-%d %H:%M")
 
 
+def _is_cron_job_line(line):
+    """Return True for a crontab job line (not comments/env assignments)."""
+    if not line or line.startswith("#"):
+        return False
+    # Environment assignments such as PATH=..., SHELL=..., MAILTO=... are not
+    # job lines and should not be compared to generated profile lines.
+    first = line.split(None, 1)[0] if line.split(None, 1) else ""
+    return "=" not in first
+
+
+def _profile_name_from_cron_line(line):
+    """Extract the profile name from a generated profile_runner cron line."""
+    # Line format: ... python3 '/path/profile_runner.py' run <name> >> ...
+    parts = line.split()
+    try:
+        idx = parts.index("run")
+        if idx + 1 < len(parts):
+            return parts[idx + 1]
+    except ValueError:
+        pass
+    return None
+
+
+def _check_cron_consistency(app):
+    """Warn if /etc/cron.d/zfsutilities does not match active profiles."""
+    profiles = list_profiles()
+    active_names = {
+        p["profile_name"]
+        for p in profiles
+        if p.get("active", False)
+    }
+
+    cron_file = cron_manager.CRON_FILE
+    if not os.path.isfile(cron_file):
+        if active_names:
+            log_msg(
+                "WARN: Cron file does not exist; active profiles are not scheduled"
+            )
+        return
+
+    actual_names = set()
+    try:
+        with open(cron_file, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not _is_cron_job_line(line):
+                    continue
+                name = _profile_name_from_cron_line(line)
+                if name:
+                    actual_names.add(name)
+    except OSError as exc:
+        log_msg(f"WARN: Could not read cron file {cron_file}: {exc}")
+        return
+
+    missing = active_names - actual_names
+    extra = actual_names - active_names
+    if missing or extra:
+        log_msg(
+            "WARN: Cron file is out of sync with active profiles; "
+            "use the Schedule tab Save button to regenerate it"
+        )
+        for name in sorted(missing):
+            log_msg(f"WARN: Active profile missing from crontab: {name}")
+        for name in sorted(extra):
+            log_msg(
+                f"WARN: Crontab contains profile not marked active: {name}"
+            )
+
+
 def _refresh_profile_list(app):
     app.schedule_store.clear()
     profiles = list_profiles()
@@ -255,6 +328,7 @@ def _refresh_profile_list(app):
             next_run,
             next_run_sort,
         ])
+    _check_cron_consistency(app)
     app.schedule_detail_box.set_no_show_all(True)
     app.schedule_detail_box.hide()
 

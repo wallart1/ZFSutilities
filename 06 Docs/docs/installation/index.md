@@ -77,8 +77,7 @@ The installer will:
 
 1. Check that required single-node prerequisites are present
 2. Explain any missing prerequisites and offer to install them automatically
-3. Ask whether you want the optional documentation server (MkDocs) and explain
-   what it provides
+3. Install the documentation server (MkDocs) and explain what it provides
 4. Prompt for your hostname (default: current hostname)
 5. Generate the installation configuration file `/etc/zfsutilities-node.conf`
 6. Deploy scripts as a **versioned installation** to `/usr/local/lib/zfsutilities/versions/<version>/`
@@ -101,7 +100,7 @@ The installer will:
 
 1. Check that required two-node prerequisites are present
 2. Explain any missing prerequisites and offer to install them automatically
-3. Ask whether you want the optional documentation server (MkDocs)
+3. Install the documentation server (MkDocs)
 4. Prompt for storage host, compute host, storage network IP, iSCSI IQN
    prefix, and pool-to-target mappings
 5. Generate the installation configuration file `/etc/zfsutilities-node.conf`
@@ -230,16 +229,10 @@ configure unattended boot.
 
 ## Editing Documentation
 
-MkDocs is only required if you plan to **edit** the documentation source files
-or run the live documentation server. The pre-built `site/` directory can be
-viewed without it, and the GUI documentation viewer does not require a running
-MkDocs server.
-
-Install MkDocs and the Material theme:
-
-```bash
-pip install mkdocs mkdocs-material
-```
+MkDocs and the Material theme are **required** for a complete installation.
+The installer installs them automatically; they are used to build the static
+`site/` directory consumed by the GUI documentation viewer and to run the live
+documentation server.
 
 With MkDocs installed, `mkdocs serve` will auto-rebuild the site when you
 edit `.md` files.

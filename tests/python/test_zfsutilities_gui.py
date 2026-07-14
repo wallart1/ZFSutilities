@@ -447,6 +447,19 @@ class TestOnPageChanged(unittest.TestCase):
         mock_refresh.assert_called_once_with(window)
         window._start_stop_schedule_timer.assert_called_once_with("schedule")
 
+    @patch("zfsutilities_gui.refresh_dashboard_page")
+    def test_dashboard_page_refreshes(self, mock_refresh):
+        """Switching to the Dashboard tab refreshes the dashboard immediately."""
+        window = self._make_window({"pools": []})
+        stack = MagicMock()
+        stack.get_visible_child_name.return_value = "dashboard"
+
+        window.on_page_changed(stack, None)
+
+        window.update_action_buttons.assert_called_once_with("dashboard")
+        window._start_stop_dashboard_timer.assert_called_once_with("dashboard")
+        mock_refresh.assert_called_once_with(window)
+
 
 class TestUpdateActionButtonsGuard(unittest.TestCase):
     """update_action_buttons() only rebuilds the panel for the visible page."""

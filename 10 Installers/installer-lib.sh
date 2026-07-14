@@ -80,7 +80,7 @@ explain_doc_server() {
     echo "         apt-get install mkdocs mkdocs-material"
     echo "      2. If apt packages are unavailable, use pip3 with"
     echo "         --break-system-packages (required on modern Debian/Ubuntu)."
-    echo "      3. Verify that mkdocs and the Material theme are available"
+    echo "      3. Verify that mkdocs and the Material theme are installed"
 }
 
 # ------------------------------------------------------------------
@@ -110,7 +110,7 @@ apt_install() {
     fi
 }
 
-# Install the optional documentation server.
+# Install the documentation server (MkDocs).
 # Returns 0 on success, non-zero on failure.
 install_doc_server() {
     echo ""
@@ -197,7 +197,7 @@ prerequisite_description() {
         "libwebkit2gtk-4.1-0") echo "WebKit2 runtime library" ;;
         ssh)                  echo "OpenSSH client for remote two-node commands" ;;
         scp)                  echo "OpenSSH secure copy for remote two-node file transfer" ;;
-        pip3)                 echo "Python package installer used to install MkDocs if apt packages are unavailable" ;;
+        pip3)                 echo "Python package installer used to install MkDocs when distribution packages are unavailable" ;;
         *)                    echo "$name" ;;
     esac
 }
@@ -347,7 +347,7 @@ ensure_doc_server() {
 
     if command -v mkdocs >/dev/null 2>&1 && python3 -c "import material" >/dev/null 2>&1; then
         echo ""
-        echo "  ✓ mkdocs and mkdocs-material are already available."
+        echo "  ✓ mkdocs and mkdocs-material are already installed."
         return 0
     fi
 

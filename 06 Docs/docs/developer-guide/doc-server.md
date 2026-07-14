@@ -20,12 +20,6 @@ The docs will then be available at:
 http://<host>:8000
 ```
 
-!!! note "MkDocs is only required for editing documentation"
-    The pre-built static site in `06 Docs/site/` can be served without MkDocs.
-    `startdocserver` automatically falls back to Python's built-in
-    `http.server` when MkDocs is not installed. You only need MkDocs if you
-    intend to edit the `.md` source files and rebuild the site.
-
 ## Configuration
 
 `mkdocs.yml` lives in `06 Docs/` (not the project root). The content is in
@@ -45,11 +39,9 @@ that the current docs originate from. This is handled automatically:
   `pgrep -f 'http.server 8000'`.
 - **[switch-version](../commands-and-modules/two-node.md#switch-version-any-host)** stops any running documentation server after switching
   versions. The next invocation of `startdocserver` will start fresh from the
-  newly activated version. It detects both `mkdocs serve` and
-  `python3 -m http.server` fallback processes.
+  newly activated version. It detects `mkdocs serve` processes.
 - **[deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root)** rebuilds the static `site/` directory in the deployed
-  version (if MkDocs is available) so the fallback also carries the correct
-  version stamp.
+  version so it carries the correct version stamp.
 
 ## Running the Server Manually
 
@@ -86,12 +78,10 @@ verifies that it is serving from the expected directory; if not, it stops the
 stale server and restarts from the correct directory.  Server output is logged
 to `~/docserver.log`.
 
-If MkDocs is installed, the server runs in live-reload mode and auto-rebuilds
-on source changes; the browser page is refreshed automatically via a
-livereload WebSocket. If MkDocs is missing, the script serves the pre-built
-`site/` directory instead. In fallback mode, edits to `.md` files do **not**
-appear until the static site is rebuilt with `mkdocs build` and the server is
-restarted (use `startdocserver --restart`).
+The server runs in MkDocs live-reload mode and auto-rebuilds on source
+changes; the browser page is refreshed automatically via a livereload
+WebSocket. MkDocs is required; if it is not installed, `startdocserver` exits
+with an error.
 
 ### Direct MkDocs commands (advanced)
 

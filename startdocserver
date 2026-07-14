@@ -43,9 +43,6 @@ function _get_server_pid {
     if [[ -z "${pid}" ]]; then
         pid=$(pgrep -f 'mkdocs serve' | head -1)
     fi
-    if [[ -z "${pid}" ]]; then
-        pid=$(pgrep -f 'http.server 8000' | head -1)
-    fi
     [[ -n "${pid}" ]] && echo "${pid}"
 }
 
@@ -66,7 +63,7 @@ function _is_server_serving_expected_dir {
     [[ -n "${running_cwd}" ]] || return 1
     resolved_running=$(readlink -f "${running_cwd}" 2>/dev/null || true)
     [[ -n "${resolved_running}" ]] || return 1
-    [[ "${resolved_running}" == "${resolved_expected}" || "${resolved_running}" == "${resolved_expected}/site" ]]
+    [[ "${resolved_running}" == "${resolved_expected}" ]]
 }
 
 function _stop_server {
@@ -89,22 +86,16 @@ function _stop_server {
 function start_server {
     log_msg "INFO: Starting documentation server..."
     cd "${docs_dir}"
-    if python3 -m mkdocs --version &>/dev/null; then
-        log_msg "INFO: Documentation server running in mkdocs live-reload mode"
-        # --livereload is the default in recent MkDocs, but passing it explicitly
-        # makes the intent clear and guards against environments where the
-        # default might differ. The livereload WebSocket auto-refreshes the
-        # browser when any docs/ source file changes.
-        nohup python3 -m mkdocs serve --livereload -a 0.0.0.0:8000 > "${logfile}" 2>&1 &
-    else
-        log_msg "INFO: Documentation server running in static site fallback mode"
-        log_msg "INFO: mkdocs not available; serving pre-built static site/"
-        # In fallback mode, edits to .md source files do not appear until the
-        # static site is rebuilt with 'mkdocs build'. The --restart flag can be
-        # used after rebuilding to refresh the server.
-        cd "${docs_dir}/site"
-        nohup python3 -m http.server 8000 --bind 0.0.0.0 > "${logfile}" 2>&1 &
+    if ! python3 -m mkdocs --version &>/dev/null; then
+        log_msg "FATAL: mkdocs is not installed. The documentation server requires MkDocs."
+        exit 1
     fi
+    log_msg "INFO: Documentation server running in mkdocs live-reload mode"
+    # --livereload is the default in recent MkDocs, but passing it explicitly
+    # makes the intent clear and guards against environments where the
+    # default might differ. The livereload WebSocket auto-refreshes the
+    # browser when any docs/ source file changes.
+    nohup python3 -m mkdocs serve --livereload -a 0.0.0.0:8000 > "${logfile}" 2>&1 &
     local pid=$!
     log_msg "INFO: Documentation server started in background (pid ${pid})"
 }

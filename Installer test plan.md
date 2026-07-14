@@ -52,7 +52,7 @@ Remediation steps before installing:
        gir1.2-gtk-3.0 gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0
    ```
 2. If GUI packages are intentionally skipped, run the installer and expect warnings, but core functionality should still install.
-3. Ensure network access for `pip3 install mkdocs mkdocs-material` (installer will attempt this automatically).
+3. MkDocs and mkdocs-material are required. Ensure network access for `pip3 install mkdocs mkdocs-material` (installer will attempt this automatically) or pre-install them.
 
 ## Phase 3 — Run the Single-Node Installer
 
@@ -67,7 +67,7 @@ Watch for:
 
 1. ZFS-root warning if `findmnt` reports `zfs` for `/`.
 2. `check-prerequisites` output and whether it aborts on failures.
-3. MkDocs installation via `pip3` (may take time; may fail offline).
+3. MkDocs installation via `pip3` (may take time; may fail offline). Installation cannot complete without it.
 4. Hostname prompt — accept default `hostname -s` or provide a test hostname.
 5. Generated `/etc/zfsutilities-node.conf` content and mode (`NODE_MODE="single-node"`, `THIS_HOST`).
 6. `deploy-version` output, especially critical-script validation.
@@ -144,13 +144,13 @@ For each problem encountered, record:
 ### 3. `pip3 install mkdocs` may fail or be slow
 
 - The installer runs `pip3 install mkdocs mkdocs-material` if `mkdocs` is missing.
-- Impact: On an offline or slow network, this can hang or fail. The installer continues with a warning, but the static docs fallback may be stale.
+- Impact: On an offline or slow network, this can hang or fail. The installer aborts because MkDocs is required.
 - Action: Ensure network access or pre-install `mkdocs`.
 
 ### 4. `pip3` may not be installed
 
-- The installer assumes `pip3` is available.
-- Impact: If `pip3` is missing, mkdocs installation fails silently and the warning is printed.
+- The installer uses `pip3` as a fallback to install MkDocs.
+- Impact: If `pip3` is missing, MkDocs installation fails and the installer aborts.
 - Action: Pre-install `python3-pip` or verify it exists.
 
 ### 5. ZFS root filesystem warning

@@ -208,7 +208,7 @@ sudo ./deploy-version [version] [group ...]
 3. Build the version directory, copy root-level scripts, and symlink two-node,
    clone, installer, and versioning scripts.
 4. Copy project subdirectories (`06 Docs`, `07 GTK + Python`, etc.) and rebuild
-   static docs if `mkdocs` is available.
+   static docs.
 5. Verify that critical scripts are present in the deployed `bin/` directory.
 6. `rsync` the version directory to each remote host in the selected groups.
 
@@ -380,8 +380,7 @@ Discovers and executes the bash test suites in `tests/`.
 ### `startdocserver`
 
 Starts the documentation server on port `8000`. Serves the MkDocs
-live-reload site when `mkdocs` is available; otherwise falls back to the
-pre-built static `site/` directory.
+live-reload site; MkDocs is required.
 
 ```bash
 ./startdocserver [--restart] [path]
@@ -407,7 +406,7 @@ pre-built static `site/` directory.
 | Structure | Role |
 | --------- | ---- |
 | `~/docserver.log` | Server stdout/stderr |
-| `06 Docs/site/` | Static fallback site |
+| `06 Docs/site/` | Built static documentation site |
 | `http://localhost:8000` | Documentation URL |
 
 **Internal flow:**
@@ -415,8 +414,7 @@ pre-built static `site/` directory.
 1. Locate the docs directory relative to the script (`06 Docs` or `../06 Docs`).
 2. Probe `localhost:8000` to see if a server is already running.
 3. If the running server serves the wrong directory, stop it.
-4. Start `mkdocs serve --livereload` if available; otherwise start
-   `python3 -m http.server` from `site/`.
+4. Start `mkdocs serve --livereload`.
 
 **Return codes:**
 

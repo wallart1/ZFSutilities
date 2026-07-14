@@ -132,6 +132,13 @@ rescan-storage() {
     return 0
 }
 
+# Point repair-iscsi-luns at the mocked function names so the executable-file
+# checks do not skip them.
+export REPAIR_ISCSI_SAFE_ISCSI_SAVE="safe-iscsi-save"
+export REPAIR_ISCSI_RESCAN_STORAGE="rescan-storage"
+# Skip sourcing the real node-lib.sh; our mocks are already in place.
+export REPAIR_ISCSI_LUNS_NODE_LIB="/dev/null"
+
 # ------------------------------------------------------------------
 # Load the script under test into this shell with node-lib mocked.
 # The script's own BASH_SOURCE guard prevents main() from running.
@@ -140,8 +147,6 @@ old_mydir="$mydir"
 REPAIR_ISCSI_LUNS_SKIP_ROOT="Y"
 REPAIR_ISCSI_LUNS_TEST_MODE="Y"
 script_text=$(cat "$old_mydir/08 Two-node/repair-iscsi-luns")
-# Replace the hard-coded source of node-lib.sh with a no-op so our mocks stay in place.
-script_text="${script_text//source \/usr\/local\/lib\/node-lib.sh/:}"
 # Ensure MY_HOST is set to the storage host so main() can be tested.
 script_text="${script_text/MY_HOST=\$(hostname -s)/MY_HOST=stewie}"
 eval "$script_text"
@@ -163,6 +168,8 @@ reset_mocks() {
     MISSING_BACKSTORES=()
     MISSING_LUNS=()
     UNMAPPED_ZVOLS=()
+    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+    export REPAIR_ISCSI_LUNS_NODE_LIB="/dev/null"
 }
 
 # ------------------------------------------------------------------
@@ -357,6 +364,112 @@ test_existing_backstore_without_lun_gets_mapped() {
     fi
 }
 
+# Create a temporary expected-backstores manifest and point the script at it.
+# Output: prints the temp file path.
+make_temp_manifest() {
+    local tmpfile
+    tmpfile=$(mktemp)
+    printf '%s\n' "$@" > "$tmpfile"
+    echo "$tmpfile"
+}
+
+test_manifest_entry_creates_missing_backstore() {
+    reset_mocks
+    test_start "Manifest entry creates missing backstore and LUN"
+
+    local manifest
+    manifest=$(make_temp_manifest "vm-209-disk-2")
+    MANIFEST="$manifest"
+
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) write-thru activated]'
+    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
+    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/proxmox/vm-209-disk-2'
+
+    main >/dev/null 2>&1 || true
+
+    rm -f "$manifest"
+    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+
+    local create_backstore_called=false
+    local create_lun_called=false
+    for call in "${_mock_targetcli_calls[@]}"; do
+        if [[ "$call" == "/backstores/block create vm-209-disk-2"* ]]; then
+            create_backstore_called=true
+        fi
+        if [[ "$call" == "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns create /backstores/block/vm-209-disk-2"* ]]; then
+            create_lun_called=true
+        fi
+    done
+
+    if [[ "$create_backstore_called" == true ]] && [[ "$create_lun_called" == true ]]; then
+        test_pass
+    else
+        test_fail "Expected targetcli create calls for manifest entry vm-209-disk-2"
+    fi
+}
+
+test_manifest_limits_exported_zvols() {
+    reset_mocks
+    test_start "Manifest limits repair to manifest entries"
+
+    local manifest
+    manifest=$(make_temp_manifest "vm-101-disk-0")
+    MANIFEST="$manifest"
+
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) write-thru activated]'
+    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
+    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/proxmox/vm-209-disk-2'
+
+    main >/dev/null 2>&1 || true
+
+    rm -f "$manifest"
+    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+
+    local create_called=false
+    for call in "${_mock_targetcli_calls[@]}"; do
+        if [[ "$call" == *"create"*"vm-209-disk-2"* ]]; then
+            create_called=true
+        fi
+    done
+
+    if [[ "$create_called" == false ]] && [[ " ${UNMAPPED_ZVOLS[*]} " == *" threeamigos/proxmox/vm-209-disk-2 "* ]]; then
+        test_pass
+    else
+        test_fail "Expected vm-209-disk-2 to be reported as unexported, not created"
+    fi
+}
+
+test_empty_manifest_exports_nothing() {
+    reset_mocks
+    test_start "Empty manifest exports nothing"
+
+    local manifest
+    manifest=$(make_temp_manifest "")
+    MANIFEST="$manifest"
+
+    _mock_backstores=''
+    _mock_luns_threeamigos=''
+    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-209-disk-2'
+
+    main >/dev/null 2>&1 || true
+
+    rm -f "$manifest"
+    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+
+    local create_called=false
+    for call in "${_mock_targetcli_calls[@]}"; do
+        if [[ "$call" == *"create"* ]]; then
+            create_called=true
+        fi
+    done
+
+    if [[ "$create_called" == false ]]; then
+        test_pass
+    else
+        test_fail "Expected no create calls with empty manifest"
+    fi
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -367,6 +480,9 @@ test_next_free_lun_index
 test_missing_backstore_and_lun_created
 test_existing_lun_index_preserved
 test_existing_backstore_without_lun_gets_mapped
+test_manifest_entry_creates_missing_backstore
+test_manifest_limits_exported_zvols
+test_empty_manifest_exports_nothing
 test_rescan_always_runs
 test_dry_run_makes_no_changes
 
