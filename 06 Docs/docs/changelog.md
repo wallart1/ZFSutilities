@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.59.14
+
+### Changed
+
+- **`retire-vm` archives only config-referenced zvols** — `retire-vm` now reads
+  `/etc/pve/qemu-server/<vmid>.conf` to determine which disks are attached to the
+  VM and archives only those zvols. Zvols that match the VM ID but are no longer
+  referenced in the config are reported as warnings and are not archived or
+  destroyed.
+- **`retire-vm` auto-creates retire snapshots** — When a referenced zvol has no
+  existing snapshot, `retire-vm` now acquires a write lock through
+  `zfslockmanager` and creates a dedicated `@retire-` snapshot before archiving.
+- **`retire-vm` two-node volblocksize handling** — The original `volblocksize` is
+  now read on the storage host during two-node archives instead of on the compute
+  host.
+- **`enroll-efi-keys-vm` iSCSI by-path parsing** — Added a dedicated
+  `parse_iscsi_by_path()` helper that correctly handles `by-path` symlinks
+  containing IPv4 portals and IQN colons. Error messages now explicitly direct
+  users to use `enroll-efi-keys-vm` instead of `qm enroll-efi-keys` for
+  iSCSI-backed EFI disks.
+- **`zfslockmanager` lock directory override** — `ZFSLOCK_DIR` can now be
+  overridden via environment variable, enabling isolated testing.
+- **Coding policy updates** — `AGENTS.md` and the developer coding policies now
+  require that every function have more than one calling site and that regular
+  expressions longer than 10 characters be profusely documented.
+
+### Documentation
+
+- Updated `commands.md`, `proxmox-integration.md`, `two-node.md`, and
+  `08 Two-node/README.md` to describe the new `retire-vm` behavior and warn that
+  Proxmox's **Enroll Updated Certificates** action and `qm enroll-efi-keys` do
+  not work for iSCSI by-path EFI disks.
+
+### Tests
+
+- Added `tests/test-retire-vm` with nine tests covering single-node and two-node
+  snapshot selection, auto-snapshot creation, referenced-disk filtering, orphan
+  warnings, storage-host volblocksize handling, and message-level compliance.
+- Extended `tests/test-enroll-efi-keys-vm` with tests for `parse_iscsi_by_path()`.
+
 ## 0.59.13
 
 ### Changed

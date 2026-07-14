@@ -135,9 +135,17 @@ sudo enroll-efi-keys-vm <vmid>
 ```
 
 This grows the EFI zvol to 4M, re-initializes it with the 2023 Microsoft
-vars file, and updates the Proxmox config. You can also do it manually via
-the Proxmox GUI (**Hardware → EFI Disk → Disk Action → Enroll Updated
-Certificates**), but the GUI may fail for iSCSI by-path EFI disks.
+vars file, and updates the Proxmox config.
+
+!!! warning "Do not use Proxmox's 'Enroll Updated Certificates' action with iSCSI"
+
+    The Proxmox GUI (**Hardware → EFI Disk → Disk Action → Enroll Updated
+    Certificates**) and the `qm enroll-efi-keys` command cannot parse the
+    raw `by-path` volume identifier used for iSCSI EFI disks. They fail with
+    an error such as `unable to parse volume ID '/dev/disk/by-path/...'`.
+
+    For iSCSI-backed VMs, always use `sudo enroll-efi-keys-vm <vmid>`
+    instead.
 
 ## Workflow: Cloning a VM
 

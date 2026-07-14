@@ -81,6 +81,19 @@ parse_efidisk_line() {
     echo "$by_path $size $has_ms_cert"
 }
 
+# Extract iSCSI target and LUN from a compute-node /dev/disk/by-path symlink.
+# The kernel by-path name contains colons (IPv4 portal, IQN target), so the
+# regex must match the full path and stop at the final "-lun-<n>" segment.
+# Echoes "<target> <lun>" and returns 0 on success, 1 otherwise.
+parse_iscsi_by_path() {
+    local path="$1"
+    if [[ "$path" =~ ^/dev/disk/by-path/ip-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+-iscsi-(.+)-lun-([0-9]+)$ ]]; then
+        printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+        return 0
+    fi
+    return 1
+}
+
 parsed=$(parse_efidisk_line "$conf")
 [[ -n "$parsed" ]] || die "VM $VMID has no efidisk0 entry"
 read -r by_path current_size has_ms_cert <<< "$parsed"
@@ -89,9 +102,11 @@ read -r by_path current_size has_ms_cert <<< "$parsed"
 [[ -n "$current_size" ]] || die "Could not extract efidisk0 size"
 
 # --- Resolve backing zvol ---
-if [[ "$by_path" =~ ^/dev/disk/by-path/ip-[^/]+-iscsi-(.+)-lun-([0-9]+)$ ]]; then
-    TARGET="${BASH_REMATCH[1]}"
-    LUN="${BASH_REMATCH[2]}"
+if [[ "$by_path" == /dev/disk/by-path/* ]]; then
+    resolved=$(parse_iscsi_by_path "$by_path") \
+        || die "Could not parse iSCSI by-path volume ID: $by_path" \
+                "(use this script instead of 'qm enroll-efi-keys' for iSCSI EFI disks)"
+    read -r TARGET LUN <<< "$resolved"
 
     if is_two_node; then
         echo "Resolving iSCSI LUN $LUN in target $TARGET on $STORAGE_HOST..."
@@ -109,7 +124,8 @@ elif [[ "$by_path" =~ ^([^:]+):vm-([0-9]+)-disk-([0-9]+)$ ]]; then
     zvol=$(zfs list -H -t volume -o name 2>/dev/null | grep "/proxmox/vm-${BASH_REMATCH[2]}-disk-${BASH_REMATCH[3]}$" | head -1)
     [[ -n "$zvol" ]] || die "No zvol found for storage reference: $by_path"
 else
-    die "Unsupported efidisk0 volume ID format: $by_path"
+    die "Unsupported efidisk0 volume ID format: $by_path" \
+        "(for iSCSI by-path EFI disks, use this script instead of 'qm enroll-efi-keys')"
 fi
 
 echo "  Backing zvol: $zvol"

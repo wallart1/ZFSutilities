@@ -10,6 +10,8 @@ setup_test_env
 old_mydir="$mydir"
 func_text=$(sed -n '/^parse_efidisk_line() {/,/^}$/p' "$old_mydir/08 Two-node/enroll-efi-keys-vm")
 func_text+=$'\n'
+func_text+=$(sed -n '/^parse_iscsi_by_path() {/,/^}$/p' "$old_mydir/08 Two-node/enroll-efi-keys-vm")
+func_text+=$'\n'
 func_text+=$(sed -n '/^update_efidisk_config() {/,/^}$/p' "$old_mydir/08 Two-node/enroll-efi-keys-vm")
 eval "$func_text"
 
@@ -56,6 +58,23 @@ EOF
     assert_equals "1M" "$size"
 }
 
+test_parse_iscsi_by_path_vm208() {
+    test_start "parse_iscsi_by_path handles the production VM 208 by-path"
+    local result target lun
+    result=$(parse_iscsi_by_path \
+        "/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-20")
+    read -r target lun <<< "$result"
+    assert_equals "iqn.2026-02.local.stewie:threeamigos" "$target"
+    assert_equals "20" "$lun"
+}
+
+test_parse_iscsi_by_path_rejects_invalid() {
+    test_start "parse_iscsi_by_path rejects an invalid by-path"
+    local result
+    result=$(parse_iscsi_by_path "/dev/disk/by-path/not-an-iscsi-path" || true)
+    assert_equals "" "$result"
+}
+
 test_update_efidisk_config() {
     test_start "update_efidisk_config adds ms-cert, sets size=4M, drops pending"
     local conf_file="$_mock_zfs_state_dir/209-update.conf"
@@ -97,6 +116,8 @@ EOF
 test_parse_efidisk_line_basic
 test_parse_efidisk_line_with_ms_cert
 test_parse_efidisk_line_storage_ref
+test_parse_iscsi_by_path_vm208
+test_parse_iscsi_by_path_rejects_invalid
 test_update_efidisk_config
 test_update_efidisk_config_idempotent
 

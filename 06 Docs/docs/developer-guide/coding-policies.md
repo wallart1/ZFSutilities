@@ -104,7 +104,7 @@ This initializes basic runtime variables and sources commonly-used functions.
 
 ### Functions and Modularity
 
-- **Use functions** to group related logic and improve readability.
+- **Use functions** to group related logic and improve readability. However, all functions must have more than one calling site.
 - **Declare variables as `local`** inside functions:
 
     ```bash
@@ -220,6 +220,7 @@ Avoid single-letter names like `l`, `O`, `I` due to visual ambiguity.
 
 ### Comments and Documentation
 
+- **Regular expressions**: Avoid retular expressions when possible. All regular expressions longer than 10 characters must be profusely documented in the code comments.
 - **Block comments**: Start with `# ` and explain intent, not code.
 - **Inline comments**: Use sparingly, with at least two spaces before `#`.
   Briefly explain intent and non-obvious code.

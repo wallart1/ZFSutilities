@@ -46,7 +46,7 @@
 # Constants and Configuration
 # ==============================================================================
 
-ZFSLOCK_DIR="/run/lock/zfs"
+ZFSLOCK_DIR="${ZFSLOCK_DIR:-/run/lock/zfs}"
 ZFSLOCK_LOCKS_DIR="$ZFSLOCK_DIR/.locks"
 ZFSLOCK_PIDS_DIR="$ZFSLOCK_DIR/.pids"
 ZFSLOCK_WAIT_INTERVAL=30    # Seconds between retry attempts when waiting

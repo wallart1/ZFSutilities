@@ -6,11 +6,18 @@
 # Install to: /usr/local/lib/zfsutilities/bin/retire-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
-source /usr/local/lib/node-lib.sh
+NODE_LIB="${NODE_LIB:-/usr/local/lib/node-lib.sh}"
+source "$NODE_LIB"
 
 MY_HOST=$(hostname -s)
-PVE_CONF_DIR="/etc/pve/qemu-server"
-JSON_CONFIG="/root/.config/zfsutilities.json"
+PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
+JSON_CONFIG="${JSON_CONFIG:-/root/.config/zfsutilities.json}"
+
+ZFSLOCK_MANAGER="${ZFSLOCK_MANAGER:-/usr/local/lib/zfsutilities/current/bin/zfslockmanager}"
+if [[ $(type -t log_msg) != function ]]; then
+    log_msg() { echo "$*" >&2; }
+fi
+source "$ZFSLOCK_MANAGER"
 
 usage() {
     echo "Usage: retire-vm <vmid>"
@@ -29,7 +36,7 @@ usage() {
 }
 
 die() {
-    echo "✗ ERROR: $*" >&2
+    log_msg "FATAL: $*"
     exit 1
 }
 
@@ -38,6 +45,75 @@ ask_yn() {
     local response
     read -rp "$prompt (y/N): " response
     [[ "$response" =~ ^[Yy]$ ]]
+}
+
+# Build the prompt for the archive base dataset. In two-node mode the prompt
+# reminds the operator that the dataset must live on the storage host.
+build_archive_prompt() {
+    local default_prompt="$1"
+    if is_two_node; then
+        echo "Archive base ZFS dataset (must be on ${STORAGE_HOST})${default_prompt}: "
+    else
+        echo "Archive base ZFS dataset${default_prompt}: "
+    fi
+}
+
+# --- Ensure a snapshot exists for archiving -----------------------------
+# Returns the full snapshot name (e.g. pool/dataset@snap) on stdout.
+# In two-node mode this runs on the storage host.
+ensure_retire_snapshot() {
+    local zvol="$1"
+    local snap snap_name
+
+    if is_single_node; then
+        snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1)
+        if [[ -z "$snap" ]]; then
+            zfslock_init
+            if ! zfslock_acquire "$zvol" "w" "retire-vm auto-snapshot"; then
+                die "Could not acquire write lock on ${zvol} for snapshot creation"
+            fi
+            snap_name="@retire-$(date -Iminutes)-d"
+            if ! zfs snapshot "${zvol}${snap_name}"; then
+                zfslock_release "$ZFSLOCK_ID"
+                die "Failed to create snapshot ${zvol}${snap_name}"
+            fi
+            zfslock_release "$ZFSLOCK_ID"
+            snap="${zvol}${snap_name}"
+            echo "  Created retire snapshot: ${snap}" >&2
+        fi
+    else
+        snap=$(ssh root@"$STORAGE_HOST" bash -s "$zvol" << 'SSHEOF'
+zvol="$1"
+
+log_msg() { echo "$*" >&2; }
+source /usr/local/lib/zfsutilities/current/bin/zfslockmanager
+
+snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1)
+if [[ -z "$snap" ]]; then
+    zfslock_init
+    if ! zfslock_acquire "$zvol" "w" "retire-vm auto-snapshot"; then
+        log_msg "FATAL: Could not acquire write lock on ${zvol} for snapshot creation"
+        exit 1
+    fi
+    snap_name="@retire-$(date -Iminutes)-d"
+    if ! zfs snapshot "${zvol}${snap_name}"; then
+        zfslock_release "$ZFSLOCK_ID"
+        log_msg "FATAL: Failed to create snapshot ${zvol}${snap_name}"
+        exit 1
+    fi
+    zfslock_release "$ZFSLOCK_ID"
+    snap="${zvol}${snap_name}"
+    echo "  Created retire snapshot: ${snap}" >&2
+fi
+echo "$snap"
+SSHEOF
+        )
+        if [[ -z "$snap" || "$snap" == FATAL:* ]]; then
+            die "Failed to determine snapshot for ${zvol} on ${STORAGE_HOST}"
+        fi
+    fi
+
+    echo "$snap"
 }
 
 # --- Read archive_path from JSON config ---
@@ -57,7 +133,7 @@ except:
 save_json_archive_path() {
     local path="$1"
     python3 -c "
-import json
+import json, os
 path = '$path'
 conf_file = '$JSON_CONFIG'
 try:
@@ -67,16 +143,132 @@ except:
     c = {}
 c['archive_path'] = path
 c['config_version'] = c.get('config_version', 2)
+os.makedirs(os.path.dirname(conf_file), exist_ok=True)
 with open(conf_file, 'w') as f:
     json.dump(c, f, indent=2)
 "
+}
+
+# Collect the zvol paths referenced by the VM's Proxmox config.
+# Prints one zvol path per line on stdout. Warnings for unresolved
+# references or orphaned zvols are emitted via log_msg on stderr.
+collect_referenced_zvols() {
+    local config_line disk_num target lun zvol_path
+    local all_zvols orphan_zvol
+    local -A referenced_zvols=()
+
+    if is_single_node; then
+        while IFS= read -r config_line; do
+            [[ "$config_line" =~ ^\[.+\] ]] && break
+            # Regex: ^[a-z]+[0-9]+: *([^:]+):vm-${VMID}-disk-([0-9]+)
+            # Matches Proxmox ZFS disk lines such as:
+            #   scsi0: threeamigos:vm-105-disk-0,size=10G
+            # Group 1 is the storage name; group 2 is the disk number.
+            if [[ "$config_line" =~ ^[a-z]+[0-9]+:\ *([^:]+):vm-${VMID}-disk-([0-9]+) ]]; then
+                disk_num="${BASH_REMATCH[2]}"
+                zvol_path=$(zfs list -H -t volume -o name 2>/dev/null \
+                    | grep -E "/proxmox/vm-${VMID}-disk-${disk_num}$" \
+                    | head -1)
+                if [[ -z "$zvol_path" ]]; then
+                    log_msg "WARN: Config references vm-${VMID}-disk-${disk_num}" \
+                        "but no zvol was found"
+                    continue
+                fi
+                if [[ -z "${referenced_zvols[$zvol_path]:-}" ]]; then
+                    referenced_zvols["$zvol_path"]=1
+                    echo "$zvol_path"
+                fi
+            fi
+        done < "$proxmoxconfig"
+
+        all_zvols=$(zfs list -H -t volume -o name 2>/dev/null \
+            | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$" \
+            || true)
+        for orphan_zvol in $all_zvols; do
+            if [[ -z "${referenced_zvols[$orphan_zvol]:-}" ]]; then
+                log_msg "WARN: Orphaned zvol not referenced in config:" \
+                    "${orphan_zvol}"
+            fi
+        done
+        return 0
+    fi
+
+    # Two-node path: collect target:lun pairs and resolve them on the
+    # storage host. The remote helper also warns about orphaned zvols.
+    local -a target_lun_refs=()
+    while IFS= read -r config_line; do
+        [[ "$config_line" =~ ^\[.+\] ]] && break
+        # Regex: ^[a-z]+[0-9]+:.*ip-[0-9.]+:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+)
+        # Matches Proxmox iSCSI disk lines such as:
+        #   scsi0: ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-0,size=10G
+        # Group 1 is the full target IQN; group 2 is the LUN number.
+        if [[ "$config_line" =~ ^[a-z]+[0-9]+:.*ip-[0-9.]+:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+) ]]; then
+            target="${BASH_REMATCH[1]}"
+            lun="${BASH_REMATCH[2]}"
+            target_lun_refs+=("${target}:${lun}")
+        fi
+    done < "$proxmoxconfig"
+
+    if [[ ${#target_lun_refs[@]} -gt 0 ]]; then
+        ssh root@"$STORAGE_HOST" bash -s "$VMID" \
+            "${target_lun_refs[@]}" << 'SSHEOF'
+VMID="$1"
+shift
+
+if [[ $(type -t log_msg) != function ]]; then
+    log_msg() { echo "$*" >&2; }
+fi
+
+declare -A referenced_zvols=()
+for ref in "$@"; do
+    IFS=: read -r target lun <<< "$ref"
+    [[ -n "$target" && -n "$lun" ]] || continue
+
+    # Find the backstore name mapped to this target/LUN.
+    # Pattern "lun${lun}[^0-9]" matches lun0 without matching lun01.
+    backstore=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
+        | grep -E "lun${lun}[^0-9]" \
+        | grep -oP 'block/\K\S+' \
+        | head -1)
+    if [[ -z "$backstore" ]]; then
+        log_msg "WARN: Config references target ${target} LUN ${lun}" \
+            "but no backstore was found"
+        continue
+    fi
+
+    # Map the backstore to its /dev/zvol path.
+    # Pattern '/dev/zvol/\K[^ )]+' extracts pool/dataset from the device path.
+    zvol=$(targetcli /backstores/block ls 2>/dev/null \
+        | grep " ${backstore} " \
+        | grep -oP '/dev/zvol/\K[^ )]+' \
+        | head -1)
+    if [[ -z "$zvol" ]]; then
+        log_msg "WARN: Backstore ${backstore} has no zvol"
+        continue
+    fi
+
+    echo "$zvol"
+    referenced_zvols["$zvol"]=1
+done
+
+# Warn about VM zvols that are not referenced in the config.
+while IFS= read -r orphan_zvol; do
+    [[ -n "$orphan_zvol" ]] || continue
+    if [[ -z "${referenced_zvols[$orphan_zvol]:-}" ]]; then
+        log_msg "WARN: Orphaned zvol not referenced in config:" \
+            "${orphan_zvol}"
+    fi
+done < <(zfs list -H -t volume -o name 2>/dev/null \
+    | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$")
+SSHEOF
+    fi
 }
 
 [[ $# -eq 1 ]] || usage
 
 VMID="$1"
 [[ "$VMID" =~ ^[0-9]+$ ]] || die "vmid must be a number, got: $VMID"
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+[[ $EUID -eq 0 || ${RETIRE_VM_TEST_NO_ROOT:-0} == "1" ]] || die "Must run as root (use sudo)"
 
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
@@ -153,7 +345,7 @@ else
     default_prompt=""
 fi
 
-read -rp "Archive base ZFS dataset${default_prompt}: " user_path
+read -rp "$(build_archive_prompt "$default_prompt")" user_path
 ARCHIVE_BASE="${user_path:-$configured_path}"
 
 [[ -n "$ARCHIVE_BASE" ]] || die "Archive base path is required"
@@ -187,24 +379,10 @@ fi
 proxmoxconfig="${PVE_CONF_DIR}/${VMID}.conf"
 [[ -f "$proxmoxconfig" ]] || die "Proxmox config not found: $proxmoxconfig"
 
-# Find all zvols for this VM
-if is_single_node; then
-    # grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$"
-    # Purpose: Filter zfs list output to only VM disk zvols belonging to the retiring VM.
-    #          The $ anchor ensures a complete match (no partial disk-number matches).
-    zvols=$(zfs list -H -t volume -o name \
-        | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$")
-else
-    zvols=$(ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF'
-VMID="$1"
-# grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$"  —  Same filter on the remote storage host.
-zfs list -H -t volume -o name \
-    | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$"
-SSHEOF
-    ) || die "SSH to $STORAGE_HOST failed"
-fi
-
-[[ -n "$zvols" ]] || die "No zvols found for VM ${VMID}"
+# Find only the zvols actually referenced by the VM config.
+zvols=$(collect_referenced_zvols | sort -u) \
+    || die "Failed to discover referenced zvols"
+[[ -n "$zvols" ]] || die "No referenced zvols found for VM ${VMID}"
 
 echo "  Archive base: ${ARCHIVE_BASE} (mount: ${ARCHIVE_MOUNT})"
 echo "  Zvols to archive:"
@@ -218,19 +396,16 @@ fi
 
 # Archive each zvol
 for zvol in $zvols; do
-    snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1)
-    if [[ -z "$snap" ]]; then
-        die "No snapshots found for ${zvol}. Cannot archive without a snapshot."
-    fi
-
+    snap=$(ensure_retire_snapshot "$zvol")
     snap_name="@${snap##*@}"
     archive_dataset="${ARCHIVE_BASE}/${zvol}"
 
-    # Get original volblocksize and save it immediately
-    orig_vbs=$(zfs get -H -o value volblocksize "$zvol")
-    echo "  Original volblocksize: ${orig_vbs}"
+    echo "  Snapshot to archive: ${snap}"
 
     if is_single_node; then
+        # Get original volblocksize and save it immediately
+        orig_vbs=$(zfs get -H -o value volblocksize "$zvol")
+        echo "  Original volblocksize: ${orig_vbs}"
         parent=$(dirname "$archive_dataset")
         zfs create -p "$parent" 2>/dev/null || true
 
@@ -260,21 +435,24 @@ for zvol in $zvols; do
         # Two-node: delegate to storage host
         echo "  Archiving ${zvol}${snap_name} → ${archive_dataset}"
         ssh root@"$STORAGE_HOST" bash -s "$zvol" "$snap_name" \
-            "$archive_dataset" "$ARCHIVE_MOUNT" "$orig_vbs" "$VMID" \
+            "$archive_dataset" "$ARCHIVE_MOUNT" "$VMID" \
             "$proxmoxconfig" << 'SSHEOF'
 zvol="$1"
 snap_name="$2"
 archive_dataset="$3"
 archive_mount="$4"
-orig_vbs="$5"
-VMID="$6"
-proxmoxconfig="$7"
+VMID="$5"
+proxmoxconfig="$6"
+
+# Get original volblocksize on the storage host
+orig_vbs=$(zfs get -H -o value volblocksize "$zvol")
+echo "  Original volblocksize: ${orig_vbs}" >&2
 
 parent=$(dirname "$archive_dataset")
 zfs create -p "$parent" 2>/dev/null || true
 
 if ! zfs send -cw "${zvol}${snap_name}" | zfs receive -o volblocksize=1M "$archive_dataset"; then
-    echo "ERROR: Failed to archive ${zvol}" >&2
+    echo "FATAL: Failed to archive ${zvol}" >&2
     exit 1
 fi
 

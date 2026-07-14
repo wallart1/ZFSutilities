@@ -629,8 +629,10 @@ and backstore in two-node mode. The zvol is **not** destroyed.
 
 Re-initializes a VM's EFI vars disk with the Microsoft UEFI CA 2023
 certificates. This is useful when Proxmox warns that the EFI disk is missing
-`ms-cert=2023k`, especially for iSCSI-backed VMs where the Proxmox GUI
-enrollment may fail to parse the raw `by-path` volume ID.
+`ms-cert=2023k`, and it is required for iSCSI-backed VMs: both the Proxmox
+GUI **Enroll Updated Certificates** action and `qm enroll-efi-keys` split the
+volume identifier on `:` and cannot parse the raw `by-path` path (for example,
+`unable to parse volume ID '/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-...'`).
 
 ```bash
 sudo enroll-efi-keys-vm <vmid>

@@ -1,0 +1,537 @@
+#!/usr/bin/bash
+# test-retire-vm — Unit tests for retire-vm snapshot and archive handling.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+setup_node_config() {
+    local mode="${1:-single-node}"
+    NODE_CONF_FILE="$_mock_zfs_state_dir/node.conf"
+    if [[ "$mode" == "single-node" ]]; then
+        cat > "$NODE_CONF_FILE" << 'EOF'
+NODE_MODE=single-node
+EOF
+    else
+        local compute
+        compute=$(hostname -s)
+        cat > "$NODE_CONF_FILE" << EOF
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="$compute"
+STORAGE_IP="192.168.100.1"
+IQN_PREFIX="iqn.2026-02.local.stewie"
+declare -A POOL_TARGET=(
+    [threeamigos]="threeamigos"
+    [NVME1]="nvme1"
+)
+EOF
+    fi
+    export NODE_CONF="$NODE_CONF_FILE"
+}
+
+setup_pve_config() {
+    local pve_dir="$1"
+    local vmid="$2"
+    local mode="${3:-single-node}"
+    mkdir -p "$pve_dir"
+    if [[ "$mode" == "single-node" ]]; then
+        cat > "${pve_dir}/${vmid}.conf" << EOF
+name: test-vm
+scsi0: threeamigos:vm-${vmid}-disk-0,size=10G
+EOF
+    else
+        cat > "${pve_dir}/${vmid}.conf" << EOF
+name: test-vm
+scsi0: ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-0,size=10G
+EOF
+    fi
+}
+
+# Run retire-vm in a subshell so an exit/die does not kill the test harness.
+run_retire() {
+    local mode="$1"
+    local snapshots="${2:-existing}"
+    local pve_dir="$3"
+    local archive_base="$4"
+    local archive_mount="$5"
+    local vmid="$6"
+    local stdin_input="${_mock_read_response:-}"
+    local ssh_snap_exists="${_mock_ssh_snapshot_exists:-1}"
+
+    # Preserve the mocked date from the outer shell.
+    local date_iso="$_mock_date_iso"
+    local date_dow="$_mock_date_dow"
+    local date_dom="$_mock_date_dom"
+
+    local capture_dir="$_mock_zfs_state_dir/capture"
+    mkdir -p "$capture_dir"
+    rm -f "$capture_dir/snapshots" "$capture_dir/ssh"
+
+    (
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+        # Redirect log_msg to stderr so warning assertions can see it.
+        log_msg() { echo "$*" >&2; }
+        setup_test_env
+        mock_date "$date_iso" "$date_dow" "$date_dom"
+        setup_node_config "$mode"
+
+        export RETIRE_VM_TEST_NO_ROOT=1
+        export NODE_LIB="$mydir/08 Two-node/node-lib.sh"
+        export ZFSLOCK_MANAGER="$mydir/zfslockmanager"
+        export ZFSLOCK_DIR="$_mock_zfs_state_dir/lock"
+        mkdir -p "$ZFSLOCK_DIR"
+
+        export PVE_CONF_DIR="$pve_dir"
+        export JSON_CONFIG="$_mock_zfs_state_dir/zfsutilities.json"
+        export _mock_zvol="threeamigos/proxmox/vm-${vmid}-disk-0"
+        export _mock_zvols_list="${_mock_zvols_list:-$_mock_zvol}"
+        export _mock_archive_base="$archive_base"
+        export _mock_archive_mount="$archive_mount"
+        export _capture_dir="$capture_dir"
+        export _mock_ssh_snapshot_exists="$ssh_snap_exists"
+
+        # Provide alternating ask_yn responses: yes for archive, no for removal.
+        _ask_yn_count=0
+        ask_yn() {
+            local rc
+            if [[ $_ask_yn_count -eq 0 ]]; then
+                rc=0
+            else
+                rc=1
+            fi
+            ((_ask_yn_count++))
+            return "$rc"
+        }
+
+        # Capture a copy of test-lib's zfs mock so we can wrap it.
+        eval "_test_lib_zfs() $(declare -f zfs | tail -n +2)"
+        zfs() {
+            if [[ "$1" == "snapshot" ]]; then
+                echo "SNAP:$2" >> "$_capture_dir/snapshots"
+            fi
+            _test_lib_zfs "$@"
+        }
+
+        # Capture ssh invocations and return canned storage-host answers.
+        ssh() {
+            local stdin
+            stdin=$(cat)
+            {
+                echo "SSH:${*}"
+                echo "$stdin"
+            } >> "$_capture_dir/ssh"
+
+            local has_bash=0 has_s=0 arg
+            for arg in "$@"; do
+                [[ "$arg" == "bash" ]] && has_bash=1
+                [[ "$arg" == "-s" ]] && has_s=1
+            done
+
+            if [[ "$*" == *"zfs get -H -o value mountpoint"* ]]; then
+                echo "$_mock_archive_mount"
+            elif [[ $has_bash -eq 1 && $has_s -eq 1 ]]; then
+                # Detect two-node target:lun resolution calls from retire-vm.
+                local has_target_lun=0 arg
+                for arg in "$@"; do
+                    if [[ "$arg" == iqn.*:* ]]; then
+                        has_target_lun=1
+                        break
+                    fi
+                done
+                if [[ $has_target_lun -eq 1 ]]; then
+                    local zvol
+                    for zvol in $_mock_zvols_list; do
+                        echo "$zvol"
+                    done
+                    return 0
+                fi
+
+                if [[ "$stdin" == *"zfs list -H -t snapshot"* ]]; then
+                    if [[ "$_mock_ssh_snapshot_exists" == "1" ]]; then
+                        echo "${_mock_zvol}@dailybackup-2026-07-14T07:00-04:00-d"
+                    else
+                        echo "SNAP:${_mock_zvol}@retire-${_mock_date_iso}-d" \
+                            >> "$_capture_dir/snapshots"
+                        echo "${_mock_zvol}@retire-${_mock_date_iso}-d"
+                    fi
+                elif [[ "$stdin" == *"zfs list -H -t volume"* ]]; then
+                    echo "$_mock_zvol"
+                elif [[ "$stdin" == *"zfs list -H -o name,origin"* ]]; then
+                    true
+                elif [[ "$stdin" == *"zfs list -H -o name"* ]]; then
+                    true
+                fi
+            fi
+            return 0
+        }
+
+        scp() { return 0; }
+        qm() { echo "status: stopped"; }
+
+        # Mock ZFS state for all configured zvols.
+        _mock_zfs_fs_list=$(echo "$_mock_zvols_list" | tr ' ' '\n')
+        _mock_zfs_datasets["$archive_base"]=1
+        _mock_zfs_props["${archive_base}:mountpoint"]="$archive_mount"
+        local zvol
+        for zvol in $_mock_zvols_list; do
+            _mock_zfs_datasets["$zvol"]=1
+            _mock_zfs_datasets["${archive_base}/${zvol}"]=1
+            _mock_zfs_props["${zvol}:volblocksize"]="8K"
+            if [[ "$snapshots" == "existing" ]]; then
+                _mock_zfs_snap_lists["$zvol"]="${zvol}@dailybackup-2026-07-14T07:00-04:00-d"
+            else
+                _mock_zfs_snap_lists["$zvol"]=""
+            fi
+        done
+
+        set -- "$vmid"
+        # Load the script via eval so we can drop its built-in ask_yn and
+        # keep the alternating-response mock defined above.
+        script_text=$(cat "$mydir/09 ZFS clone support/retire-vm")
+        script_text=$(echo "$script_text" | sed '/^ask_yn() {/,/^}$/d')
+        set -- "$vmid"
+        eval "$script_text"
+    ) <<< "$stdin_input" 2>&1
+
+    cat "$capture_dir/snapshots" 2>/dev/null || true
+    cat "$capture_dir/ssh" 2>/dev/null || true
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+reset_mocks() {
+    unset _mock_read_response _mock_ssh_snapshot_exists
+}
+
+test_single_node_uses_existing_snapshot() {
+    reset_mocks
+    test_start "Single-node: existing snapshot is used"
+
+    local vmid="209"
+    local pve_dir="$_mock_zfs_state_dir/pve1"
+    local archive="$_mock_zfs_state_dir/archive1"
+    local mount="$_mock_zfs_state_dir/mount1"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_retire single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" == *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"* ]]; then
+        test_pass
+    else
+        test_fail "Existing snapshot not used; output:\n$out"
+    fi
+}
+
+test_single_node_creates_retire_snapshot() {
+    reset_mocks
+    test_start "Single-node: retire snapshot created when none exist"
+
+    local vmid="210"
+    local pve_dir="$_mock_zfs_state_dir/pve2"
+    local archive="$_mock_zfs_state_dir/archive2"
+    local mount="$_mock_zfs_state_dir/mount2"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    mock_date "2026-07-14T11:23-04:00" "Mon" "14"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_retire single-node none "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"Created retire snapshot"* ]]; then
+        test_fail "Snapshot creation not reported; output:\n$out"
+        return
+    fi
+
+    local expected_snap="threeamigos/proxmox/vm-${vmid}-disk-0@retire-2026-07-14T11:23-04:00-d"
+    if [[ "$out" != *"Snapshot to archive: ${expected_snap}"* ]]; then
+        test_fail "Expected snapshot ${expected_snap} not used; output:\n$out"
+        return
+    fi
+
+    local sidecar="${mount}/threeamigos/proxmox/vm-${vmid}-disk-0.original_volblocksize"
+    if [[ ! -f "$sidecar" ]] || [[ "$(cat "$sidecar")" != "8K" ]]; then
+        test_fail "Original volblocksize sidecar missing or wrong: $(cat "$sidecar" 2>/dev/null)"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_queries_storage_for_snapshot() {
+    reset_mocks
+    test_start "Two-node: snapshot is queried on storage host"
+
+    local vmid="211"
+    local pve_dir="$_mock_zfs_state_dir/pve3"
+    local archive="$_mock_zfs_state_dir/archive3"
+    local mount="$_mock_zfs_state_dir/mount3"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_retire two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" == *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"* ]]; then
+        test_pass
+    else
+        test_fail "Storage snapshot not used; output:\n$out"
+    fi
+}
+
+test_two_node_creates_snapshot_on_storage() {
+    reset_mocks
+    test_start "Two-node: retire snapshot created on storage host when none exist"
+
+    local vmid="212"
+    local pve_dir="$_mock_zfs_state_dir/pve4"
+    local archive="$_mock_zfs_state_dir/archive4"
+    local mount="$_mock_zfs_state_dir/mount4"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    mock_date "2026-07-14T11:23-04:00" "Mon" "14"
+    _mock_ssh_snapshot_exists=0
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_retire two-node none "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local expected_snap="threeamigos/proxmox/vm-${vmid}-disk-0@retire-2026-07-14T11:23-04:00-d"
+    if [[ "$out" != *"Snapshot to archive: ${expected_snap}"* ]]; then
+        test_fail "Expected retire snapshot not used; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"SNAP:${expected_snap}"* ]]; then
+        test_fail "Snapshot creation not recorded in ssh mock; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_fetches_volblocksize_on_storage() {
+    reset_mocks
+    test_start "Two-node: volblocksize fetched on storage host"
+
+    local vmid="213"
+    local pve_dir="$_mock_zfs_state_dir/pve5"
+    local archive="$_mock_zfs_state_dir/archive5"
+    local mount="$_mock_zfs_state_dir/mount5"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_retire two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" == *"zfs get -H -o value volblocksize"* ]]; then
+        test_pass
+    else
+        test_fail "Storage volblocksize lookup not seen; output:\n$out"
+    fi
+}
+
+test_single_node_archives_only_referenced_disks() {
+    reset_mocks
+    test_start "Single-node: only referenced disks are archived"
+
+    local vmid="220"
+    local pve_dir="$_mock_zfs_state_dir/pve6"
+    local archive="$_mock_zfs_state_dir/archive6"
+    local mount="$_mock_zfs_state_dir/mount6"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    mkdir -p "$pve_dir"
+    cat > "${pve_dir}/${vmid}.conf" << EOF
+name: test-vm
+scsi0: threeamigos:vm-${vmid}-disk-0,size=10G
+scsi1: threeamigos:vm-${vmid}-disk-1,size=10G
+EOF
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0 threeamigos/proxmox/vm-${vmid}-disk-1"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_retire single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"* ]]; then
+        test_fail "Disk 0 not archived; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-1@dailybackup"* ]]; then
+        test_fail "Disk 1 not archived; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_warns_on_orphaned_zvol() {
+    reset_mocks
+    test_start "Single-node: orphaned zvol not in config is skipped with warning"
+
+    local vmid="221"
+    local pve_dir="$_mock_zfs_state_dir/pve7"
+    local archive="$_mock_zfs_state_dir/archive7"
+    local mount="$_mock_zfs_state_dir/mount7"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid" "single-node"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0 threeamigos/proxmox/vm-${vmid}-disk-9"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_retire single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"* ]]; then
+        test_fail "Referenced disk 0 not archived; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-9@dailybackup"* ]]; then
+        test_fail "Orphaned disk 9 was archived; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Orphaned zvol not referenced in config: threeamigos/proxmox/vm-${vmid}-disk-9"* ]]; then
+        test_fail "Orphan warning missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_prompt_mentions_storage_host() {
+    reset_mocks
+    test_start "Two-node: archive prompt mentions storage host"
+
+    setup_node_config "two-node"
+    NODE_CONF="$_mock_zfs_state_dir/node.conf"
+    source "$mydir/08 Two-node/node-lib.sh"
+
+    # Load only the prompt builder so we don't run retire-vm's main body.
+    eval "$(sed -n '/^build_archive_prompt() {/,/^}/p' \
+        "$mydir/09 ZFS clone support/retire-vm")"
+
+    local prompt
+    prompt=$(build_archive_prompt "")
+
+    if [[ "$prompt" == *"(must be on stewie)"* ]]; then
+        test_pass
+    else
+        test_fail "Expected storage-host hint in prompt, got: $prompt"
+    fi
+}
+
+test_no_error_message_level() {
+    reset_mocks
+    test_start "No unsanctioned ERROR level appears in output"
+
+    local vmid="223"
+    local pve_dir="$_mock_zfs_state_dir/pve9"
+    local archive="$_mock_zfs_state_dir/archive9"
+    local mount="$_mock_zfs_state_dir/mount9"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid" "single-node"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_retire single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" == *"ERROR:"* ]]; then
+        test_fail "Output contains unsanctioned ERROR level; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_single_node_uses_existing_snapshot
+test_single_node_creates_retire_snapshot
+test_two_node_queries_storage_for_snapshot
+test_two_node_creates_snapshot_on_storage
+test_two_node_fetches_volblocksize_on_storage
+test_single_node_archives_only_referenced_disks
+test_single_node_warns_on_orphaned_zvol
+test_two_node_prompt_mentions_storage_host
+test_no_error_message_level
+
+test_summary

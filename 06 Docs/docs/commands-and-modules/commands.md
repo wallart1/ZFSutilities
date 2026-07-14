@@ -2467,14 +2467,20 @@ sudo retire-vm <vmid>
 1. **Discover clones** — Finds all VMs whose zvols depend on snapshots of the VM's zvols
 2. **Promote clones** — If any clones exist, asks whether to promote each one (calls
    `promote-vm-clone`), severing the dependency so the VM can be removed
-3. **Archive zvols** — For each disk, runs `zfs send -cw <snapshot>` into a new ZFS dataset
-   under the archive base, setting `volblocksize=1M` for space efficiency. Saves the original
-   `volblocksize` to a `.original_volblocksize` sidecar and the disk's Proxmox config info
-   (disk key, LUN, target) to a `.disk_info` sidecar.
-4. **Archive config** — Copies `/etc/pve/qemu-server/<vmid>.conf` into the archive mount
-5. **Verify** — Confirms all archived datasets and the config file exist and have expected sizes
-6. **Remove VM** — Asks whether to remove the VM; if yes, removes the Proxmox config
-   and destroys each zvol (including iSCSI teardown via `remove-vm-disk` in two-node mode)
+3. **Discover referenced zvols** — Reads `/etc/pve/qemu-server/<vmid>.conf` and resolves each
+   referenced disk to its zvol. In single-node mode this parses the local ZFS disk lines; in
+   two-node mode it resolves iSCSI target/LUN pairs on the storage host. Any orphaned zvols
+   that match the VM ID but are not referenced in the config are reported as warnings and
+   are not archived.
+4. **Archive zvols** — For each referenced disk, runs `zfs send -cw <snapshot>` into a new ZFS
+   dataset under the archive base, setting `volblocksize=1M` for space efficiency. Saves the
+   original `volblocksize` to a `.original_volblocksize` sidecar and the disk's Proxmox config
+   info (disk key, LUN, target) to a `.disk_info` sidecar.
+5. **Archive config** — Copies `/etc/pve/qemu-server/<vmid>.conf` into the archive mount
+6. **Verify** — Confirms all archived datasets and the config file exist and have expected sizes
+7. **Remove VM** — Asks whether to remove the VM; if yes, removes the Proxmox config
+   and destroys each referenced zvol (including iSCSI teardown via `remove-vm-disk` in
+   two-node mode)
 
 **Globals:** node-config globals only (see [Two-Node Infrastructure Commands](two-node.md)).
 
@@ -2498,10 +2504,14 @@ sudo retire-vm <vmid>
 
 1. Discover VMs whose zvols depend on snapshots of the target VM's zvols.
 2. Prompt to promote each dependent clone.
-3. Archive each zvol with `zfs send -cw` into a dataset under the archive base, preserving original `volblocksize` in sidecars.
-4. Copy the Proxmox config into the archive.
-5. Verify archive integrity.
-6. Optionally remove the VM (iSCSI teardown in two-node mode, direct destroy in single-node mode).
+3. Read `/etc/pve/qemu-server/<vmid>.conf` and resolve only the referenced disks to zvols,
+   warning about any orphaned zvols that are skipped.
+4. Archive each referenced zvol with `zfs send -cw` into a dataset under the archive base,
+   preserving original `volblocksize` in sidecars.
+5. Copy the Proxmox config into the archive.
+6. Verify archive integrity.
+7. Optionally remove the VM (iSCSI teardown in two-node mode, direct destroy in single-node
+   mode).
 
 
 **Return codes:**

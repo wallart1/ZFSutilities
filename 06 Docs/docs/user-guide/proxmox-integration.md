@@ -150,7 +150,7 @@ stores UEFI firmware variables (boot order, Secure Boot state, etc.).
        initializes the firmware variables, and adds the required VM config
        lines.
 
-!!! tip "UEFI 2023 certificate enrollment"
+!!! warning "UEFI 2023 certificate enrollment for iSCSI-backed VMs"
        When you choose Secure Boot pre-enrollment, `new-vm-disk EFI` adds
        `ms-cert=2023k` to the `efidisk0` config line. This marks the 2023
        Microsoft UEFI certificates as enrolled and suppresses the Proxmox
@@ -164,11 +164,14 @@ stores UEFI firmware variables (boot order, Secure Boot state, etc.).
        ```
 
        This grows the EFI zvol to 4M, re-initializes it with the Microsoft
-       UEFI CA 2023 certificates, and updates the Proxmox config. You can
-       also use the Proxmox GUI: **Hardware → EFI Disk → Disk Action →
-       Enroll Updated Certificates** — however, that operation may fail for
-       iSCSI by-path EFI disks because Proxmox cannot parse the raw volume
-       ID.
+       UEFI CA 2023 certificates, and updates the Proxmox config.
+
+       Do **not** use the Proxmox GUI (**Hardware → EFI Disk → Disk Action →
+       Enroll Updated Certificates**) or `qm enroll-efi-keys` for iSCSI
+       by-path EFI disks. Both parse the volume identifier on `:` and fail
+       with an error such as `unable to parse volume ID
+       '/dev/disk/by-path/ip-...:3260-iscsi-...'`. Always use
+       `sudo enroll-efi-keys-vm <vmid>` for iSCSI-backed VMs.
 
        For Windows VMs with BitLocker, disable BitLocker protectors inside
        the VM before enrolling.
@@ -454,9 +457,13 @@ sudo retire-vm <vmid>
 
 The script stops the VM, discovers any clone VMs that still depend on its
 zvol snapshots, and (if any exist) asks you to promote them first. It then
-archives each zvol to a dataset under an archive base path of your choice,
-copies the Proxmox VM config alongside the archive, and — after confirmation —
-removes the original VM config and destroys the original zvols.
+reads the Proxmox VM config to determine which disks are currently attached
+and archives only those referenced zvols. Any zvols that match the VM ID but
+are no longer referenced in the config are left behind with a warning, so you
+can decide whether to archive or destroy them separately. After archiving the
+zvols under an archive base path of your choice and copying the Proxmox VM
+config alongside the archive, it — after confirmation — removes the original
+VM config and destroys the original referenced zvols.
 
 For the exact archive layout and single-node vs two-node behavior, see the
 [`retire-vm` command reference](../commands-and-modules/commands.md#retire-vm).

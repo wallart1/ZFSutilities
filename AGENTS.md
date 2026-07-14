@@ -28,6 +28,7 @@ You are a meticulous and expert coding agent. For every task:
 7. Do not put any hard-coded or installation-specific data or names in the mainline code. These must be entered by the user at runtime using text-based and GUI dialogs and will usually be saved in a saved configuration file.
 8. Look for and correct any deprecated code and features. Do not implement any deprecated code or features.
 9. Don't be lazy. Take the approach that is correct even though it may be more difficult to implement.
+10. Read and strictly follow the coding policies given in '/NFS1/dan(NFS1)/zfsutilities-pub/06 Docs/docs/developer-guide/coding-policies.md'
 
 ## Hard Rules
 
@@ -475,6 +476,7 @@ This project uses **bash** (not sh). Follow these conventions:
 - **Declare `local` variables** inside functions.
   - **Exception**: output variables that callers read (like `$fsarray`) are intentionally global and should **not** be declared `local`.
 - **Apply Single Responsibility Principle**: each function should do one thing.
+- **No single-caller functions**: Functions should have at least two calling sites. Otherwise, keep the code inline.
 
 **Project-specific patterns:**
 
@@ -528,6 +530,7 @@ The GTK GUI code in `07 GTK + Python/` follows standard Python conventions:
 - **Docstrings**: Triple quotes (`"""`) for modules, classes, and functions.
 - **Avoid mutable defaults** in function parameters.
 - **Comparisons to `None`**: Use `is None` / `is not None`.
+- **No single-caller functions**: Functions should have at least two calling sites. Otherwise, keep the code inline.
 
 **Logging:**
 
