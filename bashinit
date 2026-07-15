@@ -37,6 +37,41 @@ function bashinit {
     fi
 }
 
+# find_zfsutility_script <name>
+# Locate a sibling script or library when running from the repo or from a
+# deployed bin/ directory.  Candidate directories are checked in order; the
+# first existing regular file wins.
+#   1. $mydir/<name>
+#   2. $mydir/../<name>                      (repo subdir -> root)
+#   3. $mydir/08 Two-node/<name>             (repo root -> two-node)
+#   4. $mydir/../08 Two-node/<name>          (repo clone-support -> two-node)
+#   5. $mydir/09 ZFS clone support/<name>    (repo root -> clone-support)
+#   6. $mydir/../09 ZFS clone support/<name> (repo two-node -> clone-support)
+#   7. $mydir/../lib/<name>                  (deployed bin/ -> lib/)
+#   8. /usr/local/lib/<name>                 (system-wide library symlink)
+# Prints the resolved path and returns 0 on success, otherwise logs a FATAL
+# message and returns 1.
+function find_zfsutility_script {
+    local name="$1"
+    local candidate
+    for candidate in \
+        "$mydir/$name" \
+        "$mydir/../$name" \
+        "$mydir/08 Two-node/$name" \
+        "$mydir/../08 Two-node/$name" \
+        "$mydir/09 ZFS clone support/$name" \
+        "$mydir/../09 ZFS clone support/$name" \
+        "$mydir/../lib/$name" \
+        "/usr/local/lib/$name"; do
+        if [[ -f "$candidate" ]]; then
+            realpath "$candidate"
+            return 0
+        fi
+    done
+    log_msg "FATAL: Could not find sibling script: $name"
+    return 1
+}
+
 # Logging function with automatic prefix.
 # Usage:
 # log_msg "This is a message"

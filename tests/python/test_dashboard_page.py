@@ -360,34 +360,29 @@ class TestLogPeerVersionResult(unittest.TestCase):
 class TestGetHostVersion(unittest.TestCase):
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
-    @patch("os.path.exists", return_value=True)
-    @patch("builtins.open", create=True)
-    def test_local_repo_version(self, mock_open, _mock_exists, _mock_host):
-        mock_open.return_value.__enter__.return_value.read.return_value = "1.2.3"
+    @patch("dashboard_page.get_version", return_value="1.2.3")
+    def test_local_repo_version(self, _mock_version, _mock_host):
         ver = dp._get_host_version("myhost")
         self.assertEqual(ver, "1.2.3")
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
-    @patch("os.path.exists", return_value=False)
-    def test_local_no_version_file(self, _mock_exists, _mock_host):
+    @patch("dashboard_page.get_version", return_value="unknown")
+    def test_local_no_version_file(self, _mock_version, _mock_host):
         ver = dp._get_host_version("myhost")
         self.assertEqual(ver, "unknown")
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
-    def test_remote_version(self, _mock_host):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "2.0.0\n"
-            ver = dp._get_host_version("remote1")
+    @patch("dashboard_page.resolve_remote_version")
+    def test_remote_version(self, mock_remote, _mock_host):
+        mock_remote.return_value = "2.0.0"
+        ver = dp._get_host_version("remote1")
         self.assertEqual(ver, "2.0.0")
-        mock_run.assert_called_once()
-        args = mock_run.call_args[0][0]
-        self.assertIn("root@remote1", args)
+        mock_remote.assert_called_once_with("remote1")
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
-    def test_remote_ssh_failure(self, _mock_host):
-        with patch("subprocess.run", side_effect=OSError("no route")):
-            ver = dp._get_host_version("remote1")
+    @patch("dashboard_page.resolve_remote_version", return_value="unknown")
+    def test_remote_ssh_failure(self, _mock_remote, _mock_host):
+        ver = dp._get_host_version("remote1")
         self.assertEqual(ver, "unknown")
 
 
@@ -1734,11 +1729,14 @@ class TestFixIscsiButton(unittest.TestCase):
             mock_run.return_value.stdout = "rescan complete\n"
             mock_run.return_value.stderr = ""
             with patch.object(dp, "refresh_dashboard_page") as mock_refresh:
-                dp._on_fix_iscsi_clicked(None, app)
+                with patch.object(
+                    dp, "resolve_local_bin", return_value="/test/bin/repair-iscsi-luns"
+                ):
+                    dp._on_fix_iscsi_clicked(None, app)
 
         mock_run.assert_called_once()
         args = mock_run.call_args[0][0]
-        self.assertEqual(args[0], "/usr/local/lib/zfsutilities/bin/repair-iscsi-luns")
+        self.assertEqual(args[0], "/test/bin/repair-iscsi-luns")
         mock_refresh.assert_called_once_with(app)
 
     def test_fix_iscsi_logs_nonzero_exit(self):

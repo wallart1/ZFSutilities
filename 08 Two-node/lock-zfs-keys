@@ -1,10 +1,15 @@
-#!/bin/bash
+#!/usr/bin/bash
 # lock-zfs-keys
 # Safely unmount the ZFS keys USB drive and close the LUKS container.
 # Does NOT unload ZFS encryption keys (zvols remain accessible).
 # Run this before physically removing the USB drive.
 #
 # Install to: /usr/local/lib/zfsutilities/bin/lock-zfs-keys on the storage host
+
+source ~/bashinit
+bashinit
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 set -e
 

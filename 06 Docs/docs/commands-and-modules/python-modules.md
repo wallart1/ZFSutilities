@@ -845,6 +845,41 @@ message level, and display the success-rate summary.
 
 ## Managers and helpers
 
+### `path_utils.py`
+
+Shared path-resolution helpers for the Python layer. Mirrors the Bash
+`$mydir` / `find_zfsutility_script` / `remote_zfsutilities_bin` behavior so
+the GTK GUI can locate sibling scripts, read the deployed version, resolve
+the built docs path, and resolve remote SSH paths without hard-coding
+installation locations.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `get_script_dir(depth=1)` | Return the caller's source-file directory |
+| `find_script(name, script_dir=None)` | Search candidate directories for a sibling script |
+| `resolve_local_bin(name, script_dir=None)` | Absolute path to a sibling executable, or `None` |
+| `is_deployed_layout(script_dir=None)` | `True` if running inside a versioned deployment |
+| `get_version(script_dir=None)` | Read the `VERSION` file for the current layout |
+| `get_docs_path(script_dir=None)` | Path to built docs `index.html`, or `None` |
+| `get_profile_runner_path(script_dir=None)` | Path to `profile_runner.py` for cron / Run Now |
+| `resolve_remote_bin(host, timeout=15)` | Resolve remote active-version `bin/` over SSH |
+| `resolve_remote_script(host, name)` | Remote path to a script, or just `name` on failure |
+| `resolve_remote_version(host, timeout=15)` | Read remote `VERSION` file over SSH |
+
+**Environment overrides:**
+
+| Variable | Purpose |
+| -------- | ------- |
+| `ZFSUTILITIES_VERSION_BASE` | Base directory for versioned deployments (default `/usr/local/lib/zfsutilities`) |
+| `ZFSUTILITIES_REMOTE_BIN` | Remote `bin/` path used by `resolve_remote_bin` |
+| `ZFSUTILITIES_REMOTE_VERSION` | Remote `VERSION` path used by `resolve_remote_version` |
+
+**Called modules / imported helpers:** none (stdlib only).
+
+---
+
 ### `profile_manager.py`
 
 CRUD for saved profile JSON files under the profiles directory.

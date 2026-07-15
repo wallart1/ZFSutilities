@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # zfsclone-vm <src_vmid> <dst_vmid> <new_name>
 # Creates a new Proxmox VM by ZFS-cloning the source VM's disk zvols.
 #
@@ -17,7 +17,12 @@
 # Run from:   the local host in single-node mode, or the compute/storage host in
 #             two-node mode (storage-host runs delegate via SSH to compute)
 
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 MY_HOST=$(hostname -s)
 PVE_CONF_DIR="/etc/pve/qemu-server"
@@ -33,11 +38,6 @@ usage() {
     exit 1
 }
 
-die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
-}
-
 gen_mac() {
     printf 'BC:24:11:%02X:%02X:%02X' $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256))
 }
@@ -49,13 +49,12 @@ SRCVMID="$1"
 DSTVMID="$2"
 NEW_NAME="$3"
 
-[[ "$SRCVMID" =~ ^[0-9]+$ ]] || die "src_vmid must be a number, got: $SRCVMID"
-[[ "$DSTVMID" =~ ^[0-9]+$ ]] || die "dst_vmid must be a number, got: $DSTVMID"
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
-
+[[ "$SRCVMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: src_vmid must be a number, got: $SRCVMID"; exit 1; }
+[[ "$DSTVMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: dst_vmid must be a number, got: $DSTVMID"; exit 1; }
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    exec ssh -t root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/zfsclone-vm '$SRCVMID' '$DSTVMID' '$NEW_NAME'"
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "zfsclone-vm")
+    exec ssh -t root@"$COMPUTE_HOST" "$REMOTE_SCRIPT '$SRCVMID' '$DSTVMID' '$NEW_NAME'"
 fi
 
 # === Running on the compute host ===
@@ -63,13 +62,13 @@ fi
 src_conf="$PVE_CONF_DIR/${SRCVMID}.conf"
 dst_conf="$PVE_CONF_DIR/${DSTVMID}.conf"
 
-[[ -f "$src_conf" ]]   || die "Source VM config not found: $src_conf"
-[[ ! -f "$dst_conf" ]] || die "Destination VM config already exists: $dst_conf"
+[[ -f "$src_conf" ]]   || { log_msg "FATAL: Source VM config not found: $src_conf"; exit 1; }
+[[ ! -f "$dst_conf" ]] || { log_msg "FATAL: Destination VM config already exists: $dst_conf"; exit 1; }
 
 # --- Check source VM is stopped ---
 vm_status=$(qm status "$SRCVMID" 2>/dev/null | awk '{print $2}')
 [[ "$vm_status" == "stopped" ]] \
-    || die "VM $SRCVMID must be stopped before cloning (status: ${vm_status:-unknown})"
+    || { log_msg "FATAL: VM $SRCVMID must be stopped before cloning (status: ${vm_status:-unknown})"; exit 1; }
 
 # === Single-node ZFS clone path ===
 if is_single_node; then
@@ -96,7 +95,7 @@ if is_single_node; then
         fi
     done < "$src_conf"
 
-    [[ ${#sn_disk_keys[@]} -gt 0 ]] || die "No ZFS disk zvols found for VM $SRCVMID"
+    [[ ${#sn_disk_keys[@]} -gt 0 ]] || { log_msg "FATAL: No ZFS disk zvols found for VM $SRCVMID"; exit 1; }
 
     SNAP_SUFFIX="@clone-$(date -Iminutes)-c"
 
@@ -124,7 +123,7 @@ if is_single_node; then
         echo "Cloning ${key}: ${src_zvol}..."
 
         ! zfs list -H "$dst_zvol" >/dev/null 2>&1 \
-            || die "Destination zvol already exists: $dst_zvol"
+            || { log_msg "FATAL: Destination zvol already exists: $dst_zvol"; exit 1; }
 
         if ! zfs list -H -t snapshot "$snap" >/dev/null 2>&1; then
             zfs snapshot "$snap"
@@ -219,7 +218,7 @@ while IFS= read -r line; do
     fi
 done < "$src_conf"
 
-[[ ${#disk_keys[@]} -gt 0 ]] || die "No iSCSI disks found in source VM config"
+[[ ${#disk_keys[@]} -gt 0 ]] || { log_msg "FATAL: No iSCSI disks found in source VM config"; exit 1; }
 
 # Snapshot name — same for all disks in this operation, kept as clone origin
 SNAP_SUFFIX="@clone-$(date -Iminutes)-c"
@@ -317,9 +316,9 @@ targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
     | grep -oP 'lun\K[0-9]+' \
     | head -1
 SSHEOF
-    ) || die "Failed to clone ${key}"
+    ) || { log_msg "FATAL: Failed to clone ${key}"; exit 1; }
 
-    [[ -n "$new_lun" ]] || die "Could not determine new LUN number for ${key}"
+    [[ -n "$new_lun" ]] || { log_msg "FATAL: Could not determine new LUN number for ${key}"; exit 1; }
     disk_new_luns["$key"]="$new_lun"
     echo "✓ ${key}: LUN ${old_lun} → LUN ${new_lun}"
     echo ""
@@ -327,7 +326,8 @@ done
 
 # --- Save iSCSI config on the storage host ---
 echo "Saving iSCSI configuration..."
-ssh root@"$STORAGE_HOST" /usr/local/lib/zfsutilities/bin/safe-iscsi-save
+REMOTE_SAFE_ISCSI_SAVE=$(remote_zfsutility_script "$STORAGE_HOST" "safe-iscsi-save")
+ssh root@"$STORAGE_HOST" "$REMOTE_SAFE_ISCSI_SAVE"
 echo "✓ Configuration saved"
 echo ""
 
@@ -411,7 +411,7 @@ echo ""
 
 # --- Rescan iSCSI ---
 echo "Rescanning iSCSI..."
-/usr/local/lib/zfsutilities/bin/rescan-storage
+"$mydir/rescan-storage"
 echo ""
 
 echo "=== Done ==="

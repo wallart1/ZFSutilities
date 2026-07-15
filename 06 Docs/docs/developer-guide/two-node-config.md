@@ -76,12 +76,18 @@ If no groups are specified, `deploy-version` deploys to all defined groups plus 
 
 ## Helper Library: `node-lib.sh`
 
-Installed to `/usr/local/lib/node-lib.sh` on all hosts.
+Installed to `/usr/local/lib/node-lib.sh` on all hosts (also reachable via
+`find_zfsutility_script node-lib.sh` when running from the repo).
 
-All scripts in `08 Two-node/` and `09 ZFS clone support/` begin with:
+All scripts in `08 Two-node/` and `09 ZFS clone support/` use this header:
 
 ```bash
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 ```
 
 The library:
@@ -92,16 +98,25 @@ The library:
 3. Provides helper functions:
 
 ```bash
-is_single_node()   # returns 0 if NODE_MODE == "single-node"
-is_two_node()      # returns 0 if NODE_MODE == "two-node"
-pool_to_target()   # echoes full IQN for a pool (two-node only)
-pool_list()        # echoes pool names from POOL_TARGET (two-node only)
-is_known_pool()    # returns 0 if pool is in POOL_TARGET (two-node only)
+is_single_node()        # returns 0 if NODE_MODE == "single-node"
+is_two_node()           # returns 0 if NODE_MODE == "two-node"
+pool_to_target()        # echoes full IQN for a pool (two-node only)
+pool_list()             # echoes pool names from POOL_TARGET (two-node only)
+is_known_pool()         # returns 0 if pool is in POOL_TARGET (two-node only)
+find_zfsutility_script()# locates a sibling script across repo/deployed layouts
+remote_zfsutilities_bin()   # resolves active bin/ directory on a remote host
+remote_zfsutility_script()  # full path to a script on a remote host
 ```
 
 In single-node mode, `pool_to_target`, `pool_list`, and `is_known_pool`
 return errors — scripts use `zpool list -H -o name` for pool validation
 instead.
+
+`find_zfsutility_script` is also provided by `bashinit`; `node-lib.sh` keeps
+a fallback definition so it can be located before `bashinit` is loaded in
+unusual layouts. `remote_zfsutility_script` is used when delegating work to
+the peer node over SSH so the remote side resolves its own active deployed
+version rather than relying on a hard-coded path.
 
 ## Version Consistency
 

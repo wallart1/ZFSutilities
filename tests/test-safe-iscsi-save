@@ -23,8 +23,16 @@ _run_safe_iscsi_save() {
         -e "s|/etc/iscsi-encrypted-luns\.conf||g" \
         "$mydir/08 Two-node/safe-iscsi-save" > "$script_copy"
 
+    # Temporary single-node config so node-lib.sh does not require a two-node conf.
+    local node_conf="$tmpdir/node.conf"
+    cat > "$node_conf" <<'EOF'
+NODE_MODE="single-node"
+EOF
+
     cat > "$tmpdir/runner" << RUNNEREOF
 #!/bin/bash
+export NODE_CONF="$node_conf"
+export mydir="$mydir"
 BACKSTORE_COUNT=$backstore_count
 SAVECONFIG_CALLED=""
 targetcli() {

@@ -26,6 +26,7 @@ from cron_manager import (
     next_run_times,
 )
 from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
+from path_utils import get_profile_runner_path, is_deployed_layout
 
 COL_ACTIVE = 0
 COL_NAME = 1
@@ -523,13 +524,7 @@ def _update_interpretation(app):
 
 def _regenerate_cron(app):
     profiles = list_profiles()
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    if "/usr/local/lib/zfsutilities/versions/" in script_dir:
-        # Running from a deployed version: use the current symlink so the
-        # cron job tracks version switches automatically.
-        runner_path = "/usr/local/lib/zfsutilities/current/07 GTK + Python/profile_runner.py"
-    else:
-        runner_path = os.path.join(script_dir, "profile_runner.py")
+    runner_path = get_profile_runner_path()
     try:
         write_cron_file(profiles, runner_path)
     except OSError as e:
@@ -553,10 +548,7 @@ def _resolve_profile_runner_path():
     Mirrors the logic in _regenerate_cron so Run Now uses the same runner
     that cron uses.
     """
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    if "/usr/local/lib/zfsutilities/versions/" in script_dir:
-        return "/usr/local/lib/zfsutilities/current/07 GTK + Python/profile_runner.py"
-    return os.path.join(script_dir, "profile_runner.py")
+    return get_profile_runner_path()
 
 
 def _log_profile_line(fd, condition, app, profile_name, prefix):

@@ -11,11 +11,11 @@
 #       confirmation.
 
 source ~/bashinit
+bashinit
 
 function delallsnaps {
 
-    bashinit
-    source $mydir/rootcheck
+    source "$mydir/rootcheck"
     rootcheck
     source $mydir/zfsdelsnap
     source $mydir/zfsoverrides

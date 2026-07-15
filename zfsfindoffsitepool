@@ -2,10 +2,12 @@
 # Find an online offsite pool.
 
 source ~/bashinit
+bashinit
 
 function findoffsitepool {
 
-    bashinit
+    source "$mydir/rootcheck"
+    rootcheck
     local offsitepools=('z22tb' 'z40tb')
     local onlinepools
     local onlineoffsitepool=''

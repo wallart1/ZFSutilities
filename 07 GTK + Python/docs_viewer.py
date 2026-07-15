@@ -32,6 +32,7 @@ from backup_config import (
     get_docs_editor, load_config, log_msg,
     get_ui_state, save_ui_state,
 )
+from path_utils import get_docs_path, _DEPLOYMENT_BASE
 
 # URI schemes the viewer is allowed to navigate to.
 _ALLOWED_SCHEMES = ("file:", "http:", "https:", "about:")
@@ -91,29 +92,6 @@ class _DocsRequestHandler(SimpleHTTPRequestHandler):
         pass
 
 
-def resolve_docs_path(script_dir):
-    """Return the path to the built documentation index.html.
-
-    Tries development layout first (repo root), then deployed layout.
-    """
-    candidates = []
-
-    # Development / deployed via parent directory
-    version_root = os.path.dirname(script_dir)
-    candidates.append(os.path.join(version_root, "06 Docs", "site", "index.html"))
-
-    # Explicit deployed path (symlink-resolved)
-    candidates.append(
-        "/usr/local/lib/zfsutilities/current/06 Docs/site/index.html"
-    )
-
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
-
-    return None
-
-
 def _get_desktop_user():
     """Return the username of the desktop session owner, or None."""
     # Method 1: SUDO_USER
@@ -162,7 +140,7 @@ class DocsViewerWindow(Gtk.Window):
         self.set_default_size(900, 700)
 
         self._script_dir = script_dir
-        self._docs_path = resolve_docs_path(script_dir)
+        self._docs_path = get_docs_path(script_dir)
         self._config = config if config is not None else load_config()
         self._docs_state = self._load_state()
         self._restore_geometry()
@@ -172,11 +150,17 @@ class DocsViewerWindow(Gtk.Window):
             return
 
         if not self._docs_path:
+            repo_path = os.path.join(
+                os.path.dirname(script_dir), "06 Docs", "site", "index.html"
+            )
+            deployed_path = os.path.join(
+                _DEPLOYMENT_BASE, "current", "06 Docs", "site", "index.html"
+            )
             self._show_fallback(
                 "Documentation site not found.\n\n"
-                "Expected one of:\n"
-                "  <repo>/06 Docs/site/index.html\n"
-                "  /usr/local/lib/zfsutilities/current/06 Docs/site/index.html\n\n"
+                "path_utils.get_docs_path() checked:\n"
+                f"  {repo_path}\n"
+                f"  {deployed_path}\n\n"
                 "Run 'mkdocs build' in the 06 Docs directory."
             )
             return

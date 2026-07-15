@@ -47,6 +47,7 @@ from gui_helpers import (
 from docs_viewer import DocsViewerWindow
 from runner_factory import RunnerFactory
 from app_context import AppContext
+from path_utils import get_version
 
 def _detect_parent_dir(script_dir):
     """Auto-detect the directory containing bash scripts.
@@ -101,17 +102,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self._docs_window = None
 
         # Cache version at startup so About dialog reflects the code actually running.
-        # When running from the repo, read VERSION from the repo root (next to
-        # the '07 GTK + Python/' directory).  Otherwise fall back to the deployed
-        # version symlink.
-        repo_version_path = os.path.join(os.path.dirname(self.script_dir), "VERSION")
-        deployed_version_path = "/usr/local/lib/zfsutilities/current/VERSION"
-        if os.path.exists(repo_version_path):
-            with open(repo_version_path) as f:
-                self.ctx.version = f.read().strip()
-        elif os.path.exists(deployed_version_path):
-            with open(deployed_version_path) as f:
-                self.ctx.version = f.read().strip()
+        self.ctx.version = get_version(self.script_dir)
         self._version = self.ctx.version
 
         # Main vertical layout

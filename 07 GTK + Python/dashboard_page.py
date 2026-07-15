@@ -17,6 +17,7 @@ from config_core import get_dashboard_config, save_dashboard_config
 from backup_history import load_history
 from gui_helpers import set_monospace_font, configure_treeview_column
 from logs_page import select_log_by_path
+from path_utils import resolve_local_bin, get_version, resolve_remote_version
 from zfs_repository import get_default_repository
 
 
@@ -355,42 +356,10 @@ def _local_hostname():
 
 
 def _get_host_version(host):
-    """Return the zfsutilities version string for the given host.
-
-    For the local host, reads the repo VERSION file or the deployed
-    /usr/local/lib/zfsutilities/current/VERSION.
-    For remote hosts, SSHes to the host and reads the deployed VERSION.
-    Returns "unknown" if the version cannot be determined.
-    """
-    local_host = _local_hostname()
-    if host == local_host:
-        # Local host — try repo VERSION first, then deployed
-        repo_version = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VERSION"
-        )
-        deployed = "/usr/local/lib/zfsutilities/current/VERSION"
-        for path in (repo_version, deployed):
-            if os.path.exists(path):
-                try:
-                    with open(path) as f:
-                        return f.read().strip()
-                except OSError:
-                    pass
-        return "unknown"
-
-    # Remote host — SSH and read deployed version
-    try:
-        result = subprocess.run(
-            ["ssh", f"root@{host}", "cat /usr/local/lib/zfsutilities/current/VERSION"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    return "unknown"
+    """Return the zfsutilities version string for the given host."""
+    if host == _local_hostname():
+        return get_version()
+    return resolve_remote_version(host)
 
 
 def _get_host_zfs_version(host):
@@ -1307,8 +1276,9 @@ def _on_fix_iscsi_clicked(_button, app):
     """Run repair-iscsi-luns and refresh the dashboard."""
     log_msg("INFO: Running repair-iscsi-luns...")
     try:
+        repair_script = resolve_local_bin("repair-iscsi-luns")
         result = subprocess.run(
-            ["/usr/local/lib/zfsutilities/bin/repair-iscsi-luns"],
+            [repair_script],
             capture_output=True,
             text=True,
             timeout=120,

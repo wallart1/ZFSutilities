@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # unlock-zfs-keys
 # Manual LUKS unlock and ZFS key loading.
 # Adds encrypted LUNs to the iSCSI target without restarting it, so running
@@ -14,6 +14,13 @@
 # files already, it is left untouched and keys are loaded from there.
 #
 # Install to: /usr/local/lib/zfsutilities/bin/unlock-zfs-keys on the storage host
+
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 set -e
 
@@ -45,14 +52,17 @@ if [[ "$keys_already_available" != true ]]; then
     else
         DEVICE=$(blkid -t PARTLABEL=ZFSkeys -o device 2>/dev/null | head -1 || true)
         if [[ -z "$DEVICE" ]]; then
-            echo "ERROR: No USB drive found with PARTLABEL=ZFSkeys"
+            log_msg "FATAL: No USB drive found with PARTLABEL=ZFSkeys"
             echo "Plug in the key USB drive and try again, or specify device manually: unlock-zfs-keys /dev/sdX1"
             exit 1
         fi
         echo "Found key USB: $DEVICE"
     fi
 
-    [[ -b "$DEVICE" ]] || { echo "ERROR: Device $DEVICE is not a block device"; exit 1; }
+    [[ -b "$DEVICE" ]] || {
+        log_msg "FATAL: Device $DEVICE is not a block device"
+        exit 1
+    }
 
     # Unlock LUKS partition
     if [[ -e /dev/mapper/keys ]]; then
@@ -110,11 +120,11 @@ else
                 echo "    ✓ Loaded"
                 LOADED=$((LOADED + 1))
             else
-                echo "    ✗ Failed"
+                log_msg "WARN:     $dataset failed to load key"
                 FAILED=$((FAILED + 1))
             fi
         else
-            echo "  ⚠ $dataset — status: $STATUS (dataset may not exist)"
+            log_msg "WARN:   $dataset — status: $STATUS (dataset may not exist)"
         fi
     done < "$CONF"
 fi
@@ -127,7 +137,7 @@ echo "Keys loaded: $LOADED  Already loaded: $ALREADY_LOADED  Failed: $FAILED"
 # ---------------------------------------------------------------------------
 echo ""
 echo "Securing keys..."
-/usr/local/lib/zfsutilities/bin/lock-zfs-keys
+"$mydir/lock-zfs-keys"
 
 # ---------------------------------------------------------------------------
 # Add encrypted LUNs to the iSCSI target without restarting the service.
@@ -136,12 +146,12 @@ echo "Securing keys..."
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== Adding encrypted LUNs to iSCSI target ==="
-if /usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns; then
+if "$mydir/iscsi-add-encrypted-luns"; then
     echo ""
     echo "=== Complete ==="
 else
     echo ""
-    echo "=== Encrypted LUNs could not be added ==="
+    log_msg "FATAL: Encrypted LUNs could not be added"
     echo "Check that all encrypted zvols are available and try:"
     echo "    sudo iscsi-add-encrypted-luns"
     echo "or, if a full target restart is acceptable (stops all VM disks):"

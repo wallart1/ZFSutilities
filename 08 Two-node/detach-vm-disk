@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # detach-vm-disk <vmid> <disk-key>
 # Removes a disk from a Proxmox VM config and tears down iSCSI infrastructure
 # (two-node), leaving the underlying zvol intact.
@@ -6,11 +6,12 @@
 # Install to: /usr/local/lib/zfsutilities/bin/detach-vm-disk on BOTH hosts
 # Run from:   the compute host (or storage host — delegates via SSH)
 
-# Resolve our directory so helpers can be found relative to this script.
-# This supports running from the repo, a deployed version, or through a symlink.
-mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
-
-source "$mydir/node-lib.sh"
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 MY_HOST=$(hostname -s)
 PVE_CONF_DIR="/etc/pve/qemu-server"
@@ -27,56 +28,40 @@ usage() {
     exit 1
 }
 
-die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
-}
-
-# Resolve the active zfsutilities bin directory on a remote host.
-# Uses the versioned deployment's /usr/local/lib/zfsutilities/current symlink
-# so SSH calls run the remote host's active version rather than a hardcoded
-# path. Falls back to /usr/local/lib/zfsutilities/bin if the symlink cannot be
-# resolved.
-remote_zfsutilities_bin() {
-    local host="$1"
-    local version_dir
-    version_dir=$(ssh -o ConnectTimeout=10 root@"$host" \
-        "realpath /usr/local/lib/zfsutilities/current 2>/dev/null || \
-         readlink -f /usr/local/lib/zfsutilities/current 2>/dev/null" 2>/dev/null)
-    if [[ -n "$version_dir" ]]; then
-        echo "${version_dir}/bin"
-    else
-        echo "/usr/local/lib/zfsutilities/bin"
-    fi
-}
-
 # --- Argument validation ---
 [[ $# -eq 2 ]] || usage
 
 VMID="$1"
 DISKKEY="$2"
 
-[[ "$VMID" =~ ^[0-9]+$ ]] || die "vmid must be a number, got: $VMID"
-[[ "$DISKKEY" =~ ^[a-z]+[0-9]+$ ]] || die "disk-key must be like scsi0 or ide1, got: $DISKKEY"
-
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+[[ "$VMID" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: vmid must be a number, got: $VMID"
+    exit 1
+}
+[[ "$DISKKEY" =~ ^[a-z]+[0-9]+$ ]] || {
+    log_msg "FATAL: disk-key must be like scsi0 or ide1, got: $DISKKEY"
+    exit 1
+}
 
 # --- Delegate to compute host if run on storage node (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    REMOTE_BIN=$(remote_zfsutilities_bin "$COMPUTE_HOST")
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "detach-vm-disk")
     exec ssh -t root@"$COMPUTE_HOST" \
-        "${REMOTE_BIN}/detach-vm-disk '$VMID' '$DISKKEY'"
+        "$REMOTE_SCRIPT '$VMID' '$DISKKEY'"
 fi
 
 # === Running on the compute host ===
 
 conf="$PVE_CONF_DIR/${VMID}.conf"
-[[ -f "$conf" ]] || die "VM config not found: $conf"
+[[ -f "$conf" ]] || {
+    log_msg "FATAL: VM config not found: $conf"
+    exit 1
+}
 
 # --- VM state check ---
 status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
 if [[ "${status:-unknown}" != "stopped" ]]; then
-    echo "⚠ VM $VMID is currently $status"
+    log_msg "WARN: VM $VMID is currently $status"
     echo "  Detaching a disk from a running VM is allowed but may cause I/O errors"
     echo "  if the guest OS is actively using the disk."
     echo ""
@@ -87,7 +72,10 @@ fi
 
 # --- Parse disk line ---
 disk_line=$(grep "^${DISKKEY}:" "$conf" 2>/dev/null || true)
-[[ -n "$disk_line" ]] || die "Disk key $DISKKEY not found in VM $VMID config"
+[[ -n "$disk_line" ]] || {
+    log_msg "FATAL: Disk key $DISKKEY not found in VM $VMID config"
+    exit 1
+}
 
 echo "=== detach-vm-disk ==="
 echo "  VM:        $VMID"
@@ -124,7 +112,7 @@ if is_two_node; then
             BACKSTORE_NAME="vm-${VMID}-disk-0"
         fi
     else
-        echo "⚠ Disk line does not look like iSCSI — skipping iSCSI teardown"
+        log_msg "WARN: Disk line does not look like iSCSI — skipping iSCSI teardown"
     fi
 fi
 
@@ -157,7 +145,7 @@ if is_two_node && [[ -n "$BACKSTORE_NAME" ]]; then
     if [[ -n "$LUN_NUM" ]]; then
         echo "Removing LUN $LUN_NUM from target..."
         targetcli "/iscsi/${TARGET}/tpg1/luns" delete "lun${LUN_NUM}" 2>/dev/null || \
-            echo "⚠ Could not remove LUN (may already be removed)"
+            log_msg "WARN: Could not remove LUN (may already be removed)"
     fi
 
     # Remove backstore
@@ -166,7 +154,7 @@ if is_two_node && [[ -n "$BACKSTORE_NAME" ]]; then
         targetcli /backstores/block delete "$BACKSTORE_NAME"
         echo "✓ Backstore removed"
     else
-        echo "⚠ Backstore not found — skipping"
+        log_msg "WARN: Backstore not found — skipping"
     fi
 
     # Remove from expected-backstores manifest before saving, otherwise
@@ -185,13 +173,13 @@ if is_two_node && [[ -n "$BACKSTORE_NAME" ]]; then
     echo "✓ Configuration saved"
 
     # Rescan on the compute host, using its active deployed version.
-    REMOTE_BIN=$(remote_zfsutilities_bin "$COMPUTE_HOST")
+    REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
     echo "Triggering iSCSI rescan on $COMPUTE_HOST..."
     if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
-        "${REMOTE_BIN}/rescan-storage" 2>&1; then
+        "$REMOTE_RESCAN" 2>&1; then
         echo "✓ Rescan triggered"
     else
-        echo "⚠ Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' manually"
+        log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' manually"
     fi
 fi
 

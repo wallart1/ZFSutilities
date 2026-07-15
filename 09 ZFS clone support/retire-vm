@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # retire-vm <vmid>
 # Retires a VM: promotes dependent clones, archives zvols + config,
 # verifies the archive, and optionally removes the VM.
@@ -6,17 +6,20 @@
 # Install to: /usr/local/lib/zfsutilities/bin/retire-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
-NODE_LIB="${NODE_LIB:-/usr/local/lib/node-lib.sh}"
+source ~/bashinit
+bashinit
+
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
+
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 MY_HOST=$(hostname -s)
 PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 JSON_CONFIG="${JSON_CONFIG:-/root/.config/zfsutilities.json}"
 
-ZFSLOCK_MANAGER="${ZFSLOCK_MANAGER:-/usr/local/lib/zfsutilities/current/bin/zfslockmanager}"
-if [[ $(type -t log_msg) != function ]]; then
-    log_msg() { echo "$*" >&2; }
-fi
+ZFSLOCK_MANAGER="${ZFSLOCK_MANAGER:-$(find_zfsutility_script zfslockmanager)}"
 source "$ZFSLOCK_MANAGER"
 
 usage() {
@@ -32,11 +35,6 @@ usage() {
     echo "  5. Optionally remove the VM"
     echo ""
     echo "Example: retire-vm 904"
-    exit 1
-}
-
-die() {
-    log_msg "FATAL: $*"
     exit 1
 }
 
@@ -70,12 +68,12 @@ ensure_retire_snapshot() {
         if [[ -z "$snap" ]]; then
             zfslock_init
             if ! zfslock_acquire "$zvol" "w" "retire-vm auto-snapshot"; then
-                die "Could not acquire write lock on ${zvol} for snapshot creation"
+                { log_msg "FATAL: Could not acquire write lock on ${zvol} for snapshot creation"; exit 1; }
             fi
             snap_name="@retire-$(date -Iminutes)-d"
             if ! zfs snapshot "${zvol}${snap_name}"; then
                 zfslock_release "$ZFSLOCK_ID"
-                die "Failed to create snapshot ${zvol}${snap_name}"
+                { log_msg "FATAL: Failed to create snapshot ${zvol}${snap_name}"; exit 1; }
             fi
             zfslock_release "$ZFSLOCK_ID"
             snap="${zvol}${snap_name}"
@@ -86,7 +84,8 @@ ensure_retire_snapshot() {
 zvol="$1"
 
 log_msg() { echo "$*" >&2; }
-source /usr/local/lib/zfsutilities/current/bin/zfslockmanager
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/zfslockmanager"
 
 snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1)
 if [[ -z "$snap" ]]; then
@@ -109,7 +108,7 @@ echo "$snap"
 SSHEOF
         )
         if [[ -z "$snap" || "$snap" == FATAL:* ]]; then
-            die "Failed to determine snapshot for ${zvol} on ${STORAGE_HOST}"
+            { log_msg "FATAL: Failed to determine snapshot for ${zvol} on ${STORAGE_HOST}"; exit 1; }
         fi
     fi
 
@@ -267,13 +266,14 @@ SSHEOF
 [[ $# -eq 1 ]] || usage
 
 VMID="$1"
-[[ "$VMID" =~ ^[0-9]+$ ]] || die "vmid must be a number, got: $VMID"
-[[ $EUID -eq 0 || ${RETIRE_VM_TEST_NO_ROOT:-0} == "1" ]] || die "Must run as root (use sudo)"
+[[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
+[[ $EUID -eq 0 || ${RETIRE_VM_TEST_NO_ROOT:-0} == "1" ]] || { log_msg "FATAL: Must run as root (use sudo)"; exit 1; }
 
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "retire-vm")
     exec ssh -t root@"$COMPUTE_HOST" \
-        "/usr/local/lib/zfsutilities/bin/retire-vm '$VMID'"
+        "$REMOTE_SCRIPT '$VMID'"
 fi
 
 echo "=== retire-vm ==="
@@ -295,7 +295,7 @@ VMID="$1"
 zfs list -H -o name,origin \
     | awk -v v="$VMID" '$2 ~ "/proxmox/vm-" v "-disk-" {print $1 "\t" $2}'
 SSHEOF
-    ) || die "SSH to $STORAGE_HOST failed"
+    ) || { log_msg "FATAL: SSH to $STORAGE_HOST failed"; exit 1; }
 fi
 
 declare -A clone_vmids
@@ -319,12 +319,13 @@ if [[ -n "$clone_info" ]]; then
         for clone_vmid in "${!clone_vmids[@]}"; do
             echo ""
             echo "Promoting VM ${clone_vmid}..."
-            /usr/local/lib/zfsutilities/bin/promote-vm-clone "$clone_vmid" \
-                || die "Promotion failed for VM ${clone_vmid}"
+            promote_vm_clone=$(find_zfsutility_script promote-vm-clone)
+            "$promote_vm_clone" "$clone_vmid" \
+                || { log_msg "FATAL: Promotion failed for VM ${clone_vmid}"; exit 1; }
         done
     else
         echo "  Skipping clone promotion."
-        echo "  WARNING: Archiving may fail if snapshots are held by clones."
+        log_msg "WARN: Archiving may fail if snapshots are held by clones."
     fi
 else
     echo "  No dependent clones found."
@@ -348,17 +349,17 @@ fi
 read -rp "$(build_archive_prompt "$default_prompt")" user_path
 ARCHIVE_BASE="${user_path:-$configured_path}"
 
-[[ -n "$ARCHIVE_BASE" ]] || die "Archive base path is required"
+[[ -n "$ARCHIVE_BASE" ]] || { log_msg "FATAL: Archive base path is required"; exit 1; }
 
 # Validate the base exists as a ZFS dataset
 if is_single_node; then
     if ! zfs list -H -o name "$ARCHIVE_BASE" >/dev/null 2>&1; then
-        die "Not a ZFS dataset: $ARCHIVE_BASE"
+        { log_msg "FATAL: Not a ZFS dataset: $ARCHIVE_BASE"; exit 1; }
     fi
 else
     if ! ssh root@"$STORAGE_HOST" "zfs list -H -o name '$ARCHIVE_BASE'" \
             >/dev/null 2>&1; then
-        die "Not a ZFS dataset on $STORAGE_HOST: $ARCHIVE_BASE"
+        { log_msg "FATAL: Not a ZFS dataset on $STORAGE_HOST: $ARCHIVE_BASE"; exit 1; }
     fi
 fi
 
@@ -377,12 +378,12 @@ else
 fi
 
 proxmoxconfig="${PVE_CONF_DIR}/${VMID}.conf"
-[[ -f "$proxmoxconfig" ]] || die "Proxmox config not found: $proxmoxconfig"
+[[ -f "$proxmoxconfig" ]] || { log_msg "FATAL: Proxmox config not found: $proxmoxconfig"; exit 1; }
 
 # Find only the zvols actually referenced by the VM config.
 zvols=$(collect_referenced_zvols | sort -u) \
-    || die "Failed to discover referenced zvols"
-[[ -n "$zvols" ]] || die "No referenced zvols found for VM ${VMID}"
+    || { log_msg "FATAL: Failed to discover referenced zvols"; exit 1; }
+[[ -n "$zvols" ]] || { log_msg "FATAL: No referenced zvols found for VM ${VMID}"; exit 1; }
 
 echo "  Archive base: ${ARCHIVE_BASE} (mount: ${ARCHIVE_MOUNT})"
 echo "  Zvols to archive:"
@@ -412,7 +413,7 @@ for zvol in $zvols; do
         echo "  Archiving ${zvol}${snap_name} → ${archive_dataset}"
         if ! zfs send -cw "$zvol$snap_name" \
                 | zfs receive -o volblocksize=1M "$archive_dataset"; then
-            die "Failed to archive ${zvol}"
+            { log_msg "FATAL: Failed to archive ${zvol}"; exit 1; }
         fi
 
         # Save original volblocksize
@@ -495,7 +496,7 @@ if [[ -n "$target" && -n "$lun" ]]; then
     fi
 fi
 SSHEOF
-        [[ $? -eq 0 ]] || die "Failed to archive ${zvol}"
+        [[ $? -eq 0 ]] || { log_msg "FATAL: Failed to archive ${zvol}"; exit 1; }
     fi
 
     echo "  ✓ Archived: ${archive_dataset}"
@@ -525,7 +526,7 @@ for zvol in $zvols; do
     archive_dataset="${ARCHIVE_BASE}/${zvol}"
     if is_single_node; then
         if ! zfs list -H "$archive_dataset" >/dev/null 2>&1; then
-            echo "  ✗ MISSING dataset: ${archive_dataset}"
+            log_msg "FATAL: MISSING dataset: ${archive_dataset}"
             ((++errors))
         else
             size=$(zfs get -H -o value volsize "$archive_dataset")
@@ -534,7 +535,7 @@ for zvol in $zvols; do
     else
         if ! ssh root@"$STORAGE_HOST" "zfs list -H '$archive_dataset'" \
                 >/dev/null 2>&1; then
-            echo "  ✗ MISSING dataset: ${archive_dataset}"
+            log_msg "FATAL: MISSING dataset: ${archive_dataset}"
             ((++errors))
         else
             size=$(ssh root@"$STORAGE_HOST" \
@@ -553,14 +554,14 @@ fi
 
 if is_single_node; then
     if [[ ! -f "$config_dest_mount" ]] || [[ ! -s "$config_dest_mount" ]]; then
-        echo "  ✗ Config archive missing or empty"
+        log_msg "FATAL: Config archive missing or empty"
         ((++errors))
     else
         echo "  ✓ Config archive OK"
     fi
 else
     if ! ssh root@"$STORAGE_HOST" "[[ -f '$config_dest_mount' && -s '$config_dest_mount' ]]"; then
-        echo "  ✗ Config archive missing or empty"
+        log_msg "FATAL: Config archive missing or empty"
         ((++errors))
     else
         echo "  ✓ Config archive OK"
@@ -568,7 +569,7 @@ else
 fi
 
 if [[ $errors -gt 0 ]]; then
-    die "Archive verification failed (${errors} errors). VM NOT removed."
+    { log_msg "FATAL: Archive verification failed (${errors} errors). VM NOT removed."; exit 1; }
 fi
 
 echo ""
@@ -600,9 +601,10 @@ if is_single_node; then
     for zvol in $zvols; do
         echo "    Destroying ${zvol}..."
         if ! zfs destroy "$zvol"; then
-            source /usr/local/lib/zfsutilities/current/bin/zfs-diagnose-busy
+            zfs_diagnose_busy=$(find_zfsutility_script zfs-diagnose-busy)
+            source "$zfs_diagnose_busy"
             diagnose_dataset_busy "$zvol"
-            echo "    ⚠ Could not destroy ${zvol}"
+            log_msg "WARN: Could not destroy ${zvol}"
         fi
     done
 else
@@ -612,9 +614,10 @@ else
         disknum=$(echo "$zvol" | grep -oP 'disk-\K[0-9]+$')
         pool="${zvol%%/*}"
         echo "    Removing disk ${disknum} from pool ${pool}..."
+        remote_remove_vm_disk=$(remote_zfsutility_script "$STORAGE_HOST" "remove-vm-disk")
         ssh root@"$STORAGE_HOST" \
-            "/usr/local/lib/zfsutilities/bin/remove-vm-disk '$pool' '$VMID' '$disknum'" \
-            || echo "    ⚠ Could not remove disk ${disknum}"
+            "$remote_remove_vm_disk '$pool' '$VMID' '$disknum'" \
+            || log_msg "WARN: Could not remove disk ${disknum}"
     done
 fi
 

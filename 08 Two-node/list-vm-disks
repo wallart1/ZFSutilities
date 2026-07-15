@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # list-vm-disks [--with-devices]
 # Lists all zvols currently exported as iSCSI LUNs, with VM ownership,
 # sizes, clone relationships, and host/guest device names.
@@ -6,7 +6,12 @@
 # Install to: /usr/local/lib/zfsutilities/bin/list-vm-disks on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 MY_HOST=$(hostname -s)
 : "${LIST_VM_DISKS_CONF_DIR:=/etc/pve/qemu-server}"
@@ -15,19 +20,6 @@ PVE_CONF_DIR="$LIST_VM_DISKS_CONF_DIR"
 
 : "${LIST_VM_DISKS_GUEST_POLL_MAX:=40}"
 : "${LIST_VM_DISKS_GUEST_POLL_SLEEP:=0.25}"
-
-die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
-}
-
-warn() {
-    echo "⚠ $*" >&2
-}
-
-if [[ "${LIST_VM_DISKS_SKIP_ROOT_CHECK:-}" != "Y" ]]; then
-    [[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
-fi
 
 # --- Argument parsing ---------------------------------------------------------
 # --with-devices is accepted for backward compatibility but no longer changes
@@ -40,7 +32,7 @@ for arg in "$@"; do
         --with-devices) ;;
         --gather-vm-info) GATHER_VM_INFO=true ;;
         --gather-lun-info) GATHER_LUN_INFO=true ;;
-        *) die "Unknown argument: $arg" ;;
+        *) log_msg "FATAL: Unknown argument: $arg"; exit 1 ;;
     esac
 done
 
@@ -303,8 +295,9 @@ gather_vm_info() {
         build_guest_device_map
         emit_vm_data
     else
+        REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "list-vm-disks")
         ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
-            "/usr/local/lib/zfsutilities/bin/list-vm-disks --gather-vm-info" 2>&1
+            "$REMOTE_SCRIPT --gather-vm-info" 2>&1
     fi
 }
 
@@ -312,8 +305,9 @@ gather_lun_info() {
     if [[ "$MY_HOST" == "$STORAGE_HOST" ]]; then
         emit_lun_data
     else
+        REMOTE_SCRIPT=$(remote_zfsutility_script "$STORAGE_HOST" "list-vm-disks")
         ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" \
-            "/usr/local/lib/zfsutilities/bin/list-vm-disks --gather-lun-info" 2>&1
+            "$REMOTE_SCRIPT --gather-lun-info" 2>&1
     fi
 }
 
@@ -424,8 +418,14 @@ run_single_node() {
 run_two_node() {
     local vm_data lun_data
 
-    vm_data=$(gather_vm_info) || die "Failed to gather VM info from $COMPUTE_HOST"
-    lun_data=$(gather_lun_info) || die "Failed to gather LUN info from $STORAGE_HOST"
+    vm_data=$(gather_vm_info) || {
+        log_msg "FATAL: Failed to gather VM info from $COMPUTE_HOST"
+        exit 1
+    }
+    lun_data=$(gather_lun_info) || {
+        log_msg "FATAL: Failed to gather LUN info from $STORAGE_HOST"
+        exit 1
+    }
 
     parse_vm_data "$vm_data"
     print_two_node_output "$lun_data"

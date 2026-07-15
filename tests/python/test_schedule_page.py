@@ -45,12 +45,7 @@ class TestRegenerateCronPath(unittest.TestCase):
             }
         ]
         with temp_config_dir():
-            # Simulate running from a deployed version path
-            deployed_file = os.path.join(
-                "/usr/local/lib/zfsutilities/versions/0.36.0",
-                "07 GTK + Python", "schedule_page.py"
-            )
-            with patch.object(schedule_page, "__file__", deployed_file):
+            with patch("path_utils.is_deployed_layout", return_value=True):
                 with patch.object(schedule_page, "list_profiles", return_value=mock_profile):
                     schedule_page._regenerate_cron(MagicMock())
 
@@ -74,9 +69,7 @@ class TestRegenerateCronPath(unittest.TestCase):
             }
         ]
         with temp_config_dir():
-            # Simulate running from the repository
-            repo_file = os.path.join(GUI_SRC, "schedule_page.py")
-            with patch.object(schedule_page, "__file__", repo_file):
+            with patch("path_utils.is_deployed_layout", return_value=False):
                 with patch.object(schedule_page, "list_profiles", return_value=mock_profile):
                     schedule_page._regenerate_cron(MagicMock())
 

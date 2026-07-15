@@ -120,6 +120,9 @@ ssh() {
         emit_lun_data
     elif [[ "$cmd" == *"--gather-vm-info"* ]]; then
         emit_vm_data
+    elif [[ "$cmd" == *"realpath"* ]] || [[ "$cmd" == *"readlink"* ]]; then
+        # remote_zfsutilities_bin resolution used by remote_zfsutility_script.
+        echo "/usr/local/lib/zfsutilities/current/bin"
     else
         command ssh "$@"
     fi
@@ -131,6 +134,7 @@ ssh() {
 # ------------------------------------------------------------------------------
 
 export NODE_CONF="$node_conf_two"
+export NODE_LIB="$old_mydir/08 Two-node/node-lib.sh"
 _test_hostname="tweety"
 source "$old_mydir/08 Two-node/list-vm-disks"
 
@@ -345,7 +349,7 @@ EOF
     _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
 
     # Re-source node-lib.sh so is_single_node reflects the new config.
-    source /usr/local/lib/node-lib.sh
+    source "$mydir/08 Two-node/node-lib.sh"
 
     local output
     output=$(run_single_node 2>&1)
@@ -359,7 +363,7 @@ EOF
 
     # Restore two-node config for remaining tests.
     export NODE_CONF="$node_conf_two"
-    source /usr/local/lib/node-lib.sh
+    source "$mydir/08 Two-node/node-lib.sh"
 
     if [[ $ok -eq 1 ]]; then
         test_pass

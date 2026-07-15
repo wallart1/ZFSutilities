@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # iscsi-restore-luns
 # Idempotent restore of all iSCSI backstores and LUN mappings from saveconfig.json.
 # Handles both encrypted and non-encrypted LUNs.
@@ -9,7 +9,12 @@
 # Usage: sudo iscsi-restore-luns
 # Install to: /usr/local/lib/zfsutilities/bin/iscsi-restore-luns on the storage host
 
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 # iSCSI-only script — exit silently in single-node mode
 is_single_node && exit 0
@@ -17,7 +22,7 @@ is_single_node && exit 0
 SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
 
 if [[ ! -f "$SAVEFILE" ]]; then
-    echo "✗ saveconfig.json not found: $SAVEFILE" >&2
+    log_msg "FATAL: saveconfig.json not found: $SAVEFILE"
     exit 1
 fi
 
@@ -33,7 +38,7 @@ ADDED_LUNS=0
 while IFS=: read -r name dev; do
     [[ -z "$name" ]] && continue
     if [[ ! -e "$dev" ]]; then
-        echo "  ⚠ $name — device not available ($dev)"
+        log_msg "WARN:   $name — device not available ($dev)"
         continue
     fi
     if targetcli /backstores/block create "$name" "$dev" >/dev/null 2>&1; then
@@ -91,10 +96,10 @@ fi
 echo ""
 
 # Save only if all expected LUNs are active
-/usr/local/lib/zfsutilities/bin/safe-iscsi-save
+"$mydir/safe-iscsi-save"
 
 # Rescan compute host so it discovers any newly restored LUNs
 if [[ $ADDED_BS -gt 0 || $ADDED_LUNS -gt 0 ]]; then
     echo "=== Rescanning compute host ==="
-    /usr/local/lib/zfsutilities/bin/rescan-storage
+    "$mydir/rescan-storage"
 fi

@@ -1,20 +1,18 @@
-#!/bin/bash
+#!/usr/bin/bash
 # show-lun-map
 # Shows which iSCSI LUN maps to which /dev/sd* device and size.
 #
 # Install to: /usr/local/lib/zfsutilities/bin/show-lun-map on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 MY_HOST=$(hostname -s)
-
-die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
-}
-
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
 
 if is_single_node; then
     echo "show-lun-map: not applicable in single-node mode (no iSCSI)"
@@ -23,7 +21,8 @@ fi
 
 # --- If not on the compute host, delegate via SSH ---
 if [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    exec ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/show-lun-map"
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "show-lun-map")
+    exec ssh root@"$COMPUTE_HOST" "$REMOTE_SCRIPT"
 fi
 
 # === Running on the compute host ===
@@ -64,7 +63,7 @@ while IFS= read -r link; do
 done < <(ls /dev/disk/by-path/ip-${STORAGE_IP}* 2>/dev/null)
 
 if [[ ${#LUN_TO_DEV[@]} -eq 0 ]]; then
-    echo "No iSCSI devices found. Is the storage network up?"
+    log_msg "FATAL: No iSCSI devices found. Is the storage network up?"
     exit 1
 fi
 

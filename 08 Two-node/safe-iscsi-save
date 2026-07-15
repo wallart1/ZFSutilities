@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # safe-iscsi-save
 # Save iSCSI target configuration ONLY if all expected LUNs are currently active.
 #
@@ -24,6 +24,13 @@
 # Returns: 0 if config was saved, 1 if save was skipped (degraded state)
 #
 # Install to: /usr/local/lib/zfsutilities/bin/safe-iscsi-save on the storage host
+
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
 BOOTFILE="/etc/rtslib-fb-target/saveconfig-boot.json"
@@ -56,7 +63,7 @@ regenerate_expected_backstores_manifest() {
         echo "✓ Regenerated expected-backstores manifest"
     else
         rm -f "$tmpfile"
-        echo "⚠ Could not regenerate expected-backstores manifest (no backstores found)" >&2
+        log_msg "WARN: Could not regenerate expected-backstores manifest (no backstores found)"
     fi
 }
 
@@ -110,18 +117,18 @@ PYEOF
     if [[ $? -eq 0 ]]; then
         echo "✓ Boot config generated ($count encrypted backstores excluded)"
     else
-        echo "⚠ Failed to generate boot config" >&2
+        log_msg "WARN: Failed to generate boot config"
     fi
 }
 
 [[ -f "$SAVEFILE" ]] || {
-    echo "✗ safe-iscsi-save: Config not found: $SAVEFILE" >&2
+    log_msg "FATAL: safe-iscsi-save: Config not found: $SAVEFILE"
     exit 1
 }
 
 [[ -f "$MANIFEST" ]] || {
-    echo "✗ safe-iscsi-save: Manifest not found: $MANIFEST" >&2
-    echo "  Create it with one backstore name per line (vm-N-disk-N format)." >&2
+    log_msg "FATAL: safe-iscsi-save: Manifest not found: $MANIFEST"
+    log_msg "FATAL:   Create it with one backstore name per line (vm-N-disk-N format)."
     exit 1
 }
 
@@ -129,8 +136,8 @@ PYEOF
 expected=$(grep -cE '^vm-[0-9]+-disk-[0-9]+$' "$MANIFEST")
 
 if [[ "${expected:-0}" -eq 0 ]]; then
-    echo "✗ safe-iscsi-save: Manifest is empty or has no valid entries" >&2
-    echo "  File: $MANIFEST" >&2
+    log_msg "FATAL: safe-iscsi-save: Manifest is empty or has no valid entries"
+    log_msg "FATAL:   File: $MANIFEST"
     exit 1
 fi
 
@@ -142,16 +149,16 @@ if ! active=$(targetcli /backstores/block ls 2>/dev/null | grep -c '/dev/zvol/')
 fi
 
 if [[ "$active" -lt "$expected" ]]; then
-    echo "✗ safe-iscsi-save: iSCSI target is degraded ($active of $expected LUNs active)" >&2
-    echo "  Some backstores in manifest are not active." >&2
-    echo "  saveconfig.json NOT overwritten. To force save: targetcli saveconfig" >&2
+    log_msg "FATAL: safe-iscsi-save: iSCSI target is degraded ($active of $expected LUNs active)"
+    log_msg "FATAL:   Some backstores in manifest are not active."
+    log_msg "FATAL:   saveconfig.json NOT overwritten. To force save: targetcli saveconfig"
     exit 1
 fi
 
 # Additional check: active should not greatly exceed expected (catches orphaned backstores)
 if [[ "$active" -gt "$expected" ]]; then
-    echo "⚠ safe-iscsi-save: More backstores ($active) than manifest ($expected)" >&2
-    echo "  This may indicate orphaned backstores or manifest out of date. Saving anyway." >&2
+    log_msg "WARN: safe-iscsi-save: More backstores ($active) than manifest ($expected)"
+    log_msg "WARN:   This may indicate orphaned backstores or manifest out of date. Saving anyway."
 fi
 
 targetcli saveconfig >/dev/null 2>&1

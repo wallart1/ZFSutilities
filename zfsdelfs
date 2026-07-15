@@ -8,14 +8,21 @@
 
 source ~/bashinit
 
+# Record this script's directory early so fatal configuration errors can
+# source bashfatal and locate node-lib.sh, even when a caller has overridden
+# $mydir (e.g., the test suite).  The full bashinit / rootcheck sequence is
+# intentionally delayed until the entry function runs because this file is
+# also sourced as a library.
+_zfsdelfs_dir=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+
 # Node configuration (single-node or two-node)
 : "${NODE_CONF:=/etc/zfsutilities-node.conf}"
 if [[ ! -r "$NODE_CONF" ]]; then
     if [[ -r /etc/two-node.conf ]]; then
         NODE_CONF="/etc/two-node.conf"
     else
-        echo "✗ Missing $NODE_CONF — install via: 10 Installers/install-single-node" >&2
-        exit 1
+        log_msg "FATAL: Missing $NODE_CONF — install via: 10 Installers/install-single-node"
+        source "$_zfsdelfs_dir/bashfatal" 1
     fi
 fi
 source "$NODE_CONF"
@@ -221,16 +228,37 @@ function iscsi_rebuild_torn_down {
 
     if [[ "$rebuilt" == true && "$NODE_MODE" != "single-node" ]]; then
         log_msg "INFO: Saving iSCSI configuration..."
-        /usr/local/lib/zfsutilities/bin/safe-iscsi-save
+        local safe_iscsi_save
+        safe_iscsi_save=$(find_zfsutility_script safe-iscsi-save)
+        "$safe_iscsi_save"
         log_msg "INFO: Triggering iSCSI rescan on ${COMPUTE_HOST}..."
-        ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/rescan-storage" 2>/dev/null \
+        local rescan_path
+        rescan_path=$(remote_zfsutility_script "$COMPUTE_HOST" rescan-storage)
+        ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
+            "bash -lc $(printf '%q' "$rescan_path")" 2>/dev/null \
             || log_msg "WARN: Could not rescan $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
     fi
 }
 
 function delfs {
     local fsarray fs
+
+    # Initialise bashinit now because this file is sourced as a library.
+    # rootcheck was deliberately deferred to this entry function.
     bashinit
+
+    # Locate node-lib.sh without hard-coding the deployment path.
+    # Use $_zfsdelfs_dir because callers (and tests) may override $mydir.
+    local node_lib=""
+    for cand in "$_zfsdelfs_dir/08 Two-node/node-lib.sh" "$_zfsdelfs_dir/../lib/node-lib.sh"; do
+        [[ -f "$cand" ]] && { node_lib="$cand"; break; }
+    done
+    if [[ -z "$node_lib" ]]; then
+        log_msg "FATAL: Could not locate node-lib.sh"
+        source "$_zfsdelfs_dir/bashfatal"
+    fi
+    source "$node_lib"
+
     source $mydir/zfsbuildfsarray
     source $mydir/zfsdelallsnaps
     source $mydir/zfsoverrides

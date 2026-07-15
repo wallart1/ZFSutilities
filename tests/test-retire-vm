@@ -118,21 +118,29 @@ run_retire() {
 
         # Capture ssh invocations and return canned storage-host answers.
         ssh() {
-            local stdin
-            stdin=$(cat)
-            {
-                echo "SSH:${*}"
-                echo "$stdin"
-            } >> "$_capture_dir/ssh"
-
-            local has_bash=0 has_s=0 arg
+            local has_bash=0 has_s=0 arg stdin=""
             for arg in "$@"; do
                 [[ "$arg" == "bash" ]] && has_bash=1
                 [[ "$arg" == "-s" ]] && has_s=1
             done
 
+            # Only here-doc SSH fragments provide stdin.  Non-here-doc calls
+            # (e.g. remote version-resolution probes or simple remote commands)
+            # must not consume the interactive answers fed to this subshell.
+            if [[ $has_bash -eq 1 && $has_s -eq 1 ]]; then
+                stdin=$(cat)
+            fi
+
+            {
+                echo "SSH:${*}"
+                echo "$stdin"
+            } >> "$_capture_dir/ssh"
+
             if [[ "$*" == *"zfs get -H -o value mountpoint"* ]]; then
                 echo "$_mock_archive_mount"
+            elif [[ "$*" == *"realpath"* ]] || [[ "$*" == *"readlink"* ]]; then
+                # remote_zfsutility_script resolves the remote active version.
+                echo "/usr/local/lib/zfsutilities/current/bin"
             elif [[ $has_bash -eq 1 && $has_s -eq 1 ]]; then
                 # Detect two-node target:lun resolution calls from retire-vm.
                 local has_target_lun=0 arg
@@ -188,14 +196,20 @@ run_retire() {
             fi
         done
 
-        set -- "$vmid"
-        # Load the script via eval so we can drop its built-in ask_yn and
-        # keep the alternating-response mock defined above.
+        # Load the script from a temp file (instead of eval) so retire-vm's
+        # own SSH here-doc bodies are read from the file, leaving the
+        # subshell's stdin free for the interactive prompts.
+        local script_file="$_mock_zfs_state_dir/retire-vm"
         script_text=$(cat "$mydir/09 ZFS clone support/retire-vm")
         script_text=$(echo "$script_text" | sed '/^ask_yn() {/,/^}$/d')
-        set -- "$vmid"
-        eval "$script_text"
-    ) <<< "$stdin_input" 2>&1
+        printf '%s\n' "$script_text" > "$script_file"
+
+        # Source the temp file in the current shell so it inherits the mocks
+        # defined above (zfs, ssh, qm, etc.).
+        source "$script_file" "$vmid"
+    ) 2>&1 <<EOF
+$stdin_input
+EOF
 
     cat "$capture_dir/snapshots" 2>/dev/null || true
     cat "$capture_dir/ssh" 2>/dev/null || true

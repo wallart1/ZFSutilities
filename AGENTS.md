@@ -83,6 +83,33 @@ rootcheck
 - `$mydir` is set by `bashinit` to the calling script's directory
 - Function scripts are sourced (not executed) and call functions by name
 
+### Node-Aware Scripts (`08 Two-node/` and `09 ZFS clone support/`)
+
+Scripts that interact with the storage/compute hosts add `node-lib.sh` to the
+standard header:
+
+```bash
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
+```
+
+`NODE_LIB` is optional; it lets tests (and unusual layouts) point at the
+library explicitly while production deployments fall back to
+`find_zfsutility_script node-lib.sh`.
+
+`bashinit` provides `find_zfsutility_script` for locating sibling scripts
+and libraries across the repo or deployed `bin/` directory (e.g.
+`find_zfsutility_script promote-vm-clone`).  `node-lib.sh` provides
+`remote_zfsutility_script` for resolving the active deployed version on a
+remote host (e.g. `remote_zfsutility_script "$HOST" "remove-vm-disk"`).
+Remote `bash -s` heredocs use
+`mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)` so the code
+running on the remote side locates its own installed copy.
+
 ### Core Components
 
 **`zfs-send-receive`** - Main workhorse for copying ZFS data. Key parameters:
@@ -226,6 +253,7 @@ The `bashinit` script provides these functions:
 - `log_msg "message"` - Logs with file:line prefix to stderr and to `$ZFSUTILITIES_LOG_FILE` if set. All messages are always emitted; filtering by message level is done in the GUI log viewers.
 - `ask_yn "prompt"` - Prompts for y/n with input validation; returns 0 for yes, 1 for no
 - `calledbybash` - Returns 0 if script was executed directly (not sourced)
+- `find_zfsutility_script <name>` - Searches the repo or deployed layout for a sibling script or library and prints its absolute path. Used to locate `node-lib.sh` and `rootcheck` from scripts in `08 Two-node/` and `09 ZFS clone support/` without hard-coding paths.
 
 **Deployment**: `deploy-version` places software under
 `/usr/local/lib/zfsutilities/versions/<version>/` without touching active
@@ -278,6 +306,13 @@ from `/etc/zfsutilities-node.conf` (fallback `/etc/two-node.conf`), reads the
 peer's `/usr/local/lib/zfsutilities/current/VERSION` via SSH as `root`, and logs
 a warning if the versions differ or the peer is unreachable. The check runs in a
 background thread so GUI startup is not delayed.
+
+Path resolution for the Python layer is centralized in
+`07 GTK + Python/path_utils.py`, which mirrors the bash `$mydir` /
+`find_zfsutility_script` / `remote_zfsutilities_bin` behavior.  The module
+honors `ZFSUTILITIES_VERSION_BASE`, `ZFSUTILITIES_REMOTE_BIN`, and
+`ZFSUTILITIES_REMOTE_VERSION` environment overrides for non-standard
+installations.
 
 ## Test Framework
 

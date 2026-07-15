@@ -22,13 +22,15 @@ entry:
 
 The library also defines helper functions used throughout these scripts:
 
-| Function        | Behavior                                                                 |
-| --------------- | ------------------------------------------------------------------------ |
-| `is_single_node`| Returns 0 in `single-node` mode                                          |
-| `is_two_node`   | Returns 0 in `two-node` mode                                             |
-| `pool_to_target <pool>` | Echoes the full IQN for a pool; returns 1 if unknown or single-node |
-| `pool_list`     | Echoes valid pool names from `POOL_TARGET` (empty in single-node)        |
-| `is_known_pool <pool>` | Returns 0 if the pool is in `POOL_TARGET` (always 1 in single-node) |
+| Function                    | Behavior                                                                 |
+| --------------------------- | ------------------------------------------------------------------------ |
+| `is_single_node`            | Returns 0 in `single-node` mode                                          |
+| `is_two_node`               | Returns 0 in `two-node` mode                                             |
+| `pool_to_target <pool>`     | Echoes the full IQN for a pool; returns 1 if unknown or single-node      |
+| `pool_list`                 | Echoes valid pool names from `POOL_TARGET` (empty in single-node)        |
+| `is_known_pool <pool>`      | Returns 0 if the pool is in `POOL_TARGET` (always 1 in single-node)      |
+| `find_zfsutility_script <name>` | Locates a sibling script across repo or deployed layouts             |
+| `remote_zfsutility_script <host> <name>` | Returns the remote path to `<name>` on `<host>`, or just `<name>` on failure |
 
 The script-specific Arguments and Globals tables below omit these unless a
 script uses one in a non-obvious way.

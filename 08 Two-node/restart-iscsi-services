@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # restart-iscsi-services
 # Restart iSCSI target services after ZFS keys are loaded.
 #
@@ -12,7 +12,12 @@
 #
 # Install to: /usr/local/lib/zfsutilities/bin/restart-iscsi-services on the storage host
 
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 CONF="/etc/iscsi-encrypted-luns.conf"
 
@@ -66,7 +71,7 @@ check_running_vms() {
 
     if [[ ${#running_vms[@]} -gt 0 ]]; then
         echo ""
-        echo "⚠ ERROR: The following VMs are currently running on $COMPUTE_HOST:"
+        log_msg "FATAL: The following VMs are currently running on $COMPUTE_HOST:"
         for vm in "${running_vms[@]}"; do
             echo "    VM $vm"
         done
@@ -103,9 +108,9 @@ if [[ -f "$CONF" ]]; then
         if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
             echo "  ✓ $name configured"
         elif [[ ! -e "$device" ]]; then
-            echo "  ⚠ $name — device not available (keys not loaded?)"
+            log_msg "WARN:   $name — device not available (keys not loaded?)"
         else
-            echo "  ✗ $name — missing from iSCSI target"
+            log_msg "WARN:   $name — missing from iSCSI target"
         fi
     done < "$CONF"
 else
@@ -114,7 +119,7 @@ fi
 
 # Save only if all expected LUNs are active
 echo ""
-/usr/local/lib/zfsutilities/bin/safe-iscsi-save
+"$mydir/safe-iscsi-save"
 
 # Show current status
 echo ""

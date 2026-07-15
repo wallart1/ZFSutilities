@@ -17,6 +17,8 @@ source ~/bashinit
 STATEFILE="/tmp/zfsscruball.state"
 
 function scruball {
+    # bashinit / rootcheck are delayed until the entry function because this
+    # file is also sourced as a library by the test suite.
     bashinit
     export STATEFILE        # Make state file path available to subshells.
     source $mydir/rootcheck

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # resize-vm-disk <pool> <vmid> <disk-num> <new-size>
 # Grows a zvol and triggers a rescan so the compute host sees the new size.
 #
@@ -7,7 +7,12 @@
 #
 # NOTE: ZFS supports online growth only. Shrinking is not supported.
 
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 MY_HOST=$(hostname -s)
 
@@ -36,11 +41,6 @@ usage() {
     exit 1
 }
 
-die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
-}
-
 # Filter --skip-rescan from args
 SKIP_RESCAN=false
 CLEAN_ARGS=()
@@ -58,31 +58,46 @@ DISKNUM="$3"
 NEWSIZE="$4"
 
 if is_two_node; then
-    is_known_pool "$POOL" || \
-        die "Pool must be one of: $(pool_list | paste -sd ' ' -). Got: $POOL"
+    is_known_pool "$POOL" || {
+        log_msg "FATAL: Pool must be one of: $(pool_list | paste -sd ' ' -). Got: $POOL"
+        exit 1
+    }
 else
-    zpool list -H -o name "$POOL" >/dev/null 2>&1 || \
-        die "Pool '$POOL' not found. Available pools: $(zpool list -H -o name 2>/dev/null | paste -sd ' ' -)"
+    zpool list -H -o name "$POOL" >/dev/null 2>&1 || {
+        log_msg "FATAL: Pool '$POOL' not found. Available pools: $(zpool list -H -o name 2>/dev/null | paste -sd ' ' -)"
+        exit 1
+    }
 fi
-[[ "$VMID" =~ ^[0-9]+$ ]] || die "VMID must be a number, got: $VMID"
-[[ "$DISKNUM" =~ ^[0-9]+$ ]] || die "disk-num must be a number, got: $DISKNUM"
-[[ "$NEWSIZE" =~ ^[0-9]+(\.[0-9]+)?[KMGTP]$ ]] || \
-    die "new-size must be a total size like 200G or 1T (not an increment), got: $NEWSIZE"
-
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+[[ "$VMID" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: VMID must be a number, got: $VMID"
+    exit 1
+}
+[[ "$DISKNUM" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: disk-num must be a number, got: $DISKNUM"
+    exit 1
+}
+[[ "$NEWSIZE" =~ ^[0-9]+(\.[0-9]+)?[KMGTP]$ ]] || {
+    log_msg "FATAL: new-size must be a total size like 200G or 1T (not an increment), got: $NEWSIZE"
+    exit 1
+}
 
 # --- If not on the storage host, delegate storage work via SSH (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
     echo "Connecting to $STORAGE_HOST for storage operations..."
-    ssh root@"$STORAGE_HOST" "/usr/local/lib/zfsutilities/bin/resize-vm-disk '$POOL' '$VMID' '$DISKNUM' '$NEWSIZE' --skip-rescan" \
-        || die "Storage operations failed on $STORAGE_HOST"
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$STORAGE_HOST" "resize-vm-disk")
+    ssh root@"$STORAGE_HOST" "$REMOTE_SCRIPT '$POOL' '$VMID' '$DISKNUM' '$NEWSIZE' --skip-rescan" \
+        || {
+            log_msg "FATAL: Storage operations failed on $STORAGE_HOST"
+            exit 1
+        }
     echo ""
     echo "Rescanning iSCSI on $(hostname)..."
     if [[ "$MY_HOST" == "$COMPUTE_HOST" ]]; then
-        /usr/local/lib/zfsutilities/bin/rescan-storage
+        "$mydir/rescan-storage"
     else
-        ssh root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/rescan-storage" 2>&1 \
-            || echo "⚠ Could not rescan $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+        REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
+        ssh root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1 \
+            || log_msg "WARN: Could not rescan $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
     fi
     exit 0
 fi
@@ -98,7 +113,8 @@ echo ""
 
 # --- Check zvol exists ---
 if ! zfs list -H -o name "$ZVOL_NAME" 2>/dev/null | grep -q .; then
-    die "Zvol does not exist: $ZVOL_NAME"
+    log_msg "FATAL: Zvol does not exist: $ZVOL_NAME"
+    exit 1
 fi
 
 CURRENT_SIZE=$(zfs get -H -o value volsize "$ZVOL_NAME")
@@ -116,10 +132,11 @@ echo "  New size: $NEW_ACTUAL"
 # --- Trigger rescan on the compute host (two-node only, unless called remotely) ---
 if is_two_node && [[ "$SKIP_RESCAN" == false ]]; then
     echo "Triggering iSCSI rescan on $COMPUTE_HOST..."
-    if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/rescan-storage" 2>&1; then
+    REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
+    if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1; then
         echo "✓ Rescan triggered"
     else
-        echo "⚠ Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+        log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
     fi
 fi
 

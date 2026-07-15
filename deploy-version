@@ -12,6 +12,11 @@
 
 set -e
 
+source ~/bashinit
+bashinit
+source "$mydir/rootcheck"
+rootcheck
+
 MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
 
 # ------------------------------------------------------------------
@@ -51,8 +56,8 @@ usage() {
 }
 
 die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
+    log_msg "FATAL: $*"
+    source "$MYDIR/bashfatal" 1
 }
 
 [[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
@@ -81,7 +86,7 @@ elif [[ $# -ge 1 ]]; then
     DEPLOY_GROUPS=("$@")
 fi
 
-VERSION_BASE="/usr/local/lib/zfsutilities"
+VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
 VERSION_DIR="$VERSION_BASE/versions/$VERSION"
 
 # ------------------------------------------------------------------
@@ -169,8 +174,7 @@ validate_critical_scripts() {
         fi
     done
     if [[ $missing -gt 0 ]]; then
-        echo "  ⚠ WARNING: $missing critical script(s) missing from deployment." >&2
-        echo "             Ensure deploy-version is run from the repository root." >&2
+        log_msg "WARN: $missing critical script(s) missing from deployment. Ensure deploy-version is run from the repository root."
     fi
 }
 
@@ -192,7 +196,7 @@ deploy_to_host() {
         if [[ -f "$src" ]]; then
             ln -sfn "../08 Two-node/$script" "$VERSION_DIR/bin/$script"
         else
-            echo "  ⚠ Missing: $src"
+            log_msg "WARN: Missing: $src"
         fi
     done
 
@@ -283,13 +287,13 @@ deploy_to_host() {
 
     # Rebuild static documentation site so it is version-correct
     if ! command -v mkdocs &>/dev/null; then
-        echo "  ✗ ERROR: mkdocs is not installed. Cannot build documentation." >&2
-        return 1
+        log_msg "FATAL: mkdocs is not installed. Cannot build documentation."
+        source "$MYDIR/bashfatal" 1
     fi
     if [[ -f "$VERSION_DIR/06 Docs/mkdocs.yml" ]]; then
         if ! (cd "$VERSION_DIR/06 Docs" && mkdocs build >/dev/null 2>&1); then
-            echo "  ✗ ERROR: Documentation build failed." >&2
-            return 1
+            log_msg "FATAL: Documentation build failed."
+            source "$MYDIR/bashfatal" 1
         fi
     fi
 
@@ -397,6 +401,6 @@ echo "=== Done ==="
 echo "  Deployed: $VERSION"
 echo "  Location: $VERSION_DIR"
 echo ""
-echo "  Scripts are available via PATH: /usr/local/lib/zfsutilities/bin"
+echo "  Scripts are available via PATH: $VERSION_BASE/bin"
 echo "  To activate:   sudo switch-version $VERSION"
 echo "  To list all:   sudo switch-version --list"

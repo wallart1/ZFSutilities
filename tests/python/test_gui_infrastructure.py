@@ -606,8 +606,9 @@ class TestGtkMocking(unittest.TestCase):
     def test_docs_viewer_imports(self):
         with mock_gtk():
             import docs_viewer
+            import path_utils
             self.assertTrue(hasattr(docs_viewer, "DocsViewerWindow"))
-            self.assertTrue(hasattr(docs_viewer, "resolve_docs_path"))
+            self.assertTrue(hasattr(path_utils, "get_docs_path"))
 
     def test_docs_viewer_window_instantiates(self):
         with mock_gtk() as gtk_mock:
@@ -618,9 +619,9 @@ class TestGtkMocking(unittest.TestCase):
 
     def test_docs_path_resolution(self):
         with mock_gtk():
-            import docs_viewer
+            import path_utils
             script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
-            path = docs_viewer.resolve_docs_path(script_dir)
+            path = path_utils.get_docs_path(script_dir)
             expected = os.path.join(REPO_ROOT, "06 Docs", "site", "index.html")
             self.assertEqual(path, expected)
             self.assertTrue(os.path.isfile(path))

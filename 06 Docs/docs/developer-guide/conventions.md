@@ -14,6 +14,26 @@ rootcheck
 `bashinit` must come first because it sets `$mydir`. All subsequent `source`
 calls use `$mydir` to find sibling scripts.
 
+### Node-aware scripts
+
+Scripts in `08 Two-node/` and `09 ZFS clone support/` that interact with the
+storage or compute hosts add `node-lib.sh` to the standard header:
+
+```bash
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
+```
+
+`NODE_LIB` is optional; it lets tests (and unusual layouts) point at the
+library explicitly while production deployments fall back to
+`find_zfsutility_script node-lib.sh`. Use `remote_zfsutility_script` when
+delegating work to a peer node over SSH so the remote side resolves its own
+active deployed version.
+
 ## Dual-Mode Script Pattern
 
 Scripts should work both when run directly from the shell and when sourced by

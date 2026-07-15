@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.59.16
+
+### Changed
+
+- **Unified path resolution across the codebase** — New helpers eliminate
+  hard-coded `/usr/local/lib/zfsutilities/...` paths so scripts work from the
+  repo, a deployed version, or an arbitrary installation prefix.
+  - `bashinit` now provides `find_zfsutility_script <name>`, which searches
+    repo subdirectories and deployed `bin/` / `lib/` / `/usr/local/lib/`
+    layouts and prints the absolute path of a sibling script or library.
+  - `08 Two-node/node-lib.sh` adds `remote_zfsutilities_bin <host>` and
+    `remote_zfsutility_script <host> <name>` to resolve the active deployed
+    version on a peer node over SSH.
+  - New `07 GTK + Python/path_utils.py` mirrors the bash behavior for the
+    Python layer: `find_script`, `resolve_local_bin`, `get_version`,
+    `get_docs_path`, `get_profile_runner_path`, `resolve_remote_bin`,
+    `resolve_remote_script`, and `resolve_remote_version`. It honors
+    `ZFSUTILITIES_VERSION_BASE`, `ZFSUTILITIES_REMOTE_BIN`, and
+    `ZFSUTILITIES_REMOTE_VERSION` overrides.
+- **Standardized node-aware script headers** — All scripts in `08 Two-node/`
+  and `09 ZFS clone support/` now use the same initialization sequence:
+  `source ~/bashinit`, `bashinit`, locate `node-lib.sh` and `rootcheck` via
+  `find_zfsutility_script`, then call `rootcheck`. `NODE_LIB` can be set
+  explicitly for tests or unusual layouts.
+- **Standardized fatal handling and logging** — `deploy-version`,
+  `switch-version`, `uninstall-version`, and the two-node/clone-support
+  scripts now use `log_msg "FATAL: ..."` and `bashfatal` instead of ad-hoc
+  `echo >&2; exit 1` patterns. Shebangs are normalized to `#!/usr/bin/bash`.
+- **GUI uses centralized path helpers** — `dashboard_page.py`,
+  `docs_viewer.py`, `schedule_page.py`, and `zfsutilities_gui.py` now call
+  `path_utils` functions instead of embedding their own path/version logic.
+
+### Documentation
+
+- Added `path_utils.py` to the Python modules reference.
+- Documented `find_zfsutility_script` and `remote_zfsutility_script` in the
+  `node-lib.sh` and two-node command reference pages.
+- Updated `conventions.md` with the node-aware script header pattern.
+- Removed stale planning documents (`Installer test plan.md`,
+  `InternalsDocPlan.md`, `ROADMAP2.md`).
+
+### Tests
+
+- Added `tests/test-node-lib` covering `node-lib.sh` helpers including
+  `find_zfsutility_script`.
+- Added `tests/python/test_path_utils.py` covering all public functions in
+  `path_utils.py`.
+- Updated `tests/python/test_dashboard_page.py`,
+  `tests/python/test_gui_infrastructure.py`, and
+  `tests/python/test_schedule_page.py` for the path-utils refactor.
+- Updated bash tests for `list-vm-disks`, `restart-iscsi-services`,
+  `retire-vm`, `safe-iscsi-save`, and `unlock-zfs-keys` to match the new
+  script headers and logging.
+
 ## 0.59.15
 
 ### Changed

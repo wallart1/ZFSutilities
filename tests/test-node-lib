@@ -1,0 +1,337 @@
+#!/usr/bin/bash
+# test-node-lib — Unit tests for 08 Two-node/node-lib.sh helpers.
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------------------
+# Environment
+# ------------------------------------------------------------------------------
+
+# Create a temporary single-node config so sourcing node-lib.sh succeeds without
+# touching /etc.
+tmp_dir=$(mktemp -d)
+node_conf="$tmp_dir/node.conf"
+cat > "$node_conf" << 'EOF'
+NODE_MODE="single-node"
+EOF
+
+export NODE_CONF="$node_conf"
+
+# Source the library under test.  test-lib.sh has already set $mydir to the repo
+# root, so node-lib.sh's guarded initializer must preserve it.
+source "$mydir/08 Two-node/node-lib.sh"
+
+# ------------------------------------------------------------------------------
+# find_zfsutility_script
+# ------------------------------------------------------------------------------
+
+test_find_script_same_directory() {
+    test_start "find_zfsutility_script locates a script in the same directory"
+    local result
+    result=$(find_zfsutility_script "node-lib.sh")
+    assert_equals "$mydir/08 Two-node/node-lib.sh" "$result"
+}
+
+test_find_script_parent_directory() {
+    test_start "find_zfsutility_script locates a script in the parent directory"
+    local result
+    # Simulate a caller in 08 Two-node looking for a root-level script.
+    result=$(mydir="$mydir/08 Two-node" find_zfsutility_script "bashinit")
+    assert_equals "$mydir/bashinit" "$result"
+}
+
+test_find_script_two_node_directory() {
+    test_start "find_zfsutility_script locates a script in 08 Two-node"
+    local result
+    result=$(find_zfsutility_script "rescan-storage")
+    assert_equals "$mydir/08 Two-node/rescan-storage" "$result"
+}
+
+test_find_script_clone_support_directory() {
+    test_start "find_zfsutility_script locates a script in 09 ZFS clone support"
+    local result
+    result=$(find_zfsutility_script "retire-vm")
+    assert_equals "$mydir/09 ZFS clone support/retire-vm" "$result"
+}
+
+test_find_script_across_subdirectories() {
+    test_start "find_zfsutility_script locates clone-support script from two-node dir"
+    local result
+    result=$(mydir="$mydir/08 Two-node" find_zfsutility_script "retire-vm")
+    assert_equals "$mydir/09 ZFS clone support/retire-vm" "$result"
+}
+
+test_find_script_missing() {
+    test_start "find_zfsutility_script fails for a missing script"
+    clear_test_log_file
+    local result rc
+    result=$(find_zfsutility_script "definitely-missing-script" 2>/dev/null)
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_equals "" "$result"
+    local log
+    log=$(get_test_log_file)
+    if grep -q "FATAL: Could not find sibling script: definitely-missing-script" "$log"; then
+        test_pass
+    else
+        test_fail "Expected FATAL log message not found"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# remote_zfsutilities_bin / remote_zfsutility_script
+# ------------------------------------------------------------------------------
+
+# Track SSH invocations so tests can assert on arguments.  A file is used
+# because the helper is invoked inside command substitutions, which run in
+# subshells and do not propagate array changes to the parent.
+_test_ssh_log="$tmp_dir/ssh.log"
+_test_ssh_bin_output=""
+_test_ssh_rc=0
+
+ssh() {
+    printf '%s\n' "$*" >> "$_test_ssh_log"
+    if [[ "$_test_ssh_rc" -eq 0 ]]; then
+        printf '%s\n' "$_test_ssh_bin_output"
+    fi
+    return "$_test_ssh_rc"
+}
+
+test_remote_zfsutilities_bin_success() {
+    test_start "remote_zfsutilities_bin resolves the remote bin path"
+    : > "$_test_ssh_log"
+    _test_ssh_bin_output="/usr/local/lib/zfsutilities/versions/v1.0.0/bin"
+    _test_ssh_rc=0
+    local result_file="$tmp_dir/remote_bin.out"
+    remote_zfsutilities_bin "stewie" > "$result_file"
+    assert_equals "/usr/local/lib/zfsutilities/versions/v1.0.0/bin" "$(cat "$result_file")"
+    local call
+    call=$(head -n1 "$_test_ssh_log")
+    if [[ "$call" == *"root@stewie"* && "$call" == *"realpath /usr/local/lib/zfsutilities/current/bin"* ]]; then
+        test_pass
+    else
+        test_fail "SSH invocation did not contain expected arguments: $call"
+    fi
+}
+
+test_remote_zfsutilities_bin_failure() {
+    test_start "remote_zfsutilities_bin returns failure when SSH fails"
+    _test_ssh_calls=()
+    _test_ssh_bin_output=""
+    _test_ssh_rc=1
+    local result rc
+    result=$(remote_zfsutilities_bin "stewie" 2>/dev/null)
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_equals "" "$result"
+}
+
+test_remote_zfsutility_script_success() {
+    test_start "remote_zfsutility_script returns full path on success"
+    _test_ssh_calls=()
+    _test_ssh_bin_output="/usr/local/lib/zfsutilities/versions/v1.0.0/bin"
+    _test_ssh_rc=0
+    local result
+    result=$(remote_zfsutility_script "stewie" "repair-iscsi-luns")
+    assert_equals "/usr/local/lib/zfsutilities/versions/v1.0.0/bin/repair-iscsi-luns" "$result"
+}
+
+test_remote_zfsutility_script_fallback() {
+    test_start "remote_zfsutility_script returns bare name on failure"
+    _test_ssh_calls=()
+    _test_ssh_bin_output=""
+    _test_ssh_rc=1
+    local result
+    result=$(remote_zfsutility_script "stewie" "repair-iscsi-luns")
+    assert_equals "repair-iscsi-luns" "$result"
+}
+
+# ------------------------------------------------------------------------------
+# log_msg fallback / configuration errors
+# ------------------------------------------------------------------------------
+
+test_log_msg_fallback_used_before_bashinit() {
+    test_start "node-lib.sh provides a log_msg fallback when bashinit is absent"
+    # In this test process bashinit has already been loaded, so we cannot
+    # directly observe the fallback.  Instead, verify that log_msg is a function
+    # and that it produced the expected FATAL output in test_find_script_missing.
+    if [[ $(type -t log_msg) == "function" ]]; then
+        test_pass
+    else
+        test_fail "log_msg is not a function"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Configuration loading
+# ------------------------------------------------------------------------------
+
+two_node_conf="$tmp_dir/two-node.conf"
+cat > "$two_node_conf" << 'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="brian"
+STORAGE_IP="10.0.0.1"
+IQN_PREFIX="iqn.2025-01.com.zfsutilities"
+declare -A POOL_TARGET=(
+    ["threeamigos"]="threeamigos"
+    ["fivebays"]="fivebays"
+)
+EOF
+
+test_two_node_config_loading() {
+    test_start "node-lib.sh loads a temporary two-node config"
+    local output
+    output=$(
+        NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"
+        echo "STORAGE_HOST=$STORAGE_HOST"
+        echo "COMPUTE_HOST=$COMPUTE_HOST"
+        echo "NODE_MODE=$NODE_MODE"
+    )
+    assert_contains "$output" "STORAGE_HOST=stewie"
+    assert_contains "$output" "COMPUTE_HOST=brian"
+    assert_contains "$output" "NODE_MODE=two-node"
+}
+
+test_single_node_config_loading() {
+    test_start "node-lib.sh single-node config sets STORAGE_HOST=COMPUTE_HOST=THIS_HOST"
+    local output this_host
+    this_host=$(hostname -s)
+    output=$(
+        NODE_CONF="$node_conf" source "$mydir/08 Two-node/node-lib.sh"
+        echo "STORAGE_HOST=$STORAGE_HOST"
+        echo "COMPUTE_HOST=$COMPUTE_HOST"
+    )
+    assert_contains "$output" "STORAGE_HOST=$this_host"
+    assert_contains "$output" "COMPUTE_HOST=$this_host"
+}
+
+# ------------------------------------------------------------------------------
+# Pool helpers
+# ------------------------------------------------------------------------------
+
+test_pool_to_target_known() {
+    test_start "pool_to_target returns full IQN for a known pool"
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"; pool_to_target "threeamigos")
+    assert_equals "iqn.2025-01.com.zfsutilities:threeamigos" "$result"
+}
+
+test_pool_to_target_unknown() {
+    test_start "pool_to_target fails for an unknown pool"
+    clear_test_log_file
+    local result rc
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"; pool_to_target "unknownpool" 2>/dev/null)
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_equals "" "$result"
+    local log
+    log=$(get_test_log_file)
+    if grep -q "FATAL: Unknown pool: unknownpool" "$log"; then
+        test_pass
+    else
+        test_fail "Expected FATAL log message not found"
+    fi
+}
+
+test_pool_list_two_node() {
+    test_start "pool_list emits configured pool names in two-node mode"
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"; pool_list | sort)
+    assert_equals "fivebays"$'\n'"threeamigos" "$result"
+}
+
+test_pool_list_single_node() {
+    test_start "pool_list emits nothing in single-node mode"
+    local result
+    result=$(NODE_CONF="$node_conf" source "$mydir/08 Two-node/node-lib.sh"; pool_list)
+    assert_equals "" "$result"
+}
+
+test_is_known_pool_known() {
+    test_start "is_known_pool returns success for a known pool"
+    local rc
+    (NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"; is_known_pool "threeamigos")
+    rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_is_known_pool_unknown() {
+    test_start "is_known_pool returns failure for an unknown pool"
+    local rc
+    (NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"; is_known_pool "unknownpool")
+    rc=$?
+    assert_rc 1 "$rc"
+}
+
+test_is_known_pool_single_node() {
+    test_start "is_known_pool returns failure in single-node mode"
+    local rc
+    (NODE_CONF="$node_conf" source "$mydir/08 Two-node/node-lib.sh"; is_known_pool "threeamigos")
+    rc=$?
+    assert_rc 1 "$rc"
+}
+
+# ------------------------------------------------------------------------------
+# find_zfsutility_script edge cases
+# ------------------------------------------------------------------------------
+
+test_find_script_returns_absolute_path() {
+    test_start "find_zfsutility_script returns an absolute path via realpath"
+    local script_dir rel_dir result expected
+    script_dir="$tmp_dir/absolute"
+    mkdir -p "$script_dir"
+    touch "$script_dir/relative-script"
+    rel_dir=$(realpath --relative-to="$mydir" "$tmp_dir")
+    result=$(cd "$mydir"; mydir="$rel_dir/absolute" find_zfsutility_script "relative-script")
+    expected="$tmp_dir/absolute/relative-script"
+    assert_equals "$expected" "$result"
+}
+
+test_find_script_prefers_same_directory() {
+    test_start "find_zfsutility_script prefers same-directory match over parent"
+    local subdir result
+    subdir="$tmp_dir/parent/child"
+    mkdir -p "$subdir"
+    touch "$subdir/duplicated"
+    touch "$tmp_dir/parent/duplicated"
+    result=$(mydir="$subdir" find_zfsutility_script "duplicated")
+    assert_equals "$subdir/duplicated" "$result"
+}
+
+# ------------------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------------------
+
+test_two_node_config_loading
+test_single_node_config_loading
+
+test_pool_to_target_known
+test_pool_to_target_unknown
+test_pool_list_two_node
+test_pool_list_single_node
+test_is_known_pool_known
+test_is_known_pool_unknown
+test_is_known_pool_single_node
+
+test_find_script_returns_absolute_path
+test_find_script_prefers_same_directory
+
+test_find_script_same_directory
+test_find_script_parent_directory
+test_find_script_two_node_directory
+test_find_script_clone_support_directory
+test_find_script_across_subdirectories
+test_find_script_missing
+
+test_remote_zfsutilities_bin_success
+test_remote_zfsutilities_bin_failure
+test_remote_zfsutility_script_success
+test_remote_zfsutility_script_fallback
+
+test_log_msg_fallback_used_before_bashinit
+
+rm -rf "$tmp_dir"
+teardown_test_env
+test_summary

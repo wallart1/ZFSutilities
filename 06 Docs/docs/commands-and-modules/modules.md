@@ -51,11 +51,12 @@ rootcheck
 
 | Function      | Purpose                                                                                 |
 | ------------- | --------------------------------------------------------------------------------------- |
-| `bashinit`    | Sets `$mydir` to the caller's directory and auto-creates a session log for CLI scripts |
-| `log_msg`     | Logs messages with `file:line:` prefix to stderr and to the session log                 |
-| `msg_prefix`  | Emits the same `file:line:` prefix without the message body                             |
-| `calledbybash`| Returns true when the current file was executed directly (not sourced)                  |
-| `ask_yn`      | Prompts for yes/no and validates the response                                           |
+| `bashinit`              | Sets `$mydir` to the caller's directory and auto-creates a session log for CLI scripts |
+| `log_msg`               | Logs messages with `file:line:` prefix to stderr and to the session log                 |
+| `msg_prefix`            | Emits the same `file:line:` prefix without the message body                             |
+| `calledbybash`          | Returns true when the current file was executed directly (not sourced)                  |
+| `ask_yn`                | Prompts for yes/no and validates the response                                           |
+| `find_zfsutility_script`| Locates a sibling script/library across repo or deployed layouts; prints absolute path  |
 
 **Globals / environment:**
 

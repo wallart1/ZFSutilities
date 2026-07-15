@@ -107,6 +107,12 @@ rm -f "$TEST_MAPPER/keys"
 exit 0
 EOF
     chmod +x "$MOCKDIR/bin/lock-zfs-keys"
+
+    # Temporary single-node config so node-lib.sh does not require a two-node conf.
+    NODE_CONF="$MOCKDIR/node.conf"
+    cat > "$NODE_CONF" <<'EOF'
+NODE_MODE="single-node"
+EOF
 }
 
 # Make a script copy with paths replaced to point into temp dirs.
@@ -119,6 +125,8 @@ prepare_script() {
         -e "s|/dev/mapper/keys|$TEST_MAPPER/keys|g" \
         -e "s|/usr/local/lib/zfsutilities/bin/lock-zfs-keys|lock-zfs-keys|g" \
         -e "s|/usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns|iscsi-add-encrypted-luns|g" \
+        -e "s|\"\$mydir/lock-zfs-keys\"|lock-zfs-keys|g" \
+        -e "s|\"\$mydir/iscsi-add-encrypted-luns\"|iscsi-add-encrypted-luns|g" \
         "$src" > "$dst"
 }
 
@@ -129,7 +137,8 @@ run_under_mocks() {
     (
         export PATH="$MOCKDIR/bin:$PATH"
         export ZFSUTILITIES_LOG_FILE=""
-        export mydir="$repo_root/08 Two-node"
+        export NODE_CONF="$NODE_CONF"
+        export mydir="$repo_root"
         cd "$repo_root"
         bash "$script" "$@"
     )

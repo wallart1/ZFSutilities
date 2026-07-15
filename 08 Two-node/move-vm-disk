@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
 # Moves an existing iSCSI-backed (two-node) or ZFS-backed (single-node) VM disk
 # from one VM to another. The underlying zvol is renamed to match the destination
@@ -11,7 +11,12 @@
 # Install to: /usr/local/lib/zfsutilities/bin/move-vm-disk on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 MY_HOST=$(hostname -s)
 PVE_CONF_DIR="/etc/pve/qemu-server"
@@ -50,13 +55,8 @@ usage() {
     exit 1
 }
 
-die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
-}
-
 warn() {
-    echo "⚠ WARNING: $*" >&2
+    log_msg "WARN: $*"
 }
 
 # Manifest helpers (duplicated here to keep move-vm-disk self-contained)
@@ -121,7 +121,10 @@ EOF
 
 read_state() {
     local file="$1"
-    [[ -f "$file" ]] || die "State file not found: $file"
+    [[ -f "$file" ]] || {
+        log_msg "FATAL: State file not found: $file"
+        exit 1
+    }
     # shellcheck source=/dev/null
     source "$file"
 }
@@ -137,7 +140,10 @@ update_phase() {
 disk_num_from_key() {
     local key="$1"
     local num="${key##*[a-z]}"
-    [[ "$num" =~ ^[0-9]+$ ]] || die "Could not derive disk number from ${key}"
+    [[ "$num" =~ ^[0-9]+$ ]] || {
+        log_msg "FATAL: Could not derive disk number from ${key}"
+        exit 1
+    }
     echo "$num"
 }
 
@@ -146,7 +152,10 @@ auto_select_dst_key() {
     local bus="${SRCKEY%%[0-9]*}"
     local n=0
     if [[ "$bus" == "efidisk" ]]; then
-        grep -q "^efidisk0:" "$DST_CONF" && die "Destination VM $DSTVMID already has an efidisk0"
+        grep -q "^efidisk0:" "$DST_CONF" && {
+            log_msg "FATAL: Destination VM $DSTVMID already has an efidisk0"
+            exit 1
+        }
         echo "efidisk0"
         return
     fi
@@ -160,7 +169,8 @@ auto_select_dst_key() {
 check_dst_zvol_free() {
     if ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" \
             "zfs list -H -o name '${DSTZVOL}' >/dev/null 2>&1"; then
-        die "Destination zvol already exists: ${DSTZVOL}"
+        log_msg "FATAL: Destination zvol already exists: ${DSTZVOL}"
+        exit 1
     fi
 }
 
@@ -168,12 +178,16 @@ check_dst_zvol_free() {
 # All output is echoed back to the compute host for state capture.
 storage_move_script() {
     cat <<'SSHEOF'
+source ~/bashinit
+bashinit
 set -e
 SRCZVOL="$1"; DSTZVOL="$2"
 SRCBACKSTORE="$3"; DSTBACKSTORE="$4"
 TARGET="$5"; SRCLUN="$6"; ENCRYPTED="$7"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
 ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 
 manifest_remove() { [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"; }
 manifest_add()    { [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" && echo "$1" >> "$ISCSI_MANIFEST"; }
@@ -203,7 +217,7 @@ for i in $(seq 1 20); do
     [[ -b "$ZVOL_DEV" ]] && break
     sleep 0.5
 done
-[[ -b "$ZVOL_DEV" ]] || { echo "ERROR: device node not found: $ZVOL_DEV" >&2; exit 1; }
+[[ -b "$ZVOL_DEV" ]] || { log_msg "FATAL: device node not found: $ZVOL_DEV"; exit 1; }
 targetcli /backstores/block create "${DSTBACKSTORE}" "${ZVOL_DEV}"
 targetcli "/backstores/block/${DSTBACKSTORE}" set attribute emulate_tpu=1
 
@@ -226,7 +240,7 @@ if [[ "$ENCRYPTED" == "Y" ]]; then
 fi
 
 # 6. Save config.
-/usr/local/lib/zfsutilities/bin/safe-iscsi-save
+"$mydir/safe-iscsi-save"
 echo "PHASE=saved"
 SSHEOF
 }
@@ -235,7 +249,10 @@ SSHEOF
 run_storage_move() {
     if is_single_node; then
         echo "Renaming zvol ${SRCZVOL} → ${DSTZVOL}..."
-        zfs rename "${SRCZVOL}" "${DSTZVOL}" || die "zfs rename failed"
+        zfs rename "${SRCZVOL}" "${DSTZVOL}" || {
+            log_msg "FATAL: zfs rename failed"
+            exit 1
+        }
         update_phase "rename_done"
         return
     fi
@@ -244,7 +261,11 @@ run_storage_move() {
     local result
     result=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
         "$SRCZVOL" "$DSTZVOL" "$SRCBACKSTORE" "$DSTBACKSTORE" "$TARGET" "$SRCLUN" "$ENCRYPTED" \
-        <<< "$(storage_move_script)" 2>&1) || die "Storage-node move failed:\n${result}"
+        <<< "$(storage_move_script)" 2>&1) || {
+            log_msg "FATAL: Storage-node move failed"
+            echo "$result"
+            exit 1
+        }
 
     # Parse phase progress and DSTLUN from remote output.
     local line
@@ -264,7 +285,7 @@ run_rescan() {
         return
     fi
     echo "Rescanning iSCSI..."
-    /usr/local/lib/zfsutilities/bin/rescan-storage
+    "$mydir/rescan-storage"
 }
 
 # Move the disk line from source to destination VM config.
@@ -283,7 +304,10 @@ update_vm_configs() {
 
 # Roll back a partially completed move.
 rollback() {
-    [[ -f "$STATE_FILE" ]] || die "No state file provided for rollback."
+    [[ -f "$STATE_FILE" ]] || {
+        log_msg "FATAL: No state file provided for rollback."
+        exit 1
+    }
     read_state "$STATE_FILE"
 
     SRC_CONF="$PVE_CONF_DIR/${SRCVMID}.conf"
@@ -311,12 +335,16 @@ rollback() {
         ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
             "$SRCZVOL" "$DSTZVOL" "$SRCBACKSTORE" "$DSTBACKSTORE" "$TARGET" "$SRCLUN" "$ENCRYPTED" \
             << 'SSHEOF'
+source ~/bashinit
+bashinit
 set -e
 SRCZVOL="$1"; DSTZVOL="$2"
 SRCBACKSTORE="$3"; DSTBACKSTORE="$4"
 TARGET="$5"; SRCLUN="$6"; ENCRYPTED="$7"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
 ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 
 manifest_remove() { [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"; }
 manifest_add()    { [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" && echo "$1" >> "$ISCSI_MANIFEST"; }
@@ -348,7 +376,7 @@ if [[ -b "$ZVOL_DEV" ]]; then
         TARGETSHORT="${TARGET##*:}"
         encrypted_add "${SRCBACKSTORE}" "${ZVOL_DEV}" "${TARGETSHORT}"
     fi
-    /usr/local/lib/zfsutilities/bin/safe-iscsi-save 2>/dev/null || true
+    "$mydir/safe-iscsi-save" 2>/dev/null || true
 fi
 SSHEOF
     else
@@ -361,7 +389,7 @@ SSHEOF
 
     if is_two_node; then
         echo "Rescanning iSCSI..."
-        /usr/local/lib/zfsutilities/bin/rescan-storage 2>/dev/null || true
+        "$mydir/rescan-storage" 2>/dev/null || true
     fi
 
     rm -f "$STATE_FILE"
@@ -378,7 +406,8 @@ for arg in "$@"; do
             MODE="${arg#--}"
             ;;
         -*)
-            die "Unknown option: $arg"
+            log_msg "FATAL: Unknown option: $arg"
+            usage
             ;;
         *)
             if [[ -n "$MODE" && -z "$STATE_FILE" ]]; then
@@ -410,12 +439,22 @@ else
     DSTVMID="${POS_ARGS[2]}"
     DSTKEY="${POS_ARGS[3]:-}"
 
-    [[ "$SRCVMID" =~ ^[0-9]+$ ]] || die "src-vmid must be a number, got: $SRCVMID"
-    [[ "$DSTVMID" =~ ^[0-9]+$ ]] || die "dst-vmid must be a number, got: $DSTVMID"
-    [[ "$SRCKEY" =~ ^[a-z]+[0-9]+$ ]] || die "src-disk-key must be like scsi0 or ide1, got: $SRCKEY"
-    [[ -z "$DSTKEY" || "$DSTKEY" =~ ^[a-z]+[0-9]+$ ]] || die "dst-disk-key must be like scsi0 or ide1, got: $DSTKEY"
-
-    [[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+    [[ "$SRCVMID" =~ ^[0-9]+$ ]] || {
+        log_msg "FATAL: src-vmid must be a number, got: $SRCVMID"
+        exit 1
+    }
+    [[ "$DSTVMID" =~ ^[0-9]+$ ]] || {
+        log_msg "FATAL: dst-vmid must be a number, got: $DSTVMID"
+        exit 1
+    }
+    [[ "$SRCKEY" =~ ^[a-z]+[0-9]+$ ]] || {
+        log_msg "FATAL: src-disk-key must be like scsi0 or ide1, got: $SRCKEY"
+        exit 1
+    }
+    [[ -z "$DSTKEY" || "$DSTKEY" =~ ^[a-z]+[0-9]+$ ]] || {
+        log_msg "FATAL: dst-disk-key must be like scsi0 or ide1, got: $DSTKEY"
+        exit 1
+    }
 
     STATE_FILE=$(state_file_path "$SRCVMID" "$DSTVMID")
     PHASE="started"
@@ -423,12 +462,15 @@ fi
 
 # --- Recovery modes must run on the compute host (state file is local) ---
 if is_two_node && [[ -n "$MODE" && "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    die "--${MODE} must be run directly on ${COMPUTE_HOST} (state file is local)."
+    log_msg "FATAL: --${MODE} must be run directly on ${COMPUTE_HOST} (state file is local)."
+    exit 1
 fi
 
 # --- Delegate to compute host if run on storage node (two-node only, normal mode only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    exec ssh -t root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/move-vm-disk '${POS_ARGS[0]}' '${POS_ARGS[1]}' '${POS_ARGS[2]}' '${POS_ARGS[3]:-}'"
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "move-vm-disk")
+    exec ssh -t root@"$COMPUTE_HOST" \
+        "$REMOTE_SCRIPT '${POS_ARGS[0]}' '${POS_ARGS[1]}' '${POS_ARGS[2]}' '${POS_ARGS[3]:-}'"
 fi
 
 # === Running on the compute host ===
@@ -436,19 +478,34 @@ fi
 SRC_CONF="$PVE_CONF_DIR/${SRCVMID}.conf"
 DST_CONF="$PVE_CONF_DIR/${DSTVMID}.conf"
 
-[[ -f "$SRC_CONF" ]] || die "Source VM config not found: $SRC_CONF"
-[[ -f "$DST_CONF" ]] || die "Destination VM config not found: $DST_CONF"
+[[ -f "$SRC_CONF" ]] || {
+    log_msg "FATAL: Source VM config not found: $SRC_CONF"
+    exit 1
+}
+[[ -f "$DST_CONF" ]] || {
+    log_msg "FATAL: Destination VM config not found: $DST_CONF"
+    exit 1
+}
 
 # --- VM state safety checks ---
 src_status=$(qm status "$SRCVMID" 2>/dev/null | awk '{print $2}')
 dst_status=$(qm status "$DSTVMID" 2>/dev/null | awk '{print $2}')
 
-[[ "${src_status:-unknown}" == "stopped" ]] || die "Source VM $SRCVMID must be stopped (status: ${src_status:-unknown})"
-[[ "${dst_status:-unknown}" == "stopped" ]] || die "Destination VM $DSTVMID must be stopped (status: ${dst_status:-unknown})"
+[[ "${src_status:-unknown}" == "stopped" ]] || {
+    log_msg "FATAL: Source VM $SRCVMID must be stopped (status: ${src_status:-unknown})"
+    exit 1
+}
+[[ "${dst_status:-unknown}" == "stopped" ]] || {
+    log_msg "FATAL: Destination VM $DSTVMID must be stopped (status: ${dst_status:-unknown})"
+    exit 1
+}
 
 # --- Parse source disk line ---
 SRC_LINE=$(grep "^${SRCKEY}:" "$SRC_CONF" 2>/dev/null || true)
-[[ -n "$SRC_LINE" ]] || die "Disk key $SRCKEY not found in VM $SRCVMID config"
+[[ -n "$SRC_LINE" ]] || {
+    log_msg "FATAL: Disk key $SRCKEY not found in VM $SRCVMID config"
+    exit 1
+}
 
 POOL=""
 TARGET=""
@@ -465,7 +522,9 @@ if is_two_node; then
         POOL="${TARGET_POOL[$TARGETSHORT]}"
         TARGET="${IQN_PREFIX}:${TARGETSHORT}"
     else
-        die "Disk line for $SRCKEY does not look like an iSCSI disk in VM $SRCVMID:\n  $SRC_LINE"
+        log_msg "FATAL: Disk line for $SRCKEY does not look like an iSCSI disk in VM $SRCVMID:"
+        echo "  $SRC_LINE"
+        exit 1
     fi
 else
     if [[ "$SRC_LINE" =~ ^${SRCKEY}:\ *([^:]+):vm-([0-9]+)-disk-([0-9]+) ]]; then
@@ -473,15 +532,23 @@ else
         SRCBACKSTORE="vm-${BASH_REMATCH[2]}-disk-${BASH_REMATCH[3]}"
         SRCZVOL=$(zfs list -H -t volume -o name -r "${POOL}" 2>/dev/null \
             | grep "/${SRCBACKSTORE}$" | head -1)
-        [[ -n "$SRCZVOL" ]] || die "Could not find zvol ${SRCBACKSTORE} under pool ${POOL}"
+        [[ -n "$SRCZVOL" ]] || {
+            log_msg "FATAL: Could not find zvol ${SRCBACKSTORE} under pool ${POOL}"
+            exit 1
+        }
     else
-        die "Disk line for $SRCKEY does not look like a ZFS-backed disk in VM $SRCVMID:\n  $SRC_LINE"
+        log_msg "FATAL: Disk line for $SRCKEY does not look like a ZFS-backed disk in VM $SRCVMID:"
+        echo "  $SRC_LINE"
+        exit 1
     fi
 fi
 
 # --- Storage-node verification (two-node only) ---
 if is_two_node; then
-    [[ -n "$POOL" ]] || die "Could not determine pool from target short name: $TARGETSHORT"
+    [[ -n "$POOL" ]] || {
+        log_msg "FATAL: Could not determine pool from target short name: $TARGETSHORT"
+        exit 1
+    }
 
     storage_info=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s "$TARGET" "$SRCLUN" << 'SSHEOF'
 set -e
@@ -492,16 +559,19 @@ backstore=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
     | grep -E "lun${LUN}[^0-9]" \
     | grep -oP 'block/\K\S+' \
     | head -1)
-[[ -n "$backstore" ]] || { echo "ERROR:BACKSTORE_NOT_FOUND" >&2; exit 1; }
+[[ -n "$backstore" ]] || { log_msg "FATAL:BACKSTORE_NOT_FOUND"; exit 1; }
 
 zvol=$(zfs list -H -t volume -o name -r "${POOL}" 2>/dev/null | grep "/${backstore}$" | head -1)
-[[ -n "$zvol" ]] || { echo "ERROR:ZVOL_NOT_FOUND" >&2; exit 1; }
+[[ -n "$zvol" ]] || { log_msg "FATAL:ZVOL_NOT_FOUND"; exit 1; }
 
 size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
 encrypted=$(zfs get -H -o value encryption "$zvol" 2>/dev/null || echo "off")
 echo "$backstore $zvol $size $encrypted"
 SSHEOF
-    ) || die "Storage verification failed on $STORAGE_HOST"
+    ) || {
+        log_msg "FATAL: Storage verification failed on $STORAGE_HOST"
+        exit 1
+    }
 
     SRCBACKSTORE=$(echo "$storage_info" | awk '{print $1}')
     SRCZVOL=$(echo "$storage_info" | awk '{print $2}')
@@ -509,8 +579,14 @@ SSHEOF
     enc_value=$(echo "$storage_info" | awk '{print $4}')
     [[ "$enc_value" != "off" && "$enc_value" != "-" ]] && ENCRYPTED="Y"
 
-    [[ "$SRCBACKSTORE" != ERROR:* ]] || die "Could not find backstore for LUN $SRCLUN in target $TARGETSHORT"
-    [[ -n "$SRCZVOL" ]] || die "Could not determine zvol for backstore $SRCBACKSTORE"
+    [[ "$SRCBACKSTORE" != ERROR:* ]] || {
+        log_msg "FATAL: Could not find backstore for LUN $SRCLUN in target $TARGETSHORT"
+        exit 1
+    }
+    [[ -n "$SRCZVOL" ]] || {
+        log_msg "FATAL: Could not determine zvol for backstore $SRCBACKSTORE"
+        exit 1
+    }
 fi
 
 # --- Determine destination disk key and number ---
@@ -519,7 +595,8 @@ if [[ -z "$DSTKEY" ]]; then
 fi
 
 if grep -q "^${DSTKEY}:" "$DST_CONF"; then
-    die "Destination key $DSTKEY already exists in VM $DSTVMID config"
+    log_msg "FATAL: Destination key $DSTKEY already exists in VM $DSTVMID config"
+    exit 1
 fi
 
 DISKNUM=$(disk_num_from_key "$DSTKEY")
@@ -546,7 +623,7 @@ if [[ "$PHASE" == "started" ]]; then
         echo "  LUN:     ${SRCLUN}"
     fi
     echo ""
-    echo "⚠ Both VMs must be stopped. This will rename the underlying zvol"
+    log_msg "WARN: Both VMs must be stopped. This will rename the underlying zvol"
     echo "  and recreate the iSCSI backstore/LUN to match VM ${DSTVMID}."
     echo ""
     read -rp "Proceed? (y/N): " confirm
@@ -563,7 +640,10 @@ if is_two_node && [[ -z "$DSTLUN" ]]; then
     # If continuing and DSTLUN wasn't captured, discover it now.
     DSTLUN=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" \
         "targetcli \"/iscsi/${TARGET}/tpg1/luns\" ls 2>/dev/null | grep '${DSTBACKSTORE}' | grep -oP 'lun\\K[0-9]+' | head -1")
-    [[ -n "$DSTLUN" ]] || die "Could not determine new LUN number for ${DSTBACKSTORE}"
+    [[ -n "$DSTLUN" ]] || {
+        log_msg "FATAL: Could not determine new LUN number for ${DSTBACKSTORE}"
+        exit 1
+    }
     write_state "$STATE_FILE"
 fi
 

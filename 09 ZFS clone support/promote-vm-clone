@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # promote-vm-clone <vmid>
 # Promotes a ZFS-cloned VM's disk zvols, cutting the dependency on the source VM.
 #
@@ -17,9 +17,12 @@
 # Install to: /usr/local/lib/zfsutilities/bin/promote-vm-clone on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
-source /usr/local/lib/node-lib.sh
-
-MY_HOST=$(hostname -s)
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 usage() {
     echo "Usage: promote-vm-clone <vmid>"
@@ -30,20 +33,15 @@ usage() {
     exit 1
 }
 
-die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
-}
-
 [[ $# -eq 1 ]] || usage
 
 VMID="$1"
-[[ "$VMID" =~ ^[0-9]+$ ]] || die "vmid must be a number, got: $VMID"
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+[[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
 
 # --- If not on the compute host, delegate (two-node only) ---
-if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    exec ssh -t root@"$COMPUTE_HOST" "/usr/local/lib/zfsutilities/bin/promote-vm-clone '$VMID'"
+if is_two_node && [[ "$THIS_HOST" != "$COMPUTE_HOST" ]]; then
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "promote-vm-clone")
+    exec ssh -t root@"$COMPUTE_HOST" "$REMOTE_SCRIPT '$VMID'"
 fi
 
 # --- Discover clone zvols ---
@@ -56,11 +54,11 @@ VMID="$1"
 zfs list -H -o name,origin \
     | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}'
 SSHEOF
-    ) || die "SSH to $STORAGE_HOST failed"
+    ) || { log_msg "FATAL: SSH to $STORAGE_HOST failed"; exit 1; }
 fi
 
 [[ -n "$clone_info" ]] \
-    || die "No clone zvols found for VM ${VMID} — already promoted or not a ZFS clone"
+    || { log_msg "FATAL: No clone zvols found for VM ${VMID} — already promoted or not a ZFS clone"; exit 1; }
 
 echo "=== promote-vm-clone ==="
 echo "  VM: ${VMID}"
@@ -81,13 +79,13 @@ echo ""
 # --- Promote each zvol ---
 if is_single_node; then
     while IFS=$'\t' read -r zvol origin; do
-        zfs promote "$zvol" || die "Promotion failed: $zvol"
+        zfs promote "$zvol" || { log_msg "FATAL: Promotion failed: $zvol"; exit 1; }
         echo "✓ Promoted: ${zvol}"
         echo "  snapshot moved from ${origin%%@*} to ${zvol}"
     done < <(zfs list -H -o name,origin \
         | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
 else
-    ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF' || die "Promotion failed on $STORAGE_HOST"
+    ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF' || { log_msg "FATAL: Promotion failed on $STORAGE_HOST"; exit 1; }
 set -e
 VMID="$1"
 while IFS=$'\t' read -r zvol origin; do

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # setup-iscsi-targets
 # Create iSCSI targets, TPGs, and portals from the pool-to-target mappings
 # defined in /etc/zfsutilities-node.conf.
@@ -9,7 +9,12 @@
 # Usage: setup-iscsi-targets
 # Run on the storage host.
 
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 # Exit silently in single-node mode
 is_single_node && exit 0
@@ -17,13 +22,13 @@ is_single_node && exit 0
 # Verify we're on the storage host
 MY_HOST=$(hostname -s)
 if [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
-    echo "✗ ERROR: Must run on the storage host ($STORAGE_HOST), not $MY_HOST" >&2
+    log_msg "FATAL: Must run on the storage host ($STORAGE_HOST), not $MY_HOST"
     exit 1
 fi
 
 # Check prerequisite
 if ! command -v targetcli >/dev/null 2>&1; then
-    echo "✗ ERROR: targetcli not found. Install rtslib-fb-targetctl first." >&2
+    log_msg "FATAL: targetcli not found. Install rtslib-fb-targetctl first."
     exit 1
 fi
 
@@ -51,7 +56,7 @@ for pool in "${!POOL_TARGET[@]}"; do
             CREATED=$((CREATED + 1))
             echo "    ✓ Target created"
         else
-            echo "    ✗ Failed to create target" >&2
+            log_msg "FATAL:   Failed to create target"
             continue
         fi
     fi
@@ -77,7 +82,7 @@ for pool in "${!POOL_TARGET[@]}"; do
             PORTALS_ADDED=$((PORTALS_ADDED + 1))
             echo "    ✓ Portal ${STORAGE_IP}:3260 added"
         else
-            echo "    ⚠ Could not add portal ${STORAGE_IP}:3260" >&2
+            log_msg "WARN:   Could not add portal ${STORAGE_IP}:3260"
         fi
     fi
 done

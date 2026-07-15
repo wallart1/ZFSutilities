@@ -1,5 +1,8 @@
 #!/usr/bin/bash
 source ~/bashinit
+bashinit
+source "$mydir/rootcheck"
+rootcheck
 
 # Add a virtual disk to a VM.
 # This works around a problem in the Proxmox GUI where it assigns the wrong disk number

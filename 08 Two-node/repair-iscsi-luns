@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # repair-iscsi-luns
 # Idempotent repair of iSCSI LUN export on the storage host.
 #
@@ -16,12 +16,14 @@
 # Usage: sudo repair-iscsi-luns [--dry-run] [--force-relogin]
 # Install to: /usr/local/lib/zfsutilities/bin/repair-iscsi-luns on the storage host
 
-# Resolve our directory so helpers can be found relative to this script.
-# This supports running from the repo, a deployed version, or through a symlink.
-mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+source ~/bashinit
+bashinit
 
-NODE_LIB="${REPAIR_ISCSI_LUNS_NODE_LIB:-$mydir/node-lib.sh}"
+NODE_LIB="${REPAIR_ISCSI_LUNS_NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
+
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 # iSCSI-only script — exit silently in single-node mode
 is_single_node && exit 0
@@ -45,7 +47,7 @@ for arg in "$@"; do
         --force-relogin) FORCE_RELOGIN=true ;;
         -h|--help)       usage ;;
         *)
-            echo "✗ Unknown option: $arg" >&2
+            log_msg "FATAL: Unknown option: $arg"
             usage
             ;;
     esac
@@ -53,12 +55,12 @@ done
 
 # Verify we're on the storage host
 if [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
-    echo "✗ ERROR: Must run on the storage host ($STORAGE_HOST), not $MY_HOST" >&2
+    log_msg "FATAL: Must run on the storage host ($STORAGE_HOST), not $MY_HOST"
     exit 1
 fi
 
 [[ $EUID -eq 0 ]] || [[ "${REPAIR_ISCSI_LUNS_SKIP_ROOT:-}" == "Y" ]] || {
-    echo "✗ ERROR: Must run as root (use sudo)" >&2
+    log_msg "FATAL: Must run as root (use sudo)"
     exit 1
 }
 
@@ -69,14 +71,6 @@ MANIFEST="${REPAIR_ISCSI_LUNS_MANIFEST:-/etc/rtslib-fb-target/expected-backstore
 # provided so unit tests can substitute mocks.
 SAFE_ISCSI_SAVE="${REPAIR_ISCSI_SAFE_ISCSI_SAVE:-$mydir/safe-iscsi-save}"
 RESCAN_STORAGE="${REPAIR_ISCSI_RESCAN_STORAGE:-$mydir/rescan-storage}"
-
-# ------------------------------------------------------------------
-# Logging helpers
-# ------------------------------------------------------------------
-log_info()  { echo "  $*"; }
-log_warn()  { echo "  ⚠ $*" >&2; }
-log_error() { echo "  ✗ $*" >&2; }
-log_ok()    { echo "  ✓ $*"; }
 
 # ------------------------------------------------------------------
 # Target state discovery
@@ -229,24 +223,24 @@ next_free_lun_index() {
 create_backstore() {
     local name="$1" dev="$2"
     if [[ -n "${_bs_devs[$name]:-}" ]]; then
-        log_info "Backstore $name already exists"
+        log_msg "INFO: Backstore $name already exists"
         return 0
     fi
 
     if [[ "$DRY_RUN" == true ]]; then
-        log_info "[dry-run] Would create backstore $name -> $dev"
+        log_msg "INFO: [dry-run] Would create backstore $name -> $dev"
         return 0
     fi
 
     if targetcli /backstores/block create "$name" "$dev" >/dev/null 2>&1; then
         targetcli "/backstores/block/${name}" set attribute emulate_tpu=1 >/dev/null 2>&1
-        log_ok "Created backstore $name -> $dev"
+        echo "  ✓ Created backstore $name -> $dev"
         _bs_names+=("$name")
         _bs_devs["$name"]="$dev"
         return 0
     fi
 
-    log_error "Failed to create backstore $name"
+    log_msg "FATAL: Failed to create backstore $name"
     return 1
 }
 
@@ -256,7 +250,7 @@ create_backstore() {
 create_lun_mapping() {
     local name="$1" iqn="$2"
     if [[ -n "${_lun_indexes[$name]:-}" ]]; then
-        log_info "LUN mapping for $name already exists (${_lun_indexes[$name]}): $name"
+        log_msg "INFO: LUN mapping for $name already exists (${_lun_indexes[$name]}): $name"
         return 0
     fi
 
@@ -264,20 +258,20 @@ create_lun_mapping() {
     idx=$(next_free_lun_index)
 
     if [[ "$DRY_RUN" == true ]]; then
-        log_info "[dry-run] Would map $name to ${iqn}/tpg1/lun$idx"
+        log_msg "INFO: [dry-run] Would map $name to ${iqn}/tpg1/lun$idx"
         _used_indexes+=("$idx")
         _lun_indexes["$name"]="$idx"
         return 0
     fi
 
     if targetcli "/iscsi/${iqn}/tpg1/luns" create "/backstores/block/${name}" "$idx" >/dev/null 2>&1; then
-        log_ok "Mapped $name to ${iqn}/tpg1/lun$idx"
+        echo "  ✓ Mapped $name to ${iqn}/tpg1/lun$idx"
         _used_indexes+=("$idx")
         _lun_indexes["$name"]="$idx"
         return 0
     fi
 
-    log_error "Failed to map $name to ${iqn}/tpg1/lun$idx"
+    log_msg "FATAL: Failed to map $name to ${iqn}/tpg1/lun$idx"
     return 1
 }
 
@@ -287,14 +281,14 @@ backup_saveconfig() {
     local backup
     backup="${SAVEFILE}.backup.$(date +%Y%m%d-%H%M%S)"
     cp -f "$SAVEFILE" "$backup"
-    log_info "Backed up saveconfig.json to $backup"
+    log_msg "INFO: Backed up saveconfig.json to $backup"
 }
 
 # Regenerate expected-backstores.txt from the current list of loaded backstores.
 # This keeps the manifest accurate after adds/moves.
 regenerate_manifest() {
     if [[ "$DRY_RUN" == true ]]; then
-        log_info "[dry-run] Would regenerate $MANIFEST"
+        log_msg "INFO: [dry-run] Would regenerate $MANIFEST"
         return 0
     fi
 
@@ -310,7 +304,7 @@ regenerate_manifest() {
     } > "$tmpfile"
 
     mv -f "$tmpfile" "$MANIFEST"
-    log_ok "Regenerated $MANIFEST"
+    echo "  ✓ Regenerated $MANIFEST"
 }
 
 # ------------------------------------------------------------------
@@ -325,30 +319,30 @@ count_visible_devices() {
 
 # Rescan the compute host. Always runs.
 rescan_compute_host() {
-    log_info "Rescanning compute host ($COMPUTE_HOST)..."
+    log_msg "INFO: Rescanning compute host ($COMPUTE_HOST)..."
     if [[ "$DRY_RUN" == true ]]; then
-        log_info "[dry-run] Would run rescan-storage on $COMPUTE_HOST"
+        log_msg "INFO: [dry-run] Would run rescan-storage on $COMPUTE_HOST"
         return 0
     fi
 
     if ! type -t "$RESCAN_STORAGE" >/dev/null 2>&1; then
-        log_warn "rescan-storage not available at $RESCAN_STORAGE"
+        log_msg "WARN: rescan-storage not available at $RESCAN_STORAGE"
         return 1
     fi
 
     if "$RESCAN_STORAGE"; then
-        log_ok "Compute host rescan complete"
+        echo "  ✓ Compute host rescan complete"
     else
-        log_warn "Compute host rescan returned non-zero"
+        log_msg "WARN: Compute host rescan returned non-zero"
     fi
 }
 
 # Re-log iSCSI sessions on the compute host.
 # This briefly disconnects all LUNs and should be used with care.
 relogin_compute_host() {
-    log_warn "Re-logging iSCSI sessions on $COMPUTE_HOST (all LUNs will briefly disconnect)"
+    log_msg "WARN: Re-logging iSCSI sessions on $COMPUTE_HOST (all LUNs will briefly disconnect)"
     if [[ "$DRY_RUN" == true ]]; then
-        log_info "[dry-run] Would re-log iSCSI sessions"
+        log_msg "INFO: [dry-run] Would re-log iSCSI sessions"
         return 0
     fi
 
@@ -359,7 +353,7 @@ relogin_compute_host() {
         iscsiadm -m node -p "${STORAGE_IP}:3260" -l
 SSHEOF
 
-    log_ok "Re-login complete"
+    echo "  ✓ Re-login complete"
 }
 
 # ------------------------------------------------------------------
@@ -373,25 +367,25 @@ echo ""
 
 # Gather current target state
 parse_backstores
-log_info "Loaded backstores: ${#_bs_names[@]}"
+log_msg "INFO: Loaded backstores: ${#_bs_names[@]}"
 
 # Gather zvols and expected state
 discover_zvols
-log_info "Discovered VM zvols: ${#_zvols[@]}"
+log_msg "INFO: Discovered VM zvols: ${#_zvols[@]}"
 
 # Read the authoritative manifest. If it is missing, fall back to the
 # discovered zvol list so legacy or newly-initialized systems still get repaired.
 # An existing but empty manifest is authoritative and means nothing is expected.
 read_manifest
 if [[ "${_manifest_exists}" == true ]]; then
-    log_info "Expected backstores from manifest: ${#_expected_bs_names[@]}"
+    log_msg "INFO: Expected backstores from manifest: ${#_expected_bs_names[@]}"
 elif [[ ${#_zvols[@]} -gt 0 ]]; then
-    log_warn "Manifest missing; falling back to discovered zvols"
+    log_msg "WARN: Manifest missing; falling back to discovered zvols"
     for zvol in "${_zvols[@]}"; do
         _expected_bs_names+=("${zvol##*/}")
         _expected_bs["${zvol##*/}"]="1"
     done
-    log_info "Expected backstores from zvols: ${#_expected_bs_names[@]}"
+    log_msg "INFO: Expected backstores from zvols: ${#_expected_bs_names[@]}"
 fi
 echo ""
 
@@ -407,7 +401,7 @@ for bs_name in "${_expected_bs_names[@]}"; do
 
     zvol=$(find_zvol_for_backstore "$bs_name") || true
     if [[ -z "$zvol" ]]; then
-        log_warn "Expected backstore $bs_name has no corresponding zvol (skipping)"
+        log_msg "WARN: Expected backstore $bs_name has no corresponding zvol (skipping)"
         continue
     fi
 
@@ -417,7 +411,7 @@ for bs_name in "${_expected_bs_names[@]}"; do
     zvol_iqn=$(pool_to_target "$zvol_pool") || continue
 
     if [[ ! -e "$zvol_dev" ]] && [[ "${REPAIR_ISCSI_LUNS_TEST_MODE:-}" != "Y" ]]; then
-        log_warn "Device not available: $zvol_dev (skipping $bs_name)"
+        log_msg "WARN: Device not available: $zvol_dev (skipping $bs_name)"
         continue
     fi
 
@@ -476,7 +470,7 @@ done
 # Report unexported zvols (do not auto-export; use attach-vm-disk/new-vm-disk).
 if [[ ${#UNMAPPED_ZVOLS[@]} -gt 0 ]]; then
     echo ""
-    log_warn "The following zvols exist but are not in the expected manifest:"
+    log_msg "WARN: The following zvols exist but are not in the expected manifest:"
     for zvol in "${UNMAPPED_ZVOLS[@]}"; do
         echo "    $zvol"
     done
@@ -487,23 +481,23 @@ fi
 if [[ "$TARGET_CHANGED" == true ]]; then
     echo ""
     if [[ "$DRY_RUN" == true ]]; then
-        log_info "[dry-run] Would back up saveconfig.json, regenerate manifest, and save config"
+        log_msg "INFO: [dry-run] Would back up saveconfig.json, regenerate manifest, and save config"
     else
         backup_saveconfig
         regenerate_manifest
         if type -t "$SAFE_ISCSI_SAVE" >/dev/null 2>&1; then
             if "$SAFE_ISCSI_SAVE"; then
-                log_ok "iSCSI configuration saved"
+                echo "  ✓ iSCSI configuration saved"
             else
-                log_error "safe-iscsi-save failed — configuration may not be persistent"
+                log_msg "FATAL: safe-iscsi-save failed — configuration may not be persistent"
             fi
         else
-            log_error "safe-iscsi-save not available at $SAFE_ISCSI_SAVE — configuration may not be persistent"
+            log_msg "FATAL: safe-iscsi-save not available at $SAFE_ISCSI_SAVE — configuration may not be persistent"
         fi
     fi
 else
     echo ""
-    log_info "No target-side changes needed"
+    log_msg "INFO: No target-side changes needed"
     if [[ "$DRY_RUN" != true ]]; then
         regenerate_manifest
     fi
@@ -512,35 +506,35 @@ fi
 # Compute-side repair: always rescan, optionally re-login if requested/needed
 echo ""
 VISIBLE_BEFORE=$(count_visible_devices)
-log_info "Visible iSCSI devices on $COMPUTE_HOST before rescan: ${VISIBLE_BEFORE:-?}"
+log_msg "INFO: Visible iSCSI devices on $COMPUTE_HOST before rescan: ${VISIBLE_BEFORE:-?}"
 
 rescan_compute_host
 
 VISIBLE_AFTER=$(count_visible_devices)
-log_info "Visible iSCSI devices on $COMPUTE_HOST after rescan: ${VISIBLE_AFTER:-?}"
+log_msg "INFO: Visible iSCSI devices on $COMPUTE_HOST after rescan: ${VISIBLE_AFTER:-?}"
 
 if [[ "$FORCE_RELOGIN" == true ]] && [[ "${VISIBLE_AFTER:-0}" -le "${VISIBLE_BEFORE:-0}" ]]; then
     echo ""
-    log_warn "Device count did not increase after rescan; attempting re-login"
+    log_msg "WARN: Device count did not increase after rescan; attempting re-login"
     relogin_compute_host
     VISIBLE_AFTER=$(count_visible_devices)
-    log_info "Visible iSCSI devices after re-login: ${VISIBLE_AFTER:-?}"
+    log_msg "INFO: Visible iSCSI devices after re-login: ${VISIBLE_AFTER:-?}"
 fi
 
 # Summary
 echo ""
 echo "=== Summary ==="
 if [[ ${#MISSING_BACKSTORES[@]} -gt 0 ]]; then
-    log_ok "Backstores added/verified: ${#MISSING_BACKSTORES[@]}"
+    echo "  ✓ Backstores added/verified: ${#MISSING_BACKSTORES[@]}"
 fi
 if [[ ${#MISSING_LUNS[@]} -gt 0 ]]; then
-    log_ok "LUN mappings added/verified: ${#MISSING_LUNS[@]}"
+    echo "  ✓ LUN mappings added/verified: ${#MISSING_LUNS[@]}"
 fi
 if [[ ${#UNMAPPED_ZVOLS[@]} -gt 0 ]]; then
-    log_warn "Unexported zvols: ${#UNMAPPED_ZVOLS[@]}"
+    log_msg "WARN: Unexported zvols: ${#UNMAPPED_ZVOLS[@]}"
 fi
-log_info "Visible devices on $COMPUTE_HOST: ${VISIBLE_AFTER:-?}"
-log_ok "Done"
+log_msg "INFO: Visible devices on $COMPUTE_HOST: ${VISIBLE_AFTER:-?}"
+echo "  ✓ Done"
 echo ""
 
 } # end main

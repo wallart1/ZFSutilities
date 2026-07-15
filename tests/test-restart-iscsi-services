@@ -19,6 +19,10 @@ eval "$func_text"
 is_single_node() { [[ "$NODE_MODE" == "single-node" ]]; }
 is_two_node()     { [[ "$NODE_MODE" == "two-node" ]]; }
 
+# The extracted function uses log_msg, which test-lib.sh redirects to a file.
+# Override it locally so stderr captures the diagnostic text under test.
+log_msg() { echo "$*" >&2; }
+
 # ------------------------------------------------------------------
 # Mock targetcli
 # ------------------------------------------------------------------
@@ -161,7 +165,7 @@ test_running_vm_outputs_error() {
     test_start "Running VM produces error message"
     local output
     output=$(check_running_vms 2>&1 || true)
-    if [[ "$output" == *"ERROR"* ]] && [[ "$output" == *"VM 100"* ]]; then
+    if [[ "$output" == *"FATAL:"* ]] && [[ "$output" == *"VM 100"* ]]; then
         test_pass
     else
         test_fail "Expected error mentioning VM 100"

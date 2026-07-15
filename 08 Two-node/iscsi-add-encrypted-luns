@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # iscsi-add-encrypted-luns
 # Add encrypted LUNs to the iSCSI target if they are missing (e.g., after keys loaded).
 # Called as ExecStartPost by rtslib-fb-targetctl.service (via drop-in) and also by
@@ -13,7 +13,12 @@
 #
 # Install to: /usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns on the storage host
 
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 # iSCSI-only script — exit silently in single-node mode
 is_single_node && exit 0
@@ -75,6 +80,6 @@ while IFS=: read -r name device target; do
 done < "$CONF"
 
 # Save only if all expected LUNs are active
-/usr/local/lib/zfsutilities/bin/safe-iscsi-save
+"$mydir/safe-iscsi-save"
 
 exit 0

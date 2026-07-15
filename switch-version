@@ -10,6 +10,10 @@
 # Run as root on each host where you want to switch versions.
 
 MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+
+source ~/bashinit
+bashinit
+
 # System wiring targets.  Override these in tests to avoid touching the real
 # filesystem.  They are re-evaluated at function entry so tests can set the
 # environment variables after sourcing this file.
@@ -42,8 +46,8 @@ else
 fi
 
 die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
+    log_msg "FATAL: $*"
+    source "$MYDIR/bashfatal" 1
 }
 
 usage() {

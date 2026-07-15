@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # attach-vm-disk <zvol> <vmid> [dst-disk-key]
 # Attaches an existing zvol to a Proxmox VM, rebuilding iSCSI infrastructure
 # (two-node) if needed.
@@ -6,7 +6,12 @@
 # Install to: /usr/local/lib/zfsutilities/bin/attach-vm-disk on BOTH hosts
 # Run from:   the compute host (or storage host — delegates via SSH)
 
-source /usr/local/lib/node-lib.sh
+source ~/bashinit
+bashinit
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
 
 MY_HOST=$(hostname -s)
 PVE_CONF_DIR="/etc/pve/qemu-server"
@@ -26,11 +31,6 @@ usage() {
     exit 1
 }
 
-die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
-}
-
 # --- Argument validation ---
 [[ $# -ge 2 && $# -le 3 ]] || usage
 
@@ -38,11 +38,14 @@ ZVOL="$1"
 DSTVMID="$2"
 DSTKEY="${3:-}"
 
-[[ "$DSTVMID" =~ ^[0-9]+$ ]] || die "vmid must be a number, got: $DSTVMID"
-[[ -z "$DSTKEY" || "$DSTKEY" =~ ^[a-z]+[0-9]+$ ]] || \
-    die "dst-disk-key must be like scsi0 or ide1, got: $DSTKEY"
-
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+[[ "$DSTVMID" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: vmid must be a number, got: $DSTVMID"
+    exit 1
+}
+[[ -z "$DSTKEY" || "$DSTKEY" =~ ^[a-z]+[0-9]+$ ]] || {
+    log_msg "FATAL: dst-disk-key must be like scsi0 or ide1, got: $DSTKEY"
+    exit 1
+}
 
 # --- Parse zvol path ---
 # Regex: ^([^/]+)/proxmox/vm-([0-9]+)-disk-([0-9]+)$
@@ -56,7 +59,8 @@ if [[ "$ZVOL" =~ ^([^/]+)/proxmox/vm-([0-9]+)-disk-([0-9]+)$ ]]; then
     SRCVMID="${BASH_REMATCH[2]}"
     DISKNUM="${BASH_REMATCH[3]}"
 else
-    die "Zvol path must be <pool>/proxmox/vm-<vmid>-disk-<num>, got: $ZVOL"
+    log_msg "FATAL: Zvol path must be <pool>/proxmox/vm-<vmid>-disk-<num>, got: $ZVOL"
+    exit 1
 fi
 
 BACKSTORE_NAME="vm-${SRCVMID}-disk-${DISKNUM}"
@@ -64,26 +68,31 @@ ZVOL_DEV="/dev/zvol/${ZVOL}"
 
 # --- Validate zvol exists ---
 if ! zfs list -H -o name "$ZVOL" 2>/dev/null | grep -q .; then
-    die "Zvol does not exist: $ZVOL"
+    log_msg "FATAL: Zvol does not exist: $ZVOL"
+    exit 1
 fi
 
 ZVOL_SIZE=$(zfs get -H -o value volsize "$ZVOL" 2>/dev/null || echo "unknown")
 
 # --- Delegate to compute host if run on storage node (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "attach-vm-disk")
     exec ssh -t root@"$COMPUTE_HOST" \
-        "/usr/local/lib/zfsutilities/bin/attach-vm-disk '$ZVOL' '$DSTVMID' '$DSTKEY'"
+        "$REMOTE_SCRIPT '$ZVOL' '$DSTVMID' '$DSTKEY'"
 fi
 
 # === Running on the compute host ===
 
 dst_conf="$PVE_CONF_DIR/${DSTVMID}.conf"
-[[ -f "$dst_conf" ]] || die "VM config not found: $dst_conf"
+[[ -f "$dst_conf" ]] || {
+    log_msg "FATAL: VM config not found: $dst_conf"
+    exit 1
+}
 
 # --- VM state check ---
 status=$(qm status "$DSTVMID" 2>/dev/null | awk '{print $2}')
 if [[ "${status:-unknown}" != "stopped" ]]; then
-    echo "⚠ VM $DSTVMID is currently $status"
+    log_msg "WARN: VM $DSTVMID is currently $status"
     echo "  Attaching a disk to a running VM is allowed but the guest OS may"
     echo "  need to rescan SCSI buses to see the new device."
     echo ""
@@ -95,7 +104,8 @@ fi
 # --- Determine destination disk key ---
 if [[ -n "$DSTKEY" ]]; then
     if grep -q "^${DSTKEY}:" "$dst_conf"; then
-        die "Destination key $DSTKEY already exists in VM $DSTVMID config"
+        log_msg "FATAL: Destination key $DSTKEY already exists in VM $DSTVMID config"
+        exit 1
     fi
 else
     bus="scsi"
@@ -115,7 +125,10 @@ echo "  Dest key:  $DSTKEY"
 # --- Two-node: ensure iSCSI backstore and LUN exist ---
 LUN_NUM=""
 if is_two_node; then
-    TARGET=$(pool_to_target "$POOL") || die "Failed to map pool to target: $POOL"
+    TARGET=$(pool_to_target "$POOL") || {
+        log_msg "FATAL: Failed to map pool to target: $POOL"
+        exit 1
+    }
     TARGET_SHORT="${TARGET##*:}"
 
     echo ""
@@ -129,6 +142,8 @@ ZVOL="$1"
 ZVOL_DEV="$2"
 BACKSTORE_NAME="$3"
 TARGET="$4"
+
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 
 # Check if backstore exists
 if targetcli /backstores/block ls 2>/dev/null | grep -q " ${BACKSTORE_NAME} "; then
@@ -157,9 +172,12 @@ else
 fi
 
 # Save config
-/usr/local/lib/zfsutilities/bin/safe-iscsi-save
+"$mydir/safe-iscsi-save"
 SSHEOF
-    ) || die "Storage operations failed on $STORAGE_HOST"
+    ) || {
+        log_msg "FATAL: Storage operations failed on $STORAGE_HOST"
+        exit 1
+    }
 
     # Parse result
     if echo "$lun_result" | grep -q "LUN_EXISTS:"; then
@@ -169,12 +187,13 @@ SSHEOF
         LUN_NUM=$(echo "$lun_result" | grep "LUN_CREATED:" | cut -d: -f2)
         echo "✓ LUN $LUN_NUM created and mapped"
     else
-        die "Could not determine LUN number from storage host"
+        log_msg "FATAL: Could not determine LUN number from storage host"
+        exit 1
     fi
 
     # Rescan
     echo "Triggering iSCSI rescan..."
-    /usr/local/lib/zfsutilities/bin/rescan-storage
+    "$mydir/rescan-storage"
     echo "✓ Rescan complete"
 fi
 
