@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.59.18
+
+### Changed
+
+- **`BackupRunner` cleanup hardening** — `_cleanup_io()` now accesses the GLib
+  main context and removes each I/O source inside `try/except` blocks so an
+  unexpected error during source removal is logged but does not propagate.
+  `GLib.MainContext.default()` is used instead of the older `get_default()`
+  alias.
+- **`BackupRunner` finish hardening** — `_finish()` now wraps UI cleanup,
+  history entry creation, session trailer writing, previous log restoration,
+  and the `on_complete` callback in individual `try/except` blocks. A failure
+  in any one of these steps logs a warning and the remaining cleanup steps
+  still run.
+
+### Tests
+
+- Updated `tests/python/test_backup_runner.py` to mock
+  `GLib.MainContext.default()` instead of `get_default()`.
+- Added `test_cleanup_io_uses_real_glib_api` to verify `_cleanup_io()` does
+  not raise against the real GLib API when no sources are active.
+- Added `test_finish_recovers_from_cleanup_exceptions` to verify `_finish()`
+  completes even when UI cleanup, history entry creation, session trailer
+  writing, log restoration, and the completion callback all raise.
+
 ## 0.59.17
 
 ### Changed

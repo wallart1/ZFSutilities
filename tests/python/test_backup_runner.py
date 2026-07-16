@@ -679,12 +679,24 @@ class TestSourceCleanup(unittest.TestCase):
 
         with patch.object(br.GLib, "MainContext") as mock_mc, \
              patch.object(br.GLib, "source_remove") as mock_remove:
-            mock_mc.get_default.return_value = ctx
+            mock_mc.default.return_value = ctx
             runner._cleanup_io()
 
         mock_remove.assert_called_once_with(222)
         self.assertIsNone(runner._stdout_source)
         self.assertIsNone(runner._stderr_source)
+
+    def test_cleanup_io_uses_real_glib_api(self):
+        """Regression: _cleanup_io uses GLib.MainContext.default(), not get_default()."""
+        runner = self._runner()
+        runner._stdout_source = None
+        runner._stderr_source = None
+        runner.process = MagicMock()
+        runner.process.stdout = MagicMock()
+        runner.process.stderr = MagicMock()
+
+        # This must not raise AttributeError.
+        runner._cleanup_io()
 
 
 class TestRunnerRobustness(unittest.TestCase):
@@ -737,6 +749,34 @@ class TestRunnerRobustness(unittest.TestCase):
                     runner._run_next_step()
 
         self.assertFalse(runner.running)
+
+    @patch("backup_runner.restore_session_log")
+    @patch("backup_runner.add_history_entry")
+    def test_finish_recovers_from_cleanup_exceptions(self, mock_add,
+                                                       _mock_restore):
+        """If cleanup steps in _finish raise, the runner still completes."""
+        runner = self._runner()
+        runner.label = "Backup"
+        runner._session_start_time = time.time()
+        runner._total_bytes_received = 1234
+        runner._on_complete = MagicMock(
+            side_effect=RuntimeError("complete exploded"))
+        runner.set_stdin_enabled = MagicMock(
+            side_effect=RuntimeError("stdin exploded"))
+        runner.progress = MagicMock(
+            side_effect=RuntimeError("progress exploded"))
+        runner._write_session_trailer = MagicMock(
+            side_effect=RuntimeError("trailer exploded"))
+        mock_add.side_effect = RuntimeError("history exploded")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                runner._finish(rc=0)
+
+        self.assertFalse(runner.running)
+        self.assertIsNone(runner._session_log_file)
+        self.assertIsNone(runner._session_log_prev)
 
     @patch("backup_runner.add_history_entry")
     def test_successful_step_advances_to_next_step(self, _mock_add):

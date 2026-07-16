@@ -626,19 +626,28 @@ class BackupRunner:
                 pass
 
     def _cleanup_io(self):
-        ctx = GLib.MainContext.get_default()
-        if self._stdout_source is not None:
-            if ctx.find_source_by_id(self._stdout_source) is not None:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    GLib.source_remove(self._stdout_source)
-            self._stdout_source = None
-        if self._stderr_source is not None:
-            if ctx.find_source_by_id(self._stderr_source) is not None:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    GLib.source_remove(self._stderr_source)
-            self._stderr_source = None
+        try:
+            ctx = GLib.MainContext.default()
+            if self._stdout_source is not None:
+                try:
+                    if ctx.find_source_by_id(self._stdout_source) is not None:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            GLib.source_remove(self._stdout_source)
+                except Exception as exc:
+                    self._log(f"DEBUG: Could not remove stdout source: {exc}")
+                self._stdout_source = None
+            if self._stderr_source is not None:
+                try:
+                    if ctx.find_source_by_id(self._stderr_source) is not None:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            GLib.source_remove(self._stderr_source)
+                except Exception as exc:
+                    self._log(f"DEBUG: Could not remove stderr source: {exc}")
+                self._stderr_source = None
+        except Exception as exc:
+            self._log(f"DEBUG: Could not access main context for cleanup: {exc}")
         if self._pty_master_fd is not None:
             try:
                 os.close(self._pty_master_fd)
@@ -655,28 +664,46 @@ class BackupRunner:
 
     def _finish(self, rc=0):
         self.running = False
-        self.set_stdin_enabled(False)
-        if self.progress:
-            self.progress(1.0, f"{self.label} complete")
-        self._log(f"INFO: {self.label} complete")
+        try:
+            self.set_stdin_enabled(False)
+            if self.progress:
+                self.progress(1.0, f"{self.label} complete")
+            self._log(f"INFO: {self.label} complete")
+        except Exception as exc:
+            self._log(f"WARN: Error during finish UI cleanup: {exc}")
+
         duration = time.time() - self._session_start_time if self._session_start_time else 0.0
         result = "success" if rc == 0 else "failed"
-        entry = build_entry(
-            timestamp=datetime.now().isoformat(),
-            run_type=self._get_tab_type(),
-            name=self.label,
-            duration=duration,
-            result=result,
-            bytes_transferred=self._total_bytes_received,
-            log_file=self._session_log_file,
-        )
-        add_history_entry(entry)
-        self._write_session_trailer(rc=rc,
-                                     bytes_transferred=self._total_bytes_received)
+        try:
+            entry = build_entry(
+                timestamp=datetime.now().isoformat(),
+                run_type=self._get_tab_type(),
+                name=self.label,
+                duration=duration,
+                result=result,
+                bytes_transferred=self._total_bytes_received,
+                log_file=self._session_log_file,
+            )
+            add_history_entry(entry)
+        except Exception as exc:
+            self._log(f"WARN: Could not add history entry: {exc}")
+
+        try:
+            self._write_session_trailer(rc=rc,
+                                         bytes_transferred=self._total_bytes_received)
+        except Exception as exc:
+            self._log(f"WARN: Could not write session trailer: {exc}")
+
         if self._session_log_prev is not None:
-            restore_session_log(self._session_log_prev)
+            try:
+                restore_session_log(self._session_log_prev)
+            except Exception as exc:
+                self._log(f"WARN: Could not restore previous session log: {exc}")
             self._session_log_prev = None
         self._session_log_file = None
         self._session_start_time = None
         if self._on_complete:
-            self._on_complete(cancelled=False)
+            try:
+                self._on_complete(cancelled=False)
+            except Exception as exc:
+                self._log(f"WARN: on_complete callback failed: {exc}")
