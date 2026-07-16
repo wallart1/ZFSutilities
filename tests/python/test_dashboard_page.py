@@ -1522,6 +1522,24 @@ class TestRefreshOpsSection(unittest.TestCase):
         self.assertEqual(appended[4], "/var/log/zfsutilities/sessions/daily.log")
 
 
+class TestRefreshProcessesSection(unittest.TestCase):
+    """_refresh_processes_section populates the Running Tasks store."""
+
+    def test_empty_tasks_placeholder_has_five_columns(self):
+        """The 'No running tasks' placeholder matches the ListStore schema."""
+        with mock_gtk() as gtk_mock:
+            with patch.object(dp, "Gtk", gtk_mock):
+                app = MagicMock()
+                store = MagicMock()
+                app.dashboard_tasks_store = store
+                dp._refresh_processes_section(app, tasks=[])
+
+        store.append.assert_called_once()
+        appended = store.append.call_args[0][0]
+        self.assertEqual(len(appended), 5)
+        self.assertEqual(appended[0], "No running tasks")
+
+
 class TestCreateDashboardPage(unittest.TestCase):
     """Dashboard page layout and widget creation."""
 

@@ -1592,7 +1592,7 @@ def _refresh_processes_section(app, tasks=None):
     if tasks is None:
         tasks = _collect_running_tasks(app)
     if not tasks:
-        app.dashboard_tasks_store.append(["No running tasks", "", "", ""])
+        app.dashboard_tasks_store.append(["No running tasks", "", "", "", ""])
         return
 
     for t in tasks:

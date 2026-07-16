@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.61.1
+
+*Released 2026-07-16*
+
+### Fixed
+
+- **Dashboard crash when no tasks are running** — The Running Tasks
+  `ListStore` gained a fifth hidden column (`log_file`) in 0.61.0, but the
+  "No running tasks" placeholder row still appended only four elements. This
+  caused a `ValueError` on Dashboard refresh whenever the task list was empty.
+  The placeholder now supplies all five columns.
+
+### Tests
+
+- Added `test_empty_tasks_placeholder_has_five_columns` in
+  `tests/python/test_dashboard_page.py` to prevent the placeholder/schema
+  mismatch from regressing.
+
 ## 0.61.0
 
 *Released 2026-07-16*
