@@ -263,5 +263,142 @@ test_create_desktop_symlinks_handles_missing_user
 test_create_desktop_symlinks_handles_missing_home
 test_remove_desktop_symlinks_removes_links
 
+# ------------------------------------------------------------------
+# Partial uninstall detection (from installer-lib.sh)
+# ------------------------------------------------------------------
+
+INSTALLER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../10 Installers/installer-lib.sh"
+[[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
+source "$INSTALLER_LIB"
+
+test_partial_uninstall_clean_system() {
+    test_start "check_partial_uninstall returns 0 when no remnants exist"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    export ZFSUTILITIES_VERSION_BASE="$tmpdir/version_base"
+    mkdir -p "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0"
+    ln -sfn "versions/1.0.0" "$ZFSUTILITIES_VERSION_BASE/current"
+
+    local rc
+    rc=$(check_partial_uninstall "$tmpdir" >/dev/null 2>&1; echo $?)
+
+    unset ZFSUTILITIES_VERSION_BASE
+    rm -rf "$tmpdir"
+
+    assert_rc 0 "$rc"
+}
+
+test_partial_uninstall_detects_missing_current() {
+    test_start "check_partial_uninstall warns when version base lacks current link"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    export ZFSUTILITIES_VERSION_BASE="$tmpdir/version_base"
+    mkdir -p "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0"
+    # Deliberately no current symlink
+
+    local output
+    output=$(check_partial_uninstall "$tmpdir" 2>&1)
+    local rc=$?
+
+    unset ZFSUTILITIES_VERSION_BASE
+    rm -rf "$tmpdir"
+
+    local failed=0
+    if [[ $rc -ne 1 ]]; then
+        failed=1
+        echo "    Expected rc=1 when user declines cleanup, got $rc"
+    fi
+    if [[ "$output" != *"Remnants of a previous ZFSutilities installation detected"* ]]; then
+        failed=1
+        echo "    Expected remnant warning"
+    fi
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Partial uninstall detection did not warn as expected"
+    fi
+}
+
+test_partial_uninstall_detects_systemd_cron_remnants() {
+    test_start "check_partial_uninstall warns when systemd/cron files remain"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    export ZFSUTILITIES_VERSION_BASE="$tmpdir/version_base"
+    mkdir -p "$tmpdir/etc/systemd/system/rtslib-fb-targetctl.service.d"
+    mkdir -p "$tmpdir/etc/cron.d"
+    touch "$tmpdir/etc/systemd/system/zfs-keys-unlock.service"
+    touch "$tmpdir/etc/cron.d/zfsutilities"
+
+    local output
+    output=$(check_partial_uninstall "$tmpdir" 2>&1)
+    local rc=$?
+
+    unset ZFSUTILITIES_VERSION_BASE
+    rm -rf "$tmpdir"
+
+    local failed=0
+    if [[ $rc -ne 1 ]]; then
+        failed=1
+        echo "    Expected rc=1 when user declines cleanup, got $rc"
+    fi
+    if [[ "$output" != *"Remnants of a previous ZFSutilities installation detected"* ]]; then
+        failed=1
+        echo "    Expected remnant warning"
+    fi
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Partial uninstall detection did not warn for systemd/cron remnants"
+    fi
+}
+
+test_partial_uninstall_runs_cleanup_when_confirmed() {
+    test_start "check_partial_uninstall runs uninstaller when user confirms"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    export ZFSUTILITIES_VERSION_BASE="$tmpdir/version_base"
+    mkdir -p "$tmpdir/version_base"
+
+    # Mock ask_yn to return yes and create a fake uninstaller in the repo path.
+    ask_yn() { return 0; }
+    printf '#!/usr/bin/bash\necho "fake-uninstall"\n' > "$tmpdir/uninstall-zfsutilities"
+    chmod +x "$tmpdir/uninstall-zfsutilities"
+
+    local output
+    output=$(check_partial_uninstall "$tmpdir" 2>&1)
+    local rc=$?
+
+    unset -f ask_yn 2>/dev/null || true
+    unset ZFSUTILITIES_VERSION_BASE
+    rm -rf "$tmpdir"
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0 after cleanup, got $rc"
+    fi
+    if [[ "$output" != *"fake-uninstall"* ]]; then
+        failed=1
+        echo "    Expected fake uninstaller output"
+    fi
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Partial uninstall cleanup did not run"
+    fi
+}
+
+test_partial_uninstall_clean_system
+test_partial_uninstall_detects_missing_current
+test_partial_uninstall_detects_systemd_cron_remnants
+test_partial_uninstall_runs_cleanup_when_confirmed
+
 test_summary
 teardown_test_env

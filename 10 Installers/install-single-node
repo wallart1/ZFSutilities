@@ -31,7 +31,7 @@ COMPAT_LINK="/usr/local/lib/two-node-lib.sh"
 
 # Scripts to install in single-node mode (no iSCSI-only scripts)
 SINGLE_NODE_SCRIPTS="new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk clone-vm move-vm-disk enroll-efi-keys-vm"
-CLONE_SCRIPTS="zfsclone-vm promote-vm-clone"
+CLONE_SCRIPTS="zfsclone-vm promote-vm-clone archive-vm unarchive-vm remove-vm"
 
 INSTALLER_LIB="$SCRIPT_DIR/installer-lib.sh"
 [[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
@@ -70,6 +70,11 @@ echo "=========================================="
 echo "  ZFSutilities — Single-Node Installer"
 echo "=========================================="
 echo ""
+
+# ------------------------------------------------------------------
+# Check for partial uninstall remnants
+# ------------------------------------------------------------------
+check_partial_uninstall "$REPO_DIR" || true
 
 # ------------------------------------------------------------------
 # Prerequisites check (interactive)

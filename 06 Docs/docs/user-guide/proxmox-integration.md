@@ -444,15 +444,15 @@ with their own unique data. Excluding them from backup causes data loss.
 
 ---
 
-## Retiring a VM
+## Archiving a VM
 
-The [`retire-vm`](../commands-and-modules/commands.md#retire-vm) script
-handles the entire retirement process automatically. Retiring a VM permanently
+The [`archive-vm`](../commands-and-modules/commands.md#archive-vm) script
+handles the entire archive process automatically. Archiving a VM permanently
 severs all clone relationships associated with the VM and archives the VM's
 data before destruction.
 
 ```bash
-sudo retire-vm <vmid>
+sudo archive-vm <vmid>
 ```
 
 The script stops the VM, discovers any clone VMs that still depend on its
@@ -466,26 +466,26 @@ config alongside the archive, it — after confirmation — removes the original
 VM config and destroys the original referenced zvols.
 
 For the exact archive layout and single-node vs two-node behavior, see the
-[`retire-vm` command reference](../commands-and-modules/commands.md#retire-vm).
+[`archive-vm` command reference](../commands-and-modules/commands.md#archive-vm).
 
-### Unretiring a VM
+### Unarchiving a VM
 
-If you later need to restore a retired VM from archive, use
-[`unretire-vm`](../commands-and-modules/commands.md#unretire-vm):
+If you later need to restore an archived VM from archive, use
+[`unarchive-vm`](../commands-and-modules/commands.md#unarchive-vm):
 
 ```bash
-sudo unretire-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
+sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 ```
 
 | Argument         | Description                                                                                |
 | ---------------- | ------------------------------------------------------------------------------------------ |
-| `vmid`           | VM ID of the retired VM to restore                                                         |
-| `archive_base`   | Optional ZFS dataset that contains the archive (defaults to the path saved in JSON config) |
-| `--new-vmid`     | Optional new VM ID to use for restored resources                                           |
+| `vmid`           | VM ID of the archived VM to restore                                                         |
+| `archive_base`   | Optional ZFS dataset that contains the archive (defaults to the path saved in JSON config)  |
+| `--new-vmid`     | Optional new VM ID to use for restored resources                                            |
 
 The script discovers archived zvols, restores each one with its original
 `volblocksize`, rebuilds iSCSI backstores and LUNs in two-node mode, restores
-the Proxmox config, and triggers an iSCSI rescan. Cloned datasets are retired
+the Proxmox config, and triggers an iSCSI rescan. Cloned datasets are archived
 as full datasets and are therefore restored as full datasets.
 
 If the original `vmid` is already in use and you do not pass `--new-vmid`, the
@@ -495,7 +495,7 @@ with the new VM ID, and `vmgenid`/`smbios1` UUIDs are regenerated so the
 restored VM does not share identifiers with the original.
 
 For the exact restoration steps and sidecar files used, see the
-[`unretire-vm` command reference](../commands-and-modules/commands.md#unretire-vm).
+[`unarchive-vm` command reference](../commands-and-modules/commands.md#unarchive-vm).
 
 ---
 

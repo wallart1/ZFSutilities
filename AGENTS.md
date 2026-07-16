@@ -29,6 +29,7 @@ You are a meticulous and expert coding agent. For every task:
 8. Look for and correct any deprecated code and features. Do not implement any deprecated code or features.
 9. Don't be lazy. Take the approach that is correct even though it may be more difficult to implement.
 10. Read and strictly follow the coding policies given in '/NFS1/dan(NFS1)/zfsutilities-pub/06 Docs/docs/developer-guide/coding-policies.md'
+11. If you run across pre-existing errors or bugs that are unrelated to the immediate task, identify it with a clear message so that I can put it on my To-Do list.
 
 ## Hard Rules
 
@@ -591,6 +592,19 @@ log_msg("DEBUG: variable =", value)
 - Each line is prefixed with `file:line:` via `inspect`
 
 ---
+
+## Recent Session Notes (2026-07-15)
+
+- Renamed `retire-vm` to `archive-vm` and `unretire-vm` to `unarchive-vm` to
+  better describe their purpose.
+- Added `remove-vm`: scans pools for `vm-<VMID>-disk-*` zvols, lists iSCSI
+  target/LUN mappings, asks for confirmation, destroys the zvols with
+  `zfsdelfs`, and removes the Proxmox VM definition.
+- Added `uninstall-zfsutilities`: a single interactive uninstall script that
+  removes the deployed software and production wiring, with an optional
+  `--purge` mode for configuration/logs/history and `--all-nodes` for two-node
+  deployments. The install scripts now detect partial-uninstall remnants and
+  offer to run `uninstall-zfsutilities` first.
 
 ## Recent Session Notes (2026-07-11)
 

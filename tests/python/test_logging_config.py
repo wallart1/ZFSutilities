@@ -28,6 +28,8 @@ from logging_config import (
     NONE_LEVEL,
     NONE_PRIORITY,
     _MSG_PRIORITY,
+    format_log_line_short,
+    format_log_text_short,
 )
 
 
@@ -215,6 +217,69 @@ class TestParseMsgLevel(unittest.TestCase):
             "versions/0.59.4/bin/zfs-send-receive:477: VERB: zfs send -cw -i ..."
         )
         self.assertEqual(parse_msg_level(line), "VERB")
+
+
+class TestFormatLogLineShort(unittest.TestCase):
+
+    def test_strips_single_file_line_prefix(self):
+        result = format_log_line_short(
+            "2026-06-21 13:00:00", "/path/file:10: INFO: hello"
+        )
+        self.assertEqual(result, "2026-06-21 13:00:00  INFO: hello")
+
+    def test_strips_nested_file_line_prefixes(self):
+        message = (
+            "/usr/local/lib/zfsutilities/versions/0.59.4/07 GTK + Python/"
+            "backup_runner.py:208: /usr/local/lib/zfsutilities/versions/0.59.4/"
+            "bin/zfs-send-receive:477: VERB: details"
+        )
+        result = format_log_line_short("2026-06-21 13:00:00", message)
+        self.assertEqual(result, "2026-06-21 13:00:00  VERB: details")
+
+    def test_leaves_raw_messages_unchanged(self):
+        result = format_log_line_short(
+            "2026-06-21 13:00:00", "raw subprocess output"
+        )
+        self.assertEqual(result, "2026-06-21 13:00:00  raw subprocess output")
+
+    def test_leaves_zfsutilities_prefix_unchanged(self):
+        result = format_log_line_short(
+            "2026-06-21 13:00:00", "zfsutilities: marker text"
+        )
+        self.assertEqual(result, "2026-06-21 13:00:00  zfsutilities: marker text")
+
+
+class TestFormatLogTextShort(unittest.TestCase):
+
+    def test_strips_prefixes_from_timestamped_lines(self):
+        text = (
+            "2026-06-21 10:00:00  /a:1: INFO: one\n"
+            "2026-06-21 10:00:01  /b:2: WARN: two\n"
+        )
+        result = format_log_text_short(text)
+        self.assertEqual(
+            result,
+            "2026-06-21 10:00:00  INFO: one\n"
+            "2026-06-21 10:00:01  WARN: two\n",
+        )
+
+    def test_preserves_raw_lines_without_prefix(self):
+        text = (
+            "2026-06-21 10:00:00  /a:1: INFO: one\n"
+            "2026-06-21 10:00:01  raw subprocess output\n"
+        )
+        result = format_log_text_short(text)
+        self.assertIn("2026-06-21 10:00:01  raw subprocess output", result)
+        self.assertIn("2026-06-21 10:00:00  INFO: one", result)
+
+    def test_preserves_end_trailer(self):
+        text = (
+            "2026-06-21 10:00:00  /a:1: INFO: one\n"
+            "# END: rc=0, duration=1.0s\n"
+        )
+        result = format_log_text_short(text)
+        self.assertIn("2026-06-21 10:00:00  INFO: one", result)
+        self.assertIn("# END: rc=0, duration=1.0s", result)
 
 
 class TestViewerShouldShow(unittest.TestCase):

@@ -18,7 +18,7 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
-from logging_config import log_msg, set_log_sink
+from logging_config import log_msg, set_log_sink, format_log_line_short
 from config_core import (
     CONFIG_PATH, load_config,
     get_ui_state, save_ui_state,
@@ -328,14 +328,14 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         """Add a message to the info panel, colorizing WARN/FATAL lines.
 
         All messages are stored; the main level selector controls which lines
-        are visible in the panel.
+        are visible in the panel.  The Short prefix toggle controls whether
+        the source file:line location is shown.
         """
         if not hasattr(self, 'info_text'):
             return
         from datetime import datetime
         from logging_config import parse_msg_level
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        stamped = f"{timestamp}  {message}"
         level = parse_msg_level(message)
 
         self._info_panel_lines.append((timestamp, level, message))
@@ -347,13 +347,17 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         elif level == "WARN":
             self._update_log_status("WARN")
 
-        self._insert_info_line(timestamp, level, message, stamped)
+        self._insert_info_line(timestamp, level, message)
 
-    def _insert_info_line(self, timestamp, level, message, stamped):
+    def _insert_info_line(self, timestamp, level, message):
         """Insert a single line into the info panel if it passes the filter."""
         from logging_config import viewer_should_show
         if not viewer_should_show(level, self._info_panel_level):
             return
+        if getattr(self, "_info_panel_short_prefix", True):
+            stamped = format_log_line_short(timestamp, message)
+        else:
+            stamped = f"{timestamp}  {message}"
         buffer = self.info_text.get_buffer()
         end_iter = buffer.get_end_iter()
         start_mark = buffer.create_mark(None, end_iter, True)
@@ -391,8 +395,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         buffer.set_text("")
         for timestamp, level, message in self._info_panel_lines:
             if viewer_should_show(level, self._info_panel_level):
-                stamped = f"{timestamp}  {message}"
-                self._insert_info_line(timestamp, level, message, stamped)
+                self._insert_info_line(timestamp, level, message)
 
         # Preserve scroll position relative to the new content.
         def _restore_scroll():
@@ -715,6 +718,11 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             self.log_level_button.set_label(level)
             self._info_panel_level = level
             self._render_info_panel()
+
+    def _on_info_short_prefix_toggled(self, button):
+        """Re-render the info panel when the short-prefix toggle changes."""
+        self._info_panel_short_prefix = button.get_active()
+        self._render_info_panel()
 
     def _set_stdin_enabled(self, enabled):
         """Enable or disable the stdin entry and send button."""

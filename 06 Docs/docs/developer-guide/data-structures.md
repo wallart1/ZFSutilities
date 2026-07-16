@@ -389,7 +389,7 @@ active than expected, the save is aborted to prevent overwriting
 `saveconfig.json` with a degraded (partial) configuration.
 
 Comments (`#`) and blank lines are ignored. Maintained by [new-vm-disk](../commands-and-modules/two-node.md#new-vm-disk-both)
-(adds), [unretire-vm](../commands-and-modules/two-node.md#unretire-vm-both) (adds restored backstores), and the
+(adds), [unarchive-vm](../commands-and-modules/two-node.md#unarchive-vm-both) (adds restored backstores), and the
 `zfs-send-receive` rebuild path (re-adds after a torn-down destination is
 re-created). [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both) (removes),
 [detach-vm-disk](../commands-and-modules/two-node.md#detach-vm-disk-both) (removes),

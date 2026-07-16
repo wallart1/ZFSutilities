@@ -1,4 +1,6 @@
 #!/bin/bash
+# test-zfsretain-debug — Minimal sanity check that zfsretain sources cleanly.
+
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
 setup_test_env
 
@@ -6,7 +8,24 @@ old_mydir="$mydir"
 mock_mydir=$(mktemp -d)
 mydir="$mock_mydir"
 
+# Provide a mock zfsconfig so zfsretain can be sourced without the real helper.
 cat > "$mock_mydir/zfsconfig" << 'EOF'
 zfsconfig_get_retention() {
     mock_retention_policy
 }
+EOF
+
+# Source the real zfsretain so its internal function definitions are available.
+source "$old_mydir/zfsretain"
+
+test_start "zfsretain sources cleanly and defines retain function"
+if declare -f retain >/dev/null; then
+    test_pass
+else
+    test_fail "retain function not defined after sourcing zfsretain"
+fi
+
+rm -rf "$mock_mydir"
+mydir="$old_mydir"
+
+test_summary

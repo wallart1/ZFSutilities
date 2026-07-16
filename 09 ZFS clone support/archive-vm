@@ -1,9 +1,9 @@
 #!/usr/bin/bash
-# retire-vm <vmid>
-# Retires a VM: promotes dependent clones, archives zvols + config,
+# archive-vm <vmid>
+# Archives a VM: promotes dependent clones, archives zvols + config,
 # verifies the archive, and optionally removes the VM.
 #
-# Install to: /usr/local/lib/zfsutilities/bin/retire-vm on BOTH hosts
+# Install to: /usr/local/lib/zfsutilities/bin/archive-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
 source ~/bashinit
@@ -23,7 +23,7 @@ ZFSLOCK_MANAGER="${ZFSLOCK_MANAGER:-$(find_zfsutility_script zfslockmanager)}"
 source "$ZFSLOCK_MANAGER"
 
 usage() {
-    echo "Usage: retire-vm <vmid>"
+    echo "Usage: archive-vm <vmid>"
     echo ""
     echo "  vmid   VM ID to retire"
     echo ""
@@ -34,7 +34,7 @@ usage() {
     echo "  4. Verify archive integrity"
     echo "  5. Optionally remove the VM"
     echo ""
-    echo "Example: retire-vm 904"
+    echo "Example: archive-vm 904"
     exit 1
 }
 
@@ -67,7 +67,7 @@ ensure_retire_snapshot() {
         snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1)
         if [[ -z "$snap" ]]; then
             zfslock_init
-            if ! zfslock_acquire "$zvol" "w" "retire-vm auto-snapshot"; then
+            if ! zfslock_acquire "$zvol" "w" "archive-vm auto-snapshot"; then
                 { log_msg "FATAL: Could not acquire write lock on ${zvol} for snapshot creation"; exit 1; }
             fi
             snap_name="@retire-$(date -Iminutes)-d"
@@ -90,7 +90,7 @@ source "$mydir/zfslockmanager"
 snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1)
 if [[ -z "$snap" ]]; then
     zfslock_init
-    if ! zfslock_acquire "$zvol" "w" "retire-vm auto-snapshot"; then
+    if ! zfslock_acquire "$zvol" "w" "archive-vm auto-snapshot"; then
         log_msg "FATAL: Could not acquire write lock on ${zvol} for snapshot creation"
         exit 1
     fi
@@ -267,16 +267,16 @@ SSHEOF
 
 VMID="$1"
 [[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
-[[ $EUID -eq 0 || ${RETIRE_VM_TEST_NO_ROOT:-0} == "1" ]] || { log_msg "FATAL: Must run as root (use sudo)"; exit 1; }
+[[ $EUID -eq 0 || ${ARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || { log_msg "FATAL: Must run as root (use sudo)"; exit 1; }
 
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "retire-vm")
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "archive-vm")
     exec ssh -t root@"$COMPUTE_HOST" \
         "$REMOTE_SCRIPT '$VMID'"
 fi
 
-echo "=== retire-vm ==="
+echo "=== archive-vm ==="
 echo "  VM: ${VMID}"
 echo ""
 
@@ -419,7 +419,7 @@ for zvol in $zvols; do
         # Save original volblocksize
         echo "$orig_vbs" > "${ARCHIVE_MOUNT}/${zvol}.original_volblocksize"
 
-        # Save disk info sidecar for unretire
+        # Save disk info sidecar for unarchive
         # grep -oP 'disk-\K[0-9]+$'
         # Purpose: Extract the disk number from a zvol path using \K to drop the "disk-" prefix.
         # Example: "threeamigos/proxmox/vm-105-disk-0" -> match ("0")
@@ -459,7 +459,7 @@ fi
 
 echo "$orig_vbs" > "${archive_mount}/${zvol}.original_volblocksize"
 
-# Save disk info sidecar for unretire
+# Save disk info sidecar for unarchive
 # grep -oP 'disk-\K[0-9]+$'  —  Extract disk number from zvol path (see comment above).
 disknum=$(echo "$zvol" | grep -oP 'disk-\K[0-9]+$')
 backstore="vm-${VMID}-disk-${disknum}"
@@ -627,5 +627,5 @@ rm -f "$proxmoxconfig"
 
 echo ""
 echo "=== Done ==="
-echo "  VM ${VMID} has been retired."
+echo "  VM ${VMID} has been archived."
 echo "  Archive: ${ARCHIVE_BASE}"

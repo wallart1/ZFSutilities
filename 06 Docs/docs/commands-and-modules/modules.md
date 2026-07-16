@@ -539,7 +539,7 @@ and suggests `fuser` / `lsof` commands.
 | `zfsdelsnap`          | After `zfs destroy` fails               |
 | `zfsdelfs`            | After `zfs destroy` fails               |
 | `remove-vm-disk`      | After `zfs destroy` fails               |
-| `retire-vm`           | After `zfs destroy` fails               |
+| `archive-vm`          | After `zfs destroy` fails               |
 | `clone-vm`            | After cleanup `zfs destroy` fails       |
 | `dataset_actions.py`  | From `_run_zfs_sudo` when destroy fails |
 | `snapshot_manager.py` | After `zfs destroy` fails               |

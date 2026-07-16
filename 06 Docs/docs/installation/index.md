@@ -159,6 +159,90 @@ but their operations are skipped.
 
 The install scripts assume that storage devices and ZFS pools are already active on the new system configuration. The scripts do not assist with this. 
 
+## Uninstalling ZFSutilities
+
+A dedicated `uninstall-zfsutilities` script is installed alongside the other
+tools. Run it as `root` to remove the software from the current host:
+
+```bash
+sudo uninstall-zfsutilities
+```
+
+The script is interactive: it shows what is installed, explains the available
+choices, and asks what you want to remove.
+
+### Default uninstall
+
+Removes the deployed software and production wiring:
+
+- Versioned deployment under `/usr/local/lib/zfsutilities/`
+- `/root/bashinit`, `/usr/local/lib/node-lib.sh`, and related symlinks
+- `/etc/profile.d/zfsutilities.sh` and `/etc/sudoers.d/zfsutilities`
+- Desktop shortcuts (`ZFSutilities GUI`, `ZFSutilities Documentation`)
+- `/etc/cron.d/zfsutilities`
+- systemd service/drop-in files installed by ZFSutilities
+
+Your configuration, logs, and history are preserved.
+
+### Purge mode
+
+Add `--purge` to also remove user data and system-integration remnants:
+
+```bash
+sudo uninstall-zfsutilities --purge
+```
+
+This also removes:
+
+- `/etc/zfsutilities-node.conf`, `/etc/two-node.conf`, and `/etc/zfsutilities-deploy.conf`
+- `/root/.config/zfsutilities.json` and `/root/.config/zfsutilities/`
+- `/root/.config/zfsutilities-history.json`
+- `/root/.cache/zfsutilities/`
+- `/var/log/zfsutilities/` (session logs, cron log, rsync-backup log)
+- Cache-warm scripts, service, and logs
+- `/etc/iscsi-encrypted-luns.conf`
+- `/root/.luks-key` (with an explicit confirmation prompt)
+
+### Two-node deployments
+
+Run the uninstall on the storage host. To clean up the compute host as well,
+add `--all-nodes`:
+
+```bash
+sudo uninstall-zfsutilities --purge --all-nodes
+```
+
+The script reads `/etc/zfsutilities-node.conf`, determines the peer host, and
+runs the same uninstall command on it via SSH. If the peer is unreachable, the
+local uninstall continues and a warning is printed so you can rerun with
+`--all-nodes` later.
+
+### Non-interactive and dry-run use
+
+- `--yes` / `-y` — skip all confirmation prompts
+- `--dry-run` — print every action without modifying the system
+
+```bash
+sudo uninstall-zfsutilities --purge --yes
+sudo uninstall-zfsutilities --purge --dry-run
+```
+
+### What is not removed
+
+The uninstaller intentionally does **not** touch:
+
+- ZFS pools, datasets, snapshots, or iSCSI targets/LUNs
+- The Proxmox iSCSI rescan-rate patch on the compute host (`/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm`)
+- Packages that may be used by other software (e.g., MkDocs, mkdocs-material)
+- A pre-existing `/root/bashinit.bak`
+
+### Restartability and installer integration
+
+The uninstall script is idempotent: if a previous run was interrupted, you can
+rerun it safely. The install scripts (`install-single-node` and
+`install-two-node`) detect remnants of a partial uninstall and offer to run
+`uninstall-zfsutilities` first.
+
 ## Configuration Files
 
 ZFSutilities uses two configuration files with different purposes.

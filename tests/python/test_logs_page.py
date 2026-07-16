@@ -476,6 +476,58 @@ class TestLogsLevelChanged(unittest.TestCase):
         mock_idle.assert_called_once()
 
 
+class TestLogsShortPrefix(unittest.TestCase):
+
+    def _make_app(self, path, short_prefix=True):
+        app = MagicMock()
+        app._logs_current_path = path
+        app._logs_read_offset = 0
+        app._logs_file_size = os.path.getsize(path)
+        app.logs_viewer_level = "DEBUG"
+        app.logs_short_prefix = short_prefix
+        app.logs_show_more_btn.get_visible.return_value = False
+        buf = MagicMock()
+        app.logs_text.get_buffer.return_value = buf
+        return app, buf
+
+    def test_load_next_chunk_strips_prefix_in_short_mode(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test.log")
+            with open(path, "w") as fh:
+                fh.write("2026-06-21 10:00:00  /a:1: INFO: hello\n")
+            app, buf = self._make_app(path)
+            lp._load_next_chunk(app)
+            inserted = "".join(call[0][1] for call in buf.insert.call_args_list)
+            self.assertIn("INFO: hello", inserted)
+            self.assertNotIn("/a:1:", inserted)
+
+    def test_load_next_chunk_keeps_prefix_in_long_mode(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test.log")
+            with open(path, "w") as fh:
+                fh.write("2026-06-21 10:00:00  /a:1: INFO: hello\n")
+            app, buf = self._make_app(path, short_prefix=False)
+            lp._load_next_chunk(app)
+            inserted = "".join(call[0][1] for call in buf.insert.call_args_list)
+            self.assertIn("/a:1: INFO: hello", inserted)
+
+    def test_short_prefix_toggle_reloads_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test.log")
+            with open(path, "w") as fh:
+                fh.write("2026-06-21 10:00:00  /a:1: INFO: hello\n")
+            app, _buf = self._make_app(path)
+            app._logs_current_path = path
+            button = MagicMock()
+            button.get_active.return_value = False
+            with patch("logs_page._load_log_into_viewer") as mock_load:
+                with patch("logs_page.GLib.idle_add"):
+                    lp._on_logs_short_prefix_toggled(button, app)
+            self.assertFalse(app.logs_short_prefix)
+            app.logs_text.get_buffer().set_text.assert_called_once_with("")
+            mock_load.assert_called_once_with(app)
+
+
 class TestScanLogStatus(unittest.TestCase):
 
     def _write_log(self, tmpdir, name, content):

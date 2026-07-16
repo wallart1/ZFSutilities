@@ -171,6 +171,39 @@ List deployed versions:
 sudo switch-version --list
 ```
 
+## Uninstalling
+
+To completely remove ZFSutilities from a host, run the uninstall script as
+`root`:
+
+```bash
+sudo uninstall-zfsutilities
+```
+
+The script will guide you interactively. By default it removes the deployed
+software and production wiring but preserves your configuration, logs, and
+history. To also remove those remnants, pass `--purge`:
+
+```bash
+sudo uninstall-zfsutilities --purge
+```
+
+In a two-node deployment, run the uninstall on the storage host and use
+`--all-nodes` to also clean up the compute host:
+
+```bash
+sudo uninstall-zfsutilities --purge --all-nodes
+```
+
+Other useful options:
+
+- `--yes` / `-y` — skip confirmation prompts
+- `--dry-run` — preview what would be removed without making changes
+
+The uninstaller does not destroy ZFS pools, datasets, snapshots, or iSCSI
+targets, and it does not remove packages that may be shared with other
+software (such as MkDocs).
+
 ## Documentation
 
 The full documentation is built with MkDocs from `06 Docs/docs/` and is

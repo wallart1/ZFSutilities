@@ -1,0 +1,340 @@
+#!/usr/bin/bash
+# test-remove-vm — Unit tests for remove-vm discovery and removal flow.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+setup_node_config() {
+    local mode="${1:-single-node}"
+    NODE_CONF_FILE="$_mock_zfs_state_dir/node.conf"
+    if [[ "$mode" == "single-node" ]]; then
+        cat > "$NODE_CONF_FILE" << 'EOF'
+NODE_MODE=single-node
+EOF
+    else
+        local compute
+        compute=$(hostname -s)
+        cat > "$NODE_CONF_FILE" << EOF
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="$compute"
+STORAGE_IP="192.168.100.1"
+IQN_PREFIX="iqn.2026-02.local.stewie"
+declare -A POOL_TARGET=(
+    [threeamigos]="threeamigos"
+    [NVME1]="nvme1"
+)
+EOF
+    fi
+    export NODE_CONF="$NODE_CONF_FILE"
+}
+
+setup_pve_config() {
+    local pve_dir="$1"
+    local vmid="$2"
+    mkdir -p "$pve_dir"
+    cat > "${pve_dir}/${vmid}.conf" << EOF
+name: test-vm
+scsi0: threeamigos:vm-${vmid}-disk-0,size=10G
+EOF
+}
+
+# Run remove-vm in a subshell so an exit/die does not kill the test harness.
+run_remove() {
+    local mode="$1"
+    local pve_dir="$2"
+    local vmid="$3"
+    local stdin_input="${4:-}"
+    local zvols_list
+    if [[ $# -ge 5 ]]; then
+        zvols_list="$5"
+    else
+        zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    fi
+
+    local capture_dir="$_mock_zfs_state_dir/capture"
+    mkdir -p "$capture_dir"
+    rm -f "$capture_dir/zfsdelfs_calls" "$capture_dir/ssh" \
+        "$capture_dir/iscsi_save" "$capture_dir/rescan"
+
+    (
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+        setup_test_env
+        setup_node_config "$mode"
+
+        export REMOVE_VM_TEST_NO_ROOT=1
+        export NODE_LIB="$mydir/08 Two-node/node-lib.sh"
+        export PVE_CONF_DIR="$pve_dir"
+        export _capture_dir="$capture_dir"
+
+        # Mock executables
+        cat > "$_mock_zfs_state_dir/zfsdelfs" << 'EOF'
+#!/usr/bin/bash
+echo "$*" >> "$_capture_dir/zfsdelfs_calls"
+EOF
+        chmod +x "$_mock_zfs_state_dir/zfsdelfs"
+
+        cat > "$_mock_zfs_state_dir/rescan-storage" << 'EOF'
+#!/usr/bin/bash
+echo "rescan" >> "$_capture_dir/rescan"
+EOF
+        chmod +x "$_mock_zfs_state_dir/rescan-storage"
+
+        # Redirect find_zfsutility_script to our mocks / real files.
+        find_zfsutility_script() {
+            case "$1" in
+                zfsdelfs)
+                    echo "$_mock_zfs_state_dir/zfsdelfs"
+                    ;;
+                rescan-storage)
+                    echo "$_mock_zfs_state_dir/rescan-storage"
+                    ;;
+                node-lib.sh)
+                    echo "$mydir/08 Two-node/node-lib.sh"
+                    ;;
+                rootcheck)
+                    # Leave the test-lib mock in place.
+                    echo "/dev/null"
+                    ;;
+                *)
+                    return 1
+                    ;;
+            esac
+        }
+
+        # Mock ZFS state.
+        _mock_zfs_fs_list=$(echo "$zvols_list" | tr ' ' '\n')
+        local zvol
+        for zvol in $zvols_list; do
+            _mock_zfs_datasets["$zvol"]=1
+            _mock_zfs_props["${zvol}:volsize"]="10G"
+        done
+
+        # Mock VM status.
+        qm() {
+            echo "status: stopped"
+        }
+
+        # Mock SSH for two-node discovery and remote operations.
+        ssh() {
+            echo "SSH:${*}" >> "$_capture_dir/ssh"
+
+            if [[ "$*" == *"realpath"* || "$*" == *"readlink"* ]]; then
+                echo "/usr/local/lib/zfsutilities/current/bin"
+                return 0
+            fi
+
+            if [[ "$*" == *"zfsdelfs"* ]]; then
+                echo "ZFSDELFS:${*}" >> "$_capture_dir/zfsdelfs_calls"
+                return 0
+            fi
+
+            if [[ "$*" == *"safe-iscsi-save"* ]]; then
+                echo "SAVE:${*}" >> "$_capture_dir/iscsi_save"
+                return 0
+            fi
+
+            local has_bash=0 has_s=0 arg
+            for arg in "$@"; do
+                [[ "$arg" == "bash" ]] && has_bash=1
+                [[ "$arg" == "-s" ]] && has_s=1
+            done
+
+            if [[ $has_bash -eq 1 && $has_s -eq 1 ]]; then
+                # Discovery helper: output one zvol per line with iSCSI info.
+                local disk
+                for disk in $zvols_list; do
+                    echo -e "${disk}\t10G\tiqn.2026-02.local.stewie:threeamigos\t0"
+                done
+                return 0
+            fi
+
+            return 0
+        }
+
+        source "$mydir/09 ZFS clone support/remove-vm" "$vmid"
+    ) 2>&1 <<EOF
+$stdin_input
+EOF
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_rejects_invalid_vmid() {
+    test_start "Rejects non-numeric VMID"
+    local out rc
+    out=$(run_remove single-node "/tmp" "abc" 0 2>&1)
+    rc=$?
+    assert_rc 1 "$rc"
+}
+
+test_no_zvols_or_config() {
+    test_start "Exits cleanly when nothing is found"
+    local pve_dir="$_mock_zfs_state_dir/pve_empty"
+    mkdir -p "$pve_dir"
+    local out rc
+    out=$(run_remove single-node "$pve_dir" "999" "" "")
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    assert_contains "$out" "No zvols or Proxmox config found"
+}
+
+test_single_node_lists_zvols_and_removes() {
+    test_start "Single-node: lists zvols and calls zfsdelfs"
+
+    local vmid="309"
+    local pve_dir="$_mock_zfs_state_dir/pve1"
+    setup_pve_config "$pve_dir" "$vmid"
+
+    local out rc
+    out=$(run_remove single-node "$pve_dir" "$vmid" "y")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
+        test_fail "Zvol not listed; output:\n$out"
+        return
+    fi
+
+    local calls
+    calls=$(cat "$_mock_zfs_state_dir/capture/zfsdelfs_calls" 2>/dev/null || true)
+    if [[ "$calls" != *"threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
+        test_fail "zfsdelfs was not called for the zvol; calls:\n$calls"
+        return
+    fi
+    if [[ "$calls" != *"autoproceed='Y'"* ]]; then
+        test_fail "zfsdelfs was not called with autoproceed='Y'; calls:\n$calls"
+        return
+    fi
+
+    if [[ -f "${pve_dir}/${vmid}.conf" ]]; then
+        test_fail "Proxmox config was not removed"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_aborts_on_no() {
+    test_start "Single-node: aborts when user declines"
+
+    local vmid="310"
+    local pve_dir="$_mock_zfs_state_dir/pve2"
+    setup_pve_config "$pve_dir" "$vmid"
+
+    local out rc
+    out=$(run_remove single-node "$pve_dir" "$vmid" "n")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"Aborted."* ]]; then
+        test_fail "Expected abort message; output:\n$out"
+        return
+    fi
+
+    if [[ ! -f "${pve_dir}/${vmid}.conf" ]]; then
+        test_fail "Proxmox config should not have been removed"
+        return
+    fi
+
+    if [[ -s "$_mock_zfs_state_dir/capture/zfsdelfs_calls" ]]; then
+        test_fail "zfsdelfs should not have been called"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_includes_iscsi_info() {
+    test_start "Two-node: includes iSCSI target and LUN in summary"
+
+    local vmid="311"
+    local pve_dir="$_mock_zfs_state_dir/pve3"
+    setup_pve_config "$pve_dir" "$vmid"
+
+    local out rc
+    out=$(run_remove two-node "$pve_dir" "$vmid" "y")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"iqn.2026-02.local.stewie:threeamigos"* ]]; then
+        test_fail "iSCSI target not listed; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"LUN 0"* ]]; then
+        test_fail "LUN not listed; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_removes_via_ssh() {
+    test_start "Two-node: calls zfsdelfs on storage host and saves iSCSI config"
+
+    local vmid="312"
+    local pve_dir="$_mock_zfs_state_dir/pve4"
+    setup_pve_config "$pve_dir" "$vmid"
+
+    local out rc
+    out=$(run_remove two-node "$pve_dir" "$vmid" "y")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local calls
+    calls=$(cat "$_mock_zfs_state_dir/capture/zfsdelfs_calls" 2>/dev/null || true)
+    if [[ "$calls" != *"threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
+        test_fail "Remote zfsdelfs call missing; calls:\n$calls"
+        return
+    fi
+
+    if [[ ! -s "$_mock_zfs_state_dir/capture/iscsi_save" ]]; then
+        test_fail "safe-iscsi-save was not called"
+        return
+    fi
+
+    if [[ ! -s "$_mock_zfs_state_dir/capture/rescan" ]]; then
+        test_fail "rescan-storage was not called"
+        return
+    fi
+
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_rejects_invalid_vmid
+test_no_zvols_or_config
+test_single_node_lists_zvols_and_removes
+test_single_node_aborts_on_no
+test_two_node_includes_iscsi_info
+test_two_node_removes_via_ssh
+
+test_summary

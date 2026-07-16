@@ -114,6 +114,7 @@ class TestLogMessageDisplayFilter(unittest.TestCase):
             window.info_text = text_view
             window.log_scrolled = MagicMock()
             window._info_panel_level = "INFO"
+            window._info_panel_short_prefix = True
             window._info_panel_lines = []
             window._log_status_level = None
             return window, buffer_mock
@@ -166,6 +167,36 @@ class TestLogMessageDisplayFilter(unittest.TestCase):
             window._render_info_panel()
         self.assertEqual(buf.set_text.call_count, 1)
         self.assertEqual(buf.insert.call_count, 2)
+
+    def test_default_short_prefix_strips_file_line(self):
+        window, buf = self._make_window()
+        window.log_message(self._prefix("INFO: one"))
+        inserted = buf.insert.call_args[0][1]
+        self.assertIn("2026-", inserted)
+        self.assertIn("INFO: one", inserted)
+        self.assertNotIn("/path/file:10:", inserted)
+
+    def test_long_prefix_shows_file_line(self):
+        window, buf = self._make_window()
+        window._info_panel_short_prefix = False
+        window.log_message(self._prefix("INFO: one"))
+        inserted = buf.insert.call_args[0][1]
+        self.assertIn("/path/file:10:", inserted)
+        self.assertIn("INFO: one", inserted)
+
+    def test_short_prefix_toggle_re_renders(self):
+        window, buf = self._make_window()
+        window.log_message(self._prefix("INFO: one"))
+        buf.set_text.reset_mock()
+        buf.insert.reset_mock()
+        button = MagicMock()
+        button.get_active.return_value = False
+        with patch("zfsutilities_gui.GLib.idle_add"):
+            window._on_info_short_prefix_toggled(button)
+        self.assertFalse(window._info_panel_short_prefix)
+        self.assertEqual(buf.set_text.call_count, 1)
+        inserted = "".join(call[0][1] for call in buf.insert.call_args_list)
+        self.assertIn("/path/file:10:", inserted)
 
 
 class TestDryRunToggle(unittest.TestCase):

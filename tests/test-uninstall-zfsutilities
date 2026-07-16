@@ -1,0 +1,637 @@
+#!/usr/bin/bash
+# test-uninstall-zfsutilities — Verify the complete uninstall script.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+UNINSTALL_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../uninstall-zfsutilities"
+[[ -f "$UNINSTALL_SCRIPT" ]] || die "Missing: $UNINSTALL_SCRIPT"
+
+# Source the real uninstall script for direct function tests. rootcheck is
+# already mocked by test-lib.sh, so the root check is bypassed.
+source "$UNINSTALL_SCRIPT"
+
+# Override the script's built-in ask_yn so tests can drive it with mock_ask_yn.
+ask_yn() {
+    return "$_mock_ask_yn_rc"
+}
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+
+# Set up a temp environment and configure uninstall paths.
+_setup_uninstall_env() {
+    local _varname="$1"
+    local _tmpdir
+    _tmpdir=$(mktemp -d)
+
+    export ZFSUTILITIES_VERSION_BASE="$_tmpdir/usr/local/lib/zfsutilities"
+    export ZFSUTILITIES_BASHINIT_LINK="$_tmpdir/root/bashinit"
+    export ZFSUTILITIES_PROFILE_FILE="$_tmpdir/etc/profile.d/zfsutilities.sh"
+    export ZFSUTILITIES_SUDOERS_FILE="$_tmpdir/etc/sudoers.d/zfsutilities"
+    export ZFSUTILITIES_NODE_LIB_LINK="$_tmpdir/usr/local/lib/node-lib.sh"
+    export ZFSUTILITIES_TWO_NODE_LIB_LINK="$_tmpdir/usr/local/lib/two-node-lib.sh"
+    export ZFSUTILITIES_LOCAL_BIN_DIR="$_tmpdir/usr/local/bin"
+    export ZFSUTILITIES_NODE_CONF="$_tmpdir/etc/zfsutilities-node.conf"
+    export ZFSUTILITIES_LEGACY_NODE_CONF="$_tmpdir/etc/two-node.conf"
+    export ZFSUTILITIES_DEPLOY_CONF="$_tmpdir/etc/zfsutilities-deploy.conf"
+    export ZFSUTILITIES_CONFIG_PATH="$_tmpdir/root/.config/zfsutilities.json"
+    export ZFSUTILITIES_CONFIG_DIR="$_tmpdir/root/.config/zfsutilities"
+    export ZFSUTILITIES_HISTORY_PATH="$_tmpdir/root/.config/zfsutilities-history.json"
+    export ZFSUTILITIES_CACHE_DIR="$_tmpdir/root/.cache/zfsutilities"
+    export ZFSUTILITIES_LOG_DIR="$_tmpdir/var/log/zfsutilities"
+    export ZFSUTILITIES_CRON_FILE="$_tmpdir/etc/cron.d/zfsutilities"
+    export ZFSUTILITIES_PROFILE_LOCK_DIR="$_tmpdir/run/lock/zfs/profiles"
+    export ZFSUTILITIES_ZFSLOCK_DIR="$_tmpdir/run/lock/zfs"
+    export ZFSUTILITIES_SYSTEMD_DIR="$_tmpdir/etc/systemd/system"
+    export ZFSUTILITIES_ISCSI_ENCRYPTED_CONF="$_tmpdir/etc/iscsi-encrypted-luns.conf"
+    export ZFSUTILITIES_LUKS_KEYFILE="$_tmpdir/root/.luks-key"
+    export ZFSUTILITIES_PVE_ISCSI_PLUGIN="$_tmpdir/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm"
+    export ZFSUTILITIES_CACHE_WARM_LOG_GLOB="$_tmpdir/var/log/zfs-cache-warm*.log"
+
+    mkdir -p "$_tmpdir/root" "$_tmpdir/etc/profile.d" "$_tmpdir/etc/sudoers.d" \
+        "$_tmpdir/etc/cron.d" "$_tmpdir/usr/local/lib" "$_tmpdir/usr/local/bin" \
+        "$_tmpdir/etc/systemd/system" \
+        "$_tmpdir/run/lock/zfs/profiles" "$_tmpdir/run/lock/zfs" \
+        "$_tmpdir/root/.config/zfsutilities" "$_tmpdir/root/.cache/zfsutilities" \
+        "$_tmpdir/var/log/zfsutilities"
+
+    printf -v "$_varname" '%s' "$_tmpdir"
+}
+
+# Clean up a temp environment and unset overrides.
+_teardown_uninstall_env() {
+    local tmpdir="$1"
+    unset ZFSUTILITIES_VERSION_BASE
+    unset ZFSUTILITIES_BASHINIT_LINK
+    unset ZFSUTILITIES_PROFILE_FILE
+    unset ZFSUTILITIES_SUDOERS_FILE
+    unset ZFSUTILITIES_NODE_LIB_LINK
+    unset ZFSUTILITIES_TWO_NODE_LIB_LINK
+    unset ZFSUTILITIES_LOCAL_BIN_DIR
+    unset ZFSUTILITIES_NODE_CONF
+    unset ZFSUTILITIES_LEGACY_NODE_CONF
+    unset ZFSUTILITIES_DEPLOY_CONF
+    unset ZFSUTILITIES_CONFIG_PATH
+    unset ZFSUTILITIES_CONFIG_DIR
+    unset ZFSUTILITIES_HISTORY_PATH
+    unset ZFSUTILITIES_CACHE_DIR
+    unset ZFSUTILITIES_LOG_DIR
+    unset ZFSUTILITIES_CRON_FILE
+    unset ZFSUTILITIES_PROFILE_LOCK_DIR
+    unset ZFSUTILITIES_ZFSLOCK_DIR
+    unset ZFSUTILITIES_SYSTEMD_DIR
+    unset ZFSUTILITIES_ISCSI_ENCRYPTED_CONF
+    unset ZFSUTILITIES_LUKS_KEYFILE
+    unset ZFSUTILITIES_PVE_ISCSI_PLUGIN
+    unset ZFSUTILITIES_CACHE_WARM_LOG_GLOB
+    rm -rf "$tmpdir"
+}
+
+# Build a minimal fake deployed version.
+_make_fake_version() {
+    local version_base="$1"
+    local version="$2"
+    mkdir -p "$version_base/versions/$version/bin"
+    mkdir -p "$version_base/versions/$version/lib"
+    printf '#!/usr/bin/bash\nexit 0\n' > "$version_base/versions/$version/bin/switch-version"
+    chmod +x "$version_base/versions/$version/bin/switch-version"
+}
+
+# Record systemctl invocations.
+_systemctl_calls=()
+systemctl() {
+    _systemctl_calls+=("$*")
+    return 0
+}
+
+# Record ssh invocations.
+_ssh_calls=()
+_ssh_rc=0
+ssh() {
+    _ssh_calls+=("$*")
+    return "$_ssh_rc"
+}
+
+_clear_mocks() {
+    _systemctl_calls=()
+    _ssh_calls=()
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_default_uninstall_removes_software_preserves_config() {
+    test_start "default uninstall removes software but preserves config/logs"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+    _clear_mocks
+
+    _make_fake_version "$tmpdir/usr/local/lib/zfsutilities" "1.0.0"
+    ln -sfn "versions/1.0.0" "$tmpdir/usr/local/lib/zfsutilities/current"
+    ln -sfn "versions/1.0.0/bin/bashinit" "$tmpdir/root/bashinit"
+    ln -sfn "versions/1.0.0/lib/node-lib.sh" "$tmpdir/usr/local/lib/node-lib.sh"
+    ln -sfn "node-lib.sh" "$tmpdir/usr/local/lib/two-node-lib.sh"
+    touch "$tmpdir/etc/profile.d/zfsutilities.sh"
+    touch "$tmpdir/etc/sudoers.d/zfsutilities"
+    touch "$tmpdir/etc/cron.d/zfsutilities"
+    touch "$tmpdir/etc/systemd/system/zfs-keys-unlock.service"
+    mkdir -p "$tmpdir/etc/systemd/system/rtslib-fb-targetctl.service.d"
+    touch "$tmpdir/root/.config/zfsutilities.json"
+    touch "$tmpdir/var/log/zfsutilities/session.log"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    ( main --yes ) >/dev/null 2>&1
+    local rc=$?
+    unset -f getent chown 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$tmpdir/usr/local/lib/zfsutilities" ]]; then
+        failed=1
+        echo "    version base still exists"
+    fi
+    if [[ -L "$tmpdir/root/bashinit" ]]; then
+        failed=1
+        echo "    /root/bashinit symlink still present"
+    fi
+    if [[ ! -f "$tmpdir/root/.config/zfsutilities.json" ]]; then
+        failed=1
+        echo "    config file was incorrectly removed"
+    fi
+    if [[ ! -f "$tmpdir/var/log/zfsutilities/session.log" ]]; then
+        failed=1
+        echo "    log file was incorrectly removed"
+    fi
+    if [[ -f "$tmpdir/etc/cron.d/zfsutilities" ]]; then
+        failed=1
+        echo "    cron file still present"
+    fi
+
+    _teardown_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "default uninstall did not behave as expected"
+    fi
+}
+
+test_purge_removes_config_logs_cachewarm() {
+    test_start "--purge removes config, logs, history, cron, systemd, cache-warm"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+    _clear_mocks
+
+    _make_fake_version "$tmpdir/usr/local/lib/zfsutilities" "1.0.0"
+    ln -sfn "versions/1.0.0" "$tmpdir/usr/local/lib/zfsutilities/current"
+
+    touch "$tmpdir/etc/zfsutilities-node.conf"
+    touch "$tmpdir/etc/two-node.conf"
+    touch "$tmpdir/etc/zfsutilities-deploy.conf"
+    touch "$tmpdir/root/.config/zfsutilities.json"
+    touch "$tmpdir/root/.config/zfsutilities/scrub_state.json"
+    touch "$tmpdir/root/.config/zfsutilities-history.json"
+    touch "$tmpdir/root/.cache/zfsutilities/lock"
+    touch "$tmpdir/var/log/zfsutilities/session.log"
+    touch "$tmpdir/var/log/zfsutilities/cron.log"
+    touch "$tmpdir/etc/iscsi-encrypted-luns.conf"
+    touch "$tmpdir/root/.luks-key"
+    touch "$tmpdir/usr/local/bin/warm-cache.sh"
+    touch "$tmpdir/usr/local/bin/identify-hot-vms.sh"
+    touch "$tmpdir/usr/local/bin/monitor-cache.sh"
+    touch "$tmpdir/var/log/zfs-cache-warm.log"
+
+    # LUKS keyfile removal is confirmed with ask_yn; mock yes.
+    mock_ask_yn 0
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    main --yes --purge >/dev/null 2>&1
+    local rc=$?
+    unset -f getent chown 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    for path in \
+        "$tmpdir/etc/zfsutilities-node.conf" \
+        "$tmpdir/etc/two-node.conf" \
+        "$tmpdir/etc/zfsutilities-deploy.conf" \
+        "$tmpdir/root/.config/zfsutilities.json" \
+        "$tmpdir/root/.config/zfsutilities" \
+        "$tmpdir/root/.config/zfsutilities-history.json" \
+        "$tmpdir/root/.cache/zfsutilities" \
+        "$tmpdir/var/log/zfsutilities" \
+        "$tmpdir/etc/iscsi-encrypted-luns.conf" \
+        "$tmpdir/root/.luks-key" \
+        "$tmpdir/usr/local/bin/warm-cache.sh" \
+        "$tmpdir/usr/local/bin/identify-hot-vms.sh" \
+        "$tmpdir/usr/local/bin/monitor-cache.sh" \
+        "$tmpdir/var/log/zfs-cache-warm.log"
+    do
+        if [[ -e "$path" || -L "$path" ]]; then
+            failed=1
+            echo "    remnant still present: $path"
+        fi
+    done
+
+    _teardown_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "--purge did not remove expected remnants"
+    fi
+}
+
+test_dry_run_makes_no_changes() {
+    test_start "--dry-run makes no filesystem changes"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+    _clear_mocks
+
+    _make_fake_version "$tmpdir/usr/local/lib/zfsutilities" "1.0.0"
+    ln -sfn "versions/1.0.0" "$tmpdir/usr/local/lib/zfsutilities/current"
+    touch "$tmpdir/root/.config/zfsutilities.json"
+    touch "$tmpdir/var/log/zfsutilities/session.log"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    main --yes --purge --dry-run >/dev/null 2>&1
+    local rc=$?
+    unset -f getent chown 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ ! -d "$tmpdir/usr/local/lib/zfsutilities" ]]; then
+        failed=1
+        echo "    version base was removed during dry run"
+    fi
+    if [[ ! -f "$tmpdir/root/.config/zfsutilities.json" ]]; then
+        failed=1
+        echo "    config was removed during dry run"
+    fi
+    if [[ ! -f "$tmpdir/var/log/zfsutilities/session.log" ]]; then
+        failed=1
+        echo "    log was removed during dry run"
+    fi
+
+    _teardown_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "--dry-run modified the filesystem"
+    fi
+}
+
+test_yes_skips_interactive_dialog() {
+    test_start "--yes skips interactive prompts"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+    _clear_mocks
+
+    _make_fake_version "$tmpdir/usr/local/lib/zfsutilities" "1.0.0"
+    ln -sfn "versions/1.0.0" "$tmpdir/usr/local/lib/zfsutilities/current"
+
+    # If the interactive dialog runs, it will try to read from stdin and fail
+    # because no input is provided. With --yes it should complete anyway.
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    ( main --yes ) >/dev/null 2>&1
+    local rc=$?
+    unset -f getent chown 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$tmpdir/usr/local/lib/zfsutilities" ]]; then
+        failed=1
+        echo "    version base still exists"
+    fi
+
+    _teardown_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "--yes did not skip interactive prompts"
+    fi
+}
+
+test_interactive_dialog_choices() {
+    test_start "interactive dialog maps choices to purge and all-nodes"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+
+    # Create a minimal two-node config.
+    cat > "$tmpdir/etc/zfsutilities-node.conf" <<'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="storage"
+COMPUTE_HOST="compute"
+EOF
+    export ZFSUTILITIES_NODE_CONF="$tmpdir/etc/zfsutilities-node.conf"
+
+    DO_PURGE="false"
+    DO_ALL_NODES="false"
+    DO_YES="false"
+
+    load_uninstall_config
+    detect_node_mode
+
+    # Mock read to choose "2" (purge) then "y" (all-nodes).
+    local _read_idx=0
+    local _read_responses=("2" "y")
+    read() {
+        local varname=""
+        local arg
+        for arg in "$@"; do
+            [[ "$arg" != -* ]] && varname="$arg"
+        done
+        if [[ $_read_idx -lt ${#_read_responses[@]} ]]; then
+            eval "$varname=\"${_read_responses[$_read_idx]}\""
+            ((_read_idx++))
+            return 0
+        fi
+        return 1
+    }
+
+    # Mock ask_yn for the final confirmation.
+    mock_ask_yn 0
+
+    present_interactive_dialog >/dev/null 2>&1
+    local rc=$?
+    unset -f read 2>/dev/null || true
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    dialog returned non-zero"
+    fi
+    if [[ "$DO_PURGE" != "true" ]]; then
+        failed=1
+        echo "    DO_PURGE not set to true"
+    fi
+    if [[ "$DO_ALL_NODES" != "true" ]]; then
+        failed=1
+        echo "    DO_ALL_NODES not set to true"
+    fi
+
+    unset ZFSUTILITIES_NODE_CONF
+    _teardown_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "interactive dialog did not set mode correctly"
+    fi
+}
+
+test_missing_bashinit_fallback() {
+    test_start "script tolerates missing /root/bashinit symlink"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+    _clear_mocks
+
+    _make_fake_version "$tmpdir/usr/local/lib/zfsutilities" "1.0.0"
+    ln -sfn "versions/1.0.0" "$tmpdir/usr/local/lib/zfsutilities/current"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    main --yes >/dev/null 2>&1
+    local rc=$?
+    unset -f getent chown 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$tmpdir/usr/local/lib/zfsutilities" ]]; then
+        failed=1
+        echo "    version base still exists"
+    fi
+
+    _teardown_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "missing bashinit fallback failed"
+    fi
+}
+
+test_restartability_partial_uninstall() {
+    test_start "rerunning after partial uninstall completes successfully"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+    _clear_mocks
+
+    # Simulate partial uninstall: config/logs remain but version base is gone.
+    touch "$tmpdir/etc/profile.d/zfsutilities.sh"
+    touch "$tmpdir/etc/sudoers.d/zfsutilities"
+    touch "$tmpdir/etc/cron.d/zfsutilities"
+    touch "$tmpdir/root/.config/zfsutilities.json"
+    touch "$tmpdir/var/log/zfsutilities/session.log"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    # First run: default mode. Should not fail despite missing version base.
+    main --yes >/dev/null 2>&1
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    first run returned rc=$rc"
+    fi
+    if [[ -f "$tmpdir/etc/profile.d/zfsutilities.sh" ]]; then
+        failed=1
+        echo "    profile file still present after first run"
+    fi
+    if [[ ! -f "$tmpdir/root/.config/zfsutilities.json" ]]; then
+        failed=1
+        echo "    config removed in default mode"
+    fi
+
+    # Second run with --purge should finish cleanup.
+    if [[ $failed -eq 0 ]]; then
+        main --yes --purge >/dev/null 2>&1
+        rc=$?
+        if [[ $rc -ne 0 ]]; then
+            failed=1
+            echo "    second run returned rc=$rc"
+        fi
+        if [[ -f "$tmpdir/root/.config/zfsutilities.json" ]]; then
+            failed=1
+            echo "    config still present after purge"
+        fi
+        if [[ -f "$tmpdir/var/log/zfsutilities/session.log" ]]; then
+            failed=1
+            echo "    log still present after purge"
+        fi
+    fi
+
+    unset -f getent chown 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    _teardown_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "restartability on partial uninstall failed"
+    fi
+}
+
+test_all_nodes_ssh() {
+    test_start "--all-nodes runs uninstall on peer host"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+    _clear_mocks
+
+    _make_fake_version "$tmpdir/usr/local/lib/zfsutilities" "1.0.0"
+    ln -sfn "versions/1.0.0" "$tmpdir/usr/local/lib/zfsutilities/current"
+
+    cat > "$tmpdir/etc/zfsutilities-node.conf" <<'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="storage"
+COMPUTE_HOST="compute"
+EOF
+
+    export ZFSUTILITIES_NODE_CONF="$tmpdir/etc/zfsutilities-node.conf"
+
+    # Pretend this host is the storage host.
+    hostname() {
+        if [[ "$1" == "-s" ]]; then
+            echo "storage"
+        else
+            command hostname "$@"
+        fi
+    }
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    main --yes --all-nodes >/dev/null 2>&1
+    local rc=$?
+    unset -f hostname getent chown 2>/dev/null || true
+    unset SUDO_USER HOME ZFSUTILITIES_NODE_CONF
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    local found=0
+    local call
+    for call in "${_ssh_calls[@]}"; do
+        if [[ "$call" == *"root@compute"* && "$call" == *"uninstall-zfsutilities"* ]]; then
+            found=1
+            break
+        fi
+    done
+    if [[ $found -eq 0 ]]; then
+        failed=1
+        echo "    did not invoke uninstall on peer host"
+    fi
+
+    _teardown_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "--all-nodes did not run on peer"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------
+
+test_default_uninstall_removes_software_preserves_config
+test_purge_removes_config_logs_cachewarm
+test_dry_run_makes_no_changes
+test_yes_skips_interactive_dialog
+test_interactive_dialog_choices
+test_missing_bashinit_fallback
+test_restartability_partial_uninstall
+test_all_nodes_ssh
+
+test_summary
+teardown_test_env

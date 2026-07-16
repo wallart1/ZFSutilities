@@ -16,6 +16,7 @@ from gi.repository import Gtk, GLib, Gdk, Gio
 from logging_config import (
     log_msg, MSG_LEVELS, DEFAULT_MSG_LEVEL,
     parse_msg_level, viewer_should_show,
+    format_log_text_short,
 )
 from config_core import (
     prune_old_logs,
@@ -281,7 +282,7 @@ def create_logs_page(app):
     app.logs_text_scroll.set_min_content_height(200)
     app.logs_text_scroll.add(app.logs_text)
 
-    # Viewer toolbar: level filter + search + pop-out
+    # Viewer toolbar: level filter + short-prefix toggle + search + pop-out
     app.logs_viewer_level = DEFAULT_MSG_LEVEL
     app.logs_level_combo = Gtk.ComboBoxText()
     for level in MSG_LEVELS:
@@ -290,9 +291,20 @@ def create_logs_page(app):
     app.logs_level_combo.set_tooltip_text("Filter messages shown in the log viewer")
     app.logs_level_combo.connect("changed", _on_logs_level_changed, app)
 
+    app.logs_short_prefix = True
+    app._logs_short_prefix_toggle = Gtk.ToggleButton(label="Short prefix")
+    app._logs_short_prefix_toggle.set_active(True)
+    app._logs_short_prefix_toggle.set_tooltip_text(
+        "Show only date and time in the log viewer"
+    )
+    app._logs_short_prefix_toggle.connect(
+        "toggled", _on_logs_short_prefix_toggled, app
+    )
+
     viewer_toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     viewer_toolbar.pack_start(Gtk.Label(label="Level:"), False, False, 0)
     viewer_toolbar.pack_start(app.logs_level_combo, False, False, 0)
+    viewer_toolbar.pack_start(app._logs_short_prefix_toggle, False, False, 0)
 
     # Search bar inside viewer pane
     app.logs_search = TextViewSearch(app.logs_text)
@@ -516,6 +528,8 @@ def _tail_log_file(app):
 
             filtered = _filter_log_text(text, app.logs_viewer_level)
             if filtered:
+                if getattr(app, "logs_short_prefix", True):
+                    filtered = format_log_text_short(filtered)
                 buf = app.logs_text.get_buffer()
 
                 # Prevent the live tail buffer from growing without bound.
@@ -736,6 +750,37 @@ def _on_selection_changed(selection, app):
         app._logs_tail_timer = GLib.timeout_add_seconds(1, _tail_log_file, app)
 
 
+def _on_logs_short_prefix_toggled(button, app):
+    """Re-load the current log with the short- or full-prefix display."""
+    app.logs_short_prefix = button.get_active()
+    if not app._logs_current_path:
+        return
+
+    vadj = app.logs_text_scroll.get_vadjustment()
+    old_value = vadj.get_value()
+    old_upper = vadj.get_upper()
+
+    app.logs_text.get_buffer().set_text("")
+    _load_log_into_viewer(app)
+
+    query = app.logs_search.entry.get_text()
+    if query:
+        app.logs_search.search()
+
+    def _restore_scroll():
+        new_upper = vadj.get_upper()
+        new_page = vadj.get_page_size()
+        if old_upper > new_page:
+            ratio = old_value / (old_upper - new_page)
+        else:
+            ratio = 0.0
+        target = ratio * max(0, new_upper - new_page)
+        vadj.set_value(min(target, new_upper - new_page))
+        return False
+
+    GLib.idle_add(_restore_scroll)
+
+
 def _on_logs_level_changed(combo, app):
     """Apply the selected level filter to the current log viewer contents."""
     active = combo.get_active_text()
@@ -791,6 +836,8 @@ def _load_next_chunk(app):
     text = data.decode("utf-8", errors="replace")
     filtered = _filter_log_text(text, app.logs_viewer_level)
     if filtered:
+        if getattr(app, "logs_short_prefix", True):
+            filtered = format_log_text_short(filtered)
         buf = app.logs_text.get_buffer()
         end_iter = buf.get_end_iter()
         buf.insert(end_iter, filtered)

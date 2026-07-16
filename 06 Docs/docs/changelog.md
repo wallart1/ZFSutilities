@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.60.0
+
+*Released 2026-07-16*
+
+### Changed
+
+- **Renamed VM lifecycle scripts** — `retire-vm` is now `archive-vm` and
+  `unretire-vm` is now `unarchive-vm`. The scripts behave exactly as before;
+  only their names have changed to better describe their purpose.
+
+### Added
+
+- **`remove-vm`** — New script that removes a VM's zvols and Proxmox config
+  without archiving. It scans pools for `vm-<VMID>-disk-*` zvols, lists any
+  iSCSI target/LUN mappings, asks for confirmation, destroys the zvols with
+  `zfsdelfs`, and deletes the VM definition.
+
 ## 0.59.18
 
 ### Changed

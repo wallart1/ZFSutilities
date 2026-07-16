@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-# test-unretire-vm — Unit tests for unretire-vm new-VMID support.
+# test-unarchive-vm — Unit tests for unarchive-vm new-VMID support.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
@@ -40,8 +40,8 @@ smbios1: uuid=22222222-2222-2222-2222-222222222222
 EOF
 }
 
-# Run unretire-vm in a subshell so an exit/die does not kill the test harness.
-run_unretire() {
+# Run unarchive-vm in a subshell so an exit/die does not kill the test harness.
+run_unarchive() {
     local pve_dir="$1"
     local archive_base="$2"
     shift 2
@@ -57,7 +57,7 @@ run_unretire() {
         # Allow the script to run without root in the test harness, and
         # redirect the deployed node-lib path to the repository copy so tests
         # work without deployment.
-        export UNRETIRE_VM_TEST_NO_ROOT=1
+        export UNARCHIVE_VM_TEST_NO_ROOT=1
         export NODE_LIB="$mydir/08 Two-node/node-lib.sh"
 
         # Mock zfs state.
@@ -83,7 +83,7 @@ ${arc_dataset}"
         fi
 
         set -- "$vmid" "$archive_base" "$@"
-        source "$mydir/09 ZFS clone support/unretire-vm"
+        source "$mydir/09 ZFS clone support/unarchive-vm"
     ) <<< "$stdin_input" 2>&1
 }
 
@@ -107,7 +107,7 @@ test_usage_rejects_invalid_new_vmid() {
     setup_archive "$archive" "904" "$pve_dir"
 
     local out rc
-    out=$(run_unretire "$pve_dir" "$archive" 904 --new-vmid abc)
+    out=$(run_unarchive "$pve_dir" "$archive" 904 --new-vmid abc)
     rc=$?
 
     assert_rc 1 "$rc"
@@ -126,7 +126,7 @@ test_new_vmid_flag_rewrites_config() {
     setup_archive "$archive" "904" "$pve_dir"
 
     local out rc
-    out=$(run_unretire "$pve_dir" "$archive" 904 --new-vmid 910)
+    out=$(run_unarchive "$pve_dir" "$archive" 904 --new-vmid 910)
     rc=$?
 
     if [[ $rc -ne 0 ]]; then
@@ -160,7 +160,7 @@ test_new_vmid_regenerates_uuids() {
     setup_archive "$archive" "904" "$pve_dir"
 
     local out rc
-    out=$(run_unretire "$pve_dir" "$archive" 904 --new-vmid 910)
+    out=$(run_unarchive "$pve_dir" "$archive" 904 --new-vmid 910)
     rc=$?
 
     if [[ $rc -ne 0 ]]; then
@@ -199,7 +199,7 @@ test_prompts_for_new_vmid_when_original_in_use() {
     setup_archive "$archive" "904" "$pve_dir"
 
     local out rc
-    out=$(run_unretire "$pve_dir" "$archive" 904)
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
     rc=$?
 
     if [[ $rc -ne 0 ]]; then
@@ -227,7 +227,7 @@ test_explicit_new_vmid_rejected_if_in_use() {
     setup_archive "$archive" "904" "$pve_dir"
 
     local out rc
-    out=$(run_unretire "$pve_dir" "$archive" 904 --new-vmid 910)
+    out=$(run_unarchive "$pve_dir" "$archive" 904 --new-vmid 910)
     rc=$?
 
     assert_rc 1 "$rc"
@@ -245,7 +245,7 @@ test_original_vmid_preserved_without_conflict() {
     setup_archive "$archive" "904" "$pve_dir"
 
     local out rc
-    out=$(run_unretire "$pve_dir" "$archive" 904)
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
     rc=$?
 
     if [[ $rc -ne 0 ]]; then

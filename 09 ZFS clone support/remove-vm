@@ -1,0 +1,239 @@
+#!/usr/bin/bash
+# remove-vm <vmid>
+# Removes a VM's zvols and Proxmox config without archiving.
+#
+# Discovers all vm-<VMID>-disk-* zvols across pools, lists them along with any
+# iSCSI target/LUN information, asks for confirmation, then destroys them using
+# zfsdelfs (which handles snapshots, holds, clone-dependency checks, and iSCSI
+# teardown). Finally removes the VM definition.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/remove-vm on BOTH hosts
+# Run from:   the compute host (or the storage host directly — delegates via SSH)
+
+source ~/bashinit
+bashinit
+
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
+
+MY_HOST=$(hostname -s)
+PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
+
+usage() {
+    echo "Usage: remove-vm <vmid>"
+    echo ""
+    echo "  vmid   VM ID to remove"
+    echo ""
+    echo "Steps:"
+    echo "  1. Scan pools for vm-<vmid>-disk-* zvols"
+    echo "  2. List zvols and any iSCSI target/LUN mappings"
+    echo "  3. Stop the VM if it is running"
+    echo "  4. Ask for confirmation"
+    echo "  5. Destroy zvols using zfsdelfs"
+    echo "  6. Remove the Proxmox VM config"
+    echo ""
+    echo "Example: remove-vm 904"
+    exit 1
+}
+
+ask_yn() {
+    local prompt="$1"
+    local response
+    read -rp "$prompt (y/N): " response
+    [[ "$response" =~ ^[Yy]$ ]]
+}
+
+[[ $# -eq 1 ]] || usage
+
+VMID="$1"
+[[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
+[[ $EUID -eq 0 || ${REMOVE_VM_TEST_NO_ROOT:-0} == "1" ]] || { log_msg "FATAL: Must run as root (use sudo)"; exit 1; }
+
+# --- If not on the compute host, delegate (two-node only) ---
+if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "remove-vm")
+    exec ssh -t root@"$COMPUTE_HOST" \
+        "$REMOTE_SCRIPT '$VMID'"
+fi
+
+proxmoxconfig="${PVE_CONF_DIR}/${VMID}.conf"
+
+# =====================================================================
+# Discover zvols (and iSCSI info in two-node mode)
+# =====================================================================
+
+declare -a zvols=()
+declare -a sizes=()
+declare -a targets=()
+declare -a luns=()
+
+if is_single_node; then
+    while IFS= read -r zvol; do
+        [[ -n "$zvol" ]] || continue
+        zvols+=("$zvol")
+        size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
+        sizes+=("$size")
+        targets+=("")
+        luns+=("")
+    done < <(zfs list -H -t volume -o name 2>/dev/null \
+        | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$" \
+        | sort)
+else
+    # Two-node: discover on the storage host and collect target/LUN info.
+    discover_out=$(ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF'
+VMID="$1"
+
+zfs list -H -t volume -o name 2>/dev/null \
+    | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$" \
+    | sort \
+    | while IFS= read -r zvol; do
+        size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
+        disknum=$(echo "$zvol" | grep -oP 'disk-\K[0-9]+$')
+        backstore="vm-${VMID}-disk-${disknum}"
+
+        target=""
+        lun=""
+        while IFS= read -r t; do
+            found_lun=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
+                | grep " ${backstore} " \
+                | grep -oP 'lun\K[0-9]+' \
+                | head -1)
+            if [[ -n "$found_lun" ]]; then
+                target="$t"
+                lun="$found_lun"
+                break
+            fi
+        done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+')
+
+        printf '%s\t%s\t%s\t%s\n' "$zvol" "$size" "$target" "$lun"
+    done
+SSHEOF
+    ) || { log_msg "FATAL: SSH to $STORAGE_HOST failed"; exit 1; }
+
+    while IFS=$'\t' read -r zvol size target lun; do
+        [[ -n "$zvol" ]] || continue
+        zvols+=("$zvol")
+        sizes+=("$size")
+        targets+=("$target")
+        luns+=("$lun")
+    done <<< "$discover_out"
+fi
+
+if [[ ${#zvols[@]} -eq 0 && ! -f "$proxmoxconfig" ]]; then
+    echo "No zvols or Proxmox config found for VM ${VMID}."
+    exit 0
+fi
+
+# =====================================================================
+# Show summary
+# =====================================================================
+
+echo "=== remove-vm ==="
+echo "  VM: ${VMID}"
+if [[ -f "$proxmoxconfig" ]]; then
+    echo "  Config: ${proxmoxconfig}"
+else
+    echo "  Config: not found"
+fi
+echo ""
+
+if [[ ${#zvols[@]} -gt 0 ]]; then
+    echo "  Zvols to remove:"
+    for i in "${!zvols[@]}"; do
+        if is_two_node; then
+            if [[ -n "${targets[$i]}" ]]; then
+                echo "    ${zvols[$i]} (size: ${sizes[$i]}, iSCSI: ${targets[$i]} LUN ${luns[$i]})"
+            else
+                echo "    ${zvols[$i]} (size: ${sizes[$i]}, iSCSI: not mapped)"
+            fi
+        else
+            echo "    ${zvols[$i]} (size: ${sizes[$i]})"
+        fi
+    done
+    echo ""
+else
+    echo "  No zvols found."
+    echo ""
+fi
+
+# Warn if the VM is running.
+if [[ -f "$proxmoxconfig" ]]; then
+    vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+    if [[ "$vm_status" == "running" ]]; then
+        echo "  VM ${VMID} is currently running and will be stopped before removal."
+        echo ""
+    fi
+fi
+
+if ! ask_yn "Proceed with removal?"; then
+    echo "Aborted."
+    exit 0
+fi
+
+# =====================================================================
+# Stop the VM if running
+# =====================================================================
+
+if [[ -f "$proxmoxconfig" ]]; then
+    vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+    if [[ "$vm_status" == "running" ]]; then
+        echo "  Stopping VM ${VMID}..."
+        qm stop "$VMID" 2>/dev/null || true
+        sleep 2
+    fi
+fi
+
+# =====================================================================
+# Remove zvols using zfsdelfs
+# =====================================================================
+
+if [[ ${#zvols[@]} -gt 0 ]]; then
+    echo "  Removing zvols..."
+    if is_single_node; then
+        zfsdelfs_path=$(find_zfsutility_script zfsdelfs) || exit 1
+        for zvol in "${zvols[@]}"; do
+            echo "    Destroying ${zvol}..."
+            if ! "$zfsdelfs_path" "$zvol" '' '' '' "autoproceed='Y'"; then
+                log_msg "FATAL: Failed to remove ${zvol}"
+                exit 1
+            fi
+        done
+    else
+        remote_zfsdelfs=$(remote_zfsutility_script "$STORAGE_HOST" "zfsdelfs")
+        for zvol in "${zvols[@]}"; do
+            echo "    Destroying ${zvol}..."
+            if ! ssh root@"$STORAGE_HOST" \
+                    "$remote_zfsdelfs '$zvol' '' '' '' \"autoproceed='Y'\""; then
+                log_msg "FATAL: Failed to remove ${zvol} on $STORAGE_HOST"
+                exit 1
+            fi
+        done
+
+        echo "  Saving iSCSI configuration..."
+        remote_safe_save=$(remote_zfsutility_script "$STORAGE_HOST" "safe-iscsi-save")
+        ssh root@"$STORAGE_HOST" "$remote_safe_save" \
+            || log_msg "WARN: Could not save iSCSI config on $STORAGE_HOST"
+
+        echo "  Rescanning iSCSI..."
+        rescan_path=$(find_zfsutility_script rescan-storage) || exit 1
+        if ! "$rescan_path"; then
+            log_msg "WARN: iSCSI rescan failed; run rescan-storage manually"
+        fi
+    fi
+fi
+
+# =====================================================================
+# Remove Proxmox config
+# =====================================================================
+
+if [[ -f "$proxmoxconfig" ]]; then
+    echo "  Removing Proxmox config..."
+    rm -f "$proxmoxconfig"
+fi
+
+echo ""
+echo "=== Done ==="
+echo "  VM ${VMID} has been removed."

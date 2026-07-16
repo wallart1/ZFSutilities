@@ -102,8 +102,10 @@ detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
 - [`switch-version` (any host)](#switch-version-any-host)
 - [`uninstall-version` (any host)](#uninstall-version-any-host)
 - [`promote-vm-clone` (both)](#promote-vm-clone-both)
+- [`archive-vm` (both)](../commands-and-modules/commands.md#archive-vm)
+- [`remove-vm` (both)](../commands-and-modules/commands.md#remove-vm)
 - [`remove-vm-disk` (both)](#remove-vm-disk-both)
-- [`unretire-vm` (both)](#unretire-vm-both)
+- [`unarchive-vm` (both)](#unarchive-vm-both)
 - [`rescan-storage` (both)](#rescan-storage-both)
 - [`resize-vm-disk` (both)](#resize-vm-disk-both)
 - [`restart-iscsi-services` (storage node)](#restart-iscsi-services-storage-node)
@@ -986,7 +988,7 @@ independent, shared clone-origin snapshots move to this VM, and other clones
 re-parent automatically. No iSCSI reconfiguration is required. Safe to run while
 the VM is running.
 
-See [Retiring a VM](../user-guide/proxmox-integration.md#retiring-a-vm)
+See [Archiving a VM](../user-guide/proxmox-integration.md#archiving-a-vm)
 for the full workflow.
 
 ---
@@ -1052,22 +1054,22 @@ manifest entries in two-node mode.
 
 ---
 
-### `unretire-vm` (both)
+### `unarchive-vm` (both)
 
-Restores a retired VM from archive. Rebuilds iSCSI backstores and LUNs for
+Restores an archived VM from archive. Rebuilds iSCSI backstores and LUNs for
 each restored zvol and rewrites the Proxmox config disk lines with new LUN numbers.
 
 ```bash
-sudo unretire-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
+sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 ```
 
 **Arguments:**
 
 | Argument       | Description                                                                                             |
 | -------------- | ------------------------------------------------------------------------------------------------------- |
-| `vmid`         | VM ID of the retired VM to restore                                                                      |
-| `archive_base` | Optional ZFS dataset that contains the archive. If not specified, the last-used `archive-base` is used. |
-| `--new-vmid`   | Optional new VM ID for restored zvols, iSCSI resources, and Proxmox config                              |
+| `vmid`         | VM ID of the archived VM to restore                                                                      |
+| `archive_base` | Optional ZFS dataset that contains the archive. If not specified, the last-used `archive-base` is used.  |
+| `--new-vmid`   | Optional new VM ID for restored zvols, iSCSI resources, and Proxmox config                               |
 
 **Globals:** node-config globals only.
 
@@ -1116,7 +1118,7 @@ sudo unretire-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 Side effects: creates new zvols; creates iSCSI backstores/LUNs (two-node);
 updates manifests; writes a new VM config.
 
-See [Unretiring a VM](../user-guide/proxmox-integration.md#unretiring-a-vm)
+See [Unarchiving a VM](../user-guide/proxmox-integration.md#unarchiving-a-vm)
 for the full workflow.
 
 ---

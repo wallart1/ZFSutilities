@@ -34,6 +34,15 @@ _MSG_PRIORITY = {
 NONE_LEVEL = None
 NONE_PRIORITY = 5
 
+# Regex: ^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+
+# Purpose: Match the leading timestamp written to session log files.
+_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+")
+
+# Regex: ^(\s*(?:[^:\n]+:\d+):\s*)+
+# Purpose: Match one or more leading file:line prefixes such as those
+# produced by Python's inspect-based log_msg and bash's BASH_SOURCE log_msg.
+_FILE_LINE_PREFIX_RE = re.compile(r"^(\s*(?:[^:\n]+:\d+):\s*)+")
+
 _gui_log_sink = None
 
 
@@ -181,6 +190,24 @@ def get_msg_level(config):
     return level if level in MSG_LEVELS else DEFAULT_MSG_LEVEL
 
 
+def _strip_log_prefixes(text):
+    """Strip the leading timestamp and any leading file:line prefixes.
+
+    Returns a tuple (timestamp_prefix, stripped_body).  If no timestamp is
+    present, *timestamp_prefix* is an empty string.  This helper is shared by
+    the message-level parser and the short-prefix formatter.
+    """
+    ts_match = _TIMESTAMP_RE.match(text)
+    if ts_match:
+        timestamp_prefix = ts_match.group(0)
+        rest = text[ts_match.end():]
+    else:
+        timestamp_prefix = ""
+        rest = text
+    rest = _FILE_LINE_PREFIX_RE.sub("", rest)
+    return timestamp_prefix, rest
+
+
 def parse_msg_level(text):
     """Return the level token at the start of *text*, or None.
 
@@ -192,14 +219,41 @@ def parse_msg_level(text):
     """
     if not text:
         return NONE_LEVEL
-    # Strip optional leading timestamp: "YYYY-MM-DD HH:MM:SS  "
-    stripped = re.sub(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+", "", text)
-    # Strip one or more leading file:line prefixes.
-    stripped = re.sub(r"^(\s*(?:[^:\n]+:\d+):\s*)+", "", stripped)
+    _timestamp, stripped = _strip_log_prefixes(text)
     m = re.match(r"(DEBUG|VERB|INFO|WARN|FATAL):", stripped)
     if m:
         return m.group(1)
     return NONE_LEVEL
+
+
+def format_log_line_short(timestamp, message):
+    """Return a display line containing only timestamp + message body.
+
+    The message body has any leading file:line prefixes removed so the viewer
+    shows date/time and the message content, not the source location.
+    """
+    _prefix, body = _strip_log_prefixes(message)
+    return f"{timestamp}  {body}"
+
+
+def format_log_text_short(text):
+    """Return *text* with file:line prefixes removed from each line.
+
+    Leading timestamps are preserved.  Lines without a timestamp or without a
+    file:line prefix are returned unchanged.
+    """
+    lines = text.splitlines(keepends=True)
+    out = []
+    for line in lines:
+        ts_match = _TIMESTAMP_RE.match(line)
+        if ts_match:
+            ts_prefix = ts_match.group(0)
+            rest = line[ts_match.end():]
+            rest = _FILE_LINE_PREFIX_RE.sub("", rest)
+            out.append(ts_prefix + rest)
+        else:
+            out.append(line)
+    return "".join(out)
 
 
 def viewer_should_show(level, min_level):

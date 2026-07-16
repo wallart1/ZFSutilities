@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-# test-retire-vm — Unit tests for retire-vm snapshot and archive handling.
+# test-archive-vm — Unit tests for archive-vm snapshot and archive handling.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
@@ -51,8 +51,8 @@ EOF
     fi
 }
 
-# Run retire-vm in a subshell so an exit/die does not kill the test harness.
-run_retire() {
+# Run archive-vm in a subshell so an exit/die does not kill the test harness.
+run_archive() {
     local mode="$1"
     local snapshots="${2:-existing}"
     local pve_dir="$3"
@@ -79,7 +79,7 @@ run_retire() {
         mock_date "$date_iso" "$date_dow" "$date_dom"
         setup_node_config "$mode"
 
-        export RETIRE_VM_TEST_NO_ROOT=1
+        export ARCHIVE_VM_TEST_NO_ROOT=1
         export NODE_LIB="$mydir/08 Two-node/node-lib.sh"
         export ZFSLOCK_MANAGER="$mydir/zfslockmanager"
         export ZFSLOCK_DIR="$_mock_zfs_state_dir/lock"
@@ -142,7 +142,7 @@ run_retire() {
                 # remote_zfsutility_script resolves the remote active version.
                 echo "/usr/local/lib/zfsutilities/current/bin"
             elif [[ $has_bash -eq 1 && $has_s -eq 1 ]]; then
-                # Detect two-node target:lun resolution calls from retire-vm.
+                # Detect two-node target:lun resolution calls from archive-vm.
                 local has_target_lun=0 arg
                 for arg in "$@"; do
                     if [[ "$arg" == iqn.*:* ]]; then
@@ -196,11 +196,11 @@ run_retire() {
             fi
         done
 
-        # Load the script from a temp file (instead of eval) so retire-vm's
+        # Load the script from a temp file (instead of eval) so archive-vm's
         # own SSH here-doc bodies are read from the file, leaving the
         # subshell's stdin free for the interactive prompts.
-        local script_file="$_mock_zfs_state_dir/retire-vm"
-        script_text=$(cat "$mydir/09 ZFS clone support/retire-vm")
+        local script_file="$_mock_zfs_state_dir/archive-vm"
+        script_text=$(cat "$mydir/09 ZFS clone support/archive-vm")
         script_text=$(echo "$script_text" | sed '/^ask_yn() {/,/^}$/d')
         printf '%s\n' "$script_text" > "$script_file"
 
@@ -239,7 +239,7 @@ y
 n"
 
     local out rc
-    out=$(run_retire single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
     rc=$?
 
     if [[ $rc -ne 0 ]]; then
@@ -271,7 +271,7 @@ y
 n"
 
     local out rc
-    out=$(run_retire single-node none "$pve_dir" "$archive" "$mount" "$vmid")
+    out=$(run_archive single-node none "$pve_dir" "$archive" "$mount" "$vmid")
     rc=$?
 
     if [[ $rc -ne 0 ]]; then
@@ -314,7 +314,7 @@ y
 n"
 
     local out rc
-    out=$(run_retire two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    out=$(run_archive two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
     rc=$?
 
     if [[ $rc -ne 0 ]]; then
@@ -346,7 +346,7 @@ y
 n"
 
     local out rc
-    out=$(run_retire two-node none "$pve_dir" "$archive" "$mount" "$vmid")
+    out=$(run_archive two-node none "$pve_dir" "$archive" "$mount" "$vmid")
     rc=$?
 
     if [[ $rc -ne 0 ]]; then
@@ -383,7 +383,7 @@ y
 n"
 
     local out rc
-    out=$(run_retire two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    out=$(run_archive two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
     rc=$?
 
     if [[ $rc -ne 0 ]]; then
@@ -420,7 +420,7 @@ y
 n"
 
     local out rc
-    out=$(run_retire single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
     rc=$?
 
     if [[ $rc -ne 0 ]]; then
@@ -457,7 +457,7 @@ y
 n"
 
     local out rc
-    out=$(run_retire single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
     rc=$?
 
     if [[ $rc -ne 0 ]]; then
@@ -489,9 +489,9 @@ test_two_node_prompt_mentions_storage_host() {
     NODE_CONF="$_mock_zfs_state_dir/node.conf"
     source "$mydir/08 Two-node/node-lib.sh"
 
-    # Load only the prompt builder so we don't run retire-vm's main body.
+    # Load only the prompt builder so we don't run archive-vm's main body.
     eval "$(sed -n '/^build_archive_prompt() {/,/^}/p' \
-        "$mydir/09 ZFS clone support/retire-vm")"
+        "$mydir/09 ZFS clone support/archive-vm")"
 
     local prompt
     prompt=$(build_archive_prompt "")
@@ -519,7 +519,7 @@ y
 n"
 
     local out rc
-    out=$(run_retire single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
     rc=$?
 
     if [[ $rc -ne 0 ]]; then

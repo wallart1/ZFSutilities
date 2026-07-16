@@ -51,15 +51,15 @@ test_find_script_two_node_directory() {
 test_find_script_clone_support_directory() {
     test_start "find_zfsutility_script locates a script in 09 ZFS clone support"
     local result
-    result=$(find_zfsutility_script "retire-vm")
-    assert_equals "$mydir/09 ZFS clone support/retire-vm" "$result"
+    result=$(find_zfsutility_script "archive-vm")
+    assert_equals "$mydir/09 ZFS clone support/archive-vm" "$result"
 }
 
 test_find_script_across_subdirectories() {
     test_start "find_zfsutility_script locates clone-support script from two-node dir"
     local result
-    result=$(mydir="$mydir/08 Two-node" find_zfsutility_script "retire-vm")
-    assert_equals "$mydir/09 ZFS clone support/retire-vm" "$result"
+    result=$(mydir="$mydir/08 Two-node" find_zfsutility_script "archive-vm")
+    assert_equals "$mydir/09 ZFS clone support/archive-vm" "$result"
 }
 
 test_find_script_missing() {

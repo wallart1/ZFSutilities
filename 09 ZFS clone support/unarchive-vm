@@ -1,9 +1,9 @@
 #!/usr/bin/bash
-# unretire-vm <vmid> [archive_base]
-# Restores a retired VM from archive: recreates zvols, Proxmox config,
+# unarchive-vm <vmid> [archive_base]
+# Restores an archived VM from archive: recreates zvols, Proxmox config,
 # and iSCSI infrastructure (two-node).
 #
-# Install to: /usr/local/lib/zfsutilities/bin/unretire-vm on BOTH hosts
+# Install to: /usr/local/lib/zfsutilities/bin/unarchive-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
 source ~/bashinit
@@ -20,7 +20,7 @@ PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 JSON_CONFIG="/root/.config/zfsutilities.json"
 
 usage() {
-    echo "Usage: unretire-vm <vmid> [archive_base] [--new-vmid <new_vmid>]"
+    echo "Usage: unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]"
     echo ""
     echo "  vmid         VM ID of the retired VM to restore"
     echo "  archive_base Optional ZFS dataset that contains the archive"
@@ -38,9 +38,9 @@ usage() {
     echo "  5. Restore Proxmox config (rewriting disk lines in two-node)"
     echo "  6. Rescan iSCSI (two-node)"
     echo ""
-    echo "Example: unretire-vm 904"
-    echo "Example: unretire-vm 904 temp/archive"
-    echo "Example: unretire-vm 904 temp/archive --new-vmid 910"
+    echo "Example: unarchive-vm 904"
+    echo "Example: unarchive-vm 904 temp/archive"
+    echo "Example: unarchive-vm 904 temp/archive --new-vmid 910"
     exit 1
 }
 
@@ -128,18 +128,18 @@ ARCHIVE_BASE="${POS_ARGS[1]:-}"
 [[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
 [[ -z "$NEWVMID" || "$NEWVMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: new-vmid must be a number, got: $NEWVMID"; exit 1; }
 [[ -z "$NEWVMID" || "$NEWVMID" != "$VMID" ]] || { log_msg "FATAL: new-vmid must differ from vmid"; exit 1; }
-[[ $EUID -eq 0 || ${UNRETIRE_VM_TEST_NO_ROOT:-0} == "1" ]] || { log_msg "FATAL: Must run as root (use sudo)"; exit 1; }
+[[ $EUID -eq 0 || ${UNARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || { log_msg "FATAL: Must run as root (use sudo)"; exit 1; }
 
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
     new_vmid_arg=""
     [[ -n "$NEWVMID" ]] && new_vmid_arg=" --new-vmid '$NEWVMID'"
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "unretire-vm")
+    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "unarchive-vm")
     exec ssh -t root@"$COMPUTE_HOST" \
         "$REMOTE_SCRIPT '$VMID' '$ARCHIVE_BASE'${new_vmid_arg}"
 fi
 
-echo "=== unretire-vm ==="
+echo "=== unarchive-vm ===="
 echo "  VM: ${VMID}"
 [[ -n "$NEWVMID" && "$NEWVMID" != "$VMID" ]] && echo "  New VM: ${NEWVMID}"
 echo ""
@@ -632,9 +632,9 @@ fi
 
 echo "=== Done ==="
 if [[ "$NEWVMID" != "$VMID" ]]; then
-    echo "  VM ${VMID} has been unretired as VM ${NEWVMID}."
+    echo "  VM ${VMID} has been unarchived as VM ${NEWVMID}."
 else
-    echo "  VM ${VMID} has been unretired."
+    echo "  VM ${VMID} has been unarchived."
 fi
 if is_two_node; then
     echo "  iSCSI LUNs:"

@@ -1717,6 +1717,17 @@ def create_info_panel(app):
     app.log_level_button.set_popup(log_menu)
     stdin_box.pack_start(app.log_level_button, False, False, 0)
 
+    app._info_panel_short_prefix = True
+    app._info_short_prefix_toggle = Gtk.ToggleButton(label="Short prefix")
+    app._info_short_prefix_toggle.set_active(True)
+    app._info_short_prefix_toggle.set_tooltip_text(
+        "Show only date and time in the log panel"
+    )
+    app._info_short_prefix_toggle.connect(
+        "toggled", app._on_info_short_prefix_toggled
+    )
+    stdin_box.pack_start(app._info_short_prefix_toggle, False, False, 0)
+
     clear_btn = Gtk.Button(label="Clear")
     clear_btn.connect(
         "clicked",

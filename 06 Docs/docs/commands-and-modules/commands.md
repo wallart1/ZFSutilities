@@ -21,12 +21,13 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`getlinecount`](#getlinecount)
 - [`git-release`](#git-release)
 - [`PVE-send-to-archive`](#pve-send-to-archive)
-- [`retire-vm`](#retire-vm)
+- [`archive-vm`](#archive-vm)
+- [`remove-vm`](#remove-vm)
 - [`run-tests`](#run-tests)
 - [`startdocserver`](#startdocserver)
 - [`switch-version`](#switch-version)
 - [`uninstall-version`](#uninstall-version)
-- [`unretire-vm`](#unretire-vm)
+- [`unarchive-vm`](#unarchive-vm)
 - [`unroot`](#unroot)
 - [`watchit`](#watchit)
 - [`zfs-diagnose-busy`](#zfs-diagnose-busy)
@@ -757,7 +758,7 @@ Calls [`zfsretain`](modules.md#zfsretain) for each pool.
 ### `zfs-diagnose-busy`
 
 Diagnoses why a ZFS dataset or snapshot cannot be destroyed. Called
-automatically by `zfsdelsnap`, `zfsdelfs`, `remove-vm-disk`, `retire-vm`, and
+automatically by `zfsdelsnap`, `zfsdelfs`, `remove-vm-disk`, `archive-vm`, and
 `clone-vm` whenever `zfs destroy` fails with a "dataset is busy" error.
 
 ```bash
@@ -2447,21 +2448,21 @@ Reads `/proc/spl/kstat/zfs/arcstats` at the configured interval and prints ARC s
 
 ---
 
-### `retire-vm`
+### `archive-vm`
 
-Automates the retirement of a VM. Discovers
-clone dependencies, optionally promotes them, archives zvols and Proxmox config,
-verifies archive integrity, and optionally removes the VM.
+Archives a VM before destruction. Discovers clone dependencies, optionally
+promotes them, archives zvols and Proxmox config, verifies archive integrity,
+and optionally removes the VM.
 
 ```bash
-sudo retire-vm <vmid>
+sudo archive-vm <vmid>
 ```
 
 **Arguments:**
 
-| Argument | Description                        |
-| -------- | ---------------------------------- |
-| `$1`     | VM ID of the template VM to retire |
+| Argument | Description                         |
+| -------- | ----------------------------------- |
+| `$1`     | VM ID of the template VM to archive |
 
 **Flow:**
 
@@ -2524,23 +2525,23 @@ sudo retire-vm <vmid>
 
 ---
 
-### `unretire-vm`
+### `unarchive-vm`
 
-Restores a retired VM from archive: recreates zvols with their original
+Restores an archived VM from archive: recreates zvols with their original
 `volblocksize`, rebuilds iSCSI infrastructure (two-node), and restores the Proxmox
 config with updated disk lines.
 
 ```bash
-sudo unretire-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
+sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 ```
 
 **Arguments:**
 
 | Argument         | Description                                                                       |
 | ---------------- | --------------------------------------------------------------------------------- |
-| `vmid`           | VM ID of the retired VM to restore                                                |
-| `archive_base`   | Optional ZFS dataset that contains the archive (defaults to JSON-configured path) |
-| `--new-vmid`     | Optional new VM ID to use for restored zvols, iSCSI resources, and Proxmox config |
+| `vmid`           | VM ID of the archived VM to restore                                                |
+| `archive_base`   | Optional ZFS dataset that contains the archive (defaults to JSON-configured path)  |
+| `--new-vmid`     | Optional new VM ID to use for restored zvols, iSCSI resources, and Proxmox config  |
 
 **Flow:**
 
@@ -2595,4 +2596,62 @@ sudo unretire-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | Code | Meaning |
 | ---- | ------- |
 | `0` | Completed successfully. |
+| non-zero | Invalid input or command failure. |
+
+
+### `remove-vm`
+
+Removes a VM's zvols and Proxmox config without archiving. Scans all pools for
+`vm-<vmid>-disk-*` zvols, lists them along with any iSCSI target/LUN mappings,
+stops the VM if it is running, asks for confirmation, then destroys each zvol
+using `zfsdelfs`. Finally removes the Proxmox VM definition.
+
+```bash
+sudo remove-vm <vmid>
+```
+
+**Arguments:**
+
+| Argument | Description                |
+| -------- | -------------------------- |
+| `$1`     | VM ID to remove            |
+
+**Flow:**
+
+1. **Discover zvols** — Scans all pools for zvols matching `vm-<vmid>-disk-<N>`.
+   In two-node mode this runs on the storage host.
+2. **Collect iSCSI info** (two-node) — Looks up the target and LUN for each
+   backstore derived from the zvol name.
+3. **Stop VM** — If a Proxmox config exists and the VM is running, it is stopped.
+4. **Confirm** — Lists the zvols (with sizes and iSCSI info) and asks whether to
+   proceed.
+5. **Destroy zvols** — Calls `zfsdelfs` on each zvol with `autoproceed='Y'` so
+   only one confirmation is required. `zfsdelfs` handles snapshots, holds, clone
+   dependents, and iSCSI teardown.
+6. **Save iSCSI config / rescan** (two-node) — Persists the updated targetcli
+   configuration and rescans the compute host.
+7. **Remove config** — Deletes `/etc/pve/qemu-server/<vmid>.conf`.
+
+**Globals:** node-config globals only.
+
+**Called modules:**
+
+| Script | Purpose in this command |
+| ------ | ----------------------- |
+| `zfsdelfs` | Destroy each zvol and its snapshots/holds, handling iSCSI teardown |
+| `safe-iscsi-save` (two-node) | Persist iSCSI configuration after teardown |
+| `rescan-storage` (two-node) | Refresh compute-host device view |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| Node config | Determines single-node vs two-node paths | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf) |
+| `/etc/pve/qemu-server/<vmid>.conf` | Removed if present | — |
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Completed successfully (or nothing to remove). |
 | non-zero | Invalid input or command failure. |

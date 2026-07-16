@@ -370,6 +370,91 @@ ensure_doc_server() {
 }
 
 # ------------------------------------------------------------------
+# Partial uninstall detection
+# ------------------------------------------------------------------
+
+# Check for remnants of a previous or partial uninstall and offer to clean
+# them up before continuing with installation.
+#
+# Args:
+#   $1  Absolute path to the repository root (used to locate the repo copy of
+#       uninstall-zfsutilities when no deployed version exists).
+#
+# Returns 0 if the system is clean or cleanup succeeded.
+# Returns 1 if remnants were found but the user declined cleanup.
+check_partial_uninstall() {
+    local repo_dir="$1"
+    local version_base="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
+    local systemd_dir="/etc/systemd/system"
+    local partial=0
+
+    # A version base directory without a current symlink usually means a
+    # previous uninstall was interrupted.
+    if [[ -d "$version_base" && ! -L "$version_base/current" ]]; then
+        partial=1
+    fi
+
+    # systemd/cron integration left behind without a deployed version also
+    # indicates a partial uninstall.
+    if [[ ! -d "$version_base/versions" ]]; then
+        if [[ -f "$systemd_dir/zfs-keys-unlock.service" || \
+              -d "$systemd_dir/rtslib-fb-targetctl.service.d" || \
+              -f "/etc/cron.d/zfsutilities" ]]; then
+            partial=1
+        fi
+    fi
+
+    if [[ $partial -eq 0 ]]; then
+        return 0
+    fi
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  ⚠  WARNING: Remnants of a previous ZFSutilities installation detected"
+    echo ""
+    echo "  This usually means a previous uninstall was interrupted or incomplete."
+    echo "  Continuing without cleaning up may leave stale wiring, services, or"
+    echo "  cron entries behind."
+    echo ""
+    echo "  It is strongly recommended to run uninstall-zfsutilities first."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    if ! ask_yn "Run uninstall-zfsutilities now to clean up remnants?" "Y"; then
+        echo ""
+        echo "⚠  Continuing without cleanup. The installation may not work correctly."
+        echo "   You can run uninstall-zfsutilities manually and then re-run this"
+        echo "   installer."
+        echo ""
+        return 1
+    fi
+
+    local uninstaller=""
+    if [[ -x "$version_base/current/bin/uninstall-zfsutilities" ]]; then
+        uninstaller="$version_base/current/bin/uninstall-zfsutilities"
+    elif [[ -x "$repo_dir/uninstall-zfsutilities" ]]; then
+        uninstaller="$repo_dir/uninstall-zfsutilities"
+    fi
+
+    if [[ -z "$uninstaller" ]]; then
+        echo "✗ ERROR: uninstall-zfsutilities not found." >&2
+        echo "   Expected one of:" >&2
+        echo "     $version_base/current/bin/uninstall-zfsutilities" >&2
+        echo "     $repo_dir/uninstall-zfsutilities" >&2
+        return 1
+    fi
+
+    echo "Running: $uninstaller --yes"
+    if "$uninstaller" --yes; then
+        echo "✓ Cleanup complete. Continuing with installation."
+        return 0
+    else
+        echo "✗ ERROR: uninstall-zfsutilities failed." >&2
+        return 1
+    fi
+}
+
+# ------------------------------------------------------------------
 # Desktop launcher symlinks
 # ------------------------------------------------------------------
 

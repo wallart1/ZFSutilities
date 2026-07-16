@@ -75,16 +75,16 @@ class TestFindScript(unittest.TestCase):
 
     def test_find_script_in_clone_support_directory(self):
         """Script in 09 ZFS clone support is found from repo root."""
-        expected = self._touch("09 ZFS clone support", "retire-vm")
-        result = path_utils.find_script("retire-vm", script_dir=self.script_dir)
+        expected = self._touch("09 ZFS clone support", "archive-vm")
+        result = path_utils.find_script("archive-vm", script_dir=self.script_dir)
         self.assertEqual(result, os.path.realpath(expected))
 
     def test_find_script_across_subdirectories(self):
         """Script in 09 ZFS clone support is found from 08 Two-node."""
         two_node_dir = os.path.join(self.tmpdir, "08 Two-node")
         os.makedirs(two_node_dir)
-        expected = self._touch("09 ZFS clone support", "retire-vm")
-        result = path_utils.find_script("retire-vm", script_dir=two_node_dir)
+        expected = self._touch("09 ZFS clone support", "archive-vm")
+        result = path_utils.find_script("archive-vm", script_dir=two_node_dir)
         self.assertEqual(result, os.path.realpath(expected))
 
     def test_find_script_missing_returns_none(self):
