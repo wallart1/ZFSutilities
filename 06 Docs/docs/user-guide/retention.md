@@ -18,6 +18,26 @@ Clone snapshots (`c` bucket) are **never touched** by retention.
 For the complete algorithm, see the
 [`zfsretain` module reference](../commands-and-modules/modules.md#zfsretain).
 
+## Policy Parameters
+
+Each bucket in a retention policy has two parameters:
+
+- **`retain`** — how many snapshots of this bucket are kept. When a bucket has
+  more than this many snapshots, the oldest snapshots are deleted first. The
+  most recent snapshot in each bucket is always protected so it can serve as
+  the base for the next incremental backup.
+- **`minage`** — the minimum age, in days, before a snapshot in this bucket is
+  allowed to be deleted. It is **not** a maximum age: setting `minage=65` does
+  not mean snapshots are deleted after 65 days; it means they cannot be deleted
+  until they are at least 65 days old. A snapshot older than `minage` is still
+  kept if it is within the `retain` count or is the most recent snapshot in its
+  bucket.
+
+For example, an offsite (`s`) bucket configured as `retain=4 minage=65` keeps
+up to four offsite snapshots and never deletes any of them until each one is at
+least 65 days old. A snapshot that is 80 days old will be kept if it is one of
+the four newest offsite snapshots for that dataset.
+
 ## Editing Retention Policies
 
 The easiest way to edit policies is the GUI's **Retention** tab. You can also

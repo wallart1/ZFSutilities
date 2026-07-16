@@ -1037,7 +1037,7 @@ Delegates each deletion to [`zfsdelsnap`](#zfsdelsnap), which runs
    into a leading-`@` label.
 2. Load the retention policy for the target pool via
    `zfsconfig_get_retention`. Falls back to the `default` policy, then to
-   legacy `zfsretainpol-<pool>` files. Abort if no policy is found.
+   legacy `zfsretainpol-<pool>` files. Returns `8` if no policy is found.
 3. Build `$snaparray` from `zfs list -Ht snapshot -o name,creation -s creation`
    for the target dataset.
 4. **Phase 0** (only when `$label = @offsite`). For each `@offsite` snapshot,
@@ -1067,10 +1067,11 @@ Delegates each deletion to [`zfsdelsnap`](#zfsdelsnap), which runs
 
 **Return codes:**
 
-| Code | Meaning                              |
-| ---- | ------------------------------------ |
-| 0    | Retention applied                    |
-| 8    | Fatal error (no policy, bad eval)    |
+| Code | Meaning                                      |
+| ---- | -------------------------------------------- |
+| 0    | Retention applied                            |
+| 1    | Skipped (lock conflict)                      |
+| 8    | Skipped (no policy, lock error, bad eval)    |
 
 ---
 

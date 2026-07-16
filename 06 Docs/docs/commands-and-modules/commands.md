@@ -705,6 +705,9 @@ sudo zfscleanup <pool> only <label> [overrides]
   If the configured pool list is empty, it falls back to `zpool list -Ho name`
   so retention is not silently skipped.
 - Pools in the list that are not currently online are skipped.
+- If `retain` returns a non-zero code for a dataset (lock conflict, missing
+  policy, or other error), `zfscleanup` logs a warning and continues with the
+  next dataset/pool instead of aborting the run.
 
 **Globals:**
 

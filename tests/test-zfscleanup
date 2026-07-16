@@ -31,7 +31,10 @@ EOF
 
 cat > "$mock_mydir/zfsbuildfsarray" <<'EOF'
 buildfsarray() {
-    if [[ ${#_mock_fsarray[@]} -gt 0 ]]; then
+    local _pool_specific="_mock_fsarray_$1"
+    if [[ -n "${!_pool_specific+x}" ]]; then
+        eval "fsarray=(\"\${$_pool_specific[@]}\")"
+    elif [[ ${#_mock_fsarray[@]} -gt 0 ]]; then
         fsarray=("${_mock_fsarray[@]}")
     else
         fsarray=("$1")
@@ -42,6 +45,7 @@ EOF
 cat > "$mock_mydir/zfsretain" <<'EOF'
 retain() {
     if [[ "$1" == "${_mock_retain_conflict:-}" ]]; then return 1; fi
+    if [[ "$1" == "${_mock_retain_error:-}" ]]; then return 8; fi
     zfscleanup_processed+=("$1 $2")
 }
 EOF
@@ -64,7 +68,10 @@ reset_state() {
     zfscleanup_test_pools=()
     _mock_zpool_list=""
     _mock_fsarray=()
+    _mock_fsarray_pool1=()
+    _mock_fsarray_pool2=()
     _mock_retain_conflict=""
+    _mock_retain_error=""
     autoproceed='Y'
     dryrun='N'
     releaseholds='N'
@@ -139,6 +146,29 @@ test_continues_after_retain_lock_conflict() {
     assert_equals "pool/b @dailybackup" "${zfscleanup_processed[*]}"
 }
 
+test_continues_after_retain_policy_error() {
+    test_start "Continues with next dataset when retain returns a policy error"
+    reset_state
+    zfscleanup_test_pools=(pool)
+    _mock_zpool_list=$'pool'
+    _mock_fsarray=(pool/a pool/b)
+    _mock_retain_error="pool/a"
+    cleanup "" "" "dailybackup"
+    assert_equals "pool/b @dailybackup" "${zfscleanup_processed[*]}"
+}
+
+test_continues_to_next_pool_after_retain_error() {
+    test_start "Continues with next pool when retain returns an error"
+    reset_state
+    zfscleanup_test_pools=(pool1 pool2)
+    _mock_zpool_list=$'pool1\npool2'
+    _mock_fsarray_pool1=(pool1/a pool1/b)
+    _mock_fsarray_pool2=(pool2/a pool2/b)
+    _mock_retain_error="pool1/a"
+    cleanup "" "" "dailybackup"
+    assert_equals "pool1/b @dailybackup pool2/a @dailybackup pool2/b @dailybackup" "${zfscleanup_processed[*]}"
+}
+
 # -----------------------------------------------------------------------------
 # Run tests
 # -----------------------------------------------------------------------------
@@ -149,6 +179,8 @@ test_explicit_pool_argument_wins
 test_skips_offline_pools
 test_fallback_with_empty_array
 test_continues_after_retain_lock_conflict
+test_continues_after_retain_policy_error
+test_continues_to_next_pool_after_retain_error
 
 rm -rf "$mock_mydir"
 mydir="$old_mydir"

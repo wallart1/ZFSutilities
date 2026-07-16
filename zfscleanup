@@ -86,8 +86,10 @@ function cleanup {
             read -p "$(log_msg) Press enter to continue."
         fi
         for retainfs in "${fsarray[@]}"; do
-            if ! retain "$retainfs" "$zfscleanup_label"; then
-                log_msg "WARN: Skipped $retainfs due to lock conflict or error."
+            retain "$retainfs" "$zfscleanup_label"
+            local _retain_rc=$?
+            if [[ $_retain_rc -ne 0 ]]; then
+                log_msg "WARN: Skipped $retainfs (rc=$_retain_rc); continuing with next dataset."
             fi
         done
     done

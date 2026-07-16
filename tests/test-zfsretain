@@ -34,6 +34,9 @@ zfslock_acquire() {
     if [[ "${_mock_lock_conflict:-}" == "$1" ]]; then
         return 1
     fi
+    if [[ "${_mock_lock_error:-}" == "$1" ]]; then
+        return 2
+    fi
     ZFSLOCK_ID="/tmp/mock_lock_${1//\//_}"
     return 0
 }
@@ -55,6 +58,7 @@ reset_mocks() {
     _mock_zfs_props=()
     _mock_lock_acquisitions=()
     _mock_lock_conflict=""
+    _mock_lock_error=""
     dryrun="N"
     autoproceed="Y"
     skipbusy="Y"
@@ -284,6 +288,46 @@ test_retain_skips_when_locked() {
     fi
 }
 
+test_retain_returns_on_missing_policy() {
+    echo "=== Missing policy: returns instead of exiting ==="
+    reset_mocks
+    mock_retention_policy() {
+        true  # no output
+    }
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d'
+    retain "pool/fs" "dailybackup"
+    local rc=$?
+    # Restore the default policy mock for later tests.
+    mock_retention_policy() {
+        echo "bktname[0]='d'; bktretain[0]=3; minage[0]=0"
+        echo "bktname[1]='w'; bktretain[1]=2; minage[1]=7"
+        echo "bktname[2]='m'; bktretain[2]=2; minage[2]=30"
+    }
+    test_start "retain returns 8 when no retention policy is found"
+    if [[ $rc -eq 8 && ${#_mock_delsnap_calls[@]} -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=8 with no deletions, got rc=$rc, deletions=${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_retain_returns_on_lock_error() {
+    echo "=== Lock error: returns instead of exiting ==="
+    reset_mocks
+    _mock_lock_error="pool/fs"
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d'
+    retain "pool/fs" "dailybackup"
+    local rc=$?
+    test_start "retain returns 8 on unexpected lock acquisition error"
+    if [[ $rc -eq 8 && ${#_mock_delsnap_calls[@]} -eq 0 && "${_mock_lock_acquisitions[*]}" == *"pool/fs w"* ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=8 with no deletions, got rc=$rc, deletions=${_mock_delsnap_calls[*]}"
+    fi
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -301,6 +345,8 @@ main() {
     test_wrong_label_skipped
     test_retain_acquires_write_lock
     test_retain_skips_when_locked
+    test_retain_returns_on_missing_policy
+    test_retain_returns_on_lock_error
     mydir="$old_mydir"
     rm -rf "$mock_mydir"
     teardown_test_env

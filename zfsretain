@@ -47,9 +47,8 @@ function retain {
             log_msg "WARN: Cannot prune $retainfs — locked by another operation; skipping."
             return 1
         else
-            log_msg "FATAL: Unable to acquire lock for $retainfs."
-            sleep 5
-            exit 8
+            log_msg "WARN: Unable to acquire lock for $retainfs. Skipping."
+            return 8
         fi
     fi
 
@@ -62,15 +61,13 @@ function retain {
     bktname=(); bktretain=(); minage=()
     _retention_fragment=$(ZFSCONFIG_LEGACY_DIR="$mydir" zfsconfig_get_retention "$retainfspool")
     if [[ -z "$_retention_fragment" ]]; then
-        log_msg "FATAL: No retention policy found for pool '$retainfspool' (JSON config or" \
-            "legacy zfsretainpol-* file). Aborting."
-        sleep 5
-        exit 8
+        log_msg "WARN: No retention policy found for pool '$retainfspool' (JSON config or" \
+            "legacy zfsretainpol-* file). Skipping."
+        return 8
     fi
     if ! eval "$_retention_fragment"; then
-        log_msg "FATAL: Unable to evaluate retention policy fragment for '$retainfspool'."
-        sleep 5
-        exit 8
+        log_msg "WARN: Unable to evaluate retention policy fragment for '$retainfspool'. Skipping."
+        return 8
     fi
     unset _retention_fragment
     bktlen=${#bktname[@]}

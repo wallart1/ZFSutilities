@@ -687,5 +687,79 @@ class TestSourceCleanup(unittest.TestCase):
         self.assertIsNone(runner._stderr_source)
 
 
+class TestRunnerRobustness(unittest.TestCase):
+    """BackupRunner recovers from unexpected internal errors."""
+
+    def _runner(self):
+        return br.BackupRunner(MagicMock(), MagicMock())
+
+    def _fake_process(self, rc=0):
+        fake = MagicMock()
+        fake.poll.return_value = rc
+        fake.stdout.fileno.return_value = 3
+        fake.stdout.closed = True
+        fake.stderr.fileno.return_value = 4
+        fake.stderr.closed = True
+        return fake
+
+    @patch("backup_runner.add_history_entry")
+    def test_check_process_exception_finishes_runner(self, _mock_add):
+        """If _check_process raises, the runner still calls _finish."""
+        runner = self._runner()
+        runner.running = True
+        runner.current_step = 0
+        runner.steps = [BashStep([], "step1", is_rsync=False, fatal=False)]
+        runner._session_start_time = time.time()
+        runner.process = self._fake_process(rc=0)
+        runner.process.poll.side_effect = RuntimeError("poll exploded")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                runner._check_process()
+
+        self.assertFalse(runner.running)
+
+    @patch("backup_runner.add_history_entry")
+    def test_run_next_step_exception_finishes_runner(self, _mock_add):
+        """If _run_next_step raises, the runner still calls _finish."""
+        runner = self._runner()
+        runner.running = True
+        runner.current_step = 0
+        runner.steps = [BashStep([], "step1", is_rsync=False, fatal=False)]
+        runner._session_start_time = time.time()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                with patch.object(runner, "_spawn_process",
+                                  side_effect=RuntimeError("spawn exploded")):
+                    runner._run_next_step()
+
+        self.assertFalse(runner.running)
+
+    @patch("backup_runner.add_history_entry")
+    def test_successful_step_advances_to_next_step(self, _mock_add):
+        """When step 0 exits 0, the runner schedules step 1."""
+        runner = self._runner()
+        runner.running = True
+        runner.current_step = 0
+        runner.steps = [
+            BashStep([], "step1", is_rsync=False, fatal=False),
+            BashStep([], "step2", is_rsync=False, fatal=False),
+        ]
+        runner._session_start_time = time.time()
+        runner.process = self._fake_process(rc=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                with patch.object(br.GLib, "idle_add") as mock_idle:
+                    runner._check_process()
+                    mock_idle.assert_called_once_with(runner._run_next_step)
+
+        self.assertEqual(runner.current_step, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

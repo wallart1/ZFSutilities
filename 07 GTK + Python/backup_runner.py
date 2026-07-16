@@ -12,7 +12,9 @@ import signal
 import subprocess
 import termios
 import time
+import traceback
 import tty
+import warnings
 
 from datetime import datetime
 
@@ -365,26 +367,35 @@ class BackupRunner:
         return True
 
     def _run_next_step(self):
-        if not self.running or self.current_step >= len(self.steps):
-            if self._finally_step and not self._finally_ran:
-                self._run_finally_step()
+        try:
+            if not self.running or self.current_step >= len(self.steps):
+                if self._finally_step and not self._finally_ran:
+                    self._run_finally_step()
+                    return
+                self._finish()
                 return
-            self._finish()
-            return
-        step = self.steps[self.current_step]
-        if step.pre_callback is not None:
-            try:
-                step.pre_callback()
-            except Exception as exc:
-                self._log(f"WARN: Pre-step callback failed: {exc}")
-        if not self._spawn_process(step.description, step.command, step.is_rsync):
-            if step.post_callback is not None:
+            step = self.steps[self.current_step]
+            self._log(f"DEBUG: Starting step {self.current_step}: {step.description}")
+            if step.pre_callback is not None:
                 try:
-                    step.post_callback()
+                    step.pre_callback()
                 except Exception as exc:
-                    self._log(f"WARN: Post-step callback failed: {exc}")
-            self.current_step += 1
-            GLib.idle_add(self._run_next_step)
+                    self._log(f"WARN: Pre-step callback failed: {exc}")
+            if not self._spawn_process(step.description, step.command, step.is_rsync):
+                if step.post_callback is not None:
+                    try:
+                        step.post_callback()
+                    except Exception as exc:
+                        self._log(f"WARN: Post-step callback failed: {exc}")
+                self.current_step += 1
+                GLib.idle_add(self._run_next_step)
+        except Exception as exc:
+            self._log(f"WARN: Unexpected error while starting next step: {exc}")
+            for line in traceback.format_exc().splitlines():
+                self._log(f"WARN: {line}")
+            self._cleanup_io()
+            self.set_stdin_enabled(False)
+            self._finish(rc=1)
 
     def _run_finally_step(self):
         if self._finally_ran or not self._finally_step:
@@ -507,68 +518,78 @@ class BackupRunner:
         if now - self._last_log_size_check >= _SESSION_LOG_SIZE_CHECK_INTERVAL:
             self._last_log_size_check = now
             self._maybe_truncate_session_log()
-        rc = self.process.poll()
-        if rc is not None:
-            self._drain_remaining()
+        try:
+            rc = self.process.poll()
+            if rc is not None:
+                self._log(f"DEBUG: Step {self.current_step} process exited rc={rc}")
+                self._drain_remaining()
 
-            if not self._is_finally and self.current_step < len(self.steps):
+                if not self._is_finally and self.current_step < len(self.steps):
+                    step = self.steps[self.current_step]
+                    if step.post_callback is not None:
+                        try:
+                            step.post_callback()
+                        except Exception as exc:
+                            self._log(f"WARN: Post-step callback failed: {exc}")
+
+                if getattr(self, '_is_finally', False):
+                    if rc != 0:
+                        self._log(f"WARN: Post-backup script exited with rc={rc}")
+                    self._cleanup_io()
+                    self.set_stdin_enabled(False)
+                    self._finish(rc=self._fatal_rc if self._fatal_rc is not None else 0)
+                    return False
+
                 step = self.steps[self.current_step]
-                if step.post_callback is not None:
-                    try:
-                        step.post_callback()
-                    except Exception as exc:
-                        self._log(f"WARN: Post-step callback failed: {exc}")
-
-            if getattr(self, '_is_finally', False):
+                if step.is_rsync:
+                    desc = step.description
+                    self._log(f"INFO: {desc} ... done (rc={rc})")
+                    self._log(f"INFO: Rsync log: {RSYNC_LOG_FILE}")
+                    if self._rsync_log_fh:
+                        self._rsync_log_fh.close()
+                        self._rsync_log_fh = None
                 if rc != 0:
-                    self._log(f"WARN: Post-backup script exited with rc={rc}")
+                    self._log(f"WARN: Step exited with rc={rc}")
+                    if rc == 9:
+                        self._log(f"INFO: {self.label} aborted by user")
+                        self._cleanup_io()
+                        self.set_stdin_enabled(False)
+                        self._write_session_trailer(rc=9)
+                        if self._session_log_prev is not None:
+                            restore_session_log(self._session_log_prev)
+                            self._session_log_prev = None
+                        self._session_log_file = None
+                        self._session_start_time = None
+                        self.running = False
+                        if self.progress:
+                            self.progress(None, None)
+                        if self._on_complete:
+                            self._on_complete(cancelled=True)
+                        return False
+                    if step.fatal:
+                        self._log(f"FATAL: Aborting {self.label.lower()} because pre-backup command failed")
+                        self._cleanup_io()
+                        self.set_stdin_enabled(False)
+                        if self._finally_step and not self._finally_ran:
+                            self._fatal_rc = rc
+                            GLib.idle_add(self._run_finally_step)
+                            return False
+                        self._finish(rc=rc)
+                        return False
                 self._cleanup_io()
                 self.set_stdin_enabled(False)
-                self._finish(rc=self._fatal_rc if self._fatal_rc is not None else 0)
+                self.current_step += 1
+                GLib.idle_add(self._run_next_step)
                 return False
-
-            step = self.steps[self.current_step]
-            if step.is_rsync:
-                desc = step.description
-                self._log(f"INFO: {desc} ... done (rc={rc})")
-                self._log(f"INFO: Rsync log: {RSYNC_LOG_FILE}")
-                if self._rsync_log_fh:
-                    self._rsync_log_fh.close()
-                    self._rsync_log_fh = None
-            if rc != 0:
-                self._log(f"WARN: Step exited with rc={rc}")
-                if rc == 9:
-                    self._log(f"INFO: {self.label} aborted by user")
-                    self._cleanup_io()
-                    self.set_stdin_enabled(False)
-                    self._write_session_trailer(rc=9)
-                    if self._session_log_prev is not None:
-                        restore_session_log(self._session_log_prev)
-                        self._session_log_prev = None
-                    self._session_log_file = None
-                    self._session_start_time = None
-                    self.running = False
-                    if self.progress:
-                        self.progress(None, None)
-                    if self._on_complete:
-                        self._on_complete(cancelled=True)
-                    return False
-                if step.fatal:
-                    self._log(f"FATAL: Aborting {self.label.lower()} because pre-backup command failed")
-                    self._cleanup_io()
-                    self.set_stdin_enabled(False)
-                    if self._finally_step and not self._finally_ran:
-                        self._fatal_rc = rc
-                        GLib.idle_add(self._run_finally_step)
-                        return False
-                    self._finish(rc=rc)
-                    return False
+            return True
+        except Exception as exc:
+            self._log(f"WARN: Unexpected error while checking process: {exc}")
+            for line in traceback.format_exc().splitlines():
+                self._log(f"WARN: {line}")
             self._cleanup_io()
             self.set_stdin_enabled(False)
-            self.current_step += 1
-            GLib.idle_add(self._run_next_step)
+            self._finish(rc=1)
             return False
-        return True
 
     def _drain_remaining(self):
         if self.process is None:
@@ -608,11 +629,15 @@ class BackupRunner:
         ctx = GLib.MainContext.get_default()
         if self._stdout_source is not None:
             if ctx.find_source_by_id(self._stdout_source) is not None:
-                GLib.source_remove(self._stdout_source)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    GLib.source_remove(self._stdout_source)
             self._stdout_source = None
         if self._stderr_source is not None:
             if ctx.find_source_by_id(self._stderr_source) is not None:
-                GLib.source_remove(self._stderr_source)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    GLib.source_remove(self._stderr_source)
             self._stderr_source = None
         if self._pty_master_fd is not None:
             try:

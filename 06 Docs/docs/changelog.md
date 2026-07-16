@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.59.17
+
+### Changed
+
+- **`zfsretain` returns instead of aborting** — Missing retention policies,
+  unexpected lock-acquisition errors, and malformed policy fragments now log a
+  warning and return `8` rather than calling `exit 8`. This lets callers decide
+  whether to stop or continue.
+- **`zfscleanup` continues on per-dataset retain errors** — When `retain`
+  returns a non-zero code for a dataset, `zfscleanup` logs the return code and
+  proceeds with the next dataset and pool instead of halting the entire run.
+- **`BackupRunner` hardening** — `_run_next_step()` and `_check_process()` are
+  now wrapped in try/except so unexpected internal exceptions log a traceback
+  and cleanly finish the runner rather than leaving the GUI run stuck. Added
+  debug logging when starting a step and when a step process exits. GLib source
+  removal warnings are suppressed during I/O cleanup.
+- **Retention policy comment clarity** — The offsite-bucket comment in all
+  `zfsretainpol-*` files now explicitly states that `minage=65` means snapshots
+  are not deleted before they are 65 days old.
+
+### Documentation
+
+- Added a **Policy Parameters** section to `user-guide/retention.md` explaining
+  `retain` and `minage`.
+- Updated `commands-and-modules/modules.md` to describe `zfsretain` return
+  codes `1` and `8` as "skipped" rather than fatal.
+- Updated `commands-and-modules/commands.md` to note that `zfscleanup` logs
+  warnings and continues on retain errors.
+- Updated `user-guide/daily-backup.md` so the retention/prune step is listed as
+  non-fatal.
+
+### Tests
+
+- Added `tests/test-zfsretain` cases for missing-policy and lock-error return
+  paths.
+- Added `tests/test-zfscleanup` cases verifying continuation after a retain
+  policy error and across pools.
+- Added `TestRunnerRobustness` in `tests/python/test_backup_runner.py` to cover
+  exception recovery and normal step advancement.
+
 ## 0.59.16
 
 ### Changed
