@@ -620,6 +620,54 @@ EOF
     fi
 }
 
+test_missing_desktop_lib_tolerated() {
+    test_start "uninstall-zfsutilities tolerates missing desktop-launcher-lib.sh"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Create an isolated copy of uninstall-zfsutilities without the launcher library.
+    mkdir -p "$tmpdir/bin"
+    cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../uninstall-zfsutilities" \
+        "$tmpdir/bin/uninstall-zfsutilities"
+    cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bashinit" \
+        "$tmpdir/bashinit"
+    printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$tmpdir/bin/rootcheck"
+    chmod +x "$tmpdir/bin/rootcheck"
+
+    # Source the isolated script and verify the helper functions exist.
+    local output
+    output=$(HOME="$tmpdir" bash -c \
+        "source '$tmpdir/bin/uninstall-zfsutilities'; \
+         type get_desktop_user >/dev/null 2>&1 && \
+         type remove_desktop_symlinks >/dev/null 2>&1 && \
+         SUDO_USER=testuser get_desktop_user" 2>&1)
+    local rc=$?
+
+    rm -rf "$tmpdir"
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Sourcing uninstall-zfsutilities without desktop-launcher-lib.sh failed (rc=$rc)"
+    fi
+    if [[ "$output" != *"testuser"* ]]; then
+        failed=1
+        echo "    Fallback get_desktop_user did not return SUDO_USER: '$output'"
+    fi
+    if [[ "$output" == *"desktop-launcher-lib.sh not found"* ]]; then
+        : # expected warning
+    else
+        failed=1
+        echo "    Expected warning about missing desktop-launcher-lib.sh"
+    fi
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Missing desktop-launcher-lib.sh fallback did not work"
+    fi
+}
+
 # ------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------
@@ -632,6 +680,7 @@ test_interactive_dialog_choices
 test_missing_bashinit_fallback
 test_restartability_partial_uninstall
 test_all_nodes_ssh
+test_missing_desktop_lib_tolerated
 
 test_summary
 teardown_test_env

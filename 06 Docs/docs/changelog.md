@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.60.1
+
+*Released 2026-07-16*
+
+### Fixed
+
+- **`switch-version` tolerates missing `desktop-launcher-lib.sh`** — When the
+  desktop-launcher helper library is absent from a deployed version (for
+  example, an older deployment with an empty `10 Installers/` directory),
+  `switch-version` now defines fallback no-op helpers and continues creating
+  core production wiring instead of emitting shell errors about undefined
+  functions.
+- **`uninstall-zfsutilities` tolerates missing `desktop-launcher-lib.sh`** —
+  Applies the same conditional source logic so uninstall can complete even
+  when the launcher library is missing.
+
+### Tests
+
+- Added `test-switch-version` case verifying graceful behavior when
+  `desktop-launcher-lib.sh` is not present.
+- Added `test-uninstall-zfsutilities` case verifying graceful behavior when
+  `desktop-launcher-lib.sh` is not present.
+
 ## 0.60.0
 
 *Released 2026-07-16*

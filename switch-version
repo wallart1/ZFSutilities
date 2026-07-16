@@ -37,12 +37,21 @@ rootcheck
 
 # Source desktop launcher helpers.  In the repo root the library lives at
 # "10 Installers/..."; in the deployed layout it is at "../10 Installers/...".
+_DESKTOP_LAUNCHER_LIB=""
 if [[ -f "$MYDIR/10 Installers/desktop-launcher-lib.sh" ]]; then
+    _DESKTOP_LAUNCHER_LIB="$MYDIR/10 Installers/desktop-launcher-lib.sh"
+elif [[ -f "$MYDIR/../10 Installers/desktop-launcher-lib.sh" ]]; then
+    _DESKTOP_LAUNCHER_LIB="$MYDIR/../10 Installers/desktop-launcher-lib.sh"
+fi
+
+if [[ -n "$_DESKTOP_LAUNCHER_LIB" ]]; then
     # shellcheck source=10 Installers/desktop-launcher-lib.sh
-    source "$MYDIR/10 Installers/desktop-launcher-lib.sh"
+    source "$_DESKTOP_LAUNCHER_LIB"
 else
-    # shellcheck source=10 Installers/desktop-launcher-lib.sh
-    source "$MYDIR/../10 Installers/desktop-launcher-lib.sh"
+    echo "  ⚠ WARNING: desktop-launcher-lib.sh not found; desktop shortcuts will not be managed." >&2
+    get_desktop_user() { echo "${SUDO_USER:-}"; }
+    create_desktop_symlinks() { return 0; }
+    remove_desktop_symlinks() { return 0; }
 fi
 
 die() {
