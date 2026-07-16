@@ -74,8 +74,6 @@ For a simpler single-node setup (no separate storage host):
 sudo /path/to/zfsutilities-dev/10 Installers/install-single-node
 ```
 
-**Legacy:** The old `install-scripts` in this directory is deprecated. Use the
-new installers above.
 
 ## Workflow: Adding a New VM (without EFI)
 

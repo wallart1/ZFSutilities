@@ -118,13 +118,16 @@ def _profile_lock_path(profile_name):
     return os.path.join(PROFILE_LOCK_DIR, f"{safe}.lock")
 
 
-def acquire_profile_lock(profile_name, timeout=1.0):
+def acquire_profile_lock(profile_name, timeout=1.0, log_file=None):
     """Acquire an exclusive advisory lock for *profile_name*.
 
     Creates the lock directory and lock file if needed. Returns a tuple
     (fd, lock_path) on success, or (None, lock_path) if the lock is already
     held by another process. With *timeout* > 0, retry briefly with a short
     sleep before giving up.
+
+    If *log_file* is provided, it is recorded in the lock metadata so the
+    Dashboard can jump directly to the running profile's session log.
     """
     os.makedirs(PROFILE_LOCK_DIR, exist_ok=True)
     lock_path = _profile_lock_path(profile_name)
@@ -155,20 +158,19 @@ def acquire_profile_lock(profile_name, timeout=1.0):
         os.close(fd)
         return None, lock_path
 
-    # Record metadata so the Dashboard can identify the owning profile and PID.
+    # Record metadata so the Dashboard can identify the owning profile, PID,
+    # and (optionally) the live session log.
     timestamp = datetime.now().isoformat(timespec="seconds")
+    metadata = {
+        "profile": profile_name,
+        "pid": os.getpid(),
+        "started": timestamp,
+    }
+    if log_file:
+        metadata["log_file"] = log_file
     try:
         with open(lock_path, "w") as f:
-            f.write(
-                json.dumps(
-                    {
-                        "profile": profile_name,
-                        "pid": os.getpid(),
-                        "started": timestamp,
-                    }
-                )
-                + "\n"
-            )
+            f.write(json.dumps(metadata) + "\n")
     except OSError:
         pass
 
@@ -706,7 +708,9 @@ def main():
             _write_session_trailer(rc=1)
             sys.exit(1)
 
-        lock_fd, lock_path = acquire_profile_lock(profile_name, timeout=1.0)
+        lock_fd, lock_path = acquire_profile_lock(
+            profile_name, timeout=1.0, log_file=_session_log_file
+        )
         if lock_fd is None:
             log_msg(
                 f"INFO: Profile '{profile_name}' is already running; "

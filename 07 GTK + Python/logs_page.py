@@ -11,7 +11,7 @@ import time
 
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib, Gdk, Gio
+from gi.repository import Gtk, GLib, Gdk, Gio, Pango
 
 from logging_config import (
     log_msg, MSG_LEVELS, DEFAULT_MSG_LEVEL,
@@ -29,6 +29,7 @@ from gui_helpers import (
     LogPopoutWindow, TextViewSearch, set_monospace_font,
     configure_treeview_column, bold_label,
 )
+from backup_runner import _PV_RATE_RE
 
 # Column indices
 COL_DATETIME = 0
@@ -48,6 +49,26 @@ MAX_VIEWER_FULL_READ_BYTES = 1024 * 1024  # 1 MB
 # tailing a running log.  Older text is dropped to prevent unbounded memory
 # growth when a subprocess logs continuously.
 MAX_VIEWER_BUFFER_CHARS = 2 * 1024 * 1024  # 2 MB
+
+
+def _last_pv_line(text):
+    """Return the last line in *text* that looks like pv progress, or None."""
+    last = None
+    for line in text.splitlines():
+        if _PV_RATE_RE.search(line):
+            last = line
+    return last
+
+
+def _update_logs_status_label(app, text):
+    """Show or hide the log viewer status label with a pv progress line."""
+    label = app.logs_status_label
+    if text:
+        label.set_text(text)
+        label.show()
+    else:
+        label.set_text("")
+        label.hide()
 
 # Regex: ^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(\w+)_(.+)\.log$
 # Purpose: Parse session log filenames into (date, time, type, name).
@@ -327,6 +348,17 @@ def create_logs_page(app):
     viewer_box.pack_start(viewer_toolbar, False, False, 0)
     viewer_box.pack_start(app.logs_text_scroll, True, True, 0)
 
+    app.logs_status_label = Gtk.Label()
+    app.logs_status_label.set_halign(Gtk.Align.START)
+    app.logs_status_label.set_ellipsize(Pango.EllipsizeMode.END)
+    app.logs_status_label.set_no_show_all(True)
+    app.logs_status_label.get_style_context().add_class("status-bar-label")
+    app.logs_status_label.set_margin_start(5)
+    app.logs_status_label.set_margin_end(5)
+    app.logs_status_label.set_margin_top(2)
+    app.logs_status_label.set_margin_bottom(2)
+    viewer_box.pack_start(app.logs_status_label, False, False, 0)
+
     # Create pop-out window for log viewer (hidden by default)
     app.logs_popout_window = LogPopoutWindow(
         app,
@@ -487,17 +519,20 @@ def _tail_log_file(app):
     path = app._logs_current_path
     if not path or not os.path.isfile(path):
         app._logs_tail_timer = None
+        _update_logs_status_label(app, "")
         return False
 
     try:
         size = os.path.getsize(path)
     except OSError:
         app._logs_tail_timer = None
+        _update_logs_status_label(app, "")
         return False
 
     if size < app._logs_file_size:
         # File shrank — stop tailing
         app._logs_tail_timer = None
+        _update_logs_status_label(app, "")
         return False
 
     if size > app._logs_file_size:
@@ -559,7 +594,10 @@ def _tail_log_file(app):
                     app.logs_text.scroll_to_mark(scroll_mark, 0.0, False, 0.0, 0.0)
                     buf.delete_mark(scroll_mark)
 
+            _update_logs_status_label(app, _last_pv_line(text))
+
             if "# END:" in text:
+                _update_logs_status_label(app, "")
                 app._logs_tail_timer = None
                 _sync_log_list(app)
                 return False
@@ -712,6 +750,7 @@ def _on_selection_changed(selection, app):
         app.logs_show_more_btn.hide()
         app.logs_load_full_btn.hide()
         app.logs_search.clear()
+        _update_logs_status_label(app, "")
         return
 
     tree_iter = model.get_iter(pathlist[0])
@@ -744,6 +783,12 @@ def _on_selection_changed(selection, app):
 
     if query:
         app.logs_search.search()
+
+    if status == "Running":
+        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
+        _update_logs_status_label(app, _last_pv_line(text))
+    else:
+        _update_logs_status_label(app, "")
 
     # Start tailing if the log is still running
     if status == "Running":

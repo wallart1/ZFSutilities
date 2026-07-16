@@ -24,7 +24,7 @@
 
 if [[ ! -r "$TWO_NODE_CONF" ]]; then
     echo "✗ Missing $TWO_NODE_CONF" >&2
-    echo "  Install via: 08 Two-node/install-scripts (run on the storage host as root)" >&2
+    echo "  Install via: 10 Installers/install-two-node (run on the storage host as root)" >&2
     exit 1
 fi
 

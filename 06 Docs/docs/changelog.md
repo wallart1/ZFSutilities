@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.61.0
+
+*Released 2026-07-16*
+
+### Removed
+
+- **Obsolete `08 Two-node/install-scripts` script** — The deprecated
+  two-node installer has been removed. It was already superseded by
+  `10 Installers/install-two-node`. Updated `deploy-version`,
+  `08 Two-node/two-node-lib.sh`, `08 Two-node/README.md`, and
+  `08 Two-node/two-node.conf.template` to remove all references and point
+  users to the current installer.
+
+### Added
+
+- **Dashboard shows host operating-system information** — The Dashboard
+  config section now displays the operating-system name and version for each
+  configured host. Detection order is Proxmox VE (`pveversion`), standard
+  `/etc/os-release`, and finally `inxi -S`. Remote hosts in two-node mode are
+  queried over SSH.
+- **Dashboard "View Log" works for running tasks** — The Dashboard's
+  **View Log** button now prefers a selected **Running Tasks** row that has a
+  recorded session log and falls back to the selected **Recent Operations**
+  row. Profile locks, GUI runners, and legacy scheduled tasks all expose their
+  session log path so the Dashboard can jump directly to the live log.
+- **Dashboard shows tasks waiting for dataset locks** — Running tasks now
+  report a "Waiting for dataset lock" status, and warnings call out exactly
+  which tasks are blocked on a lock.
+- **Logs tab shows live `pv` progress** — The log viewer in the Logs tab has
+  a new status label that displays the latest `pv` progress line while a log
+  is running.
+- **Schedule "Run Now" shows `pv` progress** — Profile runs started with
+  **Run Now** from the Schedule tab now update the global status label with
+  `pv` progress lines and clear the progress when the run finishes.
+- **Schedule summary preserves scroll position** — The schedule summary
+  textview keeps its scroll position when the profile selection changes but
+  the generated summary text is unchanged.
+
+### Tests
+
+- Updated `tests/python/test_dashboard_page.py`,
+  `tests/python/test_logs_page.py`,
+  `tests/python/test_profile_runner_concurrency.py`, and
+  `tests/python/test_schedule_page.py` to cover the new Dashboard, Logs, and
+  Schedule behavior.
+- Updated `tests/test-deploy-version` to reflect the removal of
+  `install-scripts` from the deployed two-node script list.
+
 ## 0.60.1
 
 *Released 2026-07-16*

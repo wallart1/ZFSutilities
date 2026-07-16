@@ -834,6 +834,8 @@ class TestCollectRunningTasks(unittest.TestCase):
         runner.steps = [("step1", [], False, False), ("step2", [], False, False)]
         runner._finally_step = None
         runner.current_step = 0
+        runner._in_lock_wait = False
+        runner._session_log_file = "/var/log/zfsutilities/sessions/backup.log"
         app.backup_runner = runner
         app.offsite_runner = None
         app.restore_runner = None
@@ -844,6 +846,10 @@ class TestCollectRunningTasks(unittest.TestCase):
         self.assertEqual(tasks[0]["name"], "Backup")
         self.assertEqual(tasks[0]["type"], "GUI")
         self.assertEqual(tasks[0]["task_key"], "runner:backup_runner")
+        self.assertEqual(
+            tasks[0]["log_file"],
+            "/var/log/zfsutilities/sessions/backup.log",
+        )
 
     def test_scrub_task(self):
         app = MagicMock()
@@ -906,7 +912,12 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.retention_runner = None
         app.scrub_queue = None
         with patch.object(
-            dp, "list_running_profiles", return_value=[{"name": "Daily", "pid": 1234, "started": "2026-06-29T10:00:00"}]
+            dp, "list_running_profiles", return_value=[{
+                "name": "Daily",
+                "pid": 1234,
+                "started": "2026-06-29T10:00:00",
+                "log_file": "/var/log/zfsutilities/sessions/profile-daily.log",
+            }]
         ):
             tasks = dp._collect_running_tasks(app)
         self.assertEqual(len(tasks), 1)
@@ -914,6 +925,30 @@ class TestCollectRunningTasks(unittest.TestCase):
         self.assertEqual(tasks[0]["type"], "Profile")
         self.assertEqual(tasks[0]["status"], "PID 1234")
         self.assertEqual(tasks[0]["task_key"], "profile:Daily")
+        self.assertEqual(
+            tasks[0]["log_file"],
+            "/var/log/zfsutilities/sessions/profile-daily.log",
+        )
+
+    def test_gui_runner_waiting_for_lock(self):
+        app = MagicMock()
+        runner = MagicMock()
+        runner.running = True
+        runner.label = "Backup"
+        runner.steps = [("step1", [], False, False)]
+        runner._finally_step = None
+        runner.current_step = 0
+        runner._in_lock_wait = True
+        runner._session_log_file = "/var/log/zfsutilities/sessions/backup.log"
+        app.backup_runner = runner
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        app.scrub_queue = None
+        tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["status"], "Waiting for dataset lock")
+        self.assertTrue(tasks[0]["waiting_for_lock"])
 
     @patch("scrub_manager.get_all_pool_scrub_states")
     def test_finished_scrub_removed_from_running_tasks(self, mock_states):
@@ -1031,11 +1066,20 @@ class TestListRunningProfiles(unittest.TestCase):
         lock_path = os.path.join(self.tmpdir, "Daily.lock")
         with open(lock_path, "w") as f:
             import json
-            json.dump({"profile": "Daily", "pid": os.getpid(), "started": "2026-06-29T10:00:00"}, f)
+            json.dump({
+                "profile": "Daily",
+                "pid": os.getpid(),
+                "started": "2026-06-29T10:00:00",
+                "log_file": "/var/log/zfsutilities/sessions/daily.log",
+            }, f)
         profiles = dp.list_running_profiles()
         self.assertEqual(len(profiles), 1)
         self.assertEqual(profiles[0]["name"], "Daily")
         self.assertEqual(profiles[0]["pid"], os.getpid())
+        self.assertEqual(
+            profiles[0]["log_file"],
+            "/var/log/zfsutilities/sessions/daily.log",
+        )
 
     def test_skips_stale_lock(self):
         lock_path = os.path.join(self.tmpdir, "Old.lock")
@@ -1045,17 +1089,22 @@ class TestListRunningProfiles(unittest.TestCase):
         self.assertEqual(dp.list_running_profiles(), [])
 
 
-class TestProfileConflictWarnings(unittest.TestCase):
+class TestWaitingTaskWarnings(unittest.TestCase):
 
-    def test_adds_warning_when_profiles_running(self):
+    def test_no_warning_for_running_profiles(self):
         pools = []
-        profiles = [{"name": "Daily", "pid": 1234, "started": "?"}]
-        warnings = dp._get_warnings(pools, [], 80, profiles)
-        self.assertEqual(len(warnings), 1)
-        self.assertIn("Daily", warnings[0])
-        self.assertIn("concurrent GUI operations", warnings[0])
+        warnings = dp._get_warnings(pools, [], 80, [])
+        self.assertEqual(warnings, [])
 
-    def test_no_warning_when_no_profiles_running(self):
+    def test_warning_for_waiting_task(self):
+        pools = []
+        waiting = [{"name": "Backup", "waiting_for_lock": True}]
+        warnings = dp._get_warnings(pools, [], 80, waiting)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Backup", warnings[0])
+        self.assertIn("waiting for a dataset lock", warnings[0])
+
+    def test_no_warning_when_no_tasks_waiting(self):
         pools = []
         warnings = dp._get_warnings(pools, [], 80, [])
         self.assertEqual(warnings, [])
@@ -1299,82 +1348,146 @@ class TestUpdateFixLocksButton(unittest.TestCase):
 
 
 class TestViewLogButton(unittest.TestCase):
-    """Dashboard View Log button tracks recent operations selection."""
+    """Dashboard View Log button tracks running tasks and recent operations."""
 
-    def _make_app_and_selection(self, selected_iter):
+    def _make_app(self, ops_iter=None, task_paths=None, task_log_files=None):
         app = MagicMock()
         app._view_log_button = MagicMock()
+
         ops_selection = MagicMock()
-        ops_selection.get_selected.return_value = (MagicMock(), selected_iter)
+        ops_selection.get_selected.return_value = (MagicMock(), ops_iter)
         app.dashboard_ops_view.get_selection.return_value = ops_selection
 
         tasks_selection = MagicMock()
-        tasks_selection.get_selected_rows.return_value = (MagicMock(), [])
+        task_paths = task_paths or []
+        task_log_files = task_log_files or []
+        model = MagicMock()
+        iters = []
+        for i, _path in enumerate(task_paths):
+            tree_iter = MagicMock()
+            model.get_value.side_effect = lambda _it, col, idx=i: (
+                task_log_files[idx] if col == 4 else ""
+            )
+            iters.append(tree_iter)
+
+        def get_iter(path):
+            return iters[task_paths.index(path)]
+
+        model.get_iter.side_effect = get_iter
+        tasks_selection.get_selected_rows.return_value = (model, task_paths)
         app.dashboard_tasks_view.get_selection.return_value = tasks_selection
         return app, ops_selection
 
-    def test_starts_disabled_when_no_operation_selected(self):
-        app, selection = self._make_app_and_selection(None)
+    def test_starts_disabled_when_nothing_selected(self):
+        app, _selection = self._make_app()
         dp.setup_dashboard_actions(app)
-        selection.connect.assert_called()
         app._view_log_button.set_sensitive.assert_called_with(False)
 
     def test_enables_when_operation_selected(self):
-        app, selection = self._make_app_and_selection(MagicMock())
+        app, _selection = self._make_app(ops_iter=MagicMock())
         dp.setup_dashboard_actions(app)
         app._view_log_button.set_sensitive.assert_called_with(True)
 
+    def test_enables_when_running_task_with_log_selected(self):
+        path = MagicMock()
+        app, _selection = self._make_app(
+            task_paths=[path], task_log_files=["/var/log/gui.log"]
+        )
+        dp.setup_dashboard_actions(app)
+        app._view_log_button.set_sensitive.assert_called_with(True)
+
+    def test_disabled_when_running_task_without_log_selected(self):
+        path = MagicMock()
+        app, _selection = self._make_app(
+            task_paths=[path], task_log_files=[""]
+        )
+        dp.setup_dashboard_actions(app)
+        app._view_log_button.set_sensitive.assert_called_with(False)
+
     def test_toggles_with_selection_changes(self):
-        app, selection = self._make_app_and_selection(None)
+        app, ops_selection = self._make_app()
         dp.setup_dashboard_actions(app)
         app._view_log_button.reset_mock()
 
-        selection.get_selected.return_value = (MagicMock(), MagicMock())
-        callback = selection.connect.call_args_list[0][0][1]
-        callback(selection, app)
+        ops_selection.get_selected.return_value = (MagicMock(), MagicMock())
+        callback = ops_selection.connect.call_args_list[0][0][1]
+        callback(ops_selection, app)
         app._view_log_button.set_sensitive.assert_called_once_with(True)
 
     def test_no_button_attr_does_not_crash(self):
-        app, selection = self._make_app_and_selection(None)
+        app, _selection = self._make_app()
         del app._view_log_button
         dp.setup_dashboard_actions(app)
 
 
 class TestOnDashboardViewLog(unittest.TestCase):
 
-    def _make_app(self, log_path):
+    def _make_app(self, ops_log_path, task_log_path=None):
         app = MagicMock()
-        model = MagicMock()
-        tree_iter = MagicMock()
-        model.get_value.return_value = log_path
-        selection = MagicMock()
-        selection.get_selected.return_value = (model, tree_iter)
-        app.dashboard_ops_view.get_selection.return_value = selection
-        return app, model
+
+        # Recent Operations selection
+        ops_model = MagicMock()
+        ops_iter = MagicMock()
+        ops_model.get_value.return_value = ops_log_path
+        ops_selection = MagicMock()
+        ops_selection.get_selected.return_value = (ops_model, ops_iter)
+        app.dashboard_ops_view.get_selection.return_value = ops_selection
+
+        # Running Tasks selection
+        tasks_model = MagicMock()
+        tasks_selection = MagicMock()
+        if task_log_path is not None:
+            path = MagicMock()
+            tree_iter = MagicMock()
+            tasks_model.get_iter.return_value = tree_iter
+            tasks_model.get_value.return_value = task_log_path
+            tasks_selection.get_selected_rows.return_value = (
+                tasks_model, [path]
+            )
+        else:
+            tasks_selection.get_selected_rows.return_value = (
+                tasks_model, []
+            )
+        app.dashboard_tasks_view.get_selection.return_value = tasks_selection
+        return app, ops_model, tasks_model
 
     @patch("dashboard_page.select_log_by_path", return_value=True)
-    def test_switches_to_logs_and_selects_path(self, mock_select):
-        app, model = self._make_app("/var/log/zfsutilities/sessions/test.log")
+    def test_switches_to_logs_for_running_task(self, mock_select):
+        app, _ops_model, tasks_model = self._make_app(
+            "/var/log/zfsutilities/sessions/old.log",
+            task_log_path="/var/log/zfsutilities/sessions/current.log",
+        )
         dp.on_dashboard_view_log(app)
         app.stack.set_visible_child_name.assert_called_once_with("logs")
-        tree_iter = app.dashboard_ops_view.get_selection.return_value.get_selected.return_value[1]
-        model.get_value.assert_called_once_with(tree_iter, 4)
-        mock_select.assert_called_once_with(app, "/var/log/zfsutilities/sessions/test.log")
+        mock_select.assert_called_once_with(
+            app, "/var/log/zfsutilities/sessions/current.log"
+        )
+
+    @patch("dashboard_page.select_log_by_path", return_value=True)
+    def test_falls_back_to_recent_operation(self, mock_select):
+        app, _ops_model, _tasks_model = self._make_app(
+            "/var/log/zfsutilities/sessions/recent.log"
+        )
+        dp.on_dashboard_view_log(app)
+        app.stack.set_visible_child_name.assert_called_once_with("logs")
+        mock_select.assert_called_once_with(
+            app, "/var/log/zfsutilities/sessions/recent.log"
+        )
 
     @patch("dashboard_page.select_log_by_path")
     def test_warns_when_no_selection(self, mock_select):
-        app, _model = self._make_app("")
+        app, _ops_model, _tasks_model = self._make_app("")
         app.dashboard_ops_view.get_selection.return_value.get_selected.return_value = (
             MagicMock(), None,
         )
         with capture_logs() as logs:
             dp.on_dashboard_view_log(app)
-        self.assertTrue(any("No recent operation selected" in msg for msg in logs))
+        self.assertTrue(any("No task or recent operation selected" in msg for msg in logs))
         mock_select.assert_not_called()
 
     @patch("dashboard_page.select_log_by_path")
     def test_warns_when_no_log_file(self, mock_select):
-        app, _model = self._make_app("")
+        app, _ops_model, _tasks_model = self._make_app("")
         with capture_logs() as logs:
             dp.on_dashboard_view_log(app)
         self.assertTrue(any("No log file recorded" in msg for msg in logs))
@@ -1382,7 +1495,7 @@ class TestOnDashboardViewLog(unittest.TestCase):
 
     @patch("dashboard_page.select_log_by_path", return_value=False)
     def test_warns_when_log_not_found(self, mock_select):
-        app, _model = self._make_app("/missing.log")
+        app, _ops_model, _tasks_model = self._make_app("/missing.log")
         with capture_logs() as logs:
             dp.on_dashboard_view_log(app)
         self.assertTrue(any("Log entry not found" in msg for msg in logs))
@@ -1516,10 +1629,17 @@ class TestCancelSelectedButton(unittest.TestCase):
         app._cancel_selected_button = MagicMock()
         tasks_selection = MagicMock()
         model = MagicMock()
-        task_keys = task_keys if task_keys is not None else [""] * len(pathlist)
+        task_keys = list(task_keys) if task_keys is not None else [""] * len(pathlist)
 
         model.get_iter.return_value = MagicMock()
-        model.get_value.side_effect = task_keys
+
+        def get_value(_iter, col):
+            # Column 3 is the task_key; column 4 is the hidden log_file.
+            if col == 3:
+                return task_keys.pop(0)
+            return ""
+
+        model.get_value.side_effect = get_value
         tasks_selection.get_selected_rows.return_value = (model, pathlist)
         app.dashboard_tasks_view.get_selection.return_value = tasks_selection
 
@@ -1550,7 +1670,9 @@ class TestCancelSelectedButton(unittest.TestCase):
         # Simulate a selection-change callback with a task selected
         path = MagicMock()
         model = selection.get_selected_rows.return_value[0]
-        model.get_value.side_effect = ["runner:backup_runner"]
+        model.get_value.side_effect = lambda _iter, col: (
+            "runner:backup_runner" if col == 3 else ""
+        )
         selection.get_selected_rows.return_value = (model, [path])
         callback = selection.connect.call_args[0][1]
         callback(selection, app)
@@ -1622,12 +1744,13 @@ class TestGetHostZfsVersion(unittest.TestCase):
 class TestRefreshConfigSection(unittest.TestCase):
     """_refresh_config_section() populates the Configuration card grid."""
 
-    def _run_refresh(self, cfg, versions, zfs_versions):
+    def _run_refresh(self, cfg, versions, zfs_versions, os_infos=None):
         """Call _refresh_config_section with mocked dependencies.
 
         Returns the app mock and the mock Gtk object so callers can inspect
         the labels that were created.
         """
+        os_infos = os_infos or {}
         with mock_gtk() as gtk_mock:
             gtk_mock.Label.side_effect = lambda *args, **kwargs: MagicMock()
             with patch.object(dp, "Gtk", gtk_mock):
@@ -1640,9 +1763,14 @@ class TestRefreshConfigSection(unittest.TestCase):
                             "_get_host_zfs_version",
                             side_effect=zfs_versions.get,
                         ):
-                            app = MagicMock()
-                            app.dashboard_config_grid = MagicMock()
-                            dp._refresh_config_section(app)
+                            with patch.object(
+                                dp,
+                                "_get_host_os_info",
+                                side_effect=os_infos.get,
+                            ):
+                                app = MagicMock()
+                                app.dashboard_config_grid = MagicMock()
+                                dp._refresh_config_section(app)
         return app, gtk_mock
 
     def _find_label_with_text(self, gtk_mock, text):
@@ -1663,6 +1791,7 @@ class TestRefreshConfigSection(unittest.TestCase):
             cfg,
             versions={"myhost": "1.2.3"},
             zfs_versions={"myhost": "zfs-2.2.2"},
+            os_infos={"myhost": ("Debian GNU/Linux", "12 (bookworm)")},
         )
         # The grid attach method should have been called for the ZFS value.
         self.assertTrue(self._find_label_with_text(gtk_mock, "zfs-2.2.2"))
@@ -1681,6 +1810,11 @@ class TestRefreshConfigSection(unittest.TestCase):
                 "host-a": "zfs-2.2.2",
                 "host-b": "zfs-2.2.3",
                 "host-c": "zfs-2.2.4",
+            },
+            os_infos={
+                "host-a": ("Debian GNU/Linux", "12 (bookworm)"),
+                "host-b": ("Debian GNU/Linux", "12 (bookworm)"),
+                "host-c": ("Debian GNU/Linux", "12 (bookworm)"),
             },
         )
         expected = (
@@ -1704,6 +1838,10 @@ class TestRefreshConfigSection(unittest.TestCase):
             cfg,
             versions={"host-a": "1.0", "host-b": "1.0"},
             zfs_versions={"host-a": "zfs-2.2.2", "host-b": "zfs-2.2.3"},
+            os_infos={
+                "host-a": ("Debian GNU/Linux", "12 (bookworm)"),
+                "host-b": ("Debian GNU/Linux", "12 (bookworm)"),
+            },
         )
         expected = (
             "host-a (this,storage):\n"
@@ -1712,6 +1850,207 @@ class TestRefreshConfigSection(unittest.TestCase):
             "zfs-2.2.3"
         )
         self.assertTrue(self._find_label_with_text(gtk_mock, expected))
+
+    def test_single_node_shows_local_os_info(self):
+        cfg = {
+            "mode": "single-node",
+            "this_host": "myhost",
+            "storage_host": "",
+            "compute_host": "",
+        }
+        _app, gtk_mock = self._run_refresh(
+            cfg,
+            versions={"myhost": "1.2.3"},
+            zfs_versions={"myhost": "zfs-2.2.2"},
+            os_infos={"myhost": ("Debian GNU/Linux", "13 (trixie)")},
+        )
+        self.assertTrue(
+            self._find_label_with_text(gtk_mock, "Debian GNU/Linux")
+        )
+        self.assertTrue(self._find_label_with_text(gtk_mock, "13 (trixie)"))
+
+    def test_two_node_shows_os_info_per_unique_host(self):
+        cfg = {
+            "mode": "two-node",
+            "this_host": "host-a",
+            "storage_host": "host-b",
+            "compute_host": "host-c",
+        }
+        _app, gtk_mock = self._run_refresh(
+            cfg,
+            versions={"host-a": "1.0", "host-b": "1.0", "host-c": "1.0"},
+            zfs_versions={
+                "host-a": "zfs-2.2.2",
+                "host-b": "zfs-2.2.3",
+                "host-c": "zfs-2.2.4",
+            },
+            os_infos={
+                "host-a": ("Proxmox VE", "8.2.4"),
+                "host-b": ("Debian GNU/Linux", "12 (bookworm)"),
+                "host-c": ("Linux Mint", "22 (Wilma)"),
+            },
+        )
+        expected_name = (
+            "host-a (this):\n"
+            "Proxmox VE\n\n"
+            "host-b (storage):\n"
+            "Debian GNU/Linux\n\n"
+            "host-c (compute):\n"
+            "Linux Mint"
+        )
+        expected_version = (
+            "host-a (this):\n"
+            "8.2.4\n\n"
+            "host-b (storage):\n"
+            "12 (bookworm)\n\n"
+            "host-c (compute):\n"
+            "22 (Wilma)"
+        )
+        self.assertTrue(
+            self._find_label_with_text(gtk_mock, expected_name)
+        )
+        self.assertTrue(
+            self._find_label_with_text(gtk_mock, expected_version)
+        )
+
+    def test_two_node_deduplicates_same_host_across_roles_for_os(self):
+        cfg = {
+            "mode": "two-node",
+            "this_host": "host-a",
+            "storage_host": "host-a",
+            "compute_host": "host-b",
+        }
+        _app, gtk_mock = self._run_refresh(
+            cfg,
+            versions={"host-a": "1.0", "host-b": "1.0"},
+            zfs_versions={"host-a": "zfs-2.2.2", "host-b": "zfs-2.2.3"},
+            os_infos={
+                "host-a": ("Proxmox VE", "8.2.4"),
+                "host-b": ("Debian GNU/Linux", "12 (bookworm)"),
+            },
+        )
+        expected_name = (
+            "host-a (this,storage):\n"
+            "Proxmox VE\n\n"
+            "host-b (compute):\n"
+            "Debian GNU/Linux"
+        )
+        expected_version = (
+            "host-a (this,storage):\n"
+            "8.2.4\n\n"
+            "host-b (compute):\n"
+            "12 (bookworm)"
+        )
+        self.assertTrue(
+            self._find_label_with_text(gtk_mock, expected_name)
+        )
+        self.assertTrue(
+            self._find_label_with_text(gtk_mock, expected_version)
+        )
+
+
+class TestGetHostOsInfo(unittest.TestCase):
+    """_get_host_os_info() detects OS name and version per host."""
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    @patch("subprocess.run")
+    def test_local_proxmox_detected_via_pveversion(self, mock_run, _mock_local):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "pve-manager/8.2.4/2a4a85a15c2b3986\n"
+        name, version = dp._get_host_os_info("myhost")
+        self.assertEqual(name, "Proxmox VE")
+        self.assertEqual(version, "8.2.4")
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    @patch("subprocess.run")
+    def test_local_debian_from_os_release(self, mock_run, _mock_local):
+        def side_effect(cmd, **kwargs):
+            result = MagicMock()
+            if cmd[:2] == ["cat", "/etc/os-release"]:
+                result.returncode = 0
+                result.stdout = (
+                    'PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\n'
+                    'NAME="Debian GNU/Linux"\n'
+                    'VERSION_ID="13"\n'
+                    'VERSION="13 (trixie)"\n'
+                    "ID=debian\n"
+                )
+            else:
+                result.returncode = 127
+                result.stdout = ""
+            return result
+
+        mock_run.side_effect = side_effect
+        name, version = dp._get_host_os_info("myhost")
+        self.assertEqual(name, "Debian GNU/Linux")
+        self.assertEqual(version, "13 (trixie)")
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    @patch("subprocess.run")
+    def test_local_linux_mint_from_os_release(self, mock_run, _mock_local):
+        def side_effect(cmd, **kwargs):
+            result = MagicMock()
+            if cmd[:2] == ["cat", "/etc/os-release"]:
+                result.returncode = 0
+                result.stdout = (
+                    'NAME="Linux Mint"\n'
+                    'VERSION="22 (Wilma)"\n'
+                    'ID=linuxmint\n'
+                    'ID_LIKE="ubuntu debian"\n'
+                )
+            else:
+                result.returncode = 127
+                result.stdout = ""
+            return result
+
+        mock_run.side_effect = side_effect
+        name, version = dp._get_host_os_info("myhost")
+        self.assertEqual(name, "Linux Mint")
+        self.assertEqual(version, "22 (Wilma)")
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    @patch("subprocess.run")
+    def test_remote_proxmox_detected_via_ssh(self, mock_run, _mock_local):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "pve-manager/8.1.0/abcdef1234567890\n"
+        name, version = dp._get_host_os_info("remote1")
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args[:3], ["ssh", "root@remote1", "pveversion"])
+        self.assertEqual(name, "Proxmox VE")
+        self.assertEqual(version, "8.1.0")
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    @patch("subprocess.run")
+    def test_inxi_fallback_parses_distro(self, mock_run, _mock_local):
+        def side_effect(cmd, **kwargs):
+            result = MagicMock()
+            if cmd[:2] == ["cat", "/etc/os-release"]:
+                result.returncode = 1
+                result.stdout = ""
+            elif cmd[:2] == ["inxi", "-S"]:
+                result.returncode = 0
+                result.stdout = (
+                    "System:\n"
+                    "  Host: myhost Kernel: 6.8.0 x86_64 bits: 64\n"
+                    "  Desktop: Cinnamon 6.2 Distro: Linux Mint 22 Wilma\n"
+                )
+            else:
+                result.returncode = 127
+                result.stdout = ""
+            return result
+
+        mock_run.side_effect = side_effect
+        name, version = dp._get_host_os_info("myhost")
+        self.assertEqual(name, "Linux Mint")
+        self.assertEqual(version, "22 Wilma")
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    @patch("subprocess.run", side_effect=OSError("command not found"))
+    def test_returns_unknown_on_failure(self, mock_run, _mock_local):
+        name, version = dp._get_host_os_info("myhost")
+        self.assertEqual(name, "unknown")
+        self.assertEqual(version, "unknown")
 
 
 class TestFixIscsiButton(unittest.TestCase):

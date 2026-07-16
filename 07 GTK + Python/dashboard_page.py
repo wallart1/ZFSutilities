@@ -163,6 +163,7 @@ def list_running_profiles():
             "name": name,
             "pid": data.get("pid"),
             "started": data.get("started", "?"),
+            "log_file": data.get("log_file"),
         })
     return profiles
 
@@ -176,6 +177,19 @@ def _run_cmd(cmd, timeout=5):
         return result.stdout.strip()
     except (subprocess.TimeoutExpired, OSError):
         return None
+
+
+def _log_file_from_pid_environ(pid):
+    """Return ZFSUTILITIES_LOG_FILE from a process's environment, or None."""
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            data = f.read()
+    except (OSError, FileNotFoundError):
+        return None
+    for item in data.split(b"\0"):
+        if item.startswith(b"ZFSUTILITIES_LOG_FILE="):
+            return item.split(b"=", 1)[1].decode("utf-8", errors="replace")
+    return None
 
 
 def _get_cached_or_fresh(app, attr_name, fresh_value):
@@ -396,6 +410,137 @@ def _get_host_zfs_version(host):
     except (OSError, subprocess.TimeoutExpired):
         pass
     return "unknown"
+
+
+def _parse_pve_version(output):
+    """Parse ``pveversion`` output into a version string.
+
+    Input like ``pve-manager/8.2.4/2a4a85a15c2b3986`` returns ``8.2.4``.
+    Returns None if the output is not recognised.
+    """
+    parts = output.strip().split("/")
+    if len(parts) >= 2 and parts[0] == "pve-manager":
+        return parts[1]
+    return None
+
+
+def _parse_os_release(content):
+    """Parse /etc/os-release content into (name, version) tuple."""
+    name = None
+    version = None
+    for line in content.splitlines():
+        line = line.strip()
+        if line.startswith("NAME="):
+            name = line[5:].strip('"')
+        elif line.startswith("VERSION="):
+            version = line[8:].strip('"')
+    return name, version
+
+
+def _parse_inxi_distro(output):
+    """Parse ``inxi -S`` output and return the Distro string, or None."""
+    for line in output.splitlines():
+        if "Distro:" in line:
+            return line.split("Distro:", 1)[1].strip()
+    return None
+
+
+def _get_host_os_info(host):
+    """Return (os_name, os_version) for the given host.
+
+    Detection order:
+      1. Proxmox VE (``pveversion``), because /etc/os-release on Proxmox
+         hosts can report the underlying Debian base.
+      2. /etc/os-release NAME/VERSION (accurate for Mint, Ubuntu, etc.).
+      3. ``inxi -S`` Distro line as a last resort.
+
+    For the local host commands are run directly; for remote hosts they are
+    run over ``ssh root@host``.  Returns ("unknown", "unknown") if the OS
+    cannot be determined.
+    """
+    local_host = _local_hostname()
+    is_local = host == local_host
+
+    # 1. Proxmox VE specific detection.
+    pve_cmd = ["pveversion"] if is_local else ["ssh", f"root@{host}", "pveversion"]
+    try:
+        result = subprocess.run(
+            pve_cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            pve_version = _parse_pve_version(result.stdout)
+            if pve_version:
+                return ("Proxmox VE", pve_version)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    # 2. Standard /etc/os-release.
+    os_cmd = ["cat", "/etc/os-release"] if is_local else ["ssh", f"root@{host}", "cat /etc/os-release"]
+    try:
+        result = subprocess.run(
+            os_cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            name, version = _parse_os_release(result.stdout)
+            if name:
+                return (name, version or "unknown")
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    # 3. Fallback to inxi -S (tool used by Linux Mint System Information).
+    inxi_cmd = ["inxi", "-S"] if is_local else ["ssh", f"root@{host}", "inxi -S"]
+    try:
+        result = subprocess.run(
+            inxi_cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            distro = _parse_inxi_distro(result.stdout)
+            if distro:
+                # Attempt to split "Distro Name version" into name/version.
+                match = re.match(r"^(.*?)\s+(\d[\w\s\.\(\)-]*)$", distro)
+                if match:
+                    return (match.group(1).strip(), match.group(2).strip())
+                return (distro, "unknown")
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    return ("unknown", "unknown")
+
+
+def _get_host_role_list(cfg):
+    """Return a list of (host, [roles]) tuples for the configured hosts.
+
+    In two-node mode a single host may occupy multiple roles (e.g., this
+    host is also the storage host).  This function deduplicates those hosts
+    and collects the roles each host occupies.
+    """
+    host_roles = []
+    seen = set()
+    for role, host in (
+        ("this", cfg["this_host"]),
+        ("storage", cfg["storage_host"]),
+        ("compute", cfg["compute_host"]),
+    ):
+        if not host:
+            continue
+        if host in seen:
+            for entry in host_roles:
+                if entry[0] == host:
+                    entry[1].append(role)
+                    break
+        else:
+            seen.add(host)
+            host_roles.append((host, [role]))
+    return host_roles
 
 
 def _is_two_node():
@@ -676,14 +821,15 @@ def _cleanup_stale_locks():
     return removed
 
 
-def _get_warnings(pools, recent_history, threshold, running_profiles=None):
+def _get_warnings(pools, recent_history, threshold, waiting_tasks=None):
     """Compile warning strings from all sources.
 
     Args:
         pools: List of pool dicts from _get_pool_health().
         recent_history: Dict from _get_recent_history().
         threshold: Low-space warning threshold (int 0-100).
-        running_profiles: Optional list of running profile dicts.
+        waiting_tasks: Optional list of task dicts that are waiting for a
+            dataset lock.
 
     Returns a list of human-readable warning strings.
     """
@@ -705,11 +851,10 @@ def _get_warnings(pools, recent_history, threshold, running_profiles=None):
                 f'Pool "{p["name"]}" has ZFS errors: {summary}'
             )
 
-    if running_profiles:
-        for profile in running_profiles:
+    if waiting_tasks:
+        for task in waiting_tasks:
             warnings.append(
-                f"Profile '{profile['name']}' is running; concurrent GUI "
-                "operations may wait for dataset locks"
+                f"'{task['name']}' is waiting for a dataset lock"
             )
 
     return warnings
@@ -816,7 +961,8 @@ def create_dashboard_page(app):
 
     # --- Section 3: Running Tasks ---
     app.dashboard_proc_frame = _make_section_frame("Running Tasks")
-    app.dashboard_tasks_store = Gtk.ListStore(str, str, str, str)
+    # Columns: task, type, status, task_key (hidden), log_file (hidden)
+    app.dashboard_tasks_store = Gtk.ListStore(str, str, str, str, str)
     app.dashboard_tasks_view = Gtk.TreeView(model=app.dashboard_tasks_store)
     app.dashboard_tasks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.dashboard_tasks_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
@@ -951,10 +1097,11 @@ def refresh_dashboard_page(app):
     from scrub_manager import get_all_pool_scrub_states
     scrub_states = get_all_pool_scrub_states()
 
-    running_profiles = list_running_profiles()
+    tasks = _collect_running_tasks(app)
+    waiting_tasks = [t for t in tasks if t.get("waiting_for_lock")]
 
     # Build warnings: live checks + startup-style checks
-    warnings = _get_warnings(pools, recent, threshold, running_profiles)
+    warnings = _get_warnings(pools, recent, threshold, waiting_tasks)
     if not app.config.get("backup", {}).get("pull_steps") and not app.config.get("backup", {}).get("send_receive_steps"):
         warnings.append("No backup steps configured — configure in the Backup tab")
     if not app.config.get("offsite", {}).get("steps"):
@@ -972,7 +1119,7 @@ def refresh_dashboard_page(app):
     _refresh_ops_section(app, recent)
     _refresh_iscsi_section(app, missing_luns, stale=iscsi_stale)
     _refresh_warnings_section(app, warnings)
-    _refresh_processes_section(app)
+    _refresh_processes_section(app, tasks=tasks)
 
     # Update the contextual "Fix Locks" button visibility
     _update_fix_locks_button(app, stale_count)
@@ -1032,6 +1179,57 @@ def _refresh_config_section(app):
         app.dashboard_config_grid.attach(val, 1, row, 1, 1)
         row += 1
 
+    # Gather OS info once per host to avoid duplicate SSH calls.
+    if cfg["mode"] == "two-node":
+        os_info_map = {
+            host: _get_host_os_info(host)
+            for host, _roles in _get_host_role_list(cfg)
+        }
+    else:
+        os_info_map = {cfg["this_host"]: _get_host_os_info(cfg["this_host"])}
+
+    # Operating system(s)
+    os_lbl = Gtk.Label()
+    os_lbl.set_markup("<b>Operating system(s):</b>")
+    os_lbl.set_halign(Gtk.Align.START)
+    app.dashboard_config_grid.attach(os_lbl, 0, row, 1, 1)
+
+    if cfg["mode"] == "two-node":
+        os_name_parts = []
+        for host, roles in _get_host_role_list(cfg):
+            os_name, _ = os_info_map[host]
+            header = f"{host} ({','.join(roles)}):"
+            os_name_parts.append(f"{header}\n{os_name}")
+        os_name_text = "\n\n".join(os_name_parts)
+    else:
+        os_name_text, _ = os_info_map[cfg["this_host"]]
+
+    os_name_val = Gtk.Label(label=os_name_text)
+    os_name_val.set_halign(Gtk.Align.START)
+    app.dashboard_config_grid.attach(os_name_val, 1, row, 1, 1)
+    row += 1
+
+    # OS version(s)
+    os_ver_lbl = Gtk.Label()
+    os_ver_lbl.set_markup("<b>OS version(s):</b>")
+    os_ver_lbl.set_halign(Gtk.Align.START)
+    app.dashboard_config_grid.attach(os_ver_lbl, 0, row, 1, 1)
+
+    if cfg["mode"] == "two-node":
+        os_ver_parts = []
+        for host, roles in _get_host_role_list(cfg):
+            _, os_version = os_info_map[host]
+            header = f"{host} ({','.join(roles)}):"
+            os_ver_parts.append(f"{header}\n{os_version}")
+        os_ver_text = "\n\n".join(os_ver_parts)
+    else:
+        _, os_ver_text = os_info_map[cfg["this_host"]]
+
+    os_ver_val = Gtk.Label(label=os_ver_text)
+    os_ver_val.set_halign(Gtk.Align.START)
+    app.dashboard_config_grid.attach(os_ver_val, 1, row, 1, 1)
+    row += 1
+
     # Versions
     ver_lbl = Gtk.Label()
     ver_lbl.set_markup("<b>Version(s):</b>")
@@ -1058,32 +1256,10 @@ def _refresh_config_section(app):
     app.dashboard_config_grid.attach(zfs_lbl, 0, row, 1, 1)
 
     if cfg["mode"] == "two-node":
-        # Map each unique host to the roles it occupies.
-        host_roles = []
-        seen = set()
-        for role, host in (
-            ("this", cfg["this_host"]),
-            ("storage", cfg["storage_host"]),
-            ("compute", cfg["compute_host"]),
-        ):
-            if not host:
-                continue
-            if host in seen:
-                for entry in host_roles:
-                    if entry[0] == host:
-                        entry[1].append(role)
-                        break
-            else:
-                seen.add(host)
-                host_roles.append((host, [role]))
-
         zfs_parts = []
-        for host, roles in host_roles:
+        for host, roles in _get_host_role_list(cfg):
             zfs_out = _get_host_zfs_version(host)
-            if len(roles) == 1:
-                header = f"{host} ({roles[0]}):"
-            else:
-                header = f"{host} ({','.join(roles)}):"
+            header = f"{host} ({','.join(roles)}):"
             zfs_parts.append(f"{header}\n{zfs_out}")
         zfs_text = "\n\n".join(zfs_parts)
     else:
@@ -1315,12 +1491,20 @@ def _collect_running_tasks(app):
             total = len(runner.steps)
             if runner._finally_step:
                 total += 1
-            step_text = f"Step {runner.current_step + 1}/{total}" if total > 0 else "Running"
+            if getattr(runner, "_in_lock_wait", False) is True:
+                status = "Waiting for dataset lock"
+                waiting_for_lock = True
+            else:
+                step_text = f"Step {runner.current_step + 1}/{total}" if total > 0 else "Running"
+                status = step_text
+                waiting_for_lock = False
             tasks.append({
                 "name": label,
                 "type": "GUI",
-                "status": step_text,
+                "status": status,
                 "task_key": f"runner:{runner_name}",
+                "log_file": getattr(runner, "_session_log_file", None),
+                "waiting_for_lock": waiting_for_lock,
             })
 
     # 2. Active scrubs
@@ -1356,6 +1540,7 @@ def _collect_running_tasks(app):
             "type": "Profile",
             "status": status,
             "task_key": f"profile:{profile['name']}",
+            "log_file": profile.get("log_file"),
         })
 
     # 4. Legacy scheduled tasks (profile_runner.py processes not yet using locks)
@@ -1392,6 +1577,7 @@ def _collect_running_tasks(app):
                     "type": "Scheduled",
                     "status": f"PID {pid}",
                     "task_key": f"scheduled:{pid}",
+                    "log_file": _log_file_from_pid_environ(int(pid)),
                 })
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         pass
@@ -1399,11 +1585,12 @@ def _collect_running_tasks(app):
     return tasks
 
 
-def _refresh_processes_section(app):
+def _refresh_processes_section(app, tasks=None):
     """Clear and repopulate the Running Tasks list."""
     app.dashboard_tasks_store.clear()
 
-    tasks = _collect_running_tasks(app)
+    if tasks is None:
+        tasks = _collect_running_tasks(app)
     if not tasks:
         app.dashboard_tasks_store.append(["No running tasks", "", "", ""])
         return
@@ -1414,6 +1601,7 @@ def _refresh_processes_section(app):
             t["type"],
             t["status"],
             t["task_key"],
+            t.get("log_file", ""),
         ])
 
 
@@ -1512,16 +1700,16 @@ def on_dashboard_cancel_selected(app):
 def _on_dashboard_tasks_selection_changed(selection, app):
     """Enable or disable Cancel Selected Tasks based on selection."""
     button = getattr(app, "_cancel_selected_button", None)
-    if button is None:
-        return
-    model, pathlist = selection.get_selected_rows()
-    enable = False
-    for path in pathlist:
-        tree_iter = model.get_iter(path)
-        if model.get_value(tree_iter, 3):
-            enable = True
-            break
-    button.set_sensitive(enable)
+    if button is not None:
+        model, pathlist = selection.get_selected_rows()
+        enable = False
+        for path in pathlist:
+            tree_iter = model.get_iter(path)
+            if model.get_value(tree_iter, 3):
+                enable = True
+                break
+        button.set_sensitive(enable)
+    _update_view_log_button_state(app)
 
 
 def _update_view_log_button(app, enabled):
@@ -1531,24 +1719,62 @@ def _update_view_log_button(app, enabled):
         button.set_sensitive(enabled)
 
 
+def _update_view_log_button_state(app):
+    """Enable View Log if a task or recent operation with a log is selected."""
+    enabled = False
+
+    # Running Tasks view supports multiple selection; enable if any selected
+    # row has a non-empty log_file (column 4).
+    tasks_selection = app.dashboard_tasks_view.get_selection()
+    model, pathlist = tasks_selection.get_selected_rows()
+    for path in pathlist:
+        tree_iter = model.get_iter(path)
+        log_file = model.get_value(tree_iter, 4)
+        if log_file:
+            enabled = True
+            break
+
+    if not enabled:
+        ops_selection = app.dashboard_ops_view.get_selection()
+        model, tree_iter = ops_selection.get_selected()
+        enabled = tree_iter is not None
+
+    _update_view_log_button(app, enabled)
+
+
 def _on_dashboard_ops_selection_changed(selection, app):
-    """Enable or disable View Log based on Recent Operations selection."""
-    model, tree_iter = selection.get_selected()
-    _update_view_log_button(app, tree_iter is not None)
+    """Enable or disable View Log based on selection changes."""
+    _update_view_log_button_state(app)
 
 
 def on_dashboard_view_log(app):
-    """Switch to the Logs tab and select the log for the selected operation."""
-    selection = app.dashboard_ops_view.get_selection()
-    model, tree_iter = selection.get_selected()
-    if tree_iter is None:
-        log_msg("WARN: No recent operation selected")
-        return
+    """Switch to the Logs tab and select the log for the selected task/op.
 
-    log_path = model.get_value(tree_iter, 4)
+    Prefers a selected Running Tasks row that has a log_file; falls back to
+    the selected Recent Operations row.
+    """
+    log_path = None
+
+    # Prefer Running Tasks selection (supports multiple rows).
+    tasks_selection = app.dashboard_tasks_view.get_selection()
+    model, pathlist = tasks_selection.get_selected_rows()
+    for path in pathlist:
+        tree_iter = model.get_iter(path)
+        candidate = model.get_value(tree_iter, 4)
+        if candidate:
+            log_path = candidate
+            break
+
     if not log_path:
-        log_msg("WARN: No log file recorded for the selected operation")
-        return
+        selection = app.dashboard_ops_view.get_selection()
+        model, tree_iter = selection.get_selected()
+        if tree_iter is None:
+            log_msg("WARN: No task or recent operation selected")
+            return
+        log_path = model.get_value(tree_iter, 4)
+        if not log_path:
+            log_msg("WARN: No log file recorded for the selected operation")
+            return
 
     app.stack.set_visible_child_name("logs")
     if not select_log_by_path(app, log_path):

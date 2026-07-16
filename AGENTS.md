@@ -593,6 +593,13 @@ log_msg("DEBUG: variable =", value)
 
 ---
 
+## Recent Session Notes (2026-07-16)
+
+- Removed the obsolete `08 Two-node/install-scripts` script. It was already
+  marked deprecated and superseded by `10 Installers/install-two-node`, but it
+  was still being deployed by `deploy-version` and referenced by
+  `two-node-lib.sh`. Updated those references to point to the current installer.
+
 ## Recent Session Notes (2026-07-15)
 
 - Renamed `retire-vm` to `archive-vm` and `unretire-vm` to `unarchive-vm` to

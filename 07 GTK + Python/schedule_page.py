@@ -4,6 +4,7 @@ Schedule tab UI — lists profiles, manages cron parameters, and keeps
 """
 
 import os
+import re
 import subprocess
 import sys
 
@@ -27,6 +28,7 @@ from cron_manager import (
 )
 from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
 from path_utils import get_profile_runner_path, is_deployed_layout
+from backup_runner import _PV_RATE_RE
 
 COL_ACTIVE = 0
 COL_NAME = 1
@@ -34,6 +36,32 @@ COL_TYPE = 2
 COL_SCHEDULE = 3
 COL_NEXT_RUN = 4
 COL_NEXT_RUN_SORT = 5
+
+
+def _interactive_runner_active(app):
+    """Return True if any interactive GUI runner is currently running."""
+    for name in (
+        "backup_runner", "offsite_runner", "restore_runner",
+        "retention_runner", "dataset_runner",
+    ):
+        runner = getattr(app, name, None)
+        if runner is not None and getattr(runner, "running", False) is True:
+            return True
+    return False
+
+
+def _update_profile_status(app, profile_name, line):
+    """Update the global status label with a pv progress line.
+
+    Only lines that contain a pv rate field (e.g. ``[28.1MiB/s]``) update
+    the status label.  A percentage value is extracted when present so the
+    progress fraction reflects actual completion.
+    """
+    if not _PV_RATE_RE.search(line):
+        return
+    match = re.search(r"(\d+)%", line)
+    fraction = int(match.group(1)) / 100.0 if match else 0.0
+    app._update_progress(fraction, f"[{profile_name}] {line}")
 
 
 def create_schedule_page(app):
@@ -190,11 +218,13 @@ def create_schedule_page(app):
     app.schedule_summary_textview.set_bottom_margin(5)
     enable_textview_copy(app.schedule_summary_textview)
 
-    sum_scroll = Gtk.ScrolledWindow()
-    sum_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    sum_scroll.set_min_content_height(180)
-    sum_scroll.add(app.schedule_summary_textview)
-    sum_exp.add(sum_scroll)
+    app.schedule_summary_scrolled = Gtk.ScrolledWindow()
+    app.schedule_summary_scrolled.set_policy(
+        Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC
+    )
+    app.schedule_summary_scrolled.set_min_content_height(180)
+    app.schedule_summary_scrolled.add(app.schedule_summary_textview)
+    sum_exp.add(app.schedule_summary_scrolled)
     app.schedule_detail_box.pack_start(sum_exp, False, False, 0)
 
     _refresh_profile_list(app)
@@ -472,7 +502,19 @@ def _on_selection_changed(selection, app):
         cron_line = generate_cron_line(profile, runner_path)
         if cron_line:
             summary = f"Crontab entry:\n{cron_line}\n\n{summary}"
-    app.schedule_summary_textview.get_buffer().set_text(summary, -1)
+
+    buffer = app.schedule_summary_textview.get_buffer()
+    start_iter = buffer.get_start_iter()
+    end_iter = buffer.get_end_iter()
+    existing_summary = buffer.get_text(start_iter, end_iter, False)
+
+    if existing_summary == summary:
+        vadj = app.schedule_summary_scrolled.get_vadjustment()
+        scroll_pos = vadj.get_value()
+        buffer.set_text(summary, -1)
+        vadj.set_value(scroll_pos)
+    else:
+        buffer.set_text(summary, -1)
 
     app.schedule_detail_box.set_no_show_all(False)
     app.schedule_detail_box.show_all()
@@ -559,6 +601,7 @@ def _log_profile_line(fd, condition, app, profile_name, prefix):
             if data:
                 for line in data.decode("utf-8", errors="replace").splitlines():
                     log_msg(f"{prefix}{line}")
+                    _update_profile_status(app, profile_name, line)
                 return True
         except OSError:
             pass
@@ -575,6 +618,9 @@ def _on_profile_finished(pid, status, user_data):
     running = getattr(app, "_running_profiles", None)
     if running is not None:
         running.discard(profile_name)
+    if running is not None and not running \
+            and not _interactive_runner_active(app):
+        app._update_progress(None, "")
     log_msg(f"INFO: Profile finished: {profile_name}")
     app.update_action_buttons("schedule")
 
@@ -596,6 +642,8 @@ def _run_profile_now(app, profile_name):
 
     if not hasattr(app, "_running_profiles"):
         app._running_profiles = set()
+    if not app._running_profiles:
+        app._update_progress(0.0, f"Running profile: {profile_name}")
     app._running_profiles.add(profile_name)
     app.update_action_buttons("schedule")
 

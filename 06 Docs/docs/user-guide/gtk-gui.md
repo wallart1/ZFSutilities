@@ -1016,7 +1016,13 @@ search highlights, and resets the warning/error indicator.
 
 Job progress is shown as text in the log stream. Each running step logs its
 description, and `zfs receive` summary lines report bytes transferred. A
-status label below the log view displays the current step and progress text.
+status label below the log view displays the current step and progress text,
+including `pv` progress lines for interactive runs and for profiles started
+with **Run Now** from the Schedule tab.
+
+In the [Logs tab](#logs-tab), the log viewer also has its own status label.
+When you select a **Running** log, the viewer shows the latest `pv` progress
+line for that specific task.
 
 ### Warning and error indicator
 

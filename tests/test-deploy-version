@@ -314,7 +314,7 @@ _test_two_node_symlink_logic() {
         safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns
         iscsi-restore-luns repair-iscsi-luns
         unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys
-        install-scripts enroll-efi-keys-vm
+        enroll-efi-keys-vm
     )
     mkdir -p "$version_dir/bin"
     mkdir -p "$version_dir/08 Two-node"

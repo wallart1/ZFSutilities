@@ -133,7 +133,7 @@ TWO_NODE_SCRIPTS=(
     safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns
     iscsi-restore-luns repair-iscsi-luns
     unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys
-    install-scripts enroll-efi-keys-vm
+    enroll-efi-keys-vm
 )
 
 CLONE_SCRIPTS=(zfsclone-vm promote-vm-clone archive-vm unarchive-vm remove-vm)

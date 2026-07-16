@@ -777,5 +777,118 @@ class TestCreateLogsPage(unittest.TestCase):
             widget.show_all.assert_called_once()
 
 
+class TestLogViewerStatusLabel(unittest.TestCase):
+    """Verify the log viewer status label shows pv progress for running logs."""
+
+    def _make_app(self, path, file_size, read_offset):
+        app = MagicMock()
+        app._logs_current_path = path
+        app._logs_file_size = file_size
+        app._logs_read_offset = read_offset
+        app.logs_viewer_level = "DEBUG"
+        app._logs_tail_timer = None
+        app._log_index = None
+        app.logs_short_prefix = True
+        buf = MagicMock()
+        buf.get_char_count.return_value = 0
+        app.logs_text.get_buffer.return_value = buf
+        vadj = MagicMock()
+        vadj.get_value.return_value = 0
+        vadj.get_upper.return_value = 100
+        vadj.get_page_size.return_value = 20
+        app.logs_text_scroll.get_vadjustment.return_value = vadj
+        return app
+
+    def test_tail_updates_status_label_with_last_pv_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "running.log")
+            with open(path, "w") as fh:
+                fh.write("INFO: starting\n")
+                fh.write("0:00:01 [10MiB/s] [=> ] 10% ETA 0:00:10\n")
+            app = self._make_app(path, 0, 0)
+
+            result = lp._tail_log_file(app)
+
+            self.assertTrue(result)
+            app.logs_status_label.set_text.assert_called_with(
+                "0:00:01 [10MiB/s] [=> ] 10% ETA 0:00:10"
+            )
+            app.logs_status_label.show.assert_called_once()
+
+    def test_tail_hides_status_label_on_end(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "done.log")
+            with open(path, "w") as fh:
+                fh.write("0:00:01 [10MiB/s] 10% ETA 0:00:10\n")
+                fh.write("# END: rc=0, duration=1.0s\n")
+            app = self._make_app(path, 0, 0)
+
+            with patch("logs_page._sync_log_list"):
+                result = lp._tail_log_file(app)
+
+            self.assertFalse(result)
+            app.logs_status_label.set_text.assert_called_with("")
+            app.logs_status_label.hide.assert_called_once()
+
+    def test_selection_changed_shows_status_for_running_log(self):
+        app = MagicMock()
+        app._logs_current_path = None
+        app._logs_tail_timer = None
+        app.logs_search.entry.get_text.return_value = ""
+        buf = MagicMock()
+        buf.get_text.return_value = "0:00:01 [10MiB/s] 10% ETA\n"
+        app.logs_text.get_buffer.return_value = buf
+        selection = MagicMock()
+        model = MagicMock()
+        tree_iter = MagicMock()
+        model.get_iter.return_value = tree_iter
+
+        def get_value(it, col):
+            if col == lp.COL_PATH:
+                return "/tmp/running.log"
+            if col == lp.COL_STATUS:
+                return "Running"
+            return None
+
+        model.get_value.side_effect = get_value
+        selection.get_selected_rows.return_value = (model, [MagicMock()])
+
+        with patch("logs_page._load_log_into_viewer"):
+            lp._on_selection_changed(selection, app)
+
+        app.logs_status_label.set_text.assert_called_with(
+            "0:00:01 [10MiB/s] 10% ETA"
+        )
+        app.logs_status_label.show.assert_called_once()
+
+    def test_selection_changed_hides_status_for_finished_log(self):
+        app = MagicMock()
+        app._logs_current_path = None
+        app._logs_tail_timer = None
+        app.logs_search.entry.get_text.return_value = ""
+        buf = MagicMock()
+        app.logs_text.get_buffer.return_value = buf
+        selection = MagicMock()
+        model = MagicMock()
+        tree_iter = MagicMock()
+        model.get_iter.return_value = tree_iter
+
+        def get_value(it, col):
+            if col == lp.COL_PATH:
+                return "/tmp/done.log"
+            if col == lp.COL_STATUS:
+                return "Done"
+            return None
+
+        model.get_value.side_effect = get_value
+        selection.get_selected_rows.return_value = (model, [MagicMock()])
+
+        with patch("logs_page._load_log_into_viewer"):
+            lp._on_selection_changed(selection, app)
+
+        app.logs_status_label.set_text.assert_called_with("")
+        app.logs_status_label.hide.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

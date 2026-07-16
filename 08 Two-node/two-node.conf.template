@@ -11,8 +11,8 @@
 #   - the iSCSI target is recreated under a different IQN prefix
 #   - a new ZFS pool is added to the iSCSI target
 #
-# This file is installed by 08 Two-node/install-scripts from
-# two-node.conf.template if it does not already exist. install-scripts
+# This file is installed by 10 Installers/install-two-node from
+# two-node.conf.template if it does not already exist. The installer
 # never overwrites an existing /etc/two-node.conf.
 
 # --- Hosts (short hostnames as returned by `hostname -s`) ---

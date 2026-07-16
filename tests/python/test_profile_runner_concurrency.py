@@ -59,6 +59,19 @@ class TestProfileLockHelpers(unittest.TestCase):
         finally:
             profile_runner.release_profile_lock(fd, lock_path)
 
+    def test_lock_file_records_log_file(self):
+        fd, lock_path = profile_runner.acquire_profile_lock(
+            "daily", timeout=0.5, log_file="/var/log/test.log"
+        )
+        self.assertIsNotNone(fd)
+        try:
+            with open(lock_path) as f:
+                import json
+                data = json.load(f)
+            self.assertEqual(data["log_file"], "/var/log/test.log")
+        finally:
+            profile_runner.release_profile_lock(fd, lock_path)
+
     def test_release_none_is_safe(self):
         profile_runner.release_profile_lock(None, "/nonexistent/lock")
 

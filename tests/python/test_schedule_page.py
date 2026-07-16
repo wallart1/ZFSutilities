@@ -444,7 +444,100 @@ class TestConfigSummary(unittest.TestCase):
         schedule_page.create_schedule_page(app)
 
         self.assertTrue(hasattr(app, "schedule_summary_textview"))
+        self.assertTrue(hasattr(app, "schedule_summary_scrolled"))
         mock_enable_copy.assert_called_once_with(app.schedule_summary_textview)
+
+
+class TestConfigSummaryScroll(unittest.TestCase):
+    """Verify the Config Summary scroll position is preserved on refresh."""
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+            return schedule_page
+
+    def _make_app(self, rows, existing_summary="", scroll_pos=0.0):
+        app = MagicMock()
+        app.schedule_store = FakeScheduleStore(rows)
+        app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
+            app.schedule_store, [FakeTreePath(0)],
+        )
+        app._schedule_save_button = MagicMock()
+        app._schedule_pending = {}
+        app._schedule_ignore_changes = False
+        app.schedule_cron_entries = {
+            "minute": MagicMock(),
+            "hour": MagicMock(),
+            "day": MagicMock(),
+            "month": MagicMock(),
+            "weekday": MagicMock(),
+        }
+
+        buffer = MagicMock()
+        buffer.get_text.return_value = existing_summary
+        app.schedule_summary_textview.get_buffer.return_value = buffer
+
+        vadj = MagicMock()
+        vadj.get_value.return_value = scroll_pos
+        scrolled = MagicMock()
+        scrolled.get_vadjustment.return_value = vadj
+        app.schedule_summary_scrolled = scrolled
+
+        return app
+
+    def _profile(self, name, active=False, config=None, dry_run=False):
+        return {
+            "profile_name": name,
+            "active": active,
+            "tab_type": "backup",
+            "cron": {},
+            "config": config if config is not None else {"source": "tank/src"},
+            "dry_run": dry_run,
+        }
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_refresh_preserves_summary_scroll_position(self, _mock_red):
+        """Reselecting the same profile must keep the prior scroll offset."""
+        schedule_page = self._import_schedule_page()
+        saved_profile = self._profile("p1")
+        full_summary = (
+            f"Dry run: No\n\n{json.dumps(saved_profile['config'], indent=2)}"
+        )
+        app = self._make_app(
+            rows=[[True, "p1", "backup", "* * * * *", "next", ""]],
+            existing_summary=full_summary,
+            scroll_pos=75.0,
+        )
+        selection = MagicMock()
+        selection.get_selected_rows.return_value = (app.schedule_store, [FakeTreePath(0)])
+
+        with patch("schedule_page.load_profile", return_value=saved_profile):
+            schedule_page._on_selection_changed(selection, app)
+
+        vadj = app.schedule_summary_scrolled.get_vadjustment()
+        vadj.get_value.assert_called_once()
+        vadj.set_value.assert_called_once_with(75.0)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_profile_change_resets_summary_scroll_position(self, _mock_red):
+        """Switching to a different profile must not restore the old offset."""
+        schedule_page = self._import_schedule_page()
+        old_summary = "Dry run: No\n\n{}"
+        new_profile = self._profile("p2", config={"source": "other/src"})
+        app = self._make_app(
+            rows=[[True, "p2", "backup", "* * * * *", "next", ""]],
+            existing_summary=old_summary,
+            scroll_pos=75.0,
+        )
+        selection = MagicMock()
+        selection.get_selected_rows.return_value = (app.schedule_store, [FakeTreePath(0)])
+
+        with patch("schedule_page.load_profile", return_value=new_profile):
+            schedule_page._on_selection_changed(selection, app)
+
+        vadj = app.schedule_summary_scrolled.get_vadjustment()
+        vadj.get_value.assert_not_called()
+        vadj.set_value.assert_not_called()
 
 
 class TestSchedulePageWidgets(unittest.TestCase):
@@ -921,6 +1014,75 @@ class TestRunNow(unittest.TestCase):
             "expected at most 4 positional arguments",
             fatal_calls[0][0][0],
         )
+
+    @patch("schedule_page.set_button_markup_red")
+    @patch("schedule_page.os.set_blocking")
+    @patch("schedule_page.GLib.io_add_watch")
+    @patch("schedule_page.GLib.child_watch_add")
+    def test_run_now_shows_status_label(self, _mock_child_watch,
+                                        _mock_io_add_watch,
+                                        _mock_set_blocking, _mock_red):
+        """The global status label appears when the first profile starts."""
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        app = self._make_app(rows, [0])
+        process = self._make_popen()
+
+        with patch("schedule_page.subprocess.Popen", return_value=process), \
+             patch("schedule_page._resolve_profile_runner_path",
+                   return_value="/fake/profile_runner.py"):
+            schedule_page.on_schedule_run_now(app)
+
+        app._update_progress.assert_called_with(0.0, "Running profile: p1")
+
+    @patch("schedule_page.set_button_markup_red")
+    @patch("schedule_page.os.set_blocking")
+    def test_run_now_pv_line_updates_status_label(self, _mock_set_blocking,
+                                                  _mock_red):
+        """A pv progress line from the profile updates the status label."""
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        app = self._make_app(rows, [0])
+        process = self._make_popen()
+        pv_line = "0:00:05 [28.1MiB/s] [===> ] 20% ETA 0:00:20"
+
+        with patch("schedule_page.subprocess.Popen", return_value=process), \
+             patch("schedule_page._resolve_profile_runner_path",
+                   return_value="/fake/profile_runner.py"), \
+             patch("schedule_page.os.read",
+                   return_value=(pv_line + "\n").encode()):
+            schedule_page.on_schedule_run_now(app)
+            callback = schedule_page._log_profile_line
+            callback(process.stdout.fileno(),
+                     schedule_page.GLib.IOCondition.IN,
+                     app, "p1", "[p1] ")
+
+        app._update_progress.assert_any_call(0.2, f"[p1] {pv_line}")
+
+    @patch("schedule_page.log_msg")
+    def test_on_profile_finished_hides_status_label(self, mock_log):
+        """The status label is hidden when the last profile finishes."""
+        schedule_page = self._import_schedule_page()
+        app = self._make_app([], [])
+        app._running_profiles.add("p1")
+        process = MagicMock()
+
+        schedule_page._on_profile_finished(12345, 0, (app, "p1", process))
+
+        self.assertNotIn("p1", app._running_profiles)
+        app._update_progress.assert_called_with(None, "")
+
+    def test_on_profile_finished_leaves_label_when_runner_active(self):
+        """Do not hide the status label if an interactive runner is active."""
+        schedule_page = self._import_schedule_page()
+        app = self._make_app([], [])
+        app._running_profiles.add("p1")
+        app.backup_runner.running = True
+        process = MagicMock()
+
+        schedule_page._on_profile_finished(12345, 0, (app, "p1", process))
+
+        app._update_progress.assert_not_called()
 
 
 class TestScheduleDelete(unittest.TestCase):
