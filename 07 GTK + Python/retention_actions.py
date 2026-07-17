@@ -2,6 +2,7 @@
 Retention tab action handlers — extracted from retention_page.py.
 """
 
+import shlex
 import subprocess
 
 import gi
@@ -209,6 +210,93 @@ def on_retention_prune(app, ctx):
 
     runner.set_steps(steps)
     runner.start(on_complete=_on_prune_complete)
+    if hasattr(app, 'update_action_buttons'):
+        app.update_action_buttons("retention")
+
+
+def on_retention_mass_delete(app, ctx):
+    """Mass-delete snapshots across selected prune pools."""
+    app.clear_log_status()
+    if not hasattr(app, '_ret_prune_view'):
+        log_msg("WARN: Retention page not initialized")
+        return
+    selection = app._ret_prune_view.get_selection()
+    model, paths = selection.get_selected_rows()
+    if not paths:
+        log_msg("WARN: Select one or more pools in the Prune list")
+        return
+
+    label = app._ret_prune_label_entry.get_text().strip()
+    if not label:
+        _show_error(app, "Please enter a snapshot label for the mass delete operation.")
+        return
+
+    selected = {model[p][0] for p in paths}
+    # Walk the model in visual order so execution order matches the list.
+    pools = [row[0] for row in model if row[0] in selected]
+
+    runner = getattr(app, 'retention_runner', None)
+    if runner is None:
+        log_msg("WARN: Retention runner not available")
+        return
+    if runner.running:
+        log_msg("WARN: A retention operation is already running")
+        return
+
+    dryrun = getattr(app, '_dry_run_active', False)
+
+    widgets = app._ret_mass_delete_widgets
+    includes = widgets["includes"].get_text().strip()
+    excludes = widgets["excludes"].get_text().strip()
+    startwith = widgets["startwith"].get_text().strip()
+    endwith = widgets["endwith"].get_text().strip()
+    snapshot_has = widgets["snapshot_has"].get_text().strip()
+    releaseholds = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
+    ignore = "Y" if app._ret_ignore_retention_check.get_active() else "N"
+
+    var_assignments = f'{_dryrun_assignments(dryrun)}'
+    var_assignments += f'ignore_retention_policies="{ignore}"; '
+    var_assignments += f'releaseholds="{releaseholds}"; '
+    var_assignments += f'snapshot_label="{label}"; '
+    var_assignments += f'snapshot_has="{snapshot_has}"; '
+    if includes:
+        items = shlex.split(includes)
+        arr = " ".join(f'"{i}"' for i in items)
+        var_assignments += f'includes=({arr}); '
+    else:
+        var_assignments += 'includes=(); '
+    if excludes:
+        items = shlex.split(excludes)
+        arr = " ".join(f'"{i}"' for i in items)
+        var_assignments += f'excludes=({arr}); '
+    else:
+        var_assignments += 'excludes=(); '
+    if startwith:
+        var_assignments += f'startwith="{startwith}"; '
+    if endwith:
+        var_assignments += f'endwith="{endwith}"; '
+
+    pool_list = " ".join(shlex.quote(p) for p in pools)
+    bash_cmd = (
+        f'source ~/bashinit; bashinit; mydir="{ctx.parent_dir}"; '
+        f'source "$mydir/zfsmassdelsnaps"; '
+        f'{var_assignments}'
+        f'mass_delete_snapshots {pool_list}'
+    )
+
+    step = BashStep(
+        ["bash", "-c", bash_cmd],
+        f"Mass Delete ({', '.join(pools)})",
+        is_rsync=False,
+        fatal=False,
+    )
+
+    def _on_mass_delete_complete(cancelled=False):
+        if hasattr(app, 'update_action_buttons'):
+            app.update_action_buttons("retention")
+
+    runner.set_steps([step])
+    runner.start(on_complete=_on_mass_delete_complete)
     if hasattr(app, 'update_action_buttons'):
         app.update_action_buttons("retention")
 

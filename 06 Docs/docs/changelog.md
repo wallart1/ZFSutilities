@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.62.0
+
+### Added
+
+- **Mass Delete snapshots from the Retention tab** — A new **Mass Delete**
+  toolbar button on the Retention tab deletes snapshots across selected pools
+  in bulk. Two modes are supported:
+  - *Respect retention policies* (default) — runs `zfscleanup` for each selected
+    pool and deletes only the snapshots the retention policy would prune.
+  - *Ignore retention policies* — deletes every matching snapshot regardless of
+    retention counts, `minage`, or `zfscheckagainst` safety checks.
+- **`zfsmassdelsnaps` command** — New bash script that implements the mass-delete
+  logic. It can be invoked directly from the command line or through the GUI.
+  It supports dataset filters (`includes`, `excludes`, `startwith`, `endwith`),
+  a snapshot-name substring filter, dry-run mode, and optional hold release.
+- **Mass Delete settings persistence** — The Retention tab's Mass Delete card
+  settings are saved in the JSON config under `retention_mass_delete`.
+- **Prune label and pool-order persistence** — The global prune snapshot label
+  (`prune_label`) and the order of pools in the Prune list
+  (`prune_pools_order`) are now persisted in the JSON config.
+
+### Changed
+
+- **Retention tab action handlers refactored** — Prune and Mass Delete actions
+  moved from `retention_page.py` to the new `retention_actions.py` module to
+  keep page construction and action logic separate.
+
+### Documentation
+
+- Added the [`zfsmassdelsnaps`](commands-and-modules/commands.md#zfsmassdelsnaps)
+  section to the command reference.
+- Added a **Mass Delete** section to the [Retention Policies](user-guide/retention.md)
+  user guide.
+- Updated the [Retention Tab](user-guide/gtk-gui.md#retention-tab) GUI reference
+  with the **Mass Delete** button and card documentation.
+- Documented `prune_label`, `prune_pools_order`, and `retention_mass_delete` in
+  the [JSON config reference](developer-guide/data-structures.md).
+- Added `get_retention_mass_delete_config()` / `save_retention_mass_delete_config()`
+  and `on_retention_mass_delete()` to the Python modules reference.
+
+### Tests
+
+- Added `tests/test-zfsmassdelsnaps` covering ignore mode, respect mode, dry run,
+  user approval, and `releaseholds` forwarding.
+- Added `TestOnRetentionMassDelete` in `tests/python/test_retention_actions.py`.
+- Expanded `tests/python/test_retention_page.py` with tests for Mass Delete
+  widget creation, dirty detection, and config save/load.
+
 ## 0.61.1
 
 *Released 2026-07-16*

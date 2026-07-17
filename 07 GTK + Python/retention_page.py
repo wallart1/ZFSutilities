@@ -20,14 +20,22 @@ from feature_config import (
     save_prune_label,
     get_prune_pools_order,
     save_prune_pools_order,
+    get_retention_mass_delete_config,
+    save_retention_mass_delete_config,
     import_legacy_retention,
     DEFAULT_RETENTION,
+    MASS_DELETE_DEFAULTS,
 )
 from gui_helpers import (
     set_button_markup_red,
     configure_treeview_column, ACTIVE_COLUMN_WIDTH,
     handle_editing_key_press,
+    add_var_row, bold_label,
 )
+from backup_page import _frame_grid
+
+# Mass-delete dataset criteria shown in the Advanced expander
+MASS_DELETE_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
 
 # Human-readable bucket labels
 BUCKET_LABELS = {
@@ -283,6 +291,76 @@ def create_retention_page(app, ctx):
     label_box.pack_start(app._ret_prune_label_entry, False, False, 0)
     outer.pack_start(label_box, False, False, 0)
 
+    # ── Advanced: Mass Delete ─────────────────────────────────────────────────
+    advanced_exp = Gtk.Expander()
+    advanced_exp.set_label_widget(bold_label("Advanced"))
+    advanced_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+    advanced_box.set_margin_start(10)
+    advanced_box.set_margin_end(10)
+    advanced_box.set_margin_top(5)
+    advanced_box.set_margin_bottom(5)
+    advanced_exp.add(advanced_box)
+    outer.pack_start(advanced_exp, False, False, 0)
+
+    danger_frame = Gtk.Frame()
+    danger_label = Gtk.Label()
+    danger_label.set_markup(
+        "<span color='red'><b>Snapshot Mass Delete - Danger Zone</b></span>"
+    )
+    danger_label.set_halign(Gtk.Align.START)
+    danger_frame.set_label_widget(danger_label)
+    app._ret_danger_label = danger_label
+    advanced_box.pack_start(danger_frame, False, False, 0)
+
+    danger_grid = Gtk.Grid()
+    danger_grid.set_row_spacing(5)
+    danger_grid.set_column_spacing(10)
+    danger_grid.set_margin_start(10)
+    danger_grid.set_margin_end(10)
+    danger_grid.set_margin_top(5)
+    danger_grid.set_margin_bottom(5)
+    danger_frame.add(danger_grid)
+
+    mass_delete_cfg = get_retention_mass_delete_config(ctx.config)
+    variables = {
+        key: mass_delete_cfg.get(key, MASS_DELETE_DEFAULTS[key])
+        for key in MASS_DELETE_DEFAULTS
+    }
+    app._ret_mass_delete_widgets = {}
+    app._ret_mass_delete_original = dict(variables)
+
+    row = 0
+    for key in MASS_DELETE_VARIABLES:
+        add_var_row(
+            danger_grid, row, key, variables, app._ret_mass_delete_widgets,
+            yn_vars={"releaseholds"},
+        )
+        row += 1
+    for key in ("snapshot_has", "releaseholds"):
+        add_var_row(
+            danger_grid, row, key, variables, app._ret_mass_delete_widgets,
+            yn_vars={"releaseholds"},
+        )
+        row += 1
+
+    # Connect change handlers so dirty detection updates live.
+    for key in list(MASS_DELETE_VARIABLES) + ["snapshot_has", "releaseholds"]:
+        widget = app._ret_mass_delete_widgets[key]
+        widget.connect("changed", lambda *_a: _update_ret_status(app))
+
+    ignore_check = Gtk.CheckButton(label="Ignore retention policies")
+    ignore_check.set_active(variables["ignore_retention_policies"])
+    ignore_check.connect("toggled", lambda *_a: _update_ret_status(app))
+    app._ret_ignore_retention_check = ignore_check
+    advanced_box.pack_start(ignore_check, False, False, 0)
+
+    reminder = Gtk.Label(
+        label="Results and approval request will appear in the log area."
+    )
+    reminder.set_halign(Gtk.Align.START)
+    reminder.set_line_wrap(True)
+    advanced_box.pack_start(reminder, False, False, 0)
+
     # ── Wire up pool selector ─────────────────────────────────────────────────
     combo.connect("changed", _on_pool_changed, app)
     app._ret_combo = combo
@@ -372,6 +450,27 @@ def _store_to_buckets(app):
     return buckets
 
 
+def _mass_delete_is_dirty(app):
+    """Return True if any mass-delete widget differs from the saved config."""
+    widgets = getattr(app, '_ret_mass_delete_widgets', None)
+    orig = getattr(app, '_ret_mass_delete_original', None)
+    if not isinstance(widgets, dict) or not isinstance(orig, dict):
+        return False
+    for key in MASS_DELETE_VARIABLES:
+        if widgets[key].get_text().strip() != orig.get(key, ""):
+            return True
+    if widgets["snapshot_has"].get_text().strip() != orig.get("snapshot_has", ""):
+        return True
+    release_val = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
+    if release_val != orig.get("releaseholds", "N"):
+        return True
+    ignore_check = getattr(app, '_ret_ignore_retention_check', None)
+    if ignore_check is not None \
+            and ignore_check.get_active() != orig.get("ignore_retention_policies", False):
+        return True
+    return False
+
+
 def _is_dirty(app):
     if app._ret_prune_label_entry.get_text().strip() != app._ret_original_prune_label:
         return True
@@ -381,6 +480,8 @@ def _is_dirty(app):
     for pool, pending in app._ret_pending.items():
         if pending != app._ret_original.get(pool, []):
             return True
+    if _mass_delete_is_dirty(app):
+        return True
     return False
 
 
@@ -528,6 +629,26 @@ def _on_ret_save(btn, app, ctx):
         return
     app._ret_original_prune_label = label
 
+    # Save mass-delete settings if they have changed.
+    widgets = getattr(app, '_ret_mass_delete_widgets', None)
+    if isinstance(widgets, dict):
+        mass_delete_data = {}
+        for key in MASS_DELETE_VARIABLES:
+            mass_delete_data[key] = widgets[key].get_text().strip()
+        mass_delete_data["snapshot_has"] = widgets["snapshot_has"].get_text().strip()
+        mass_delete_data["releaseholds"] = \
+            "Y" if widgets["releaseholds"].get_active() == 0 else "N"
+        ignore_check = getattr(app, '_ret_ignore_retention_check', None)
+        mass_delete_data["ignore_retention_policies"] = \
+            ignore_check.get_active() if ignore_check is not None else False
+        if mass_delete_data != app._ret_mass_delete_original:
+            try:
+                save_retention_mass_delete_config(ctx.config, mass_delete_data)
+            except OSError as e:
+                _show_error(app, f"Failed to save mass delete settings:\n{e}")
+                return
+            app._ret_mass_delete_original = dict(mass_delete_data)
+
     if saved_pools:
         if len(saved_pools) == 1:
             log_msg(f"INFO: Retention policy saved for pool: {saved_pools[0]}")
@@ -545,6 +666,20 @@ def _on_ret_revert(btn, app, ctx):
     # have persisted across the whole page.
     app._ret_pending.clear()
     _load_pool_into_store(app, ctx, app._ret_pool)
+
+    # Revert mass-delete widgets to the last saved values.
+    widgets = getattr(app, '_ret_mass_delete_widgets', None)
+    orig = getattr(app, '_ret_mass_delete_original', None)
+    if isinstance(widgets, dict) and isinstance(orig, dict):
+        for key in MASS_DELETE_VARIABLES:
+            widgets[key].set_text(orig.get(key, ""))
+        widgets["snapshot_has"].set_text(orig.get("snapshot_has", ""))
+        widgets["releaseholds"].set_active(
+            0 if orig.get("releaseholds", "N") == "Y" else 1
+        )
+        ignore_check = getattr(app, '_ret_ignore_retention_check', None)
+        if ignore_check is not None:
+            ignore_check.set_active(orig.get("ignore_retention_policies", False))
 
 
 def _show_error(app, msg):

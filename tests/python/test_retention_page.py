@@ -858,5 +858,152 @@ class TestTabNavigationWiring(unittest.TestCase):
             self.assertEqual(conn_args[5], [2, 3])
 
 
+class TestRetentionPageMassDelete(unittest.TestCase):
+    """Verify the Advanced mass-delete card and its config handling."""
+
+    def _fresh_module(self):
+        _clear_cached_modules("retention_page")
+        with mock_gtk():
+            import retention_page as rp
+            return rp
+
+    def _make_app(self, rp, config):
+        app = MagicMock()
+        app.ctx = AppContext(
+            config=config,
+            script_dir="",
+            parent_dir=os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__))
+            ),
+            version="dev",
+        )
+        return app
+
+    def test_mass_delete_widgets_created(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+            app = self._make_app(rp, {"retention": {"default": []}})
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            self.assertIsInstance(app._ret_mass_delete_widgets, dict)
+            for key in rp.MASS_DELETE_VARIABLES + ["snapshot_has", "releaseholds"]:
+                self.assertIn(key, app._ret_mass_delete_widgets)
+            self.assertIsNotNone(app._ret_ignore_retention_check)
+
+    def test_danger_frame_label_uses_red_markup(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+            app = self._make_app(rp, {"retention": {"default": []}})
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            label = app._ret_danger_label
+            markups = [c[0][0] for c in label.set_markup.call_args_list]
+            expected = (
+                "<span color='red'><b>Snapshot Mass Delete - Danger Zone</b></span>"
+            )
+            self.assertIn(expected, markups)
+
+    def test_loads_saved_mass_delete_config(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+            app = self._make_app(rp, {
+                "retention": {"default": []},
+                "retention_mass_delete": {
+                    "includes": "proxmox",
+                    "excludes": "temp",
+                    "snapshot_has": "weekly",
+                    "releaseholds": "Y",
+                    "ignore_retention_policies": True,
+                },
+            })
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            self.assertEqual(app._ret_mass_delete_original["includes"], "proxmox")
+            self.assertEqual(app._ret_mass_delete_original["excludes"], "temp")
+            self.assertEqual(app._ret_mass_delete_original["snapshot_has"], "weekly")
+            self.assertEqual(app._ret_mass_delete_original["releaseholds"], "Y")
+            self.assertTrue(
+                app._ret_mass_delete_original["ignore_retention_policies"]
+            )
+
+    def test_mass_delete_dirty_detection(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            app = MagicMock()
+            app._ret_prune_label_entry = _FakeEntry("dailybackup")
+            app._ret_original_prune_label = "dailybackup"
+            app._ret_store = _FakeStore([
+                ["d", "Daily", 3, 0],
+            ])
+            app._ret_original = {"default": [
+                {"name": "d", "retain": 3, "minage": 0},
+            ]}
+            app._ret_pool = "default"
+            app._ret_status_label = _FakeLabel()
+            app._ret_save_button = None
+            app._ret_pending = {}
+            app._ret_mass_delete_widgets = {
+                key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES
+            }
+            app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")
+            app._ret_mass_delete_widgets["releaseholds"] = MagicMock()
+            app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 1
+            app._ret_mass_delete_original = rp.MASS_DELETE_DEFAULTS.copy()
+            app._ret_ignore_retention_check = MagicMock()
+            app._ret_ignore_retention_check.get_active.return_value = False
+
+            self.assertFalse(rp._is_dirty(app))
+            app._ret_mass_delete_widgets["snapshot_has"].set_text("weekly")
+            self.assertTrue(rp._is_dirty(app))
+
+    def test_save_persists_mass_delete_config(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            config = {"retention": {"default": []}}
+            app = MagicMock()
+            app.ctx = AppContext(
+                config=config,
+                script_dir="",
+                parent_dir="",
+                version="dev",
+            )
+            app._ret_prune_label_entry = _FakeEntry("dailybackup")
+            app._ret_original_prune_label = "dailybackup"
+            app._ret_store = _FakeStore([])
+            app._ret_original = {"default": []}
+            app._ret_pool = "default"
+            app._ret_pending = {}
+            app._ret_mass_delete_widgets = {
+                key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES
+            }
+            app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("old")
+            app._ret_mass_delete_widgets["releaseholds"] = MagicMock()
+            app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 1
+            app._ret_mass_delete_original = rp.MASS_DELETE_DEFAULTS.copy()
+            app._ret_ignore_retention_check = MagicMock()
+            app._ret_ignore_retention_check.get_active.return_value = False
+
+            app._ret_mass_delete_widgets["snapshot_has"].set_text("weekly")
+            with patch.object(rp, "_update_ret_status"):
+                rp._on_ret_save(None, app, app.ctx)
+
+            self.assertEqual(
+                config["retention_mass_delete"]["snapshot_has"], "weekly"
+            )
+            self.assertFalse(rp._is_dirty(app))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,174 @@
+#!/usr/bin/bash
+# Mass-delete snapshots across selected pools.
+#
+# This script is invoked from the Retention page when the user clicks the
+# "Mass Delete" toolbar button.  It supports two modes:
+#   * Ignore retention policies - list all matching snapshots and delete them.
+#   * Respect retention policies - run zfscleanup in dry-run, parse the
+#     candidate list, ask for approval, then run zfscleanup for real.
+#
+# Globals consumed:
+#   snapshot_label            Snapshot label to match (e.g. "dailybackup").
+#   includes[]                Optional dataset include filters.
+#   excludes[]                Optional dataset exclude filters.
+#   startwith                 Optional dataset start-with filter.
+#   endwith                   Optional dataset end-with filter.
+#   snapshot_has              Optional substring that must appear in the full
+#                             snapshot name.
+#   ignore_retention_policies "Y" to bypass retention policies, "N" to respect.
+#   releaseholds              "Y" to release holds in ignore mode, "N" otherwise.
+#   dryrun                    "Y" to list only, "N" to delete.
+#
+# Positional arguments:
+#   One or more pool names to process.
+#
+# Returns:
+#   0 on success or cancellation, 8 on fatal error.
+
+source ~/bashinit
+bashinit
+: "${ZFSUTILITIES_LOG_FILE:=}"
+
+function mass_delete_snapshots {
+    source "$mydir/rootcheck"
+    rootcheck
+    source "$mydir/zfsbuildfsarray"
+    source "$mydir/zfsdelsnap"
+    source "$mydir/zfscleanup"
+
+    local pools=("$@")
+    if [[ ${#pools[@]} -eq 0 ]]; then
+        log_msg "FATAL: At least one pool must be specified."
+        return 8
+    fi
+
+    if [[ -z "${snapshot_label:-}" ]]; then
+        log_msg "FATAL: A snapshot label must be specified."
+        return 8
+    fi
+
+    if [[ "${ignore_retention_policies:-N}" == "Y" ]]; then
+        _mass_delete_ignore_retention "${pools[@]}"
+    else
+        _mass_delete_respect_retention "${pools[@]}"
+    fi
+}
+
+function _mass_delete_ignore_retention {
+    local pool fs snap
+    local all_snaps=()
+    for pool in "$@"; do
+        sourcefs="$pool"
+        buildfsarray "$pool"
+        for fs in "${fsarray[@]}"; do
+            while IFS= read -r snap; do
+                [[ -z "$snap" ]] && continue
+                if [[ -n "${snapshot_has:-}" && "$snap" != *"$snapshot_has"* ]]; then
+                    continue
+                fi
+                all_snaps+=("$snap")
+            done < <(zfs list -Ho name -t snapshot "$fs" 2>/dev/null)
+        done
+    done
+
+    _list_and_approve "${all_snaps[@]}"
+}
+
+function _mass_delete_respect_retention {
+    local pool candidates=() line snap
+    for pool in "$@"; do
+        local preview
+        preview=$(dryrun='Y' autoproceed='Y' cleanup "$pool" "" "$snapshot_label" 2>&1)
+        # Show the preview output in the log area, then parse it below.
+        echo "$preview" >&2
+        while IFS= read -r line; do
+            if [[ "$line" == *"Would remove"* ]]; then
+                snap=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="remove"){print $(i+1); break}}')
+            elif [[ "$line" == *"Would: Remove"* ]]; then
+                snap=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="Remove"){print $(i+1); break}}')
+            else
+                continue
+            fi
+            [[ -n "$snap" ]] && candidates+=("$snap")
+        done <<< "$preview"
+    done
+
+    # Deduplicate and sort
+    mapfile -t candidates < <(printf "%s\n" "${candidates[@]}" 2>/dev/null | sort -u)
+
+    if [[ ${#candidates[@]} -eq 0 ]]; then
+        log_msg "INFO: No snapshots would be removed by retention policies."
+        return 0
+    fi
+
+    log_msg "INFO: The following ${#candidates[@]} snapshots would be removed:"
+    _print_snapshots_with_age "${candidates[@]}"
+
+    if [[ "${dryrun:-N}" == "Y" ]]; then
+        log_msg "INFO: Dry run - no snapshots were deleted."
+        return 0
+    fi
+
+    log_msg "INFO: Approve deletion of ${#candidates[@]} snapshots?"
+    log_msg "INFO: Type y in the Input box and press Enter to proceed."
+    local response
+    read -r response
+    if [[ "$response" != [yY]* ]]; then
+        log_msg "INFO: Deletion cancelled by user."
+        return 0
+    fi
+
+    local failed=0
+    for pool in "$@"; do
+        dryrun='N' autoproceed='Y' cleanup "$pool" "" "$snapshot_label" || failed=$?
+    done
+    return $failed
+}
+
+function _list_and_approve {
+    if [[ $# -eq 0 ]]; then
+        log_msg "INFO: No snapshots matched the criteria."
+        return 0
+    fi
+
+    log_msg "INFO: About to delete the following $# snapshots."
+    log_msg "INFO: This disregards holds, incremental bases, and snapshot age."
+    _print_snapshots_with_age "$@"
+
+    if [[ "${dryrun:-N}" == "Y" ]]; then
+        log_msg "INFO: Dry run - no snapshots were deleted."
+        return 0
+    fi
+
+    log_msg "INFO: Approve deletion of $# snapshots?"
+    log_msg "INFO: Type y in the Input box and press Enter to proceed."
+    local response
+    read -r response
+    if [[ "$response" != [yY]* ]]; then
+        log_msg "INFO: Deletion cancelled by user."
+        return 0
+    fi
+
+    local snap failed=0 release_arg=""
+    [[ "${releaseholds:-N}" == "Y" ]] && release_arg="releaseholds"
+    for snap in "$@"; do
+        if ! delsnap "$snap" 0 "$release_arg" 'nocheckagainst'; then
+            failed=1
+        fi
+    done
+    return $failed
+}
+
+function _print_snapshots_with_age {
+    local now snap creation age
+    now=$(date +%s)
+    for snap in "$@"; do
+        creation=$(zfs get -Hp -o value creation "$snap" 2>/dev/null || echo "$now")
+        age=$(( (now - creation) / 86400 ))
+        printf "%-60s  (%d days old)\n" "$snap" "$age"
+    done
+}
+
+if calledbybash; then
+    mass_delete_snapshots "$@"
+fi

@@ -190,6 +190,9 @@ Top-level keys:
 | `pools`                                                               | array of strings or objects          | Registered pool names. String entries are supported for backward compatibility; v14 migrates them to `{"name", "offsite_candidate"}` objects |
 | [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) | array of objects                     | fss table rows (`dataset`, `quals`, `counterpart`, `label`, optional `comment`)                                   |
 | `retention`                                                           | object keyed by pool name | Per-pool retention policy. Each value is an array of `{name, retain, minage}` entries. Key `default` is the fallback |
+| `prune_label`                                                         | string                    | Default snapshot label used by the Retention tab prune runner (default `dailybackup`)                                |
+| `prune_pools_order`                                                   | array of strings          | Persisted order of pools in the Retention tab Prune list                                                             |
+| `retention_mass_delete`                                               | object                    | Settings for the Retention tab Mass Delete card (`includes`, `excludes`, `startwith`, `endwith`, `snapshot_has`, `releaseholds`, `ignore_retention_policies`) |
 | `backup`                                                              | object                    | GUI Backup tab settings (see below)                                                                                  |
 | `offsite`                                                             | object                    | GUI Offsite tab settings                                                                                             |
 | `restore`                                                             | object                    | GUI Restore tab settings                                                                                             |
@@ -213,6 +216,9 @@ The Python config API is split across two modules:
 - `feature_config.get_offsite_config()` / `save_offsite_config()` — Offsite tab state
 - `feature_config.get_restore_config()` / `save_restore_config()` — Restore tab state
 - `feature_config.get_retention()` / `save_retention()` — per-pool retention policies
+- `feature_config.get_prune_label()` / `save_prune_label()` — retention prune label
+- `feature_config.get_prune_pools_order()` / `save_prune_pools_order()` — retention Prune list order
+- `feature_config.get_retention_mass_delete_config()` / `save_retention_mass_delete_config()` — Mass Delete card settings
 - `feature_config.get_pools()` / `save_pools()` — registered pool list
 - `feature_config.get_checkagainst()` / `save_checkagainst()` — fss table
 - `feature_config.generate_snapshot_name()` / `generate_offsite_snapshot_name()` — snapshot naming

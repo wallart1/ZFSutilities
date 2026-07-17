@@ -138,3 +138,51 @@ Deletion blocked for safety. Bring the counterpart pool(s) online to verify.
 
 For the full safety-check algorithm, see the
 [`zfscheckagainst` module reference](../commands-and-modules/modules.md#zfscheckagainst).
+
+## Mass Delete
+
+The Retention tab provides a **Mass Delete** action for deleting many snapshots
+at once outside the normal three-phase pruning flow. Select one or more pools in
+the Prune list, configure the filters in the **Mass Delete** card, and click
+**Mass Delete**.
+
+!!! warning "Mass Delete can break incremental chains"
+    When **Ignore retention policies** is enabled, snapshots are deleted without
+    consulting `zfscheckagainst`. This can remove the last common snapshot shared
+    with an offsite or backup pool and break future incremental backups. Use this
+    mode only when you are certain the snapshots are no longer needed.
+
+### Filter options
+
+| Field              | Purpose                                                                |
+| ------------------ | ---------------------------------------------------------------------- |
+| **Includes**       | Space-separated dataset name substrings to include                     |
+| **Excludes**       | Space-separated dataset name substrings to exclude                     |
+| **Start With**     | Skip datasets until this substring is seen                             |
+| **End With**       | Stop processing datasets after this substring                          |
+| **Snapshot Has**   | Only consider snapshots whose full name contains this substring        |
+| **Release Holds**  | Release ZFS holds before deleting (ignore mode only)                   |
+| **Ignore Retention Policies** | When enabled, delete all matching snapshots regardless of retention policy |
+
+### Modes
+
+- **Respect retention policies** (default) — behaves like running **Prune** for
+  each selected pool, using the configured retention policies. Dry Run shows the
+  candidates that `zfscleanup` would remove.
+- **Ignore retention policies** — lists every matching snapshot and deletes them
+  after confirmation, bypassing retention counts, `minage`, and
+  `zfscheckagainst`. This is the fastest way to free space, but it is also the
+  most destructive.
+
+### Command-line equivalent
+
+The GUI action invokes [`zfsmassdelsnaps`](../commands-and-modules/commands.md#zfsmassdelsnaps):
+
+```bash
+# Respect retention policies (default)
+sudo ./zfsmassdelsnaps fivebays
+
+# Ignore retention policies and delete all matching dailybackup snapshots
+export snapshot_label="dailybackup" ignore_retention_policies="Y"
+sudo -E ./zfsmassdelsnaps fivebays
+```

@@ -143,6 +143,10 @@ function retain {
             #   Example: "Mon May 11 12:00 2026" -> "2026-May"
             _snapym=$(echo ${snaparray[$i]} | awk '{print $6"-"$3}')
 
+            if [[ -n "${snapshot_has:-}" && "$_snapsnap" != *"$snapshot_has"* ]]; then
+                continue
+            fi
+
             _key="$_snapfs|$_snapym"
             if [[ -n "${_month_latest[$_key]}" ]]; then
                 _prev_snap="${_month_latest[$_key]}"
@@ -195,6 +199,12 @@ function retain {
         # Skip snapshots that don't match the specified label
         if [[ $snaplabel2 != ${label:1} ]]; then
             # Reset comparison values so we don't compare across label boundaries
+            snapsnap1=""; snaplabel1=""; snapfs1=""; snapbucket1=""; snapymd1=""
+            continue
+        fi
+
+        # Skip snapshots that don't contain the optional substring filter
+        if [[ -n "${snapshot_has:-}" && "$snapsnap2" != *"$snapshot_has"* ]]; then
             snapsnap1=""; snaplabel1=""; snapfs1=""; snapbucket1=""; snapymd1=""
             continue
         fi
@@ -270,6 +280,11 @@ function retain {
 
         # Get the snapshot's bucket from its name
         snapbkt=$(echo ${bktsnaparray[$k]} | awk -F'-' '{print $NF}')
+
+        # Skip snapshots that don't contain the optional substring filter
+        if [[ -n "${snapshot_has:-}" && "${bktsnaparray[$k]}" != *"$snapshot_has"* ]]; then
+            continue
+        fi
 
         # Skip clone snapshots and bucket 'c' snapshots entirely
         if [[ $snaplabel == 'clone' ]] || [[ $snapbkt == 'c' ]]; then

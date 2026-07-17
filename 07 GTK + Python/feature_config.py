@@ -244,6 +244,35 @@ def save_prune_pools_order(config, order):
     save_config(config)
 
 
+MASS_DELETE_DEFAULTS = {
+    "includes": "",
+    "excludes": "",
+    "startwith": "",
+    "endwith": "",
+    "snapshot_has": "",
+    "releaseholds": "N",
+    "ignore_retention_policies": False,
+}
+
+
+def get_retention_mass_delete_config(config):
+    """Return the Retention Mass Delete card settings, merged with defaults."""
+    defaults = _deep_copy(MASS_DELETE_DEFAULTS)
+    data = config.get("retention_mass_delete")
+    if not isinstance(data, dict):
+        data = {}
+    merged = dict(defaults)
+    merged.update(data)
+    config["retention_mass_delete"] = merged
+    return merged
+
+
+def save_retention_mass_delete_config(config, data):
+    """Persist the Retention Mass Delete card settings."""
+    config["retention_mass_delete"] = dict(data)
+    save_config(config)
+
+
 def import_legacy_retention(config, parent_dir):
     """One-time migration: scan parent_dir for zfsretainpol-* files and add
     missing pools to config['retention']. Returns list of imported pools."""

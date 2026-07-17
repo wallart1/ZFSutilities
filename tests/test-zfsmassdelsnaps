@@ -1,0 +1,253 @@
+#!/usr/bin/bash
+# test-zfsmassdelsnaps — Unit tests for snapshot mass delete.
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+mock_mydir=$(mktemp -d)
+_mock_cleanup_log="${mock_mydir}/cleanup_calls.log"
+: > "${_mock_cleanup_log}"
+mydir="$mock_mydir"
+
+cat > "$mock_mydir/rootcheck" <<'EOF'
+rootcheck() { true; }
+EOF
+
+cat > "$mock_mydir/bashreturn" <<'EOF'
+return "${1:-0}"
+EOF
+
+cat > "$mock_mydir/zfsbuildfsarray" <<'EOF'
+buildfsarray() {
+    local _pool_specific="_mock_fsarray_$1"
+    if [[ -n "${!_pool_specific+x}" ]]; then
+        eval "fsarray=(\"\${$_pool_specific[@]}\")"
+    elif [[ ${#_mock_fsarray[@]} -gt 0 ]]; then
+        fsarray=("${_mock_fsarray[@]}")
+    else
+        fsarray=("$1")
+    fi
+}
+EOF
+
+cat > "$mock_mydir/zfsdelsnap" <<'EOF'
+delsnap() {
+    _mock_delsnap_calls+=("$1|$2|$3|$4")
+    return 0
+}
+EOF
+
+cat > "$mock_mydir/zfscleanup" <<'EOF'
+cleanup() {
+    echo "$* releaseholds=${releaseholds:-N}" >> "${_mock_cleanup_log}"
+    local pool="${1:-}"
+    # Echo would-be removal lines for the respect-retention path to parse.
+    if [[ "${dryrun:-N}" == "Y" ]]; then
+        printf 'INFO: Would: Remove %s@dailybackup-2025-03-28T10:00-04:00-d --- Bucket.\n' "$pool"
+        printf 'INFO: Would: Remove %s@dailybackup-2025-03-29T10:00-04:00-d --- Bucket.\n' "$pool"
+    fi
+    return 0
+}
+EOF
+
+source "$old_mydir/zfsmassdelsnaps"
+
+reset_state() {
+    _mock_delsnap_calls=()
+    : > "${_mock_cleanup_log}"
+    _mock_fsarray=()
+    _mock_fsarray_pool1=()
+    _mock_zfs_snap_lists=()
+    _mock_zfs_props=()
+    snapshot_label=""
+    snapshot_has=""
+    includes=()
+    excludes=()
+    startwith=""
+    endwith=""
+    ignore_retention_policies="N"
+    releaseholds="N"
+    dryrun="N"
+}
+
+# -----------------------------------------------------------------------------
+# Ignore retention policies mode
+# -----------------------------------------------------------------------------
+
+test_no_matching_snapshots() {
+    echo "=== Ignore mode: no snapshots match ==="
+    reset_state
+    snapshot_label="dailybackup"
+    snapshot_has="nomatch"
+    ignore_retention_policies="Y"
+    _mock_fsarray_pool1=("pool1/fs")
+    mock_zfs_snap_list_for "pool1/fs" "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d"
+    mass_delete_snapshots pool1 >/dev/null
+    test_start "Returns 0 and deletes nothing when no snapshots match"
+    if [[ ${#_mock_delsnap_calls[@]} -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected no deletions, got: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_ignore_dryrun_lists_only() {
+    echo "=== Ignore mode: dry run lists but does not delete ==="
+    reset_state
+    snapshot_label="dailybackup"
+    snapshot_has="dailybackup"
+    ignore_retention_policies="Y"
+    dryrun="Y"
+    _mock_fsarray_pool1=("pool1/fs")
+    mock_zfs_snap_list_for "pool1/fs" \
+        $'pool1/fs@dailybackup-2025-03-28T10:00-04:00-d\npool1/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mock_zfs_prop "pool1/fs@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
+    mass_delete_snapshots pool1 >/dev/null
+    test_start "Dry run does not call delsnap"
+    if [[ ${#_mock_delsnap_calls[@]} -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected no deletions, got: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_ignore_approval_no_cancels() {
+    echo "=== Ignore mode: approval N cancels ==="
+    reset_state
+    snapshot_label="dailybackup"
+    snapshot_has="dailybackup"
+    ignore_retention_policies="Y"
+    _mock_fsarray_pool1=("pool1/fs")
+    mock_zfs_snap_list_for "pool1/fs" "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d"
+    mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mass_delete_snapshots pool1 <<< "N" >/dev/null
+    test_start "Cancelling approval does not delete snapshots"
+    if [[ ${#_mock_delsnap_calls[@]} -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected no deletions, got: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_ignore_approval_yes_deletes() {
+    echo "=== Ignore mode: approval Y deletes ==="
+    reset_state
+    snapshot_label="dailybackup"
+    snapshot_has="dailybackup"
+    ignore_retention_policies="Y"
+    releaseholds="Y"
+    _mock_fsarray_pool1=("pool1/fs")
+    mock_zfs_snap_list_for "pool1/fs" \
+        $'pool1/fs@dailybackup-2025-03-28T10:00-04:00-d\npool1/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mock_zfs_prop "pool1/fs@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
+    mass_delete_snapshots pool1 <<< "Y" >/dev/null
+    test_start "Approval deletes matching snapshots with releaseholds"
+    if [[ ${#_mock_delsnap_calls[@]} -eq 2 ]]; then
+        test_pass
+    else
+        test_fail "Expected 2 deletions, got: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_ignore_releaseholds_passed() {
+    echo "=== Ignore mode: releaseholds argument ==="
+    reset_state
+    snapshot_label="dailybackup"
+    snapshot_has="dailybackup"
+    ignore_retention_policies="Y"
+    releaseholds="Y"
+    _mock_fsarray_pool1=("pool1/fs")
+    mock_zfs_snap_list_for "pool1/fs" "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d"
+    mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mass_delete_snapshots pool1 <<< "Y" >/dev/null
+    test_start "delsnap receives releaseholds argument"
+    if [[ "${_mock_delsnap_calls[0]}" == *"|0|releaseholds|nocheckagainst"* ]]; then
+        test_pass
+    else
+        test_fail "Expected releaseholds arg, got: ${_mock_delsnap_calls[0]}"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Respect retention policies mode
+# -----------------------------------------------------------------------------
+
+test_respect_dryrun_lists_only() {
+    echo "=== Respect mode: dry run lists but does not delete ==="
+    reset_state
+    snapshot_label="dailybackup"
+    ignore_retention_policies="N"
+    dryrun="Y"
+    mock_zfs_prop "pool1@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mock_zfs_prop "pool1@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
+    mass_delete_snapshots pool1 >/dev/null
+    test_start "Dry run calls cleanup but not real deletion"
+    local cleanup_count
+    cleanup_count=$(wc -l < "${_mock_cleanup_log}")
+    if [[ "$cleanup_count" -eq 1 && ${#_mock_delsnap_calls[@]} -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Unexpected calls: cleanup=${cleanup_count} delsnap=${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_respect_parses_candidates() {
+    echo "=== Respect mode: parses candidate snapshots ==="
+    reset_state
+    snapshot_label="dailybackup"
+    ignore_retention_policies="N"
+    mock_zfs_prop "pool1@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mock_zfs_prop "pool1@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
+    mock_zfs_prop "pool2@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mock_zfs_prop "pool2@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
+    mass_delete_snapshots pool1 pool2 <<< "Y" >/dev/null
+    test_start "Calls cleanup once per pool in real mode"
+    local cleanup_count
+    cleanup_count=$(wc -l < "${_mock_cleanup_log}")
+    if [[ "$cleanup_count" -eq 4 ]]; then
+        test_pass
+    else
+        test_fail "Expected 4 cleanup calls, got: $(cat "${_mock_cleanup_log}")"
+    fi
+}
+
+test_respect_releaseholds_passed() {
+    echo "=== Respect mode: releaseholds is forwarded ==="
+    reset_state
+    snapshot_label="dailybackup"
+    ignore_retention_policies="N"
+    releaseholds="Y"
+    mock_zfs_prop "pool1@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mock_zfs_prop "pool1@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
+    mass_delete_snapshots pool1 <<< "Y" >/dev/null
+    test_start "Real cleanup runs with releaseholds=Y"
+    local first_call
+    first_call=$(head -n 1 < "${_mock_cleanup_log}")
+    if [[ "$first_call" == *"releaseholds=Y"* ]]; then
+        test_pass
+    else
+        test_fail "Unexpected cleanup call: $first_call"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Run tests
+# -----------------------------------------------------------------------------
+
+test_no_matching_snapshots
+test_ignore_dryrun_lists_only
+test_ignore_approval_no_cancels
+test_ignore_approval_yes_deletes
+test_ignore_releaseholds_passed
+test_respect_dryrun_lists_only
+test_respect_parses_candidates
+test_respect_releaseholds_passed
+
+rm -rf "$mock_mydir"
+mydir="$old_mydir"
+
+test_summary
+teardown_test_env

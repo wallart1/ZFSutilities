@@ -49,6 +49,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfslockctl`](#zfslockctl)
 - [`zfslockmanager-test`](#zfslockmanager-test)
 - [`zfsmaketest`](#zfsmaketest-archived)
+- [`zfsmassdelsnaps`](#zfsmassdelsnaps)
 - [`zfsmount`](#zfsmount)
 - [`zfsmountsnapshot`](#zfsmountsnapshot)
 - [`zfsoffsiteretain`](#zfsoffsiteretain)
@@ -1577,6 +1578,69 @@ sudo zfsmaketest
 | ---- | ------- |
 | `0` | All tests passed. |
 | non-zero | One or more tests failed. |
+
+---
+
+### `zfsmassdelsnaps`
+
+Mass-delete snapshots across one or more pools. This is the backend for the
+Retention tab's **Mass Delete** button; it can also be run directly from the
+command line.
+
+```bash
+sudo zfsmassdelsnaps <pool> [pool ...]
+```
+
+**Arguments:**
+
+| Argument | Description                |
+| -------- | -------------------------- |
+| `$1 ...` | One or more pool names     |
+
+**Globals:**
+
+| Variable                    | Role                                                                          | Reference                                                                          |
+| --------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `snapshot_label`            | Snapshot label that must match (required)                                     | —                                                                                  |
+| `includes[]`                | Optional dataset include filters                                              | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `excludes[]`                | Optional dataset exclude filters                                              | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `startwith`                 | Optional dataset start-with filter                                            | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `endwith`                   | Optional dataset end-with filter                                              | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `snapshot_has`              | Optional substring that must appear in the full snapshot name                 | —                                                                                  |
+| `ignore_retention_policies` | `'Y'` = delete all matching snapshots regardless of retention policy          | —                                                                                  |
+| `releaseholds`              | `'Y'` = release holds before deletion (ignore mode only)                      | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
+| `dryrun`                    | `'Y'` = report without deleting                                               | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
+| `autoproceed`               | `'Y'` = skip approval prompts (respected by underlying `zfscleanup` in respect mode) | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
+
+**Modes:**
+
+- **Ignore retention policies** (`ignore_retention_policies='Y'`) — Lists every
+  snapshot whose label matches `snapshot_label` and any include/exclude/startwith/endwith
+  filters, optionally filtered by `snapshot_has`. After approval, each snapshot is
+  destroyed with `zfsdelsnap ... nocheckagainst`, bypassing the usual
+  `zfscheckagainst` safety check. This mode is dangerous: it can delete the last
+  common snapshot needed for an incremental backup.
+- **Respect retention policies** (`ignore_retention_policies='N'`, the default) —
+  Runs `zfscleanup` in dry-run mode for each pool, parses the candidate list,
+  asks for approval, then runs `zfscleanup` for real. This is equivalent to a
+  normal prune, just batched across the selected pools.
+
+In both modes, **Dry Run** lists the affected snapshots without deleting them.
+
+**Called modules:**
+
+| Module | Purpose in this command |
+| ------ | ----------------------- |
+| [zfsbuildfsarray](modules.md#zfsbuildfsarray) | Build the per-pool dataset list |
+| [zfsdelsnap](modules.md#zfsdelsnap) | Delete individual snapshots in ignore mode |
+| [zfscleanup](commands.md#zfscleanup) | Apply retention policy in respect mode |
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Completed successfully, was cancelled, or no snapshots matched |
+| `8`  | Fatal error (no pool or no label specified) |
 
 ---
 

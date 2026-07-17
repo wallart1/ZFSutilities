@@ -76,6 +76,7 @@ the GUI tabs and the bash scripts.
 | `get_archive_path()` / `save_archive_path()` | Offsite archive path |
 | `get_prune_label()` / `save_prune_label()` | Global retention prune label |
 | `get_prune_pools_order()` / `save_prune_pools_order()` | Retention Prune pool order |
+| `get_retention_mass_delete_config()` / `save_retention_mass_delete_config()` | Retention tab Mass Delete card settings |
 | `get_scrub_manager_config()` / `save_scrub_manager_config()` | Scrub queue settings |
 | `load_scrub_state()` / `save_scrub_state()` | Scrub queue persistence |
 | `generate_snapshot_name()` | Generate a backup snapshot name and update the snapfile |
@@ -1089,6 +1090,7 @@ buckets, run prune, and dirty-state tracking.
 | `on_retention_add_policy()` / `on_retention_remove_policy()` | Manage per-pool policies |
 | `on_retention_add_bucket()` / `on_retention_remove_bucket()` | Manage buckets |
 | `on_retention_prune()` | Run `zfscleanup` for selected pools |
+| `on_retention_mass_delete()` | Mass-delete snapshots across selected pools |
 | `on_retention_save()` / `on_retention_revert()` | Persist/revert |
 | `check_retention_dirty()` | Highlight unsaved changes |
 

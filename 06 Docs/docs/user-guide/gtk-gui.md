@@ -1245,8 +1245,9 @@ or when a Min Age is set on a bucket whose Retain Count is 0.
 | **Remove Policy**           | Deletes the currently-selected pool's entry (after confirmation). Blocked for `default`. The pool is removed from the Prune list and falls back to the `default` policy.                                          |
 | **Add Bucket**              | Adds a new bucket row to the editor table                                                                                                                                                                         |
 | **Remove Bucket**           | Removes the selected bucket row                                                                                                                                                                                   |
-| **Save**                    | Saves the policy for the currently-selected pool, any pending bucket edits made to other pools, and the prune snapshot label                                                                                      |
-| **Revert**                  | Discards all pending edits (for every pool) and reloads the saved policy and prune label                                                                                                                          |
+| **Save**                    | Saves the policy for the currently-selected pool, any pending bucket edits made to other pools, the prune snapshot label, and the Mass Delete card settings                                                       |
+| **Revert**                  | Discards all pending edits (for every pool) and reloads the saved policy, prune label, and Mass Delete settings                                                                                                   |
+| **Mass Delete**             | Deletes snapshots across the selected prune pools using the filters and mode in the Mass Delete card                                                                                                              |
 | **Add Profile to Schedule** | Saves a snapshot of current prune settings (label + selected pools) as a scheduled profile                                                                                                                        |
 | **Recall Profile**          | Loads a previously-saved retention profile into this tab for editing or on-demand execution                                                                                                                       |
 
@@ -1285,6 +1286,30 @@ would be deleted without actually destroying anything.
 
 For the full algorithm, see the
 [`zfsretain` module reference](../commands-and-modules/modules.md#zfsretain).
+
+#### Mass Delete
+
+The **Mass Delete** button runs the [`zfsmassdelsnaps`](../commands-and-modules/commands.md#zfsmassdelsnaps)
+command against the pools selected in the Prune list. Before it runs, configure
+the filters in the **Mass Delete** card:
+
+- **Includes / Excludes / Start With / End With** — dataset name filters passed
+  to `zfsbuildfsarray`
+- **Snapshot Has** — only snapshots whose full name contains this substring are
+  considered
+- **Release Holds** — release ZFS holds before deleting (only in ignore mode)
+- **Ignore Retention Policies** — when enabled, matching snapshots are deleted
+  regardless of retention policy, `minage`, or `zfscheckagainst`
+
+Two modes are available:
+
+- **Respect retention policies** (default) — equivalent to a normal **Prune**,
+  using the pool's configured retention policy to select candidates.
+- **Ignore retention policies** — lists all matching snapshots and deletes them
+  after confirmation. This bypasses the safety checks that keep incremental
+  backup chains intact, so it should be used with caution.
+
+Dry Run previews the affected snapshots in both modes without deleting anything.
 
 ---
 
