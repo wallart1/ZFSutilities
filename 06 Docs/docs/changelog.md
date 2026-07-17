@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.62.1
+
+*Released 2026-07-16*
+
+### Fixed
+
+- **Retention tab vertical resizing** — The Retention tab content is now
+  wrapped in a `Gtk.ScrolledWindow` so the main window can shrink vertically
+  without hiding the Mass Delete and profile controls.
+
+### Tests
+
+- Added `TestRetentionPageLayout` in `tests/python/test_retention_page.py`
+  to verify the page is returned inside a `Gtk.ScrolledWindow`.
+
 ## 0.62.0
 
 ### Added

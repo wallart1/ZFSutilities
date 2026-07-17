@@ -1005,5 +1005,46 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             self.assertFalse(rp._is_dirty(app))
 
 
+class TestRetentionPageLayout(unittest.TestCase):
+    """Verify the Retention page can shrink vertically."""
+
+    def _fresh_module(self):
+        _clear_cached_modules("retention_page")
+        with mock_gtk():
+            import retention_page as rp
+            return rp
+
+    def test_page_is_wrapped_in_scrolled_window(self):
+        """The returned page must be a ScrolledWindow so the window can shrink."""
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+
+            sentinels = [MagicMock() for _ in range(3)]
+            call_count = [0]
+
+            def _make_scrolled():
+                sentinel = sentinels[call_count[0]]
+                call_count[0] += 1
+                return sentinel
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={"retention": {"default": []}},
+                script_dir="",
+                parent_dir=os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))
+                ),
+                version="dev",
+            )
+
+            with patch.object(rp, "import_legacy_retention", return_value=False), \
+                 patch.object(rp.Gtk, "ScrolledWindow", side_effect=_make_scrolled):
+                page = rp.create_retention_page(app, app.ctx)
+
+            self.assertIs(page, sentinels[0])
+
+
 if __name__ == "__main__":
     unittest.main()

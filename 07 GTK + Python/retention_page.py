@@ -138,11 +138,15 @@ def create_retention_page(app, ctx):
     app._ret_original = {}
     app._ret_pending = {}
 
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
     outer.set_margin_start(12)
     outer.set_margin_end(12)
     outer.set_margin_top(10)
     outer.set_margin_bottom(10)
+    scrolled.add(outer)
 
     # ── Header ────────────────────────────────────────────────────────────────
     hdr = Gtk.Label()
@@ -369,7 +373,7 @@ def create_retention_page(app, ctx):
     refresh_prune_pools(app)
     _load_pool_into_store(app, ctx, app._ret_pool_list[0])
 
-    return outer
+    return scrolled
 
 
 def refresh_prune_pools(app):
