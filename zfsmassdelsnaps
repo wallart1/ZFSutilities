@@ -94,7 +94,9 @@ function _mass_delete_respect_retention {
     done
 
     # Deduplicate and sort
-    mapfile -t candidates < <(printf "%s\n" "${candidates[@]}" 2>/dev/null | sort -u)
+    if [[ ${#candidates[@]} -gt 0 ]]; then
+        mapfile -t candidates < <(printf "%s\n" "${candidates[@]}" 2>/dev/null | sort -u)
+    fi
 
     if [[ ${#candidates[@]} -eq 0 ]]; then
         log_msg "INFO: No snapshots would be removed by retention policies."

@@ -43,7 +43,7 @@ cleanup() {
     echo "$* releaseholds=${releaseholds:-N}" >> "${_mock_cleanup_log}"
     local pool="${1:-}"
     # Echo would-be removal lines for the respect-retention path to parse.
-    if [[ "${dryrun:-N}" == "Y" ]]; then
+    if [[ "${dryrun:-N}" == "Y" && "${_mock_cleanup_empty:-N}" != "Y" ]]; then
         printf 'INFO: Would: Remove %s@dailybackup-2025-03-28T10:00-04:00-d --- Bucket.\n' "$pool"
         printf 'INFO: Would: Remove %s@dailybackup-2025-03-29T10:00-04:00-d --- Bucket.\n' "$pool"
     fi
@@ -60,6 +60,7 @@ reset_state() {
     _mock_fsarray_pool1=()
     _mock_zfs_snap_lists=()
     _mock_zfs_props=()
+    _mock_cleanup_empty="N"
     snapshot_label=""
     snapshot_has=""
     includes=()
@@ -175,6 +176,27 @@ test_ignore_releaseholds_passed() {
 # Respect retention policies mode
 # -----------------------------------------------------------------------------
 
+test_respect_no_matching_snapshots() {
+    echo "=== Respect mode: no snapshots match ==="
+    reset_state
+    snapshot_label="dailybackup"
+    ignore_retention_policies="N"
+    dryrun="Y"
+    _mock_cleanup_empty="Y"
+    local output
+    output=$(mass_delete_snapshots pool1 2>&1)
+    test_start "Reports no snapshots when none would be removed"
+    local cleanup_count
+    cleanup_count=$(wc -l < "${_mock_cleanup_log}")
+    if [[ "$cleanup_count" -ne 1 || ${#_mock_delsnap_calls[@]} -ne 0 ]]; then
+        test_fail "Unexpected calls: cleanup=${cleanup_count} delsnap=${_mock_delsnap_calls[*]}"
+    elif [[ "$output" == *"No snapshots would be removed by retention policies."* ]]; then
+        test_pass
+    else
+        test_fail "Expected 'No snapshots would be removed' message, got: $output"
+    fi
+}
+
 test_respect_dryrun_lists_only() {
     echo "=== Respect mode: dry run lists but does not delete ==="
     reset_state
@@ -242,6 +264,7 @@ test_ignore_dryrun_lists_only
 test_ignore_approval_no_cancels
 test_ignore_approval_yes_deletes
 test_ignore_releaseholds_passed
+test_respect_no_matching_snapshots
 test_respect_dryrun_lists_only
 test_respect_parses_candidates
 test_respect_releaseholds_passed

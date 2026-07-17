@@ -1,4 +1,4 @@
-"""Diagnostic script for ZfsRepository / Datasets tab behavior.
+r"""Diagnostic script for ZfsRepository / Datasets tab behavior.
 
 Run on a machine with live ZFS pools:
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.62.2
+
+*Released 2026-07-16*
+
+### Fixed
+
+- **`zfsmassdelsnaps` respect mode with no matching snapshots** — When no
+  snapshots would be removed by the retention policy, the respect-mode path no
+  longer attempts to deduplicate an empty candidate list. It now reports
+  "No snapshots would be removed by retention policies." and exits cleanly.
+- **Invalid escape sequence in diagnostic script** — The docstring in
+  `07 GTK + Python/diagnose_zfs_repository.py` now uses a raw string so the
+  escaped shell path no longer emits a `SyntaxWarning`.
+
+### Tests
+
+- Added `test_respect_no_matching_snapshots` to `tests/test-zfsmassdelsnaps` to
+  verify the respect-mode no-match path.
+
 ## 0.62.1
 
 *Released 2026-07-16*
