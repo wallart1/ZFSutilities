@@ -348,6 +348,40 @@ class TestOnRetentionMassDelete(unittest.TestCase):
         cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
         self.assertIn("dryrun='Y'", cmd)
 
+    def test_respect_mode_uses_releaseholds_n(self):
+        ra = _import_retention_actions()
+        app = _make_mass_delete_app(
+            [["archive", "ONLINE"]], selected_paths=[0]
+        )
+        app._ret_ignore_retention_check.get_active.return_value = False
+        app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 1
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+
+        with patch.object(ra, "log_msg"):
+            ra.on_retention_mass_delete(app, ctx)
+
+        cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
+        self.assertIn('releaseholds="N"', cmd)
+        self.assertIn('ignore_retention_policies="N"', cmd)
+
+    def test_ignore_mode_uses_releaseholds_y(self):
+        ra = _import_retention_actions()
+        app = _make_mass_delete_app(
+            [["archive", "ONLINE"]], selected_paths=[0]
+        )
+        app._ret_ignore_retention_check.get_active.return_value = True
+        app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 0
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+
+        with patch.object(ra, "log_msg"):
+            ra.on_retention_mass_delete(app, ctx)
+
+        cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
+        self.assertIn('releaseholds="Y"', cmd)
+        self.assertIn('ignore_retention_policies="Y"', cmd)
+
 
 if __name__ == "__main__":
     unittest.main()

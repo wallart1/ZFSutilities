@@ -250,7 +250,7 @@ MASS_DELETE_DEFAULTS = {
     "startwith": "",
     "endwith": "",
     "snapshot_has": "",
-    "releaseholds": "N",
+    "releaseholds": "Y",
     "ignore_retention_policies": False,
 }
 

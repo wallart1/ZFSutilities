@@ -1004,6 +1004,100 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             )
             self.assertFalse(rp._is_dirty(app))
 
+    def _mass_delete_dirty_app(self, rp, ignore=False, releaseholds="N"):
+        app = MagicMock()
+        app._ret_prune_label_entry = _FakeEntry("dailybackup")
+        app._ret_original_prune_label = "dailybackup"
+        app._ret_store = _FakeStore([])
+        app._ret_original = {"default": []}
+        app._ret_pool = "default"
+        app._ret_pending = {}
+        app._ret_mass_delete_widgets = {
+            key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES
+        }
+        app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")
+        rh = MagicMock()
+        rh.get_active.return_value = 0 if releaseholds == "Y" else 1
+        app._ret_mass_delete_widgets["releaseholds"] = rh
+        app._ret_mass_delete_original = rp.MASS_DELETE_DEFAULTS.copy()
+        app._ret_mass_delete_original["releaseholds"] = releaseholds
+        app._ret_mass_delete_original["ignore_retention_policies"] = ignore
+        app._ret_ignore_retention_check = MagicMock()
+        app._ret_ignore_retention_check.get_active.return_value = ignore
+        return app
+
+    def test_respect_mode_ignores_releaseholds_for_dirty(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            app = self._mass_delete_dirty_app(rp, ignore=False, releaseholds="N")
+            self.assertFalse(rp._is_dirty(app))
+            app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 0
+            self.assertFalse(rp._is_dirty(app))
+
+    def test_ignore_mode_releaseholds_tracked_for_dirty(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            app = self._mass_delete_dirty_app(rp, ignore=True, releaseholds="N")
+            self.assertFalse(rp._is_dirty(app))
+            app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 0
+            self.assertTrue(rp._is_dirty(app))
+
+    def test_releaseholds_disabled_when_not_ignoring(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+            app = self._make_app(rp, {"retention": {"default": []}})
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            rh_widget = app._ret_mass_delete_widgets["releaseholds"]
+            app._ret_ignore_retention_check.set_active.assert_called_with(False)
+            rh_widget.set_sensitive.assert_called_with(False)
+            rh_widget.set_active.assert_called_with(1)
+
+    def test_releaseholds_enabled_when_ignoring(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+            app = self._make_app(rp, {
+                "retention": {"default": []},
+                "retention_mass_delete": {
+                    "ignore_retention_policies": True,
+                },
+            })
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            rh_widget = app._ret_mass_delete_widgets["releaseholds"]
+            app._ret_ignore_retention_check.set_active.assert_called_with(True)
+            rh_widget.set_sensitive.assert_called_with(True)
+            rh_widget.set_active.assert_called_with(0)
+
+    def test_respect_mode_forces_releaseholds_off(self):
+        """If ignore is unchecked, releaseholds is forced to N on load."""
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+            app = self._make_app(rp, {
+                "retention": {"default": []},
+                "retention_mass_delete": {
+                    "releaseholds": "Y",
+                    "ignore_retention_policies": False,
+                },
+            })
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            rh_widget = app._ret_mass_delete_widgets["releaseholds"]
+            rh_widget.set_sensitive.assert_called_with(False)
+            rh_widget.set_active.assert_called_with(1)
+
 
 class TestRetentionPageLayout(unittest.TestCase):
     """Verify the Retention page can shrink vertically."""

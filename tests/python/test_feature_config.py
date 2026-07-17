@@ -166,6 +166,31 @@ class TestRetentionConfig(unittest.TestCase):
             self.assertEqual(config["retention"]["tank"][0]["retain"], 5)
 
 
+class TestMassDeleteConfig(unittest.TestCase):
+    """Mass Delete card configuration defaults and merge."""
+
+    def test_get_retention_mass_delete_config_defaults(self):
+        config = {}
+        md = feature_config.get_retention_mass_delete_config(config)
+        self.assertEqual(md["releaseholds"], "Y")
+        self.assertFalse(md["ignore_retention_policies"])
+        self.assertEqual(md["includes"], "")
+        self.assertEqual(md["snapshot_has"], "")
+
+    def test_get_retention_mass_delete_config_merges_saved_values(self):
+        config = {
+            "retention_mass_delete": {
+                "releaseholds": "N",
+                "ignore_retention_policies": True,
+                "snapshot_has": "weekly",
+            }
+        }
+        md = feature_config.get_retention_mass_delete_config(config)
+        self.assertEqual(md["releaseholds"], "N")
+        self.assertTrue(md["ignore_retention_policies"])
+        self.assertEqual(md["snapshot_has"], "weekly")
+
+
 class TestPruneLabelConfig(unittest.TestCase):
     """Global retention prune label helpers."""
 

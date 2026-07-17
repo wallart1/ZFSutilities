@@ -161,7 +161,7 @@ the Prune list, configure the filters in the **Mass Delete** card, and click
 | **Start With**     | Skip datasets until this substring is seen                             |
 | **End With**       | Stop processing datasets after this substring                          |
 | **Snapshot Has**   | Only consider snapshots whose full name contains this substring        |
-| **Release Holds**  | Release ZFS holds before deleting (ignore mode only)                   |
+| **Release Holds**  | Release ZFS holds before deleting; enabled only when **Ignore retention policies** is checked |
 | **Ignore Retention Policies** | When enabled, delete all matching snapshots regardless of retention policy |
 
 ### Modes

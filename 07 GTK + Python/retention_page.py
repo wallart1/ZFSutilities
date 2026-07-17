@@ -354,9 +354,18 @@ def create_retention_page(app, ctx):
 
     ignore_check = Gtk.CheckButton(label="Ignore retention policies")
     ignore_check.set_active(variables["ignore_retention_policies"])
-    ignore_check.connect("toggled", lambda *_a: _update_ret_status(app))
     app._ret_ignore_retention_check = ignore_check
     advanced_box.pack_start(ignore_check, False, False, 0)
+    ignore_check.connect(
+        "toggled",
+        lambda *_a: (
+            _sync_releaseholds_widget(
+                app, app._ret_ignore_retention_check.get_active()
+            ),
+            _update_ret_status(app),
+        ),
+    )
+    _sync_releaseholds_widget(app, variables["ignore_retention_policies"])
 
     reminder = Gtk.Label(
         label="Results and approval request will appear in the log area."
@@ -454,6 +463,21 @@ def _store_to_buckets(app):
     return buckets
 
 
+def _sync_releaseholds_widget(app, ignore_active):
+    """Enable releaseholds only when Ignore retention policies is checked."""
+    widgets = getattr(app, '_ret_mass_delete_widgets', None)
+    if not isinstance(widgets, dict):
+        return
+    rh_widget = widgets["releaseholds"]
+    if ignore_active:
+        rh_widget.set_sensitive(True)
+        if rh_widget.get_active() != 0:
+            rh_widget.set_active(0)
+    else:
+        rh_widget.set_sensitive(False)
+        rh_widget.set_active(1)
+
+
 def _mass_delete_is_dirty(app):
     """Return True if any mass-delete widget differs from the saved config."""
     widgets = getattr(app, '_ret_mass_delete_widgets', None)
@@ -465,13 +489,15 @@ def _mass_delete_is_dirty(app):
             return True
     if widgets["snapshot_has"].get_text().strip() != orig.get("snapshot_has", ""):
         return True
-    release_val = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
-    if release_val != orig.get("releaseholds", "N"):
-        return True
     ignore_check = getattr(app, '_ret_ignore_retention_check', None)
-    if ignore_check is not None \
-            and ignore_check.get_active() != orig.get("ignore_retention_policies", False):
+    ignore_active = ignore_check.get_active() if ignore_check is not None else False
+    if ignore_active != orig.get("ignore_retention_policies", False):
         return True
+    # releaseholds is only editable in ignore mode.
+    if ignore_active:
+        release_val = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
+        if release_val != orig.get("releaseholds", "N"):
+            return True
     return False
 
 
@@ -684,6 +710,7 @@ def _on_ret_revert(btn, app, ctx):
         ignore_check = getattr(app, '_ret_ignore_retention_check', None)
         if ignore_check is not None:
             ignore_check.set_active(orig.get("ignore_retention_policies", False))
+        _sync_releaseholds_widget(app, orig.get("ignore_retention_policies", False))
 
 
 def _show_error(app, msg):

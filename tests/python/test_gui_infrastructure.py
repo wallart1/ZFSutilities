@@ -1639,6 +1639,33 @@ class TestAddVarRowEntryWidth(unittest.TestCase):
             gtk_mock.Entry.return_value.set_width_chars.assert_called_once_with(1)
 
 
+class TestAddVarRowYNCombo(unittest.TestCase):
+    """Verify Y/N combo handling in add_var_row."""
+
+    def _run(self, variables):
+        _clear_cached_modules("gui_helpers")
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+            grid = MagicMock()
+            widgets = {}
+            gui_helpers.add_var_row(
+                grid, 0, "test_key", variables, widgets, yn_vars={"test_key"}
+            )
+            return gtk_mock.ComboBoxText.return_value
+
+    def test_y_variable_sets_active_y(self):
+        widget = self._run({"test_key": "Y"})
+        widget.set_active.assert_called_once_with(0)
+
+    def test_n_variable_sets_active_n(self):
+        widget = self._run({"test_key": "N"})
+        widget.set_active.assert_called_once_with(1)
+
+    def test_missing_variable_defaults_to_n(self):
+        widget = self._run({})
+        widget.set_active.assert_called_once_with(1)
+
+
 class TestLogLevelButtonLabel(unittest.TestCase):
     """Verify log-level button uses short label format."""
 

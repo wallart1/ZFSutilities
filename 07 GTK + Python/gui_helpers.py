@@ -912,8 +912,7 @@ def add_var_row(grid, row, key, variables, widgets_dict,
         widget = Gtk.ComboBoxText()
         widget.append_text("Y")
         widget.append_text("N")
-        default = "N" if key == "allow_destructive" else "Y"
-        widget.set_active(0 if variables.get(key, default) == "Y" else 1)
+        widget.set_active(0 if variables.get(key, "N") == "Y" else 1)
     else:
         widget = Gtk.Entry()
         widget.set_text(variables.get(key, ""))

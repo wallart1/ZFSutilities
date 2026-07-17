@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.62.3
+
+*Released 2026-07-16*
+
+### Changed
+
+- **Mass Delete releaseholds defaults to enabled and is only editable in ignore
+  mode** — The Retention tab's Mass Delete card now defaults
+  `releaseholds='Y'`. The **Release Holds** control is enabled only when
+  **Ignore retention policies** is checked; in respect mode it is disabled and
+  forced to `'N'` so retention-policy pruning never silently releases holds.
+- **Generic Y/N combo default** — `gui_helpers.add_var_row()` now defaults an
+  absent Y/N variable to `'N'` consistently, matching the Mass Delete behavior.
+
+### Tests
+
+- Added `TestMassDeleteConfig` in `tests/python/test_feature_config.py` to cover
+  `get_retention_mass_delete_config()` defaults and merge behavior.
+- Added `TestAddVarRowYNCombo` in `tests/python/test_gui_infrastructure.py` to
+  verify Y/N combo active state for present and missing variables.
+- Added dirty-detection tests in `tests/python/test_retention_page.py` for
+  `releaseholds` tracking in ignore vs. respect mode.
+- Fixed `tests/test-repair-iscsi-luns` to provide `find_zfsutility_script()` so
+  the evaluated script can locate `rootcheck` in test environments where the
+  deployed `bashinit` does not define it.
+
 ## 0.62.2
 
 *Released 2026-07-16*
