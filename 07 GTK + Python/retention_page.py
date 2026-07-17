@@ -390,6 +390,8 @@ def refresh_prune_pools(app):
 
     The order is driven by the persisted ``prune_pools_order`` key, then by
     any in-session reorder, and finally by sorted pool name for newcomers.
+    The current multi-selection is preserved for pools that remain in the
+    refreshed list.
     """
     if not hasattr(app, '_ret_prune_store') or not hasattr(app, 'ctx'):
         return
@@ -402,6 +404,21 @@ def refresh_prune_pools(app):
     current_order = [
         row[0] for row in app._ret_prune_store if row[0] in candidates
     ]
+
+    # Remember the pools that are currently selected so the selection survives
+    # the model clear/rebuild that happens below.
+    selected_pools = set()
+    if hasattr(app, '_ret_prune_view'):
+        selection = app._ret_prune_view.get_selection()
+        if selection is not None:
+            rows = selection.get_selected_rows()
+            # get_selected_rows() always returns a (model, paths) tuple in GTK,
+            # but tests that have not configured the mock may receive a
+            # MagicMock; treat those as no selection.
+            if isinstance(rows, tuple) and len(rows) == 2:
+                model, paths = rows
+                for p in paths:
+                    selected_pools.add(model[p][0])
 
     new_order = []
     seen = set()
@@ -422,6 +439,16 @@ def refresh_prune_pools(app):
     app._ret_prune_store.clear()
     for pool in new_order:
         app._ret_prune_store.append([pool, "ONLINE"])
+
+    # Restore selection for any pools that are still present after the refresh.
+    if selected_pools and hasattr(app, '_ret_prune_view'):
+        selection = app._ret_prune_view.get_selection()
+        if selection is not None:
+            for i, pool in enumerate(new_order):
+                if pool in selected_pools:
+                    selection.select_path(
+                        Gtk.TreePath.new_from_indices([i])
+                    )
 
 
 def _on_prune_drag_end(treeview, drag_context, app):

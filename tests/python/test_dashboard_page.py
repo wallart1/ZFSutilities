@@ -1579,6 +1579,14 @@ class TestCreateDashboardPage(unittest.TestCase):
         self.assertIsNotNone(app.dashboard_ops_store)
         self.assertIsNotNone(app.dashboard_tasks_store)
 
+    def test_dashboard_ops_view_is_bound_for_width_persistence(self):
+        """Recent Operations columns should be saved and restored."""
+        app = self._create_app()
+        self._run_create(app)
+        app._ui_state.bind_treeview.assert_any_call(
+            app.dashboard_ops_view, "dashboard_ops_view"
+        )
+
     def test_section_order_in_top_level_box(self):
         app = self._create_app()
         page = self._run_create(app)
@@ -1883,9 +1891,10 @@ class TestRefreshConfigSection(unittest.TestCase):
             os_infos={"myhost": ("Debian GNU/Linux", "13 (trixie)")},
         )
         self.assertTrue(
-            self._find_label_with_text(gtk_mock, "Debian GNU/Linux")
+            self._find_label_with_text(
+                gtk_mock, "Debian GNU/Linux 13 (trixie)"
+            )
         )
-        self.assertTrue(self._find_label_with_text(gtk_mock, "13 (trixie)"))
 
     def test_two_node_shows_os_info_per_unique_host(self):
         cfg = {
@@ -1910,25 +1919,14 @@ class TestRefreshConfigSection(unittest.TestCase):
         )
         expected_name = (
             "host-a (this):\n"
-            "Proxmox VE\n\n"
+            "Proxmox VE 8.2.4\n\n"
             "host-b (storage):\n"
-            "Debian GNU/Linux\n\n"
+            "Debian GNU/Linux 12 (bookworm)\n\n"
             "host-c (compute):\n"
-            "Linux Mint"
-        )
-        expected_version = (
-            "host-a (this):\n"
-            "8.2.4\n\n"
-            "host-b (storage):\n"
-            "12 (bookworm)\n\n"
-            "host-c (compute):\n"
-            "22 (Wilma)"
+            "Linux Mint 22 (Wilma)"
         )
         self.assertTrue(
             self._find_label_with_text(gtk_mock, expected_name)
-        )
-        self.assertTrue(
-            self._find_label_with_text(gtk_mock, expected_version)
         )
 
     def test_two_node_deduplicates_same_host_across_roles_for_os(self):
@@ -1949,21 +1947,12 @@ class TestRefreshConfigSection(unittest.TestCase):
         )
         expected_name = (
             "host-a (this,storage):\n"
-            "Proxmox VE\n\n"
+            "Proxmox VE 8.2.4\n\n"
             "host-b (compute):\n"
-            "Debian GNU/Linux"
-        )
-        expected_version = (
-            "host-a (this,storage):\n"
-            "8.2.4\n\n"
-            "host-b (compute):\n"
-            "12 (bookworm)"
+            "Debian GNU/Linux 12 (bookworm)"
         )
         self.assertTrue(
             self._find_label_with_text(gtk_mock, expected_name)
-        )
-        self.assertTrue(
-            self._find_label_with_text(gtk_mock, expected_version)
         )
 
 

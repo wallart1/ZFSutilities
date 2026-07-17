@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.62.4
+
+*Released 2026-07-17*
+
+### Changed
+
+- **Snapshot Mass Delete space estimate** — `zfsmassdelsnaps` now prints an
+  estimated disk-space-free message after listing snapshots that would be
+  deleted. The estimate is the sum of each snapshot's `used` property and is
+  shown in both ignore and respect modes, including during dry runs.
+- **Snapshot Mass Delete auto-proceeds hold releases** — In ignore mode, the
+  deletion loop now sets `autoproceed='Y'` so releasing holds no longer prompts
+  the user to press Enter for every snapshot. The single approval prompt before
+  deletion remains.
+
+### Tests
+
+- Updated `tests/test-zfsmassdelsnaps` to verify the space-estimate message in
+  ignore/respect modes and to confirm `autoproceed='Y'` is active during ignore
+  mode deletions.
+- Added edge-case tests in `tests/test-zfsmassdelsnaps` for zero and
+  non-numeric snapshot `used` values in the space estimate.
+- Added `test_bind_treeview_no_resizable_columns_does_nothing` in
+  `tests/python/test_gui_infrastructure.py` to ensure `bind_treeview()` handles
+  all-fixed column layouts gracefully.
+
+### Documentation
+
+- Updated `06 Docs/docs/user-guide/gtk-gui.md` to mention the Mass Delete space
+  estimate and automatic hold release.
+
 ## 0.62.3
 
 *Released 2026-07-16*

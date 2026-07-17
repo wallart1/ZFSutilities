@@ -1610,22 +1610,26 @@ sudo zfsmassdelsnaps <pool> [pool ...]
 | `ignore_retention_policies` | `'Y'` = delete all matching snapshots regardless of retention policy          | —                                                                                  |
 | `releaseholds`              | `'Y'` = release holds before deletion (ignore mode only)                      | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 | `dryrun`                    | `'Y'` = report without deleting                                               | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
-| `autoproceed`               | `'Y'` = skip approval prompts (respected by underlying `zfscleanup` in respect mode) | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
+| `autoproceed`               | `'Y'` = skip per-snapshot hold-release prompts (ignore mode) and approval prompts in underlying `zfscleanup` (respect mode) | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 
 **Modes:**
 
 - **Ignore retention policies** (`ignore_retention_policies='Y'`) — Lists every
   snapshot whose label matches `snapshot_label` and any include/exclude/startwith/endwith
-  filters, optionally filtered by `snapshot_has`. After approval, each snapshot is
-  destroyed with `zfsdelsnap ... nocheckagainst`, bypassing the usual
-  `zfscheckagainst` safety check. This mode is dangerous: it can delete the last
-  common snapshot needed for an incremental backup.
+  filters, optionally filtered by `snapshot_has`. The list is followed by an
+  estimate of the disk space that would be freed (sum of each snapshot's `used`
+  property). After approval, each snapshot is destroyed with
+  `zfsdelsnap ... nocheckagainst`, bypassing the usual `zfscheckagainst` safety
+  check. This mode is dangerous: it can delete the last common snapshot needed
+  for an incremental backup. Holds are released automatically when
+  `releaseholds='Y'` is set, without a prompt per snapshot.
 - **Respect retention policies** (`ignore_retention_policies='N'`, the default) —
   Runs `zfscleanup` in dry-run mode for each pool, parses the candidate list,
-  asks for approval, then runs `zfscleanup` for real. This is equivalent to a
-  normal prune, just batched across the selected pools.
+  prints a space estimate, asks for approval, then runs `zfscleanup` for real.
+  This is equivalent to a normal prune, just batched across the selected pools.
 
-In both modes, **Dry Run** lists the affected snapshots without deleting them.
+In both modes, **Dry Run** lists the affected snapshots and the estimated space
+without deleting them.
 
 **Called modules:**
 

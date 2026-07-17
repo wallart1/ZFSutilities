@@ -1310,6 +1310,10 @@ Two modes are available:
   backup chains intact, so it should be used with caution.
 
 Dry Run previews the affected snapshots in both modes without deleting anything.
+Before confirming a real delete, the candidate list is followed by an estimated
+amount of disk space that would be freed (the sum of each snapshot's `used`
+property). When **Release Holds** is enabled, holds are released automatically
+without an additional confirmation for each snapshot.
 
 ---
 

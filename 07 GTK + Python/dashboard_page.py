@@ -1019,6 +1019,9 @@ def create_dashboard_page(app):
         col = Gtk.TreeViewColumn(title_text, r, **{attr: col_idx})
         configure_treeview_column(col, width=width)
         app.dashboard_ops_view.append_column(col)
+    app._ui_state.bind_treeview(
+        app.dashboard_ops_view, "dashboard_ops_view"
+    )
 
     ops_scrolled = Gtk.ScrolledWindow()
     ops_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -1197,37 +1200,17 @@ def _refresh_config_section(app):
     if cfg["mode"] == "two-node":
         os_name_parts = []
         for host, roles in _get_host_role_list(cfg):
-            os_name, _ = os_info_map[host]
+            os_name, os_version = os_info_map[host]
             header = f"{host} ({','.join(roles)}):"
-            os_name_parts.append(f"{header}\n{os_name}")
+            os_name_parts.append(f"{header}\n{os_name} {os_version}")
         os_name_text = "\n\n".join(os_name_parts)
     else:
-        os_name_text, _ = os_info_map[cfg["this_host"]]
+        os_name, os_version = os_info_map[cfg["this_host"]]
+        os_name_text = f"{os_name} {os_version}"
 
     os_name_val = Gtk.Label(label=os_name_text)
     os_name_val.set_halign(Gtk.Align.START)
     app.dashboard_config_grid.attach(os_name_val, 1, row, 1, 1)
-    row += 1
-
-    # OS version(s)
-    os_ver_lbl = Gtk.Label()
-    os_ver_lbl.set_markup("<b>OS version(s):</b>")
-    os_ver_lbl.set_halign(Gtk.Align.START)
-    app.dashboard_config_grid.attach(os_ver_lbl, 0, row, 1, 1)
-
-    if cfg["mode"] == "two-node":
-        os_ver_parts = []
-        for host, roles in _get_host_role_list(cfg):
-            _, os_version = os_info_map[host]
-            header = f"{host} ({','.join(roles)}):"
-            os_ver_parts.append(f"{header}\n{os_version}")
-        os_ver_text = "\n\n".join(os_ver_parts)
-    else:
-        _, os_ver_text = os_info_map[cfg["this_host"]]
-
-    os_ver_val = Gtk.Label(label=os_ver_text)
-    os_ver_val.set_halign(Gtk.Align.START)
-    app.dashboard_config_grid.attach(os_ver_val, 1, row, 1, 1)
     row += 1
 
     # Versions

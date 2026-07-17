@@ -1304,6 +1304,119 @@ class TestTreeviewColumnHelpers(unittest.TestCase):
 
             col.set_fixed_width.assert_called_once_with(60)
 
+    @patch("backup_config.save_ui_state")
+    def test_bind_treeview_aligns_widths_with_resizable_columns(self, mock_save):
+        """Saved widths must apply to resizable columns, skipping fixed ones."""
+        with mock_gtk():
+            import gui_helpers
+            import backup_config
+            gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
+            gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {"treeview_columns": {"test_view": [150, 200]}}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            col0 = MagicMock()
+            col0.get_resizable.return_value = False
+            col0.get_min_width.return_value = 60
+            col1 = MagicMock()
+            col1.get_resizable.return_value = True
+            col1.get_min_width.return_value = 20
+            col2 = MagicMock()
+            col2.get_resizable.return_value = True
+            col2.get_min_width.return_value = 20
+            tv = MagicMock()
+            tv.get_columns.return_value = [col0, col1, col2]
+
+            orig_idle_add = gui_helpers.GLib.idle_add
+            gui_helpers.GLib.idle_add = lambda fn, *a, **k: fn(*a, **k) or False
+            try:
+                mgr.bind_treeview(tv, "test_view")
+            finally:
+                gui_helpers.GLib.idle_add = orig_idle_add
+
+            col0.set_fixed_width.assert_not_called()
+            col1.set_fixed_width.assert_called_once_with(150)
+            col2.set_fixed_width.assert_called_once_with(200)
+
+    @patch("backup_config.save_ui_state")
+    def test_bind_treeview_fixed_width_signal_schedules_save(self, mock_save):
+        """Resizing a fixed-width column must schedule a persisted save."""
+        with mock_gtk():
+            import gui_helpers
+            gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
+            gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            handlers = {}
+            col = MagicMock()
+            col.get_resizable.return_value = True
+            col.get_min_width.return_value = 20
+
+            def _capture(signal, handler):
+                handlers[signal] = handler
+                return 1
+
+            col.connect.side_effect = _capture
+            tv = MagicMock()
+            tv.get_columns.return_value = [col]
+
+            orig_idle_add = gui_helpers.GLib.idle_add
+            gui_helpers.GLib.idle_add = lambda fn, *a, **k: fn(*a, **k) or False
+            try:
+                with patch.object(mgr, "_schedule_save") as mock_schedule:
+                    mgr.bind_treeview(tv, "test_view")
+                    self.assertIn("notify::fixed-width", handlers)
+                    handlers["notify::fixed-width"]()
+                    mock_schedule.assert_called_once()
+            finally:
+                gui_helpers.GLib.idle_add = orig_idle_add
+
+    @patch("backup_config.save_ui_state")
+    def test_bind_treeview_no_resizable_columns_does_nothing(self, mock_save):
+        """A treeview with only fixed columns should not crash or resize."""
+        with mock_gtk():
+            import gui_helpers
+            import backup_config
+            gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
+            gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {"treeview_columns": {"test_view": [150]}}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            col = MagicMock()
+            col.get_resizable.return_value = False
+            col.get_min_width.return_value = 60
+            tv = MagicMock()
+            tv.get_columns.return_value = [col]
+
+            orig_idle_add = gui_helpers.GLib.idle_add
+            gui_helpers.GLib.idle_add = lambda fn, *a, **k: fn(*a, **k) or False
+            try:
+                mgr.bind_treeview(tv, "test_view")
+            finally:
+                gui_helpers.GLib.idle_add = orig_idle_add
+
+            col.set_sizing.assert_not_called()
+            col.set_fixed_width.assert_not_called()
+
     def test_reset_resizable_columns_to_min_width_uses_column_minimum(self):
         with mock_gtk():
             import gui_helpers

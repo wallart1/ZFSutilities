@@ -67,11 +67,40 @@ class _FakeStore:
     def __iter__(self):
         return iter(self._rows)
 
+    def __len__(self):
+        return len(self._rows)
+
+    def __getitem__(self, key):
+        # Support both integer indices and TreePath-like objects (including
+        # MagicMock stand-ins used under mock_gtk).
+        if isinstance(key, int):
+            return self._rows[key]
+        get_indices = getattr(key, "get_indices", None)
+        if get_indices is not None:
+            return self._rows[get_indices()[0]]
+        return self._rows[int(key)]
+
     def clear(self):
         self._rows = []
 
     def append(self, row):
         self._rows.append(list(row))
+
+
+class _FakeTreePath:
+    """Minimal stand-in for a Gtk.TreePath."""
+
+    def __init__(self, idx):
+        self._idx = idx
+
+    def get_indices(self):
+        return [self._idx]
+
+    def __eq__(self, other):
+        return isinstance(other, _FakeTreePath) and self._idx == other._idx
+
+    def __repr__(self):
+        return f"_FakeTreePath({self._idx})"
 
 
 class TestRetentionPagePruneLabel(unittest.TestCase):
@@ -747,6 +776,81 @@ class TestRetentionPagePruneList(unittest.TestCase):
             rp._on_prune_drag_end(MagicMock(), MagicMock(), app)
 
             self.assertEqual(app.ctx.config["prune_pools_order"], ["tank", "archive"])
+
+    def test_refresh_preserves_selected_pools(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=["tank", "archive"])
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={
+                    "retention": {
+                        "default": [{"name": "d", "retain": 3, "minage": 0}],
+                        "tank": [{"name": "d", "retain": 3, "minage": 0}],
+                        "archive": [{"name": "d", "retain": 3, "minage": 0}],
+                    }
+                },
+                script_dir="",
+                parent_dir="",
+                version="dev",
+            )
+            store = _FakeStore([["tank", "ONLINE"], ["archive", "ONLINE"]])
+            app._ret_prune_store = store
+
+            selection = MagicMock()
+            selection.get_selected_rows.return_value = (
+                store, [_FakeTreePath(0), _FakeTreePath(1)]
+            )
+            app._ret_prune_view = MagicMock()
+            app._ret_prune_view.get_selection.return_value = selection
+
+            with patch.object(
+                rp.Gtk.TreePath,
+                "new_from_indices",
+                side_effect=lambda idx: _FakeTreePath(idx[0]),
+            ):
+                rp.refresh_prune_pools(app)
+
+            pools = [row[0] for row in app._ret_prune_store]
+            self.assertEqual(pools, ["tank", "archive"])
+            self.assertEqual(selection.select_path.call_count, 2)
+            selection.select_path.assert_any_call(_FakeTreePath(0))
+            selection.select_path.assert_any_call(_FakeTreePath(1))
+
+    def test_refresh_does_not_reselect_missing_pool(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=["archive"])
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={
+                    "retention": {
+                        "default": [{"name": "d", "retain": 3, "minage": 0}],
+                        "tank": [{"name": "d", "retain": 3, "minage": 0}],
+                        "archive": [{"name": "d", "retain": 3, "minage": 0}],
+                    }
+                },
+                script_dir="",
+                parent_dir="",
+                version="dev",
+            )
+            store = _FakeStore([["tank", "ONLINE"], ["archive", "ONLINE"]])
+            app._ret_prune_store = store
+
+            selection = MagicMock()
+            selection.get_selected_rows.return_value = (
+                store, [_FakeTreePath(0)]  # tank was selected
+            )
+            app._ret_prune_view = MagicMock()
+            app._ret_prune_view.get_selection.return_value = selection
+
+            rp.refresh_prune_pools(app)
+
+            pools = [row[0] for row in app._ret_prune_store]
+            self.assertEqual(pools, ["archive"])
+            selection.select_path.assert_not_called()
 
 
 class TestTabNavigationWiring(unittest.TestCase):

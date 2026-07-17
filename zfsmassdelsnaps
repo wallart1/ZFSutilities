@@ -105,6 +105,7 @@ function _mass_delete_respect_retention {
 
     log_msg "INFO: The following ${#candidates[@]} snapshots would be removed:"
     _print_snapshots_with_age "${candidates[@]}"
+    _estimate_space_freed "${candidates[@]}"
 
     if [[ "${dryrun:-N}" == "Y" ]]; then
         log_msg "INFO: Dry run - no snapshots were deleted."
@@ -136,6 +137,7 @@ function _list_and_approve {
     log_msg "INFO: About to delete the following $# snapshots."
     log_msg "INFO: This disregards holds, incremental bases, and snapshot age."
     _print_snapshots_with_age "$@"
+    _estimate_space_freed "$@"
 
     if [[ "${dryrun:-N}" == "Y" ]]; then
         log_msg "INFO: Dry run - no snapshots were deleted."
@@ -153,6 +155,7 @@ function _list_and_approve {
 
     local snap failed=0 release_arg=""
     [[ "${releaseholds:-N}" == "Y" ]] && release_arg="releaseholds"
+    autoproceed='Y'
     for snap in "$@"; do
         if ! delsnap "$snap" 0 "$release_arg" 'nocheckagainst'; then
             failed=1
@@ -169,6 +172,22 @@ function _print_snapshots_with_age {
         age=$(( (now - creation) / 86400 ))
         printf "%-60s  (%d days old)\n" "$snap" "$age"
     done
+}
+
+function _estimate_space_freed {
+    local snap used total=0 human
+    for snap in "$@"; do
+        used=$(zfs get -Hp -o value used "$snap" 2>/dev/null || echo 0)
+        if [[ "$used" =~ ^[0-9]+$ ]]; then
+            total=$((total + used))
+        fi
+    done
+    if command -v numfmt >/dev/null 2>&1 && [[ "$total" -gt 0 ]]; then
+        human=$(echo "$total" | numfmt --to=iec-i)
+    else
+        human="${total}B"
+    fi
+    log_msg "INFO: Estimated disk space that would be freed: ~$human"
 }
 
 if calledbybash; then

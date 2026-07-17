@@ -1830,7 +1830,9 @@ class UIStateManager:
 
         Restore saved widths via GLib.idle_add after realization, scaling them
         down if they would force the window wider than the saved size.
-        Connect notify::width on every resizable column to debounced save.
+        Connect notify::width and notify::fixed-width on every resizable
+        column to a debounced save, so both GTK allocation changes and user
+        drags reliably persist.
         """
         # Defer registration until after the idle restoration has run.  This
         # prevents window configure events that fire before the TreeView is
@@ -1842,7 +1844,11 @@ class UIStateManager:
         saved_widths = list(saved) if saved else []
 
         def _apply():
-            if saved_widths:
+            # Saved widths correspond to resizable columns in column order.
+            columns = treeview.get_columns()
+            resizable_columns = [c for c in columns if c.get_resizable()]
+
+            if saved_widths and resizable_columns:
                 widths = list(saved_widths)
                 saved_width = ui_state.get("main_window", {}).get("width")
                 if saved_width:
@@ -1857,24 +1863,26 @@ class UIStateManager:
                             scale = budget / total
                             widths = [max(20, int(w * scale)) for w in widths]
 
-                columns = treeview.get_columns()
                 widths = [
-                    max(w, columns[i].get_min_width())
-                    for i, w in enumerate(widths)
-                    if i < len(columns) and columns[i].get_resizable()
+                    max(w, col.get_min_width())
+                    for w, col in zip(widths, resizable_columns)
                 ]
-                for i, width in enumerate(widths):
-                    if i < len(columns):
-                        col = columns[i]
-                        col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
-                        col.set_fixed_width(width)
+                for col, width in zip(resizable_columns, widths):
+                    col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+                    col.set_fixed_width(width)
 
-            # Connect notify::width handlers AFTER any restoration so that
+            # Connect width-change handlers AFTER any restoration so that
             # initial layout notifications do not overwrite saved widths with
             # default/minimum values.
             for col in treeview.get_columns():
                 if col.get_resizable():
-                    col.connect("notify::width", lambda *_a: self._schedule_save())
+                    col.connect(
+                        "notify::width", lambda *_a: self._schedule_save()
+                    )
+                    col.connect(
+                        "notify::fixed-width",
+                        lambda *_a: self._schedule_save(),
+                    )
 
             # Register only once restoration and handler wiring are complete.
             self._treeviews[state_key] = treeview

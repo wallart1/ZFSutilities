@@ -174,6 +174,11 @@ the Prune list, configure the filters in the **Mass Delete** card, and click
   `zfscheckagainst`. This is the fastest way to free space, but it is also the
   most destructive.
 
+Before either mode deletes anything, the candidate list is followed by an
+**estimated disk space** message. The estimate is the sum of each snapshot's
+`used` property (space unique to that snapshot). If **Release Holds** is enabled,
+holds are released automatically without an additional confirmation per snapshot.
+
 ### Command-line equivalent
 
 The GUI action invokes [`zfsmassdelsnaps`](../commands-and-modules/commands.md#zfsmassdelsnaps):
