@@ -816,40 +816,106 @@ Scheduled jobs run in the background and execute the same commands the GUI would
 This tab edits the [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst)
 table used for verification when deleting snapshots.
 
-### Layout
+The table is split into three sections:
 
-An editable, reorderable table with five columns. Drag rows to reorder them; click a cell to edit it.
+- **Backup-derived entries** — rows generated from active Backup tab
+  send/receive steps.
+- **Offsite-derived entries** — rows generated from active Offsite tab
+  send/receive steps.
+- **User entries** — manually maintained rows that always override
+  derived rows for the same `(dataset, label)` pair.
 
-| Column          | Meaning                                                                                                                                                          |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Dataset**     | Source dataset tree this row applies to. `<offsite>` may appear anywhere; each occurrence is replaced with each offsite-candidate pool name at run-time.         |
-| **Quals**       | Number of leading path segments to strip from the dataset's name. This is the first of two steps for constructing the counterpart dataset name.                                                                                       |
-| **Counterpart** | Path prefix to prepend after stripping. A literal `-` means "no prepend". `<offsite>` may appear anywhere and is replaced with each offsite-candidate pool name. This is the second of two steps for constructing the counterpart dataset name.|
-| **Label**       | Snapshot label to match. This entry will be used only when the snapshot has this label.                                                                                                                                          |
-| **Comment**     | Optional note stored in the saved configuration and shown in this table. Use for documenting the entry's purpose or a short blurb of what it does.                                                                                                  |
-
-`zfscheckagainst` uses this table to map a snapshot to its counterpart
-dataset(s). Before a snapshot is deleted, the script verifies that the candidate snapshot
-is not the last common snapshot shared with any counterpart. If the
-counterpart pool is offline and the snapshot label is `offsite`, hold tags
-are used as receipts to decide whether deletion is safe.
+`zfscheckagainst` uses the merged table to map a snapshot to its
+counterpart dataset(s). Before a snapshot is deleted, the script verifies
+that the candidate snapshot is not the last common snapshot shared with any
+counterpart. If the counterpart pool is offline and the snapshot label is
+`offsite`, hold tags are used as receipts to decide whether deletion is
+safe.
 
 For the full algorithm and return codes, see the
 [`zfscheckagainst` module reference](../commands-and-modules/modules.md#zfscheckagainst).
 
+### Layout
+
+The two derived sections are read-only tables. Each has an **Active**
+checkbox at the top:
+
+- When checked, the rows in that section are included in the merged
+  runtime table.
+- When unchecked, the section is ignored.
+
+The bottom **User entries** section is an editable, reorderable table.
+Drag rows to reorder them; click a cell to edit it.
+
+| Column                      | Meaning                                                                                                                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Snapshot label**          | Snapshot label to match. This entry applies only to snapshots carrying this label (e.g. `dailybackup`, `offsite`).                                                              |
+| **Source dataset**          | Source dataset tree this row applies to. `<offsite>` may appear anywhere; each occurrence is replaced with each offsite-candidate pool name at run-time.                        |
+| **Strip leading segments**  | Number of leading path segments to remove from the source dataset name. This is the first of two steps for constructing the counterpart dataset name.                          |
+| **Destination dataset**     | Path prefix to prepend after stripping. A literal `-` means "no prepend". `<offsite>` may appear anywhere and is replaced with each offsite-candidate pool name.                |
+| **Comment**                 | Optional note stored in the saved configuration and shown in this table. Use for documenting the entry's purpose.                                                               |
+
+Hover over any column header to see a tooltip explaining the field.
+
+### How the destination dataset is constructed
+
+`zfscheckagainst` builds the counterpart dataset name in two steps:
+
+1. **Remove** the first N path segments from the snapshot's dataset
+   (where N is the value in **Strip leading segments**).
+2. **Prepend** the value from **Destination dataset** to the result.
+
+For example, with a snapshot on
+`threeamigos/proxmox/vm-101-disk-0@dailybackup-…-d`:
+
+| Source dataset                | Strip | Destination dataset | Counterpart dataset                        |
+| ----------------------------- | ----- | ------------------- | ------------------------------------------ |
+| `threeamigos/proxmox`         | `0`   | `fivebays`          | `fivebays/threeamigos/proxmox/vm-101-disk-0` |
+| `fivebays/threeamigos/proxmox`| `1`   | `-`                 | `threeamigos/proxmox/vm-101-disk-0`        |
+
+### Derived entries
+
+Derived rows are generated automatically from the Backup and Offsite tab
+send/receive steps. For each active step `source → dest` with label
+`dailybackup` (Backup) or `offsite` (Offsite), two rows are produced:
+
+- **Forward**: `source 0 dest <label>`
+- **Reverse**: `dest/source 1 - <label>`
+
+When the Offsite Destination column contains `<offsite>`, the derived
+row keeps the placeholder literal. `zfscheckagainst` expands it to every
+pool marked as an offsite candidate in the [Pools tab](#pools-tab) at
+run time, so one derived row can verify against all candidate pools.
+
 ### Actions
 
-| Button         | Behavior                                                                            |
-| -------------- | ----------------------------------------------------------------------------------- |
-| **Add Row**    | Appends a new empty row                                                             |
-| **Remove Row** | Deletes the selected row(s)                                                         |
-| **Save**       | Saves the table after validation. Turns **red** while there are unsaved changes. |
-| **Revert**     | Discards all changes and reloads from the last saved table.                                                                   |
+| Button          | Behavior                                                                                                              |
+| --------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **Get Entries** | Refresh the Backup-derived and Offsite-derived sections from the current Backup/Offsite configs. Marks the tab dirty. |
+| **Add pair...** | Open an assistant that asks for snapshot label, source dataset, destination dataset, and comment; it computes the correct **Strip leading segments** value and appends the row to the user table. |
+| **Add Row**     | Appends a new empty row to the user table.                                                                            |
+| **Remove Row**  | Deletes the selected row(s) from the user table.                                                                      |
+| **Save**        | Saves the whole `checkagainst` object after validation. Turns **red** while there are unsaved changes.                |
+| **Revert**      | Discards all changes and reloads from the last saved object.                                                          |
 
 A status label below the table shows **orange** "Unsaved changes" while
 edits are pending, or a **red** validation error if a row is missing a
-required field (Dataset, Counterpart, or Label) or has an invalid Quals
-value.
+required field (Source dataset, Destination dataset, or Snapshot label) or
+has an invalid **Strip leading segments** value.
+
+### Auto-seeding
+
+After a successful Backup, Offsite, or Restore run started from the GUI,
+the corresponding source/destination pair is automatically added to the
+**User entries** table. This only happens when:
+
+- The run completed successfully.
+- The destination does **not** contain `<offsite>`.
+- An equivalent row (same source dataset, label, and destination dataset)
+  does not already exist.
+
+When a row is added this way, an `INFO` message is logged. Auto-seeding
+does not happen for scheduled profile or cron runs; it is GUI-only.
 
 ---
 

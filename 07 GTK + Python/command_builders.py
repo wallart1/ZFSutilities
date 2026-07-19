@@ -19,6 +19,8 @@ class BashStep:
         fatal: True if a non-zero return code should abort the run.
         pre_callback: Optional callable to run before the step starts.
         post_callback: Optional callable to run after the step finishes.
+        metadata: Optional dict carrying source/dest/label for successful
+            send/receive steps (used to auto-seed checkagainst entries).
     """
 
     command: List[str]
@@ -27,6 +29,7 @@ class BashStep:
     fatal: bool = False
     pre_callback: Optional[Callable[[], None]] = None
     post_callback: Optional[Callable[[], None]] = None
+    metadata: Optional[dict] = None
 
 
 def _dryrun_assignments(dryrun=False):
@@ -171,11 +174,17 @@ def build_send_receive_command(source, dest, variables, parent_dir, nextsnap,
         f'{var_assignments}'
         f'send-receive'
     )
+    metadata = {
+        "source": source,
+        "dest": dest,
+        "label": variables.get("label", "dailybackup"),
+    }
     return BashStep(
         ["bash", "-c", bash_script],
         f"zfs send/receive: {source} -> {dest}",
         is_rsync=False,
         fatal=True,
+        metadata=metadata,
     )
 
 

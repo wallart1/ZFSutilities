@@ -218,9 +218,14 @@ class TestPoolsAndCheckagainst(unittest.TestCase):
                 ],
             )
 
-    def test_get_checkagainst_creates_empty_list(self):
+    def test_get_checkagainst_creates_nested_defaults(self):
         config = {}
-        self.assertEqual(backup_config.get_checkagainst(config), [])
+        data = backup_config.get_checkagainst(config)
+        self.assertTrue(data["backup_derived_active"])
+        self.assertTrue(data["offsite_derived_active"])
+        self.assertEqual(data["backup_derived"], [])
+        self.assertEqual(data["offsite_derived"], [])
+        self.assertEqual(data["user_entries"], [])
 
 
 class TestRetentionConfig(unittest.TestCase):

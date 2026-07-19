@@ -51,7 +51,9 @@ from retention_actions import (
 )
 from checkagainst_page import (
     on_checkagainst_add, on_checkagainst_remove,
-    on_checkagainst_save, on_checkagainst_revert, check_checkagainst_dirty,
+    on_checkagainst_save, on_checkagainst_revert,
+    on_checkagainst_get_entries, on_checkagainst_add_pair,
+    check_checkagainst_dirty,
 )
 from schedule_page import (
     on_schedule_save, on_schedule_revert, on_schedule_delete,
@@ -166,11 +168,13 @@ PAGE_SPECS = {
         "buttons": [
             ("Add Row", "list-add", None),
             ("Remove Row", "list-remove", None),
+            ("Get Entries", "view-refresh", None),
+            ("Add pair...", "list-add", None),
             ("Save", "document-save", "_ca_save_button"),
             ("Revert", "document-revert", None),
         ],
         "dirty_check": check_checkagainst_dirty,
-        "dirty_attr": "_ca_original",
+        "dirty_attr": "_ca_original_full",
     },
     "dashboard": {
         "buttons": [
@@ -264,6 +268,11 @@ def _handler_checkagainst_save(app):
 
 def _handler_checkagainst_revert(app):
     on_checkagainst_revert(app)
+    app.update_action_buttons("checkagainst")
+
+
+def _handler_checkagainst_get_entries(app):
+    on_checkagainst_get_entries(app)
     app.update_action_buttons("checkagainst")
 
 
@@ -372,6 +381,8 @@ ACTION_HANDLERS = {
     "checkagainst": {
         "Add Row": on_checkagainst_add,
         "Remove Row": on_checkagainst_remove,
+        "Get Entries": _handler_checkagainst_get_entries,
+        "Add pair...": on_checkagainst_add_pair,
         "Save": _handler_checkagainst_save,
         "Revert": _handler_checkagainst_revert,
     },

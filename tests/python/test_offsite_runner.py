@@ -76,6 +76,13 @@ class TestBuildOffsiteStepCommand(unittest.TestCase):
         self.assertTrue(step.fatal)
         self.assertFalse(step.is_rsync)
 
+    def test_step_has_metadata(self):
+        step = self._build({})
+        self.assertIsNotNone(step.metadata)
+        self.assertEqual(step.metadata["source"], "tank/src")
+        self.assertEqual(step.metadata["dest"], "z40tb/src")
+        self.assertEqual(step.metadata["label"], "offsite")
+
     def test_includes_core_variables(self):
         step = self._build({})
         script = step.command[2]

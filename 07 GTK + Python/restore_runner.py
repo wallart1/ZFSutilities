@@ -224,4 +224,9 @@ def build_restore_command(source, removequalifiers, destfs, parent_dir,
         which.append("incremental")
     desc = f"restore: {source} -> {destfs} ({' + '.join(which)})"
 
-    return BashStep(cmd, desc, is_rsync=False, fatal=True)
+    metadata = {
+        "source": source,
+        "dest": destfs,
+        "label": advanced_vars.get("label", ""),
+    }
+    return BashStep(cmd, desc, is_rsync=False, fatal=True, metadata=metadata)

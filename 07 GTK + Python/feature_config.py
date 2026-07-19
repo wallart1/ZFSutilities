@@ -164,17 +164,241 @@ def save_pools(config, pools):
     save_config(config)
 
 
+CHECKAGAINST_DEFAULTS = {
+    "backup_derived_active": True,
+    "offsite_derived_active": True,
+    "backup_derived": [],
+    "offsite_derived": [],
+    "user_entries": [],
+}
+
+
 def get_checkagainst(config):
-    entries = config.get("checkagainst")
-    if entries is None:
-        entries = []
-        config["checkagainst"] = entries
-    return entries
+    """Return the nested checkagainst dict, creating defaults if absent.
+
+    Backward-compatible: if the config still holds a flat list, wrap it in
+    the nested schema under user_entries.
+    """
+    data = config.get("checkagainst")
+    if isinstance(data, list):
+        data = {"user_entries": [dict(e) for e in data if isinstance(e, dict)]}
+        config["checkagainst"] = data
+    elif not isinstance(data, dict):
+        data = {}
+        config["checkagainst"] = data
+
+    for key, value in CHECKAGAINST_DEFAULTS.items():
+        if key not in data:
+            data[key] = _deep_copy(value)
+
+    return data
 
 
-def save_checkagainst(config, entries):
-    config["checkagainst"] = [dict(e) for e in entries]
+def save_checkagainst(config, data):
+    """Persist the nested checkagainst dict under config lock."""
+    config["checkagainst"] = _deep_copy(data)
     save_config(config)
+
+
+def _compute_strip_segments(source, destination):
+    """Compute the quals/prefix that maps source onto destination.
+
+    Finds the longest common suffix between source and destination.  The
+    number of leading segments in source that are not part of that suffix is
+    the strip count; the part of destination before the suffix is the prefix
+    to prepend.  When there is no common suffix, fall back to (0, destination).
+    """
+    src_parts = [p for p in str(source).split("/") if p]
+    dst_parts = [p for p in str(destination).split("/") if p]
+
+    max_suffix = 0
+    for length in range(1, min(len(src_parts), len(dst_parts)) + 1):
+        if src_parts[-length:] == dst_parts[-length:]:
+            max_suffix = length
+        else:
+            break
+
+    if max_suffix == 0:
+        return (0, destination)
+
+    strip_count = len(src_parts) - max_suffix
+    prefix_parts = dst_parts[:len(dst_parts) - max_suffix]
+    prefix = "/".join(prefix_parts) if prefix_parts else "-"
+    return (strip_count, prefix)
+
+
+def _checkagainst_row_key(row):
+    return (row.get("dataset", ""), row.get("label", ""))
+
+
+def _dedupe_checkagainst_rows(rows):
+    seen = set()
+    result = []
+    for row in rows:
+        key = (
+            row.get("dataset", ""),
+            row.get("quals", "0"),
+            row.get("counterpart", "-"),
+            row.get("label", ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(dict(row))
+    return result
+
+
+def _reverse_checkagainst_row(source, dest, label):
+    """Build the reverse checkagainst row for a source/dest pair.
+
+    zfs-send-receive constructs the destination as destfs + "/" + source_path.
+    The reverse row therefore needs to match the actual destination root
+    (dest/source when dest does not already end with source) and strip exactly
+    the leading prefix so the original source path remains.
+    """
+    src_parts = [p for p in str(source).split("/") if p]
+    dst_parts = [p for p in str(dest).split("/") if p]
+
+    # If dest already ends with the full source path, the actual destination
+    # root is dest itself; otherwise it is dest + "/" + source.
+    if (
+        len(dst_parts) >= len(src_parts)
+        and dst_parts[-len(src_parts):] == src_parts
+    ):
+        reverse_dataset = dest
+        strip_count = len(dst_parts) - len(src_parts)
+    else:
+        reverse_dataset = f"{dest}/{source}"
+        strip_count = len(dst_parts)
+
+    return {
+        "dataset": reverse_dataset,
+        "quals": str(strip_count),
+        "counterpart": "-",
+        "label": label,
+    }
+
+
+def derive_checkagainst_entries(config):
+    """Derive checkagainst rows from active Backup and Offsite steps.
+
+    Returns a tuple (backup_derived, offsite_derived) of flat row lists.
+    """
+    backup_cfg = config.get("backup", {})
+    backup_label = backup_cfg.get("variables", {}).get("label", "dailybackup")
+
+    backup_derived = []
+    for step in backup_cfg.get("send_receive_steps", []):
+        if not step.get("active", True):
+            continue
+        source = step.get("source", "").strip()
+        dest = step.get("dest", "").strip()
+        if not source or not dest:
+            continue
+        backup_derived.append({
+            "dataset": source,
+            "quals": "0",
+            "counterpart": dest,
+            "label": backup_label,
+        })
+        backup_derived.append(_reverse_checkagainst_row(source, dest, backup_label))
+
+    offsite_derived = []
+    for step in config.get("offsite", {}).get("steps", []):
+        if not step.get("active", True):
+            continue
+        source = step.get("source", "").strip()
+        dest = step.get("dest", "").strip()
+        if not source or not dest:
+            continue
+        offsite_derived.append({
+            "dataset": source,
+            "quals": "0",
+            "counterpart": dest,
+            "label": "offsite",
+        })
+        offsite_derived.append(_reverse_checkagainst_row(source, dest, "offsite"))
+
+    return (
+        _dedupe_checkagainst_rows(backup_derived),
+        _dedupe_checkagainst_rows(offsite_derived),
+    )
+
+
+def merge_checkagainst_entries(config):
+    """Merge derived and user checkagainst rows with explicit precedence.
+
+    Precedence for the same (dataset, label) key:
+      user_entries > offsite_derived > backup_derived
+    """
+    data = get_checkagainst(config)
+    merged = {}
+
+    if data.get("backup_derived_active", True):
+        for row in data.get("backup_derived", []):
+            merged[_checkagainst_row_key(row)] = dict(row)
+
+    if data.get("offsite_derived_active", True):
+        for row in data.get("offsite_derived", []):
+            merged[_checkagainst_row_key(row)] = dict(row)
+
+    for row in data.get("user_entries", []):
+        merged[_checkagainst_row_key(row)] = dict(row)
+
+    return list(merged.values())
+
+
+def add_checkagainst_entry(config, row_dict, source="user"):
+    """Append a row to user_entries if an equivalent row does not exist.
+
+    Equivalence is keyed by (dataset, label, counterpart).  Returns True if
+    the row was added, False if a matching entry already exists.
+    """
+    data = get_checkagainst(config)
+    new_dataset = row_dict.get("dataset", "")
+    new_label = row_dict.get("label", "")
+    new_counterpart = row_dict.get("counterpart", "-")
+
+    for row in data.get("user_entries", []):
+        if (
+            row.get("dataset", "") == new_dataset
+            and row.get("label", "") == new_label
+            and row.get("counterpart", "-") == new_counterpart
+        ):
+            return False
+
+    data["user_entries"].append(dict(row_dict))
+    save_checkagainst(config, data)
+    return True
+
+
+def _maybe_seed_checkagainst(app, step_metadata):
+    """Add a checkagainst row after a successful GUI send/receive step.
+
+    Skips rows that already exist, have an empty label, or involve the
+    <offsite> placeholder.
+    """
+    if step_metadata is None:
+        return
+    source = step_metadata.get("source", "").strip()
+    dest = step_metadata.get("dest", "").strip()
+    label = step_metadata.get("label", "").strip()
+    if not label:
+        return
+    if "<offsite>" in source or "<offsite>" in dest:
+        return
+    strip_count, prefix = _compute_strip_segments(source, dest)
+    row = {
+        "dataset": source,
+        "quals": str(strip_count),
+        "counterpart": prefix,
+        "label": label,
+    }
+    if add_checkagainst_entry(app.ctx.config, row):
+        from backup_config import log_msg
+        log_msg(
+            f"INFO: Added checkagainst entry for {source} -> {prefix} ({label})"
+        )
 
 
 def get_archive_path(config):

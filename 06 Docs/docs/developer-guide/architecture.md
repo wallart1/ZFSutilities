@@ -182,7 +182,7 @@ Deletes a single snapshot after:
 ### [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst)
 
 Verifies a snapshot is not the last common snapshot shared with a counterpart
-dataset. Maintains a lookup table (`fss` table, configured by the GUI Retention tab) mapping dataset pairs and labels.
+dataset. Maintains a lookup table (`fss` table, configured by the GUI Checkagainst tab) mapping dataset pairs and labels.
 
 When a counterpart pool is offline (offsite label only), uses hold-tag
 verification: scans other `@offsite` snapshots on the same source dataset for a

@@ -125,4 +125,9 @@ def build_offsite_step_command(source, dest, variables, parent_dir, nextsnap,
         desc += f" (includes: {includes})"
     if excludes:
         desc += f" (excludes: {excludes})"
-    return BashStep(cmd, desc, is_rsync=False, fatal=True)
+    metadata = {
+        "source": source,
+        "dest": dest,
+        "label": "offsite",
+    }
+    return BashStep(cmd, desc, is_rsync=False, fatal=True, metadata=metadata)

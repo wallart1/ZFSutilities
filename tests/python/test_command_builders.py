@@ -167,6 +167,36 @@ class TestBuildRsyncCommand(unittest.TestCase):
         self.assertIn("exit ${PIPESTATUS[0]}", script)
 
 
+class TestSendReceiveMetadata(unittest.TestCase):
+    """build_send_receive_command attaches source/dest/label metadata."""
+
+    def test_send_receive_step_has_metadata(self):
+        variables = {"label": "dailybackup"}
+        step = command_builders.build_send_receive_command(
+            "threeamigos/proxmox",
+            "fivebays/threeamigos/proxmox",
+            variables,
+            "/usr/local/lib/zfsutilities/current/bin",
+            "@dailybackup-2026-06-11T12:00-d",
+            dryrun=False,
+        )
+        self.assertIsNotNone(step.metadata)
+        self.assertEqual(step.metadata["source"], "threeamigos/proxmox")
+        self.assertEqual(step.metadata["dest"], "fivebays/threeamigos/proxmox")
+        self.assertEqual(step.metadata["label"], "dailybackup")
+
+    def test_send_receive_step_metadata_defaults_label(self):
+        step = command_builders.build_send_receive_command(
+            "tank/src",
+            "backup/tank/src",
+            {},
+            "/usr/local/lib/zfsutilities/current/bin",
+            "@dailybackup-2026-06-11T12:00-d",
+            dryrun=False,
+        )
+        self.assertEqual(step.metadata["label"], "dailybackup")
+
+
 class TestBuildSendReceiveCommand(unittest.TestCase):
 
     def test_includes_basic_variables(self):

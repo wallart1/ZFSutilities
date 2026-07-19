@@ -174,8 +174,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_17(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 17)
+    def test_config_version_is_18(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 18)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
         config = {"config_version": 15}
@@ -247,6 +247,49 @@ class TestRunMigrations(unittest.TestCase):
         self.assertTrue(result["offsite"]["pause_scrubs"])
         self.assertTrue(result["restore"]["pause_scrubs"])
 
+    def test_migrate_17_to_18_moves_flat_list(self):
+        config = {
+            "config_version": 17,
+            "checkagainst": [
+                {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "offsite"},
+                {"dataset": "tank/b", "comment": "existing"},
+            ],
+        }
+        result = config_migrations._migrate_17_to_18(config)
+        self.assertEqual(result["config_version"], 18)
+        self.assertEqual(len(result["checkagainst"]["user_entries"]), 2)
+        self.assertEqual(result["checkagainst"]["user_entries"][0]["dataset"], "tank/a")
+        self.assertEqual(result["checkagainst"]["user_entries"][1]["comment"], "existing")
+        self.assertTrue(result["checkagainst"]["backup_derived_active"])
+        self.assertTrue(result["checkagainst"]["offsite_derived_active"])
+        self.assertEqual(result["checkagainst"]["backup_derived"], [])
+        self.assertEqual(result["checkagainst"]["offsite_derived"], [])
+
+    def test_migrate_17_to_18_idempotent_for_nested_dict(self):
+        config = {
+            "config_version": 17,
+            "checkagainst": {
+                "backup_derived_active": False,
+                "offsite_derived_active": False,
+                "backup_derived": [{"dataset": "src", "quals": "0", "counterpart": "dst", "label": "dailybackup"}],
+                "offsite_derived": [],
+                "user_entries": [{"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "offsite"}],
+            },
+        }
+        result = config_migrations._migrate_17_to_18(dict(config))
+        self.assertEqual(result["config_version"], 18)
+        self.assertEqual(result["checkagainst"], config["checkagainst"])
+
+    def test_migrate_17_to_18_initializes_defaults_when_missing(self):
+        config = {"config_version": 17}
+        result = config_migrations._migrate_17_to_18(config)
+        self.assertEqual(result["config_version"], 18)
+        self.assertTrue(result["checkagainst"]["backup_derived_active"])
+        self.assertTrue(result["checkagainst"]["offsite_derived_active"])
+        self.assertEqual(result["checkagainst"]["backup_derived"], [])
+        self.assertEqual(result["checkagainst"]["offsite_derived"], [])
+        self.assertEqual(result["checkagainst"]["user_entries"], [])
+
     def test_run_migrations_from_version_14(self):
         config = {
             "config_version": 14,
@@ -255,8 +298,12 @@ class TestRunMigrations(unittest.TestCase):
             ],
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 17)
-        self.assertEqual(result["checkagainst"][0]["comment"], "")
+        self.assertEqual(result["config_version"], 18)
+        self.assertEqual(result["checkagainst"]["user_entries"][0]["comment"], "")
+        self.assertTrue(result["checkagainst"]["backup_derived_active"])
+        self.assertTrue(result["checkagainst"]["offsite_derived_active"])
+        self.assertEqual(result["checkagainst"]["backup_derived"], [])
+        self.assertEqual(result["checkagainst"]["offsite_derived"], [])
         self.assertEqual(result["prune_pools_order"], [])
         self.assertFalse(result["backup"]["pause_scrubs"])
         self.assertFalse(result["offsite"]["pause_scrubs"])

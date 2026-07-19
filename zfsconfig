@@ -41,6 +41,28 @@ _zfsconfig_lock_file() {
     printf '%s/.config.lock' "$ZFSLOCK_DIR"
 }
 
+# Locate the Python source directory so bash helpers can import feature_config.
+# Honours ZFSUTILITIES_PYLIB, then checks the repo root and deployed bin/ layouts.
+_zfsconfig_pylib() {
+    if [[ -n "${ZFSUTILITIES_PYLIB:-}" ]]; then
+        printf '%s\n' "$ZFSUTILITIES_PYLIB"
+        return 0
+    fi
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local candidate
+    for candidate in \
+        "$script_dir/07 GTK + Python" \
+        "$script_dir/../07 GTK + Python"; do
+        if [[ -f "$candidate/feature_config.py" ]]; then
+            realpath "$candidate"
+            return 0
+        fi
+    done
+    log_msg "FATAL: Could not locate feature_config.py"
+    return 1
+}
+
 zfsconfig_invalidate() {
     unset _ZFSCONFIG_POOLS_CACHE _ZFSCONFIG_OFFSITE_CACHE _ZFSCONFIG_CA_CACHE
 }
@@ -130,25 +152,28 @@ PYEOF
 zfsconfig_get_checkagainst() {
     if [[ -z "${_ZFSCONFIG_CA_CACHE+x}" ]]; then
         _zfsconfig_ensure
-        local lock_file
+        local lock_file pylib
         lock_file="$(_zfsconfig_lock_file)"
+        pylib="$(_zfsconfig_pylib)" || return 1
         _ZFSCONFIG_CA_CACHE=$(
             exec 200<>"$lock_file"
             flock -s 200
-            CFG_PATH="$ZFSCONFIG_PATH" python3 - <<'PYEOF'
-import json, os
+            CFG_PATH="$ZFSCONFIG_PATH" PYLIB="$pylib" python3 - <<'PYEOF'
+import json, os, sys
+sys.path.insert(0, os.environ["PYLIB"])
+import feature_config
 try:
     with open(os.environ["CFG_PATH"]) as f:
         cfg = json.load(f)
 except Exception:
     cfg = {}
-for e in cfg.get("checkagainst", []) or []:
-    dataset = e.get("dataset", "")
-    quals = e.get("quals", "0")
-    counterpart = e.get("counterpart", "-")
-    label = e.get("label", "")
+for e in feature_config.merge_checkagainst_entries(cfg):
+    dataset = str(e.get("dataset", "")).strip()
+    label = str(e.get("label", "")).strip()
     if not dataset or not label:
         continue
+    quals = str(e.get("quals", "0") or "0").strip()
+    counterpart = str(e.get("counterpart", "-") or "-").strip()
     print(dataset, quals, counterpart, label)
 PYEOF
         )

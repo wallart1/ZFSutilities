@@ -91,5 +91,36 @@ class TestComputeRestoreParams(unittest.TestCase):
         self.assertEqual(destfs, "poolA")
 
 
+class TestBuildRestoreCommand(unittest.TestCase):
+    """build_restore_command produces a BashStep with metadata."""
+
+    def test_step_has_metadata(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={"label": "dailybackup"},
+            do_part1=True,
+            do_part2=False,
+        )
+        self.assertIsNotNone(step.metadata)
+        self.assertEqual(step.metadata["source"], "backuppool/threeamigos/proxmox")
+        self.assertEqual(step.metadata["dest"], "threeamigos")
+        self.assertEqual(step.metadata["label"], "dailybackup")
+
+    def test_empty_label_in_metadata(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+            do_part1=True,
+            do_part2=False,
+        )
+        self.assertEqual(step.metadata["label"], "")
+
+
 if __name__ == "__main__":
     unittest.main()

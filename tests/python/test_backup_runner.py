@@ -800,6 +800,71 @@ class TestRunnerRobustness(unittest.TestCase):
 
         self.assertEqual(runner.current_step, 1)
 
+    @patch("backup_runner.add_history_entry")
+    def test_step_success_callback_invoked_with_metadata(self, _mock_add):
+        """A successful step with metadata invokes the registered callback."""
+        runner = self._runner()
+        runner.running = True
+        runner.current_step = 0
+        callback = MagicMock()
+        runner.set_step_success_callback(callback)
+        runner.steps = [
+            BashStep([], "step", metadata={"source": "a", "dest": "b"}),
+        ]
+        runner._session_start_time = time.time()
+        runner.process = self._fake_process(rc=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                with patch.object(br.GLib, "idle_add"):
+                    runner._check_process()
+
+        callback.assert_called_once_with({"source": "a", "dest": "b"})
+
+    @patch("backup_runner.add_history_entry")
+    def test_step_success_callback_not_invoked_without_metadata(self, _mock_add):
+        """A successful step without metadata does not invoke the callback."""
+        runner = self._runner()
+        runner.running = True
+        runner.current_step = 0
+        callback = MagicMock()
+        runner.set_step_success_callback(callback)
+        runner.steps = [BashStep([], "step")]
+        runner._session_start_time = time.time()
+        runner.process = self._fake_process(rc=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                with patch.object(br.GLib, "idle_add"):
+                    runner._check_process()
+
+        callback.assert_not_called()
+
+    @patch("backup_runner.add_history_entry")
+    def test_step_success_callback_exception_logs_warning(self, _mock_add):
+        """An exception in the success callback is logged but does not abort."""
+        runner = self._runner()
+        runner.running = True
+        runner.current_step = 0
+        callback = MagicMock(side_effect=RuntimeError("seed failed"))
+        runner.set_step_success_callback(callback)
+        runner.steps = [
+            BashStep([], "step", metadata={"source": "a", "dest": "b"}),
+        ]
+        runner._session_start_time = time.time()
+        runner.process = self._fake_process(rc=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                with patch.object(br.GLib, "idle_add"):
+                    runner._check_process()
+
+        callback.assert_called_once()
+        self.assertEqual(runner.current_step, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

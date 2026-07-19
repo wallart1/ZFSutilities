@@ -10,9 +10,10 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk
+from test_support import mock_gtk, temp_config_dir
 from app_context import AppContext
 from command_builders import BashStep
+from feature_config import _maybe_seed_checkagainst
 
 
 def _mock_app_with_runner():
@@ -104,6 +105,18 @@ class TestRestorePageRun(unittest.TestCase):
         app.restore_runner.prepare_session_log.assert_called_once()
         app.restore_runner.set_steps.assert_called_once()
 
+    def test_sets_step_success_callback(self):
+        with mock_gtk():
+            import restore_page
+        _configure_dialog_ok(restore_page)
+        app = _mock_app_with_runner()
+        app.parent_dir = REPO_ROOT
+
+        with self._patch_dependencies():
+            restore_page.on_restore_run(app, app.ctx)
+
+        app.restore_runner.set_step_success_callback.assert_called_once()
+
 
 class TestOffsitePageRun(unittest.TestCase):
     """offsite_page.on_offsite_run() calls prepare_session_log."""
@@ -112,7 +125,15 @@ class TestOffsitePageRun(unittest.TestCase):
         return patch.multiple(
             "offsite_page",
             collect_offsite_config=MagicMock(return_value={
-                "steps": [],
+                "steps": [
+                    {
+                        "active": True,
+                        "source": "tank/src",
+                        "dest": "<offsite>/src",
+                        "includes": "",
+                        "excludes": "",
+                    },
+                ],
                 "variables": {},
             }),
             do_detect_offsite_pool=MagicMock(return_value="offsitepool"),
@@ -131,6 +152,19 @@ class TestOffsitePageRun(unittest.TestCase):
             offsite_page.on_offsite_run(app, app.ctx)
 
         app.offsite_runner.prepare_session_log.assert_called_once()
+
+    def test_sets_step_success_callback(self):
+        with mock_gtk():
+            import offsite_page
+        _configure_dialog_ok(offsite_page)
+        app = _mock_app_with_runner()
+        app.offsite_nextsnap_entry.get_text.return_value = "@offsite-2026-06-11T12:00-s"
+        app.offsite_pool_store = MagicMock()
+
+        with self._patch_dependencies():
+            offsite_page.on_offsite_run(app, app.ctx)
+
+        app.offsite_runner.set_step_success_callback.assert_called_once()
 
 
 class TestBackupPageRun(unittest.TestCase):
@@ -195,6 +229,69 @@ class TestBackupPageRun(unittest.TestCase):
         with self._patch_dependencies():
             backup_page.on_backup_run(app, app.ctx)
             backup_page.build_rsync_command.assert_called_once_with("remote:/src", "/dst")
+
+    def test_sets_step_success_callback(self):
+        with mock_gtk():
+            import backup_page
+        _configure_dialog_ok(backup_page)
+        app = _mock_app_with_runner()
+        app.backup_nextsnap_entry.get_text.return_value = "@daily-2026-06-11T12:00-d"
+        app.backup_pull_store = []
+        app.backup_sr_store = []
+        app.config = {"retention": {"enabled": False}}
+
+        with self._patch_dependencies():
+            backup_page.on_backup_run(app, app.ctx)
+
+        app.backup_runner.set_step_success_callback.assert_called_once()
+
+    def test_success_callback_seeds_checkagainst(self):
+        """The registered callback persists a checkagainst row on success."""
+        with mock_gtk():
+            import backup_page
+        _configure_dialog_ok(backup_page)
+
+        step = BashStep(
+            ["echo", "zfs"],
+            "ZFS step",
+            metadata={
+                "source": "threeamigos/proxmox",
+                "dest": "fivebays/threeamigos/proxmox",
+                "label": "dailybackup",
+            },
+        )
+
+        with temp_config_dir():
+            app = _mock_app_with_runner()
+            app.backup_nextsnap_entry.get_text.return_value = "@daily-2026-06-11T12:00-d"
+            app.backup_pull_store = []
+            app.backup_sr_store = []
+            app.config = {"retention": {"enabled": False}}
+            app.ctx.config = app.config
+
+            with patch.multiple(
+                "backup_page",
+                collect_backup_config=MagicMock(return_value={
+                    "steps": [],
+                    "variables": {},
+                    "post_steps": {"remove_snapfile": False, "run_retention": False},
+                }),
+                build_pre_backup_command=MagicMock(return_value=BashStep(["echo", "pre"], "Pre-backup")),
+                build_rsync_command=MagicMock(return_value=BashStep(["echo", "rsync"], "Rsync step", is_rsync=True)),
+                build_send_receive_command=MagicMock(return_value=step),
+                build_post_backup_command=MagicMock(return_value=BashStep(["echo", "post"], "Post-backup")),
+                build_retention_command=MagicMock(return_value=BashStep(["echo", "retain"], "Retention")),
+            ):
+                backup_page.on_backup_run(app, app.ctx)
+
+            callback = app.backup_runner.set_step_success_callback.call_args[0][0]
+            callback(step.metadata)
+
+            entries = app.config["checkagainst"]["user_entries"]
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["dataset"], "threeamigos/proxmox")
+            self.assertEqual(entries[0]["counterpart"], "fivebays")
+            self.assertEqual(entries[0]["label"], "dailybackup")
 
 
 if __name__ == "__main__":

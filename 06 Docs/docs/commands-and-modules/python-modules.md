@@ -71,7 +71,10 @@ the GUI tabs and the bash scripts.
 | `get_offsite_config()` / `save_offsite_config()` | Offsite tab state |
 | `get_restore_config()` / `save_restore_config()` | Restore tab state |
 | `get_pools()` / `save_pools()` | Registered pool list, including `offsite_candidate` flag |
-| `get_checkagainst()` / `save_checkagainst()` | fss table rows |
+| `get_checkagainst()` / `save_checkagainst()` | Nested checkagainst object (derived + user entries) |
+| `derive_checkagainst_entries()` | Build forward/reverse rows from active Backup/Offsite steps |
+| `merge_checkagainst_entries()` | Merge derived and user entries for `zfsconfig_get_checkagainst` |
+| `add_checkagainst_entry()` | Append a row to `user_entries` if not already present |
 | `get_retention()` / `save_retention()` | Per-pool retention policies |
 | `get_archive_path()` / `save_archive_path()` | Offsite archive path |
 | `get_prune_label()` / `save_prune_label()` | Global retention prune label |

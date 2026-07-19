@@ -15,6 +15,7 @@ from feature_config import (
     get_offsite_config, generate_offsite_snapshot_name,
     save_offsite_config, get_offsite_candidate_names,
     _read_snapfile, OFFSITE_SNAPFILE,
+    _maybe_seed_checkagainst,
 )
 from offsite_runner import detect_offsite_pool, build_offsite_step_command
 from scrub_manager import attach_step_scrub_callbacks
@@ -480,6 +481,9 @@ def on_offsite_run(app, ctx):
 
     log_msg(f"INFO: Snapshot: {nextsnap}")
     app.offsite_runner.set_steps(steps)
+    app.offsite_runner.set_step_success_callback(
+        lambda md: _maybe_seed_checkagainst(app, md)
+    )
     app.offsite_runner.start(on_complete=lambda cancelled=False: _on_offsite_complete(app, cancelled))
     app.update_action_buttons("offsite")
 

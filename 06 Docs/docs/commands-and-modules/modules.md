@@ -421,6 +421,45 @@ offsite snapshots against their local counterpart. The `<offsite>` token may
 appear anywhere in the Dataset or Counterpart value; every occurrence is
 replaced with the candidate pool name.
 
+#### Deriving entries from Backup/Offsite steps
+
+The GUI can generate checkagainst rows automatically from the active
+send/receive steps on the Backup and Offsite tabs.
+
+For an active Backup step that sends `threeamigos/proxmox` to `fivebays`
+with label `dailybackup`, the derivation produces two rows:
+
+```
+threeamigos/proxmox 0 fivebays               dailybackup
+fivebays/threeamigos/proxmox 1 -             dailybackup
+```
+
+- **Forward row**: keep the source dataset unchanged and prepend the
+  destination pool/path (`0` leading segments stripped).
+- **Reverse row**: prepend the destination to the source, then strip one
+  leading segment from the resulting path so the counterpart resolves back
+  to the original source (`1` leading segment stripped, `-` for no further
+  prepend).
+
+For an Offsite step with label `offsite`, the same rules apply. If the
+Destination column contains `<offsite>`, the derived row keeps the
+placeholder literal; `zfscheckagainst` expands it to each
+offsite-candidate pool at run time.
+
+Derived rows are stored separately in the JSON config under
+`checkagainst.backup_derived` and `checkagainst.offsite_derived`. They are
+merged with `user_entries` at runtime by `zfsconfig_get_checkagainst`:
+
+1. Active `backup_derived` rows are included if
+   `backup_derived_active` is `true`.
+2. Active `offsite_derived` rows overlay them by `(dataset, label)`.
+3. `user_entries` overlay everything by `(dataset, label)`.
+
+Refresh the derived lists manually in the GUI with **Get Entries**, or let
+the GUI add a matching user entry automatically after a successful Backup,
+Offsite, or Restore run (auto-seeding skips destinations that contain
+`<offsite>` and never duplicates an existing row).
+
 #### How an entry is used
 
 For a snapshot like `threeamigos/proxmox/vm-101-disk-0@dailybackup-…-d` and

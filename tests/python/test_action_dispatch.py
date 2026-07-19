@@ -103,6 +103,30 @@ class TestPoolsAddProfileHandler(unittest.TestCase):
         self.assertEqual(args[2]["pools"], ["tank"])
 
 
+class TestCheckagainstPageSpec(unittest.TestCase):
+    """Checkagainst page exposes the new Get Entries and Add pair buttons."""
+
+    def test_get_entries_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["checkagainst"]["buttons"]
+        self.assertIn(("Get Entries", "view-refresh", None), buttons)
+
+    def test_add_pair_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["checkagainst"]["buttons"]
+        self.assertIn(("Add pair...", "list-add", None), buttons)
+
+
+class TestCheckagainstHandlers(unittest.TestCase):
+    """Checkagainst action handlers are wired correctly."""
+
+    def test_get_entries_handler_registered(self):
+        handler = action_dispatch.ACTION_HANDLERS["checkagainst"]["Get Entries"]
+        self.assertTrue(callable(handler))
+
+    def test_add_pair_handler_registered(self):
+        handler = action_dispatch.ACTION_HANDLERS["checkagainst"]["Add pair..."]
+        self.assertIs(handler, action_dispatch.on_checkagainst_add_pair)
+
+
 class TestDashboardPageSpec(unittest.TestCase):
     """Dashboard page spec exposes the View Log action."""
 

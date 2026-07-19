@@ -14,6 +14,7 @@ from feature_config import (
     get_pool_names,
     get_restore_config,
     save_restore_config,
+    _maybe_seed_checkagainst,
 )
 from restore_runner import (
     compute_auto_destination,
@@ -478,6 +479,9 @@ def on_restore_run(app, ctx):
     )
     log_msg(f"INFO: Starting restore: {source} -> {dest}")
     app.restore_runner.set_steps([step])
+    app.restore_runner.set_step_success_callback(
+        lambda md: _maybe_seed_checkagainst(app, md)
+    )
     app.restore_runner.start(on_complete=lambda cancelled=False: _on_restore_complete(app, cancelled))
     app.update_action_buttons("restore")
 

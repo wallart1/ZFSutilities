@@ -12,6 +12,7 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 from test_support import temp_config_dir, patch_environ
+from unittest.mock import MagicMock
 
 import feature_config
 
@@ -121,9 +122,14 @@ class TestPoolsAndCheckagainst(unittest.TestCase):
             )
             self.assertEqual(config["offsite"]["offsite_pools"], ["z40tb"])
 
-    def test_get_checkagainst_creates_empty_list(self):
+    def test_get_checkagainst_creates_nested_defaults(self):
         config = {}
-        self.assertEqual(feature_config.get_checkagainst(config), [])
+        data = feature_config.get_checkagainst(config)
+        self.assertTrue(data["backup_derived_active"])
+        self.assertTrue(data["offsite_derived_active"])
+        self.assertEqual(data["backup_derived"], [])
+        self.assertEqual(data["offsite_derived"], [])
+        self.assertEqual(data["user_entries"], [])
 
 
 class TestArchivePath(unittest.TestCase):
@@ -322,6 +328,104 @@ class TestPrunePoolsOrder(unittest.TestCase):
             config = {}
             feature_config.save_prune_pools_order(config, ["archive", "tank"])
             self.assertEqual(config["prune_pools_order"], ["archive", "tank"])
+
+
+class TestMaybeSeedCheckagainst(unittest.TestCase):
+    """Auto-seeding checkagainst rows after successful GUI send/receive."""
+
+    def _mock_app(self, config):
+        app = MagicMock()
+        app.ctx = MagicMock()
+        app.ctx.config = config
+        return app
+
+    def test_adds_row_when_new(self):
+        with temp_config_dir():
+            config = {}
+            app = self._mock_app(config)
+            feature_config._maybe_seed_checkagainst(app, {
+                "source": "threeamigos/proxmox",
+                "dest": "fivebays/threeamigos/proxmox",
+                "label": "dailybackup",
+            })
+            entries = feature_config.get_checkagainst(config)["user_entries"]
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["dataset"], "threeamigos/proxmox")
+            self.assertEqual(entries[0]["quals"], "0")
+            self.assertEqual(entries[0]["counterpart"], "fivebays")
+            self.assertEqual(entries[0]["label"], "dailybackup")
+
+    def test_skips_existing_row(self):
+        with temp_config_dir():
+            config = {}
+            app = self._mock_app(config)
+            metadata = {
+                "source": "threeamigos/proxmox",
+                "dest": "fivebays/threeamigos/proxmox",
+                "label": "dailybackup",
+            }
+            feature_config._maybe_seed_checkagainst(app, metadata)
+            feature_config._maybe_seed_checkagainst(app, metadata)
+            entries = feature_config.get_checkagainst(config)["user_entries"]
+            self.assertEqual(len(entries), 1)
+
+    def test_skips_offsite_placeholder(self):
+        with temp_config_dir():
+            config = {}
+            app = self._mock_app(config)
+            feature_config._maybe_seed_checkagainst(app, {
+                "source": "threeamigos/proxmox",
+                "dest": "<offsite>/threeamigos/proxmox",
+                "label": "offsite",
+            })
+            entries = feature_config.get_checkagainst(config)["user_entries"]
+            self.assertEqual(entries, [])
+
+    def test_skips_empty_label(self):
+        with temp_config_dir():
+            config = {}
+            app = self._mock_app(config)
+            feature_config._maybe_seed_checkagainst(app, {
+                "source": "threeamigos/proxmox",
+                "dest": "fivebays/threeamigos/proxmox",
+                "label": "",
+            })
+            entries = feature_config.get_checkagainst(config)["user_entries"]
+            self.assertEqual(entries, [])
+
+    def test_skips_none_metadata(self):
+        with temp_config_dir():
+            config = {}
+            app = self._mock_app(config)
+            feature_config._maybe_seed_checkagainst(app, None)
+            entries = feature_config.get_checkagainst(config)["user_entries"]
+            self.assertEqual(entries, [])
+
+
+class TestComputeStripSegments(unittest.TestCase):
+    """Checkagainst strip-segment helper."""
+
+    def test_no_common_suffix_returns_destination(self):
+        self.assertEqual(
+            feature_config._compute_strip_segments("tank/a", "backup/b"),
+            (0, "backup/b"),
+        )
+
+    def test_source_nested_under_destination(self):
+        self.assertEqual(
+            feature_config._compute_strip_segments(
+                "threeamigos/proxmox", "fivebays/threeamigos/proxmox"
+            ),
+            (0, "fivebays"),
+        )
+
+    def test_common_suffix_requires_strip(self):
+        self.assertEqual(
+            feature_config._compute_strip_segments(
+                "fivebays/threeamigos/proxmox", "threeamigos/proxmox"
+            ),
+            (1, "-"),
+        )
 
 
 if __name__ == "__main__":

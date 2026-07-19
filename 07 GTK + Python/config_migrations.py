@@ -1,6 +1,6 @@
 """Config schema migrations. Bump CONFIG_VERSION when JSON structure changes."""
 
-CONFIG_VERSION = 17
+CONFIG_VERSION = 18
 
 
 def _migrate_1_to_2(config):
@@ -144,6 +144,34 @@ def _migrate_16_to_17(config):
     return config
 
 
+def _migrate_17_to_18(config):
+    existing = config.get("checkagainst")
+    if isinstance(existing, dict):
+        nested = existing
+    else:
+        nested = {}
+
+    defaults = {
+        "backup_derived_active": True,
+        "offsite_derived_active": True,
+        "backup_derived": [],
+        "offsite_derived": [],
+        "user_entries": [],
+    }
+    for key, value in defaults.items():
+        if key not in nested:
+            nested[key] = value
+
+    if isinstance(existing, list):
+        for entry in existing:
+            if isinstance(entry, dict):
+                nested["user_entries"].append(entry)
+
+    config["checkagainst"] = nested
+    config["config_version"] = 18
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -161,6 +189,7 @@ MIGRATIONS = [
     _migrate_14_to_15,
     _migrate_15_to_16,
     _migrate_16_to_17,
+    _migrate_17_to_18,
 ]
 
 

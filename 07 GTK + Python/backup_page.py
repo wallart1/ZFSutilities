@@ -15,6 +15,7 @@ from feature_config import (
     save_backup_config, remove_snapfile,
     get_pool_names,
     _read_snapfile, SNAPFILE,
+    _maybe_seed_checkagainst,
 )
 from command_builders import (
     BashStep,
@@ -636,6 +637,9 @@ def on_backup_run(app, ctx):
 
     log_msg(f"INFO: Snapshot: {nextsnap}")
     app.backup_runner.set_steps(steps)
+    app.backup_runner.set_step_success_callback(
+        lambda md: _maybe_seed_checkagainst(app, md)
+    )
     app.backup_runner.start(on_complete=lambda cancelled=False: _on_backup_complete(app, cancelled))
     app.update_action_buttons("backup")
 

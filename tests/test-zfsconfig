@@ -187,6 +187,65 @@ test_get_checkagainst_defaults_counterpart_to_dash() {
     assert_equals "tank/a 0 - offsite" "$result"
 }
 
+test_get_checkagainst_merges_nested_sections() {
+    test_start "Nested checkagainst sections merge with user precedence"
+    write_config '{
+  "checkagainst": {
+    "backup_derived_active": true,
+    "offsite_derived_active": true,
+    "backup_derived": [
+      {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "dailybackup"},
+      {"dataset": "tank/b", "quals": "0", "counterpart": "backup/b", "label": "dailybackup"}
+    ],
+    "offsite_derived": [
+      {"dataset": "tank/c", "quals": "0", "counterpart": "offsite/c", "label": "offsite"}
+    ],
+    "user_entries": [
+      {"dataset": "tank/a", "quals": "0", "counterpart": "user/a", "label": "dailybackup"}
+    ]
+  }
+}'
+    local result
+    result=$(zfsconfig_get_checkagainst)
+    assert_contains "$result" "tank/a 0 user/a dailybackup"
+    assert_contains "$result" "tank/b 0 backup/b dailybackup"
+    assert_contains "$result" "tank/c 0 offsite/c offsite"
+}
+
+test_get_checkagainst_active_flags_disable_sections() {
+    test_start "Derived sections can be disabled via active flags"
+    write_config '{
+  "checkagainst": {
+    "backup_derived_active": false,
+    "offsite_derived_active": false,
+    "backup_derived": [
+      {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "dailybackup"}
+    ],
+    "offsite_derived": [
+      {"dataset": "tank/c", "quals": "0", "counterpart": "offsite/c", "label": "offsite"}
+    ],
+    "user_entries": [
+      {"dataset": "tank/u", "quals": "0", "counterpart": "-", "label": "dailybackup"}
+    ]
+  }
+}'
+    local result
+    result=$(zfsconfig_get_checkagainst)
+    assert_equals "tank/u 0 - dailybackup" "$result"
+}
+
+test_get_checkagainst_backward_compatible_flat_list() {
+    test_start "Flat checkagainst list is treated as user entries"
+    write_config '{
+  "checkagainst": [
+    {"dataset": "tank/a", "quals": "1", "counterpart": "backup/a", "label": "offsite"}
+  ]
+}'
+    local result
+    result=$(zfsconfig_get_checkagainst)
+    assert_equals "tank/a 1 backup/a offsite" "$result"
+}
+
 # ------------------------------------------------------------------------------
 # Locking
 # ------------------------------------------------------------------------------
@@ -232,6 +291,9 @@ test_offsite_candidates_ignores_missing_pools
 test_get_checkagainst_emits_fields
 test_get_checkagainst_skips_incomplete_entries
 test_get_checkagainst_defaults_counterpart_to_dash
+test_get_checkagainst_merges_nested_sections
+test_get_checkagainst_active_flags_disable_sections
+test_get_checkagainst_backward_compatible_flat_list
 test_set_pools_creates_lock_file
 test_get_pools_uses_shared_lock
 

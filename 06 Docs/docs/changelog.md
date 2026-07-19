@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.63.0
+
+*Released 2026-07-19*
+
+### Added
+
+- **Nested Checkagainst configuration (config schema v18)** — The
+  `checkagainst` key in `/root/.config/zfsutilities.json` is now a nested
+  object with `backup_derived_active`, `offsite_derived_active`,
+  `backup_derived`, `offsite_derived`, and `user_entries` sections. Existing
+  flat lists are migrated automatically to `user_entries` by
+  `_migrate_17_to_18`.
+- **Derived Checkagainst entries from Backup/Offsite steps** —
+  `feature_config.derive_checkagainst_entries()` builds forward and reverse
+  checkagainst rows from active Backup and Offsite send/receive steps. The
+  bash helper `zfsconfig_get_checkagainst()` now calls
+  `feature_config.merge_checkagainst_entries()` to combine derived sections
+  with user entries at runtime.
+- **GUI Checkagainst tab redesign** — The tab now shows three sections:
+  read-only **Backup-derived entries**, read-only **Offsite-derived entries**
+  (each with an **Active** toggle), and an editable **User entries** table.
+  Column order and labels were updated to match the new workflow, and each
+  column header has a descriptive tooltip.
+- **Get Entries action** — Refreshes the derived sections from the current
+  Backup and Offsite configurations.
+- **Add pair... assistant** — Opens a dialog that asks for snapshot label,
+  source dataset, destination dataset, and comment, then computes the correct
+  strip-segment count and appends both the forward and reverse rows to the
+  user table.
+- **Auto-seed checkagainst after GUI runs** — After a successful Backup,
+  Offsite, or Restore run started from the GUI, a matching checkagainst row
+  is automatically added to `user_entries` (skipped for `<offsite>`
+  destinations and duplicates).
+
+### Changed
+
+- `feature_config.get_checkagainst()` now returns the nested dict structure
+  and transparently wraps legacy flat lists for backward compatibility.
+- `feature_config.save_checkagainst()` persists the full nested object.
+- `BashStep` gains an optional `metadata` field that carries `source`,
+  `dest`, and `label` for successful send/receive steps so the GUI can
+  auto-seed the checkagainst table.
+
+### Tests
+
+- Added `tests/python/test_checkagainst_derivation.py` covering
+  `_compute_strip_segments()`, `derive_checkagainst_entries()`,
+  `merge_checkagainst_entries()`, `get_checkagainst()`, and
+  `add_checkagainst_entry()`.
+- Updated `tests/python/test_checkagainst_page.py` for the three-section UI,
+  dirty detection, action handlers, and the Add pair assistant.
+- Updated `tests/python/test_config_migrations.py` for the v17→v18
+  migration.
+- Updated `tests/python/test_feature_config.py`,
+  `test_backup_config.py`, `test_backup_runner.py`,
+  `test_command_builders.py`, `test_offsite_runner.py`,
+  `test_restore_runner.py`, `test_page_runners.py`, and
+  `test_action_dispatch.py` for the new schema, metadata, and seeding
+  behavior.
+- Updated `tests/test-zfsconfig` to verify merging, active flags, and
+  backward-compatible flat-list handling.
+
+### Documentation
+
+- Updated `06 Docs/docs/commands-and-modules/modules.md` with the new
+  derivation rules and merge precedence.
+- Updated `06 Docs/docs/developer-guide/data-structures.md` with the nested
+  `checkagainst` schema.
+- Updated `06 Docs/docs/user-guide/gtk-gui.md` with the redesigned tab,
+  sections, tooltips, Get Entries, Add pair, and auto-seeding behavior.
+- Updated `06 Docs/docs/commands-and-modules/python-modules.md` to list the
+  new `feature_config` helpers.
+
 ## 0.62.4
 
 *Released 2026-07-17*
