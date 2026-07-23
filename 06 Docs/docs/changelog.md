@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.63.1
+
+*Released 2026-07-22*
+
+### Added
+
+- **`rootcheck` is now a first-class deployed script** — `deploy-version`
+  validates that `rootcheck` is present in the versioned `bin/` directory,
+  `switch-version` creates and removes `/usr/local/lib/rootcheck` as a
+  production-wiring symlink, and `uninstall-zfsutilities` cleans it up.
+- **`find_zfsutility_script` deployment overrides** — The absolute directories
+  searched for deployed siblings can be overridden with
+  `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and
+  `ZFSUTILITIES_SYSTEM_LIB_DIR`. This makes the helper testable without root
+  and supports non-standard installs.
+- **`node-lib.sh` fallback parity** — The fallback `find_zfsutility_script`
+  definition in `node-lib.sh` now searches the same active/current deployment
+  directories as `bashinit`.
+
+### Tests
+
+- Added `tests/test-node-lib` cases verifying
+  `find_zfsutility_script` resolves scripts via
+  `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and
+  `ZFSUTILITIES_SYSTEM_LIB_DIR`.
+- Added `tests/test-uninstall-zfsutilities` case verifying that the
+  `/usr/local/lib/rootcheck` symlink is removed during uninstall.
+
+### Documentation
+
+- Updated `commands-and-modules/two-node.md`, `commands-and-modules/modules.md`,
+  `installation/index.md`, `developer-guide/conventions.md`,
+  `developer-guide/two-node-config.md`, and `AGENTS.md` to document the
+  `rootcheck` symlink and the new `find_zfsutility_script` environment
+  overrides.
+
 ## 0.63.0
 
 *Released 2026-07-19*

@@ -30,9 +30,11 @@ rootcheck
 
 `NODE_LIB` is optional; it lets tests (and unusual layouts) point at the
 library explicitly while production deployments fall back to
-`find_zfsutility_script node-lib.sh`. Use `remote_zfsutility_script` when
-delegating work to a peer node over SSH so the remote side resolves its own
-active deployed version.
+`find_zfsutility_script node-lib.sh`. `find_zfsutility_script` also honors
+`ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and
+`ZFSUTILITIES_SYSTEM_LIB_DIR` for non-standard layouts. Use
+`remote_zfsutility_script` when delegating work to a peer node over SSH so the
+remote side resolves its own active deployed version.
 
 ## Dual-Mode Script Pattern
 

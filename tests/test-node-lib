@@ -22,6 +22,13 @@ export NODE_CONF="$node_conf"
 # root, so node-lib.sh's guarded initializer must preserve it.
 source "$mydir/08 Two-node/node-lib.sh"
 
+# Reload find_zfsutility_script from the working tree so tests exercise the
+# current implementation (including deployment-directory overrides). Preserve
+# test-lib.sh's redirected log_msg afterwards.
+_test_log_msg_copy=$(declare -f log_msg)
+source "$mydir/bashinit"
+eval "$_test_log_msg_copy"
+
 # ------------------------------------------------------------------------------
 # find_zfsutility_script
 # ------------------------------------------------------------------------------
@@ -300,6 +307,36 @@ test_find_script_prefers_same_directory() {
     assert_equals "$subdir/duplicated" "$result"
 }
 
+test_find_script_active_path_bin() {
+    test_start "find_zfsutility_script locates a script in the active PATH bin directory"
+    local bin_dir result
+    bin_dir="$tmp_dir/active-bin"
+    mkdir -p "$bin_dir"
+    touch "$bin_dir/deployed-script"
+    result=$(ZFSUTILITIES_BIN_DIR="$bin_dir" find_zfsutility_script "deployed-script")
+    assert_equals "$bin_dir/deployed-script" "$result"
+}
+
+test_find_script_current_version_bin() {
+    test_start "find_zfsutility_script locates a script in the current version bin directory"
+    local current_bin_dir result
+    current_bin_dir="$tmp_dir/current-bin"
+    mkdir -p "$current_bin_dir"
+    touch "$current_bin_dir/versioned-script"
+    result=$(ZFSUTILITIES_CURRENT_BIN_DIR="$current_bin_dir" find_zfsutility_script "versioned-script")
+    assert_equals "$current_bin_dir/versioned-script" "$result"
+}
+
+test_find_script_system_lib_dir() {
+    test_start "find_zfsutility_script locates a script in the system library directory"
+    local system_lib_dir result
+    system_lib_dir="$tmp_dir/system-lib"
+    mkdir -p "$system_lib_dir"
+    touch "$system_lib_dir/system-script"
+    result=$(ZFSUTILITIES_SYSTEM_LIB_DIR="$system_lib_dir" find_zfsutility_script "system-script")
+    assert_equals "$system_lib_dir/system-script" "$result"
+}
+
 # ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
@@ -317,6 +354,9 @@ test_is_known_pool_single_node
 
 test_find_script_returns_absolute_path
 test_find_script_prefers_same_directory
+test_find_script_active_path_bin
+test_find_script_current_version_bin
+test_find_script_system_lib_dir
 
 test_find_script_same_directory
 test_find_script_parent_directory

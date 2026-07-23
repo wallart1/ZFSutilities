@@ -29,7 +29,7 @@ The library also defines helper functions used throughout these scripts:
 | `pool_to_target <pool>`     | Echoes the full IQN for a pool; returns 1 if unknown or single-node      |
 | `pool_list`                 | Echoes valid pool names from `POOL_TARGET` (empty in single-node)        |
 | `is_known_pool <pool>`      | Returns 0 if the pool is in `POOL_TARGET` (always 1 in single-node)      |
-| `find_zfsutility_script <name>` | Locates a sibling script across repo or deployed layouts             |
+| `find_zfsutility_script <name>` | Locates a sibling script across repo or deployed layouts; respects `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR` overrides |
 | `remote_zfsutility_script <host> <name>` | Returns the remote path to `<name>` on `<host>`, or just `<name>` on failure |
 
 The script-specific Arguments and Globals tables below omit these unless a
@@ -1406,7 +1406,7 @@ sudo switch-version <version>|previous|--list|--uninstall
 | `/etc/profile.d/zfsutilities.sh` | PATH export |
 | `/etc/sudoers.d/zfsutilities` | `secure_path` for sudo |
 | `/root/bashinit` | Symlink to active version's `bashinit` |
-| `/usr/local/lib/node-lib.sh`, `/usr/local/lib/two-node-lib.sh` | Library symlinks |
+| `/usr/local/lib/node-lib.sh`, `/usr/local/lib/two-node-lib.sh`, `/usr/local/lib/rootcheck` | Library symlinks |
 
 **Internal flow / algorithm:**
 

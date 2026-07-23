@@ -286,6 +286,7 @@ and activated via symlink:
 | `/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui` | Symlink → `../07 GTK + Python/zfsutilities_gui.py` |
 | `/usr/local/lib/zfsutilities/current/bin/zfsutilities-docs` | Symlink → `../07 GTK + Python/docs_viewer.py` |
 | `/usr/local/lib/node-lib.sh`                          | Symlink → `.../current/lib/node-lib.sh` |
+| `/usr/local/lib/rootcheck`                            | Symlink → `.../current/bin/rootcheck`   |
 
 ### Install Configuration
 

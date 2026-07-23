@@ -24,6 +24,7 @@ load_switch_config() {
     SUDOERS_FILE="${ZFSUTILITIES_SUDOERS_FILE:-/etc/sudoers.d/zfsutilities}"
     NODE_LIB_LINK="${ZFSUTILITIES_NODE_LIB_LINK:-/usr/local/lib/node-lib.sh}"
     TWO_NODE_LIB_LINK="${ZFSUTILITIES_TWO_NODE_LIB_LINK:-/usr/local/lib/two-node-lib.sh}"
+    ROOTCHECK_LINK="${ZFSUTILITIES_ROOTCHECK_LINK:-/usr/local/lib/rootcheck}"
     LOCAL_BIN_DIR="${ZFSUTILITIES_LOCAL_BIN_DIR:-/usr/local/bin}"
 }
 
@@ -135,6 +136,7 @@ setup_bashinit_symlink() {
 setup_library_symlinks() {
     local node_target="$VERSION_BASE/current/lib/node-lib.sh"
     local two_node_target="$VERSION_BASE/current/lib/two-node-lib.sh"
+    local rootcheck_target="$VERSION_BASE/current/bin/rootcheck"
 
     if [[ -f "$VERSION_BASE/current/lib/node-lib.sh" ]]; then
         ln -sfn "$node_target" "$NODE_LIB_LINK"
@@ -148,6 +150,11 @@ setup_library_symlinks() {
         # Backward-compat: old scripts source /usr/local/lib/two-node-lib.sh
         ln -sfn "node-lib.sh" "$TWO_NODE_LIB_LINK"
         echo "  Created $TWO_NODE_LIB_LINK -> node-lib.sh (compat)"
+    fi
+
+    if [[ -f "$VERSION_BASE/current/bin/rootcheck" ]]; then
+        ln -sfn "$rootcheck_target" "$ROOTCHECK_LINK"
+        echo "  Created $ROOTCHECK_LINK -> $rootcheck_target"
     fi
 }
 
@@ -197,6 +204,11 @@ uninstall_wiring() {
     if [[ -L "$TWO_NODE_LIB_LINK" ]]; then
         rm -f "$TWO_NODE_LIB_LINK"
         echo "  Removed $TWO_NODE_LIB_LINK"
+    fi
+
+    if [[ -L "$ROOTCHECK_LINK" ]]; then
+        rm -f "$ROOTCHECK_LINK"
+        echo "  Removed $ROOTCHECK_LINK"
     fi
 
     local desktop_user

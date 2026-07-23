@@ -167,7 +167,7 @@ EXCLUDE_TOP_DIRS=(
 # ------------------------------------------------------------------
 validate_critical_scripts() {
     local missing=0
-    for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive; do
+    for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive rootcheck; do
         if [[ ! -f "$VERSION_DIR/bin/$script" ]]; then
             echo "  Missing: $VERSION_DIR/bin/$script" >&2
             ((++missing))

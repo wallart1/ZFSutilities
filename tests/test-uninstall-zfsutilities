@@ -33,6 +33,7 @@ _setup_uninstall_env() {
     export ZFSUTILITIES_SUDOERS_FILE="$_tmpdir/etc/sudoers.d/zfsutilities"
     export ZFSUTILITIES_NODE_LIB_LINK="$_tmpdir/usr/local/lib/node-lib.sh"
     export ZFSUTILITIES_TWO_NODE_LIB_LINK="$_tmpdir/usr/local/lib/two-node-lib.sh"
+    export ZFSUTILITIES_ROOTCHECK_LINK="$_tmpdir/usr/local/lib/rootcheck"
     export ZFSUTILITIES_LOCAL_BIN_DIR="$_tmpdir/usr/local/bin"
     export ZFSUTILITIES_NODE_CONF="$_tmpdir/etc/zfsutilities-node.conf"
     export ZFSUTILITIES_LEGACY_NODE_CONF="$_tmpdir/etc/two-node.conf"
@@ -70,6 +71,7 @@ _teardown_uninstall_env() {
     unset ZFSUTILITIES_SUDOERS_FILE
     unset ZFSUTILITIES_NODE_LIB_LINK
     unset ZFSUTILITIES_TWO_NODE_LIB_LINK
+    unset ZFSUTILITIES_ROOTCHECK_LINK
     unset ZFSUTILITIES_LOCAL_BIN_DIR
     unset ZFSUTILITIES_NODE_CONF
     unset ZFSUTILITIES_LEGACY_NODE_CONF
@@ -190,6 +192,50 @@ test_default_uninstall_removes_software_preserves_config() {
         test_pass
     else
         test_fail "default uninstall did not behave as expected"
+    fi
+}
+
+test_rootcheck_symlink_removed() {
+    test_start "default uninstall removes rootcheck library symlink"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+    _clear_mocks
+
+    _make_fake_version "$tmpdir/usr/local/lib/zfsutilities" "1.0.0"
+    ln -sfn "versions/1.0.0" "$tmpdir/usr/local/lib/zfsutilities/current"
+    ln -sfn "versions/1.0.0/bin/rootcheck" "$tmpdir/usr/local/lib/rootcheck"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    ( main --yes ) >/dev/null 2>&1
+    local rc=$?
+    unset -f getent chown 2>/dev/null || true
+    unset SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -L "$tmpdir/usr/local/lib/rootcheck" ]]; then
+        failed=1
+        echo "    rootcheck symlink still present"
+    fi
+
+    _teardown_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "rootcheck symlink was not removed"
     fi
 }
 
@@ -673,6 +719,7 @@ test_missing_desktop_lib_tolerated() {
 # ------------------------------------------------------------------
 
 test_default_uninstall_removes_software_preserves_config
+test_rootcheck_symlink_removed
 test_purge_removes_config_logs_cachewarm
 test_dry_run_makes_no_changes
 test_yes_skips_interactive_dialog

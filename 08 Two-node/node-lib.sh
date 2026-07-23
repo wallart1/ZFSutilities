@@ -134,12 +134,23 @@ is_known_pool() {
 #   5. $mydir/09 ZFS clone support/<name>    (repo root -> clone-support)
 #   6. $mydir/../09 ZFS clone support/<name> (repo two-node -> clone-support)
 #   7. $mydir/../lib/<name>                  (deployed bin/ -> lib/)
-#   8. /usr/local/lib/<name>                 (system-wide library symlink)
+#   8. /usr/local/lib/zfsutilities/bin/<name>  (active PATH bin/)
+#   9. /usr/local/lib/zfsutilities/current/bin/<name> (current version bin/)
+#  10. /usr/local/lib/<name>                   (system-wide library symlink)
+#
+# The absolute deployment directories can be overridden via environment
+# variables for testing or non-standard layouts:
+#   ZFSUTILITIES_BIN_DIR         (default: /usr/local/lib/zfsutilities/bin)
+#   ZFSUTILITIES_CURRENT_BIN_DIR (default: /usr/local/lib/zfsutilities/current/bin)
+#   ZFSUTILITIES_SYSTEM_LIB_DIR  (default: /usr/local/lib)
 # Prints the resolved path and returns 0 on success, otherwise logs a FATAL
 # message and returns 1.
 if [[ $(type -t find_zfsutility_script 2>/dev/null) != "function" ]]; then
     find_zfsutility_script() {
         local name="$1"
+        local bin_dir="${ZFSUTILITIES_BIN_DIR:-/usr/local/lib/zfsutilities/bin}"
+        local current_bin_dir="${ZFSUTILITIES_CURRENT_BIN_DIR:-/usr/local/lib/zfsutilities/current/bin}"
+        local system_lib_dir="${ZFSUTILITIES_SYSTEM_LIB_DIR:-/usr/local/lib}"
         local candidate
         for candidate in \
             "$mydir/$name" \
@@ -149,7 +160,9 @@ if [[ $(type -t find_zfsutility_script 2>/dev/null) != "function" ]]; then
             "$mydir/09 ZFS clone support/$name" \
             "$mydir/../09 ZFS clone support/$name" \
             "$mydir/../lib/$name" \
-            "/usr/local/lib/$name"; do
+            "$bin_dir/$name" \
+            "$current_bin_dir/$name" \
+            "$system_lib_dir/$name"; do
             if [[ -f "$candidate" ]]; then
                 realpath "$candidate"
                 return 0

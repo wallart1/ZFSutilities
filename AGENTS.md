@@ -254,12 +254,13 @@ The `bashinit` script provides these functions:
 - `log_msg "message"` - Logs with file:line prefix to stderr and to `$ZFSUTILITIES_LOG_FILE` if set. All messages are always emitted; filtering by message level is done in the GUI log viewers.
 - `ask_yn "prompt"` - Prompts for y/n with input validation; returns 0 for yes, 1 for no
 - `calledbybash` - Returns 0 if script was executed directly (not sourced)
-- `find_zfsutility_script <name>` - Searches the repo or deployed layout for a sibling script or library and prints its absolute path. Used to locate `node-lib.sh` and `rootcheck` from scripts in `08 Two-node/` and `09 ZFS clone support/` without hard-coding paths.
+- `find_zfsutility_script <name>` - Searches the repo or deployed layout for a sibling script or library and prints its absolute path. Used to locate `node-lib.sh` and `rootcheck` from scripts in `08 Two-node/` and `09 ZFS clone support/` without hard-coding paths. The absolute deployment directories can be overridden with `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`.
 
 **Deployment**: `deploy-version` places software under
 `/usr/local/lib/zfsutilities/versions/<version>/` without touching active
 production. `switch-version` creates and updates production wiring, including
-`/root/bashinit`, `PATH` configuration, library symlinks, and desktop
+`/root/bashinit`, `PATH` configuration, library symlinks (`node-lib.sh`,
+`two-node-lib.sh`, and `rootcheck`), and desktop
 shortcuts. When `switch-version` changes the active version, `/root/bashinit`
 tracks automatically — no manual copying needed.
 

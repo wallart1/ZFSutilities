@@ -114,9 +114,12 @@ instead.
 
 `find_zfsutility_script` is also provided by `bashinit`; `node-lib.sh` keeps
 a fallback definition so it can be located before `bashinit` is loaded in
-unusual layouts. `remote_zfsutility_script` is used when delegating work to
-the peer node over SSH so the remote side resolves its own active deployed
-version rather than relying on a hard-coded path.
+unusual layouts. The absolute deployment directories can be overridden with
+`ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and
+`ZFSUTILITIES_SYSTEM_LIB_DIR` for testing or non-standard installs.
+`remote_zfsutility_script` is used when delegating work to the peer node over
+SSH so the remote side resolves its own active deployed version rather than
+relying on a hard-coded path.
 
 ## Version Consistency
 

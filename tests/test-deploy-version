@@ -254,7 +254,7 @@ test_multiple_mixed_files
 _test_validate_logic() {
     local version_dir="$1"
     local missing=0
-    for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive; do
+    for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive rootcheck; do
         if [[ ! -f "$version_dir/bin/$script" ]]; then
             echo "  Missing: $version_dir/bin/$script"
             ((++missing))
@@ -270,7 +270,7 @@ test_validate_all_present() {
     test_start "Validation passes when all critical scripts present"
     local tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/bin"
-    for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive; do
+    for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive rootcheck; do
         touch "$tmpdir/bin/$script"
     done
     local output
@@ -287,7 +287,7 @@ test_validate_missing_scripts_warns() {
     test_start "Validation warns when critical scripts are missing"
     local tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/bin"
-    # Only create two of the five required scripts
+    # Only create two of the required scripts
     touch "$tmpdir/bin/zfsdelsnap"
     touch "$tmpdir/bin/zfscleanup"
     local output
@@ -302,6 +302,41 @@ test_validate_missing_scripts_warns() {
 
 test_validate_all_present
 test_validate_missing_scripts_warns
+
+test_rootcheck_copied() {
+    test_start "rootcheck is copied as a root-level script"
+    local tmpdir=$(mktemp -d)
+    printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$tmpdir/rootcheck"
+    chmod +x "$tmpdir/rootcheck"
+    local destdir=$(mktemp -d)
+    _test_copy_logic "$tmpdir" "$destdir"
+    if [[ -f "$destdir/rootcheck" && -x "$destdir/rootcheck" ]]; then
+        test_pass
+    else
+        test_fail "rootcheck was not copied or not made executable"
+    fi
+    rm -rf "$tmpdir" "$destdir"
+}
+
+test_rootcheck_validation_warns() {
+    test_start "Validation warns when rootcheck is missing"
+    local tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/bin"
+    for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive; do
+        touch "$tmpdir/bin/$script"
+    done
+    local output
+    output=$(_test_validate_logic "$tmpdir" 2>&1)
+    if [[ "$output" == *"Missing: $tmpdir/bin/rootcheck"* && "$output" == *"WARNING:"* ]]; then
+        test_pass
+    else
+        test_fail "Expected rootcheck missing warning, got: $output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_rootcheck_copied
+test_rootcheck_validation_warns
 
 # ------------------------------------------------------------------
 # Two-node script symlinks (from deploy-version deploy_to_host)

@@ -56,7 +56,7 @@ rootcheck
 | `msg_prefix`            | Emits the same `file:line:` prefix without the message body                             |
 | `calledbybash`          | Returns true when the current file was executed directly (not sourced)                  |
 | `ask_yn`                | Prompts for yes/no and validates the response                                           |
-| `find_zfsutility_script`| Locates a sibling script/library across repo or deployed layouts; prints absolute path  |
+| `find_zfsutility_script`| Locates a sibling script/library across repo or deployed layouts; respects `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`; prints absolute path |
 
 **Globals / environment:**
 
@@ -67,6 +67,9 @@ rootcheck
 | `$ZFSUTILITIES_LOG_FILE`         | Path of the active session log (set by `bashinit`)                | [Session log index](../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson) |
 | `$ZFSUTILITIES_LOG_INHERIT`      | `'Y'` to reuse a parent runner's log instead of creating a new one | [Session log index](../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson) |
 | `$ZFSUTILITIES_HEADLESS`         | When `'Y'`, suppresses interactive prompts in lock-manager code   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
+| `$ZFSUTILITIES_BIN_DIR`          | Override active PATH bin directory for `find_zfsutility_script` (default `/usr/local/lib/zfsutilities/bin`) | — |
+| `$ZFSUTILITIES_CURRENT_BIN_DIR`  | Override current version bin directory for `find_zfsutility_script` (default `/usr/local/lib/zfsutilities/current/bin`) | — |
+| `$ZFSUTILITIES_SYSTEM_LIB_DIR`   | Override system library directory for `find_zfsutility_script` (default `/usr/local/lib`) | — |
 
 **Data structures produced:**
 
