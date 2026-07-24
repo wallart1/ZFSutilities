@@ -896,7 +896,7 @@ class EditableListView:
 # ---------------------------------------------------------------------------
 
 def add_var_row(grid, row, key, variables, widgets_dict,
-                yn_vars=None, topic_map=None):
+                yn_vars=None, topic_map=None, tooltip=None):
     """Add a label + widget row to a grid for the given variable key.
 
     If key is in yn_vars, a Y/N ComboBoxText is created.
@@ -905,6 +905,8 @@ def add_var_row(grid, row, key, variables, widgets_dict,
     """
     lbl = Gtk.Label(label=key)
     lbl.set_halign(Gtk.Align.END)
+    if tooltip:
+        lbl.set_tooltip_text(tooltip)
     grid.attach(lbl, 0, row, 1, 1)
 
     yn_vars = yn_vars or set()

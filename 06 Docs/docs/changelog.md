@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.63.2
+
+*Released 2026-07-23*
+
+### Added
+
+- **`$releaseholds_tags` variable** — Selective ZFS hold release. When
+  `$releaseholds='Y'`, only hold tags matching one of the patterns in
+  `$releaseholds_tags` are released before snapshot deletion. Defaults to
+  `('offsite-*')`. Snapshots that still have unmatched user holds are skipped
+  with a warning instead of failing the job. Set to `('*')` to restore the
+  previous all-holds behavior.
+- **GUI support for `releaseholds_tags`** — The Backup tab advanced variables
+  and the Retention tab mass-delete dialog expose the new setting. Commands
+  emitted by the Python layer include `releaseholds_tags=("offsite-*")`
+  whenever hold release is enabled.
+
+### Changed
+
+- `zfsdelsnap`, `zfsdelallholds`, `zfsdelallsnaps`, `zfsmassdelsnaps`,
+  `zfs-send-receive`, `zfscleanup`, `zfsretain`, `zfsoffsiteretain`,
+  `zfsrestore`, `zfsfullcopy`, and `zfsresizevol` now default
+  `releaseholds_tags` to `offsite-*` and only release matching holds.
+- `zfsdelallholds` now accepts glob tag patterns and reports unreleased holds
+  in `$ZFS_DELALLHOLDS_REMAINING_TAGS`.
+
+### Tests
+
+- Added `tests/test-zfsdelallholds` covering selective hold release and
+  remaining-tag reporting.
+- Extended `tests/test-zfsdelsnap` to verify user holds block deletion under
+  the new semantics.
+- Added coverage for `releaseholds_tags` defaults in `test-zfsretain`,
+  `test-zfscleanup`, and `test-zfsdelallsnaps`.
+- Added Python tests verifying `releaseholds_tags` in command builders, backup
+  defaults, mass-delete defaults, and backup-page variable wiring.
+
+### Documentation
+
+- Updated `commands-and-modules/commands.md`, `commands-and-modules/modules.md`,
+  `developer-guide/global-variables.md`, and `AGENTS.md` to document
+  `$releaseholds_tags` and the new selective hold-release behavior.
+
 ## 0.63.1
 
 *Released 2026-07-22*

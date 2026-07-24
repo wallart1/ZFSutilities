@@ -195,6 +195,7 @@ def on_retention_prune(app, ctx):
             f'{_dryrun_assignments(dryrun)}'
             f'autoproceed="Y"; '
             f'releaseholds="Y"; '
+            f'releaseholds_tags=("offsite-*"); '
             f'cleanup "{pool}" "" "{label}"'
         )
         steps.append(BashStep(
@@ -257,6 +258,8 @@ def on_retention_mass_delete(app, ctx):
     var_assignments = f'{_dryrun_assignments(dryrun)}'
     var_assignments += f'ignore_retention_policies="{ignore}"; '
     var_assignments += f'releaseholds="{releaseholds}"; '
+    if releaseholds == "Y":
+        var_assignments += f'releaseholds_tags=("offsite-*"); '
     var_assignments += f'snapshot_label="{label}"; '
     var_assignments += f'snapshot_has="{snapshot_has}"; '
     if includes:

@@ -175,9 +175,13 @@ function send-receive {
                 log_msg "WARN: About to delete all snapshots of destination dataset $dest, ignoring holds, in preparation for a full transfer from $fs.\n\t(Child datasets will NOT be touched.)"
                 read -p "Press enter to continue."
             fi
+            local _save_releaseholds_tags=("${releaseholds_tags[@]}")
+            releaseholds_tags=('offsite-*')
             if ! delallsnaps "$dest" '' 'releaseholds'; then
+                releaseholds_tags=("${_save_releaseholds_tags[@]}")
                 log_msg "FATAL: Snapshot deletion failed for $dest."; return 1
             fi
+            releaseholds_tags=("${_save_releaseholds_tags[@]}")
             receive_F_option='F'
         fi
         return 0
@@ -241,12 +245,23 @@ function send-receive {
             fi
             if [[ $do_rollback = 'Y' ]]; then
                 if [[ $dryrun != 'N' ]]; then
-                    log_msg "INFO: Dry-run: Would release holds and rollback $destfs_restorefs to $commsnap"
+                    log_msg "INFO: Dry-run: Would release matching holds and rollback $destfs_restorefs to $commsnap"
                 else
                     local _save_autoproceed="$autoproceed"
+                    local _remaining_holds=""
                     autoproceed='Y'
-                    for snap in "${snaparray_d[@]}"; do delallholds "$snap"; done
+                    for snap in "${snaparray_d[@]}"; do
+                        delallholds "$snap" 'offsite-*'
+                        if [[ -n "$ZFS_DELALLHOLDS_REMAINING_TAGS" ]]; then
+                            _remaining_holds="$_remaining_holds $snap:$ZFS_DELALLHOLDS_REMAINING_TAGS"
+                        fi
+                    done
                     autoproceed="$_save_autoproceed"
+                    if [[ -n "$_remaining_holds" ]]; then
+                        log_msg "WARN: Cannot roll back $destfs_restorefs to $commsnap —" \
+                            "snapshot(s) still have user holds:$_remaining_holds. Skipping $fs."
+                        return 1
+                    fi
                     if ! zfs rollback -r "$destfs_restorefs$commsnap"; then
                         log_msg "FATAL: Unable to roll back to snapshot $destfs_restorefs$commsnap."
                         return 2

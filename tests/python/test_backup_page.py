@@ -176,6 +176,20 @@ class TestBackupPageScriptLabels(unittest.TestCase):
                 )
 
 
+class TestBackupVariables(unittest.TestCase):
+    """Backup tab exposes the releaseholds_tags setting."""
+
+    def test_releaseholds_tags_in_advanced_variables(self):
+        with mock_gtk():
+            import backup_page
+            self.assertIn("releaseholds_tags", backup_page.ADVANCED_VARIABLES)
+            self.assertIn("releaseholds_tags", backup_page._BACKUP_TOPIC_MAP)
+            self.assertEqual(
+                backup_page._BACKUP_TOPIC_MAP["releaseholds_tags"],
+                "backup_releaseholds_tags",
+            )
+
+
 class TestBackupConfigHelpers(unittest.TestCase):
     """Tests for load_backup_config and collect_backup_config."""
 

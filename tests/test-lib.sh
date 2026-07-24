@@ -150,6 +150,7 @@ declare -gA _mock_zfs_snaps=()
 declare -gA _mock_zfs_datasets=()
 declare -gA _mock_zfs_snap_lists=()
 declare -gA _mock_zfs_guid_lists=()
+declare -gA _mock_zfs_holds=()
 _mock_zfs_send_size="0"
 _mock_zpool_list=""
 _mock_zfs_last_sequence=""  # tracks -s / -S passed to zfs list
@@ -215,6 +216,12 @@ mock_zfs_snap_list_for() {
 mock_zfs_guid_list_for() {
     local dataset="$1"
     _mock_zfs_guid_lists["$dataset"]="$2"
+}
+
+mock_zfs_holds() {
+    local snapshot="$1"
+    shift
+    _mock_zfs_holds["$snapshot"]="$*"
 }
 
 mock_zpool_list() {
@@ -408,6 +415,36 @@ zfs() {
             ;;
 
         snapshot|create|destroy|receive|rollback|set)
+            return 0
+            ;;
+
+        holds)
+            local snapshot="${args[-1]}"
+            local tags="${_mock_zfs_holds[$snapshot]:-}"
+            local tag
+            for tag in $tags; do
+                printf '%s\t%s\t%s\n' "$snapshot" "$tag" "2025-01-01T00:00:00"
+            done
+            return 0
+            ;;
+
+        release)
+            local tag="${args[1]}"
+            local snapshot="${args[2]}"
+            local current="${_mock_zfs_holds[$snapshot]:-}"
+            local new_tags=""
+            local t
+            for t in $current; do
+                if [[ "$t" != "$tag" ]]; then
+                    new_tags="$new_tags $t"
+                fi
+            done
+            new_tags="${new_tags# }"
+            if [[ -n "$new_tags" ]]; then
+                _mock_zfs_holds["$snapshot"]="$new_tags"
+            else
+                unset '_mock_zfs_holds[$snapshot]'
+            fi
             return 0
             ;;
 

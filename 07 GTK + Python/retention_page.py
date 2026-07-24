@@ -341,9 +341,16 @@ def create_retention_page(app, ctx):
         )
         row += 1
     for key in ("snapshot_has", "releaseholds"):
+        tooltip = None
+        if key == "releaseholds":
+            tooltip = (
+                "When enabled, only system offsite-* holds are released; "
+                "user-added holds are left in place and block deletion."
+            )
         add_var_row(
             danger_grid, row, key, variables, app._ret_mass_delete_widgets,
             yn_vars={"releaseholds"},
+            tooltip=tooltip,
         )
         row += 1
 

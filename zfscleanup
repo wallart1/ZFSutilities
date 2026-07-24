@@ -15,7 +15,8 @@ function cleanup {
     #               'Y' means to not stop. (Default)
     # $dryrun       'Y' means to not perform any dataset updates.Only say what would happen.
     #               'N' means to perform updates. (Default)
-    # $releaseholds 'Y' means to release any and all holds on snapshots to be deleted.
+    # $releaseholds 'Y' means to release matching holds on snapshots to be deleted.
+    #                   Matching tags are controlled by releaseholds_tags (default offsite-*).
     #               'N' means to keep snapshot holds. May result in "Dataset is busy" messages
     #                   as holds may be preventing snapshots from being deleted. (Default)
     #                   "Dataset is busy" is used as a ZFS catch-all for this and many other cases.
@@ -39,6 +40,9 @@ function cleanup {
     # Holds are maintained for offsite snapshots to avoid accidental removal.
     # This function does not release holds by default.
     if [[ $releaseholds = '' ]]; then releaseholds='N'; fi
+    if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
+        releaseholds_tags=('offsite-*')
+    fi
 
     if [[ $1 != "" ]]; then zfspoolarray=("$1")
     else

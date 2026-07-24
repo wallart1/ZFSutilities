@@ -23,6 +23,7 @@ BACKUP_DEFAULTS = {
         "endwith": "",
         "receive_F_option": "F",
         "releaseholds": "N",
+        "releaseholds_tags": "offsite-*",
         "doincrementals": "Y",
         "dointermediates": "Y",
         "allow_destructive": "N",

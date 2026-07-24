@@ -178,6 +178,7 @@ def build_restore_command(source, removequalifiers, destfs, parent_dir,
         parts.append(
             f'log_msg "Part one: Full copy using the oldest available snapshot."; '
             f'force="Y"; releaseholds="Y"; '
+            f'releaseholds_tags=("offsite-*"); '
             f'doincrementals="N"; dointermediates="N"; '
             f'commsnap_mostrecent="OLDEST"; '
             f'autoproceed="N"; '

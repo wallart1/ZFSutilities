@@ -154,7 +154,12 @@ function _list_and_approve {
     fi
 
     local snap failed=0 release_arg=""
-    [[ "${releaseholds:-N}" == "Y" ]] && release_arg="releaseholds"
+    if [[ "${releaseholds:-N}" == "Y" ]]; then
+        release_arg="releaseholds"
+        if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
+            releaseholds_tags=('offsite-*')
+        fi
+    fi
     autoproceed='Y'
     for snap in "$@"; do
         if ! delsnap "$snap" 0 "$release_arg" 'nocheckagainst'; then

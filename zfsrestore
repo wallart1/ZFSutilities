@@ -45,8 +45,10 @@ if [[ $dopart1 = 'Y' ]]; then
     # Part 1: do a full copy using the oldest available snapshot.
     log_msg "INFO: Part one: Full copy using the oldest available snapshot."
     force='Y'                       # Do full copy even if common snapshots are found.
-    releaseholds='Y'                # Allow all of destfs to be deleted, unconditionally, before
-                                    # restoring.
+    releaseholds='Y'                # Release matching holds before restoring.
+    if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
+        releaseholds_tags=('offsite-*')
+    fi
     doincrementals='N'              # 'N' means do full copies.
     dointermediates='N'             # Don't try to do any other shapshots.
     commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.

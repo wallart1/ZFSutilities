@@ -161,6 +161,8 @@ class TestBackupConfig(unittest.TestCase):
         backup = backup_config.get_backup_config(config)
         self.assertEqual(backup["variables"]["label"], "special")
         self.assertEqual(backup["variables"]["autoresume"], "Y")
+        self.assertEqual(backup["variables"]["releaseholds"], "N")
+        self.assertEqual(backup["variables"]["releaseholds_tags"], "offsite-*")
         self.assertTrue(backup["pull_steps_active"])
 
     def test_get_backup_config_preserves_pull_steps_active(self):

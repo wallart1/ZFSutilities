@@ -1,0 +1,92 @@
+#!/usr/bin/bash
+# test-zfsdelallholds — Verify selective hold release by tag patterns.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# Source the real helper; it depends only on bashinit (mocked above) and zfs.
+source "$old_mydir/zfsdelallholds"
+
+test_no_patterns_releases_all_holds() {
+    echo "=== No patterns: releases all holds ==="
+    mock_zfs_holds "pool/fs@snap" "offsite-pool" "userhold"
+    delallholds "pool/fs@snap"
+    test_start "No patterns releases all holds"
+    if [[ -z "${_mock_zfs_holds[pool/fs@snap]:-}" ]]; then
+        test_pass
+    else
+        test_fail "Expected all holds released, remaining: ${_mock_zfs_holds[pool/fs@snap]}"
+    fi
+}
+
+test_single_tag_releases_only_matching() {
+    echo "=== Single tag: releases only match ==="
+    mock_zfs_holds "pool/fs@snap" "offsite-pool" "userhold"
+    delallholds "pool/fs@snap" "offsite-pool"
+    test_start "Single tag releases only matching hold"
+    if [[ "${_mock_zfs_holds[pool/fs@snap]:-}" == "userhold" ]]; then
+        test_pass
+    else
+        test_fail "Expected userhold remaining, got: ${_mock_zfs_holds[pool/fs@snap]:-}"
+    fi
+}
+
+test_glob_pattern_releases_matching() {
+    echo "=== Glob pattern: releases offsite-* ==="
+    mock_zfs_holds "pool/fs@snap" "offsite-pool1" "offsite-pool2" "userhold"
+    delallholds "pool/fs@snap" 'offsite-*'
+    test_start "Glob pattern releases only offsite-* holds"
+    if [[ "${_mock_zfs_holds[pool/fs@snap]:-}" == "userhold" ]]; then
+        test_pass
+    else
+        test_fail "Expected userhold remaining, got: ${_mock_zfs_holds[pool/fs@snap]:-}"
+    fi
+}
+
+test_reports_remaining_holds() {
+    echo "=== Reports remaining holds ==="
+    mock_zfs_holds "pool/fs@snap" "offsite-pool" "userhold"
+    delallholds "pool/fs@snap" 'offsite-*'
+    test_start "Sets ZFS_DELALLHOLDS_REMAINING_TAGS for unreleased holds"
+    if [[ "$ZFS_DELALLHOLDS_REMAINING_TAGS" == "userhold" ]]; then
+        test_pass
+    else
+        test_fail "Expected remaining tags 'userhold', got: '$ZFS_DELALLHOLDS_REMAINING_TAGS'"
+    fi
+}
+
+test_no_holds_returns_zero() {
+    echo "=== No holds: returns 0 ==="
+    _mock_zfs_holds=()
+    delallholds "pool/fs@snap" 'offsite-*'
+    test_start "No holds returns zero and clears remaining tags"
+    if [[ -z "$ZFS_DELALLHOLDS_REMAINING_TAGS" ]]; then
+        test_pass
+    else
+        test_fail "Expected empty remaining tags, got: '$ZFS_DELALLHOLDS_REMAINING_TAGS'"
+    fi
+}
+
+test_multiple_patterns() {
+    echo "=== Multiple patterns ==="
+    mock_zfs_holds "pool/fs@snap" "offsite-pool" "backup-hold" "userhold"
+    delallholds "pool/fs@snap" 'offsite-*' 'backup-*'
+    test_start "Multiple patterns release all matching holds"
+    if [[ "${_mock_zfs_holds[pool/fs@snap]:-}" == "userhold" ]]; then
+        test_pass
+    else
+        test_fail "Expected userhold remaining, got: ${_mock_zfs_holds[pool/fs@snap]:-}"
+    fi
+}
+
+test_no_patterns_releases_all_holds
+test_single_tag_releases_only_matching
+test_glob_pattern_releases_matching
+test_reports_remaining_holds
+test_no_holds_returns_zero
+test_multiple_patterns
+
+test_summary
+teardown_test_env

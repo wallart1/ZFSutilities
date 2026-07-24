@@ -285,5 +285,101 @@ test_checkagainst_sources_remove_leading_qualifiers() {
 
 test_checkagainst_sources_remove_leading_qualifiers
 
+# ------------------------------------------------------------------
+# Test: User holds block deletion when releaseholds is enabled
+# ------------------------------------------------------------------
+test_user_hold_blocks_deletion() {
+    test_start "User hold blocks snapshot deletion"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { true; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cp "$old_mydir/zfsdelallholds" "$tmpdir/zfsdelallholds"
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
+function diagnose_dataset_busy {
+    true
+}
+EOF
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    local output rc=0
+    output=$(
+        bash -c '
+            mydir="'"$tmpdir"'"
+            declare -A _mock_zfs_holds=()
+            mock_zfs_holds() {
+                _mock_zfs_holds["$1"]="${*:2}"
+            }
+            mock_zfs_holds "pool@snap" "offsite-pool" "userhold"
+            zfs() {
+                case "$1" in
+                    list)
+                        if [[ "$2" == "-t" && "$3" == "snapshot" ]]; then
+                            return 0
+                        fi
+                        if [[ "$2" == "-H" && "$3" == "-o" && "$4" == "clones" ]]; then
+                            echo "-"
+                            return 0
+                        fi
+                        ;;
+                    holds)
+                        local snap="${@: -1}"
+                        local tag
+                        for tag in ${_mock_zfs_holds[$snap]}; do
+                            printf "%s\t%s\t%s\n" "$snap" "$tag" "2025-01-01T00:00:00"
+                        done
+                        return 0
+                        ;;
+                    release)
+                        local tag="$2"
+                        local snap="$3"
+                        local current="${_mock_zfs_holds[$snap]}"
+                        local new_tags=""
+                        local t
+                        for t in $current; do
+                            [[ "$t" != "$tag" ]] && new_tags="$new_tags $t"
+                        done
+                        new_tags="${new_tags# }"
+                        if [[ -n "$new_tags" ]]; then
+                            _mock_zfs_holds[$snap]="$new_tags"
+                        else
+                            unset "_mock_zfs_holds[$snap]"
+                        fi
+                        return 0
+                        ;;
+                    destroy)
+                        return 0
+                        ;;
+                esac
+                return 0
+            }
+            source "'"$old_mydir"'/zfsdelsnap"
+            releaseholds_tags=('offsite-*')
+            delsnap "pool@snap" "0" "releaseholds" "nocheckagainst"
+        ' 2>&1
+    ) || rc=$?
+
+    if [[ $rc -eq 1 && "$output" == *"still has holds"* && "$output" == *"userhold"* ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=1 with user-hold warning, got rc=$rc output: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+test_user_hold_blocks_deletion
+
 test_summary
 teardown_test_env

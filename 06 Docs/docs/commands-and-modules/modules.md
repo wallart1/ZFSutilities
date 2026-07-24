@@ -651,21 +651,28 @@ Returns non-zero if no common snapshot exists.
 
 ### `zfsdelallholds`
 
-Releases all holds (or a specific hold) on a single ZFS snapshot.
+Releases selected holds on a single ZFS snapshot. When no tag patterns are
+supplied, all holds are released. When one or more patterns are supplied,
+only holds matching at least one pattern are released. Unmatched holds are
+reported in `$ZFS_DELALLHOLDS_REMAINING_TAGS`.
 
 ```bash
 source $mydir/zfsdelallholds
-delallholds <snapshot> [hold-tag]
+delallholds <snapshot> [hold-tag-pattern...]
 ```
 
 **Arguments:**
 
-| Argument | Description                                   |
-| -------- | --------------------------------------------- |
-| `$1`     | Snapshot name                                 |
-| `$2`     | Optional: only release this specific hold tag |
+| Argument | Description                                              |
+| -------- | -------------------------------------------------------- |
+| `$1`     | Snapshot name                                            |
+| `$2+`    | Optional tag patterns (e.g. `offsite-*`). Globs allowed. |
 
-**Globals:** none.
+**Globals:**
+
+| Variable                        | Description                                              |
+| ------------------------------- | -------------------------------------------------------- |
+| `$ZFS_DELALLHOLDS_REMAINING_TAGS` | Space-separated list of hold tags that were not released |
 
 **Called modules:** none.
 
@@ -734,7 +741,10 @@ delsnap <snapshot> [minage] [releaseholds]
 | -------- | ------- | ------------------------------------------------------------ |
 | `$1`     | —       | Snapshot to delete                                           |
 | `$2`     | `0`     | Minimum age in days; snapshots younger than this are skipped |
-| `$3`     | `N`     | `'releaseholds'` or `'Y'` to release holds before destroying |
+| `$3`     | `N`     | `'releaseholds'` to release matching holds before destroying |
+
+The holds released are controlled by `$releaseholds_tags` (default
+`offsite-*`). Any remaining holds cause the snapshot to be skipped.
 
 **Globals:**
 
@@ -1058,6 +1068,7 @@ retain <pool> [label]
 | `$dryrun`                      | `'Y'` (or anything not `'N'`) = report only                                   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$autoproceed`                 | `'Y'` = skip per-deletion prompt                                              | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$releaseholds`                | `'Y'` = release holds before `zfsdelsnap`                                     | [Execution Control](../developer-guide/global-variables.md#execution-control) |
+| `$releaseholds_tags`           | Array of hold tag patterns to release (default `offsite-*`)                   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$skipbusy`                    | `'Y'` = warn and continue on held/busy snapshots; `'N'` = fatal               | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$originlabel`, `$targetlabel` | Override label per side                                                       | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 | `$leadingqualifiestodelete`    | Leading components to strip when building counterpart name for `checkagainst` | [Retention](../developer-guide/global-variables.md#retention)                 |
@@ -1162,6 +1173,8 @@ arguments. Callers set the variables below, then invoke `send-receive`.
 | `$maxcommsnapperiod`                                             | `130`         | Max age (days) of an acceptable common snapshot                                                                                                                                                         | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$pv_rate_limit`                                                 | `''`          | Max transfer rate for `pv -L` (e.g. `200M`, `1G`). Empty = no limit                                                                                                                                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$pvthreshold`                                                   | 300 MB        | Size above which `pv` progress display is used                                                                                                                                                          | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
+| `$releaseholds`                                                  | `'N'`         | `'Y'` = release matching holds before deleting destination snapshots during full copy/rollback                                                                                                          | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
+| `$releaseholds_tags`                                             | `('offsite-*')` | Hold tag patterns released when `$releaseholds='Y'`                                                                                                                                                   | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 | `$includes` / `$excludes` / `$startwith` / `$endwith` / `$depth` | varies        | Dataset filters (delegated to `zfsbuildfsarray`)                                                                                                                                                        | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 
 **Data structures consumed/produced:**
@@ -1215,7 +1228,8 @@ steps.
       (another common snap found for `checkagainst` logic).
    e. For full copies (`$doincrementals='N'`), check for running VMs on the
       destination and either delete destination snapshots (`allow_destructive`)
-      or the whole destination dataset (`force`).
+      or the whole destination dataset (`force`). Snapshots with non-matching
+      user holds are skipped with a warning.
    f. Estimate stream size with `zfs send -nP`. If the destination pool has
       insufficient space, prompt or skip (depending on `$autoproceed`).
    g. Build send options (`-cw`, plus `-i`/`-I` for incrementals) and receive

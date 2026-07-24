@@ -22,10 +22,11 @@ EOF
 
 # Write a zfsdelsnap stub whose delsnap returns the requested rc.
 _write_delsnap_stub() {
-    local dir="$1" fail_snap="${2:-}"
+    local dir="$1" fail_snap="${2:-}" tags_file="${3:-}"
     cat > "$dir/zfsdelsnap" << EOF
 function delsnap {
     [[ -n "$fail_snap" && "\$1" == "$fail_snap" ]] && return 1
+    [[ -n "$tags_file" ]] && printf '%s\n' "\${releaseholds_tags[*]}" >> "$tags_file"
     return 0
 }
 EOF
@@ -180,6 +181,51 @@ test_all_success_returns_zero
 test_any_failure_returns_one
 test_no_snapshots_returns_zero
 test_filtered_no_match_returns_zero
+
+# ------------------------------------------------------------------
+# Test: releaseholds argument defaults releaseholds_tags
+# ------------------------------------------------------------------
+test_releaseholds_tags_default() {
+    test_start "releaseholds argument defaults releaseholds_tags to offsite-*"
+    local tmpdir output rc=0 tags_file
+    tmpdir=$(_create_helper_dir)
+    tags_file="$tmpdir/tags.out"
+    _write_delsnap_stub "$tmpdir" "" "$tags_file"
+
+    output=$(
+        mydir="$tmpdir"
+        bash -c '
+            zfs() {
+                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
+                    echo "tank/fs@snap1"
+                    return 0
+                fi
+                if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" && "$5" == "creation" ]]; then
+                    echo "1750000000"
+                    return 0
+                fi
+                command zfs "$@"
+            }
+            export -f zfs
+            autoproceed='"'"'Y'"'"'
+            releaseholds='"'"'Y'"'"'
+            releaseholds_tags=()
+            source "'"$old_mydir"'/zfsdelallsnaps"
+            delallsnaps "tank/fs" "" "releaseholds"
+        '
+    ) || rc=$?
+
+    local tags=""
+    [[ -f "$tags_file" ]] && tags=$(cat "$tags_file")
+    rm -rf "$tmpdir"
+    if [[ $rc -eq 0 && "$tags" == *"offsite-*"* ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 and offsite-* tag, got rc=$rc tags: $tags"
+    fi
+}
+
+test_releaseholds_tags_default
 
 test_summary
 rc=$?

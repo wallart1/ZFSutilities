@@ -39,8 +39,8 @@ DATASET_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
 
 ADVANCED_VARIABLES = [
     "label", "autoresume", "receive_F_option", "releaseholds",
-    "doincrementals", "dointermediates", "allow_destructive",
-    "verify_after_transfer", "pv_rate_limit",
+    "releaseholds_tags", "doincrementals", "dointermediates",
+    "allow_destructive", "verify_after_transfer", "pv_rate_limit",
 ]
 
 YN_VARIABLES = {"autoresume", "releaseholds", "doincrementals",
@@ -56,6 +56,7 @@ _BACKUP_TOPIC_MAP = {
     "autoresume": "backup_autoresume",
     "receive_F_option": "backup_receive_F_option",
     "releaseholds": "backup_releaseholds",
+    "releaseholds_tags": "backup_releaseholds_tags",
     "doincrementals": "backup_doincrementals",
     "dointermediates": "backup_dointermediates",
     "allow_destructive": "backup_allow_destructive",

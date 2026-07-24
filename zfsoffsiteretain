@@ -22,6 +22,9 @@ source $mydir/zfsoverrides
 
 if [[ $autoproceed = '' ]]; then autoproceed='Y'; fi
 if [[ $releaseholds = '' ]]; then releaseholds='Y'; fi
+if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
+    releaseholds_tags=('offsite-*')
+fi
 
 if [[ $1 != '' ]]; then overrides "$1"; fi
 

@@ -21,6 +21,7 @@ EOF
 cat > "$mock_mydir/zfsdelsnap" << 'EOF'
 delsnap() {
     _mock_delsnap_calls+=("$1")
+    _mock_delsnap_tags+=("${releaseholds_tags[*]}")
     return 0
 }
 EOF
@@ -53,6 +54,7 @@ source "$old_mydir/zfsretain"
 # Reset mocks between tests
 reset_mocks() {
     _mock_delsnap_calls=()
+    _mock_delsnap_tags=()
     _mock_zfs_snap_list_creation=""
     _mock_zfs_snap_list=""
     _mock_zfs_props=()
@@ -63,6 +65,7 @@ reset_mocks() {
     autoproceed="Y"
     skipbusy="Y"
     releaseholds="N"
+    releaseholds_tags=()
 }
 
 # =============================================================================
@@ -328,6 +331,21 @@ test_retain_returns_on_lock_error() {
     fi
 }
 
+test_releaseholds_tags_default() {
+    echo "=== releaseholds_tags default ==="
+    reset_mocks
+    releaseholds="Y"
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-30T12:00-04:00-d\tSun Mar 30 12:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T12:00-04:00-d'
+    retain "pool/fs" "dailybackup"
+    test_start "Defaults releaseholds_tags to offsite-*"
+    if [[ "${_mock_delsnap_tags[*]}" == *"offsite-*"* ]]; then
+        test_pass
+    else
+        test_fail "Expected offsite-* in delsnap tags, got: ${_mock_delsnap_tags[*]}"
+    fi
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -347,6 +365,7 @@ main() {
     test_retain_skips_when_locked
     test_retain_returns_on_missing_policy
     test_retain_returns_on_lock_error
+    test_releaseholds_tags_default
     mydir="$old_mydir"
     rm -rf "$mock_mydir"
     teardown_test_env

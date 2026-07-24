@@ -1,45 +1,75 @@
 #!/usr/bin/bash
+# Release selected holds on a given ZFS snapshot.
+#
+# $1    Snapshot
+# $2+   Optional hold tag patterns. Only holds matching at least one pattern
+#       are released. If no patterns are supplied, all holds are released.
+#
+# Sets global variable ZFS_DELALLHOLDS_REMAINING_TAGS to a space-separated
+# list of hold tags that were NOT released (empty if none remain).
 
 function delallholds {
-    # Release all holds on a given ZFS snapshot
-    # $1 Snapshot
-    # $2 Optional. Only this tag will be realeased.
-
     source ~/bashinit
     bashinit
 
     local zfsdelallholds_snap="$1"
-    local zfsdelallholds_hold="$2"
-    local hold i holdtag
-    declare -a holdtags holdarray
+    shift
+    local -a zfsdelallholds_patterns=("$@")
+    local hold holdtag pattern
+    declare -a holdarray released_tags held_tags
+
+    ZFS_DELALLHOLDS_REMAINING_TAGS=""
 
     # Read each line from zfs holds -H into holdarray
     IFS=$'\n' readarray -t holdarray < <(zfs holds -H "$zfsdelallholds_snap")
 
     if [[ ${#holdarray[@]} = 0 ]]; then
         return 0
-    else
-        if [[ $zfsdelallholds_hold != "" ]]; then # If removing a single hold
-            holdtags[0]="$zfsdelallholds_hold"
-        else
-            i=0
-            for hold in "${holdarray[@]}"; do # Process each line
-                # Extract the hold tag (second field) from the line
-                holdtags[i]=$(echo "$hold" | awk '{print $2}')
-                ((i=i+1))
-            done
+    fi
 
-            log_msg "INFO: About to release the following ${#holdtags[@]} holds from $zfsdelallholds_snap."
-            for holdtag in "${holdtags[@]}"; do
-                echo "$holdtag"
+    released_tags=()
+    held_tags=()
+    for hold in "${holdarray[@]}"; do
+        holdtag=$(echo "$hold" | awk '{print $2}')
+        local release_this='N'
+        if [[ ${#zfsdelallholds_patterns[@]} -eq 0 ]]; then
+            release_this='Y'
+        else
+            for pattern in "${zfsdelallholds_patterns[@]}"; do
+                if [[ "$holdtag" == $pattern ]]; then
+                    release_this='Y'
+                    break
+                fi
             done
-            if [[ $autoproceed != "Y" ]]; then
-                read -p "Press enter to continue."
-            fi
+        fi
+        if [[ $release_this = 'Y' ]]; then
+            released_tags+=("$holdtag")
+        else
+            held_tags+=("$holdtag")
+        fi
+    done
+
+    if [[ ${#held_tags[@]} -gt 0 ]]; then
+        ZFS_DELALLHOLDS_REMAINING_TAGS="${held_tags[*]}"
+    fi
+
+    if [[ ${#released_tags[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    # Only prompt when releasing all holds (no patterns supplied), matching
+    # historical behavior for direct/manual use.
+    if [[ ${#zfsdelallholds_patterns[@]} -eq 0 ]]; then
+        log_msg "INFO: About to release the following ${#released_tags[@]} holds from $zfsdelallholds_snap."
+        for holdtag in "${released_tags[@]}"; do
+            echo "$holdtag"
+        done
+        if [[ $autoproceed != "Y" ]]; then
+            read -p "Press enter to continue."
         fi
     fi
 
-    for holdtag in "${holdtags[@]}"; do
+    for holdtag in "${released_tags[@]}"; do
         if ! zfs release "$holdtag" "$zfsdelallholds_snap"; then
             rc=$?
             log_msg "FATAL: Release of hold $holdtag on $zfsdelallholds_snap failed rc=$rc."
@@ -47,4 +77,3 @@ function delallholds {
         fi
     done
 }
-

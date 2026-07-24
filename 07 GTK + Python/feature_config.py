@@ -475,6 +475,7 @@ MASS_DELETE_DEFAULTS = {
     "endwith": "",
     "snapshot_has": "",
     "releaseholds": "Y",
+    "releaseholds_tags": "offsite-*",
     "ignore_retention_policies": False,
 }
 

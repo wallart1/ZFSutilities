@@ -5,7 +5,10 @@
 # $1    Full dataset@snapshot name to be removed.
 # $2    Minimum age in days. If the snapshot is younger than this, deletion is refused.
 #       Use 0 to skip the age check.
-# $3    (Optional) "releaseholds" means to remove all holds on the snapshot before destroying it.
+# $3    (Optional) "releaseholds" means to remove matching holds on the snapshot
+#       before destroying it. The holds to release are controlled by the
+#       releaseholds_tags array (default: offsite-*). Any remaining holds cause
+#       the snapshot to be skipped rather than destroyed.
 # $4    (Optional) 'nocheckagainst' means bypass counterpart snap checking.
 
 source ~/bashinit
@@ -61,6 +64,11 @@ function delsnap {
         releaseholds='N'
     fi
 
+    # Default the set of releasable hold tags if the caller did not set it.
+    if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
+        releaseholds_tags=('offsite-*')
+    fi
+
     if ! zfs list -t snapshot "$snaptoremove" >/dev/null; then
         log_msg "FATAL: Snapshot $snaptoremove does not exist."
         zfslock_release "$delsnap_lock"
@@ -109,7 +117,13 @@ function delsnap {
     fi
 
     if [[ $releaseholds = 'Y' ]]; then
-        delallholds $snaptoremove
+        delallholds "$snaptoremove" "${releaseholds_tags[@]}"
+        if [[ -n "$ZFS_DELALLHOLDS_REMAINING_TAGS" ]]; then
+            log_msg "WARN: Snapshot $snaptoremove still has holds" \
+                "($ZFS_DELALLHOLDS_REMAINING_TAGS); skipping deletion."
+            zfslock_release "$delsnap_lock"
+            return 1
+        fi
     fi
 
     # Check for clone dependents before attempting destruction

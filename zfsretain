@@ -34,7 +34,14 @@ function retain {
     if [[ ${label:0:1} != '@' ]]; then label="@$label"; fi
     if [[ $originlabel = '' ]]; then originlabel=$label; fi
     if [[ $targetlabel = '' ]]; then targetlabel=$label; fi
-    if [[ $releaseholds = 'Y' ]]; then relholds='releaseholds'; else relholds='N'; fi
+    if [[ $releaseholds = 'Y' ]]; then
+        relholds='releaseholds'
+        if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
+            releaseholds_tags=('offsite-*')
+        fi
+    else
+        relholds='N'
+    fi
 
     zfslock_init
 

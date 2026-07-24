@@ -614,6 +614,7 @@ def run_retention_profile(profile, config, parent_dir, session_log_file=None):
             f'{_dryrun_assignments(dryrun)}'
             f'autoproceed="Y"; '
             f'releaseholds="Y"; '
+            f'releaseholds_tags=("offsite-*"); '
             f'cleanup "{pool}" "" "{label}"'
         )
         rc = _run_command(

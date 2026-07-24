@@ -179,6 +179,7 @@ class TestMassDeleteConfig(unittest.TestCase):
         config = {}
         md = feature_config.get_retention_mass_delete_config(config)
         self.assertEqual(md["releaseholds"], "Y")
+        self.assertEqual(md["releaseholds_tags"], "offsite-*")
         self.assertFalse(md["ignore_retention_policies"])
         self.assertEqual(md["includes"], "")
         self.assertEqual(md["snapshot_has"], "")
@@ -187,12 +188,14 @@ class TestMassDeleteConfig(unittest.TestCase):
         config = {
             "retention_mass_delete": {
                 "releaseholds": "N",
+                "releaseholds_tags": "custom-*",
                 "ignore_retention_policies": True,
                 "snapshot_has": "weekly",
             }
         }
         md = feature_config.get_retention_mass_delete_config(config)
         self.assertEqual(md["releaseholds"], "N")
+        self.assertEqual(md["releaseholds_tags"], "custom-*")
         self.assertTrue(md["ignore_retention_policies"])
         self.assertEqual(md["snapshot_has"], "weekly")
 

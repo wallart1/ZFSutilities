@@ -63,6 +63,7 @@ nextsnapsave=$nextsnap
 echo "Part one: Full copy using the oldest available snapshot."
 force='N'
 releaseholds='Y'
+releaseholds_tags=('offsite-*')
 doincrementals='N'              # Do full copies.
 dointermediates='N'             # Don't try to do any other shapshots.
 nextsnap=$nextsnapsave

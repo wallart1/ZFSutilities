@@ -248,6 +248,22 @@ class TestBuildSendReceiveCommand(unittest.TestCase):
         self.assertIn("dryrun='Y'", bash_script)
         self.assertNotIn("msg_level", bash_script)
 
+    def test_releaseholds_tags_default(self):
+        variables = {"releaseholds": "Y"}
+        step = command_builders.build_send_receive_command(
+            "src", "dst", variables, "/bin", "@snap"
+        )
+        bash_script = step.command[2]
+        self.assertIn('releaseholds_tags=("offsite-*")', bash_script)
+
+    def test_releaseholds_tags_custom(self):
+        variables = {"releaseholds": "Y", "releaseholds_tags": "custom-*"}
+        step = command_builders.build_send_receive_command(
+            "src", "dst", variables, "/bin", "@snap"
+        )
+        bash_script = step.command[2]
+        self.assertIn('releaseholds_tags=("custom-*")', bash_script)
+
 
 class TestBuildInstalledProgramsCommand(unittest.TestCase):
 
@@ -302,6 +318,12 @@ class TestBuildRetentionCommand(unittest.TestCase):
         self.assertIn('cleanup "$pool" "" dailybackup', bash_script)
         self.assertIn("exit $overall_rc", bash_script)
         self.assertEqual(step.description, "Prune snapshots (archive, tank)")
+
+    def test_retention_command_includes_releaseholds_tags(self):
+        step = command_builders.build_retention_command("/bin", "dailybackup")
+        bash_script = step.command[2]
+        self.assertIn('releaseholds="Y"', bash_script)
+        self.assertIn('releaseholds_tags=("offsite-*")', bash_script)
 
 
 if __name__ == "__main__":

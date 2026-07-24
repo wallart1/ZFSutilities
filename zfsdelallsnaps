@@ -2,7 +2,8 @@
 # Delete all snapshots in a given ZFS filesystem
 # $1    Filesystem.
 # $2    A string that, if specified, is used to select snapshots.
-# $3    "releaseholds" means to release all holds on snapshots that have any.
+# $3    "releaseholds" means to release matching holds on snapshots that have any.
+#       Matching tags are controlled by releaseholds_tags (default offsite-*).
 # $4    "recursive" means to process the entire subtree, not just the specified dataset.
 #       Causes display of snapshots to be deleted and requests approval, just to be safer.
 # $5    Optional overrides.
@@ -34,9 +35,12 @@ function delallsnaps {
     if [[ $2 != '' ]]; then zfsdelsnapsfind="$2"; fi
 
     if [[ $releaseholds = '' ]]; then releaseholds='N'; fi
-    if [[ $3 = 'releaseholds' ]]; then 
+    if [[ $3 = 'releaseholds' ]]; then
         releaseholds='Y'
         release='releaseholds'
+        if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
+            releaseholds_tags=('offsite-*')
+        fi
     else
         releaseholds='N'
         release=''
@@ -76,7 +80,7 @@ function delallsnaps {
         else
             log_msg "INFO: About to delete the following ${#snaparray[@]} snapshots from" \
                 "$zfsdelallsnaps_fs." \
-                "\nThis will disregard all holds, retaining of incremental backup ability and snapshot age."
+                "\nThis will disregard system offsite-* holds and snapshot age; user holds may block individual snapshots."
             local now=$(date +%s)
             for snap in "${snaparray[@]}"; do
                 local snap_creation=$(zfs get -Hp -o value creation "$snap")

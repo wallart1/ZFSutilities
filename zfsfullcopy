@@ -45,8 +45,8 @@ function zfsfullcopy {
         log_msg "INFO: Part one: Full copy using the oldest available snapshot."
         local startwith=''              # Substring of fs name. All preceeding fs's will be skipped.
         local force='Y'                 # Do full copy even if common snapshots are found.
-        local releaseholds='Y'          # Allow all of destfs to be deleted, unconditionally, before
-                                        # restoring.
+        local releaseholds='Y'          # Release matching holds before restoring.
+        local releaseholds_tags=('offsite-*')
         local doincrementals='N'        # 'N' means do full copies.
         local dointermediates='N'       # Don't try to do any other shapshots.
         local nextsnap=$nextsnapsave    # Just in case it gets clobbered.

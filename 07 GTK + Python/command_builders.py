@@ -144,6 +144,7 @@ def build_send_receive_command(source, dest, variables, parent_dir, nextsnap,
         f'allow_destructive="{v.get("allow_destructive", "N")}"; '
         f'receive_F_option="{v.get("receive_F_option", "F")}"; '
         f'releaseholds="{v.get("releaseholds", "N")}"; '
+        f'releaseholds_tags=("{v.get("releaseholds_tags", "offsite-*")}"); '
         f'autoresume="{v.get("autoresume", "Y")}"; '
         f'verify_after_transfer="{v.get("verify_after_transfer", "Y")}"; '
         f'pv_rate_limit="{v.get("pv_rate_limit", "")}"; '
@@ -242,6 +243,7 @@ def build_retention_command(parent_dir, label, pools=None, dryrun=False,
         f'{dryrun_part}'
         f'autoproceed="Y"; '
         f'releaseholds="Y"; '
+        f'releaseholds_tags=("offsite-*"); '
     )
     if pools:
         pool_list = " ".join(shlex.quote(p) for p in pools)
