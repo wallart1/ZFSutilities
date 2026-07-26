@@ -843,6 +843,9 @@ For the full algorithm and return codes, see the
 
 ### Layout
 
+The tab content scrolls vertically when the derived and user-entry tables do
+not fit in the window.
+
 The two derived sections are read-only tables. Each has an **Active**
 checkbox at the top:
 

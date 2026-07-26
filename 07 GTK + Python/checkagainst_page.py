@@ -99,6 +99,10 @@ def create_checkagainst_page(app):
     outer.set_margin_top(10)
     outer.set_margin_bottom(10)
 
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    scrolled.add(outer)
+
     # Header
     hdr = Gtk.Label()
     hdr.set_markup("<big><b>Checkagainst Table</b></big>")
@@ -216,7 +220,7 @@ def create_checkagainst_page(app):
     # Load initial data
     _load_fss_into_store(app)
 
-    return outer
+    return scrolled
 
 
 def _column_width(col_idx):

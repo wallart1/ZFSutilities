@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.63.4
+
+*Released 2026-07-26*
+
+### Fixed
+
+- **Checkagainst tab now scrolls vertically when content overflows** — The
+  Checkagainst page is wrapped in a `Gtk.ScrolledWindow` with a vertical-only
+  scrollbar policy, so long derived/user entry tables remain accessible on
+  smaller displays.
+
+### Tests
+
+- Added `test_page_is_wrapped_in_scrolled_window` in
+  `tests/python/test_checkagainst_page.py` to verify the page root widget and
+  its scrolling policy.
+
 ## 0.63.3
 
 *Released 2026-07-25*

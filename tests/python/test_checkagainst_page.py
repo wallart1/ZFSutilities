@@ -518,6 +518,25 @@ class TestPageConstruction(unittest.TestCase):
         self.assertIn("Comment", titles)
         self.assertEqual(len(titles), 15)  # 5 columns x 3 treeviews
 
+    def test_page_is_wrapped_in_scrolled_window(self):
+        """The page root is a vertical-scrolling ScrolledWindow."""
+        app = self._make_app()
+        # ScrolledWindows are created in this order:
+        # page wrapper, backup section treeview, offsite section treeview,
+        # user entries treeview.
+        page_sw = MagicMock()
+        sw_iter = iter([page_sw, MagicMock(), MagicMock(), MagicMock()])
+
+        with patch.object(cap.Gtk, "ScrolledWindow", side_effect=lambda: next(sw_iter)), \
+             patch.object(cap, "_set_button_markup"):
+            result = cap.create_checkagainst_page(app)
+
+        self.assertIs(result, page_sw)
+        page_sw.set_policy.assert_called_once_with(
+            cap.Gtk.PolicyType.NEVER, cap.Gtk.PolicyType.AUTOMATIC
+        )
+        page_sw.add.assert_called_once()
+
 
 class TestColumnTooltips(unittest.TestCase):
     """Each column header has an explanatory tooltip."""
