@@ -729,10 +729,12 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
             col1 = MagicMock()
             col1.get_resizable.return_value = True
             col1.get_min_width.return_value = 20
-            col1.get_width.return_value = 123
+            col1.get_fixed_width.return_value = 123
+            col1.get_title.return_value = "Name"
             col2 = MagicMock()
             col2.get_resizable.return_value = False
-            col2.get_width.return_value = 456
+            col2.get_fixed_width.return_value = 456
+            col2.get_title.return_value = "Fixed"
             tv = MagicMock()
             tv.get_realized.return_value = True
             tv.get_columns.return_value = [col1, col2]
@@ -749,7 +751,7 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
 
             args = mock_save.call_args[0][1]
             self.assertIn("treeview_columns", args)
-            self.assertEqual(args["treeview_columns"]["test_view"], [123])
+            self.assertEqual(args["treeview_columns"]["test_view"], {"Name": 123})
 
     @patch("backup_config.save_ui_state")
     def test_bind_treeview_restores_saved_widths(self, mock_save):
@@ -790,8 +792,8 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
             col2.set_fixed_width.assert_called_once_with(200)
 
     @patch("backup_config.save_ui_state")
-    def test_bind_treeview_scales_saved_widths_to_fit_window(self, mock_save):
-        """Saved column widths are scaled down so they never expand the window."""
+    def test_bind_treeview_does_not_scale_saved_widths_to_window(self, mock_save):
+        """Saved column widths are not scaled down to fit a stale window width."""
         with mock_gtk():
             import gui_helpers
             import backup_config
@@ -827,9 +829,8 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
             finally:
                 gui_helpers.GLib.idle_add = orig_idle_add
 
-            # Budget = 400 - 300 chrome = 100; total saved = 500; scale = 0.2
-            col1.set_fixed_width.assert_called_once_with(40)
-            col2.set_fixed_width.assert_called_once_with(60)
+            col1.set_fixed_width.assert_called_once_with(200)
+            col2.set_fixed_width.assert_called_once_with(300)
 
     @patch("backup_config.save_ui_state")
     def test_bind_treeview_defers_width_signal_until_after_restore(self, mock_save):
@@ -955,10 +956,14 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
             col1.get_resizable.return_value = True
             col1.get_min_width.return_value = 20
             col1.get_width.return_value = 150
+            col1.get_fixed_width.return_value = 150
+            col1.get_title.return_value = "Name"
             col2 = MagicMock()
             col2.get_resizable.return_value = True
             col2.get_min_width.return_value = 20
             col2.get_width.return_value = 200
+            col2.get_fixed_width.return_value = 200
+            col2.get_title.return_value = "Created"
             tv = MagicMock()
             tv.get_realized.return_value = False
             tv.get_columns.return_value = [col1, col2]
@@ -995,11 +1000,13 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
             col1 = MagicMock()
             col1.get_resizable.return_value = True
             col1.get_min_width.return_value = 20
-            col1.get_width.return_value = 0
+            col1.get_fixed_width.return_value = 0
+            col1.get_title.return_value = "Name"
             col2 = MagicMock()
             col2.get_resizable.return_value = True
             col2.get_min_width.return_value = 20
-            col2.get_width.return_value = 1
+            col2.get_fixed_width.return_value = 1
+            col2.get_title.return_value = "Created"
             tv = MagicMock()
             tv.get_realized.return_value = True
             tv.get_columns.return_value = [col1, col2]
@@ -1036,11 +1043,13 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
             col1 = MagicMock()
             col1.get_resizable.return_value = True
             col1.get_min_width.return_value = 20
-            col1.get_width.return_value = 20
+            col1.get_fixed_width.return_value = 20
+            col1.get_title.return_value = "Name"
             col2 = MagicMock()
             col2.get_resizable.return_value = True
             col2.get_min_width.return_value = 20
-            col2.get_width.return_value = 20
+            col2.get_fixed_width.return_value = 20
+            col2.get_title.return_value = "Created"
             tv = MagicMock()
             tv.get_realized.return_value = True
             tv.get_columns.return_value = [col1, col2]
@@ -1056,7 +1065,7 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
 
             args = mock_save.call_args[0][1]
             self.assertIn("treeview_columns", args)
-            self.assertEqual(args["treeview_columns"]["test_view"], [20, 20])
+            self.assertEqual(args["treeview_columns"]["test_view"], {"Name": 20, "Created": 20})
 
     @patch("backup_config.save_ui_state")
     def test_bind_treeview_not_saved_before_idle_runs(self, mock_save):
@@ -1083,10 +1092,14 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
             col1.get_resizable.return_value = True
             col1.get_min_width.return_value = 20
             col1.get_width.return_value = 150
+            col1.get_fixed_width.return_value = 150
+            col1.get_title.return_value = "Name"
             col2 = MagicMock()
             col2.get_resizable.return_value = True
             col2.get_min_width.return_value = 20
             col2.get_width.return_value = 200
+            col2.get_fixed_width.return_value = 200
+            col2.get_title.return_value = "Created"
             tv = MagicMock()
             tv.get_realized.return_value = True
             tv.get_columns.return_value = [col1, col2]
@@ -1112,7 +1125,9 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
             mgr._do_save()
             args = mock_save.call_args[0][1]
             self.assertIn("treeview_columns", args)
-            self.assertEqual(args["treeview_columns"]["test_view"], [150, 200])
+            self.assertEqual(
+                args["treeview_columns"]["test_view"], {"Name": 150, "Created": 200}
+            )
 
     @patch("backup_config.save_ui_state")
     def test_bind_treeview_defers_shrink_setup_until_realized(self, mock_save):
@@ -1242,6 +1257,130 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
                 gui_helpers.Gtk.PolicyType.AUTOMATIC,
                 gui_helpers.Gtk.PolicyType.AUTOMATIC,
             )
+
+    @patch("backup_config.save_ui_state")
+    def test_do_save_persists_fixed_width_not_allocated_width(self, mock_save):
+        """GTK may allocate narrower than fixed_width; persist fixed_width."""
+        with mock_gtk() as gtk_mock:
+            gtk_mock.TreeViewColumnSizing = MagicMock()
+            gtk_mock.TreeViewColumnSizing.FIXED = 2
+            import gui_helpers
+
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            col = MagicMock()
+            col.get_resizable.return_value = True
+            col.get_min_width.return_value = 20
+            # User dragged the column to 200, but GTK allocated only 80.
+            col.get_fixed_width.return_value = 200
+            col.get_width.return_value = 80
+            col.get_title.return_value = "Created"
+            tv = MagicMock()
+            tv.get_realized.return_value = True
+            tv.get_columns.return_value = [col]
+
+            orig_idle_add = gui_helpers.GLib.idle_add
+            gui_helpers.GLib.idle_add = lambda fn, *a, **k: fn(*a, **k) or False
+            try:
+                mgr.bind_treeview(tv, "test_view")
+            finally:
+                gui_helpers.GLib.idle_add = orig_idle_add
+
+            mgr._do_save()
+
+            args = mock_save.call_args[0][1]
+            self.assertIn("treeview_columns", args)
+            self.assertEqual(args["treeview_columns"]["test_view"], {"Created": 200})
+
+    @patch("backup_config.save_ui_state")
+    def test_bind_treeview_restores_saved_widths_by_title(self, mock_save):
+        """Title-keyed dict format restores each column by header title."""
+        with mock_gtk():
+            import gui_helpers
+            import backup_config
+            gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
+            gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {
+                "ui_state": {
+                    "treeview_columns": {
+                        "test_view": {"Name": 150, "Created": 110}
+                    }
+                }
+            }
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            col1 = MagicMock()
+            col1.get_resizable.return_value = True
+            col1.get_min_width.return_value = 20
+            col1.get_title.return_value = "Name"
+            col2 = MagicMock()
+            col2.get_resizable.return_value = True
+            col2.get_min_width.return_value = 20
+            col2.get_title.return_value = "Created"
+            tv = MagicMock()
+            tv.get_columns.return_value = [col1, col2]
+
+            orig_idle_add = gui_helpers.GLib.idle_add
+            gui_helpers.GLib.idle_add = lambda fn, *a, **k: fn(*a, **k) or False
+            try:
+                mgr.bind_treeview(tv, "test_view")
+            finally:
+                gui_helpers.GLib.idle_add = orig_idle_add
+
+            col1.set_fixed_width.assert_called_once_with(150)
+            col2.set_fixed_width.assert_called_once_with(110)
+
+    @patch("backup_config.save_ui_state")
+    def test_bind_treeview_skips_renamed_or_missing_columns(self, mock_save):
+        """Unmatched titles keep their default width instead of getting zero."""
+        with mock_gtk():
+            import gui_helpers
+            import backup_config
+            gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
+            gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {
+                "ui_state": {
+                    "treeview_columns": {
+                        "test_view": {"OldName": 150}
+                    }
+                }
+            }
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            col = MagicMock()
+            col.get_resizable.return_value = True
+            col.get_min_width.return_value = 20
+            col.get_title.return_value = "NewName"
+            tv = MagicMock()
+            tv.get_columns.return_value = [col]
+
+            orig_idle_add = gui_helpers.GLib.idle_add
+            gui_helpers.GLib.idle_add = lambda fn, *a, **k: fn(*a, **k) or False
+            try:
+                mgr.bind_treeview(tv, "test_view")
+            finally:
+                gui_helpers.GLib.idle_add = orig_idle_add
+
+            col.set_fixed_width.assert_not_called()
 
 
 class TestTreeviewColumnHelpers(unittest.TestCase):
@@ -2047,6 +2186,7 @@ class TestMinimizeWidth(unittest.TestCase):
                     window.get_size.return_value = (1000, 700)
                     window.config = {"ui_state": {"treeview_columns": {"x": [100]}}}
                     window.get_window.return_value = None
+                    window._ui_state = MagicMock()
 
                     try:
                         with capture_logs() as logs:
@@ -2056,6 +2196,7 @@ class TestMinimizeWidth(unittest.TestCase):
 
                     gtk_mock.MessageDialog.assert_called_once()
                     mock_reset.assert_called_once_with(window)
+                    window._ui_state.flush.assert_called_once()
                     window.queue_resize.assert_called_once()
                     window.resize.assert_called_once_with(1, 700)
                     saved = backup_config.load_config()

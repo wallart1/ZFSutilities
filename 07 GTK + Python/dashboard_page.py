@@ -222,7 +222,8 @@ def _parse_cap(cap_str):
 def _get_pool_health(repo=None):
     """Run zpool list, return list of pool health dicts.
 
-    Each dict contains: name, health, cap, cap_int, scrub_date, status_errors.
+    Each dict contains: name, health, cap, cap_int, scrub_date, status_errors,
+    ckpoint.
     Returns None if the command fails or times out.
     """
     repo = repo or get_default_repository()
@@ -243,6 +244,7 @@ def _get_pool_health(repo=None):
                 "cap_int": cap_int,
                 "scrub_date": scrub_date,
                 "status_errors": status_errors,
+                "ckpoint": row.ckpoint,
             }
         )
     return pools
@@ -849,6 +851,12 @@ def _get_warnings(pools, recent_history, threshold, waiting_tasks=None):
             summary = status_errors.get("errors_summary", "unknown error")
             warnings.append(
                 f'Pool "{p["name"]}" has ZFS errors: {summary}'
+            )
+        ckpoint = p.get("ckpoint", "")
+        if ckpoint and ckpoint != "-":
+            warnings.append(
+                f'Pool "{p["name"]}" has an active ZFS checkpoint '
+                f"({ckpoint})"
             )
 
     if waiting_tasks:

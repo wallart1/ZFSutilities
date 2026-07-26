@@ -158,7 +158,7 @@ and tests easy to mock.
 
 | Class | Purpose |
 | ----- | ------- |
-| `PoolRow` | One row from `zpool list -H -o name,health,size,alloc,free,cap` |
+| `PoolRow` | One row from `zpool list -H -o name,health,size,alloc,free,cap,ckpoint` |
 | `DatasetRow` | One row from `zfs list -H -o name,creation,type,used,avail,refer,origin,clones` |
 | `SnapshotRow` | One row from `zfs list -t snapshot -H -o ...` |
 | `HoldRow` | One row from `zfs holds -H <snapshot>` |

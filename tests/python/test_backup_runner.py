@@ -171,6 +171,117 @@ class TestReceivedByteCounting(unittest.TestCase):
         self.assertEqual(runner._total_bytes_received, 0)
 
 
+class TestSubprocessOutputLogging(unittest.TestCase):
+    """Subprocess output is displayed in the GUI and written once to the log."""
+
+    def _runner(self):
+        return br.BackupRunner(MagicMock(), MagicMock())
+
+    def test_on_stderr_writes_subprocess_line_once(self):
+        """Regression: subprocess output appeared twice in the session log."""
+        runner = self._runner()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                log_path = runner._session_log_file
+                line = "INFO: Processing threeamigos/proxmox."
+
+                def fake_read(fd, _size):
+                    if fd == 0:
+                        return line.encode()
+                    return b""
+
+                with patch("os.read", side_effect=fake_read):
+                    runner._on_stderr(0, br.GLib.IOCondition.IN)
+
+                with open(log_path) as fh:
+                    content = fh.read()
+        self.assertEqual(content.count(line), 1)
+        runner.log.assert_called_once_with(line)
+
+    def test_drain_remaining_writes_subprocess_line_once(self):
+        """Regression: drain_remaining also duplicated subprocess output."""
+        runner = self._runner()
+        runner.steps = [BashStep([], "step", is_rsync=False, fatal=False)]
+        fake_process = MagicMock()
+        fake_process.stdout.fileno.return_value = 3
+        fake_process.stdout.closed = False
+        fake_process.stderr.fileno.return_value = 4
+        fake_process.stderr.closed = False
+        runner.process = fake_process
+
+        line = "received 500B stream in 0.50 seconds"
+        calls = [0]
+
+        def fake_read(fd, _size):
+            if fd == 3:
+                return b""
+            if fd == 4:
+                calls[0] += 1
+                if calls[0] == 1:
+                    return line.encode()
+                return b""
+            return b""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                log_path = runner._session_log_file
+                with patch("os.read", side_effect=fake_read):
+                    runner._drain_remaining()
+
+                with open(log_path) as fh:
+                    content = fh.read()
+        self.assertEqual(content.count(line), 1)
+        runner.log.assert_called_once_with(line)
+
+    def test_on_stdout_writes_subprocess_line_once(self):
+        """Regression: merged stdout output also duplicated subprocess output."""
+        runner = self._runner()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                log_path = runner._session_log_file
+                line = "INFO: Processing threeamigos/proxmox."
+
+                def fake_read(fd, _size):
+                    if fd == 0:
+                        return line.encode()
+                    return b""
+
+                with patch("os.read", side_effect=fake_read):
+                    runner._on_stdout(0, br.GLib.IOCondition.IN)
+
+                with open(log_path) as fh:
+                    content = fh.read()
+        self.assertEqual(content.count(line), 1)
+        runner.log.assert_called_once_with(line)
+
+    def test_on_rsync_stderr_writes_subprocess_line_once(self):
+        """Regression: rsync stderr output also duplicated subprocess output."""
+        runner = self._runner()
+        runner._current_desc = "pull"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dirs(tmpdir):
+                runner.prepare_session_log()
+                log_path = runner._session_log_file
+                line = "rsync warning message"
+                formatted = "pull: rsync warning message"
+
+                def fake_read(fd, _size):
+                    if fd == 0:
+                        return line.encode()
+                    return b""
+
+                with patch("os.read", side_effect=fake_read):
+                    runner._on_rsync_stderr(0, br.GLib.IOCondition.IN)
+
+                with open(log_path) as fh:
+                    content = fh.read()
+        self.assertEqual(content.count(formatted), 1)
+        runner.log.assert_called_once_with(formatted)
+
+
 class TestAbortHandling(unittest.TestCase):
     """Operation-abort exit code (9) stops the runner cleanly."""
 

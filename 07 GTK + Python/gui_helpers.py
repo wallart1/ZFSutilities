@@ -1330,6 +1330,11 @@ def confirm_and_minimize_width(window):
 
     count = reset_resizable_columns_to_min_width(window)
 
+    # Flush any pending debounced save before clearing widths, otherwise the
+    # just-cleared values could be re-written.
+    if hasattr(window, "_ui_state") and window._ui_state is not None:
+        window._ui_state.flush()
+
     # Discard saved column widths so they are not restored later
     window.config.setdefault("ui_state", {}).setdefault("treeview_columns", {})
     window.config["ui_state"]["treeview_columns"] = {}
@@ -1843,35 +1848,35 @@ class UIStateManager:
         from backup_config import get_ui_state
         ui_state = get_ui_state(self.config)
         saved = ui_state.get("treeview_columns", {}).get(state_key)
-        saved_widths = list(saved) if saved else []
+        saved_widths = saved if saved else []
 
         def _apply():
-            # Saved widths correspond to resizable columns in column order.
             columns = treeview.get_columns()
             resizable_columns = [c for c in columns if c.get_resizable()]
 
             if saved_widths and resizable_columns:
-                widths = list(saved_widths)
-                saved_width = ui_state.get("main_window", {}).get("width")
-                if saved_width:
-                    # Approximate non-treeview chrome: sidebar + action box +
-                    # frames/margins.  The exact value is not critical; the goal
-                    # is simply to keep restored columns from expanding the
-                    # window beyond its saved width.
-                    budget = saved_width - 300
-                    if budget > 0:
-                        total = sum(widths)
-                        if total > budget:
-                            scale = budget / total
-                            widths = [max(20, int(w * scale)) for w in widths]
-
-                widths = [
-                    max(w, col.get_min_width())
-                    for w, col in zip(widths, resizable_columns)
-                ]
-                for col, width in zip(resizable_columns, widths):
-                    col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
-                    col.set_fixed_width(width)
+                if isinstance(saved_widths, dict):
+                    # Title-keyed storage: match each resizable column by its
+                    # header title. Unmatched columns keep their default width.
+                    for col in resizable_columns:
+                        title = col.get_title()
+                        width = saved_widths.get(title)
+                        if width is None:
+                            continue
+                        width = max(width, col.get_min_width())
+                        col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+                        col.set_fixed_width(width)
+                else:
+                    # Legacy list format: apply widths by resizable-column
+                    # index. This preserves existing configs until the next
+                    # save rewrites them in the title-keyed dict format.
+                    widths = [
+                        max(w, col.get_min_width())
+                        for w, col in zip(saved_widths, resizable_columns)
+                    ]
+                    for col, width in zip(resizable_columns, widths):
+                        col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+                        col.set_fixed_width(width)
 
             # Connect width-change handlers AFTER any restoration so that
             # initial layout notifications do not overwrite saved widths with
@@ -1956,24 +1961,24 @@ class UIStateManager:
             lw["y"] = p_y
 
         # Persist TreeView column widths.  Skip TreeViews that are not yet
-        # realized or whose columns still have placeholder widths (this happens
-        # for pages hidden in a Gtk.Stack when a save fires before they are
-        # allocated).
+        # realized.  Save the user's intended width (fixed_width) rather than
+        # the allocated width, and key each width by column title so column
+        # additions/removals/renames do not silently misapply old values.
         tvc = {}
         for key, tv in self._treeviews.items():
             if not tv.get_realized():
                 continue
-            widths = []
-            valid = True
+            widths = {}
             for col in tv.get_columns():
                 if not col.get_resizable():
                     continue
-                width = col.get_width()
-                if width < col.get_min_width():
-                    valid = False
-                    break
-                widths.append(width)
-            if valid and widths:
+                width = col.get_fixed_width()
+                min_width = col.get_min_width()
+                if width <= 0 or width < min_width:
+                    continue
+                title = col.get_title()
+                widths[title] = width
+            if widths:
                 tvc[key] = widths
         if tvc:
             state["treeview_columns"] = tvc

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.63.3
+
+*Released 2026-07-25*
+
+### Fixed
+
+- **GTK TreeView column widths no longer shrink after version switches or
+  maximized sessions** — Column widths are now persisted as the user's intended
+  `fixed_width` (not the allocated width) and keyed by column header title. The
+  old scaling logic that shrank restored widths to fit a stale saved window
+  width has been removed, and legacy list-format configs continue to restore
+  until the next save rewrites them in the title-keyed dict format.
+
+- **Backup runner no longer duplicates subprocess output in the session log** —
+  All subprocess output handlers now route lines through the GUI sink once and
+  write the raw line to the session log once, instead of calling the runner log
+  helper that also wrote to the session log.
+
+### Changed
+
+- `View → Minimize Width...` now flushes any pending debounced UI-state save
+  before clearing saved column widths, preventing the cleared widths from being
+  immediately re-written.
+
+### Added
+
+- **Dashboard warns about active ZFS checkpoints** — `zpool list` output now
+  includes the `ckpoint` property; pools with an active checkpoint appear in
+  the Dashboard warnings list.
+
 ## 0.63.2
 
 *Released 2026-07-23*

@@ -431,7 +431,7 @@ class BackupRunner:
                             self._in_lock_wait = True
                         elif "Lock is now available" in line or "Wait interrupted" in line:
                             self._in_lock_wait = False
-                        self._runner_log(line)
+                        self.log(line)
                         self._write_raw_line(line)
                     return True
             except OSError:
@@ -479,7 +479,7 @@ class BackupRunner:
                                 self._in_lock_wait = True
                             elif "Lock is now available" in segment or "Wait interrupted" in segment:
                                 self._in_lock_wait = False
-                            self._runner_log(segment)
+                            self.log(segment)
                             self._write_raw_line(segment)
                     return True
             except OSError:
@@ -511,7 +511,7 @@ class BackupRunner:
                     for line in data.decode("utf-8", errors="replace").splitlines():
                         if line.strip():
                             formatted = f"{desc}: {line}"
-                            self._runner_log(formatted)
+                            self.log(formatted)
                             self._write_raw_line(formatted)
                     return True
             except OSError:
@@ -642,7 +642,7 @@ class BackupRunner:
                                     self._total_bytes_received += _parse_human_size(
                                         received_match.group(1)
                                     )
-                                self._runner_log(line)
+                                self.log(line)
                                 self._write_raw_line(line)
             except (OSError, ValueError):
                 pass

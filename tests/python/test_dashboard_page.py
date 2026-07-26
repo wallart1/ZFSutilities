@@ -73,10 +73,10 @@ class TestGetPoolHealth(unittest.TestCase):
 
     def test_pools_returned_with_cap_parsed(self):
         with mock_subprocess() as m:
-            # The default mock only outputs 5 columns; override for 6 columns
+            # The default mock only outputs default columns; override for 7 columns
             m.set_command_handler(
                 r"zpool list -H -o name,health,size,alloc,free,cap",
-                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t75%\n"),
+                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t75%\t-\n"),
             )
             m.set_command_handler(r"zpool status", lambda *_a, **_k: m._completed(""))
             pools = dp._get_pool_health()
@@ -85,12 +85,13 @@ class TestGetPoolHealth(unittest.TestCase):
         self.assertEqual(pools[0]["health"], "ONLINE")
         self.assertEqual(pools[0]["cap"], "75%")
         self.assertEqual(pools[0]["cap_int"], 75)
+        self.assertEqual(pools[0]["ckpoint"], "-")
 
     def test_scrub_date_parsed(self):
         with mock_subprocess() as m:
             m.set_command_handler(
                 r"zpool list -H -o name,health,size,alloc,free,cap",
-                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\n"),
+                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
             )
             status = (
                 "  scan: scrub repaired 0B in 00:00:02 with 0 errors on Sun May 10 00:24:03 2026\n"
@@ -103,7 +104,7 @@ class TestGetPoolHealth(unittest.TestCase):
         with mock_subprocess() as m:
             m.set_command_handler(
                 r"zpool list -H -o name,health,size,alloc,free,cap",
-                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\n"),
+                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
             )
             status = (
                 "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
@@ -116,7 +117,7 @@ class TestGetPoolHealth(unittest.TestCase):
         with mock_subprocess() as m:
             m.set_command_handler(
                 r"zpool list -H -o name,health,size,alloc,free,cap",
-                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\n"),
+                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
             )
             status = (
                 "  scan: scrub repaired 0B in 1 days 01:35:48 with 0 errors on Wed Jun  3 20:50:19 2026\n"
@@ -129,7 +130,7 @@ class TestGetPoolHealth(unittest.TestCase):
         with mock_subprocess() as m:
             m.set_command_handler(
                 r"zpool list -H -o name,health,size,alloc,free,cap",
-                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\n"),
+                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
             )
             status = "  scan: scrub canceled on Fri Jun 12 12:00:13 2026\n"
             m.set_command_handler(r"zpool status", lambda *_a, **_k: m._completed(status))
@@ -704,6 +705,47 @@ class TestGetWarnings(unittest.TestCase):
                 "cap": "50%",
                 "cap_int": 50,
                 "status_errors": {"has_errors": False},
+            },
+        ]
+        warnings = dp._get_warnings(pools, {}, threshold=80)
+        self.assertEqual(warnings, [])
+
+    def test_active_checkpoint_warning(self):
+        pools = [
+            {
+                "name": "tank",
+                "health": "ONLINE",
+                "cap": "50%",
+                "cap_int": 50,
+                "ckpoint": "50G",
+            },
+        ]
+        warnings = dp._get_warnings(pools, {}, threshold=80)
+        self.assertEqual(
+            warnings,
+            ['Pool "tank" has an active ZFS checkpoint (50G)'],
+        )
+
+    def test_no_checkpoint_no_warning(self):
+        pools = [
+            {
+                "name": "tank",
+                "health": "ONLINE",
+                "cap": "50%",
+                "cap_int": 50,
+                "ckpoint": "-",
+            },
+        ]
+        warnings = dp._get_warnings(pools, {}, threshold=80)
+        self.assertEqual(warnings, [])
+
+    def test_missing_checkpoint_field_no_warning(self):
+        pools = [
+            {
+                "name": "tank",
+                "health": "ONLINE",
+                "cap": "50%",
+                "cap_int": 50,
             },
         ]
         warnings = dp._get_warnings(pools, {}, threshold=80)

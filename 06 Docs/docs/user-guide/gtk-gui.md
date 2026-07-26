@@ -217,13 +217,18 @@ The GUI's **View** menu contains global display actions.
 | **Minimize Width...** | Reset every resizable table column to its own minimum width, clear saved column widths, and shrink the main window as narrow as possible |
 
 Column widths across the GUI are normally restored from the saved `ui_state`
-when the window opens. All tables use fixed-width, resizable columns hosted
-inside scrollable viewports, so the main window can always be shrunk
-horizontally even when columns were previously widened.
+when the window opens. Each resizable column's width is stored by its header
+title, so adding, removing, or renaming a column does not silently misapply old
+widths. Widths are saved as the user's set width rather than GTK's allocated
+width, and they are not scaled against the saved window size, so maximized
+sessions no longer shrink columns based on a stale non-maximized window width.
+All tables use fixed-width, resizable columns hosted inside scrollable
+viewports, so the main window can always be shrunk horizontally even when
+columns were previously widened.
 
-Choosing **Minimize Width...** discards saved widths and resets every
-resizable column to its own minimum width. The action asks for confirmation
-before resizing the window.
+Choosing **Minimize Width...** flushes any pending save, discards saved widths,
+and resets every resizable column to its own minimum width. The action asks for
+confirmation before resizing the window.
 
 ## Tabs
 
@@ -372,6 +377,7 @@ Live compilation of issues that need attention:
 - Degraded or offline pools
 - Pools above the low-space threshold
 - Pools with ZFS errors (vdev or permanent data errors)
+- Pools with an active ZFS checkpoint
 - Missing backup/offsite/checkagainst configuration
 - Unregistered pools
 - Stale lock files in `/run/lock/zfs/.locks/`

@@ -69,6 +69,14 @@ test_find_script_across_subdirectories() {
     assert_equals "$mydir/09 ZFS clone support/archive-vm" "$result"
 }
 
+test_find_script_from_clone_support_directory() {
+    test_start "find_zfsutility_script locates rescan-storage from clone-support dir"
+    local result expected
+    expected="$mydir/08 Two-node/rescan-storage"
+    result=$(mydir="$mydir/09 ZFS clone support" find_zfsutility_script "rescan-storage")
+    assert_equals "$expected" "$result"
+}
+
 test_find_script_missing() {
     test_start "find_zfsutility_script fails for a missing script"
     clear_test_log_file
@@ -363,6 +371,7 @@ test_find_script_parent_directory
 test_find_script_two_node_directory
 test_find_script_clone_support_directory
 test_find_script_across_subdirectories
+test_find_script_from_clone_support_directory
 test_find_script_missing
 
 test_remote_zfsutilities_bin_success

@@ -367,7 +367,7 @@ Read methods return typed rows instead of raw tab-separated strings.
 
 | Class | Fields | Source command |
 | ----- | ------ | -------------- |
-| `PoolRow` | `name`, `health`, `size`, `alloc`, `free`, `cap` | `zpool list -H -o name,health,size,alloc,free,cap` |
+| `PoolRow` | `name`, `health`, `size`, `alloc`, `free`, `cap`, `ckpoint` | `zpool list -H -o name,health,size,alloc,free,cap,ckpoint` |
 | `DatasetRow` | `name`, `creation`, `ds_type`, `used`, `avail`, `refer`, `origin`, `clones` | `zfs list -H -o name,creation,type,used,avail,refer,origin,clones` |
 | `SnapshotRow` | `name`, `creation`, `ds_type`, `used`, `avail`, `refer`, `origin`, `clones` | `zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones` |
 | `HoldRow` | `snapshot`, `tag`, `date` | `zfs holds -H <snapshot>` |

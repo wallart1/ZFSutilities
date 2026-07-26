@@ -622,7 +622,11 @@ echo ""
 
 if is_two_node; then
     echo "--- Step 4: Rescanning iSCSI ---"
-    "$mydir/rescan-storage"
+    rescan_path=$(find_zfsutility_script rescan-storage) \
+        || { log_msg "FATAL: Could not locate rescan-storage"; exit 1; }
+    if ! "$rescan_path"; then
+        log_msg "WARN: iSCSI rescan failed; run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+    fi
     echo ""
 fi
 
