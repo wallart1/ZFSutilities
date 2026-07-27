@@ -289,8 +289,8 @@ class TestBackupPageRun(unittest.TestCase):
 
             entries = app.config["checkagainst"]["user_entries"]
             self.assertEqual(len(entries), 1)
-            self.assertEqual(entries[0]["dataset"], "threeamigos/proxmox")
-            self.assertEqual(entries[0]["counterpart"], "fivebays")
+            self.assertEqual(entries[0]["source_root"], "threeamigos/proxmox")
+            self.assertEqual(entries[0]["dest_root"], "fivebays/threeamigos/proxmox")
             self.assertEqual(entries[0]["label"], "dailybackup")
 
 

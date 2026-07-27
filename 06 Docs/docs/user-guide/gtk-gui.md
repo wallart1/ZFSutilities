@@ -829,7 +829,7 @@ The table is split into three sections:
 - **Offsite-derived entries** — rows generated from active Offsite tab
   send/receive steps.
 - **User entries** — manually maintained rows that always override
-  derived rows for the same `(dataset, label)` pair.
+  derived rows for the same `(source_root, label)` pair.
 
 `zfscheckagainst` uses the merged table to map a snapshot to its
 counterpart dataset(s). Before a snapshot is deleted, the script verifies
@@ -856,31 +856,27 @@ checkbox at the top:
 The bottom **User entries** section is an editable, reorderable table.
 Drag rows to reorder them; click a cell to edit it.
 
-| Column                      | Meaning                                                                                                                                                                         |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Snapshot label**          | Snapshot label to match. This entry applies only to snapshots carrying this label (e.g. `dailybackup`, `offsite`).                                                              |
-| **Source dataset**          | Source dataset tree this row applies to. `<offsite>` may appear anywhere; each occurrence is replaced with each offsite-candidate pool name at run-time.                        |
-| **Strip leading segments**  | Number of leading path segments to remove from the source dataset name. This is the first of two steps for constructing the counterpart dataset name.                          |
-| **Destination dataset**     | Path prefix to prepend after stripping. A literal `-` means "no prepend". `<offsite>` may appear anywhere and is replaced with each offsite-candidate pool name.                |
-| **Comment**                 | Optional note stored in the saved configuration and shown in this table. Use for documenting the entry's purpose.                                                               |
+| Column                  | Meaning                                                                                                                                                                      |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Snapshot label**      | Snapshot label to match. This entry applies only to snapshots carrying this label (e.g. `dailybackup`, `offsite`).                                                           |
+| **Source root**         | Source dataset tree this row applies to. A snapshot's dataset must be this root or one of its descendants. `<offsite>` may appear anywhere and expands per offsite-candidate pool at run-time. |
+| **Destination root**    | Destination dataset tree where the counterpart is expected. The counterpart is built by replacing the source-root prefix of the snapshot's dataset with this value. `<offsite>` may appear anywhere and expands per offsite-candidate pool at run-time. |
+| **Comment**             | Optional note stored in the saved configuration and shown in this table. Use for documenting the entry's purpose.                                                            |
 
 Hover over any column header to see a tooltip explaining the field.
 
-### How the destination dataset is constructed
+### How the counterpart dataset is constructed
 
-`zfscheckagainst` builds the counterpart dataset name in two steps:
-
-1. **Remove** the first N path segments from the snapshot's dataset
-   (where N is the value in **Strip leading segments**).
-2. **Prepend** the value from **Destination dataset** to the result.
+`zfscheckagainst` builds the counterpart dataset by replacing the snapshot's
+source-root prefix with the destination-root prefix.
 
 For example, with a snapshot on
 `threeamigos/proxmox/vm-101-disk-0@dailybackup-…-d`:
 
-| Source dataset                | Strip | Destination dataset | Counterpart dataset                        |
-| ----------------------------- | ----- | ------------------- | ------------------------------------------ |
-| `threeamigos/proxmox`         | `0`   | `fivebays`          | `fivebays/threeamigos/proxmox/vm-101-disk-0` |
-| `fivebays/threeamigos/proxmox`| `1`   | `-`                 | `threeamigos/proxmox/vm-101-disk-0`        |
+| Source root            | Destination root            | Counterpart dataset                            |
+| ---------------------- | --------------------------- | ---------------------------------------------- |
+| `threeamigos`          | `fivebays/threeamigos`      | `fivebays/threeamigos/proxmox/vm-101-disk-0`   |
+| `fivebays/threeamigos` | `threeamigos`               | `threeamigos/proxmox/vm-101-disk-0`            |
 
 ### Derived entries
 
@@ -888,12 +884,13 @@ Derived rows are generated automatically from the Backup and Offsite tab
 send/receive steps. For each active step `source → dest` with label
 `dailybackup` (Backup) or `offsite` (Offsite), two rows are produced:
 
-- **Forward**: `source 0 dest <label>`
-- **Reverse**: `dest/source 1 - <label>`
+- **Forward**: `source <actual_destination> <label>`
+- **Reverse**: `<actual_destination> source <label>`
 
-When the Offsite Destination column contains `<offsite>`, the derived
-row keeps the placeholder literal. `zfscheckagainst` expands it to every
-pool marked as an offsite candidate in the [Pools tab](#pools-tab) at
+The actual destination root is the destination path that `zfs-send-receive`
+will use. When the Offsite Destination column contains `<offsite>`, the
+derived row keeps the placeholder literal. `zfscheckagainst` expands it to
+every pool marked as an offsite candidate in the [Pools tab](#pools-tab) at
 run time, so one derived row can verify against all candidate pools.
 
 ### Actions
@@ -901,7 +898,7 @@ run time, so one derived row can verify against all candidate pools.
 | Button          | Behavior                                                                                                              |
 | --------------- | --------------------------------------------------------------------------------------------------------------------- |
 | **Get Entries** | Refresh the Backup-derived and Offsite-derived sections from the current Backup/Offsite configs. Marks the tab dirty. |
-| **Add pair...** | Open an assistant that asks for snapshot label, source dataset, destination dataset, and comment; it computes the correct **Strip leading segments** value and appends the row to the user table. |
+| **Add pair...** | Open an assistant that asks for snapshot label, source root, destination root, and comment; it appends the forward row and the reverse row to the user table. |
 | **Add Row**     | Appends a new empty row to the user table.                                                                            |
 | **Remove Row**  | Deletes the selected row(s) from the user table.                                                                      |
 | **Save**        | Saves the whole `checkagainst` object after validation. Turns **red** while there are unsaved changes.                |
@@ -909,8 +906,7 @@ run time, so one derived row can verify against all candidate pools.
 
 A status label below the table shows **orange** "Unsaved changes" while
 edits are pending, or a **red** validation error if a row is missing a
-required field (Source dataset, Destination dataset, or Snapshot label) or
-has an invalid **Strip leading segments** value.
+required field (Source root, Destination root, or Snapshot label).
 
 ### Auto-seeding
 

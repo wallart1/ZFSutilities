@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.64.0
+
+*Released 2026-07-27*
+
+### Changed
+
+- **Checkagainst now uses source/destination roots instead of strip/prepend**
+  — The `zfscheckagainst` fss table and the GUI Checkagainst tab have been
+  simplified from four fields (`dataset`, `quals`, `counterpart`, `label`) to
+  three (`source_root`, `dest_root`, `label`). The counterpart dataset is now
+  built by replacing the snapshot's `source_root` prefix with the `dest_root`
+  prefix, which matches how `zfs-send-receive` constructs destination paths and
+  removes the need to compute leading-segment strip counts.
+
+### Added
+
+- **Config migration v18 → v19** — Existing checkagainst rows using the legacy
+  `dataset`/`quals`/`counterpart` format are automatically converted to
+  `source_root`/`dest_root` when the JSON config is loaded.
+- **Legacy `.conf` conversion** — `zfscheckagainst` now reads legacy
+  4-field `zfscheckagainst.conf` rows and converts them to the new 3-field
+  `source_root`/`dest_root`/`label` format on the fly.
+
+### Removed
+
+- **`zfsretain` no longer parses `$leadingqualifiertodelete`** — The variable
+  and the unused `remove_leading_qualifiers` calls have been removed from
+  retention pruning; counterpart resolution is now handled entirely by
+  `zfscheckagainst` using the config's `source_root`/`dest_root` rows.
+
+### Tests
+
+- Updated `tests/test-zfsdelsnap` so the "real `zfscheckagainst` sources
+  cleanly" test no longer expects the removed `zfsremoveleadingqualifiers`
+  helper.
+- Added `_normalize_checkagainst_row` coverage for legacy null-prepend
+  (`counterpart: "-"`) rows in
+  `tests/python/test_checkagainst_derivation.py`.
+- Fixed `tests/test-lib.sh` so `teardown_test_env` propagates `test_summary`'s
+  non-zero exit code; failing suites are no longer reported as passed when
+  teardown is the last command.
+
+### Documentation
+
+- Updated `commands-and-modules/modules.md`,
+  `developer-guide/architecture.md`, `developer-guide/data-structures.md`,
+  `developer-guide/global-variables.md`, `developer-guide/testing.md`, and
+  `user-guide/gtk-gui.md` to document the new `source_root`/`dest_root`
+  checkagainst schema.
+
 ## 0.63.4
 
 *Released 2026-07-26*

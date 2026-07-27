@@ -57,17 +57,16 @@ seconds. The lock is released immediately after the reservation is written.
 Used by [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst)
 to map a snapshot to the counterpart dataset that must still share a common
 snapshot with it before deletion is safe. Loaded at [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) time from
-`zfsconfig_get_checkagainst`. At runtime each row has four functional
-whitespace-separated fields; an optional fifth `comment` field is stored in
-the JSON config and ignored by the bash consumer:
+`zfsconfig_get_checkagainst`. At runtime each row has three functional
+whitespace-separated fields; an optional fourth `comment` field is stored
+in the JSON config and ignored by the bash consumer:
 
-| Field | Variable name in script                 | Purpose                                                          |
-| ----- | --------------------------------------- | ---------------------------------------------------------------- |
-| 1     | apply-to dataset (`$fs`)                | Matches the source dataset tree. May contain `<offsite>` anywhere; every occurrence is replaced with each offsite-candidate pool name at run-time |
-| 2     | qualifiers to delete (`$delquals`)      | Leading path components to strip                                 |
-| 3     | qualifiers to prepend (`$checkagainst`) | Path prefix to prepend, or `-` for none                          |
-| 4     | label                                   | Snapshot label this row applies to (`dailybackup`, `offsite`, …) |
-| 5     | comment                                 | Optional UI-only note (JSON-only, not emitted by `zfsconfig_get_checkagainst`) |
+| Field | Variable name in script | Purpose                                                          |
+| ----- | ----------------------- | ---------------------------------------------------------------- |
+| 1     | source root (`$fs`)     | Matches the source dataset tree. May contain `<offsite>`; expanded per offsite-candidate pool at run-time |
+| 2     | destination root        | Destination dataset tree. The counterpart is built by replacing the source-root prefix of the snapshot's dataset with this value. May contain `<offsite>`; expanded at run-time |
+| 3     | label                   | Snapshot label this row applies to (`dailybackup`, `offsite`, …) |
+| 4     | comment                 | Optional UI-only note (JSON-only, not emitted by `zfsconfig_get_checkagainst`) |
 
 See [`zfscheckagainst` → The fss table](../commands-and-modules/modules.md#the-fss-table)
 for the matching algorithm and a worked example.
@@ -87,8 +86,8 @@ object rather than a flat list:
 }
 ```
 
-Each row object still contains the same fields: `dataset`, `quals`,
-`counterpart`, `label`, and optional `comment`.
+Each row object contains `source_root`, `dest_root`, `label`, and optional
+`comment`.
 
 The three sub-lists are merged by `zfsconfig_get_checkagainst` /
 `feature_config.merge_checkagainst_entries()` into the flat runtime table
@@ -97,11 +96,11 @@ used by `zfscheckagainst`:
 1. Start with active `backup_derived` rows if `backup_derived_active` is
    `true`.
 2. Overlay active `offsite_derived` rows if `offsite_derived_active` is
-   `true`, keyed by `(dataset, label)`.
-3. Overlay `user_entries`, keyed by `(dataset, label)`.
+   `true`, keyed by `(source_root, label)`.
+3. Overlay `user_entries`, keyed by `(source_root, label)`.
 
 Precedence is therefore `user_entries` > `offsite_derived` >
-`backup_derived` for the same `(dataset, label)` pair. Inactive derived
+`backup_derived` for the same `(source_root, label)` pair. Inactive derived
 sections are omitted entirely from the runtime rows.
 
 The GUI's Checkagainst tab lets you refresh the derived lists manually
@@ -115,9 +114,9 @@ project root:
 
 ```
 # zfscheckagainst.conf
-# Format: <dataset> <delquals> <prepend> <label> [<comment>]
-threeamigos          0 fivebays    dailybackup
-fivebays/threeamigos 2 threeamigos dailybackup
+# Format: <source_root> <dest_root> <label> [<comment>]
+threeamigos            fivebays/threeamigos dailybackup
+fivebays/threeamigos   threeamigos          dailybackup
 ```
 
 This file is **deprecated**. The GUI imports it into the JSON config
@@ -224,7 +223,7 @@ Top-level keys:
 | Key                                                                   | Type                                 | Contents                                                                                                             |
 | --------------------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `pools`                                                               | array of strings or objects          | Registered pool names. String entries are supported for backward compatibility; v14 migrates them to `{"name", "offsite_candidate"}` objects |
-| [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) | object                               | Nested fss table: `backup_derived_active`, `offsite_derived_active`, `backup_derived`, `offsite_derived`, `user_entries`. Each row contains `dataset`, `quals`, `counterpart`, `label`, optional `comment`. |
+| [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) | object                               | Nested fss table: `backup_derived_active`, `offsite_derived_active`, `backup_derived`, `offsite_derived`, `user_entries`. Each row contains `source_root`, `dest_root`, `label`, optional `comment`. |
 | `retention`                                                           | object keyed by pool name | Per-pool retention policy. Each value is an array of `{name, retain, minage}` entries. Key `default` is the fallback |
 | `prune_label`                                                         | string                    | Default snapshot label used by the Retention tab prune runner (default `dailybackup`)                                |
 | `prune_pools_order`                                                   | array of strings          | Persisted order of pools in the Retention tab Prune list                                                             |

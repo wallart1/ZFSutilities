@@ -22,65 +22,80 @@ function checkagainst {
     source ~/bashinit
     bashinit
     source $mydir/zfscommsnap
-    source $mydir/zfsremoveleadingqualifiers
     source $mydir/bashdebug
     if [[ "$1" == '*NVME1*' ]]; then bashdebugon; else bashdebugoff; fi
 
     local \
+        _ca_from_offsite_ds=() \
+        _candidate_dstocheck \
+        _candidate_pool \
+        _candidate_guid \
+        _dest_guids \
+        _entry_found \
+        _entry_last_remaining \
+        _entry_offline_pools \
+        _fs \
+        _has_other \
+        _hold_tag \
+        _line \
+        _new_src \
+        _offsite_candidates=() \
+        _other_snap \
+        _pool \
+        _pool_online \
+        _source_dataset \
+        _source_pool \
         checkagainst \
         commsnap \
-        dstocheck \
-        delquals \
-        foundcounterpart \
+        dest_root \
+        foundcounterpart='' \
         fs \
         fullfs \
         i \
         label \
-        last_remaining_common \
+        last_remaining_common='' \
+        offline_pools="" \
         rc \
         snaplabel \
         snaptocheck="$1" \
-        zfsdelsnap_other_commsnap \
-        _source_pool \
-        _ca_from_offsite_ds=()
+        source_root \
+        zfsdelsnap_other_commsnap
 
     # Verify that the given snapshot exists.
-    if ! zfs list -t snapshot $snaptocheck > /dev/null 2>&1; then
+    if ! zfs list -t snapshot "$snaptocheck" > /dev/null 2>&1; then
         log_msg "FATAL: Snapshot $snaptocheck does not exist."
         exit 8
     fi
 
     # Remember the source pool so we can skip self-checks for rows that were
-    # expanded from an <offsite> dataset placeholder.
+    # expanded from an <offsite> source-root placeholder.
     _source_pool=$(echo "${snaptocheck%%@*}" | awk -F'/' '{print $1}')
+    _source_dataset="${snaptocheck%%@*}"
 
 # =======================  Backup Series  ==============================
 # Each < or > is one line in the fss table.
-#       LABEL           DATASET               FROM-TO  DATASET
-# 1)    dailybackup     threeamigos           <---->   fivebays/threeamigos
-# 2)    dailybackup     NVME1                 <---->   fivebays/NVME1
-# 3)    dailybackup     temp                  <---->   z22tb/temp
-#                           (dailybackup label in temp/z22tb/z40tb is not expected but harmless)
-# 4)    dailybackup     temp                  <---->   z40tb/temp
-# 5)    offsite         temp                  <---->   z22tb/temp
-# 6)    offsite         temp                  <---->   z40tb/temp
-# 7)    offsite         threeamigos           <---->   fivebays/threeamigos
-# 8)    offsite         NVME1                 <---->   fivebays/NVME1
-# 9)    offsite         fivebays              <---->   z22tb/fivebays
-# 10)   offsite         fivebays              <---->   z40tb/fivebays
+#       LABEL           SOURCE ROOT            DESTINATION ROOT
+# 1)    dailybackup     threeamigos            fivebays/threeamigos
+# 2)    dailybackup     NVME1                  fivebays/NVME1
+# 3)    dailybackup     temp                   z22tb/temp
+# 4)    dailybackup     temp                   z40tb/temp
+# 5)    offsite         temp                   z22tb/temp
+# 6)    offsite         temp                   z40tb/temp
+# 7)    offsite         threeamigos            fivebays/threeamigos
+# 8)    offsite         NVME1                  fivebays/NVME1
+# 9)    offsite         fivebays               z22tb/fivebays
+# 10)   offsite         fivebays               z40tb/fivebays
 
-    #    Dataset (tree) that the checked snapshot belongs to
-    #    |                    Number of leading qualifies for delete from snapshot filesystem
-    #    |                    | Leading qualifiers to prepend after qualifier deletion
-    #    |                    | |           Label to process
-    #    |                    | |           |
-    #    V                    V V           V
+    #    Source root (dataset tree that the checked snapshot belongs to)
+    #    |                    Destination root (counterpart dataset tree)
+    #    |                    |           Label to process
+    #    |                    |           |
+    #    V                    V           V
     #
     # Load fss table from the JSON config via zfsconfig helper. Falls back
     # to the legacy zfscheckagainst.conf file if the JSON section is empty.
     local fss=()
     source $mydir/zfsconfig
-    local _line
     while IFS= read -r _line; do
         [[ -z "${_line//[[:space:]]/}" ]] && continue
         fss+=("$_line")
@@ -89,21 +104,39 @@ function checkagainst {
         local _conf="$mydir/zfscheckagainst.conf"
         if [[ -f "$_conf" ]]; then
             while IFS= read -r _line; do
-                # Regex: ^[[:space:]]*#
-                # Purpose: Skip comment lines and lines that are entirely whitespace
-                #          in the zfscheckagainst.conf file.
-                # Example: "  # this is a comment" -> match; "threeamigos/data" -> no match
                 [[ "$_line" =~ ^[[:space:]]*# ]] && continue
                 [[ -z "${_line//[[:space:]]/}" ]] && continue
+                # Convert legacy 4-field strip/prepend rows to 3-field
+                # source_root/dest_root rows.
+                local _fields
+                _fields=$(echo "$_line" | awk '{print NF}')
+                if [[ $_fields -eq 4 ]]; then
+                    local _dataset _quals _prepend _lbl
+                    _dataset=$(echo "$_line" | awk '{print $1}')
+                    _quals=$(echo "$_line" | awk '{print $2}')
+                    _prepend=$(echo "$_line" | awk '{print $3}')
+                    _lbl=$(echo "$_line" | awk '{print $4}')
+                    [[ $_prepend = '-' ]] && _prepend=''
+                    local _stripped
+                    _stripped=$(echo "$_dataset" | cut -d'/' -f$((_quals + 1))-)
+                    if [[ -n "$_prepend" && -n "$_stripped" ]]; then
+                        _line="$_dataset ${_prepend}/${_stripped} $_lbl"
+                    elif [[ -n "$_prepend" ]]; then
+                        _line="$_dataset $_prepend $_lbl"
+                    else
+                        _line="$_dataset $_stripped $_lbl"
+                    fi
+                fi
                 fss+=("$_line")
             done < "$_conf"
         fi
     fi
 
-    # Expand <offsite> placeholders in the Dataset column. Every occurrence
-    # of the literal token is replaced with each offsite-candidate pool.
+    # Expand <offsite> placeholders in the Source root column. Every
+    # occurrence of the literal token is replaced with each offsite-candidate
+    # pool.
     local _expanded_fss=()
-    local _ca_line _fs _pool
+    local _ca_line
     for _ca_line in "${fss[@]}"; do
         _fs=$(echo "$_ca_line" | awk '{print $1}')
         if [[ $_fs == *'<offsite>'* ]]; then
@@ -112,13 +145,13 @@ function checkagainst {
                 [[ -n "$_pool" ]] && _offsite_ds_candidates+=("$_pool")
             done < <(zfsconfig_get_offsite_candidates)
             if [[ ${#_offsite_ds_candidates[@]} -eq 0 ]]; then
-                log_msg "WARN: <offsite> used in dataset but no offsite candidate" \
+                log_msg "WARN: <offsite> used in source root but no offsite candidate" \
                     "pools are configured. Skipping fss row: $_ca_line"
                 continue
             fi
             for _pool in "${_offsite_ds_candidates[@]}"; do
-                local _new_ds="${_fs//<offsite>/$_pool}"
-                _expanded_fss+=("$(echo "$_ca_line" | awk -v d="$_new_ds" '{$1=d; print}')")
+                _new_src="${_fs//<offsite>/$_pool}"
+                _expanded_fss+=("$(echo "$_ca_line" | awk -v s="$_new_src" '{$1=s; print}')")
                 _ca_from_offsite_ds+=("Y")
             done
         else
@@ -128,48 +161,36 @@ function checkagainst {
     done
     fss=("${_expanded_fss[@]}")
 
-    foundcounterpart=''
-    local offline_pools=""
     local matched_fss_entry=false
     for ((i=0; i<${#fss[@]}; i++)); do
         fullfs="${fss[$i]}"
-        # awk '{print $1}'  —  fullfs is a space-separated config line; get the target dataset.
-        fs=$(echo "$fullfs" | awk '{print $1}')
-        # Check if snapshot belongs to this dataset (exact match or child dataset)
-        if [[ $snaptocheck == $fs@* ]] || [[ $snaptocheck == $fs/* ]]; then
-            # awk '{print $4}'  —  Get the snapshot label to match from the config line.
-            label=$(echo "$fullfs" | awk '{print $4}')
-            # awk -F'@' '{print $2}' | awk -F'-' '{print $1}'  —  Extract label from snapshot name.
-            #   Example: "threeamigos/proxmox@daily-2026-05-11T12:00-04:00-d" -> "daily"
-            snaplabel=$(echo $snaptocheck | awk -F'@' '{print $2}' \
-                | awk -F'-' '{print $1}' )
-            if [[ $label = $snaplabel ]]; then                  # Labels must match.
-                # Construct the base dataset name ( Quals removed, prefix not yet applied).
-                # awk -F'@' '{print $1}'  —  Remove the snapshot part, keep only the dataset path.
-                local _base_dataset
-                _base_dataset=$(echo "$snaptocheck" | awk -F'@' '{print $1}')
-                # awk '{print $2}'  —  Get the number of leading path qualifiers to delete.
-                delquals=$(echo "$fullfs" | awk '{print $2}')
-                # Remove the leading qualifier(s).
-                _base_dataset=$(remove_leading_qualifiers $delquals "$_base_dataset")
-                # awk '{print $3}'  —  Get the destination pool/dataset prefix to prepend.
-                checkagainst=$(echo "$fullfs" | awk '{print $3}')
-                # A literal "-" means "null prepend" — leave dstocheck as-is.
-                if [[ $checkagainst = '-' ]]; then
-                    checkagainst=''
+        source_root=$(echo "$fullfs" | awk '{print $1}')
+        dest_root=$(echo "$fullfs" | awk '{print $2}')
+        label=$(echo "$fullfs" | awk '{print $3}')
+
+        # Check if snapshot belongs to this source root (exact match or child dataset).
+        if [[ $snaptocheck == $source_root@* ]] || [[ $snaptocheck == $source_root/* ]]; then
+            snaplabel=$(echo "$snaptocheck" | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
+            if [[ $label = "$snaplabel" ]]; then              # Labels must match.
+                # Compute the counterpart dataset by replacing the source-root
+                # prefix with the destination-root prefix.
+                local _src_dataset="${snaptocheck%%@*}"
+                if [[ $_src_dataset == "$source_root" ]]; then
+                    _candidate_dstocheck="$dest_root"
+                else
+                    _candidate_dstocheck="${dest_root}/${_src_dataset#${source_root}/}"
                 fi
 
-                # Expand <offsite> placeholder to all configured offsite-candidate pools.
-                local _offsite_candidates=()
-                local _ca_prefixes=("$checkagainst")
-                if [[ $checkagainst == *'<offsite>'* ]]; then
+                # Expand <offsite> placeholder in the destination root.
+                local _ca_dest_roots=("$dest_root")
+                if [[ $dest_root == *'<offsite>'* ]]; then
+                    _offsite_candidates=()
                     while IFS= read -r _pool; do
                         [[ -n "$_pool" ]] && _offsite_candidates+=("$_pool")
                     done < <(zfsconfig_get_offsite_candidates)
                     if [[ ${#_offsite_candidates[@]} -eq 0 ]]; then
                         log_msg "WARN: <offsite> placeholder used but no offsite candidate" \
                             "pools are configured. Snapshot: $snaptocheck."
-                        # Treat as an unverifiable offline counterpart.
                         if [[ -z "$offline_pools" ]]; then
                             offline_pools="<offsite>"
                         elif [[ "$offline_pools" != *"<offsite>"* ]]; then
@@ -178,48 +199,36 @@ function checkagainst {
                         matched_fss_entry=true
                         continue
                     fi
-                    _ca_prefixes=()
+                    _ca_dest_roots=()
                     for _pool in "${_offsite_candidates[@]}"; do
-                        _ca_prefixes+=("${checkagainst//<offsite>/$_pool}")
+                        _ca_dest_roots+=("${dest_root//<offsite>/$_pool}")
                     done
                 fi
 
-                matched_fss_entry=true  # We found a matching entry for this snapshot
+                matched_fss_entry=true
 
-                # Evaluate every expanded counterpart prefix for this fss entry.
-                local _entry_found=false
-                local _entry_last_remaining=false
-                local _entry_offline_pools=""
-                local _candidate_dstocheck
-                local _candidate_pool
-                local _pool_online
-                local _candidate_guid _dest_guids
+                _entry_found=false
+                _entry_last_remaining=false
+                _entry_offline_pools=""
 
-                for checkagainst in "${_ca_prefixes[@]}"; do
-                    # Prepend the prefix to the base dataset.
-                    if [[ $checkagainst = '' ]]; then
-                        _candidate_dstocheck="$_base_dataset"
-                    elif [[ $_base_dataset != '' ]]; then
-                        _candidate_dstocheck="$checkagainst/$_base_dataset"
+                for dest_root in "${_ca_dest_roots[@]}"; do
+                    # Recompute counterpart with the expanded dest_root.
+                    _src_dataset="${snaptocheck%%@*}"
+                    if [[ $_src_dataset == "$source_root" ]]; then
+                        _candidate_dstocheck="$dest_root"
                     else
-                        _candidate_dstocheck="$checkagainst"
+                        _candidate_dstocheck="${dest_root}/${_src_dataset#${source_root}/}"
                     fi
 
-                    # Derive the pool name to check for online status.
-                    if [[ $checkagainst != '' ]]; then
-                        _candidate_pool=$(echo "$checkagainst" | awk -F'/' '{print $1}')
-                    else
-                        _candidate_pool=$(echo "$_candidate_dstocheck" | awk -F'/' '{print $1}')
-                    fi
+                    _candidate_pool=$(echo "$dest_root" | awk -F'/' '{print $1}')
 
-                    # If this row was expanded from an <offsite> dataset
+                    # If this row was expanded from an <offsite> source-root
                     # placeholder, skip the meaningless self-check (e.g.
                     # z22tb/temp should not be checked against z22tb/temp).
                     if [[ ${_ca_from_offsite_ds[$i]} == "Y" && $_candidate_pool == $_source_pool ]]; then
                         continue
                     fi
 
-                    # See if the pool is online.
                     if zpool list -Ho name "$_candidate_pool" >/dev/null 2>&1; then
                         _pool_online=true
                     else
@@ -227,16 +236,9 @@ function checkagainst {
                     fi
 
                     if [[ $_pool_online = false ]]; then
-                        # For offsite snapshots: use hold tags to verify another common snapshot
-                        # exists between source and the offline counterpart pool.
-                        # Hold tag "offsite-<pool>" on a source snapshot proves the counterpart
-                        # received that snapshot. If another such snapshot exists, the incremental
-                        # chain is intact and deletion is safe.
                         if [[ $label = "offsite" ]]; then
-                            local _source_dataset="${snaptocheck%%@*}"
-                            local _hold_tag="offsite-${_candidate_pool}"
-                            local _has_other=false
-                            local _other_snap
+                            _hold_tag="offsite-${_candidate_pool}"
+                            _has_other=false
                             while IFS= read -r _other_snap; do
                                 [[ "$_other_snap" = "$snaptocheck" ]] && continue
                                 if zfs holds -H "$_other_snap" 2>/dev/null \
@@ -253,7 +255,6 @@ function checkagainst {
                                 break
                             fi
                         fi
-                        # No hold-based verification possible — track for blocking.
                         if [[ -z "$_entry_offline_pools" ]]; then
                             _entry_offline_pools="$_candidate_pool"
                         elif [[ "$_entry_offline_pools" != *"$_candidate_pool"* ]]; then
@@ -262,33 +263,26 @@ function checkagainst {
                         continue
                     fi
 
-                    # Pool is online. Verify the destination dataset exists.
                     if ! (zfs list -rt filesystem,volume "$_candidate_dstocheck" >/dev/null 2>&1); then
                         log_msg "WARN: Dataset to check $_candidate_dstocheck does not exist or is offline."
                         continue
                     fi
 
-                    # Look for a counterpart snapshot.
-                    commsnap_find_another='Y'   # Want a *second* counterpart snap.
+                    commsnap_find_another='Y'
                     if [[ $maxcommsnapperiod = '' ]]; then maxcommsnapperiod=130; fi
                     commsnap=$(getcommonsnap "$snaptocheck" "$_candidate_dstocheck")
                     rc=$?
                     if [[ $rc -eq 32 || $rc -eq 0 ]]; then
-                        # A counterpart snap was found, or the dest one is the most recent.
                         _entry_found=true
                         break
                     elif [[ $rc -eq 64 ]]; then
-                        # getcommonsnap found no OTHER common snap. Determine whether the
-                        # candidate snapshot itself is common with the destination.
                         _candidate_guid=$(zfs get -Hp -o value guid "$snaptocheck" 2>/dev/null)
                         _dest_guids=$(zfs list -t snapshot -H -o guid -d1 "$_candidate_dstocheck" 2>/dev/null)
                         if grep -qFx "$_candidate_guid" <<< "$_dest_guids"; then
-                            # Candidate IS common with destination → last remaining common snap.
                             _entry_last_remaining=true
                             log_msg "WARN: This is the last remaining common snap." \
                                 "\nSnapshot: $snaptocheck. Other dataset: $_candidate_dstocheck."
                         else
-                            # Candidate is NOT common with destination → no counterpart at all.
                             log_msg "INFO: No counterpart snapshot for $snaptocheck on $_candidate_dstocheck."
                             _entry_found=true
                             break
@@ -300,7 +294,6 @@ function checkagainst {
                     fi
                 done
 
-                # Apply the per-entry result.
                 if [[ $_entry_found = true ]]; then
                     foundcounterpart=true
                     continue
@@ -315,10 +308,10 @@ function checkagainst {
                     fi
                     continue
                 fi
-            else                    # Labels don't match. Skip this checkagainst.
+            else
                 continue
             fi
-        else                        # Supplied snaptocheck does not match the fss entry. Skip.
+        else
             continue
         fi
     done
@@ -328,7 +321,6 @@ function checkagainst {
         return 7
     fi
     if [[ $foundcounterpart = '' ]]; then
-        # Check if we matched entries but pools were offline
         if [[ $matched_fss_entry = true && -n "$offline_pools" ]]; then
             log_msg "WARN: Cannot verify counterpart - pool(s) offline: $offline_pools" \
                 "\nSnapshot: $snaptocheck" \
@@ -336,16 +328,9 @@ function checkagainst {
             return 6
         fi
         log_msg "WARN: No eligible enteries in the checkagainst array for $snaptocheck."
-        # Use temp file to track state across subshell calls
         if [[ ! -f /tmp/fssalreadyprinted.$PPID ]]; then
             touch /tmp/fssalreadyprinted.$PPID
-            echo 'Dataset that the checked snapshot belongs to'
-            echo '|                    Number of leading qualifies to delete from snapshot' \
-                'filesystem'
-            echo '|                    | Leading qualifiers to prepend after qualifier deletion'
-            echo '|                    | |           Label to match'
-            echo '|                    | |           |'
-            echo 'V                    V V           V'
+            echo 'Source root            Destination root       Label'
             for fullfs in "${fss[@]}"; do
                 echo "$fullfs"
             done

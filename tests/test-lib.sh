@@ -135,7 +135,11 @@ setup_test_env() {
 }
 
 teardown_test_env() {
+    # Propagate test_summary's return code so a failing suite still exits
+    # non-zero when teardown is the last command in the test script.
+    local rc=${_TEST_SUMMARY_RC:-0}
     rm -f "/tmp/zfsnextsnap_$(basename "$0" | tr -c 'A-Za-z0-9_' '_')"
+    return $rc
 }
 
 # =============================================================================
@@ -546,5 +550,8 @@ test_summary() {
             "$TESTS_FAILED" "$TESTS_SKIPPED" "$rc" \
             >> "${ZFSUTILITIES_TEST_RESULTS}"
     fi
+    # Save the result so teardown_test_env can propagate it even when it is
+    # called after test_summary.
+    _TEST_SUMMARY_RC=$rc
     return $rc
 }

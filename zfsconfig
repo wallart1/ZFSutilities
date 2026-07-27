@@ -168,13 +168,12 @@ try:
 except Exception:
     cfg = {}
 for e in feature_config.merge_checkagainst_entries(cfg):
-    dataset = str(e.get("dataset", "")).strip()
+    source_root = str(e.get("source_root", "")).strip()
+    dest_root = str(e.get("dest_root", "")).strip()
     label = str(e.get("label", "")).strip()
-    if not dataset or not label:
+    if not source_root or not dest_root or not label:
         continue
-    quals = str(e.get("quals", "0") or "0").strip()
-    counterpart = str(e.get("counterpart", "-") or "-").strip()
-    print(dataset, quals, counterpart, label)
+    print(source_root, dest_root, label)
 PYEOF
         )
         export _ZFSCONFIG_CA_CACHE
@@ -201,13 +200,12 @@ with open(src) as f:
         if not line or line.startswith("#"):
             continue
         parts = line.split()
-        if len(parts) != 4:
+        if len(parts) != 3:
             continue
         entries.append({
-            "dataset": parts[0],
-            "quals": parts[1],
-            "counterpart": parts[2],
-            "label": parts[3],
+            "source_root": parts[0],
+            "dest_root": parts[1],
+            "label": parts[2],
         })
 try:
     with open(path) as f:

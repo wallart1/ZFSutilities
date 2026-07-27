@@ -26,8 +26,6 @@ delsnap() {
 }
 EOF
 
-cp "$old_mydir/zfsremoveleadingqualifiers" "$mock_mydir/zfsremoveleadingqualifiers"
-
 cat > "$mock_mydir/zfslockmanager" << 'EOF'
 zfslock_init() { true; }
 zfslock_acquire() {

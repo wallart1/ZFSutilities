@@ -238,10 +238,10 @@ test_checkagainst_rc7_blocks_deletion
 test_checkagainst_rc4_allows_deletion
 
 # ------------------------------------------------------------------
-# Test: Real zfscheckagainst sources remove_leading_qualifiers
+# Test: Real zfscheckagainst sources cleanly with the new helpers
 # ------------------------------------------------------------------
-test_checkagainst_sources_remove_leading_qualifiers() {
-    test_start "Real zfscheckagainst defines remove_leading_qualifiers when called"
+test_checkagainst_sources_cleanly() {
+    test_start "Real zfscheckagainst defines checkagainst after sourcing"
     local tmpdir
     tmpdir=$(mktemp -d)
 
@@ -250,7 +250,6 @@ test_checkagainst_sources_remove_leading_qualifiers() {
     cp "$old_mydir/zfscommsnap" "$tmpdir/zfscommsnap"
     cp "$old_mydir/bashdebug" "$tmpdir/bashdebug"
     cp "$old_mydir/zfsconfig" "$tmpdir/zfsconfig"
-    cp "$old_mydir/zfsremoveleadingqualifiers" "$tmpdir/zfsremoveleadingqualifiers"
 
     local output rc=0
     output=$(
@@ -265,7 +264,7 @@ test_checkagainst_sources_remove_leading_qualifiers() {
             }
             source "$mydir/zfscheckagainst"
             checkagainst "pool/fs@snap" >/dev/null 2>&1 || true
-            if [[ $(type -t remove_leading_qualifiers) == "function" ]]; then
+            if [[ $(type -t checkagainst) == "function" ]]; then
                 echo FUNCTION_DEFINED
             else
                 echo FUNCTION_MISSING
@@ -276,14 +275,14 @@ test_checkagainst_sources_remove_leading_qualifiers() {
     if [[ "$output" == *"FUNCTION_DEFINED"* ]]; then
         test_pass
     else
-        test_fail "Expected remove_leading_qualifiers to be defined after calling" \
+        test_fail "Expected checkagainst to be defined after sourcing" \
             "zfscheckagainst. rc=$rc output: $output"
     fi
 
     rm -rf "$tmpdir"
 }
 
-test_checkagainst_sources_remove_leading_qualifiers
+test_checkagainst_sources_cleanly
 
 # ------------------------------------------------------------------
 # Test: User holds block deletion when releaseholds is enabled

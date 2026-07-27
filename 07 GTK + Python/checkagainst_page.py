@@ -22,68 +22,63 @@ from gi.repository import Gtk
 from logging_config import log_msg
 from feature_config import (
     get_checkagainst, save_checkagainst, derive_checkagainst_entries,
-    _compute_strip_segments, _reverse_checkagainst_row, get_pool_names,
+    _compute_destination_root, _reverse_checkagainst_row, get_pool_names,
 )
 from gui_helpers import configure_treeview_column, handle_editing_key_press
 
 # Column indices in the ListStore (display order):
-# Snapshot label, Source dataset, Strip leading segments,
-# Destination dataset, Comment.
+# Snapshot label, Source root, Destination root, Comment.
 COL_LABEL       = 0
-COL_DATASET     = 1
-COL_QUALS       = 2
-COL_COUNTERPART = 3
-COL_COMMENT     = 4
+COL_SOURCE_ROOT = 1
+COL_DEST_ROOT   = 2
+COL_COMMENT     = 3
 
 # Titles shown on the user-entry column headers.
 _COLUMN_TITLES = {
     COL_LABEL:       "Snapshot label",
-    COL_DATASET:     "Source dataset",
-    COL_QUALS:       "Strip leading segments",
-    COL_COUNTERPART: "Destination dataset",
+    COL_SOURCE_ROOT: "Source root",
+    COL_DEST_ROOT:   "Destination root",
     COL_COMMENT:     "Comment",
 }
 
 # Tooltips for each column header.
 _COLUMN_TOOLTIPS = {
     COL_LABEL:       "Snapshot label used to build snapshot names (e.g. offsite, dailybackup).",
-    COL_DATASET:     "Source dataset whose snapshots are checked.",
-    COL_QUALS:       "Number of leading path segments to remove from the source dataset.",
-    COL_COUNTERPART: (
-        "Destination dataset where the counterpart snapshot is expected "
-        "(use - for none, <offsite> for all candidates)."
+    COL_SOURCE_ROOT: "Source root dataset tree whose snapshots are checked. <offsite> may appear anywhere.",
+    COL_DEST_ROOT:   (
+        "Destination root dataset tree where the counterpart snapshot is expected. "
+        "<offsite> expands to all offsite-candidate pools."
     ),
     COL_COMMENT:     "Optional note about this row.",
 }
 
 
 def _entries_from_config(app):
-    """Load user checkagainst entries as 5-tuples from the JSON config."""
+    """Load user checkagainst entries as 4-tuples from the JSON config."""
     data = get_checkagainst(app.config)
     return [
-        (e.get("label", ""), e.get("dataset", ""), e.get("quals", "0"),
-         e.get("counterpart", "-"), e.get("comment", ""))
+        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""),
+         e.get("comment", ""))
         for e in data.get("user_entries", [])
     ]
 
 
 def _derived_from_config(app, section):
-    """Load backup_derived or offsite_derived rows as 5-tuples."""
+    """Load backup_derived or offsite_derived rows as 4-tuples."""
     data = get_checkagainst(app.config)
     return [
-        (e.get("label", ""), e.get("dataset", ""), e.get("quals", "0"),
-         e.get("counterpart", "-"), e.get("comment", ""))
+        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""),
+         e.get("comment", ""))
         for e in data.get(section, [])
     ]
 
 
 def _row_to_dict(row):
-    """Convert a 5-tuple store row into the config row dict."""
+    """Convert a 4-tuple store row into the config row dict."""
     return {
         "label":       row[COL_LABEL],
-        "dataset":     row[COL_DATASET],
-        "quals":       row[COL_QUALS],
-        "counterpart": row[COL_COUNTERPART],
+        "source_root": row[COL_SOURCE_ROOT],
+        "dest_root":   row[COL_DEST_ROOT],
         "comment":     row[COL_COMMENT],
     }
 
@@ -112,7 +107,7 @@ def create_checkagainst_page(app):
     desc = Gtk.Label(
         label="Maps dataset pairs for incremental-backup safety checks. Before deleting a\n"
               "snapshot, the system verifies a counterpart snapshot exists in the paired dataset.\n"
-              "Use <offsite> in the Destination dataset column to check against all "
+              "Use <offsite> in the Destination root column to check against all "
               "offsite-candidate pools."
     )
     desc.set_halign(Gtk.Align.START)
@@ -120,9 +115,9 @@ def create_checkagainst_page(app):
     outer.pack_start(desc, False, False, 0)
 
     # Derived sections
-    app._ca_backup_store = Gtk.ListStore(str, str, str, str, str)
-    app._ca_offsite_store = Gtk.ListStore(str, str, str, str, str)
-    app._ca_store = Gtk.ListStore(str, str, str, str, str)
+    app._ca_backup_store = Gtk.ListStore(str, str, str, str)
+    app._ca_offsite_store = Gtk.ListStore(str, str, str, str)
+    app._ca_store = Gtk.ListStore(str, str, str, str)
 
     app._ca_backup_active_chk = Gtk.CheckButton(label="Active")
     app._ca_backup_active_chk.set_tooltip_text(
@@ -163,8 +158,7 @@ def create_checkagainst_page(app):
     tv.set_reorderable(True)
     app._ca_view = tv
 
-    for col_idx in (COL_LABEL, COL_DATASET, COL_QUALS,
-                     COL_COUNTERPART, COL_COMMENT):
+    for col_idx in (COL_LABEL, COL_SOURCE_ROOT, COL_DEST_ROOT, COL_COMMENT):
         renderer = Gtk.CellRendererText()
         renderer.set_property("editable", True)
         renderer.connect("edited", _on_cell_edited, app, col_idx)
@@ -193,25 +187,22 @@ def create_checkagainst_page(app):
     notes = Gtk.Label()
     notes.set_markup(
         "<small><b>How the destination dataset is constructed:</b>\n"
-        "  1. <b>Remove</b> the first N path segments from the snapshot's dataset "
-        "(N = Strip leading segments)\n"
-        "  2. <b>Prepend</b> the Destination dataset prefix to the result\n\n"
+        "  Replace the <b>Source root</b> prefix of the snapshot's dataset with the "
+        "<b>Destination root</b>.\n\n"
         "<b>Special value:</b>\n"
-        "  <b>&lt;offsite&gt;</b> may be used anywhere in the Source dataset or "
-        "Destination dataset "
-        "column. Every occurrence is replaced with every pool marked as an offsite "
-        "candidate in the Pools tab.\n\n"
+        "  <b>&lt;offsite&gt;</b> may be used anywhere in the Source root or "
+        "Destination root column. Every occurrence is replaced with every pool "
+        "marked as an offsite candidate in the Pools tab.\n\n"
         "<b>Examples:</b>\n"
-        "  Strip=0: poolA/data → remove nothing → prepend poolB → "
-        "<b>poolB/poolA/data</b>\n"
-        "  Strip=2: poolB/poolA/data → remove 'poolB/poolA' → "
-        "prepend poolA → <b>poolA/data</b>\n"
-        "  Strip=0, Destination=&lt;offsite&gt;: poolA/data → "
-        "<b>z22tb/poolA/data</b>, <b>z40tb/poolA/data</b>, …\n"
-        "  Source=&lt;offsite&gt;/temp, Strip=1, Destination=-: "
-        "z22tb/temp → remove 'z22tb' → <b>temp</b>\n"
-        "  Destination=poolA/&lt;offsite&gt;/backup: poolA/data → "
-        "<b>poolA/z22tb/backup/poolA/data</b>, …</small>"
+        "  Source root <b>poolA/data</b>, Destination root <b>poolB/poolA/data</b>: "
+        "poolA/data/vm-101 → <b>poolB/poolA/data/vm-101</b>\n"
+        "  Source root <b>poolB/poolA/data</b>, Destination root <b>poolA/data</b>: "
+        "poolB/poolA/data/vm-101 → <b>poolA/data/vm-101</b>\n"
+        "  Source root <b>poolA/data</b>, Destination root <b>&lt;offsite&gt;</b>: "
+        "poolA/data/vm-101 → <b>z22tb/poolA/data/vm-101</b>, "
+        "<b>z40tb/poolA/data/vm-101</b>, …\n"
+        "  Source root <b>&lt;offsite&gt;/temp</b>, Destination root <b>temp</b>: "
+        "z22tb/temp/vm-101 → <b>temp/vm-101</b></small>"
     )
     notes.set_halign(Gtk.Align.START)
     notes.set_line_wrap(True)
@@ -227,9 +218,8 @@ def _column_width(col_idx):
     """Return a reasonable default width for a checkagainst column."""
     widths = {
         COL_LABEL:       100,
-        COL_DATASET:     160,
-        COL_QUALS:       130,
-        COL_COUNTERPART: 160,
+        COL_SOURCE_ROOT: 190,
+        COL_DEST_ROOT:   190,
         COL_COMMENT:     140,
     }
     return widths.get(col_idx, 100)
@@ -250,7 +240,7 @@ def _build_readonly_treeview(store, state_key):
     tv.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     tv.set_reorderable(False)
 
-    for col_idx in (COL_LABEL, COL_DATASET, COL_QUALS, COL_COUNTERPART, COL_COMMENT):
+    for col_idx in (COL_LABEL, COL_SOURCE_ROOT, COL_DEST_ROOT, COL_COMMENT):
         renderer = Gtk.CellRendererText()
         renderer.set_property("editable", False)
         col = Gtk.TreeViewColumn(_COLUMN_TITLES[col_idx], renderer, text=col_idx)
@@ -295,7 +285,7 @@ def _build_section_box(title, store, checkbox, state_key):
 # Internal helpers
 
 def _load_store(store, entries):
-    """Populate a ListStore with a list of 5-tuples."""
+    """Populate a ListStore with a list of 4-tuples."""
     store.clear()
     for entry in entries:
         store.append(list(entry))
@@ -322,7 +312,7 @@ def _load_fss_into_store(app):
 
 
 def _store_to_entries(store):
-    return [(row[0], row[1], row[2], row[3], row[4]) for row in store]
+    return [(row[0], row[1], row[2], row[3]) for row in store]
 
 
 def _full_dict_from_ui(app):
@@ -352,18 +342,10 @@ def _validate_rows(rows, source):
     """Validate rows and return a list of human-readable errors."""
     errors = []
     for row in rows:
-        label, dataset, quals, counterpart, _comment = row
-        if not dataset or not counterpart or not label:
+        label, source_root, dest_root, _comment = row
+        if not source_root or not dest_root or not label:
             errors.append(f"One or more {source} rows have empty required fields.")
             break
-        try:
-            q = int(quals)
-            if q < 0:
-                raise ValueError
-        except ValueError:
-            errors.append(
-                f"{source} row '{dataset}': Strip leading segments must be a non-negative integer."
-            )
     return errors
 
 
@@ -400,11 +382,11 @@ def _on_editing_started(renderer, editable, path, treeview, col_idx):
     editable.connect(
         "key-press-event", handle_editing_key_press,
         treeview, path, col_idx,
-        [COL_LABEL, COL_DATASET, COL_QUALS, COL_COUNTERPART, COL_COMMENT])
+        [COL_LABEL, COL_SOURCE_ROOT, COL_DEST_ROOT, COL_COMMENT])
 
 
 def _on_ca_add(btn, app):
-    app._ca_store.append(["offsite", "", "0", "-", ""])
+    app._ca_store.append(["offsite", "", "", ""])
     # Select and scroll to the new row
     path = Gtk.TreePath(len(app._ca_store) - 1)
     app._ca_view.scroll_to_cell(path, None, False, 0, 0)
@@ -488,13 +470,13 @@ def on_checkagainst_get_entries(app):
     app.config["checkagainst"] = data
 
     _load_store(app._ca_backup_store, [
-        (e.get("label", ""), e.get("dataset", ""), e.get("quals", "0"),
-         e.get("counterpart", "-"), e.get("comment", ""))
+        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""),
+         e.get("comment", ""))
         for e in backup_derived
     ])
     _load_store(app._ca_offsite_store, [
-        (e.get("label", ""), e.get("dataset", ""), e.get("quals", "0"),
-         e.get("counterpart", "-"), e.get("comment", ""))
+        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""),
+         e.get("comment", ""))
         for e in offsite_derived
     ])
 
@@ -507,15 +489,14 @@ def on_checkagainst_get_entries(app):
 
 def _build_pair_rows(source, dest, label, comment=""):
     """Build the forward and reverse checkagainst rows for a source/dest pair."""
-    strip_count, prefix = _compute_strip_segments(source, dest)
+    dest_root = _compute_destination_root(source, dest)
     forward = {
         "label": label,
-        "dataset": source,
-        "quals": str(strip_count),
-        "counterpart": prefix,
+        "source_root": source,
+        "dest_root": dest_root,
         "comment": comment,
     }
-    reverse = _reverse_checkagainst_row(source, dest, label)
+    reverse = _reverse_checkagainst_row(source, dest_root, label)
     reverse["comment"] = comment
     return forward, reverse
 
@@ -615,17 +596,14 @@ def _show_add_pair_assistant(app):
             preview_lbl.set_text("Enter source and destination datasets to see preview.")
             return
         try:
-            strip_count, prefix = _compute_strip_segments(source, dest)
+            dest_root = _compute_destination_root(source, dest)
         except Exception:
-            preview_lbl.set_text("Unable to compute strip segments.")
+            preview_lbl.set_text("Unable to compute destination root.")
             return
-        forward = f"{source} → strip {strip_count} → prepend {prefix}"
+        forward = f"{source} → {dest_root}"
         try:
-            reverse = _reverse_checkagainst_row(source, dest, label or "offsite")
-            reverse_text = (
-                f"{reverse['dataset']} → strip {reverse['quals']} → "
-                f"prepend {reverse['counterpart']}"
-            )
+            reverse = _reverse_checkagainst_row(source, dest_root, label or "offsite")
+            reverse_text = f"{reverse['source_root']} → {reverse['dest_root']}"
         except Exception:
             reverse_text = "(unable to compute reverse)"
         preview_lbl.set_markup(
@@ -671,12 +649,10 @@ def _show_add_pair_assistant(app):
             continue
 
         try:
-            strip_count, prefix = _compute_strip_segments(source, dest)
-            if int(strip_count) < 0:
-                raise ValueError
+            _compute_destination_root(source, dest)
         except Exception:
             _show_validation_error(
-                "Could not compute a valid strip count for the given datasets."
+                "Could not compute a valid destination root for the given datasets."
             )
             continue
 
@@ -684,16 +660,14 @@ def _show_add_pair_assistant(app):
 
         app._ca_store.append([
             forward["label"],
-            forward["dataset"],
-            forward["quals"],
-            forward["counterpart"],
+            forward["source_root"],
+            forward["dest_root"],
             forward["comment"],
         ])
         app._ca_store.append([
             reverse["label"],
-            reverse["dataset"],
-            reverse["quals"],
-            reverse["counterpart"],
+            reverse["source_root"],
+            reverse["dest_root"],
             reverse["comment"],
         ])
         _update_ca_status(app)

@@ -1,9 +1,10 @@
-"""Tests for checkagainst derivation, merge, and strip helpers."""
+"""Tests for checkagainst derivation, merge, and source/dest-root helpers."""
 
 import unittest
 
 from feature_config import (
-    _compute_strip_segments,
+    _compute_destination_root,
+    _normalize_checkagainst_row,
     add_checkagainst_entry,
     derive_checkagainst_entries,
     get_checkagainst,
@@ -11,28 +12,101 @@ from feature_config import (
 )
 
 
-class TestComputeStripSegments(unittest.TestCase):
+class TestComputeDestinationRoot(unittest.TestCase):
 
-    def test_no_common_suffix_returns_zero_and_destination(self):
+    def test_pool_root_destination_appends_source(self):
         self.assertEqual(
-            _compute_strip_segments("poolA/data", "poolB/other"),
-            (0, "poolB/other"),
+            _compute_destination_root("threeamigos/proxmox", "fivebays"),
+            "fivebays/threeamigos/proxmox",
         )
 
-    def test_common_suffix_gives_zero_strip_and_prefix(self):
+    def test_destination_already_ends_with_source_suffix(self):
         self.assertEqual(
-            _compute_strip_segments(
+            _compute_destination_root(
                 "threeamigos/proxmox", "fivebays/threeamigos/proxmox"
             ),
-            (0, "fivebays"),
+            "fivebays/threeamigos/proxmox",
         )
 
-    def test_nested_source_gives_one_strip_and_null_prefix(self):
+    def test_offsite_wildcard_matches_source_suffix(self):
         self.assertEqual(
-            _compute_strip_segments(
-                "fivebays/threeamigos/proxmox", "threeamigos/proxmox"
+            _compute_destination_root(
+                "fivebays/threeamigos/proxmox", "<offsite>/threeamigos/proxmox"
             ),
-            (1, "-"),
+            "<offsite>/threeamigos/proxmox",
+        )
+
+    def test_no_common_suffix_appends_source(self):
+        self.assertEqual(
+            _compute_destination_root("poolA/data", "poolB/other"),
+            "poolB/other/poolA/data",
+        )
+
+
+class TestNormalizeCheckagainstRow(unittest.TestCase):
+
+    def test_new_format_row_passes_through(self):
+        row = {"source_root": "a", "dest_root": "b", "label": "offsite"}
+        self.assertEqual(_normalize_checkagainst_row(row), row)
+
+    def test_legacy_strip_zero_counterpart(self):
+        self.assertEqual(
+            _normalize_checkagainst_row({
+                "dataset": "threeamigos/proxmox",
+                "quals": "0",
+                "counterpart": "fivebays",
+                "label": "dailybackup",
+            }),
+            {
+                "source_root": "threeamigos/proxmox",
+                "dest_root": "fivebays/threeamigos/proxmox",
+                "label": "dailybackup",
+            },
+        )
+
+    def test_legacy_strip_two_null_prepend(self):
+        self.assertEqual(
+            _normalize_checkagainst_row({
+                "dataset": "fivebays/threeamigos/proxmox",
+                "quals": "2",
+                "counterpart": "threeamigos",
+                "label": "dailybackup",
+            }),
+            {
+                "source_root": "fivebays/threeamigos/proxmox",
+                "dest_root": "threeamigos/proxmox",
+                "label": "dailybackup",
+            },
+        )
+
+    def test_legacy_strip_pool_root(self):
+        self.assertEqual(
+            _normalize_checkagainst_row({
+                "dataset": "threeamigos",
+                "quals": "0",
+                "counterpart": "fivebays",
+                "label": "dailybackup",
+            }),
+            {
+                "source_root": "threeamigos",
+                "dest_root": "fivebays/threeamigos",
+                "label": "dailybackup",
+            },
+        )
+
+    def test_legacy_null_prepend_counterpart_dash(self):
+        self.assertEqual(
+            _normalize_checkagainst_row({
+                "dataset": "fivebays/threeamigos/proxmox",
+                "quals": "1",
+                "counterpart": "-",
+                "label": "dailybackup",
+            }),
+            {
+                "source_root": "fivebays/threeamigos/proxmox",
+                "dest_root": "threeamigos/proxmox",
+                "label": "dailybackup",
+            },
         )
 
 
@@ -51,8 +125,8 @@ class TestDeriveCheckagainstEntries(unittest.TestCase):
         backup_derived, offsite_derived = derive_checkagainst_entries(config)
         self.assertEqual(offsite_derived, [])
         self.assertEqual(backup_derived, [
-            {"dataset": "threeamigos/proxmox", "quals": "0", "counterpart": "fivebays/threeamigos/proxmox", "label": "dailybackup"},
-            {"dataset": "fivebays/threeamigos/proxmox", "quals": "1", "counterpart": "-", "label": "dailybackup"},
+            {"source_root": "threeamigos/proxmox", "dest_root": "fivebays/threeamigos/proxmox", "label": "dailybackup"},
+            {"source_root": "fivebays/threeamigos/proxmox", "dest_root": "threeamigos/proxmox", "label": "dailybackup"},
         ])
 
     def test_offsite_rows_use_offsite_label(self):
@@ -67,8 +141,8 @@ class TestDeriveCheckagainstEntries(unittest.TestCase):
         backup_derived, offsite_derived = derive_checkagainst_entries(config)
         self.assertEqual(backup_derived, [])
         self.assertEqual(offsite_derived, [
-            {"dataset": "fivebays/threeamigos/proxmox", "quals": "0", "counterpart": "<offsite>/threeamigos/proxmox", "label": "offsite"},
-            {"dataset": "<offsite>/threeamigos/proxmox/fivebays/threeamigos/proxmox", "quals": "3", "counterpart": "-", "label": "offsite"},
+            {"source_root": "fivebays/threeamigos/proxmox", "dest_root": "<offsite>/threeamigos/proxmox", "label": "offsite"},
+            {"source_root": "<offsite>/threeamigos/proxmox", "dest_root": "fivebays/threeamigos/proxmox", "label": "offsite"},
         ])
 
     def test_inactive_and_empty_steps_are_skipped(self):
@@ -113,8 +187,8 @@ class TestDeriveCheckagainstEntries(unittest.TestCase):
         }
         backup_derived, _ = derive_checkagainst_entries(config)
         self.assertEqual(backup_derived, [
-            {"dataset": "threeamigos/proxmox", "quals": "0", "counterpart": "fivebays", "label": "dailybackup"},
-            {"dataset": "fivebays/threeamigos/proxmox", "quals": "1", "counterpart": "-", "label": "dailybackup"},
+            {"source_root": "threeamigos/proxmox", "dest_root": "fivebays/threeamigos/proxmox", "label": "dailybackup"},
+            {"source_root": "fivebays/threeamigos/proxmox", "dest_root": "threeamigos/proxmox", "label": "dailybackup"},
         ])
 
 
@@ -135,44 +209,55 @@ class TestMergeCheckagainstEntries(unittest.TestCase):
     def test_user_overrides_offsite_overrides_backup(self):
         config = self._make_config(
             backup_derived=[
-                {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "dailybackup"},
+                {"source_root": "tank/a", "dest_root": "backup/a", "label": "dailybackup"},
             ],
             offsite_derived=[
-                {"dataset": "tank/a", "quals": "0", "counterpart": "offsite/a", "label": "dailybackup"},
+                {"source_root": "tank/a", "dest_root": "offsite/a", "label": "dailybackup"},
             ],
             user_entries=[
-                {"dataset": "tank/a", "quals": "0", "counterpart": "user/a", "label": "dailybackup"},
+                {"source_root": "tank/a", "dest_root": "user/a", "label": "dailybackup"},
             ],
         )
         merged = merge_checkagainst_entries(config)
         self.assertEqual(len(merged), 1)
-        self.assertEqual(merged[0]["counterpart"], "user/a")
+        self.assertEqual(merged[0]["dest_root"], "user/a")
 
     def test_offsite_overrides_backup(self):
         config = self._make_config(
             backup_derived=[
-                {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "dailybackup"},
+                {"source_root": "tank/a", "dest_root": "backup/a", "label": "dailybackup"},
             ],
             offsite_derived=[
-                {"dataset": "tank/a", "quals": "0", "counterpart": "offsite/a", "label": "dailybackup"},
+                {"source_root": "tank/a", "dest_root": "offsite/a", "label": "dailybackup"},
             ],
         )
         merged = merge_checkagainst_entries(config)
-        self.assertEqual(merged[0]["counterpart"], "offsite/a")
+        self.assertEqual(merged[0]["dest_root"], "offsite/a")
 
     def test_inactive_flags_exclude_sections(self):
         config = self._make_config(
             backup_derived=[
-                {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "dailybackup"},
+                {"source_root": "tank/a", "dest_root": "backup/a", "label": "dailybackup"},
             ],
             offsite_derived=[
-                {"dataset": "tank/b", "quals": "0", "counterpart": "offsite/b", "label": "offsite"},
+                {"source_root": "tank/b", "dest_root": "offsite/b", "label": "offsite"},
             ],
             backup_active=False,
             offsite_active=False,
         )
         merged = merge_checkagainst_entries(config)
         self.assertEqual(merged, [])
+
+    def test_legacy_rows_are_normalized(self):
+        config = self._make_config(
+            backup_derived=[
+                {"dataset": "tank/a", "quals": "0", "counterpart": "backup", "label": "dailybackup"},
+            ],
+        )
+        merged = merge_checkagainst_entries(config)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["source_root"], "tank/a")
+        self.assertEqual(merged[0]["dest_root"], "backup/tank/a")
 
 
 class TestGetCheckagainst(unittest.TestCase):
@@ -187,9 +272,9 @@ class TestGetCheckagainst(unittest.TestCase):
         self.assertEqual(data["user_entries"], [])
 
     def test_wraps_flat_list_backward_compatible(self):
-        config = {"checkagainst": [{"dataset": "tank/a", "label": "offsite"}]}
+        config = {"checkagainst": [{"source_root": "tank/a", "label": "offsite"}]}
         data = get_checkagainst(config)
-        self.assertEqual(data["user_entries"], [{"dataset": "tank/a", "label": "offsite"}])
+        self.assertEqual(data["user_entries"], [{"source_root": "tank/a", "label": "offsite"}])
 
 
 class TestAddCheckagainstEntry(unittest.TestCase):
@@ -198,18 +283,18 @@ class TestAddCheckagainstEntry(unittest.TestCase):
         config = {"checkagainst": {"user_entries": []}}
         added = add_checkagainst_entry(
             config,
-            {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "offsite"},
+            {"source_root": "tank/a", "dest_root": "backup/a", "label": "offsite"},
         )
         self.assertTrue(added)
         self.assertEqual(len(config["checkagainst"]["user_entries"]), 1)
 
     def test_skips_duplicate(self):
         config = {"checkagainst": {"user_entries": [
-            {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "offsite"},
+            {"source_root": "tank/a", "dest_root": "backup/a", "label": "offsite"},
         ]}}
         added = add_checkagainst_entry(
             config,
-            {"dataset": "tank/a", "quals": "1", "counterpart": "backup/a", "label": "offsite"},
+            {"source_root": "tank/a", "dest_root": "backup/a", "label": "offsite"},
         )
         self.assertFalse(added)
         self.assertEqual(len(config["checkagainst"]["user_entries"]), 1)

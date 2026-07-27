@@ -76,7 +76,6 @@ reading a policy via `zfsconfig_get_retention`:
 | `$bktname[i]`                | string  | Bucket letter (`d`, `w`, `m`, `s`)                                                                                                                          |
 | `$bktretain[i]`              | integer | Number of snapshots to keep in that bucket                                                                                                                  |
 | `$minage[i]`                 | integer | Minimum age (days) before a snapshot in that bucket is eligible for deletion                                                                                |
-| `$leadingqualifierstodelete` | integer | Number of leading path components to strip when computing the counterpart dataset for [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) |
 
 ## Node Configuration
 

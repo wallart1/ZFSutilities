@@ -174,8 +174,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_18(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 18)
+    def test_config_version_is_19(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 19)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
         config = {"config_version": 15}
@@ -290,6 +290,42 @@ class TestRunMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"]["offsite_derived"], [])
         self.assertEqual(result["checkagainst"]["user_entries"], [])
 
+    def test_migrate_18_to_19_converts_legacy_checkagainst_rows(self):
+        config = {
+            "config_version": 18,
+            "checkagainst": {
+                "backup_derived": [
+                    {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "daily"},
+                ],
+                "offsite_derived": [],
+                "user_entries": [
+                    {"dataset": "fivebays/src", "quals": "1", "counterpart": "-", "label": "offsite"},
+                ],
+            },
+        }
+        result = config_migrations._migrate_18_to_19(config)
+        self.assertEqual(result["config_version"], 19)
+        self.assertEqual(result["checkagainst"]["backup_derived"][0]["source_root"], "tank/a")
+        self.assertEqual(result["checkagainst"]["backup_derived"][0]["dest_root"], "backup/a/tank/a")
+        self.assertEqual(result["checkagainst"]["user_entries"][0]["source_root"], "fivebays/src")
+        self.assertEqual(result["checkagainst"]["user_entries"][0]["dest_root"], "src")
+
+    def test_migrate_18_to_19_idempotent_for_new_rows(self):
+        config = {
+            "config_version": 18,
+            "checkagainst": {
+                "user_entries": [
+                    {"source_root": "tank/a", "dest_root": "backup/a", "label": "daily"},
+                ],
+            },
+        }
+        result = config_migrations._migrate_18_to_19(config)
+        self.assertEqual(result["config_version"], 19)
+        row = result["checkagainst"]["user_entries"][0]
+        self.assertEqual(row["source_root"], "tank/a")
+        self.assertEqual(row["dest_root"], "backup/a")
+        self.assertEqual(row["label"], "daily")
+
     def test_run_migrations_from_version_14(self):
         config = {
             "config_version": 14,
@@ -298,8 +334,12 @@ class TestRunMigrations(unittest.TestCase):
             ],
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 18)
-        self.assertEqual(result["checkagainst"]["user_entries"][0]["comment"], "")
+        self.assertEqual(result["config_version"], 19)
+        row = result["checkagainst"]["user_entries"][0]
+        self.assertEqual(row["source_root"], "tank/a")
+        self.assertEqual(row["dest_root"], "backup/a/tank/a")
+        self.assertEqual(row["label"], "offsite")
+        self.assertEqual(row["comment"], "")
         self.assertTrue(result["checkagainst"]["backup_derived_active"])
         self.assertTrue(result["checkagainst"]["offsite_derived_active"])
         self.assertEqual(result["checkagainst"]["backup_derived"], [])

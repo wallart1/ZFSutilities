@@ -191,9 +191,16 @@ counterpart received it too — a second common snapshot is confirmed and deleti
 
 The fss table lives in the shared JSON config at `/root/.config/zfsutilities.json`
 under the [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) key, accessed from bash via `zfsconfig_get_checkagainst`
-(see [`zfsconfig`](../commands-and-modules/modules.md#zfsconfig)) and from the GUI via `backup_config.get_checkagainst` (from the Retention tab). A counterpart value of `-` means "null prepend" — `dstocheck` is used as-is (after leading qualifiers are deleted) without any prepending, and `checkagainstpool` is derived from `dstocheck` itself.
+(see [`zfsconfig`](../commands-and-modules/modules.md#zfsconfig)) and from the GUI via `feature_config.get_checkagainst`. Each row stores a
+`source_root`, `dest_root`, `label`, and optional `comment`. The counterpart
+dataset for a snapshot is constructed by replacing the snapshot's
+`source_root` prefix with the `dest_root` prefix.
 
-A counterpart value of `<offsite>` (or `<offsite>/suffix`) is resolved at check-time to **all** pools marked as offsite candidates in the pool registry. The snapshot is safe to delete if any online candidate has a counterpart snapshot, or (for `offsite` labels) if hold-tag verification succeeds for an offline candidate. If no candidate verifies, deletion is blocked.
+A `<offsite>` placeholder in either root is resolved at check-time to **all**
+pools marked as offsite candidates in the pool registry. The snapshot is safe
+to delete if any online candidate has a counterpart snapshot, or (for
+`offsite` labels) if hold-tag verification succeeds for an offline candidate.
+If no candidate verifies, deletion is blocked.
 
 Returns:
 

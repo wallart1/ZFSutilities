@@ -9,7 +9,6 @@ mock_mydir=$(mktemp -d)
 mydir="$mock_mydir"
 
 # Copy real helpers that zfscheckagainst sources.
-cp "$old_mydir/zfsremoveleadingqualifiers" "$mock_mydir/zfsremoveleadingqualifiers"
 cp "$old_mydir/bashdebug" "$mock_mydir/bashdebug"
 
 # Stub zfsconfig so we control offsite candidates and checkagainst entries.
@@ -69,7 +68,7 @@ reset_mocks() {
     _getcommonsnap_call=0
     _getcommonsnap_sequence=()
     _zfscheckagainst_offsite_candidates=()
-    _zfscheckagainst_checkagainst_lines=("poolA/data 0 <offsite> offsite")
+    _zfscheckagainst_checkagainst_lines=("poolA/data <offsite>/poolA/data offsite")
 }
 
 set_online_pools() {
@@ -236,7 +235,7 @@ test_offsite_placeholder_offline_non_offsite_label_blocks() {
     reset_mocks
     _zfscheckagainst_offsite_candidates=(z22tb z40tb)
     set_online_pools
-    _zfscheckagainst_checkagainst_lines=("poolA/data 0 <offsite> dailybackup")
+    _zfscheckagainst_checkagainst_lines=("poolA/data <offsite>/poolA/data dailybackup")
 
     local rc=0
     checkagainst "poolA/data@dailybackup-2025-01-01T10:00-05:00-d" >/dev/null 2>&1 || rc=$?
@@ -249,7 +248,7 @@ test_offsite_placeholder_with_suffix() {
     _zfscheckagainst_offsite_candidates=(z22tb z40tb)
     set_online_pools z22tb z40tb
     set_existing_datasets z22tb/archive/poolA/data z40tb/archive/poolA/data
-    _zfscheckagainst_checkagainst_lines=("poolA/data 0 <offsite>/archive offsite")
+    _zfscheckagainst_checkagainst_lines=("poolA/data <offsite>/archive/poolA/data offsite")
 
     local rc=0
     checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
@@ -272,7 +271,7 @@ test_snapshot_not_found() {
 test_literal_counterpart_found() {
     test_start "Literal counterpart path finds a common snapshot"
     reset_mocks
-    _zfscheckagainst_checkagainst_lines=("poolA/data 0 fivebays offsite")
+    _zfscheckagainst_checkagainst_lines=("poolA/data fivebays/poolA/data offsite")
     set_online_pools fivebays
     set_existing_datasets fivebays/poolA/data
     local rc=0
@@ -283,7 +282,7 @@ test_literal_counterpart_found() {
 test_no_eligible_fss_entry() {
     test_start "No matching fss entry returns 5"
     reset_mocks
-    _zfscheckagainst_checkagainst_lines=("poolB/data 0 <offsite> offsite")
+    _zfscheckagainst_checkagainst_lines=("poolB/data <offsite>/poolB/data offsite")
     set_online_pools z22tb
     set_existing_datasets z22tb/poolA/data
     local rc=0
@@ -294,7 +293,7 @@ test_no_eligible_fss_entry() {
 test_label_mismatch() {
     test_start "Label mismatch falls through to no eligible entry"
     reset_mocks
-    _zfscheckagainst_checkagainst_lines=("poolA/data 0 <offsite> dailybackup")
+    _zfscheckagainst_checkagainst_lines=("poolA/data <offsite>/poolA/data dailybackup")
     set_online_pools z22tb
     set_existing_datasets z22tb/poolA/data
     local rc=0
@@ -305,7 +304,7 @@ test_label_mismatch() {
 test_null_prepend() {
     test_start "Counterpart '-' leaves destination unchanged"
     reset_mocks
-    _zfscheckagainst_checkagainst_lines=("poolA/data 0 - offsite")
+    _zfscheckagainst_checkagainst_lines=("poolA/data poolA/data offsite")
     set_online_pools poolA
     set_existing_datasets poolA/data
     local rc=0
@@ -316,7 +315,7 @@ test_null_prepend() {
 test_nonzero_quals() {
     test_start "Non-zero quals strip leading path segments"
     reset_mocks
-    _zfscheckagainst_checkagainst_lines=("poolA/poolB/data 2 z22tb offsite")
+    _zfscheckagainst_checkagainst_lines=("poolA/poolB/data z22tb/data offsite")
     set_online_pools z22tb
     set_existing_datasets z22tb/data
     local rc=0
@@ -401,7 +400,7 @@ test_mixed_online_offline_candidates() {
 test_literal_counterpart_last_remaining() {
     test_start "Literal counterpart can report last remaining common"
     reset_mocks
-    _zfscheckagainst_checkagainst_lines=("poolA/data 0 fivebays offsite")
+    _zfscheckagainst_checkagainst_lines=("poolA/data fivebays/poolA/data offsite")
     set_online_pools fivebays
     set_existing_datasets fivebays/poolA/data
     _getcommonsnap_rc=64
@@ -416,7 +415,7 @@ test_dataset_offsite_placeholder_reverse_check() {
     test_start "Dataset <offsite>/suffix expands for reverse check"
     reset_mocks
     _zfscheckagainst_offsite_candidates=(z22tb z40tb)
-    _zfscheckagainst_checkagainst_lines=("<offsite>/temp 1 - offsite")
+    _zfscheckagainst_checkagainst_lines=("<offsite>/temp temp offsite")
     set_online_pools z22tb temp
     set_existing_datasets temp
     local rc=0
@@ -428,7 +427,7 @@ test_dataset_offsite_placeholder_no_candidates() {
     test_start "Dataset <offsite>/suffix with no candidates returns 5"
     reset_mocks
     _zfscheckagainst_offsite_candidates=()
-    _zfscheckagainst_checkagainst_lines=("<offsite>/temp 1 - offsite")
+    _zfscheckagainst_checkagainst_lines=("<offsite>/temp temp offsite")
     set_online_pools temp
     local rc=0
     checkagainst "z22tb/temp@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
@@ -439,7 +438,7 @@ test_dataset_and_counterpart_offsite_placeholder() {
     test_start "<offsite> in both columns expands and skips self-checks"
     reset_mocks
     _zfscheckagainst_offsite_candidates=(z22tb z40tb)
-    _zfscheckagainst_checkagainst_lines=("<offsite>/temp 1 <offsite> offsite")
+    _zfscheckagainst_checkagainst_lines=("<offsite>/temp <offsite>/temp offsite")
     set_online_pools z22tb z40tb temp
     set_existing_datasets z40tb/temp temp
     local rc=0
@@ -451,7 +450,7 @@ test_counterpart_offsite_not_at_start() {
     test_start "Counterpart <offsite> may appear after the pool name"
     reset_mocks
     _zfscheckagainst_offsite_candidates=(z22tb z40tb)
-    _zfscheckagainst_checkagainst_lines=("poolA/data 0 poolA/<offsite>/backup offsite")
+    _zfscheckagainst_checkagainst_lines=("poolA/data poolA/<offsite>/backup/poolA/data offsite")
     set_online_pools z22tb z40tb poolA
     set_existing_datasets poolA/z40tb/backup/poolA/data
     local rc=0

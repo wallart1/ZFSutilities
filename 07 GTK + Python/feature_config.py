@@ -200,35 +200,78 @@ def save_checkagainst(config, data):
     save_config(config)
 
 
-def _compute_strip_segments(source, destination):
-    """Compute the quals/prefix that maps source onto destination.
+def _normalize_checkagainst_row(row):
+    """Return a source_root/dest_root row, converting legacy fields if needed.
 
-    Finds the longest common suffix between source and destination.  The
-    number of leading segments in source that are not part of that suffix is
-    the strip count; the part of destination before the suffix is the prefix
-    to prepend.  When there is no common suffix, fall back to (0, destination).
+    Legacy rows used dataset/quals/counterpart; the new schema uses
+    source_root/dest_root.  This helper can be used by migrations and by
+    consumers that may still encounter old-format rows.
+    """
+    if "source_root" in row and "dest_root" in row:
+        return dict(row)
+
+    source_root = str(row.get("dataset", "")).strip()
+    quals = int(row.get("quals", "0") or "0")
+    counterpart = str(row.get("counterpart", "-") or "-").strip()
+    if counterpart == "-":
+        counterpart = ""
+
+    parts = [p for p in source_root.split("/") if p]
+    if quals < len(parts):
+        stripped = "/".join(parts[quals:])
+    else:
+        stripped = ""
+
+    if counterpart and stripped:
+        dest_root = f"{counterpart}/{stripped}"
+    elif counterpart:
+        dest_root = counterpart
+    else:
+        dest_root = stripped
+
+    new_row = dict(row)
+    new_row.pop("dataset", None)
+    new_row.pop("quals", None)
+    new_row.pop("counterpart", None)
+    new_row["source_root"] = source_root
+    new_row["dest_root"] = dest_root
+    return new_row
+
+
+def _compute_destination_root(source, destination):
+    """Compute the actual destination root for a source/dest send/receive pair.
+
+    zfs-send-receive appends the source path to the destination prefix unless
+    the destination is already a suffix of the source path.  The placeholder
+    <offsite> is treated as a wildcard single-segment pool name for this
+    comparison.
     """
     src_parts = [p for p in str(source).split("/") if p]
     dst_parts = [p for p in str(destination).split("/") if p]
 
+    if not src_parts:
+        return destination
+
+    # Find the longest common suffix, treating <offsite> as a wildcard.
     max_suffix = 0
-    for length in range(1, min(len(src_parts), len(dst_parts)) + 1):
-        if src_parts[-length:] == dst_parts[-length:]:
+    max_possible = min(len(src_parts), len(dst_parts))
+    for length in range(1, max_possible + 1):
+        if src_parts[-length] == dst_parts[-length] or dst_parts[-length] == "<offsite>":
             max_suffix = length
         else:
             break
 
-    if max_suffix == 0:
-        return (0, destination)
+    # If the destination ends with the full source path, or the destination is
+    # entirely a suffix of the source path, the destination root is the
+    # destination itself; otherwise zfs-send-receive appends the source.
+    if max_suffix == len(src_parts) or max_suffix == len(dst_parts):
+        return destination
 
-    strip_count = len(src_parts) - max_suffix
-    prefix_parts = dst_parts[:len(dst_parts) - max_suffix]
-    prefix = "/".join(prefix_parts) if prefix_parts else "-"
-    return (strip_count, prefix)
+    return f"{destination}/{source}" if destination else source
 
 
 def _checkagainst_row_key(row):
-    return (row.get("dataset", ""), row.get("label", ""))
+    return (row.get("source_root", ""), row.get("label", ""))
 
 
 def _dedupe_checkagainst_rows(rows):
@@ -236,9 +279,8 @@ def _dedupe_checkagainst_rows(rows):
     result = []
     for row in rows:
         key = (
-            row.get("dataset", ""),
-            row.get("quals", "0"),
-            row.get("counterpart", "-"),
+            row.get("source_root", ""),
+            row.get("dest_root", ""),
             row.get("label", ""),
         )
         if key in seen:
@@ -248,33 +290,11 @@ def _dedupe_checkagainst_rows(rows):
     return result
 
 
-def _reverse_checkagainst_row(source, dest, label):
-    """Build the reverse checkagainst row for a source/dest pair.
-
-    zfs-send-receive constructs the destination as destfs + "/" + source_path.
-    The reverse row therefore needs to match the actual destination root
-    (dest/source when dest does not already end with source) and strip exactly
-    the leading prefix so the original source path remains.
-    """
-    src_parts = [p for p in str(source).split("/") if p]
-    dst_parts = [p for p in str(dest).split("/") if p]
-
-    # If dest already ends with the full source path, the actual destination
-    # root is dest itself; otherwise it is dest + "/" + source.
-    if (
-        len(dst_parts) >= len(src_parts)
-        and dst_parts[-len(src_parts):] == src_parts
-    ):
-        reverse_dataset = dest
-        strip_count = len(dst_parts) - len(src_parts)
-    else:
-        reverse_dataset = f"{dest}/{source}"
-        strip_count = len(dst_parts)
-
+def _reverse_checkagainst_row(source_root, dest_root, label):
+    """Build the reverse checkagainst row by swapping source and dest roots."""
     return {
-        "dataset": reverse_dataset,
-        "quals": str(strip_count),
-        "counterpart": "-",
+        "source_root": dest_root,
+        "dest_root": source_root,
         "label": label,
     }
 
@@ -295,13 +315,13 @@ def derive_checkagainst_entries(config):
         dest = step.get("dest", "").strip()
         if not source or not dest:
             continue
+        dest_root = _compute_destination_root(source, dest)
         backup_derived.append({
-            "dataset": source,
-            "quals": "0",
-            "counterpart": dest,
+            "source_root": source,
+            "dest_root": dest_root,
             "label": backup_label,
         })
-        backup_derived.append(_reverse_checkagainst_row(source, dest, backup_label))
+        backup_derived.append(_reverse_checkagainst_row(source, dest_root, backup_label))
 
     offsite_derived = []
     for step in config.get("offsite", {}).get("steps", []):
@@ -311,13 +331,13 @@ def derive_checkagainst_entries(config):
         dest = step.get("dest", "").strip()
         if not source or not dest:
             continue
+        dest_root = _compute_destination_root(source, dest)
         offsite_derived.append({
-            "dataset": source,
-            "quals": "0",
-            "counterpart": dest,
+            "source_root": source,
+            "dest_root": dest_root,
             "label": "offsite",
         })
-        offsite_derived.append(_reverse_checkagainst_row(source, dest, "offsite"))
+        offsite_derived.append(_reverse_checkagainst_row(source, dest_root, "offsite"))
 
     return (
         _dedupe_checkagainst_rows(backup_derived),
@@ -328,22 +348,27 @@ def derive_checkagainst_entries(config):
 def merge_checkagainst_entries(config):
     """Merge derived and user checkagainst rows with explicit precedence.
 
-    Precedence for the same (dataset, label) key:
+    Precedence for the same (source_root, label) key:
       user_entries > offsite_derived > backup_derived
+
+    Legacy rows are normalized to source_root/dest_root on the fly.
     """
     data = get_checkagainst(config)
     merged = {}
 
     if data.get("backup_derived_active", True):
         for row in data.get("backup_derived", []):
-            merged[_checkagainst_row_key(row)] = dict(row)
+            row = _normalize_checkagainst_row(row)
+            merged[_checkagainst_row_key(row)] = row
 
     if data.get("offsite_derived_active", True):
         for row in data.get("offsite_derived", []):
-            merged[_checkagainst_row_key(row)] = dict(row)
+            row = _normalize_checkagainst_row(row)
+            merged[_checkagainst_row_key(row)] = row
 
     for row in data.get("user_entries", []):
-        merged[_checkagainst_row_key(row)] = dict(row)
+        row = _normalize_checkagainst_row(row)
+        merged[_checkagainst_row_key(row)] = row
 
     return list(merged.values())
 
@@ -351,23 +376,25 @@ def merge_checkagainst_entries(config):
 def add_checkagainst_entry(config, row_dict, source="user"):
     """Append a row to user_entries if an equivalent row does not exist.
 
-    Equivalence is keyed by (dataset, label, counterpart).  Returns True if
+    Equivalence is keyed by (source_root, dest_root, label).  Returns True if
     the row was added, False if a matching entry already exists.
     """
     data = get_checkagainst(config)
-    new_dataset = row_dict.get("dataset", "")
+    row_dict = _normalize_checkagainst_row(row_dict)
+    new_source = row_dict.get("source_root", "")
+    new_dest = row_dict.get("dest_root", "")
     new_label = row_dict.get("label", "")
-    new_counterpart = row_dict.get("counterpart", "-")
 
     for row in data.get("user_entries", []):
+        row = _normalize_checkagainst_row(row)
         if (
-            row.get("dataset", "") == new_dataset
+            row.get("source_root", "") == new_source
+            and row.get("dest_root", "") == new_dest
             and row.get("label", "") == new_label
-            and row.get("counterpart", "-") == new_counterpart
         ):
             return False
 
-    data["user_entries"].append(dict(row_dict))
+    data["user_entries"].append(row_dict)
     save_checkagainst(config, data)
     return True
 
@@ -387,17 +414,16 @@ def _maybe_seed_checkagainst(app, step_metadata):
         return
     if "<offsite>" in source or "<offsite>" in dest:
         return
-    strip_count, prefix = _compute_strip_segments(source, dest)
+    dest_root = _compute_destination_root(source, dest)
     row = {
-        "dataset": source,
-        "quals": str(strip_count),
-        "counterpart": prefix,
+        "source_root": source,
+        "dest_root": dest_root,
         "label": label,
     }
     if add_checkagainst_entry(app.ctx.config, row):
         from backup_config import log_msg
         log_msg(
-            f"INFO: Added checkagainst entry for {source} -> {prefix} ({label})"
+            f"INFO: Added checkagainst entry for {source} -> {dest_root} ({label})"
         )
 
 

@@ -353,9 +353,8 @@ class TestMaybeSeedCheckagainst(unittest.TestCase):
             })
             entries = feature_config.get_checkagainst(config)["user_entries"]
             self.assertEqual(len(entries), 1)
-            self.assertEqual(entries[0]["dataset"], "threeamigos/proxmox")
-            self.assertEqual(entries[0]["quals"], "0")
-            self.assertEqual(entries[0]["counterpart"], "fivebays")
+            self.assertEqual(entries[0]["source_root"], "threeamigos/proxmox")
+            self.assertEqual(entries[0]["dest_root"], "fivebays/threeamigos/proxmox")
             self.assertEqual(entries[0]["label"], "dailybackup")
 
     def test_skips_existing_row(self):
@@ -405,29 +404,29 @@ class TestMaybeSeedCheckagainst(unittest.TestCase):
             self.assertEqual(entries, [])
 
 
-class TestComputeStripSegments(unittest.TestCase):
-    """Checkagainst strip-segment helper."""
+class TestComputeDestinationRoot(unittest.TestCase):
+    """Checkagainst destination-root helper."""
 
-    def test_no_common_suffix_returns_destination(self):
+    def test_no_common_suffix_appends_source_to_destination(self):
         self.assertEqual(
-            feature_config._compute_strip_segments("tank/a", "backup/b"),
-            (0, "backup/b"),
+            feature_config._compute_destination_root("tank/a", "backup/b"),
+            "backup/b/tank/a",
         )
 
-    def test_source_nested_under_destination(self):
+    def test_common_suffix_returns_destination(self):
         self.assertEqual(
-            feature_config._compute_strip_segments(
+            feature_config._compute_destination_root(
                 "threeamigos/proxmox", "fivebays/threeamigos/proxmox"
             ),
-            (0, "fivebays"),
+            "fivebays/threeamigos/proxmox",
         )
 
-    def test_common_suffix_requires_strip(self):
+    def test_offsite_wildcard_matches_common_suffix(self):
         self.assertEqual(
-            feature_config._compute_strip_segments(
-                "fivebays/threeamigos/proxmox", "threeamigos/proxmox"
+            feature_config._compute_destination_root(
+                "threeamigos/proxmox", "<offsite>/threeamigos/proxmox"
             ),
-            (1, "-"),
+            "<offsite>/threeamigos/proxmox",
         )
 
 

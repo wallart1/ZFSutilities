@@ -13,21 +13,15 @@ function retain {
     bashinit
     source $mydir/zfsconfig
     source $mydir/zfsdelsnap
-    source $mydir/zfsremoveleadingqualifiers
     source $mydir/zfslockmanager
 
     if [[ "$skipbusy" = '' ]]; then skipbusy='Y'; fi
 
     if [[ "$1" != '' ]]; then retainfs="$1"; fi
-    # awk '{print $2}'  —  retainfs may contain "pool/fs qualifiers"; grab the second token (qualifiers).
-    leadingqualifiestodelete=$(echo "$retainfs" | awk '{print $2}')
     # awk -F'[/ ]' '{print $1}'  —  Split on slash or space; get the pool name (first token).
     retainfspool=$(echo $retainfs | awk -F'[/ ]' '{print $1}')
     # awk '{print $1}'  —  Get the first whitespace-delimited token (the dataset path).
     retainfs=$(echo "$retainfs" | awk '{print $1}')
-    if [[ $leadingqualifiestodelete = '' ]]; then 
-        leadingqualifiestodelete='0'
-    fi
 
     if [[ $2 != '' ]]; then label=$2; fi
     if [[ $label = '' ]]; then label='@dailybackup'; fi
@@ -158,7 +152,6 @@ function retain {
             if [[ -n "${_month_latest[$_key]}" ]]; then
                 _prev_snap="${_month_latest[$_key]}"
                 phase0_removed["$_prev_snap"]=1
-                dstocheck=$(remove_leading_qualifiers $leadingqualifiestodelete $_snapfs)
                 if [[ $dryrun != "N" ]]; then
                     log_msg "INFO: Would remove $_prev_snap --- Offsite same-month."
                 else
@@ -228,7 +221,6 @@ function retain {
           && [[ $snaplabel1 = $snaplabel2 ]] \
           && [[ $snapbucket1 = $snapbucket2 ]] \
           && [[ $snapymd1 = $snapymd2 ]]; then
-            dstocheck=$(remove_leading_qualifiers $leadingqualifiestodelete $snapfs1)
             phase1_removed["$snapsnap1"]=1    # Track for Phase 2 exclusion
             if [[ $dryrun != "N" ]]; then
                 log_msg "INFO: Would remove $snapsnap1 ---Same-day."

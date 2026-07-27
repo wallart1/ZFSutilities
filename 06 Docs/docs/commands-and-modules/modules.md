@@ -246,7 +246,7 @@ zfsconfig_set_pools threeamigos fivebays    # replace the list
 zfsconfig_get_offsite_candidates            # one candidate pool name per line
 
 # Checkagainst table
-zfsconfig_get_checkagainst                  # "<dataset> <quals> <counterpart> <label>" per line
+zfsconfig_get_checkagainst                  # "<source_root> <dest_root> <label>" per line
 zfsconfig_set_checkagainst_file table.conf  # import a whitespace-formatted file (comment field ignored)
 
 # Retention policy (sourceable bash fragment)
@@ -264,7 +264,7 @@ zfsconfig_invalidate
 | `zfsconfig_get_pools`             | —         | Print one pool name per line from `config.pools`. Accepts string entries or `{"name", "offsite_candidate"}` objects                 |
 | `zfsconfig_set_pools`             | `POOL...` | Replace the pool list (always stores objects internally via the GUI helpers)                                                        |
 | `zfsconfig_get_offsite_candidates`| —         | Print one offsite-candidate pool name per line (pools with `offsite_candidate: true`)                                               |
-| `zfsconfig_get_checkagainst`      | —         | Print entries: `<dataset> <quals> <counterpart> <label>` (the JSON `comment` field is not emitted)                                 |
+| `zfsconfig_get_checkagainst`      | —         | Print entries: `<source_root> <dest_root> <label>` (the JSON `comment` field is not emitted)                                         |
 | `zfsconfig_set_checkagainst_file` | `<path>`  | Replace from a whitespace-formatted file (comment field is not imported)                                                            |
 | `zfsconfig_get_retention`         | `<pool>`  | Emit `bktname[i]/bktretain[i]/minage[i]` fragment for `<pool>` (falls back to `default`, then to legacy `zfsretainpol-<pool>` file) |
 | `zfsconfig_invalidate`            | —         | Drop the in-shell cache                                                                                                             |
@@ -379,7 +379,6 @@ checkagainst <snapshot>
 | `bashinit`                 | Logging and `$mydir` initialization              |
 | `bashdebug`                | Optional debug traps (conditionally enabled)     |
 | `zfscommsnap`              | Find common snapshots with counterpart datasets  |
-| `zfsremoveleadingqualifiers`| Strip leading qualifiers from dataset names     |
 | `zfsconfig`                | Load the fss table from JSON config              |
 
 **Data structures consumed:**
@@ -394,60 +393,58 @@ checkagainst <snapshot>
 The fss table tells `checkagainst` how to transform a snapshot name into the
 counterpart dataset name that must still share a common snapshot with it. It
 is loaded from the JSON config's `checkagainst` key via
-[`zfsconfig_get_checkagainst`](#zfsconfig). Each entry is a single line of
-four whitespace-separated fields. An optional `comment` is stored in the JSON
-config and shown in the GUI, but it is not emitted by `zfsconfig_get_checkagainst`:
+[`zfsconfig_get_checkagainst`](#zfsconfig). Each runtime entry is a single
+line of three whitespace-separated fields. An optional `comment` is stored
+in the JSON config and shown in the GUI, but it is not emitted by
+`zfsconfig_get_checkagainst`:
 
-| Field | Name in code                            | Purpose                                                                                                                                   |
-| ----- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | apply-to dataset (`$fs`)                | The source dataset tree this entry applies to. The snapshot being checked must belong to this dataset or one of its descendants. May contain `<offsite>` anywhere; every occurrence is replaced with each offsite-candidate pool name at run-time |
-| 2     | qualifiers to delete (`$delquals`)      | Number of leading path components to strip from the source dataset name before constructing the counterpart name. `0` means strip nothing |
-| 3     | qualifiers to prepend (`$checkagainst`) | Path prefix to prepend to the stripped dataset name. A literal `-` means "null prepend" — use the stripped name as-is                     |
-| 4     | label                                   | Snapshot label to match (`dailybackup`, `offsite`, etc.). Only snapshots carrying this label are checked against this entry               |
-| 5     | comment                                 | Optional note stored in JSON / shown in GUI; ignored by `zfscheckagainst`                                                                  |
+| Field | Name in code     | Purpose                                                                                                                                                                           |
+| ----- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | source root      | Source dataset tree this entry applies to. The snapshot being checked must belong to this dataset or one of its descendants. May contain `<offsite>`; expanded per offsite-candidate pool at run-time |
+| 2     | destination root | Destination dataset tree where the counterpart is expected. The counterpart dataset is built by replacing the source-root prefix of the snapshot's dataset with this value. May contain `<offsite>`; expanded at run-time |
+| 3     | label            | Snapshot label to match (`dailybackup`, `offsite`, etc.). Only snapshots carrying this label are checked against this entry                                                     |
+| 4     | comment          | Optional note stored in JSON / shown in GUI; ignored by `zfscheckagainst`                                                                                                          |
 
 **Example fss table:**
 
 ```
-# Apply-to dataset   Del  Prepend                Label
-threeamigos          0    fivebays               dailybackup
-NVME1                0    fivebays               dailybackup
-temp                 0    z22tb                  dailybackup
-temp                 0    z40tb                  offsite
-fivebays             0    z22tb                  offsite
-<offsite>/temp       1    -                      offsite
+# Source root          Destination root        Label
+threeamigos            fivebays/threeamigos    dailybackup
+NVME1                  fivebays/NVME1          dailybackup
+temp                   z22tb/temp              dailybackup
+temp                   z40tb/temp              offsite
+fivebays/threeamigos   threeamigos             dailybackup
+<offsite>/temp         temp                    offsite
 ```
 
-The last entry expands at run-time to one row per offsite-candidate pool
-(e.g. `z22tb/temp` and `z40tb/temp`), allowing `zfscheckagainst` to verify
-offsite snapshots against their local counterpart. The `<offsite>` token may
-appear anywhere in the Dataset or Counterpart value; every occurrence is
-replaced with the candidate pool name.
+The `<offsite>` token may appear anywhere in the Source root or Destination
+root. Each row containing `<offsite>` expands at run-time to one row per
+offsite-candidate pool, allowing `zfscheckagainst` to verify offsite
+snapshots against their local counterpart.
 
 #### Deriving entries from Backup/Offsite steps
 
 The GUI can generate checkagainst rows automatically from the active
 send/receive steps on the Backup and Offsite tabs.
 
-For an active Backup step that sends `threeamigos/proxmox` to `fivebays`
-with label `dailybackup`, the derivation produces two rows:
+For an active Backup step that sends `threeamigos/proxmox` to
+`fivebays/threeamigos/proxmox` with label `dailybackup`, the derivation
+produces two rows:
 
 ```
-threeamigos/proxmox 0 fivebays               dailybackup
-fivebays/threeamigos/proxmox 1 -             dailybackup
+threeamigos/proxmox        fivebays/threeamigos/proxmox    dailybackup
+fivebays/threeamigos/proxmox threeamigos/proxmox           dailybackup
 ```
 
-- **Forward row**: keep the source dataset unchanged and prepend the
-  destination pool/path (`0` leading segments stripped).
-- **Reverse row**: prepend the destination to the source, then strip one
-  leading segment from the resulting path so the counterpart resolves back
-  to the original source (`1` leading segment stripped, `-` for no further
-  prepend).
+- **Forward row**: the source root is the source dataset and the destination
+  root is the actual destination dataset.
+- **Reverse row**: the source and destination roots are swapped, so the
+  reverse path can also be safety-checked.
 
 For an Offsite step with label `offsite`, the same rules apply. If the
 Destination column contains `<offsite>`, the derived row keeps the
-placeholder literal; `zfscheckagainst` expands it to each
-offsite-candidate pool at run time.
+placeholder literal; `zfscheckagainst` expands it to each offsite-candidate
+pool at run time.
 
 Derived rows are stored separately in the JSON config under
 `checkagainst.backup_derived` and `checkagainst.offsite_derived`. They are
@@ -455,8 +452,8 @@ merged with `user_entries` at runtime by `zfsconfig_get_checkagainst`:
 
 1. Active `backup_derived` rows are included if
    `backup_derived_active` is `true`.
-2. Active `offsite_derived` rows overlay them by `(dataset, label)`.
-3. `user_entries` overlay everything by `(dataset, label)`.
+2. Active `offsite_derived` rows overlay them by `(source_root, label)`.
+3. `user_entries` overlay everything by `(source_root, label)`.
 
 Refresh the derived lists manually in the GUI with **Get Entries**, or let
 the GUI add a matching user entry automatically after a successful Backup,
@@ -469,20 +466,16 @@ For a snapshot like `threeamigos/proxmox/vm-101-disk-0@dailybackup-…-d` and
 the first entry above:
 
 1. The snapshot's dataset (`threeamigos/proxmox/vm-101-disk-0`) is under the
-   apply-to dataset (`threeamigos`) — entry matches.
+   source root (`threeamigos`) — entry matches.
 2. The snapshot's label (`dailybackup`) matches the entry's label — entry
    applies.
-3. Strip the snapshot suffix, giving `dstocheck = threeamigos/proxmox/vm-101-disk-0`.
-4. Delete the first `$delquals` leading qualifiers from `dstocheck`. With
-   `delquals = 0`, nothing is stripped.
-5. Prepend `$checkagainst`: `dstocheck` becomes
+3. Replace the source-root prefix with the destination-root prefix:
    `fivebays/threeamigos/proxmox/vm-101-disk-0`.
-6. The counterpart pool (`checkagainstpool`) is the first segment of the
-   prepend value (`fivebays`). If the prepend is `-`, the counterpart pool
-   is instead the first segment of the transformed `dstocheck`.
-7. If the counterpart pool is online, look for a common snapshot between
-   the source and `dstocheck`. If offline, fall through to hold-tag
-   verification (below).
+4. The counterpart pool is the first segment of the expanded destination
+   root (`fivebays`).
+5. If the counterpart pool is online, look for a common snapshot between
+   the source and the counterpart dataset. If offline, fall through to
+   hold-tag verification (below).
 
 Multiple fss entries may match one snapshot. `checkagainst` evaluates every
 matching entry and only returns "safe to delete" when all counterparts can
@@ -1058,7 +1051,7 @@ retain <pool> [label]
 
 | Argument | Default       | Description                                                                                   |
 | -------- | ------------- | --------------------------------------------------------------------------------------------- |
-| `$1`     | —             | Pool or dataset to retain. May include `<fs> <leadingqualifiestodelete>` as a whitespace pair |
+| `$1`     | —             | Pool or dataset to retain                                                                      |
 | `$2`     | `dailybackup` | Snapshot label to retain against. Leading `@` optional                                        |
 
 **Globals:**
@@ -1071,7 +1064,6 @@ retain <pool> [label]
 | `$releaseholds_tags`           | Array of hold tag patterns to release (default `offsite-*`)                   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$skipbusy`                    | `'Y'` = warn and continue on held/busy snapshots; `'N'` = fatal               | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$originlabel`, `$targetlabel` | Override label per side                                                       | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
-| `$leadingqualifiestodelete`    | Leading components to strip when building counterpart name for `checkagainst` | [Retention](../developer-guide/global-variables.md#retention)                 |
 
 **Data structures consumed/produced:**
 
@@ -1115,7 +1107,6 @@ Delegates each deletion to [`zfsdelsnap`](#zfsdelsnap), which runs
 | `bashinit`                 | Logging and `$mydir` initialization              |
 | `zfsconfig`                | Load pool retention policy and offsite candidates|
 | `zfsdelsnap`               | Delete individual snapshots safely               |
-| `zfsremoveleadingqualifiers`| Strip leading qualifiers for `checkagainst`     |
 | `zfslockmanager`           | Acquire a write lock on the dataset being pruned |
 
 **Return codes:**

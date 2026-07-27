@@ -1,6 +1,6 @@
 """Config schema migrations. Bump CONFIG_VERSION when JSON structure changes."""
 
-CONFIG_VERSION = 18
+CONFIG_VERSION = 19
 
 
 def _migrate_1_to_2(config):
@@ -172,6 +172,51 @@ def _migrate_17_to_18(config):
     return config
 
 
+def _migrate_18_to_19(config):
+    """Convert checkagainst rows from strip/prepend to source_root/dest_root."""
+    data = config.get("checkagainst")
+    if not isinstance(data, dict):
+        data = {}
+        config["checkagainst"] = data
+
+    sections = ("backup_derived", "offsite_derived", "user_entries")
+    for section in sections:
+        migrated = []
+        for row in data.get(section, []):
+            if not isinstance(row, dict):
+                continue
+            if "source_root" in row and "dest_root" in row:
+                migrated.append(row)
+                continue
+            source_root = str(row.get("dataset", "")).strip()
+            quals = int(row.get("quals", "0") or "0")
+            counterpart = str(row.get("counterpart", "-") or "-").strip()
+            if counterpart == "-":
+                counterpart = ""
+
+            parts = [p for p in source_root.split("/") if p]
+            stripped = "/".join(parts[quals:]) if quals < len(parts) else ""
+
+            if counterpart and stripped:
+                dest_root = f"{counterpart}/{stripped}"
+            elif counterpart:
+                dest_root = counterpart
+            else:
+                dest_root = stripped
+
+            new_row = dict(row)
+            new_row.pop("dataset", None)
+            new_row.pop("quals", None)
+            new_row.pop("counterpart", None)
+            new_row["source_root"] = source_root
+            new_row["dest_root"] = dest_root
+            migrated.append(new_row)
+        data[section] = migrated
+
+    config["config_version"] = 19
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -190,6 +235,7 @@ MIGRATIONS = [
     _migrate_15_to_16,
     _migrate_16_to_17,
     _migrate_17_to_18,
+    _migrate_18_to_19,
 ]
 
 

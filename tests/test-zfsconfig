@@ -154,37 +154,37 @@ test_get_checkagainst_emits_fields() {
     test_start "Checkagainst entries emitted as whitespace fields"
     write_config '{
   "checkagainst": [
-    {"dataset": "tank/a", "quals": "1", "counterpart": "backup/a", "label": "offsite"}
+    {"source_root": "tank/a", "dest_root": "backup/a", "label": "offsite"}
   ]
 }'
     local result
     result=$(zfsconfig_get_checkagainst)
-    assert_equals "tank/a 1 backup/a offsite" "$result"
+    assert_equals "tank/a backup/a offsite" "$result"
 }
 
 test_get_checkagainst_skips_incomplete_entries() {
     test_start "Incomplete checkagainst entries are skipped"
     write_config '{
   "checkagainst": [
-    {"dataset": "tank/a", "quals": "1", "counterpart": "backup/a", "label": "offsite"},
-    {"dataset": "incomplete", "counterpart": "backup/incomplete"}
+    {"source_root": "tank/a", "dest_root": "backup/a", "label": "offsite"},
+    {"source_root": "incomplete"}
   ]
 }'
     local result
     result=$(zfsconfig_get_checkagainst)
-    assert_equals "tank/a 1 backup/a offsite" "$result"
+    assert_equals "tank/a backup/a offsite" "$result"
 }
 
 test_get_checkagainst_defaults_counterpart_to_dash() {
-    test_start "Missing counterpart defaults to '-'"
+    test_start "Missing dest_root is skipped"
     write_config '{
   "checkagainst": [
-    {"dataset": "tank/a", "quals": "0", "label": "offsite"}
+    {"source_root": "tank/a", "label": "offsite"}
   ]
 }'
     local result
     result=$(zfsconfig_get_checkagainst)
-    assert_equals "tank/a 0 - offsite" "$result"
+    assert_equals "" "$result"
 }
 
 test_get_checkagainst_merges_nested_sections() {
@@ -194,22 +194,22 @@ test_get_checkagainst_merges_nested_sections() {
     "backup_derived_active": true,
     "offsite_derived_active": true,
     "backup_derived": [
-      {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "dailybackup"},
-      {"dataset": "tank/b", "quals": "0", "counterpart": "backup/b", "label": "dailybackup"}
+      {"source_root": "tank/a", "dest_root": "backup/a", "label": "dailybackup"},
+      {"source_root": "tank/b", "dest_root": "backup/b", "label": "dailybackup"}
     ],
     "offsite_derived": [
-      {"dataset": "tank/c", "quals": "0", "counterpart": "offsite/c", "label": "offsite"}
+      {"source_root": "tank/c", "dest_root": "offsite/c", "label": "offsite"}
     ],
     "user_entries": [
-      {"dataset": "tank/a", "quals": "0", "counterpart": "user/a", "label": "dailybackup"}
+      {"source_root": "tank/a", "dest_root": "user/a", "label": "dailybackup"}
     ]
   }
 }'
     local result
     result=$(zfsconfig_get_checkagainst)
-    assert_contains "$result" "tank/a 0 user/a dailybackup"
-    assert_contains "$result" "tank/b 0 backup/b dailybackup"
-    assert_contains "$result" "tank/c 0 offsite/c offsite"
+    assert_contains "$result" "tank/a user/a dailybackup"
+    assert_contains "$result" "tank/b backup/b dailybackup"
+    assert_contains "$result" "tank/c offsite/c offsite"
 }
 
 test_get_checkagainst_active_flags_disable_sections() {
@@ -219,31 +219,31 @@ test_get_checkagainst_active_flags_disable_sections() {
     "backup_derived_active": false,
     "offsite_derived_active": false,
     "backup_derived": [
-      {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "dailybackup"}
+      {"source_root": "tank/a", "dest_root": "backup/a", "label": "dailybackup"}
     ],
     "offsite_derived": [
-      {"dataset": "tank/c", "quals": "0", "counterpart": "offsite/c", "label": "offsite"}
+      {"source_root": "tank/c", "dest_root": "offsite/c", "label": "offsite"}
     ],
     "user_entries": [
-      {"dataset": "tank/u", "quals": "0", "counterpart": "-", "label": "dailybackup"}
+      {"source_root": "tank/u", "dest_root": "tank/u", "label": "dailybackup"}
     ]
   }
 }'
     local result
     result=$(zfsconfig_get_checkagainst)
-    assert_equals "tank/u 0 - dailybackup" "$result"
+    assert_equals "tank/u tank/u dailybackup" "$result"
 }
 
 test_get_checkagainst_backward_compatible_flat_list() {
     test_start "Flat checkagainst list is treated as user entries"
     write_config '{
   "checkagainst": [
-    {"dataset": "tank/a", "quals": "1", "counterpart": "backup/a", "label": "offsite"}
+    {"source_root": "tank/a", "dest_root": "backup/a", "label": "offsite"}
   ]
 }'
     local result
     result=$(zfsconfig_get_checkagainst)
-    assert_equals "tank/a 1 backup/a offsite" "$result"
+    assert_equals "tank/a backup/a offsite" "$result"
 }
 
 # ------------------------------------------------------------------------------
