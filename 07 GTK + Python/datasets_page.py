@@ -8,27 +8,23 @@ in a separate window, so holds are always visible in the tree.
 import subprocess
 
 import gi
+
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib
-
-from logging_config import log_msg
+from gi.repository import GLib, Gtk
 from gui_helpers import (
-    setup_row_scroll,
-    dataset_name_cell_func,
-    build_full_dataset_name,
-    get_expanded_rows,
-    restore_expanded_rows,
-    expand_tree_recursively,
-    on_row_expanded,
-    load_pool_children,
-    load_dataset_children,
-    load_snapshot_children,
     TreeSearch,
-    get_tree_selection_items,
-    set_monospace_font,
+    build_full_dataset_name,
     configure_treeview_column,
+    dataset_name_cell_func,
+    expand_tree_recursively,
+    get_expanded_rows,
+    get_tree_selection_items,
+    on_row_expanded,
+    restore_expanded_rows,
+    set_monospace_font,
+    setup_row_scroll,
 )
-
+from logging_config import log_msg
 
 # ---------------------------------------------------------------------------
 # Page builder

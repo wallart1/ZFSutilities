@@ -6,16 +6,21 @@
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
-# Prevent re-sourcing bashinit / rootcheck / zfslockmanager / bashsetx inside
-# send-receive from overwriting our mocks or enabling xtrace.
+# Prevent re-sourcing bashinit / rootcheck / zfslockmanager / bashsetx / iscsi-lib
+# inside send-receive from overwriting our mocks, enabling xtrace, or requiring
+# a real node configuration.
 source() {
     local expanded="${1/#\~/$HOME}"
     [[ "$expanded" == "$HOME/bashinit" ]] && return 0
     [[ "$expanded" == *"rootcheck" ]] && return 0
     [[ "$expanded" == *"zfslockmanager" ]] && return 0
     [[ "$expanded" == *"bashsetx" ]] && return 0
+    [[ "$expanded" == *"iscsi-lib.sh" ]] && return 0
     builtin source "$@"
 }
+
+# iscsi-lib.sh is skipped above; provide the one function send-receive calls.
+iscsi_rebuild_torn_down() { :; }
 
 # Auto-answer 'y' to any interactive read prompt (rollback, resume token, etc.)
 read() {

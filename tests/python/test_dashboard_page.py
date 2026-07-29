@@ -3,24 +3,25 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
-from datetime import datetime
 from contextlib import ExitStack
+from datetime import datetime
 from unittest.mock import MagicMock, Mock, patch
-
-import sys
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import (
-    capture_logs, mock_gtk, mock_subprocess, temp_config_dir, write_config,
-)
-
 import dashboard_page as dp
+import feature_config
+from test_support import (
+    capture_logs,
+    mock_gtk,
+    mock_subprocess,
+)
 
 
 def _write_lock_file(path, dataset, pid, lock_type="w"):
@@ -995,9 +996,9 @@ class TestCollectRunningTasks(unittest.TestCase):
     @patch("scrub_manager.get_all_pool_scrub_states")
     def test_finished_scrub_removed_from_running_tasks(self, mock_states):
         """A stale queue.active entry whose live state is FINISHED is not shown."""
-        from scrub_manager import ScrubQueue, ScrubState
-        import scrub_manager as sm
         import tempfile
+
+        from scrub_manager import ScrubQueue, ScrubState
 
         app = MagicMock()
         app.backup_runner = None
@@ -1009,7 +1010,7 @@ class TestCollectRunningTasks(unittest.TestCase):
             fh.write("{}")
             state_path = fh.name
         try:
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 queue = ScrubQueue(target=1)
                 queue.active.add("fivebays")
                 queue._save()
@@ -1037,9 +1038,9 @@ class TestCollectRunningTasks(unittest.TestCase):
     @patch("scrub_manager.get_all_pool_scrub_states")
     def test_running_tasks_matches_live_state_after_stale_queue(self, mock_states):
         """Mixed live state reconciles stale queue.active: only scanning shown."""
-        from scrub_manager import ScrubQueue, ScrubState
-        import scrub_manager as sm
         import tempfile
+
+        from scrub_manager import ScrubQueue, ScrubState
 
         app = MagicMock()
         app.backup_runner = None
@@ -1051,7 +1052,7 @@ class TestCollectRunningTasks(unittest.TestCase):
             fh.write("{}")
             state_path = fh.name
         try:
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 queue = ScrubQueue(target=1)
                 # Stale in-memory state: both were active when the backup started.
                 queue.active.update({"fivebays", "threeamigos"})
@@ -1216,19 +1217,18 @@ class TestCachedOrFresh(unittest.TestCase):
 class TestRefreshPoolSection(unittest.TestCase):
 
     def test_stale_indicator_shown_when_stale(self):
-        with mock_gtk() as gtk_mock:
-            with patch.object(dp, "Gtk", gtk_mock):
-                app = MagicMock()
-                grid = MagicMock()
-                app.dashboard_pool_grid = grid
-                pools = [{
-                    "name": "tank",
-                    "health": "ONLINE",
-                    "cap": "50%",
-                    "cap_int": 50,
-                    "scrub_date": "Sun May 10 00:24:03 2026",
-                }]
-                dp._refresh_pool_section(app, pools, scrub_states={}, stale=True)
+        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
+            app = MagicMock()
+            grid = MagicMock()
+            app.dashboard_pool_grid = grid
+            pools = [{
+                "name": "tank",
+                "health": "ONLINE",
+                "cap": "50%",
+                "cap_int": 50,
+                "scrub_date": "Sun May 10 00:24:03 2026",
+            }]
+            dp._refresh_pool_section(app, pools, scrub_states={}, stale=True)
 
         attach_calls = grid.attach.call_args_list
         self.assertTrue(len(attach_calls) > 0)
@@ -1239,19 +1239,18 @@ class TestRefreshPoolSection(unittest.TestCase):
         self.assertEqual(first_call[0][3], 4)  # columnspan
 
     def test_no_stale_indicator_when_fresh(self):
-        with mock_gtk() as gtk_mock:
-            with patch.object(dp, "Gtk", gtk_mock):
-                app = MagicMock()
-                grid = MagicMock()
-                app.dashboard_pool_grid = grid
-                pools = [{
-                    "name": "tank",
-                    "health": "ONLINE",
-                    "cap": "50%",
-                    "cap_int": 50,
-                    "scrub_date": "Sun May 10 00:24:03 2026",
-                }]
-                dp._refresh_pool_section(app, pools, scrub_states={}, stale=False)
+        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
+            app = MagicMock()
+            grid = MagicMock()
+            app.dashboard_pool_grid = grid
+            pools = [{
+                "name": "tank",
+                "health": "ONLINE",
+                "cap": "50%",
+                "cap_int": 50,
+                "scrub_date": "Sun May 10 00:24:03 2026",
+            }]
+            dp._refresh_pool_section(app, pools, scrub_states={}, stale=False)
 
         attach_calls = grid.attach.call_args_list
         # Stale label would span 4 columns at row 0; ensure no such call exists.
@@ -1546,19 +1545,18 @@ class TestOnDashboardViewLog(unittest.TestCase):
 class TestRefreshOpsSection(unittest.TestCase):
 
     def test_log_file_stored_in_hidden_column(self):
-        with mock_gtk() as gtk_mock:
-            with patch.object(dp, "Gtk", gtk_mock):
-                app = MagicMock()
-                store = MagicMock()
-                app.dashboard_ops_store = store
-                recent = [{
-                    "timestamp": "2026-05-28T14:32:00",
-                    "type": "backup",
-                    "name": "Daily",
-                    "result": "success",
-                    "log_file": "/var/log/zfsutilities/sessions/daily.log",
-                }]
-                dp._refresh_ops_section(app, recent)
+        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
+            app = MagicMock()
+            store = MagicMock()
+            app.dashboard_ops_store = store
+            recent = [{
+                "timestamp": "2026-05-28T14:32:00",
+                "type": "backup",
+                "name": "Daily",
+                "result": "success",
+                "log_file": "/var/log/zfsutilities/sessions/daily.log",
+            }]
+            dp._refresh_ops_section(app, recent)
         store.append.assert_called_once()
         appended = store.append.call_args[0][0]
         self.assertEqual(appended[4], "/var/log/zfsutilities/sessions/daily.log")
@@ -1569,12 +1567,11 @@ class TestRefreshProcessesSection(unittest.TestCase):
 
     def test_empty_tasks_placeholder_has_five_columns(self):
         """The 'No running tasks' placeholder matches the ListStore schema."""
-        with mock_gtk() as gtk_mock:
-            with patch.object(dp, "Gtk", gtk_mock):
-                app = MagicMock()
-                store = MagicMock()
-                app.dashboard_tasks_store = store
-                dp._refresh_processes_section(app, tasks=[])
+        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
+            app = MagicMock()
+            store = MagicMock()
+            app.dashboard_tasks_store = store
+            dp._refresh_processes_section(app, tasks=[])
 
         store.append.assert_called_once()
         appended = store.append.call_args[0][0]

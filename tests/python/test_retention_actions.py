@@ -3,15 +3,15 @@
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, call, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk
 import zfs_lock_manager as zlm
+from test_support import mock_gtk
 
 
 def _import_retention_actions():
@@ -37,7 +37,7 @@ class TestOnRetentionPruneLocking(unittest.TestCase):
         ctx = MagicMock()
         ctx.parent_dir = "/bin"
 
-        with patch.object(ra, "_show_error") as mock_error, \
+        with patch.object(ra, "show_error") as mock_error, \
              patch.object(ra, "log_msg"), \
              patch.object(ra, "zlm", autospec=True) as zlm_mock:
             zlm_mock.check.return_value = True
@@ -60,7 +60,7 @@ class TestOnRetentionPruneLocking(unittest.TestCase):
         ctx = MagicMock()
         ctx.parent_dir = "/bin"
 
-        with patch.object(ra, "_show_error") as mock_error, \
+        with patch.object(ra, "show_error") as mock_error, \
              patch.object(ra, "log_msg") as mock_log, \
              patch.object(ra, "zlm") as zlm_mock:
             zlm_mock.check.side_effect = [True, False]
@@ -196,7 +196,7 @@ class TestOnRetentionPruneOrder(unittest.TestCase):
 
         ctx = MagicMock()
         ctx.parent_dir = "/bin"
-        with patch.object(ra, "_show_error") as mock_error, \
+        with patch.object(ra, "show_error") as mock_error, \
              patch.object(ra, "log_msg"):
             ra.on_retention_prune(app, ctx)
 

@@ -5,7 +5,6 @@ Manages /etc/cron.d/zfsutilities as a drop-in file exclusively for zfsutilities.
 """
 
 import os
-import re
 import shlex
 from datetime import datetime, timedelta
 

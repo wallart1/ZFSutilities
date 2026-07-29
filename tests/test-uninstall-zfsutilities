@@ -33,6 +33,7 @@ _setup_uninstall_env() {
     export ZFSUTILITIES_SUDOERS_FILE="$_tmpdir/etc/sudoers.d/zfsutilities"
     export ZFSUTILITIES_NODE_LIB_LINK="$_tmpdir/usr/local/lib/node-lib.sh"
     export ZFSUTILITIES_TWO_NODE_LIB_LINK="$_tmpdir/usr/local/lib/two-node-lib.sh"
+    export ZFSUTILITIES_ISCSI_LIB_LINK="$_tmpdir/usr/local/lib/iscsi-lib.sh"
     export ZFSUTILITIES_ROOTCHECK_LINK="$_tmpdir/usr/local/lib/rootcheck"
     export ZFSUTILITIES_LOCAL_BIN_DIR="$_tmpdir/usr/local/bin"
     export ZFSUTILITIES_NODE_CONF="$_tmpdir/etc/zfsutilities-node.conf"
@@ -71,6 +72,7 @@ _teardown_uninstall_env() {
     unset ZFSUTILITIES_SUDOERS_FILE
     unset ZFSUTILITIES_NODE_LIB_LINK
     unset ZFSUTILITIES_TWO_NODE_LIB_LINK
+    unset ZFSUTILITIES_ISCSI_LIB_LINK
     unset ZFSUTILITIES_ROOTCHECK_LINK
     unset ZFSUTILITIES_LOCAL_BIN_DIR
     unset ZFSUTILITIES_NODE_CONF
@@ -137,6 +139,7 @@ test_default_uninstall_removes_software_preserves_config() {
     ln -sfn "versions/1.0.0/bin/bashinit" "$tmpdir/root/bashinit"
     ln -sfn "versions/1.0.0/lib/node-lib.sh" "$tmpdir/usr/local/lib/node-lib.sh"
     ln -sfn "node-lib.sh" "$tmpdir/usr/local/lib/two-node-lib.sh"
+    ln -sfn "versions/1.0.0/lib/iscsi-lib.sh" "$tmpdir/usr/local/lib/iscsi-lib.sh"
     touch "$tmpdir/etc/profile.d/zfsutilities.sh"
     touch "$tmpdir/etc/sudoers.d/zfsutilities"
     touch "$tmpdir/etc/cron.d/zfsutilities"
@@ -184,6 +187,10 @@ test_default_uninstall_removes_software_preserves_config() {
     if [[ -f "$tmpdir/etc/cron.d/zfsutilities" ]]; then
         failed=1
         echo "    cron file still present"
+    fi
+    if [[ -L "$tmpdir/usr/local/lib/iscsi-lib.sh" ]]; then
+        failed=1
+        echo "    iscsi-lib.sh symlink still present"
     fi
 
     _teardown_uninstall_env "$tmpdir"

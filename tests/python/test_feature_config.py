@@ -2,6 +2,7 @@
 
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -12,7 +13,7 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 from test_support import temp_config_dir, patch_environ
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import feature_config
 
@@ -313,6 +314,58 @@ class TestScrubManagerConfig(unittest.TestCase):
             config = {}
             feature_config.save_scrub_manager_config(config, {"target": 2})
             self.assertEqual(config["scrub_manager"]["target"], 2)
+
+
+class TestScrubStatePersistence(unittest.TestCase):
+    """load_scrub_state / save_scrub_state round trips."""
+
+    def test_load_missing_returns_defaults(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "scrub_state.json")
+            with patch.object(feature_config, "SCRUB_STATE_PATH", path):
+                data = feature_config.load_scrub_state()
+        self.assertEqual(data["pending"], [])
+        self.assertEqual(data["active"], [])
+        self.assertEqual(data["paused"], [])
+        self.assertEqual(data["finished"], [])
+        self.assertEqual(data["target"], 1)
+
+    def test_save_then_load_round_trips(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "scrub_state.json")
+            with patch.object(feature_config, "SCRUB_STATE_PATH", path):
+                feature_config.save_scrub_state({
+                    "pending": ["tank"],
+                    "active": ["fivebays"],
+                    "paused": [],
+                    "finished": ["threeamigos"],
+                    "target": 3,
+                })
+                data = feature_config.load_scrub_state()
+        self.assertEqual(data["pending"], ["tank"])
+        self.assertEqual(data["active"], ["fivebays"])
+        self.assertEqual(data["finished"], ["threeamigos"])
+        self.assertEqual(data["target"], 3)
+
+    def test_load_corrupt_file_returns_defaults(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "scrub_state.json")
+            with open(path, "w") as fh:
+                fh.write("not json")
+            with patch.object(feature_config, "SCRUB_STATE_PATH", path):
+                data = feature_config.load_scrub_state()
+        self.assertEqual(data["pending"], [])
+
+    def test_load_non_list_buckets_default_to_empty_lists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "scrub_state.json")
+            with open(path, "w") as fh:
+                import json
+                json.dump({"pending": "oops", "target": 2}, fh)
+            with patch.object(feature_config, "SCRUB_STATE_PATH", path):
+                data = feature_config.load_scrub_state()
+        self.assertEqual(data["pending"], [])
+        self.assertEqual(data["target"], 2)
 
 
 class TestPrunePoolsOrder(unittest.TestCase):

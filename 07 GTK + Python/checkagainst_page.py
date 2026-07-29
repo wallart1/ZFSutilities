@@ -16,15 +16,24 @@ pools marked as offsite candidates in the Pools tab.
 import copy
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
 
-from logging_config import log_msg
+gi.require_version('Gtk', '3.0')
 from feature_config import (
-    get_checkagainst, save_checkagainst, derive_checkagainst_entries,
-    _compute_destination_root, _reverse_checkagainst_row, get_pool_names,
+    _compute_destination_root,
+    _reverse_checkagainst_row,
+    derive_checkagainst_entries,
+    get_checkagainst,
+    get_pool_names,
+    save_checkagainst,
 )
-from gui_helpers import configure_treeview_column, handle_editing_key_press
+from gi.repository import Gtk
+from gui_helpers import (
+    configure_treeview_column,
+    handle_editing_key_press,
+    set_button_markup,
+    show_error,
+)
+from logging_config import log_msg
 
 # Column indices in the ListStore (display order):
 # Snapshot label, Source root, Destination root, Comment.
@@ -409,13 +418,13 @@ def _on_ca_save(btn, app):
     errors.extend(_validate_rows(_store_to_entries(app._ca_offsite_store), "Offsite-derived"))
     errors.extend(_validate_rows(_store_to_entries(app._ca_store), "User"))
     if errors:
-        _show_error(app, "Cannot save:\n" + "\n".join(errors))
+        show_error(app, "Cannot save:\n" + "\n".join(errors))
         return
     try:
         data = _full_dict_from_ui(app)
         save_checkagainst(app.config, data)
     except OSError as e:
-        _show_error(app, f"Failed to save checkagainst table:\n{e}")
+        show_error(app, f"Failed to save checkagainst table:\n{e}")
         return
     app._ca_original_full = copy.deepcopy(data)
     log_msg("INFO: Checkagainst table saved to JSON config")
@@ -426,17 +435,6 @@ def _on_ca_revert(btn, app):
     if hasattr(app, '_ca_original_full'):
         app.config["checkagainst"] = copy.deepcopy(app._ca_original_full)
     _load_fss_into_store(app)
-
-
-def _show_error(app, msg):
-    dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
-        message_type=Gtk.MessageType.ERROR,
-        buttons=Gtk.ButtonsType.OK,
-        text=msg,
-    )
-    dlg.run()
-    dlg.destroy()
 
 
 # Action handlers
@@ -685,34 +683,16 @@ def on_checkagainst_add_pair(app):
     _show_add_pair_assistant(app)
 
 
-def is_checkagainst_dirty(app):
-    """Return True if there are unsaved changes."""
-    return _is_ca_dirty(app)
-
-
 def check_checkagainst_dirty(app):
     """Compare current UI state to last-saved state; style Save button accordingly."""
-    dirty = is_checkagainst_dirty(app)
+    dirty = _is_ca_dirty(app)
     btn = getattr(app, '_ca_save_button', None)
     if btn is None:
         return
     if dirty:
-        _set_button_markup(btn, '<span foreground="red">Save</span>')
+        set_button_markup(btn, '<span foreground="red">Save</span>')
     else:
-        _set_button_markup(btn, 'Save')
+        set_button_markup(btn, 'Save')
 
 
-def _set_button_markup(widget, markup):
-    """Recursively find a Gtk.Label inside a widget and set its markup."""
-    if isinstance(widget, Gtk.Label):
-        widget.set_markup(markup)
-        return True
-    if hasattr(widget, 'get_children'):
-        for child in widget.get_children():
-            if _set_button_markup(child, markup):
-                return True
-    if hasattr(widget, 'get_child'):
-        child = widget.get_child()
-        if child and _set_button_markup(child, markup):
-            return True
-    return False
+

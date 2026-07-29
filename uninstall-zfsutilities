@@ -48,10 +48,13 @@ elif [[ -f "$MYDIR/../10 Installers/desktop-launcher-lib.sh" ]]; then
 fi
 
 if [[ -n "$_DESKTOP_LAUNCHER_LIB" ]]; then
-    # shellcheck source=10 Installers/desktop-launcher-lib.sh
+    # The real path contains a space ("10 Installers/...") and cannot be
+    # expressed in a ShellCheck source= directive, so use /dev/null.
+    # shellcheck source=/dev/null
     source "$_DESKTOP_LAUNCHER_LIB"
 else
     echo "  ⚠ WARNING: desktop-launcher-lib.sh not found; desktop shortcuts will not be removed." >&2
+    get_desktop_user() { echo "${SUDO_USER:-}"; }
 fi
 
 # Ensure the desktop-removal helper is available even if the launcher library
@@ -70,6 +73,7 @@ load_uninstall_config() {
     SUDOERS_FILE="${ZFSUTILITIES_SUDOERS_FILE:-/etc/sudoers.d/zfsutilities}"
     NODE_LIB_LINK="${ZFSUTILITIES_NODE_LIB_LINK:-/usr/local/lib/node-lib.sh}"
     TWO_NODE_LIB_LINK="${ZFSUTILITIES_TWO_NODE_LIB_LINK:-/usr/local/lib/two-node-lib.sh}"
+    ISCSI_LIB_LINK="${ZFSUTILITIES_ISCSI_LIB_LINK:-/usr/local/lib/iscsi-lib.sh}"
     ROOTCHECK_LINK="${ZFSUTILITIES_ROOTCHECK_LINK:-/usr/local/lib/rootcheck}"
     LOCAL_BIN_DIR="${ZFSUTILITIES_LOCAL_BIN_DIR:-/usr/local/bin}"
     NODE_CONF="${ZFSUTILITIES_NODE_CONF:-/etc/zfsutilities-node.conf}"
@@ -101,10 +105,7 @@ DO_DRY_RUN="false"
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
-die() {
-    log_msg "FATAL: $*"
-    source "$MYDIR/bashfatal" 1
-}
+# die and ask_yn are provided by bashinit (sourced above).
 
 usage() {
     cat <<EOF
@@ -202,34 +203,7 @@ run_on_peer() {
     ssh -o ConnectTimeout=5 "root@$peer" "$cmd"
 }
 
-# Return the username that owns the current desktop session.
-get_desktop_user() {
-    local user
-    user="${SUDO_USER:-}"
-    if [[ -n "$user" ]]; then
-        echo "$user"
-        return 0
-    fi
-
-    local display="${DISPLAY:-:0}"
-    local display_num="${display%%.*}"
-    display_num="${display_num#:}"
-    local x11_sock="/tmp/.X11-unix/X${display_num}"
-
-    if [[ -e "$x11_sock" ]]; then
-        local uid
-        uid=$(stat -c '%u' "$x11_sock" 2>/dev/null || true)
-        if [[ -n "$uid" && "$uid" != "0" ]]; then
-            user=$(id -un "$uid" 2>/dev/null || true)
-            if [[ -n "$user" ]]; then
-                echo "$user"
-                return 0
-            fi
-        fi
-    fi
-
-    return 0
-}
+# get_desktop_user is provided by desktop-launcher-lib.sh (sourced above).
 
 # ------------------------------------------------------------------
 # Argument parsing
@@ -347,25 +321,7 @@ detect_installed_state() {
 # ------------------------------------------------------------------
 # Interactive dialog
 # ------------------------------------------------------------------
-ask_yn() {
-    local prompt="$1"
-    local default="${2:-N}"
-    local answer
-    while true; do
-        if [[ "$default" == "Y" ]]; then
-            read -rp "${prompt} [Y/n]: " answer
-            answer="${answer:-Y}"
-        else
-            read -rp "${prompt} [y/N]: " answer
-            answer="${answer:-N}"
-        fi
-        case "${answer,,}" in
-            y|yes) return 0 ;;
-            n|no)  return 1 ;;
-            *)     echo "  Please answer y or n." ;;
-        esac
-    done
-}
+# ask_yn is provided by bashinit (sourced above).
 
 present_interactive_dialog() {
     echo ""
@@ -540,6 +496,7 @@ uninstall_software() {
     remove_symlink "$BASHINIT_LINK"
     remove_symlink "$NODE_LIB_LINK"
     remove_symlink "$TWO_NODE_LIB_LINK"
+    remove_symlink "$ISCSI_LIB_LINK"
     remove_symlink "$ROOTCHECK_LINK"
     remove_file "$PROFILE_FILE"
     remove_file "$SUDOERS_FILE"

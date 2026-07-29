@@ -7,32 +7,33 @@ import copy
 import subprocess
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
 
-from logging_config import log_msg
+gi.require_version('Gtk', '3.0')
 from config_core import save_config
 from feature_config import (
-    get_all_retention,
-    get_retention,
-    save_retention,
-    get_prune_label,
-    save_prune_label,
-    get_prune_pools_order,
-    save_prune_pools_order,
-    get_retention_mass_delete_config,
-    save_retention_mass_delete_config,
-    import_legacy_retention,
     DEFAULT_RETENTION,
     MASS_DELETE_DEFAULTS,
+    get_all_retention,
+    get_prune_label,
+    get_prune_pools_order,
+    get_retention,
+    get_retention_mass_delete_config,
+    import_legacy_retention,
+    save_prune_label,
+    save_prune_pools_order,
+    save_retention,
+    save_retention_mass_delete_config,
 )
+from gi.repository import Gtk
 from gui_helpers import (
-    set_button_markup_red,
-    configure_treeview_column, ACTIVE_COLUMN_WIDTH,
+    add_var_row,
+    bold_label,
+    configure_treeview_column,
     handle_editing_key_press,
-    add_var_row, bold_label,
+    set_button_markup_red,
+    show_error,
 )
-from backup_page import _frame_grid
+from logging_config import log_msg
 
 # Mass-delete dataset criteria shown in the Advanced expander
 MASS_DELETE_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
@@ -666,7 +667,7 @@ def _on_ret_save(btn, app, ctx):
         try:
             save_retention(ctx.config, app._ret_pool, current_buckets)
         except OSError as e:
-            _show_error(app, f"Failed to save retention policy for '{app._ret_pool}':\n{e}")
+            show_error(app, f"Failed to save retention policy for '{app._ret_pool}':\n{e}")
             return
         app._ret_original[app._ret_pool] = copy.deepcopy(current_buckets)
         app._ret_pending.pop(app._ret_pool, None)
@@ -680,7 +681,7 @@ def _on_ret_save(btn, app, ctx):
         try:
             save_retention(ctx.config, pool, pending)
         except OSError as e:
-            _show_error(app, f"Failed to save retention policy for '{pool}':\n{e}")
+            show_error(app, f"Failed to save retention policy for '{pool}':\n{e}")
             return
         app._ret_original[pool] = copy.deepcopy(pending)
         app._ret_pending.pop(pool, None)
@@ -689,7 +690,7 @@ def _on_ret_save(btn, app, ctx):
     try:
         save_prune_label(ctx.config, label)
     except OSError as e:
-        _show_error(app, f"Failed to save prune label:\n{e}")
+        show_error(app, f"Failed to save prune label:\n{e}")
         return
     app._ret_original_prune_label = label
 
@@ -709,7 +710,7 @@ def _on_ret_save(btn, app, ctx):
             try:
                 save_retention_mass_delete_config(ctx.config, mass_delete_data)
             except OSError as e:
-                _show_error(app, f"Failed to save mass delete settings:\n{e}")
+                show_error(app, f"Failed to save mass delete settings:\n{e}")
                 return
             app._ret_mass_delete_original = dict(mass_delete_data)
 
@@ -747,12 +748,3 @@ def _on_ret_revert(btn, app, ctx):
         _sync_releaseholds_widget(app, orig.get("ignore_retention_policies", False))
 
 
-def _show_error(app, msg):
-    dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
-        message_type=Gtk.MessageType.ERROR,
-        buttons=Gtk.ButtonsType.OK,
-        text=msg,
-    )
-    dlg.run()
-    dlg.destroy()

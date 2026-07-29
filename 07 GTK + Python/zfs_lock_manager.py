@@ -10,15 +10,12 @@ environment variable for testing.
 import glob
 import json
 import os
-import re
 import sys
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import List, Optional
 
 from backup_config import log_msg
-
 
 # ---------------------------------------------------------------------------
 # Constants and module state
@@ -52,19 +49,12 @@ def _encode(path: str) -> str:
     return path
 
 
-def _decode(encoded: str) -> str:
-    """Decode a filename back to a dataset path."""
-    encoded = encoded.replace("%2F", "/")
-    encoded = encoded.replace("%40", "@")
-    return encoded
-
-
 def _lock_file(dataset: str) -> str:
     """Return the lock file path for *dataset*."""
     return os.path.join(ZFSLOCK_LOCKS_DIR, f"{_encode(dataset)}.lock")
 
 
-def _pid_file(pid: Optional[int] = None) -> str:
+def _pid_file(pid: int | None = None) -> str:
     """Return the PID tracking file path for this or the given process."""
     return os.path.join(ZFSLOCK_PIDS_DIR, str(pid or os.getpid()))
 
@@ -74,7 +64,7 @@ def _script_name() -> str:
     return os.path.basename(sys.argv[0]) if sys.argv else "python"
 
 
-def _read_field(lockfile: str, field: str) -> Optional[str]:
+def _read_field(lockfile: str, field: str) -> str | None:
     """Read a string field from a lock file."""
     if not os.path.isfile(lockfile):
         return None
@@ -87,7 +77,7 @@ def _read_field(lockfile: str, field: str) -> Optional[str]:
     return str(value) if value is not None else None
 
 
-def _read_pid(lockfile: str) -> Optional[int]:
+def _read_pid(lockfile: str) -> int | None:
     """Read the pid field from a lock file as an integer."""
     raw = _read_field(lockfile, "pid")
     if raw is None:
@@ -204,7 +194,7 @@ def _check_file(lockfile: str, requested_type: str, relationship: str) -> bool:
     return not _hierarchy_conflict(requested_type, existing_type, relationship)
 
 
-def _ancestors(dataset: str) -> List[str]:
+def _ancestors(dataset: str) -> list[str]:
     """Return ancestor dataset paths from immediate parent up to the pool."""
     ancestors = []
     parent = dataset
@@ -214,7 +204,7 @@ def _ancestors(dataset: str) -> List[str]:
     return ancestors
 
 
-def _pool(dataset: str) -> Optional[str]:
+def _pool(dataset: str) -> str | None:
     """Return the pool component of a dataset, or None for a pool itself."""
     if "/" in dataset:
         return dataset.split("/", 1)[0]
@@ -318,7 +308,7 @@ def acquire(dataset: str, lock_type: str, description: str = "") -> str:
     return lockfile
 
 
-def acquire_multiple(lock_type: str, datasets: List[str]) -> List[str]:
+def acquire_multiple(lock_type: str, datasets: list[str]) -> list[str]:
     """Acquire locks on multiple datasets in a deadlock-free order.
 
     Datasets are sorted by path depth then lexicographically, redundant
@@ -353,7 +343,7 @@ def acquire_multiple(lock_type: str, datasets: List[str]) -> List[str]:
         if not redundant:
             kept.append(ds)
 
-    acquired: List[str] = []
+    acquired: list[str] = []
     try:
         for ds in kept:
             lock_id = acquire(ds, lock_type)
@@ -418,33 +408,6 @@ def release(lock_id: str) -> bool:
     return True
 
 
-def release_all() -> int:
-    """Release every lock held by this process.  Returns the count released."""
-    released = 0
-    pidfile = _pid_file()
-    if os.path.isfile(pidfile):
-        try:
-            with open(pidfile, "r", encoding="utf-8") as f:
-                lock_ids = list(f.read().splitlines())
-        except OSError:
-            lock_ids = []
-    else:
-        lock_ids = []
-
-    # Also include in-process refcounts (covers locks where pidfile was not
-    # updated or was cleaned externally).
-    with _refcount_lock:
-        for lock_id in list(_lock_refcounts.keys()):
-            if lock_id not in lock_ids:
-                lock_ids.append(lock_id)
-
-    for lock_id in lock_ids:
-        if release(lock_id):
-            released += 1
-
-    return released
-
-
 @contextmanager
 def lock(dataset: str, lock_type: str, description: str = ""):
     """Context manager that acquires and releases a single lock."""
@@ -456,7 +419,7 @@ def lock(dataset: str, lock_type: str, description: str = ""):
 
 
 @contextmanager
-def locks(lock_type: str, datasets: List[str]):
+def locks(lock_type: str, datasets: list[str]):
     """Context manager that acquires and releases multiple locks."""
     lock_ids = acquire_multiple(lock_type, datasets)
     try:

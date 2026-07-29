@@ -39,6 +39,7 @@ for name in os.listdir(repo_root):
 # Functions provided by bashinit (available everywhere without an explicit source).
 bashinit_funcs = {
     'bashinit', 'log_msg', 'msg_prefix', 'calledbybash', 'ask_yn',
+    'die', 'warn',
 }
 
 func_def_re = re.compile(

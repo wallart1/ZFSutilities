@@ -13,36 +13,8 @@ declare -A INSTALLER_FAILURES
 # ------------------------------------------------------------------
 # Prompts
 # ------------------------------------------------------------------
-
-# Ask a yes/no question. Returns 0 for yes, 1 for no.
-# Default is "no" unless the second argument is "Y".
-ask_yn() {
-    local prompt="$1"
-    local default="${2:-N}"
-    local answer
-
-    while true; do
-        if [[ "$default" == "Y" ]]; then
-            read -rp "${prompt} [Y/n]: " answer
-            answer="${answer:-Y}"
-        else
-            read -rp "${prompt} [y/N]: " answer
-            answer="${answer:-N}"
-        fi
-
-        case "$answer" in
-            [Yy]|[Yy][Ee][Ss])
-                return 0
-                ;;
-            [Nn]|[Nn][Oo])
-                return 1
-                ;;
-            *)
-                echo "  Please answer y or n."
-                ;;
-        esac
-    done
-}
+# ask_yn is provided by bashinit, which the installers source before
+# sourcing this library.
 
 # ------------------------------------------------------------------
 # Explanations
@@ -502,22 +474,3 @@ ensure_retention_profiles() {
         python3 "$helper" --config-path "$config_path" ${new_install_flag}
 }
 
-# Run ensure_retention_profiles on a remote host via SSH.
-# Warnings only on failure so the install can continue.
-ensure_retention_profiles_remote() {
-    local host="$1"
-    local config_path="${ZFSCONFIG_PATH:-/root/.config/zfsutilities.json}"
-    local helper="/usr/local/lib/zfsutilities/current/10 Installers/installer_retention.py"
-    local python_src="/usr/local/lib/zfsutilities/current/07 GTK + Python"
-    local installer_src="/usr/local/lib/zfsutilities/current/10 Installers"
-
-    local new_install_flag=""
-    if ssh -o ConnectTimeout=5 "root@$host" "[[ ! -f '$config_path' ]]" >/dev/null 2>&1; then
-        new_install_flag="--new-install"
-    fi
-
-    echo "=== Retention Profiles on $host ==="
-    ssh -o ConnectTimeout=5 "root@$host" \
-        "PYTHONPATH='$python_src:$installer_src' python3 '$helper' --config-path '$config_path' $new_install_flag" \
-        || echo "  ⚠ Could not initialize retention profiles on $host" >&2
-}

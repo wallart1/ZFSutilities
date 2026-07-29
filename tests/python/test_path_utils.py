@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from test_support import mock_subprocess, patch_environ, REPO_ROOT
+from test_support import mock_subprocess, patch_environ
 
 import path_utils
 
@@ -280,33 +280,6 @@ class TestRemoteResolution(unittest.TestCase):
             )
             result = path_utils.resolve_remote_bin("stewie")
             self.assertIsNone(result)
-
-    def test_resolve_remote_script_success(self):
-        """resolve_remote_script returns full path when bin resolves."""
-        with mock_subprocess() as m:
-            m.set_command_handler(
-                r"ssh.*realpath.*zfsutilities/current/bin",
-                lambda _cmd, **_kw: subprocess.CompletedProcess(
-                    args=[],
-                    returncode=0,
-                    stdout="/remote/bin\n",
-                    stderr="",
-                ),
-            )
-            result = path_utils.resolve_remote_script("stewie", "repair-iscsi-luns")
-            self.assertEqual(result, "/remote/bin/repair-iscsi-luns")
-
-    def test_resolve_remote_script_fallback(self):
-        """resolve_remote_script returns bare name when bin fails."""
-        with mock_subprocess() as m:
-            m.set_command_handler(
-                r"ssh.*realpath.*zfsutilities/current/bin",
-                lambda _cmd, **_kw: subprocess.CompletedProcess(
-                    args=[], returncode=1, stdout="", stderr=""
-                ),
-            )
-            result = path_utils.resolve_remote_script("stewie", "repair-iscsi-luns")
-            self.assertEqual(result, "repair-iscsi-luns")
 
     def test_resolve_remote_version_success(self):
         """resolve_remote_version returns the remote VERSION content."""

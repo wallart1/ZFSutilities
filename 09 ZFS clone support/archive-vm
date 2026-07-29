@@ -38,13 +38,6 @@ usage() {
     exit 1
 }
 
-ask_yn() {
-    local prompt="$1"
-    local response
-    read -rp "$prompt (y/N): " response
-    [[ "$response" =~ ^[Yy]$ ]]
-}
-
 # Build the prompt for the archive base dataset. In two-node mode the prompt
 # reminds the operator that the dataset must live on the storage host.
 build_archive_prompt() {
@@ -115,18 +108,7 @@ SSHEOF
     echo "$snap"
 }
 
-# --- Read archive_path from JSON config ---
-get_json_archive_path() {
-    python3 -c "
-import json
-try:
-    with open('$JSON_CONFIG') as f:
-        c = json.load(f)
-    print(c.get('archive_path', ''), end='')
-except:
-    pass
-"
-}
+# get_json_archive_path is provided by node-lib.sh (sourced above).
 
 # --- Save archive_path to JSON config ---
 save_json_archive_path() {

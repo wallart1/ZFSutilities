@@ -2,33 +2,40 @@
 Pool tab action handlers — extracted from pools_page.py.
 """
 
-import subprocess
-
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
 
-from backup_config import save_pools, log_msg
+gi.require_version('Gtk', '3.0')
+from backup_config import log_msg, save_pools
+from gi.repository import Gtk
 from gui_helpers import (
+    add_scrolled_text_view,
+    configure_treeview_column,
     create_dialog,
-    configure_treeview_column, _ensure_treeview_scrolling,
-    add_scrolled_text_view, set_button_markup_red,
-)
-from pools_page import (
-    refresh_pools_page, refresh_scrub_table, schedule_scrub_refresh_burst,
-    _update_pools_dirty_indicator, get_selected_pool_names,
-    COL_NAME, COL_HEALTH, COL_FLAG,
-    FLAG_REGISTERED, FLAG_UNREGISTERED,
-)
-from scrub_manager import (
-    start_scrub, pause_scrub, stop_scrub,
+    set_button_markup_red,
 )
 from pool_watch import PoolWatchWindow
+from pools_page import (
+    COL_FLAG,
+    COL_HEALTH,
+    COL_NAME,
+    FLAG_UNREGISTERED,
+    _update_pools_dirty_indicator,
+    get_selected_pool_names,
+    refresh_pools_page,
+    refresh_scrub_table,
+    schedule_scrub_refresh_burst,
+)
+from scrub_manager import (
+    pause_scrub,
+    stop_scrub,
+)
 
 
 def on_pools_watch(app):
     """Open independent watch windows for all selected online pools."""
-    selected = _get_selected_registered_rows(app)
+    rows = _get_selected_rows(app)
+    known_names = {p["name"] for p in app.known_pools}
+    selected = [(n, h) for n, h in rows if n in known_names]
     if not selected:
         log_msg("WARN: Select at least one pool to watch")
         return
@@ -476,13 +483,5 @@ def _get_selected_rows(app):
     return rows
 
 
-def _get_selected_registered_rows(app):
-    """Return list of (pool_name, health) for selected registered rows."""
-    rows = _get_selected_rows(app)
-    known_names = {p["name"] for p in app.known_pools}
-    return [(n, h) for n, h in rows if n in known_names]
 
 
-# Legacy: no-op kept for any lingering callers.
-def set_pools_dirty(app, dirty):
-    _update_pools_dirty_indicator(app)

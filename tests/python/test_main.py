@@ -6,10 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import ANY, MagicMock, mock_open, patch
 
-from test_support import capture_logs, mock_gtk
-
 # main.py is on PYTHON_SRC via test_support
 import main as main_module
+from test_support import capture_logs
 
 
 class _ExecvpCalled(Exception):
@@ -102,7 +101,6 @@ class TestMainSingleInstance(unittest.TestCase):
              terminate_patch as mock_term, \
              patch.object(main_module, "_find_matching_pids", side_effect=[matching_pids, []] if matching_pids else [matching_pids]), \
              patch.object(main_module, "_has_visible_window", return_value=has_visible_window), \
-             patch.object(main_module, "_is_instance_stuck", return_value=is_instance_stuck), \
              patch.object(main_module, "_show_wait_dialog", MagicMock()), \
              patch.object(main_module, "_pump_events_for", MagicMock()), \
              patch.object(main_module, "time", MagicMock()), \
@@ -250,7 +248,7 @@ class TestMainSingleInstance(unittest.TestCase):
         second_app.get_is_remote.return_value = False
         app_class = self._make_app_class(first_app, second_app)
         terminate_mock = MagicMock(return_value=True)
-        result = self._run_main(
+        self._run_main(
             ["main.py"], app_class,
             alive_pids=set(), our_pids=set(), pid_states={},
             terminate_mock=terminate_mock,
@@ -266,7 +264,7 @@ class TestMainSingleInstance(unittest.TestCase):
         second_app = self._make_app(remote=True)
         app_class = self._make_app_class(first_app, second_app)
         terminate_mock = MagicMock(return_value=True)
-        result = self._run_main(
+        self._run_main(
             ["main.py"], app_class,
             alive_pids=set(), our_pids=set(), pid_states={},
             terminate_mock=terminate_mock,
@@ -288,7 +286,7 @@ class TestMainSingleInstance(unittest.TestCase):
 
         app.run.side_effect = mark_run_called
         app_class = self._make_app_class(app)
-        result = self._run_main(
+        self._run_main(
             ["main.py"], app_class,
             alive_pids=set(), our_pids=set(), pid_states={}
         )
@@ -532,7 +530,6 @@ class TestMainStuckInstance(unittest.TestCase):
              patch.object(main_module, "_is_zfsutilities_process", side_effect=fake_is_zfsutilities_process), \
              patch.object(main_module, "_pid_state", side_effect=fake_pid_state), \
              patch.object(main_module, "_has_visible_window", return_value=has_visible_window), \
-             patch.object(main_module, "_is_instance_stuck", return_value=is_instance_stuck), \
              patch.object(main_module, "_find_matching_pids", side_effect=[matching_pids, []] if matching_pids else [matching_pids]), \
              patch.object(main_module, "_show_wait_dialog", MagicMock()), \
              patch.object(main_module, "_pump_events_for", MagicMock()), \
@@ -653,27 +650,6 @@ class TestWindowHelpers(unittest.TestCase):
              patch.object(main_module, "_is_window_visible", return_value=False):
             self.assertFalse(main_module._has_visible_window(42))
 
-    def test_is_instance_stuck_alive_old_no_window(self):
-        with patch.object(main_module, "_is_pid_alive", return_value=True), \
-             patch.object(main_module, "_has_visible_window", return_value=False), \
-             patch.object(main_module, "_process_age_seconds", return_value=15):
-            self.assertTrue(main_module._is_instance_stuck(42))
-
-    def test_is_instance_stuck_alive_young_no_window(self):
-        with patch.object(main_module, "_is_pid_alive", return_value=True), \
-             patch.object(main_module, "_has_visible_window", return_value=False), \
-             patch.object(main_module, "_process_age_seconds", return_value=5):
-            self.assertFalse(main_module._is_instance_stuck(42))
-
-    def test_is_instance_stuck_with_visible_window(self):
-        with patch.object(main_module, "_is_pid_alive", return_value=True), \
-             patch.object(main_module, "_has_visible_window", return_value=True):
-            self.assertFalse(main_module._is_instance_stuck(42))
-
-    def test_is_instance_stuck_dead(self):
-        with patch.object(main_module, "_is_pid_alive", return_value=False):
-            self.assertFalse(main_module._is_instance_stuck(42))
-
 
 class TestWaitDialogHelpers(unittest.TestCase):
     """Tests for the transient wait dialog and event-pumping helpers."""
@@ -682,9 +658,8 @@ class TestWaitDialogHelpers(unittest.TestCase):
         dialog = MagicMock()
         with patch.object(
             main_module.Gtk, "MessageDialog", return_value=dialog
-        ) as mock_dialog:
-            with patch.object(main_module, "_pump_events_for"):
-                result = main_module._show_wait_dialog("Please wait...")
+        ) as mock_dialog, patch.object(main_module, "_pump_events_for"):
+            result = main_module._show_wait_dialog("Please wait...")
         self.assertEqual(result, dialog)
         mock_dialog.assert_called_once()
         kwargs = mock_dialog.call_args.kwargs
@@ -717,11 +692,10 @@ class TestWaitDialogHelpers(unittest.TestCase):
             mock_time.sleep = MagicMock()
             with patch.object(
                 main_module.Gtk, "events_pending", side_effect=fake_pending
-            ):
-                with patch.object(
-                    main_module.Gtk, "main_iteration_do"
-                ) as mock_iter:
-                    main_module._pump_events_for(0.1)
+            ), patch.object(
+                main_module.Gtk, "main_iteration_do"
+            ) as mock_iter:
+                main_module._pump_events_for(0.1)
         self.assertEqual(mock_iter.call_count, 2)
         self.assertGreater(mock_time.sleep.call_count, 0)
 

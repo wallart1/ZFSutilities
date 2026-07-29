@@ -16,6 +16,7 @@ from test_support import mock_gtk, temp_config_dir
 
 with mock_gtk():
     import checkagainst_page as cap
+    import gui_helpers
 
 
 class _FakeStore:
@@ -51,7 +52,7 @@ class TestEntriesFromToConfig(unittest.TestCase):
     """Config serialization round-trips."""
 
     def setUp(self):
-        self._p = patch.object(cap, "_set_button_markup")
+        self._p = patch.object(cap, "set_button_markup")
         self._p.start()
 
     def tearDown(self):
@@ -116,7 +117,7 @@ class TestDirtyTracking(unittest.TestCase):
     """Dirty detection compares the full checkagainst dict."""
 
     def setUp(self):
-        self._p = patch.object(cap, "_set_button_markup")
+        self._p = patch.object(cap, "set_button_markup")
         self._p.start()
 
     def tearDown(self):
@@ -188,7 +189,7 @@ class TestDirtyTracking(unittest.TestCase):
         class NoOriginalApp:
             pass
         app = NoOriginalApp()
-        self.assertFalse(cap.is_checkagainst_dirty(app))
+        self.assertFalse(cap._is_ca_dirty(app))
 
 
 class TestLoadNormalization(unittest.TestCase):
@@ -207,7 +208,7 @@ class TestLoadNormalization(unittest.TestCase):
         app._ca_status_label = MagicMock()
         app._ca_save_button = MagicMock()
 
-        with patch.object(cap, "_set_button_markup"):
+        with patch.object(cap, "set_button_markup"):
             cap._load_fss_into_store(app)
 
         self.assertFalse(cap._is_ca_dirty(app))
@@ -217,7 +218,7 @@ class TestStatusUpdate(unittest.TestCase):
     """_update_ca_status validates and shows status messages."""
 
     def setUp(self):
-        self._p = patch.object(cap, "_set_button_markup")
+        self._p = patch.object(cap, "set_button_markup")
         self._p.start()
 
     def tearDown(self):
@@ -300,11 +301,11 @@ class TestActionHandlers(unittest.TestCase):
         return app
 
     def setUp(self):
-        self._set_button_markup_patch = patch.object(cap, "_set_button_markup")
-        self._set_button_markup_patch.start()
+        self.set_button_markup_patch = patch.object(cap, "set_button_markup")
+        self.set_button_markup_patch.start()
 
     def tearDown(self):
-        self._set_button_markup_patch.stop()
+        self.set_button_markup_patch.stop()
 
     def test_on_ca_add_appends_default_row(self):
         app = self._make_app()
@@ -418,7 +419,7 @@ class TestPageNotes(unittest.TestCase):
         app = MagicMock()
         app.config = {"checkagainst": {"user_entries": []}}
         with patch.object(cap.Gtk, "Label", return_value=recording_label), \
-             patch.object(cap, "_set_button_markup"):
+             patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
 
         self.assertTrue(
@@ -439,7 +440,7 @@ class TestPageNotes(unittest.TestCase):
         app = MagicMock()
         app.config = {"checkagainst": {"user_entries": []}}
         with patch.object(cap.Gtk, "Label", return_value=recording_label), \
-             patch.object(cap, "_set_button_markup"):
+             patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
 
         combined = " ".join(str(t) for t in recording_label._texts)
@@ -457,7 +458,7 @@ class TestPageConstruction(unittest.TestCase):
     def test_liststore_has_four_string_columns(self):
         app = self._make_app()
         with patch.object(cap.Gtk, "ListStore") as mock_liststore, \
-             patch.object(cap, "_set_button_markup"):
+             patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
         self.assertEqual(mock_liststore.call_count, 3)
         mock_liststore.assert_called_with(str, str, str, str)
@@ -466,13 +467,13 @@ class TestPageConstruction(unittest.TestCase):
         app = self._make_app()
         tv_mock = MagicMock()
         with patch.object(cap.Gtk, "TreeView", return_value=tv_mock), \
-             patch.object(cap, "_set_button_markup"):
+             patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
         tv_mock.set_reorderable.assert_called_with(True)
 
     def test_columns_are_not_sortable(self):
         app = self._make_app()
-        with patch.object(cap, "_set_button_markup"):
+        with patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
         self.assertEqual(
             cap.Gtk.TreeViewColumn.return_value.set_sort_column_id.call_count,
@@ -488,7 +489,7 @@ class TestPageConstruction(unittest.TestCase):
             return MagicMock()
 
         with patch.object(cap.Gtk, "TreeViewColumn", side_effect=_record_column), \
-             patch.object(cap, "_set_button_markup"):
+             patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
         self.assertIn("Comment", titles)
         self.assertEqual(len(titles), 12)  # 4 columns x 3 treeviews
@@ -499,7 +500,7 @@ class TestPageConstruction(unittest.TestCase):
         sw_iter = iter([page_sw, MagicMock(), MagicMock(), MagicMock()])
 
         with patch.object(cap.Gtk, "ScrolledWindow", side_effect=lambda: next(sw_iter)), \
-             patch.object(cap, "_set_button_markup"):
+             patch.object(cap, "set_button_markup"):
             result = cap.create_checkagainst_page(app)
 
         self.assertIs(result, page_sw)
@@ -583,7 +584,7 @@ class TestSaveButtonStyling(unittest.TestCase):
             [("offsite", "tank/a", "backup/a", "")],
             [("offsite", "tank/a", "other/a", "")],
         )
-        with patch.object(cap, "_set_button_markup") as mock_markup:
+        with patch.object(cap, "set_button_markup") as mock_markup:
             cap.check_checkagainst_dirty(app)
         mock_markup.assert_called_once_with(
             app._ca_save_button,
@@ -595,16 +596,16 @@ class TestSaveButtonStyling(unittest.TestCase):
             [("offsite", "tank/a", "backup/a", "")],
             [("offsite", "tank/a", "backup/a", "")],
         )
-        with patch.object(cap, "_set_button_markup") as mock_markup:
+        with patch.object(cap, "set_button_markup") as mock_markup:
             cap.check_checkagainst_dirty(app)
         mock_markup.assert_called_once_with(app._ca_save_button, "Save")
 
 
 class TestSetButtonMarkup(unittest.TestCase):
-    """_set_button_markup recurses to find a Gtk.Label."""
+    """set_button_markup recurses to find a Gtk.Label."""
 
     def test_finds_label_in_box(self):
-        with patch.object(cap, "Gtk") as mock_gtk:
+        with patch.object(gui_helpers, "Gtk") as mock_gtk:
             class FakeLabel:
                 def __init__(self):
                     self.markup = None
@@ -618,11 +619,11 @@ class TestSetButtonMarkup(unittest.TestCase):
                 def get_children(self):
                     return [self.label]
             box = FakeBox()
-            self.assertTrue(cap._set_button_markup(box, "<b>Save</b>"))
+            self.assertTrue(cap.set_button_markup(box, "<b>Save</b>"))
             self.assertEqual(box.label.markup, "<b>Save</b>")
 
     def test_finds_label_via_get_child(self):
-        with patch.object(cap, "Gtk") as mock_gtk:
+        with patch.object(gui_helpers, "Gtk") as mock_gtk:
             class FakeLabel:
                 def __init__(self):
                     self.markup = None
@@ -636,25 +637,25 @@ class TestSetButtonMarkup(unittest.TestCase):
                 def get_child(self):
                     return self.label
             container = FakeContainer()
-            self.assertTrue(cap._set_button_markup(container, "Save"))
+            self.assertTrue(cap.set_button_markup(container, "Save"))
             self.assertEqual(container.label.markup, "Save")
 
     def test_returns_false_when_no_label_found(self):
-        with patch.object(cap, "Gtk") as mock_gtk:
+        with patch.object(gui_helpers, "Gtk") as mock_gtk:
             class NotALabel:
                 pass
             mock_gtk.Label = NotALabel
             widget = MagicMock()
             widget.get_children.return_value = []
             widget.get_child.return_value = None
-            self.assertFalse(cap._set_button_markup(widget, "Save"))
+            self.assertFalse(cap.set_button_markup(widget, "Save"))
 
 
 class TestStatusUpdateEmptyFields(unittest.TestCase):
     """Status validation catches empty required fields."""
 
     def setUp(self):
-        self._p = patch.object(cap, "_set_button_markup")
+        self._p = patch.object(cap, "set_button_markup")
         self._p.start()
 
     def tearDown(self):
@@ -736,7 +737,7 @@ class TestTabNavigationWiring(unittest.TestCase):
             return r
 
         with patch.object(cap.Gtk, "CellRendererText", side_effect=_make_renderer), \
-             patch.object(cap, "_set_button_markup"):
+             patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
 
         editable_renderers = [r for r in renderers if True in r._editable_calls]
@@ -776,7 +777,7 @@ class TestTabNavigationWiring(unittest.TestCase):
             return r
 
         with patch.object(cap.Gtk, "CellRendererText", side_effect=_make_renderer), \
-             patch.object(cap, "_set_button_markup"):
+             patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
 
         editable_renderers = [r for r in renderers if True in r._editable_calls]
@@ -829,11 +830,11 @@ class TestActionHandlersEmptyFields(unittest.TestCase):
         return app
 
     def setUp(self):
-        self._set_button_markup_patch = patch.object(cap, "_set_button_markup")
-        self._set_button_markup_patch.start()
+        self.set_button_markup_patch = patch.object(cap, "set_button_markup")
+        self.set_button_markup_patch.start()
 
     def tearDown(self):
-        self._set_button_markup_patch.stop()
+        self.set_button_markup_patch.stop()
 
     def test_on_ca_save_rejects_empty_source_root(self):
         app = self._make_app([("offsite", "", "backup/a", "")])

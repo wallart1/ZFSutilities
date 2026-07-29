@@ -2,8 +2,8 @@
 
 import unittest
 
-from command_builders import BashStep
 import command_builders
+from command_builders import BashStep
 
 
 class TestDryrunAssignments(unittest.TestCase):
@@ -146,10 +146,13 @@ class TestBuildRsyncCommand(unittest.TestCase):
         self.assertNotIn("exit ${PIPESTATUS[0]}", script)
         self.assertNotIn("exit 0", script)
 
-    def test_remote_rsync_log_setup_command(self):
-        cmd = command_builders._remote_rsync_log_setup_command(
-            "remote", "/var/log/zfsutilities/rsync-pull.log"
-        )
+    def test_rsync_log_setup_script_used_in_ssh_command(self):
+        host = "remote"
+        log_path = "/var/log/zfsutilities/rsync-pull.log"
+        cmd = [
+            "ssh", "-q", f"root@{host}",
+            command_builders._rsync_log_setup_script(log_path),
+        ]
         self.assertEqual(cmd[0], "ssh")
         self.assertEqual(cmd[1], "-q")
         self.assertEqual(cmd[2], "root@remote")
@@ -263,18 +266,6 @@ class TestBuildSendReceiveCommand(unittest.TestCase):
         )
         bash_script = step.command[2]
         self.assertIn('releaseholds_tags=("custom-*")', bash_script)
-
-
-class TestBuildInstalledProgramsCommand(unittest.TestCase):
-
-    def test_local(self):
-        step = command_builders.build_installed_programs_command("")
-        self.assertEqual(step.command[0], "bash")
-
-    def test_remote(self):
-        step = command_builders.build_installed_programs_command("remote")
-        self.assertEqual(step.command[0], "ssh")
-        self.assertIn("root@remote", step.command)
 
 
 class TestBuildPrePostBackupCommands(unittest.TestCase):

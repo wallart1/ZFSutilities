@@ -7,26 +7,33 @@ optional ZFS hold application.
 """
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib
 
-from logging_config import log_msg
+gi.require_version('Gtk', '3.0')
 from feature_config import (
-    get_offsite_config, generate_offsite_snapshot_name,
-    save_offsite_config, get_offsite_candidate_names,
-    _read_snapfile, OFFSITE_SNAPFILE,
+    OFFSITE_SNAPFILE,
     _maybe_seed_checkagainst,
+    _read_snapfile,
+    generate_offsite_snapshot_name,
+    get_offsite_candidate_names,
+    get_offsite_config,
+    save_offsite_config,
 )
-from offsite_runner import detect_offsite_pool, build_offsite_step_command
-from scrub_manager import attach_step_scrub_callbacks
+from gi.repository import GLib, Gtk
 from gui_helpers import (
-    setup_row_scroll,
-    set_button_markup_red, DirtyTracker, add_var_row,
-    handle_editing_key_press, on_toggle, on_cell_edited,
-    on_row_activated,
-    configure_treeview_column, ACTIVE_COLUMN_WIDTH,
+    ACTIVE_COLUMN_WIDTH,
+    DirtyTracker,
+    add_var_row,
     bold_label,
+    configure_treeview_column,
+    handle_editing_key_press,
+    on_cell_edited,
+    on_row_activated,
+    on_toggle,
+    setup_row_scroll,
 )
+from logging_config import log_msg
+from offsite_runner import build_offsite_step_command, detect_offsite_pool
+from scrub_manager import attach_step_scrub_callbacks
 
 OFFSITE_DATASET_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
 OFFSITE_VARIABLES = ["applyholds", "doincrementals", "dointermediates",
@@ -310,12 +317,6 @@ def check_offsite_dirty(app):
         app._offsite_tracker.check()
 
 
-def mark_offsite_clean(app):
-    """Call after saving to update saved state and reset the button."""
-    if hasattr(app, '_offsite_tracker'):
-        app._offsite_tracker.mark_clean()
-
-
 def load_offsite_config(app, config):
     """Load an offsite config dict into the UI widgets."""
     for key, widget in app.offsite_var_widgets.items():
@@ -335,12 +336,6 @@ def load_offsite_config(app, config):
             step.get("includes", ""), step.get("excludes", ""),
         ])
     app.offsite_pause_scrubs.set_active(config.get("pause_scrubs", False))
-
-
-def revert_offsite_config(app):
-    """Restore all offsite UI widgets to the last-saved state."""
-    if hasattr(app, '_offsite_tracker'):
-        app._offsite_tracker.revert(lambda cfg: load_offsite_config(app, cfg))
 
 
 def _do_generate_snap(app):
@@ -505,7 +500,8 @@ def on_offsite_save(app, ctx):
     offsite_data = collect_offsite_config(app)
     try:
         save_offsite_config(ctx.config, offsite_data)
-        mark_offsite_clean(app)
+        if hasattr(app, '_offsite_tracker'):
+            app._offsite_tracker.mark_clean()
         log_msg("INFO: Offsite config saved to /root/.config/zfsutilities.json")
     except OSError as e:
         log_msg(f"WARN: Error saving config: {e}")
@@ -516,7 +512,8 @@ def on_offsite_revert(app, ctx):
     if not hasattr(app, '_offsite_saved_state'):
         log_msg("INFO: Nothing to revert")
         return
-    revert_offsite_config(app)
+    if hasattr(app, '_offsite_tracker'):
+        app._offsite_tracker.revert(lambda cfg: load_offsite_config(app, cfg))
     log_msg("INFO: Offsite config reverted to last saved state")
 
 

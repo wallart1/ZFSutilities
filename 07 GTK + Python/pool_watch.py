@@ -2,23 +2,20 @@
 PoolWatchWindow — independent per-pool dataset watch window with auto-refresh.
 """
 
-import subprocess
-
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib
 
-from backup_config import log_msg
+gi.require_version('Gtk', '3.0')
+from gi.repository import GLib, Gtk
 from gui_helpers import (
-    setup_row_scroll,
-    dataset_name_cell_func,
-    build_full_dataset_name,
-    get_expanded_rows,
-    restore_expanded_rows,
-    on_row_expanded,
-    set_monospace_font,
-    configure_treeview_column,
     _ensure_treeview_scrolling,
+    build_full_dataset_name,
+    configure_treeview_column,
+    dataset_name_cell_func,
+    get_expanded_rows,
+    on_row_expanded,
+    restore_expanded_rows,
+    set_monospace_font,
+    setup_row_scroll,
 )
 
 

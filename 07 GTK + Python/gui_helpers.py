@@ -6,12 +6,12 @@ import re
 import subprocess
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Gdk, Pango, GLib
 
-from backup_config import log_msg, MSG_LEVELS, set_log_sink
-from logging_config import DEFAULT_MSG_LEVEL, parse_msg_level, viewer_should_show
-from zfs_repository import get_default_repository, DatasetRow
+gi.require_version('Gtk', '3.0')
+from backup_config import MSG_LEVELS, log_msg, set_log_sink
+from gi.repository import Gdk, GLib, Gtk, Pango
+from logging_config import DEFAULT_MSG_LEVEL
+from zfs_repository import get_default_repository
 
 
 def set_monospace_font(renderer):
@@ -441,6 +441,46 @@ def set_button_markup_red(button, dirty):
         lbl.set_markup(f'<span foreground="red">{text}</span>' if dirty else text)
 
 
+def set_button_markup(widget, markup):
+    """Recursively find a Gtk.Label inside *widget* and set its markup."""
+    if isinstance(widget, Gtk.Label):
+        widget.set_markup(markup)
+        return True
+    if hasattr(widget, 'get_children'):
+        for child in widget.get_children():
+            if set_button_markup(child, markup):
+                return True
+    if hasattr(widget, 'get_child'):
+        child = widget.get_child()
+        if child and set_button_markup(child, markup):
+            return True
+    return False
+
+
+def show_error(app, msg):
+    """Show a modal error dialog and wait for the user to dismiss it."""
+    dlg = Gtk.MessageDialog(
+        transient_for=app, modal=True,
+        message_type=Gtk.MessageType.ERROR,
+        buttons=Gtk.ButtonsType.OK,
+        text=msg,
+    )
+    dlg.run()
+    dlg.destroy()
+
+
+def show_error_dialog(app, message):
+    """Show a modal error dialog and wait for the user to dismiss it."""
+    dlg = Gtk.MessageDialog(
+        transient_for=app, modal=True,
+        message_type=Gtk.MessageType.ERROR,
+        buttons=Gtk.ButtonsType.OK,
+        text=message,
+    )
+    dlg.run()
+    dlg.destroy()
+
+
 # ---------------------------------------------------------------------------
 # Dirty state tracker
 # ---------------------------------------------------------------------------
@@ -587,7 +627,7 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
     # 1. Clone dependents
     if is_snapshot:
         try:
-            clones = repo.get_clones(target)
+            clones = repo.get_property(target, "clones")
             if clones and clones != "-":
                 log_msg(f"WARN:   → Snapshot has clone dependents: {clones}")
                 log_msg("WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first.")
@@ -743,42 +783,6 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
         log_msg("WARN:       • A process has the dataset open through a different path.")
         log_msg("WARN:       • The pool is undergoing a scrub or resilver.")
         log_msg("WARN:     Try: fuser -m <mountpoint>  or  lsof +D <mountpoint>")
-
-
-# ---------------------------------------------------------------------------
-# Placeholder page
-# ---------------------------------------------------------------------------
-
-def create_placeholder_page(title, description):
-    """Create a placeholder page with title and description."""
-    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    box.set_margin_start(20)
-    box.set_margin_end(20)
-    box.set_margin_top(20)
-    box.set_margin_bottom(20)
-
-    title_label = Gtk.Label()
-    title_label.set_markup(f"<big><b>{title}</b></big>")
-    title_label.set_halign(Gtk.Align.START)
-    title_label.set_selectable(True)
-    box.pack_start(title_label, False, False, 0)
-
-    box.pack_start(Gtk.Separator(), False, False, 5)
-
-    desc_label = Gtk.Label(label=description)
-    desc_label.set_halign(Gtk.Align.START)
-    desc_label.set_valign(Gtk.Align.START)
-    desc_label.set_line_wrap(True)
-    desc_label.set_selectable(True)
-    box.pack_start(desc_label, False, False, 0)
-
-    placeholder = Gtk.Label(label="(Content to be implemented)")
-    placeholder.set_valign(Gtk.Align.CENTER)
-    placeholder.set_vexpand(True)
-    placeholder.set_opacity(0.5)
-    box.pack_start(placeholder, True, True, 0)
-
-    return box
 
 
 # ---------------------------------------------------------------------------
@@ -1121,8 +1125,7 @@ class TreeSearch:
             self._current_idx = self._matches.index(current_path)
         elif self._matches:
             self._current_idx = min(self._current_idx, len(self._matches) - 1)
-            if self._current_idx < 0:
-                self._current_idx = 0
+            self._current_idx = max(self._current_idx, 0)
         else:
             self._current_idx = -1
         self._update_ui()

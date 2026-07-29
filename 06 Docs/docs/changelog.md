@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.65.0
+
+*Released 2026-07-28*
+
+### Added
+
+- **`session_log.py`** — New shared Python module that consolidates per-run
+  session-log creation, raw-line writing, trailer writing, and size-cap
+  enforcement. Both the GUI `BackupRunner` and the headless
+  `profile_runner.py` now use the same stateless helpers.
+- **`iscsi-lib.sh`** — New shared bash library containing iSCSI teardown and
+  rebuild helpers previously duplicated in `zfsdelfs`. `zfs-send-receive` and
+  `zfsdelfs` now source this library instead of embedding the logic.
+- **`bashinit` helpers** — Added `die` and `warn` convenience functions and an
+  optional default-answer argument for `ask_yn`.
+- **`node-lib.sh` clone helpers** — Added `gen_mac()` and
+  `get_json_archive_path()` so the VM clone/archive scripts no longer define
+  their own copies.
+- **Scrub-state persistence in `feature_config.py`** — `load_scrub_state()` and
+  `save_scrub_state()` now live alongside the other feature getters/setters and
+  validate bucket types on load.
+- **`is_dataset_encrypted()` in `zfs_repository.py`** — Replaced the
+  walk-up-the-filesystem implementation with a single `zfs list -o name,mountpoint`
+  lookup.
+
+### Changed
+
+- **`two-node-lib.sh`** is now a deprecated compatibility wrapper that sources
+  `node-lib.sh`. New code should source `node-lib.sh` directly.
+- **Python type annotations** modernized across `zfs_repository.py`,
+  `scrub_manager.py`, `command_builders.py`, and others (`List` → `list`,
+  `Optional[X]` → `X | None`).
+- **`zfs-send-receive`** now sources `iscsi-lib.sh` directly rather than all of
+  `zfsdelfs`.
+- **Installers** (`install-single-node`, `install-two-node`) now source
+  `bashinit` so they can share its `die`/`ask_yn` helpers.
+- **Deployment wiring** for `iscsi-lib.sh`: `deploy-version` ships it into the
+  versioned `lib/` directory and `switch-version` creates/removes the
+  `/usr/local/lib/iscsi-lib.sh` symlink.
+
+### Removed
+
+- **`snapshot_manager.py`** and its test — Snapshot hold/delete/rollback actions
+  are now reached through the Datasets tab action buttons.
+- **Root-level `monitor-cache.sh`** duplicate; the canonical copy remains in
+  `Cache-warm/`.
+- **Unused helpers:** `zfsconfig_set_pools`,
+  `zfsconfig_set_checkagainst_file`, `zfslockmanager::_zfslock_decode`,
+  `zfsretain::get_minage_for_bucket`,
+  `command_builders::build_installed_programs_command`, and
+  `installer-lib.sh::ensure_retention_profiles_remote`.
+
+### Tests
+
+- Added `tests/python/test_session_log.py` covering file creation, raw-line
+  writing, trailers, log-index updates, and truncation.
+- Added `tests/python/test_feature_config.py` scrub-state persistence tests.
+- Extended `tests/test-logging` with `ask_yn` default-answer, `warn`, and `die`
+  coverage.
+- Extended `tests/test-node-lib` with `gen_mac`, `get_json_archive_path`, and
+  `two-node-lib.sh` wrapper tests.
+- Renamed stale `test_remote_rsync_log_setup_command` in
+  `tests/python/test_command_builders.py`.
+
+### Documentation
+
+- Updated `commands-and-modules/python-modules.md` to add `session_log.py`,
+  document `is_dataset_encrypted`, and remove stale function references.
+- Updated `commands-and-modules/modules.md` for the new `bashinit` helpers and
+  `iscsi-lib.sh`.
+
 ## 0.64.0
 
 *Released 2026-07-27*

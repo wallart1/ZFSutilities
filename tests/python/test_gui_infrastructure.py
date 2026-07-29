@@ -567,21 +567,6 @@ class TestGtkMocking(unittest.TestCase):
             self.assertTrue(hasattr(gi.repository, "WebKit2"))
             self.assertTrue(hasattr(gi.repository.WebKit2, "WebView"))
 
-    def test_snapshot_manager_imports(self):
-        with mock_gtk():
-            import snapshot_manager
-            self.assertTrue(hasattr(snapshot_manager, "SnapshotManagerWindow"))
-
-    def test_snapshot_manager_window_instantiates(self):
-        with mock_gtk() as gtk_mock:
-            import snapshot_manager
-            parent = MagicMock()
-            with patch.object(snapshot_manager.SnapshotManagerWindow, "refresh_snapshots"):
-                win = snapshot_manager.SnapshotManagerWindow("tank/data", parent)
-            self.assertIsNotNone(win)
-            self.assertEqual(win.dataset, "tank/data")
-            self.assertIs(win.parent_window, parent)
-
     def test_gui_helpers_imports(self):
         with mock_gtk():
             import gui_helpers

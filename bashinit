@@ -138,17 +138,38 @@ function calledbybash {
 }
 
 # Prompt user for yes/no response with input validation.
-# Usage: if ask_yn "Do you want to continue?"; then ...
-# Returns 0 for yes, 1 for no
+# Usage: if ask_yn "Do you want to continue?" ["Y"|"N"]; then ...
+# Returns 0 for yes, 1 for no. The optional second argument is the default
+# answer used when the user presses Enter (N if omitted).
 function ask_yn {
     local prompt="${1:-Continue?}"
+    local default="${2:-N}"
     local response
     while true; do
-        read -p "$prompt (y/n): " response
+        if [[ "$default" == "Y" ]]; then
+            read -rp "${prompt} [Y/n]: " response
+            response="${response:-Y}"
+        else
+            read -rp "${prompt} [y/N]: " response
+            response="${response:-N}"
+        fi
         case "${response,,}" in
             y|yes) return 0 ;;
             n|no)  return 1 ;;
-            *)     echo "Please enter 'y' or 'n'." ;;
+            *)     echo "  Please answer y or n." ;;
         esac
     done
+}
+
+# Print a fatal message and terminate the process.
+# Usage: die "error message"
+function die {
+    log_msg "FATAL: $*"
+    source "$mydir/bashfatal" 1
+}
+
+# Log a warning message.
+# Usage: warn "warning message"
+function warn {
+    log_msg "WARN: $*"
 }

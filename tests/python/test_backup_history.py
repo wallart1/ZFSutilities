@@ -5,7 +5,6 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch
 
 import backup_history
 import file_locking
@@ -72,7 +71,7 @@ class TestFormatDuration(unittest.TestCase):
         self.assertEqual(backup_history.format_duration(None), "00:00:00")
 
 
-class TestLoadSaveHistory(unittest.TestCase):
+class TestLoadHistory(unittest.TestCase):
 
     def setUp(self):
         self._orig_path = backup_history.HISTORY_PATH
@@ -97,22 +96,6 @@ class TestLoadSaveHistory(unittest.TestCase):
         with open(backup_history.HISTORY_PATH, "w") as fh:
             fh.write("not json")
         self.assertEqual(backup_history.load_history(), [])
-
-    def test_save_and_load_roundtrip(self):
-        entries = [
-            {"timestamp": "2026-05-20T12:00:00", "type": "backup", "name": "Daily"},
-        ]
-        backup_history.save_history(entries)
-        loaded = backup_history.load_history()
-        self.assertEqual(loaded, entries)
-
-    def test_atomic_save_does_not_leave_temp_file(self):
-        backup_history.save_history([])
-        temp_files = [
-            f for f in os.listdir(self._tmp_dir.name)
-            if f.startswith(".") and f != ".history.lock"
-        ]
-        self.assertEqual(temp_files, [])
 
 
 class TestPruneHistory(unittest.TestCase):
@@ -224,7 +207,9 @@ class TestAddHistoryEntry(unittest.TestCase):
             duration=10.0,
             result="success",
         )
-        backup_history.save_history([old_entry])
+        # Seed the history file directly; add_history_entry will prune on add.
+        with open(backup_history.HISTORY_PATH, "w") as fh:
+            json.dump([old_entry], fh)
         new_entry = backup_history.build_entry(
             timestamp=datetime.now(timezone.utc).isoformat(),
             run_type="backup",
@@ -242,7 +227,7 @@ class TestAddHistoryEntry(unittest.TestCase):
 class TestHistoryLocking(unittest.TestCase):
     """History load/save/add acquire the shared history lock."""
 
-    def test_save_history_acquires_write_lock(self):
+    def test_add_history_entry_acquires_write_lock(self):
         self._orig_path = backup_history.HISTORY_PATH
         self._orig_lock = file_locking.HISTORY_LOCK_PATH
         tmpdir = tempfile.TemporaryDirectory()
@@ -251,7 +236,14 @@ class TestHistoryLocking(unittest.TestCase):
             file_locking.HISTORY_LOCK_PATH = os.path.join(
                 tmpdir.name, ".history.lock"
             )
-            backup_history.save_history([])
+            entry = backup_history.build_entry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                run_type="backup",
+                name="Daily",
+                duration=10.0,
+                result="success",
+            )
+            backup_history.add_history_entry(entry)
             self.assertTrue(os.path.exists(file_locking.HISTORY_LOCK_PATH))
         finally:
             backup_history.HISTORY_PATH = self._orig_path

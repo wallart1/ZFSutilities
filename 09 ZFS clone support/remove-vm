@@ -39,13 +39,6 @@ usage() {
     exit 1
 }
 
-ask_yn() {
-    local prompt="$1"
-    local response
-    read -rp "$prompt (y/N): " response
-    [[ "$response" =~ ^[Yy]$ ]]
-}
-
 [[ $# -eq 1 ]] || usage
 
 VMID="$1"

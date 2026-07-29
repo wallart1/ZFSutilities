@@ -69,16 +69,6 @@ _zfslock_encode() {
     echo "$path"
 }
 
-# URL-decode a filename back to dataset path
-# Usage: decoded=$(_zfslock_decode "pool%2Fdataset")
-_zfslock_decode() {
-    local encoded="$1"
-    # Decode %2F as / and %40 as @
-    encoded="${encoded//%2F/\/}"
-    encoded="${encoded//%40/@}"
-    echo "$encoded"
-}
-
 # Get the lock file path for a dataset
 # Usage: lockfile=$(_zfslock_file "pool/dataset")
 _zfslock_file() {

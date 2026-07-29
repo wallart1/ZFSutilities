@@ -55,10 +55,7 @@ usage() {
     exit 0
 }
 
-die() {
-    log_msg "FATAL: $*"
-    source "$MYDIR/bashfatal" 1
-}
+# die is provided by bashinit (sourced above).
 
 [[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
 
@@ -268,6 +265,9 @@ deploy_to_host() {
     fi
     if [[ -f "$MYDIR/08 Two-node/two-node-lib.sh" ]]; then
         install -m 0644 "$MYDIR/08 Two-node/two-node-lib.sh" "$VERSION_DIR/lib/"
+    fi
+    if [[ -f "$MYDIR/08 Two-node/iscsi-lib.sh" ]]; then
+        install -m 0644 "$MYDIR/08 Two-node/iscsi-lib.sh" "$VERSION_DIR/lib/"
     fi
 
     # Copy project subdirectories

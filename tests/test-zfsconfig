@@ -250,18 +250,6 @@ test_get_checkagainst_backward_compatible_flat_list() {
 # Locking
 # ------------------------------------------------------------------------------
 
-test_set_pools_creates_lock_file() {
-    test_start "Set pools creates and uses the config lock file"
-    write_config '{}'
-    rm -f "$ZFSLOCK_DIR/.config.lock"
-    zfsconfig_set_pools tank fivebays
-    if [[ -f "$ZFSLOCK_DIR/.config.lock" ]]; then
-        test_pass
-    else
-        test_fail "Lock file $ZFSLOCK_DIR/.config.lock was not created"
-    fi
-}
-
 test_get_pools_uses_shared_lock() {
     test_start "Get pools uses the config lock file"
     write_config '{"pools": ["tank"]}'
@@ -294,7 +282,6 @@ test_get_checkagainst_defaults_counterpart_to_dash
 test_get_checkagainst_merges_nested_sections
 test_get_checkagainst_active_flags_disable_sections
 test_get_checkagainst_backward_compatible_flat_list
-test_set_pools_creates_lock_file
 test_get_pools_uses_shared_lock
 
 rm -f "$ZFSCONFIG_PATH"

@@ -24,6 +24,7 @@ load_switch_config() {
     SUDOERS_FILE="${ZFSUTILITIES_SUDOERS_FILE:-/etc/sudoers.d/zfsutilities}"
     NODE_LIB_LINK="${ZFSUTILITIES_NODE_LIB_LINK:-/usr/local/lib/node-lib.sh}"
     TWO_NODE_LIB_LINK="${ZFSUTILITIES_TWO_NODE_LIB_LINK:-/usr/local/lib/two-node-lib.sh}"
+    ISCSI_LIB_LINK="${ZFSUTILITIES_ISCSI_LIB_LINK:-/usr/local/lib/iscsi-lib.sh}"
     ROOTCHECK_LINK="${ZFSUTILITIES_ROOTCHECK_LINK:-/usr/local/lib/rootcheck}"
     LOCAL_BIN_DIR="${ZFSUTILITIES_LOCAL_BIN_DIR:-/usr/local/bin}"
 }
@@ -46,7 +47,9 @@ elif [[ -f "$MYDIR/../10 Installers/desktop-launcher-lib.sh" ]]; then
 fi
 
 if [[ -n "$_DESKTOP_LAUNCHER_LIB" ]]; then
-    # shellcheck source=10 Installers/desktop-launcher-lib.sh
+    # The real path contains a space ("10 Installers/...") and cannot be
+    # expressed in a ShellCheck source= directive, so use /dev/null.
+    # shellcheck source=/dev/null
     source "$_DESKTOP_LAUNCHER_LIB"
 else
     echo "  ⚠ WARNING: desktop-launcher-lib.sh not found; desktop shortcuts will not be managed." >&2
@@ -55,10 +58,7 @@ else
     remove_desktop_symlinks() { return 0; }
 fi
 
-die() {
-    log_msg "FATAL: $*"
-    source "$MYDIR/bashfatal" 1
-}
+# die is provided by bashinit (sourced above).
 
 usage() {
     echo "Usage: switch-version <version>|previous|--list|--uninstall"
@@ -136,6 +136,7 @@ setup_bashinit_symlink() {
 setup_library_symlinks() {
     local node_target="$VERSION_BASE/current/lib/node-lib.sh"
     local two_node_target="$VERSION_BASE/current/lib/two-node-lib.sh"
+    local iscsi_lib_target="$VERSION_BASE/current/lib/iscsi-lib.sh"
     local rootcheck_target="$VERSION_BASE/current/bin/rootcheck"
 
     if [[ -f "$VERSION_BASE/current/lib/node-lib.sh" ]]; then
@@ -150,6 +151,11 @@ setup_library_symlinks() {
         # Backward-compat: old scripts source /usr/local/lib/two-node-lib.sh
         ln -sfn "node-lib.sh" "$TWO_NODE_LIB_LINK"
         echo "  Created $TWO_NODE_LIB_LINK -> node-lib.sh (compat)"
+    fi
+
+    if [[ -f "$VERSION_BASE/current/lib/iscsi-lib.sh" ]]; then
+        ln -sfn "$iscsi_lib_target" "$ISCSI_LIB_LINK"
+        echo "  Created $ISCSI_LIB_LINK -> $iscsi_lib_target"
     fi
 
     if [[ -f "$VERSION_BASE/current/bin/rootcheck" ]]; then
@@ -204,6 +210,11 @@ uninstall_wiring() {
     if [[ -L "$TWO_NODE_LIB_LINK" ]]; then
         rm -f "$TWO_NODE_LIB_LINK"
         echo "  Removed $TWO_NODE_LIB_LINK"
+    fi
+
+    if [[ -L "$ISCSI_LIB_LINK" ]]; then
+        rm -f "$ISCSI_LIB_LINK"
+        echo "  Removed $ISCSI_LIB_LINK"
     fi
 
     if [[ -L "$ROOTCHECK_LINK" ]]; then

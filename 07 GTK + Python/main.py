@@ -13,10 +13,10 @@ import sys
 import time
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Gdk, Gio
 
+gi.require_version('Gtk', '3.0')
 from backup_config import log_msg
+from gi.repository import Gdk, Gio, Gtk
 
 PID_FILE = "/run/zfsutilities/main.pid"
 
@@ -360,30 +360,6 @@ def _has_visible_window(pid):
         if _is_window_visible(window_id):
             return True
     return False
-
-
-def _process_age_seconds(pid):
-    """Return how many seconds pid has been alive, or None if unknown."""
-    try:
-        return time.time() - os.stat(f"/proc/{pid}").st_ctime
-    except OSError:
-        return None
-
-
-def _is_instance_stuck(pid):
-    """Return True when pid is alive but has no usable window for a while.
-
-    A freshly launched GUI may need a moment to map its window, so instances
-    younger than 10 seconds are not considered stuck.
-    """
-    if not _is_pid_alive(pid):
-        return False
-    if _has_visible_window(pid):
-        return False
-    age = _process_age_seconds(pid)
-    if age is not None and age < 10:
-        return False
-    return True
 
 
 def _write_pid_file(pid):

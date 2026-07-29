@@ -142,7 +142,7 @@ class DocsViewerWindow(Gtk.Window):
         self._script_dir = script_dir
         self._docs_path = get_docs_path(script_dir)
         self._config = config if config is not None else load_config()
-        self._docs_state = self._load_state()
+        self._docs_state = get_ui_state(self._config).get("docs_viewer", {})
         self._restore_geometry()
 
         if not _WEBKIT_AVAILABLE:
@@ -176,10 +176,6 @@ class DocsViewerWindow(Gtk.Window):
             self._docs_server = None
 
     # --- State persistence ---------------------------------------------------
-
-    def _load_state(self):
-        """Load saved docs-viewer state, or return defaults."""
-        return get_ui_state(self._config).get("docs_viewer", {})
 
     def _restore_geometry(self):
         """Restore size, position, and maximized state from saved config."""

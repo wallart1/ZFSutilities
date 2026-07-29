@@ -12,10 +12,7 @@ rootcheck
 MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
 VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
 
-die() {
-    log_msg "FATAL: $*"
-    source "$MYDIR/bashfatal" 1
-}
+# die is provided by bashinit (sourced above).
 
 usage() {
     echo "Usage: uninstall-version <version>"

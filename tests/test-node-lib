@@ -289,6 +289,73 @@ test_is_known_pool_single_node() {
 }
 
 # ------------------------------------------------------------------------------
+# Clone helpers
+# ------------------------------------------------------------------------------
+
+test_gen_mac_format() {
+    test_start "gen_mac produces a Proxmox-compatible MAC address"
+    local mac
+    mac=$(gen_mac)
+    if [[ "$mac" =~ ^BC:24:11:[0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}$ ]]; then
+        test_pass
+    else
+        test_fail "Unexpected MAC format: $mac"
+    fi
+}
+
+test_gen_mac_is_random() {
+    test_start "gen_mac produces different MAC addresses"
+    local mac1 mac2
+    mac1=$(gen_mac)
+    mac2=$(gen_mac)
+    assert_equals "different" "$([[ "$mac1" != "$mac2" ]] && echo different || echo same)"
+}
+
+test_get_json_archive_path_reads_config() {
+    test_start "get_json_archive_path reads archive_path from JSON config"
+    local config_path result expected
+    config_path="$tmp_dir/archive-config.json"
+    expected="/srv/zfs-utilities-archive"
+    cat > "$config_path" << EOF
+{"archive_path": "$expected"}
+EOF
+    result=$(JSON_CONFIG="$config_path" get_json_archive_path)
+    assert_equals "$expected" "$result"
+}
+
+test_get_json_archive_path_missing_key() {
+    test_start "get_json_archive_path returns empty when key is missing"
+    local config_path result
+    config_path="$tmp_dir/no-archive.json"
+    echo '{}' > "$config_path"
+    result=$(JSON_CONFIG="$config_path" get_json_archive_path)
+    assert_equals "" "$result"
+}
+
+test_get_json_archive_path_missing_file() {
+    test_start "get_json_archive_path returns empty when file is missing"
+    local result
+    result=$(JSON_CONFIG="$tmp_dir/does-not-exist.json" get_json_archive_path)
+    assert_equals "" "$result"
+}
+
+# ------------------------------------------------------------------------------
+# two-node-lib.sh compatibility wrapper
+# ------------------------------------------------------------------------------
+
+test_two_node_lib_wrapper_sources_node_lib() {
+    test_start "two-node-lib.sh wrapper exposes node-lib.sh pool helpers"
+    local output
+    output=$(
+        NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/two-node-lib.sh"
+        echo "target=$(pool_to_target threeamigos)"
+        echo "known=$(is_known_pool threeamigos && echo yes || echo no)"
+    )
+    assert_contains "$output" "target=iqn.2025-01.com.zfsutilities:threeamigos"
+    assert_contains "$output" "known=yes"
+}
+
+# ------------------------------------------------------------------------------
 # find_zfsutility_script edge cases
 # ------------------------------------------------------------------------------
 
@@ -380,6 +447,13 @@ test_remote_zfsutility_script_success
 test_remote_zfsutility_script_fallback
 
 test_log_msg_fallback_used_before_bashinit
+
+test_gen_mac_format
+test_gen_mac_is_random
+test_get_json_archive_path_reads_config
+test_get_json_archive_path_missing_key
+test_get_json_archive_path_missing_file
+test_two_node_lib_wrapper_sources_node_lib
 
 rm -rf "$tmp_dir"
 teardown_test_env

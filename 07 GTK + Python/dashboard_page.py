@@ -6,20 +6,19 @@ import re
 import signal
 import socket
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import gi
+
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib
-
-from logging_config import log_msg
-from config_core import get_dashboard_config, save_dashboard_config
 from backup_history import load_history
-from gui_helpers import set_monospace_font, configure_treeview_column
+from config_core import get_dashboard_config, save_dashboard_config
+from gi.repository import GLib, Gtk
+from gui_helpers import configure_treeview_column, set_monospace_font
+from logging_config import log_msg
 from logs_page import select_log_by_path
-from path_utils import resolve_local_bin, get_version, resolve_remote_version
+from path_utils import get_version, resolve_local_bin, resolve_remote_version
 from zfs_repository import get_default_repository
-
 
 # ---------------------------------------------------------------------------
 # Regex: ^vm-(\d+)-disk-(\d+)$
@@ -1117,7 +1116,7 @@ def refresh_dashboard_page(app):
         warnings.append("No backup steps configured — configure in the Backup tab")
     if not app.config.get("offsite", {}).get("steps"):
         warnings.append("No offsite steps configured — configure in the Offsite tab")
-    from feature_config import get_pools, get_checkagainst
+    from feature_config import get_checkagainst, get_pools
     if not get_pools(app.config):
         warnings.append("No pools registered — add pools in the Pools tab")
     if not get_checkagainst(app.config):
@@ -1501,7 +1500,7 @@ def _collect_running_tasks(app):
     # 2. Active scrubs
     queue = getattr(app, "scrub_queue", None)
     if queue:
-        from scrub_manager import get_all_pool_scrub_states, ScrubState
+        from scrub_manager import ScrubState, get_all_pool_scrub_states
         scrub_states = get_all_pool_scrub_states()
         # Reconcile queue against live zpool status so finished or paused
         # scrubs are not still shown as running when the in-memory queue

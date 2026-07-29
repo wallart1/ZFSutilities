@@ -169,6 +169,7 @@ and tests easy to mock.
 | Function | Purpose |
 | -------- | ------- |
 | `get_default_repository()` | Returns a module-level default `ZfsRepository` instance |
+| `is_dataset_encrypted(path)` | Return `True` if *path* resides on an encrypted ZFS dataset |
 
 **Called modules / imported helpers:** none (uses `subprocess` directly).
 
@@ -241,11 +242,10 @@ offsite, restore, and retention runners.
 | Function | Purpose |
 | -------- | ------- |
 | `parse_rsync_endpoint(endpoint)` | Split `user@host:path` into host and path |
-| `build_rsync_command(source, dest)` | Build an rsync pull command |
+| `build_rsync_command(source, dest, remote_log_path=None)` | Build an rsync pull/push command |
 | `build_send_receive_command(...)` | Build the `bash` command for a ZFS send/receive step |
 | `build_pre_backup_command(cmd)` / `build_post_backup_command(cmd)` | Wrap user pre/post commands |
 | `build_retention_command(...)` | Build the `zfscleanup` invocation |
-| `build_installed_programs_command(host)` | Build `backup-installed-programs` over SSH |
 
 **Called modules / imported helpers:** none (stdlib only).
 
@@ -254,6 +254,39 @@ offsite, restore, and retention runners.
 | Structure | Reference |
 | --------- | --------- |
 | `BashStep` | [BashStep][ds-bashstep] |
+
+---
+
+### `session_log.py`
+
+Low-level, stateless helpers for per-run session log files. Used by both the
+GUI runner (`backup_runner.py`) and the headless profile runner
+(`profile_runner.py`) so both paths create, append, and truncate logs the same
+way.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | --------- |
+| `create_session_log_file(tab_type, name=None)` | Create a timestamped log file under `SESSION_LOG_DIR` |
+| `write_raw_line(session_log_file, line)` | Append a raw subprocess line with a timestamp |
+| `write_session_trailer(...)` | Write the `# END` trailer and update the log index |
+| `maybe_truncate_session_log(...)` | Enforce the configured session-log size cap |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `config_core` | `SESSION_LOG_DIR` |
+| `log_index` | `LogIndex` for cached log metadata |
+| `logging_config` | `log_msg`, `truncate_session_log` |
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| Session log files | [Session log index][ds-log] |
+| Session log index | [Session log index][ds-log] |
 
 ---
 
@@ -270,19 +303,22 @@ progress parsing, cancellation, and final history/log-index entries.
 
 **Internal flow:**
 
-1. `prepare_session_log()` creates a timestamped log under `SESSION_LOG_DIR`.
+1. `prepare_session_log()` uses `session_log.create_session_log_file()` to
+   create a timestamped log under `SESSION_LOG_DIR`.
 2. `start()` spawns each step in a PTY so output can be streamed.
 3. `_on_stdout()` / `_on_stderr()` parse `pv`/`zfs receive` progress and
-   append raw lines to the log.
-4. `_write_session_trailer()` writes the `# END` trailer and updates the
-   log index.
-5. `_maybe_truncate_session_log()` enforces the configured size cap.
+   append raw lines to the log via `session_log.write_raw_line()`.
+4. `_write_session_trailer()` uses `session_log.write_session_trailer()` to
+   write the `# END` trailer and update the log index.
+5. `_maybe_truncate_session_log()` uses `session_log.maybe_truncate_session_log()`
+   to enforce the configured size cap.
 
 **Called modules / imported helpers:**
 
 | Module | Purpose in this module |
 | ------ | ------------------------ |
-| `logging_config` | Session log context, truncation, `log_msg` |
+| `session_log` | Create, append, truncate, and finalize session logs |
+| `logging_config` | Session log context, `log_msg` |
 | `log_index` | `LogIndex` for updating cached log metadata |
 | `backup_history` | Build and append history entries |
 | `command_builders` | `BashStep` |
@@ -367,7 +403,6 @@ as the GUI runners but writes its own session logs and history entries.
 | `run_retention_profile(profile)` | Run retention/cleanup for configured pools |
 | `run_scrub_profile(profile)` | Queue and poll scrubs for configured pools |
 | `_check_weekday_ordinal(weekday_field)` | Runtime guard for weekday ordinal expressions |
-| `_profile_lock_path(profile_name)` | Path to the per-profile lock file |
 | `acquire_profile_lock(profile_name, timeout=1.0)` | Acquire the profile lock; suppress duplicate runs |
 | `release_profile_lock(fd, lock_path)` | Release the profile lock |
 | `main()` | CLI entry point for cron execution |
@@ -375,8 +410,8 @@ as the GUI runners but writes its own session logs and history entries.
 **Internal flow:**
 
 1. Load the requested profile from disk to determine its tab type.
-2. Create a session log so that lock-skip messages and early errors are
-   recorded.
+2. Create a session log with `session_log.create_session_log_file()` so that
+   lock-skip messages and early errors are recorded.
 3. Acquire a per-profile advisory lock so a duplicate cron invocation exits
    cleanly instead of running the profile twice.
 4. If the profile's cron weekday field contains an ordinal expression
@@ -395,10 +430,12 @@ as the GUI runners but writes its own session logs and history entries.
 | `profile_manager` | Load profile JSON |
 | `scrub_manager` | Scrub queue operations |
 | `config_core` | `load_config`, session log directory |
-| `feature_config` | Snapshot naming, pool names, snapfile removal |
-| `logging_config` | Session log context, truncation, `log_msg` |
+| `feature_config` | Snapshot naming, pool names, snapfile removal, scrub state |
+| `session_log` | Create, append, truncate, and finalize session logs |
+| `logging_config` | Session log context, `log_msg` |
 | `log_index` | Update log index entries |
 | `backup_history` | Append history entries |
+| `zfs_repository` | `is_dataset_encrypted` for ZFS keys destination checks |
 
 **Data structures consumed / produced:**
 
@@ -1114,25 +1151,6 @@ buckets, run prune, and dirty-state tracking.
 | --------- | --------- |
 | `retention` config object | [JSON config][ds-json] |
 | `BashStep` | [BashStep][ds-bashstep] |
-
----
-
-### `snapshot_manager.py`
-
-Secondary window for managing snapshots of a specific dataset.
-
-**Key class:**
-
-| Class | Purpose |
-| ----- | ------- |
-| `SnapshotManagerWindow` | Snapshot list, hold, delete, rollback for one dataset |
-
-**Called modules / imported helpers:**
-
-| Module | Purpose in this module |
-| ------ | ------------------------ |
-| `gui_helpers` | TreeView helpers, busy diagnosis |
-| `logging_config` | `log_msg` |
 
 ---
 

@@ -2,24 +2,22 @@
 
 import os
 import subprocess
-import unittest
-from unittest.mock import patch, MagicMock
-
 import sys
+import unittest
+from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import capture_logs
-
+from test_support import capture_logs, mock_subprocess
 from zfs_repository import (
-    ZfsRepository,
-    PoolRow,
-    DatasetRow,
-    SnapshotRow,
     HoldRow,
+    PoolRow,
+    SnapshotRow,
+    ZfsRepository,
+    is_dataset_encrypted,
 )
 
 
@@ -93,9 +91,9 @@ class TestZfsRepositoryReads(unittest.TestCase):
         repo = self._repo("/mnt/data\n")
         self.assertEqual(repo.get_property("tank/data", "mountpoint"), "/mnt/data")
 
-    def test_get_clones_delegates_to_get_property(self):
+    def test_get_clones_reads_clones_property(self):
         repo = self._repo("tank/data/clone1\n")
-        self.assertEqual(repo.get_clones("tank/data@snap1"), "tank/data/clone1")
+        self.assertEqual(repo.get_property("tank/data@snap1", "clones"), "tank/data/clone1")
 
     def test_get_recursive_snapshot_clones_filters_dashes(self):
         stdout = "-\n-\ntank/data/clone1\n"
@@ -365,3 +363,62 @@ class TestScrubCommandsLogDebug(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIsDatasetEncrypted(unittest.TestCase):
+    """is_dataset_encrypted matches a path to its ZFS dataset encryption."""
+
+    def test_encrypted_dataset(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zfs list -H -o name,mountpoint",
+                lambda cmd, **kwargs: m._completed("tank/data\t/backups\n"),
+            )
+            m.set_command_handler(
+                r"zfs get -H -o value encryption tank/data",
+                lambda cmd, **kwargs: m._completed("aes-256-gcm"),
+            )
+            self.assertTrue(is_dataset_encrypted("/backups/keys"))
+
+    def test_unencrypted_dataset(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zfs list -H -o name,mountpoint",
+                lambda cmd, **kwargs: m._completed("tank/data\t/backups\n"),
+            )
+            m.set_command_handler(
+                r"zfs get -H -o value encryption tank/data",
+                lambda cmd, **kwargs: m._completed("-"),
+            )
+            self.assertFalse(is_dataset_encrypted("/backups/keys"))
+
+    def test_off_encryption_value(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zfs list -H -o name,mountpoint",
+                lambda cmd, **kwargs: m._completed("tank/data\t/backups\n"),
+            )
+            m.set_command_handler(
+                r"zfs get -H -o value encryption tank/data",
+                lambda cmd, **kwargs: m._completed("off"),
+            )
+            self.assertFalse(is_dataset_encrypted("/backups/keys"))
+
+    def test_no_dataset(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zfs list -H -o name,mountpoint",
+                lambda cmd, **kwargs: m._completed("tank/data\t/other\n"),
+            )
+            self.assertFalse(is_dataset_encrypted("/backups/keys"))
+
+    def test_zfs_list_failure(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zfs list -H -o name,mountpoint",
+                lambda cmd, **kwargs: m._completed("", rc=1),
+            )
+            self.assertFalse(is_dataset_encrypted("/backups/keys"))
+
+    def test_empty_path(self):
+        self.assertFalse(is_dataset_encrypted(""))

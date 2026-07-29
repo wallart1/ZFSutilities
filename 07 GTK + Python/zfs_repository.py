@@ -6,13 +6,51 @@ raise subprocess.CalledProcessError on failure so callers can decide how to
 handle errors; write methods swallow the exception and return success/failure.
 """
 
+import os
 import re
 import shlex
 import subprocess
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 from logging_config import log_msg
+
+
+def is_dataset_encrypted(path):
+    """Return True if *path* resides on an encrypted ZFS dataset."""
+    if not path:
+        return False
+    abs_path = os.path.abspath(path)
+    try:
+        result = subprocess.run(
+            ["zfs", "list", "-H", "-o", "name,mountpoint"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            return False
+        datasets = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split("\t", 1)
+            if len(parts) == 2:
+                datasets.append((parts[0], parts[1]))
+        candidate = None
+        for ds, mp in datasets:
+            mp = mp.rstrip("/")
+            if abs_path.startswith(mp + "/") or abs_path == mp:
+                if candidate is None or len(mp) > len(candidate[1]):
+                    candidate = (ds, mp)
+        if candidate is None:
+            return False
+        ds_name = candidate[0]
+        result = subprocess.run(
+            ["zfs", "get", "-H", "-o", "value", "encryption", ds_name],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            return False
+        enc = result.stdout.strip()
+        return enc not in ("", "-", "off")
+    except Exception:
+        return False
 
 
 # Regex: ^[\s]*errors:\s*(.+?)\s*$
@@ -85,13 +123,13 @@ class ZfsRepository:
     def __init__(self, sudo: bool = False):
         self.sudo = sudo
 
-    def _zfs(self, *args: str) -> List[str]:
+    def _zfs(self, *args: str) -> list[str]:
         return (["sudo", "zfs"] if self.sudo else ["zfs"]) + list(args)
 
-    def _zpool(self, *args: str) -> List[str]:
+    def _zpool(self, *args: str) -> list[str]:
         return (["sudo", "zpool"] if self.sudo else ["zpool"]) + list(args)
 
-    def _run(self, cmd: List[str], check: bool = True, timeout: Optional[int] = None):
+    def _run(self, cmd: list[str], check: bool = True, timeout: int | None = None):
         return subprocess.run(
             cmd, capture_output=True, text=True, check=check, timeout=timeout
         )
@@ -100,7 +138,7 @@ class ZfsRepository:
     # Pool reads
     # ------------------------------------------------------------------
 
-    def list_pools(self) -> List[PoolRow]:
+    def list_pools(self) -> list[PoolRow]:
         """Return all pools with health, size, alloc, free, capacity, and checkpoint."""
         result = self._run(
             self._zpool("list", "-H", "-o", "name,health,size,alloc,free,cap,ckpoint")
@@ -115,7 +153,7 @@ class ZfsRepository:
             rows.append(PoolRow(*parts[:7]))
         return rows
 
-    def list_pools_full(self) -> List[dict]:
+    def list_pools_full(self) -> list[dict]:
         """Return all pools with the extended 9-column field set."""
         result = self._run(
             self._zpool(
@@ -143,12 +181,12 @@ class ZfsRepository:
             })
         return rows
 
-    def pool_status(self, pool: str, timeout: Optional[int] = None) -> str:
+    def pool_status(self, pool: str, timeout: int | None = None) -> str:
         """Return raw `zpool status` text (empty on failure)."""
         result = self._run(self._zpool("status", pool), check=False, timeout=timeout)
         return result.stdout
 
-    def pool_status_errors(self, pool: str, timeout: Optional[int] = None) -> dict:
+    def pool_status_errors(self, pool: str, timeout: int | None = None) -> dict:
         """Parse `zpool status` and return a structured error report.
 
         Returns a dict with keys:
@@ -162,7 +200,7 @@ class ZfsRepository:
         collections.
         """
         raw = self.pool_status(pool, timeout=timeout)
-        result: Dict[str, object] = {
+        result: dict[str, object] = {
             "has_errors": False,
             "errors_summary": "",
             "data_errors": [],
@@ -180,7 +218,7 @@ class ZfsRepository:
             if summary.lower() != "no known data errors":
                 result["has_errors"] = True
                 # Capture any subsequent lines/files listed under errors.
-                data_errors: List[str] = []
+                data_errors: list[str] = []
                 capture = False
                 for line in raw.splitlines():
                     stripped = line.strip()
@@ -258,28 +296,28 @@ class ZfsRepository:
         result = self._run(self._zpool("export", pool), check=False)
         return result.returncode == 0
 
-    def start_scrub(self, pool: str, timeout: Optional[int] = None) -> bool:
+    def start_scrub(self, pool: str, timeout: int | None = None) -> bool:
         """Start a scrub on *pool*."""
         cmd = self._zpool("scrub", pool)
         log_msg(f"DEBUG: issuing zpool scrub command: {shlex.join(cmd)}")
         result = self._run(cmd, check=False, timeout=timeout)
         return result.returncode == 0
 
-    def pause_scrub(self, pool: str, timeout: Optional[int] = None) -> bool:
+    def pause_scrub(self, pool: str, timeout: int | None = None) -> bool:
         """Pause a scrub on *pool*."""
         cmd = self._zpool("scrub", "-p", pool)
         log_msg(f"DEBUG: issuing zpool scrub command: {shlex.join(cmd)}")
         result = self._run(cmd, check=False, timeout=timeout)
         return result.returncode == 0
 
-    def resume_scrub(self, pool: str, timeout: Optional[int] = None) -> bool:
+    def resume_scrub(self, pool: str, timeout: int | None = None) -> bool:
         """Resume a scrub on *pool*."""
         cmd = self._zpool("scrub", pool)
         log_msg(f"DEBUG: issuing zpool scrub command: {shlex.join(cmd)}")
         result = self._run(cmd, check=False, timeout=timeout)
         return result.returncode == 0
 
-    def stop_scrub(self, pool: str, timeout: Optional[int] = None) -> bool:
+    def stop_scrub(self, pool: str, timeout: int | None = None) -> bool:
         """Stop a scrub on *pool*."""
         cmd = self._zpool("scrub", "-s", pool)
         log_msg(f"DEBUG: issuing zpool scrub command: {shlex.join(cmd)}")
@@ -291,8 +329,8 @@ class ZfsRepository:
     # ------------------------------------------------------------------
 
     def list_datasets(
-        self, pool: Optional[str] = None, depth: Optional[int] = None
-    ) -> List[DatasetRow]:
+        self, pool: str | None = None, depth: int | None = None
+    ) -> list[DatasetRow]:
         """List datasets with the full 8-column field set.
 
         If *pool* is given, the listing is recursive under that pool/dataset.
@@ -318,8 +356,8 @@ class ZfsRepository:
         return rows
 
     def list_dataset_info(
-        self, pool: Optional[str] = None
-    ) -> List[dict]:
+        self, pool: str | None = None
+    ) -> list[dict]:
         """Return datasets as dicts with name, used, avail, refer, mountpoint."""
         cmd = self._zfs(
             "list", "-H", "-o", "name,used,avail,refer,mountpoint",
@@ -347,9 +385,9 @@ class ZfsRepository:
     def list_snapshots(
         self,
         dataset: str,
-        depth: Optional[int] = None,
+        depth: int | None = None,
         sort_creation: bool = False,
-    ) -> List[SnapshotRow]:
+    ) -> list[SnapshotRow]:
         """List snapshots of *dataset* (recursively if depth is None)."""
         cmd = self._zfs(
             "list", "-t", "snapshot", "-H",
@@ -372,8 +410,8 @@ class ZfsRepository:
         return rows
 
     def list_all_snapshot_names(
-        self, pool: Optional[str] = None
-    ) -> List[str]:
+        self, pool: str | None = None
+    ) -> list[str]:
         """Return full snapshot names, optionally filtered under *pool*."""
         cmd = self._zfs("list", "-t", "snapshot", "-H", "-o", "name")
         if pool is not None:
@@ -381,7 +419,7 @@ class ZfsRepository:
         result = self._run(cmd)
         return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
 
-    def list_holds(self, snapshot: str) -> List[HoldRow]:
+    def list_holds(self, snapshot: str) -> list[HoldRow]:
         """Return holds for a single snapshot."""
         result = self._run(self._zfs("holds", "-H", snapshot))
         rows = []
@@ -400,11 +438,7 @@ class ZfsRepository:
         )
         return result.stdout.strip()
 
-    def get_clones(self, target: str) -> str:
-        """Return the `clones` property value for a snapshot or dataset."""
-        return self.get_property(target, "clones")
-
-    def get_recursive_snapshot_clones(self, dataset: str) -> List[str]:
+    def get_recursive_snapshot_clones(self, dataset: str) -> list[str]:
         """Return non-empty clones values for all snapshots under *dataset*."""
         result = self._run(
             self._zfs("list", "-H", "-t", "snapshot", "-o", "clones", "-r", dataset)
@@ -414,7 +448,7 @@ class ZfsRepository:
             if line.strip() and line.strip() != "-"
         ]
 
-    def list_bookmarks(self, dataset: str, snap_name: Optional[str] = None) -> List[str]:
+    def list_bookmarks(self, dataset: str, snap_name: str | None = None) -> list[str]:
         """Return bookmark names under *dataset*, optionally filtering by snapshot name."""
         result = self._run(
             self._zfs("list", "-t", "bookmark", "-H", "-o", "name", "-r", dataset)

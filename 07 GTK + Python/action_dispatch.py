@@ -5,70 +5,111 @@ This module separates the declarative page metadata from the window class
 to keep zfsutilities_gui.py focused on UI construction and core behaviour.
 """
 
-from backup_config import log_msg, get_scrub_manager_config
+from backup_config import get_scrub_manager_config, log_msg
 from backup_page import (
-    collect_backup_config, load_backup_config,
-    on_backup_run, on_backup_cancel, on_backup_save, on_backup_revert,
-    backup_set_all_active, check_backup_dirty,
-)
-from offsite_page import (
-    collect_offsite_config, load_offsite_config,
-    on_offsite_run, on_offsite_cancel, on_offsite_save, on_offsite_revert,
-    offsite_set_all_active,
-    check_offsite_dirty,
-)
-from restore_page import (
-    collect_restore_config, load_restore_config,
-    on_restore_run, on_restore_cancel, on_restore_save, on_restore_revert,
-    check_restore_dirty,
-)
-from pools_page import refresh_pools_page
-from pool_actions import (
-    on_pools_watch, on_pools_details, on_pools_add, on_pools_remove,
-    on_pools_import, on_pools_export,
-    on_pools_save, on_pools_revert, check_pools_dirty,
-    on_scrub_start, on_scrub_pause, on_scrub_resume, on_scrub_stop,
-)
-from datasets_page import (
-    refresh_datasets_page,
-    update_ds_button_sensitivity,
-    expand_selected_datasets,
-)
-from dataset_actions import (
-    on_datasets_snapshot, on_datasets_delete,
-    on_datasets_hold, on_datasets_rollback,
-    on_datasets_show_files,
-    on_datasets_browse_snapshot, on_datasets_unmount_snapshot,
-)
-from retention_page import (
-    collect_retention_profile_config, load_retention_profile_config,
-)
-from retention_actions import (
-    on_retention_add_bucket, on_retention_remove_bucket,
-    on_retention_add_policy, on_retention_remove_policy,
-    on_retention_prune, on_retention_mass_delete,
-    on_retention_save, on_retention_revert, check_retention_dirty,
+    backup_set_all_active,
+    check_backup_dirty,
+    collect_backup_config,
+    load_backup_config,
+    on_backup_cancel,
+    on_backup_revert,
+    on_backup_run,
+    on_backup_save,
 )
 from checkagainst_page import (
-    on_checkagainst_add, on_checkagainst_remove,
-    on_checkagainst_save, on_checkagainst_revert,
-    on_checkagainst_get_entries, on_checkagainst_add_pair,
     check_checkagainst_dirty,
-)
-from schedule_page import (
-    on_schedule_save, on_schedule_revert, on_schedule_delete,
-    on_schedule_run_now, check_schedule_dirty,
-)
-from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
-from logs_page import (
-    _sync_log_list, _on_delete_selected, _on_prune_old,
-    _setup_logs_actions,
+    on_checkagainst_add,
+    on_checkagainst_add_pair,
+    on_checkagainst_get_entries,
+    on_checkagainst_remove,
+    on_checkagainst_revert,
+    on_checkagainst_save,
 )
 from dashboard_page import (
-    refresh_dashboard_page, on_dashboard_refresh, on_dashboard_fix_locks,
-    on_dashboard_cancel_selected, on_dashboard_view_log, setup_dashboard_actions,
+    on_dashboard_cancel_selected,
+    on_dashboard_fix_locks,
+    on_dashboard_refresh,
+    on_dashboard_view_log,
+    setup_dashboard_actions,
 )
-
+from dataset_actions import (
+    on_datasets_browse_snapshot,
+    on_datasets_delete,
+    on_datasets_hold,
+    on_datasets_rollback,
+    on_datasets_show_files,
+    on_datasets_snapshot,
+    on_datasets_unmount_snapshot,
+)
+from datasets_page import (
+    expand_selected_datasets,
+    refresh_datasets_page,
+    update_ds_button_sensitivity,
+)
+from logs_page import (
+    _on_delete_selected,
+    _on_prune_old,
+    _setup_logs_actions,
+    _sync_log_list,
+)
+from offsite_page import (
+    check_offsite_dirty,
+    collect_offsite_config,
+    load_offsite_config,
+    offsite_set_all_active,
+    on_offsite_cancel,
+    on_offsite_revert,
+    on_offsite_run,
+    on_offsite_save,
+)
+from pool_actions import (
+    check_pools_dirty,
+    on_pools_add,
+    on_pools_details,
+    on_pools_export,
+    on_pools_import,
+    on_pools_remove,
+    on_pools_revert,
+    on_pools_save,
+    on_pools_watch,
+    on_scrub_pause,
+    on_scrub_resume,
+    on_scrub_start,
+    on_scrub_stop,
+)
+from pools_page import refresh_pools_page
+from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
+from restore_page import (
+    check_restore_dirty,
+    collect_restore_config,
+    load_restore_config,
+    on_restore_cancel,
+    on_restore_revert,
+    on_restore_run,
+    on_restore_save,
+)
+from retention_actions import (
+    check_retention_dirty,
+    on_retention_add_bucket,
+    on_retention_add_policy,
+    on_retention_mass_delete,
+    on_retention_prune,
+    on_retention_remove_bucket,
+    on_retention_remove_policy,
+    on_retention_revert,
+    on_retention_save,
+)
+from retention_page import (
+    collect_retention_profile_config,
+    load_retention_profile_config,
+)
+from schedule_page import (
+    check_schedule_dirty,
+    on_schedule_delete,
+    on_schedule_revert,
+    on_schedule_run_now,
+    on_schedule_save,
+)
 
 # ---------------------------------------------------------------------------
 # Page action button specifications

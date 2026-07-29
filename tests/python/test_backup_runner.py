@@ -13,8 +13,8 @@ from unittest.mock import MagicMock, patch
 
 @contextmanager
 def _patch_log_dirs(tmpdir):
-    """Patch both backup_runner and log_index to use tmpdir as SESSION_LOG_DIR."""
-    with patch("backup_runner.SESSION_LOG_DIR", tmpdir), \
+    """Patch session_log and log_index to use tmpdir as SESSION_LOG_DIR."""
+    with patch("session_log.SESSION_LOG_DIR", tmpdir), \
             patch("log_index.SESSION_LOG_DIR", tmpdir):
         yield
 
@@ -24,9 +24,8 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 # Mock GTK/WebKit so gi.repository imports succeed without a display.
-from test_support import mock_gtk
-
 import log_index as li
+from test_support import mock_gtk
 
 with mock_gtk():
     import backup_runner as br
@@ -42,7 +41,7 @@ class TestPrepareSessionLog(unittest.TestCase):
     def test_creates_file_and_sets_env(self):
         runner = self._runner()
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("backup_runner.SESSION_LOG_DIR", tmpdir):
+            with patch("session_log.SESSION_LOG_DIR", tmpdir):
                 runner.prepare_session_log()
                 self.assertIsNotNone(runner._session_log_file)
                 self.assertTrue(os.path.isfile(runner._session_log_file))
@@ -54,7 +53,7 @@ class TestPrepareSessionLog(unittest.TestCase):
     def test_idempotent(self):
         runner = self._runner()
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("backup_runner.SESSION_LOG_DIR", tmpdir):
+            with patch("session_log.SESSION_LOG_DIR", tmpdir):
                 runner.prepare_session_log()
                 first_file = runner._session_log_file
                 runner.prepare_session_log()
@@ -180,22 +179,21 @@ class TestSubprocessOutputLogging(unittest.TestCase):
     def test_on_stderr_writes_subprocess_line_once(self):
         """Regression: subprocess output appeared twice in the session log."""
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                log_path = runner._session_log_file
-                line = "INFO: Processing threeamigos/proxmox."
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            log_path = runner._session_log_file
+            line = "INFO: Processing threeamigos/proxmox."
 
-                def fake_read(fd, _size):
-                    if fd == 0:
-                        return line.encode()
-                    return b""
+            def fake_read(fd, _size):
+                if fd == 0:
+                    return line.encode()
+                return b""
 
-                with patch("os.read", side_effect=fake_read):
-                    runner._on_stderr(0, br.GLib.IOCondition.IN)
+            with patch("os.read", side_effect=fake_read):
+                runner._on_stderr(0, br.GLib.IOCondition.IN)
 
-                with open(log_path) as fh:
-                    content = fh.read()
+            with open(log_path) as fh:
+                content = fh.read()
         self.assertEqual(content.count(line), 1)
         runner.log.assert_called_once_with(line)
 
@@ -223,37 +221,35 @@ class TestSubprocessOutputLogging(unittest.TestCase):
                 return b""
             return b""
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                log_path = runner._session_log_file
-                with patch("os.read", side_effect=fake_read):
-                    runner._drain_remaining()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            log_path = runner._session_log_file
+            with patch("os.read", side_effect=fake_read):
+                runner._drain_remaining()
 
-                with open(log_path) as fh:
-                    content = fh.read()
+            with open(log_path) as fh:
+                content = fh.read()
         self.assertEqual(content.count(line), 1)
         runner.log.assert_called_once_with(line)
 
     def test_on_stdout_writes_subprocess_line_once(self):
         """Regression: merged stdout output also duplicated subprocess output."""
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                log_path = runner._session_log_file
-                line = "INFO: Processing threeamigos/proxmox."
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            log_path = runner._session_log_file
+            line = "INFO: Processing threeamigos/proxmox."
 
-                def fake_read(fd, _size):
-                    if fd == 0:
-                        return line.encode()
-                    return b""
+            def fake_read(fd, _size):
+                if fd == 0:
+                    return line.encode()
+                return b""
 
-                with patch("os.read", side_effect=fake_read):
-                    runner._on_stdout(0, br.GLib.IOCondition.IN)
+            with patch("os.read", side_effect=fake_read):
+                runner._on_stdout(0, br.GLib.IOCondition.IN)
 
-                with open(log_path) as fh:
-                    content = fh.read()
+            with open(log_path) as fh:
+                content = fh.read()
         self.assertEqual(content.count(line), 1)
         runner.log.assert_called_once_with(line)
 
@@ -261,23 +257,22 @@ class TestSubprocessOutputLogging(unittest.TestCase):
         """Regression: rsync stderr output also duplicated subprocess output."""
         runner = self._runner()
         runner._current_desc = "pull"
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                log_path = runner._session_log_file
-                line = "rsync warning message"
-                formatted = "pull: rsync warning message"
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            log_path = runner._session_log_file
+            line = "rsync warning message"
+            formatted = "pull: rsync warning message"
 
-                def fake_read(fd, _size):
-                    if fd == 0:
-                        return line.encode()
-                    return b""
+            def fake_read(fd, _size):
+                if fd == 0:
+                    return line.encode()
+                return b""
 
-                with patch("os.read", side_effect=fake_read):
-                    runner._on_rsync_stderr(0, br.GLib.IOCondition.IN)
+            with patch("os.read", side_effect=fake_read):
+                runner._on_rsync_stderr(0, br.GLib.IOCondition.IN)
 
-                with open(log_path) as fh:
-                    content = fh.read()
+            with open(log_path) as fh:
+                content = fh.read()
         self.assertEqual(content.count(formatted), 1)
         runner.log.assert_called_once_with(formatted)
 
@@ -296,19 +291,18 @@ class TestAbortHandling(unittest.TestCase):
         runner.steps = [BashStep([], "step1", is_rsync=False, fatal=False)]
         runner._finally_step = None
         runner._session_start_time = time.time()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
 
-                fake_process = MagicMock()
-                fake_process.poll.return_value = 9
-                fake_process.stdout.fileno.return_value = 3
-                fake_process.stdout.closed = True
-                fake_process.stderr.fileno.return_value = 4
-                fake_process.stderr.closed = True
-                runner.process = fake_process
+            fake_process = MagicMock()
+            fake_process.poll.return_value = 9
+            fake_process.stdout.fileno.return_value = 3
+            fake_process.stdout.closed = True
+            fake_process.stderr.fileno.return_value = 4
+            fake_process.stderr.closed = True
+            runner.process = fake_process
 
-                runner._check_process()
+            runner._check_process()
 
         self.assertFalse(runner.running)
         on_complete.assert_called_once_with(cancelled=True)
@@ -379,11 +373,10 @@ class TestHistoryEntry(unittest.TestCase):
         runner.label = "Backup"
         runner._total_bytes_received = 0
         runner._session_start_time = time.time()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                log_path = runner._session_log_file
-                runner._finish(rc=0)
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            log_path = runner._session_log_file
+            runner._finish(rc=0)
         mock_add.assert_called_once()
         entry = mock_add.call_args[0][0]
         self.assertEqual(entry.get("log_file"), log_path)
@@ -409,39 +402,36 @@ class TestSessionTrailer(unittest.TestCase):
 
     def test_trailer_includes_bytes(self):
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                runner._session_start_time = time.time()
-                runner._write_session_trailer(rc=0, bytes_transferred=1234)
-                with open(runner._session_log_file) as fh:
-                    content = fh.read()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            runner._session_start_time = time.time()
+            runner._write_session_trailer(rc=0, bytes_transferred=1234)
+            with open(runner._session_log_file) as fh:
+                content = fh.read()
         self.assertIn("# END: rc=0", content)
         self.assertIn("bytes=1234", content)
 
     def test_trailer_omits_bytes_when_zero(self):
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                runner._session_start_time = time.time()
-                runner._write_session_trailer(rc=0, bytes_transferred=0)
-                with open(runner._session_log_file) as fh:
-                    content = fh.read()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            runner._session_start_time = time.time()
+            runner._write_session_trailer(rc=0, bytes_transferred=0)
+            with open(runner._session_log_file) as fh:
+                content = fh.read()
         self.assertIn("# END: rc=0", content)
         self.assertNotIn("bytes=", content)
 
     def test_trailer_persists_done_to_log_index(self):
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                runner._session_start_time = time.time()
-                runner._write_session_trailer(rc=0, bytes_transferred=1234)
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            runner._session_start_time = time.time()
+            runner._write_session_trailer(rc=0, bytes_transferred=1234)
 
-                import log_index as li
-                index = li.LogIndex.load()
-                entry = index.get(runner._session_log_file)
+            import log_index as li
+            index = li.LogIndex.load()
+            entry = index.get(runner._session_log_file)
 
         self.assertIsNotNone(entry)
         self.assertEqual(entry["status"], "Done")
@@ -450,30 +440,28 @@ class TestSessionTrailer(unittest.TestCase):
 
     def test_trailer_persists_failed_to_log_index(self):
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                runner._session_start_time = time.time()
-                runner._write_session_trailer(rc=1)
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            runner._session_start_time = time.time()
+            runner._write_session_trailer(rc=1)
 
-                import log_index as li
-                index = li.LogIndex.load()
-                entry = index.get(runner._session_log_file)
+            import log_index as li
+            index = li.LogIndex.load()
+            entry = index.get(runner._session_log_file)
 
         self.assertIsNotNone(entry)
         self.assertEqual(entry["status"], "Failed")
 
     def test_trailer_persists_cancelled_to_log_index(self):
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                runner._session_start_time = time.time()
-                runner._write_session_trailer(rc=None, cancelled=True)
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            runner._session_start_time = time.time()
+            runner._write_session_trailer(rc=None, cancelled=True)
 
-                import log_index as li
-                index = li.LogIndex.load()
-                entry = index.get(runner._session_log_file)
+            import log_index as li
+            index = li.LogIndex.load()
+            entry = index.get(runner._session_log_file)
 
         self.assertIsNotNone(entry)
         self.assertEqual(entry["status"], "Cancelled")
@@ -486,11 +474,10 @@ class TestSessionLogReuse(unittest.TestCase):
         return br.BackupRunner(MagicMock(), MagicMock())
 
     @patch("backup_runner.add_history_entry")
-    @patch("backup_runner.datetime")
+    @patch("session_log.datetime")
     def test_finish_resets_session_log_file(self, mock_datetime, _mock_add):
         from datetime import datetime as _datetime
         call_times = [
-            _datetime(2026, 6, 27, 22, 22, 41),
             _datetime(2026, 6, 27, 22, 22, 41),
             _datetime(2026, 6, 27, 22, 26, 35),
         ]
@@ -499,34 +486,33 @@ class TestSessionLogReuse(unittest.TestCase):
         runner = self._runner()
         runner.label = "Prune"
         runner._total_bytes_received = 0
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                first_path = runner._session_log_file
-                runner._session_start_time = time.time()
-                runner._finish(rc=0)
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            first_path = runner._session_log_file
+            runner._session_start_time = time.time()
+            runner._finish(rc=0)
 
-                # After _finish the runner should be ready for a new run.
-                self.assertIsNone(runner._session_log_file)
-                self.assertIsNone(runner._session_start_time)
+            # After _finish the runner should be ready for a new run.
+            self.assertIsNone(runner._session_log_file)
+            self.assertIsNone(runner._session_start_time)
 
-                runner.prepare_session_log()
-                second_path = runner._session_log_file
+            runner.prepare_session_log()
+            second_path = runner._session_log_file
 
-                self.assertIsNotNone(first_path)
-                self.assertIsNotNone(second_path)
-                self.assertNotEqual(first_path, second_path)
+            self.assertIsNotNone(first_path)
+            self.assertIsNotNone(second_path)
+            self.assertNotEqual(first_path, second_path)
 
-                # The first run's file has its END trailer; the second file
-                # was created fresh and has not been finished yet.
-                with open(first_path, "r", encoding="utf-8") as fh:
-                    first_content = fh.read()
-                with open(second_path, "r", encoding="utf-8") as fh:
-                    second_content = fh.read()
-                self.assertEqual(first_content.count("# END:"), 1)
-                self.assertEqual(second_content.count("# END:"), 0)
+            # The first run's file has its END trailer; the second file
+            # was created fresh and has not been finished yet.
+            with open(first_path, "r", encoding="utf-8") as fh:
+                first_content = fh.read()
+            with open(second_path, "r", encoding="utf-8") as fh:
+                second_content = fh.read()
+            self.assertEqual(first_content.count("# END:"), 1)
+            self.assertEqual(second_content.count("# END:"), 0)
 
-    @patch("backup_runner.datetime")
+    @patch("session_log.datetime")
     def test_cancel_clears_session_log_file(self, mock_datetime):
         from datetime import datetime as _datetime
         mock_datetime.now.side_effect = [
@@ -538,21 +524,20 @@ class TestSessionLogReuse(unittest.TestCase):
         runner = self._runner()
         runner.label = "Backup"
         runner.running = True
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                first_path = runner._session_log_file
-                runner.cancel()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            first_path = runner._session_log_file
+            runner.cancel()
 
-                self.assertIsNone(runner._session_log_file)
-                self.assertIsNone(runner._session_start_time)
+            self.assertIsNone(runner._session_log_file)
+            self.assertIsNone(runner._session_start_time)
 
-                runner.running = True
-                runner.prepare_session_log()
-                second_path = runner._session_log_file
+            runner.running = True
+            runner.prepare_session_log()
+            second_path = runner._session_log_file
 
-                self.assertIsNotNone(second_path)
-                self.assertNotEqual(first_path, second_path)
+            self.assertIsNotNone(second_path)
+            self.assertNotEqual(first_path, second_path)
 
 
 class TestSessionLogSizeCap(unittest.TestCase):
@@ -563,7 +548,7 @@ class TestSessionLogSizeCap(unittest.TestCase):
 
     def test_noop_when_no_session_log(self):
         runner = self._runner()
-        with patch("backup_runner.truncate_session_log") as mock_truncate:
+        with patch("session_log.truncate_session_log") as mock_truncate:
             runner._maybe_truncate_session_log()
         mock_truncate.assert_not_called()
 
@@ -578,7 +563,7 @@ class TestSessionLogSizeCap(unittest.TestCase):
                 index.update(path)
                 index.save()
 
-                with patch("backup_runner.truncate_session_log", return_value=True) as mock_truncate:
+                with patch("session_log.truncate_session_log", return_value=True) as mock_truncate:
                     runner._maybe_truncate_session_log()
 
                 mock_truncate.assert_called_once_with(path)
@@ -836,10 +821,9 @@ class TestRunnerRobustness(unittest.TestCase):
         runner.process = self._fake_process(rc=0)
         runner.process.poll.side_effect = RuntimeError("poll exploded")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                runner._check_process()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            runner._check_process()
 
         self.assertFalse(runner.running)
 
@@ -852,12 +836,11 @@ class TestRunnerRobustness(unittest.TestCase):
         runner.steps = [BashStep([], "step1", is_rsync=False, fatal=False)]
         runner._session_start_time = time.time()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                with patch.object(runner, "_spawn_process",
-                                  side_effect=RuntimeError("spawn exploded")):
-                    runner._run_next_step()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            with patch.object(runner, "_spawn_process",
+                              side_effect=RuntimeError("spawn exploded")):
+                runner._run_next_step()
 
         self.assertFalse(runner.running)
 
@@ -880,10 +863,9 @@ class TestRunnerRobustness(unittest.TestCase):
             side_effect=RuntimeError("trailer exploded"))
         mock_add.side_effect = RuntimeError("history exploded")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                runner._finish(rc=0)
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            runner._finish(rc=0)
 
         self.assertFalse(runner.running)
         self.assertIsNone(runner._session_log_file)
@@ -902,12 +884,11 @@ class TestRunnerRobustness(unittest.TestCase):
         runner._session_start_time = time.time()
         runner.process = self._fake_process(rc=0)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                with patch.object(br.GLib, "idle_add") as mock_idle:
-                    runner._check_process()
-                    mock_idle.assert_called_once_with(runner._run_next_step)
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            with patch.object(br.GLib, "idle_add") as mock_idle:
+                runner._check_process()
+                mock_idle.assert_called_once_with(runner._run_next_step)
 
         self.assertEqual(runner.current_step, 1)
 
@@ -925,11 +906,10 @@ class TestRunnerRobustness(unittest.TestCase):
         runner._session_start_time = time.time()
         runner.process = self._fake_process(rc=0)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                with patch.object(br.GLib, "idle_add"):
-                    runner._check_process()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            with patch.object(br.GLib, "idle_add"):
+                runner._check_process()
 
         callback.assert_called_once_with({"source": "a", "dest": "b"})
 
@@ -945,11 +925,10 @@ class TestRunnerRobustness(unittest.TestCase):
         runner._session_start_time = time.time()
         runner.process = self._fake_process(rc=0)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                with patch.object(br.GLib, "idle_add"):
-                    runner._check_process()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            with patch.object(br.GLib, "idle_add"):
+                runner._check_process()
 
         callback.assert_not_called()
 
@@ -967,11 +946,10 @@ class TestRunnerRobustness(unittest.TestCase):
         runner._session_start_time = time.time()
         runner.process = self._fake_process(rc=0)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with _patch_log_dirs(tmpdir):
-                runner.prepare_session_log()
-                with patch.object(br.GLib, "idle_add"):
-                    runner._check_process()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            with patch.object(br.GLib, "idle_add"):
+                runner._check_process()
 
         callback.assert_called_once()
         self.assertEqual(runner.current_step, 1)

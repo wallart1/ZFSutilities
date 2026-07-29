@@ -1,13 +1,12 @@
 """Tests for profile_runner.py per-profile locking."""
 
 import os
-import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import profile_runner
-from test_support import temp_config_dir, capture_logs
+from test_support import capture_logs, temp_config_dir
 
 
 class TestProfileLockHelpers(unittest.TestCase):
@@ -97,7 +96,7 @@ class TestMainDuplicateInvocation(unittest.TestCase):
             with tempfile.TemporaryDirectory() as session_dir:
                 with patch.object(profile_runner.sys, "argv", ["profile_runner.py", "run", "Daily"]):
                     with patch("profile_runner.load_profile", return_value=profile):
-                        with patch("profile_runner.SESSION_LOG_DIR", session_dir):
+                        with patch("session_log.SESSION_LOG_DIR", session_dir):
                             with patch("profile_runner.load_config", return_value={}):
                                 with patch("profile_runner.prune_old_logs"):
                                     with capture_logs() as logs:
@@ -123,7 +122,7 @@ class TestMainDuplicateInvocation(unittest.TestCase):
                         with patch("profile_runner.prune_old_logs"):
                             with patch("profile_runner.run_backup_profile", return_value=0) as mock_run:
                                 with patch("profile_runner.add_history_entry"):
-                                    with patch("profile_runner._write_session_trailer"):
+                                    with patch("session_log.write_session_trailer"):
                                         with patch("profile_runner.sys.exit") as mock_exit:
                                             profile_runner.main()
             mock_run.assert_called_once()

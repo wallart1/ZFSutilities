@@ -13,20 +13,13 @@ import subprocess
 import termios
 import time
 import traceback
-import tty
 import warnings
-
 from datetime import datetime
 
+import session_log
+from backup_history import _parse_human_size, add_history_entry, build_entry
 from gi.repository import GLib
-
-from backup_config import SESSION_LOG_DIR
-from logging_config import (
-    log_msg, set_session_log, restore_session_log, truncate_session_log,
-)
-from log_index import LogIndex
-from backup_history import _parse_human_size, build_entry, add_history_entry
-from command_builders import BashStep
+from logging_config import log_msg, restore_session_log, set_session_log
 
 RSYNC_LOG_DIR = "/var/log/zfsutilities"
 RSYNC_LOG_FILE = os.path.join(RSYNC_LOG_DIR, "rsync-backup.log")
@@ -142,56 +135,23 @@ class BackupRunner:
         return "backup"
 
     def _create_session_log_file(self):
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        tab_type = self._get_tab_type()
-        filename = f"{ts}_{tab_type}_gui.log"
-        os.makedirs(SESSION_LOG_DIR, exist_ok=True)
-        path = os.path.join(SESSION_LOG_DIR, filename)
-        try:
-            open(path, "a").close()
-        except OSError:
-            path = None
+        path = session_log.create_session_log_file(self._get_tab_type())
         self._session_log_file = path
         return path
 
     def _write_raw_line(self, line):
         """Append a raw subprocess line to the session log file."""
-        if not self._session_log_file:
-            return
-        try:
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(self._session_log_file, "a") as fh:
-                fh.write(f"{ts}  {line}\n")
-        except OSError:
-            pass
+        session_log.write_raw_line(self._session_log_file, line)
 
     def _write_session_trailer(self, rc=None, cancelled=False,
                                 bytes_transferred=0):
-        if not self._session_log_file:
-            return
-        duration = time.time() - self._session_start_time if self._session_start_time else 0.0
-        status = "cancelled" if cancelled else (f"rc={rc}" if rc is not None else "done")
-        trailer = f"# END: {status}, duration={duration:.1f}s"
-        if bytes_transferred:
-            trailer += f", bytes={bytes_transferred}"
-        try:
-            with open(self._session_log_file, "a") as fh:
-                fh.write(trailer + "\n")
-        except OSError:
-            pass
-
-        # Persist final metadata so the Logs tab does not need to rescan.
-        try:
-            index = LogIndex.load()
-            index.set_status(
-                self._session_log_file,
-                status="Cancelled" if cancelled else ("Done" if rc == 0 else "Failed"),
-                duration=duration,
-                bytes_transferred=bytes_transferred,
-            )
-            index.save()
-        except Exception as e:
-            self._runner_log(f"WARN: Could not update log index: {e}")
+        session_log.write_session_trailer(
+            self._session_log_file,
+            self._session_start_time,
+            rc=rc,
+            cancelled=cancelled,
+            bytes_transferred=bytes_transferred,
+        )
 
     def _maybe_truncate_session_log(self):
         """Truncate the session log if it has grown beyond the cap.
@@ -201,16 +161,11 @@ class BackupRunner:
         After truncation the persistent index entry is removed so the Logs tab
         rescans the smaller file.
         """
-        if not self._session_log_file:
-            return
-        if truncate_session_log(self._session_log_file):
-            self._runner_log("WARN: Session log exceeded size cap and was truncated")
-            try:
-                index = LogIndex.load()
-                index.remove(self._session_log_file)
-                index.save()
-            except Exception as e:
-                self._runner_log(f"WARN: Could not reset log index after truncation: {e}")
+        _, self._last_log_size_check = session_log.maybe_truncate_session_log(
+            self._session_log_file,
+            self._last_log_size_check,
+            interval=_SESSION_LOG_SIZE_CHECK_INTERVAL,
+        )
 
     def _log(self, msg):
         """Log to the GUI panel and session log file."""
@@ -522,10 +477,7 @@ class BackupRunner:
     def _check_process(self):
         if self.process is None:
             return False
-        now = time.time()
-        if now - self._last_log_size_check >= _SESSION_LOG_SIZE_CHECK_INTERVAL:
-            self._last_log_size_check = now
-            self._maybe_truncate_session_log()
+        self._maybe_truncate_session_log()
         try:
             rc = self.process.poll()
             if rc is not None:

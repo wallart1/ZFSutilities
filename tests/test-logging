@@ -3,13 +3,26 @@
 
 mydir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Source bashinit directly so we test the real log_msg, not the test harness
-# redirection in test-lib.sh.
-source ~/bashinit
+# Source the working-tree bashinit directly so we test the current log_msg,
+# ask_yn, warn, and die implementations, not the test harness overrides.
+source "$mydir/bashinit"
 bashinit
+
+# Preserve bashinit's helpers before test-lib.sh replaces log_msg and ask_yn.
+_bashinit_log_msg=$(declare -f log_msg)
+_bashinit_ask_yn=$(declare -f ask_yn)
+_bashinit_warn=$(declare -f warn)
+_bashinit_die=$(declare -f die)
 
 source "$mydir/tests/test-lib.sh"
 setup_test_env
+
+# Restore bashinit's helpers after test-lib.sh has set up redirects.
+# The log_msg tests below intentionally exercise the real bashinit log_msg,
+# while the ask_yn/warn/die tests rely on test-lib.sh's log_msg redirect.
+eval "$_bashinit_ask_yn"
+eval "$_bashinit_warn"
+eval "$_bashinit_die"
 
 test_log_msg_writes_all_levels() {
     test_start "log_msg writes all levels to session log file"
@@ -115,6 +128,82 @@ test_log_msg_writes_to_file_when_owned
 test_log_msg_writes_all_levels
 test_log_msg_prints_all_to_stderr
 test_log_msg_no_filtering
+
+# ------------------------------------------------------------------------------
+# ask_yn
+# ------------------------------------------------------------------------------
+
+test_ask_yn_yes_returns_zero() {
+    test_start "ask_yn returns 0 for yes"
+    local rc
+    rc=0
+    printf 'y\n' | ask_yn "Continue?" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_ask_yn_no_returns_one() {
+    test_start "ask_yn returns 1 for no"
+    local rc
+    rc=1
+    printf 'n\n' | ask_yn "Continue?" >/dev/null 2>&1 && rc=0
+    assert_rc 1 "$rc"
+}
+
+test_ask_yn_default_y_uses_enter() {
+    test_start "ask_yn default Y returns 0 on empty input"
+    local rc
+    rc=1
+    printf '\n' | ask_yn "Continue?" "Y" >/dev/null 2>&1 && rc=0
+    assert_rc 0 "$rc"
+}
+
+test_ask_yn_default_n_uses_enter() {
+    test_start "ask_yn default N returns 1 on empty input"
+    local rc
+    rc=0
+    printf '\n' | ask_yn "Continue?" "N" >/dev/null 2>&1 || rc=$?
+    assert_rc 1 "$rc"
+}
+
+test_ask_yn_invalid_then_yes() {
+    test_start "ask_yn rejects invalid input then accepts yes"
+    local rc
+    rc=0
+    printf 'maybe\ny\n' | ask_yn "Continue?" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+# ------------------------------------------------------------------------------
+# warn / die
+# ------------------------------------------------------------------------------
+
+test_warn_logs_warning() {
+    test_start "warn writes a WARN message"
+    clear_test_log_file
+    warn "look out"
+    local log
+    log=$(get_test_log_file)
+    assert_contains "$(cat "$log")" "WARN: look out"
+}
+
+test_die_logs_fatal_and_exits() {
+    test_start "die writes a FATAL message and exits non-zero"
+    clear_test_log_file
+    local rc
+    (die "game over") 2>/dev/null && rc=0 || rc=$?
+    assert_rc 1 "$rc"
+    local log
+    log=$(get_test_log_file)
+    assert_contains "$(cat "$log")" "FATAL: game over"
+}
+
+test_ask_yn_yes_returns_zero
+test_ask_yn_no_returns_one
+test_ask_yn_default_y_uses_enter
+test_ask_yn_default_n_uses_enter
+test_ask_yn_invalid_then_yes
+test_warn_logs_warning
+test_die_logs_fatal_and_exits
 
 test_summary
 teardown_test_env

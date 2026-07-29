@@ -9,9 +9,7 @@
 # Functions:
 #   zfsconfig_get_pools              # Print one pool name per line
 #   zfsconfig_get_offsite_candidates # Print offsite-candidate pool names, one per line
-#   zfsconfig_set_pools POOL...      # Replace the pool list
 #   zfsconfig_get_checkagainst       # Print entries: "<dataset> <quals> <counterpart> <label>"
-#   zfsconfig_set_checkagainst_file <path>   # Replace checkagainst from a whitespace file
 #   zfsconfig_get_retention <pool>   # Emit bash-sourceable bktname[]/bktretain[]/minage[]
 #                                    # for <pool>, or 'default' if no pool entry exists.
 #                                    # Falls back to legacy zfsretainpol-<pool> files in
@@ -125,30 +123,6 @@ PYEOF
     printf '%s\n' "$_ZFSCONFIG_OFFSITE_CACHE"
 }
 
-zfsconfig_set_pools() {
-    _zfsconfig_ensure
-    local lock_file
-    lock_file="$(_zfsconfig_lock_file)"
-    (
-        exec 200<>"$lock_file"
-        flock -x 200
-        CFG_PATH="$ZFSCONFIG_PATH" ZFS_POOL_ARGS="$*" python3 - <<'PYEOF'
-import json, os
-path = os.environ["CFG_PATH"]
-pools = os.environ["ZFS_POOL_ARGS"].split()
-try:
-    with open(path) as f:
-        cfg = json.load(f)
-except Exception:
-    cfg = {}
-cfg["pools"] = pools
-with open(path, "w") as f:
-    json.dump(cfg, f, indent=2)
-PYEOF
-    )
-    zfsconfig_invalidate
-}
-
 zfsconfig_get_checkagainst() {
     if [[ -z "${_ZFSCONFIG_CA_CACHE+x}" ]]; then
         _zfsconfig_ensure
@@ -179,45 +153,6 @@ PYEOF
         export _ZFSCONFIG_CA_CACHE
     fi
     printf '%s\n' "$_ZFSCONFIG_CA_CACHE"
-}
-
-zfsconfig_set_checkagainst_file() {
-    local src="$1"
-    _zfsconfig_ensure
-    local lock_file
-    lock_file="$(_zfsconfig_lock_file)"
-    (
-        exec 200<>"$lock_file"
-        flock -x 200
-        CFG_PATH="$ZFSCONFIG_PATH" SRC_PATH="$src" python3 - <<'PYEOF'
-import json, os
-path = os.environ["CFG_PATH"]
-src  = os.environ["SRC_PATH"]
-entries = []
-with open(src) as f:
-    for raw in f:
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        if len(parts) != 3:
-            continue
-        entries.append({
-            "source_root": parts[0],
-            "dest_root": parts[1],
-            "label": parts[2],
-        })
-try:
-    with open(path) as f:
-        cfg = json.load(f)
-except Exception:
-    cfg = {}
-cfg["checkagainst"] = entries
-with open(path, "w") as f:
-    json.dump(cfg, f, indent=2)
-PYEOF
-    )
-    zfsconfig_invalidate
 }
 
 # zfsconfig_get_retention <pool>

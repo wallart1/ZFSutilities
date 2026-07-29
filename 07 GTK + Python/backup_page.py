@@ -3,35 +3,38 @@ Backup tab UI — builds the full Backup page widget and handles interaction.
 """
 
 import os
-import subprocess
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
 
-from logging_config import log_msg
-from feature_config import (
-    get_backup_config, generate_snapshot_name,
-    save_backup_config, remove_snapfile,
-    get_pool_names,
-    _read_snapfile, SNAPFILE,
-    _maybe_seed_checkagainst,
-)
+gi.require_version('Gtk', '3.0')
 from command_builders import (
-    BashStep,
-    parse_rsync_endpoint,
+    build_post_backup_command,
+    build_pre_backup_command,
+    build_retention_command,
     build_rsync_command,
     build_send_receive_command,
-    build_pre_backup_command,
-    build_post_backup_command,
-    build_retention_command,
+    parse_rsync_endpoint,
 )
-from scrub_manager import attach_step_scrub_callbacks
+from feature_config import (
+    SNAPFILE,
+    _maybe_seed_checkagainst,
+    _read_snapfile,
+    generate_snapshot_name,
+    get_backup_config,
+    get_pool_names,
+    remove_snapfile,
+    save_backup_config,
+)
+from gi.repository import Gtk
 from gui_helpers import (
-    DirtyTracker, add_var_row, EditableListView, bold_label,
+    DirtyTracker,
+    EditableListView,
+    add_var_row,
+    bold_label,
 )
-from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
-
+from logging_config import log_msg
+from scrub_manager import attach_step_scrub_callbacks
+from zfs_repository import is_dataset_encrypted
 
 # --- Layout constants ---
 
@@ -371,18 +374,6 @@ def load_backup_config(app, config):
     app.backup_pause_scrubs.set_active(config.get("pause_scrubs", False))
 
 
-def mark_backup_clean(app):
-    """Call after saving to update the saved state and reset the button."""
-    if hasattr(app, '_backup_tracker'):
-        app._backup_tracker.mark_clean()
-
-
-def revert_backup_config(app):
-    """Restore all backup UI widgets to the last-saved state."""
-    if hasattr(app, '_backup_tracker'):
-        app._backup_tracker.revert(lambda cfg: load_backup_config(app, cfg))
-
-
 def check_backup_dirty(app):
     """Compare current UI state to last-saved state; style Save button."""
     if hasattr(app, '_backup_tracker'):
@@ -446,43 +437,6 @@ def _on_generate_snap(button, app):
 # ---------------------------------------------------------------------------
 # Action handlers
 # ---------------------------------------------------------------------------
-
-def _is_dataset_encrypted(path):
-    """Return True if *path* resides on an encrypted ZFS dataset."""
-    if not path:
-        return False
-    abs_path = os.path.abspath(path)
-    try:
-        result = subprocess.run(
-            ["zfs", "list", "-H", "-o", "name,mountpoint"],
-            capture_output=True, text=True, check=False,
-        )
-        if result.returncode != 0:
-            return False
-        datasets = []
-        for line in result.stdout.strip().splitlines():
-            parts = line.split("\t", 1)
-            if len(parts) == 2:
-                datasets.append((parts[0], parts[1]))
-        candidate = None
-        for ds, mp in datasets:
-            if abs_path.startswith(mp.rstrip("/") + "/") or abs_path == mp.rstrip("/"):
-                if candidate is None or len(mp) > len(candidate[1]):
-                    candidate = (ds, mp)
-        if candidate is None:
-            return False
-        ds_name = candidate[0]
-        result = subprocess.run(
-            ["zfs", "get", "-H", "-o", "value", "encryption", ds_name],
-            capture_output=True, text=True, check=False,
-        )
-        if result.returncode != 0:
-            return False
-        enc = result.stdout.strip()
-        return enc not in ("-", "off")
-    except Exception:
-        return False
-
 
 def on_backup_run(app, ctx):
     """Build step list and start backup execution."""
@@ -581,17 +535,17 @@ def on_backup_run(app, ctx):
                 except OSError:
                     log_msg(f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not accessible")
                 else:
-                    if not _is_dataset_encrypted(zfs_keys_dest):
-                        log_msg(f"WARN: Skipping ZFS keys backup — destination is not encrypted. "
-                                f"Set zfs_keys_dest to an encrypted dataset.")
+                    if not is_dataset_encrypted(zfs_keys_dest):
+                        log_msg("WARN: Skipping ZFS keys backup — destination is not encrypted. "
+                                "Set zfs_keys_dest to an encrypted dataset.")
                     elif dryrun:
                         log_msg(f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}")
                     else:
                         steps.append(build_rsync_command(zfs_keys_path, zfs_keys_dest))
         else:
-            if not _is_dataset_encrypted(zfs_keys_dest):
-                log_msg(f"WARN: Skipping ZFS keys backup — destination is not encrypted. "
-                                f"Set zfs_keys_dest to an encrypted dataset.")
+            if not is_dataset_encrypted(zfs_keys_dest):
+                log_msg("WARN: Skipping ZFS keys backup — destination is not encrypted. "
+                                "Set zfs_keys_dest to an encrypted dataset.")
             elif dryrun:
                 log_msg(f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}")
             else:
@@ -667,7 +621,8 @@ def on_backup_save(app, ctx):
     backup_data = collect_backup_config(app)
     try:
         save_backup_config(ctx.config, backup_data)
-        mark_backup_clean(app)
+        if hasattr(app, '_backup_tracker'):
+            app._backup_tracker.mark_clean()
         log_msg("INFO: Backup config saved to /root/.config/zfsutilities.json")
     except OSError as e:
         log_msg(f"WARN: Error saving config: {e}")
@@ -678,7 +633,7 @@ def on_backup_revert(app, ctx):
     if not hasattr(app, '_backup_tracker'):
         log_msg("INFO: Nothing to revert")
         return
-    revert_backup_config(app)
+    app._backup_tracker.revert(lambda cfg: load_backup_config(app, cfg))
     log_msg("INFO: Backup config reverted to last saved state")
 
 

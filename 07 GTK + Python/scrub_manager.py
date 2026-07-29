@@ -8,20 +8,18 @@ Provides:
 - Helpers for the pre-installed systemd scrub timers
 """
 
-import json
 import os
 import re
 import subprocess
 import time
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Set
 
+import feature_config
 from backup_config import log_msg
-from file_locking import scrub_state_lock_read, scrub_state_lock_write
 from zfs_repository import get_default_repository
-
 
 # ---------------------------------------------------------------------------
 # Scrub state enum + info dataclass
@@ -40,12 +38,12 @@ class ScrubState(Enum):
 @dataclass
 class ScrubInfo:
     state: ScrubState = ScrubState.UNKNOWN
-    progress_percent: Optional[float] = None
+    progress_percent: float | None = None
     scan_line: str = ""
     last_scrub: str = ""
     errors: int = 0
-    remaining_seconds: Optional[int] = None
-    eta: Optional[datetime] = None
+    remaining_seconds: int | None = None
+    eta: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -84,12 +82,6 @@ _SCAN_REMAINING_RE = re.compile(
 # ---------------------------------------------------------------------------
 # Low-level zpool status parsing
 # ---------------------------------------------------------------------------
-
-def _run_zpool_status(pool_name: str, repo=None) -> str:
-    """Return raw zpool status text or empty string on failure."""
-    repo = repo or get_default_repository()
-    return repo.pool_status(pool_name, timeout=15)
-
 
 def parse_scrub_status(raw: str) -> ScrubInfo:
     """Parse zpool status text and return ScrubInfo."""
@@ -170,7 +162,7 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
     return info
 
 
-def _extract_percent(raw: str) -> Optional[float]:
+def _extract_percent(raw: str) -> float | None:
     m = _SCAN_PERCENT_RE.search(raw)
     if m:
         try:
@@ -180,7 +172,7 @@ def _extract_percent(raw: str) -> Optional[float]:
     return None
 
 
-def _extract_remaining_seconds(raw: str) -> Optional[int]:
+def _extract_remaining_seconds(raw: str) -> int | None:
     """Return seconds remaining from a 'zpool status' 'to go' line, or None."""
     m = _SCAN_REMAINING_RE.search(raw)
     if not m:
@@ -203,14 +195,15 @@ def _extract_remaining_seconds(raw: str) -> Optional[int]:
 
 def get_pool_scrub_info(pool_name: str, repo=None) -> ScrubInfo:
     """Return ScrubInfo for a single pool."""
-    raw = _run_zpool_status(pool_name, repo=repo)
+    repo = repo or get_default_repository()
+    raw = repo.pool_status(pool_name, timeout=15)
     return parse_scrub_status(raw)
 
 
-def get_all_pool_scrub_states(repo=None) -> Dict[str, ScrubInfo]:
+def get_all_pool_scrub_states(repo=None) -> dict[str, ScrubInfo]:
     """Return a dict mapping pool name -> ScrubInfo for all online pools."""
     repo = repo or get_default_repository()
-    states: Dict[str, ScrubInfo] = {}
+    states: dict[str, ScrubInfo] = {}
     try:
         for row in repo.list_pools():
             states[row.name] = get_pool_scrub_info(row.name, repo=repo)
@@ -232,7 +225,7 @@ def get_all_pool_scrub_states(repo=None) -> Dict[str, ScrubInfo]:
 
 def _scrub_action_allowed(
     pool_name: str,
-    allowed_states: Set[ScrubState],
+    allowed_states: set[ScrubState],
     repo=None,
 ) -> bool:
     """Return True if the pool's current scrub state permits the action."""
@@ -336,7 +329,7 @@ def stop_scrub(pool_name: str, repo=None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _pool_from_dataset(dataset: str) -> Optional[str]:
+def _pool_from_dataset(dataset: str) -> str | None:
     """Return the pool name for a local ZFS dataset path.
 
     Remote endpoints (host:path) and non-dataset paths are ignored.
@@ -349,9 +342,9 @@ def _pool_from_dataset(dataset: str) -> Optional[str]:
     return name or None
 
 
-def pause_scrubs_for_pools(pool_names: List[str], repo=None,
+def pause_scrubs_for_pools(pool_names: list[str], repo=None,
                            dry_run: bool = False,
-                           log_func: Optional[Callable] = None) -> List[str]:
+                           log_func: Callable | None = None) -> list[str]:
     """Pause any running scrubs on *pool_names* and mark them user-paused.
 
     Returns the list of pools whose scrubs were actually paused (only pools
@@ -377,9 +370,7 @@ def pause_scrubs_for_pools(pool_names: List[str], repo=None,
         to_pause_in_queue = []
         for name in names:
             info = states.get(name)
-            if info and info.state == ScrubState.SCANNING:
-                to_pause_in_queue.append(name)
-            elif name in queue.pending:
+            if info and info.state == ScrubState.SCANNING or name in queue.pending:
                 to_pause_in_queue.append(name)
         if to_pause_in_queue:
             for name in to_pause_in_queue:
@@ -420,9 +411,9 @@ def pause_scrubs_for_pools(pool_names: List[str], repo=None,
     return paused
 
 
-def resume_scrubs_for_pools(pool_names: List[str], repo=None,
+def resume_scrubs_for_pools(pool_names: list[str], repo=None,
                             dry_run: bool = False,
-                            log_func: Optional[Callable] = None) -> None:
+                            log_func: Callable | None = None) -> None:
     """Resume scrubs that were paused by pause_scrubs_for_pools().
 
     Pools that were not actually paused (e.g., already finished or paused)
@@ -471,7 +462,7 @@ def resume_scrubs_for_pools(pool_names: List[str], repo=None,
 
 def attach_step_scrub_callbacks(step, source: str, dest: str,
                                 enabled: bool, dry_run: bool = False,
-                                log_func: Optional[Callable] = None) -> None:
+                                log_func: Callable | None = None) -> None:
     """Attach pre/post callbacks to a BashStep to pause/resume scrubs.
 
     The callbacks pause scrubs on the pools referenced by *source* and *dest*
@@ -490,7 +481,7 @@ def attach_step_scrub_callbacks(step, source: str, dest: str,
     if not pools:
         return
 
-    paused_pools: List[str] = []
+    paused_pools: list[str] = []
 
     def pre_callback():
         nonlocal paused_pools
@@ -510,56 +501,6 @@ def attach_step_scrub_callbacks(step, source: str, dest: str,
 
 
 # ---------------------------------------------------------------------------
-# Persistent state helpers
-# ---------------------------------------------------------------------------
-
-SCRUB_STATE_PATH = "/root/.config/zfsutilities/scrub_state.json"
-
-
-def _ensure_state_dir():
-    os.makedirs(os.path.dirname(SCRUB_STATE_PATH), exist_ok=True)
-
-
-def load_scrub_state() -> dict:
-    """Load scrub queue state from disk. Returns dict with empty defaults if missing."""
-    defaults = {
-        "pending": [],
-        "active": [],
-        "paused": [],
-        "finished": [],
-        "target": 1,
-    }
-    if not os.path.exists(SCRUB_STATE_PATH):
-        return dict(defaults)
-    try:
-        with scrub_state_lock_read():
-            with open(SCRUB_STATE_PATH, "r") as f:
-                data = json.load(f)
-        for key in defaults:
-            if key not in data:
-                data[key] = defaults[key]
-        # Ensure lists
-        for key in ("pending", "active", "paused", "finished"):
-            if not isinstance(data[key], list):
-                data[key] = []
-        return data
-    except (json.JSONDecodeError, OSError) as e:
-        log_msg(f"WARN: Could not load scrub state: {e}")
-        return dict(defaults)
-
-
-def save_scrub_state(state: dict) -> None:
-    """Persist scrub queue state to disk."""
-    _ensure_state_dir()
-    try:
-        with scrub_state_lock_write():
-            with open(SCRUB_STATE_PATH, "w") as f:
-                json.dump(state, f, indent=2)
-    except OSError as e:
-        log_msg(f"WARN: Could not save scrub state: {e}")
-
-
-# ---------------------------------------------------------------------------
 # ScrubQueue — manages pending / active / paused / finished buckets
 # ---------------------------------------------------------------------------
 
@@ -572,7 +513,7 @@ class ScrubQueue:
     # -- Persistence --
 
     def _load(self):
-        data = load_scrub_state()
+        data = feature_config.load_scrub_state()
         self.pending = set(data.get("pending", []))
         self.active = set(data.get("active", []))
         self.paused = set(data.get("paused", []))
@@ -581,7 +522,7 @@ class ScrubQueue:
         self.target = max(1, int(data.get("target", 1)))
 
     def _save(self):
-        save_scrub_state({
+        feature_config.save_scrub_state({
             "pending": sorted(self.pending),
             "active": sorted(self.active),
             "paused": sorted(self.paused),
@@ -600,7 +541,7 @@ class ScrubQueue:
             log_msg(f"INFO: Scrub target changed from {old} to {self.target}")
             self._save()
 
-    def add_pending(self, pool_names: List[str]):
+    def add_pending(self, pool_names: list[str]):
         """Add pools to the pending queue.
 
         Active pools are left alone. Pools that are currently paused are moved
@@ -622,7 +563,7 @@ class ScrubQueue:
             log_msg(f"INFO: Pools added to scrub queue: {', '.join(added)}")
             self._save()
 
-    def remove_pools(self, pool_names: List[str]):
+    def remove_pools(self, pool_names: list[str]):
         """Remove pools from all buckets."""
         names = set(pool_names)
         for bucket in (self.pending, self.active, self.paused, self.finished):
@@ -632,7 +573,7 @@ class ScrubQueue:
             log_msg(f"INFO: Pools removed from scrub queue: {', '.join(sorted(names))}")
             self._save()
 
-    def pause_pools(self, pool_names: List[str]):
+    def pause_pools(self, pool_names: list[str]):
         """Move specified active/pending pools to paused (user-initiated)."""
         names = set(pool_names)
         to_pause = names & (self.active | self.pending)
@@ -645,7 +586,7 @@ class ScrubQueue:
             log_msg(f"INFO: Pools paused: {', '.join(sorted(to_pause))}")
             self._save()
 
-    def resume_pools(self, pool_names: List[str]):
+    def resume_pools(self, pool_names: list[str]):
         """Move specified paused pools to pending so tick() will restart them."""
         names = set(pool_names)
         to_resume = names & self.paused
@@ -657,7 +598,7 @@ class ScrubQueue:
             log_msg(f"INFO: Pools resumed: {', '.join(sorted(to_resume))}")
             self._save()
 
-    def tick(self, states: Dict[str, ScrubInfo]):
+    def tick(self, states: dict[str, ScrubInfo]):
         """Reconcile queue against live zpool status and target.
 
         Call this on every refresh cycle.
@@ -845,15 +786,15 @@ class ScrubQueue:
             self._save()
 
     def __init__(self, target: int = 1):
-        self.pending: Set[str] = set()
-        self.active: Set[str] = set()
-        self.paused: Set[str] = set()
-        self.finished: Set[str] = set()
-        self.paused_by_user: Set[str] = set()
+        self.pending: set[str] = set()
+        self.active: set[str] = set()
+        self.paused: set[str] = set()
+        self.finished: set[str] = set()
+        self.paused_by_user: set[str] = set()
         self.target = max(1, target)
-        self._start_times: Dict[str, float] = {}
-        self._last_saved_state: Optional[dict] = None
-        had_state = os.path.exists(SCRUB_STATE_PATH)
+        self._start_times: dict[str, float] = {}
+        self._last_saved_state: dict | None = None
+        had_state = os.path.exists(feature_config.SCRUB_STATE_PATH)
         self._load()
         if not had_state:
             # No prior state — use the passed target and persist it
@@ -874,7 +815,7 @@ class ScrubQueue:
             return True
         return False
 
-    def summary(self) -> Dict[str, int]:
+    def summary(self) -> dict[str, int]:
         return {
             "pending": len(self.pending),
             "active": len(self.active),
@@ -898,30 +839,6 @@ class ScrubQueue:
 # ---------------------------------------------------------------------------
 # System scrub schedule helpers (systemd timers)
 # ---------------------------------------------------------------------------
-
-def get_system_scrub_state(pool_name: str) -> Dict[str, bool]:
-    """Return {'weekly': bool, 'monthly': bool} for the given pool."""
-    result = {"weekly": False, "monthly": False}
-    for timer in ("zfs-scrub-weekly", "zfs-scrub-monthly"):
-        unit = f"{timer}@{pool_name}.timer"
-        try:
-            proc = subprocess.run(
-                ["systemctl", "is-enabled", unit],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=5,
-            )
-            enabled = proc.returncode == 0 and proc.stdout.strip() in (
-                "enabled",
-                "enabled-runtime",
-            )
-            key = "weekly" if "weekly" in timer else "monthly"
-            result[key] = enabled
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-            log_msg(f"WARN: Could not check {unit}: {e}")
-    return result
-
 
 def set_system_scrub_enabled(pool_name: str, weekly: bool, monthly: bool) -> bool:
     """Enable or disable systemd scrub timers for a pool. Returns True on success."""
@@ -952,7 +869,7 @@ def set_system_scrub_enabled(pool_name: str, weekly: bool, monthly: bool) -> boo
     return ok
 
 
-def sync_system_scrub_for_pools(pool_names: List[str], weekly: bool, monthly: bool):
+def sync_system_scrub_for_pools(pool_names: list[str], weekly: bool, monthly: bool):
     """Apply weekly/monthly settings to a list of pools."""
     for pool_name in pool_names:
         set_system_scrub_enabled(pool_name, weekly, monthly)

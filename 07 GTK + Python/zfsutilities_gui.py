@@ -5,49 +5,56 @@ ZFS Utilities GUI - Main Application
 A GTK3 frontend for ZFS backup, snapshot, and retention operations.
 """
 
-import gi
 import os
 import sys
 import threading
 
+import gi
+
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Gdk, Gio, GLib
+from gi.repository import GLib, Gtk
 
 # Ensure the script's own directory is on sys.path for sibling imports
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
-from logging_config import log_msg, set_log_sink, format_log_line_short
-from config_core import (
-    CONFIG_PATH, load_config,
-    get_ui_state, save_ui_state,
-    get_docs_editor, save_docs_editor,
-)
-from feature_config import get_pools, get_checkagainst
-from dashboard_page import (
-    create_dashboard_page, refresh_dashboard_page,
-    _get_peer_host, _get_host_version, _log_peer_version_result,
-)
-from backup_page import create_backup_page
-from backup_runner import BackupRunner
-from offsite_page import create_offsite_page, do_detect_offsite_pool
-from restore_page import create_restore_page
-from pools_page import create_pools_page, refresh_pools_page
-from datasets_page import create_datasets_page, refresh_datasets_page
-from retention_page import create_retention_page, refresh_prune_pools
-from checkagainst_page import create_checkagainst_page
-from schedule_page import create_schedule_page, refresh_schedule_page
-from logs_page import create_logs_page
-from action_dispatch import PAGE_SPECS, ACTION_HANDLERS
-from gui_helpers import (
-    create_menu_bar, create_info_panel, UIStateManager,
-    confirm_and_minimize_width,
-)
-from docs_viewer import DocsViewerWindow
-from runner_factory import RunnerFactory
+from action_dispatch import ACTION_HANDLERS, PAGE_SPECS
 from app_context import AppContext
+from backup_page import create_backup_page
+from checkagainst_page import create_checkagainst_page
+from config_core import (
+    CONFIG_PATH,
+    get_docs_editor,
+    load_config,
+    save_docs_editor,
+)
+from dashboard_page import (
+    _get_host_version,
+    _get_peer_host,
+    _log_peer_version_result,
+    create_dashboard_page,
+    refresh_dashboard_page,
+)
+from datasets_page import create_datasets_page, refresh_datasets_page
+from docs_viewer import DocsViewerWindow
+from feature_config import get_checkagainst, get_pools
+from gui_helpers import (
+    UIStateManager,
+    confirm_and_minimize_width,
+    create_info_panel,
+    create_menu_bar,
+)
+from logging_config import format_log_line_short, log_msg
+from logs_page import create_logs_page
+from offsite_page import create_offsite_page, do_detect_offsite_pool
 from path_utils import get_version
+from pools_page import create_pools_page, refresh_pools_page
+from restore_page import create_restore_page
+from retention_page import create_retention_page, refresh_prune_pools
+from runner_factory import RunnerFactory
+from schedule_page import create_schedule_page, refresh_schedule_page
+
 
 def _detect_parent_dir(script_dir):
     """Auto-detect the directory containing bash scripts.
@@ -334,6 +341,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         if not hasattr(self, 'info_text'):
             return
         from datetime import datetime
+
         from logging_config import parse_msg_level
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         level = parse_msg_level(message)

@@ -172,14 +172,6 @@ def resolve_remote_bin(host, timeout=15):
     return None
 
 
-def resolve_remote_script(host, name):
-    """Return ``"<remote_bin>/<name>"`` or just ``"<name>"`` on failure."""
-    remote_bin = resolve_remote_bin(host)
-    if remote_bin:
-        return os.path.join(remote_bin, name)
-    return name
-
-
 def resolve_remote_version(host, timeout=15):
     """Read the deployed ``VERSION`` file from *host* via SSH.
 

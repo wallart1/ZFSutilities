@@ -18,6 +18,9 @@
 
 set -e
 
+source ~/bashinit
+bashinit
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DOCS_DIR="$REPO_DIR/06 Docs"
@@ -27,7 +30,6 @@ CLONE_DIR="$REPO_DIR/09 ZFS clone support"
 NODE_CONF="/etc/zfsutilities-node.conf"
 NODE_LIB_SRC="$TWO_NODE_DIR/node-lib.sh"
 NODE_LIB_DST="/usr/local/lib/node-lib.sh"
-COMPAT_LINK="/usr/local/lib/two-node-lib.sh"
 
 # Scripts to install in single-node mode (no iSCSI-only scripts)
 SINGLE_NODE_SCRIPTS="new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk clone-vm move-vm-disk enroll-efi-keys-vm"
@@ -36,11 +38,6 @@ CLONE_SCRIPTS="zfsclone-vm promote-vm-clone archive-vm unarchive-vm remove-vm"
 INSTALLER_LIB="$SCRIPT_DIR/installer-lib.sh"
 [[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
 source "$INSTALLER_LIB"
-
-die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
-}
 
 _check_zfs_root() {
     local root_fs_type

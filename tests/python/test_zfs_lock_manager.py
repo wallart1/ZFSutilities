@@ -21,9 +21,6 @@ class TestEncoding(unittest.TestCase):
     def test_encode_slash_and_at(self):
         self.assertEqual(zlm._encode("pool/dataset@snap"), "pool%2Fdataset%40snap")
 
-    def test_decode_round_trip(self):
-        self.assertEqual(zlm._decode("pool%2Fdataset%40snap"), "pool/dataset@snap")
-
     def test_lock_file_path(self):
         with temp_lock_dir():
             self.assertEqual(
@@ -259,21 +256,6 @@ class TestContextManagers(unittest.TestCase):
                     self.assertTrue(os.path.isfile(lid))
             for lid in lock_ids:
                 self.assertFalse(os.path.isfile(lid))
-
-
-class TestReleaseAll(unittest.TestCase):
-    """release_all cleans up every lock held by this process."""
-
-    def setUp(self):
-        zlm._lock_refcounts.clear()
-
-    def test_release_all_releases_held_locks(self):
-        with temp_lock_dir():
-            lid1 = zlm.acquire("tank", "w")
-            lid2 = zlm.acquire("data", "r")
-            self.assertEqual(zlm.release_all(), 2)
-            self.assertFalse(os.path.isfile(lid1))
-            self.assertFalse(os.path.isfile(lid2))
 
 
 if __name__ == "__main__":

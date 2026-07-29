@@ -31,6 +31,8 @@
 #   pool_to_target <pool>   echoes the full IQN (two-node only), returns 1 if unknown or single-node
 #   pool_list               echoes valid pool names from POOL_TARGET (two-node only)
 #   is_known_pool <pool>    returns 0 if pool is in POOL_TARGET (two-node only; always 1 in single-node)
+#   gen_mac                 generates a Proxmox-compatible random MAC address
+#   get_json_archive_path   reads archive_path from the JSON config file
 
 # Co-operate with bashinit: ensure $mydir is set when this library is sourced
 # before bashinit runs.  bashinit itself will overwrite nothing if $mydir is
@@ -204,4 +206,31 @@ remote_zfsutility_script() {
     else
         printf '%s\n' "$name"
     fi
+}
+
+# ------------------------------------------------------------------
+# Clone helpers
+# ------------------------------------------------------------------
+# These are used by scripts in 09 ZFS clone support/ (and clone-vm in
+# 08 Two-node/).  They live here because those scripts already source
+# node-lib.sh for single-node / two-node configuration.
+
+# Generate a Proxmox-compatible random MAC address.
+gen_mac() {
+    printf 'BC:24:11:%02X:%02X:%02X' \
+        $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256))
+}
+
+# Read the archive_path value from the JSON config file.
+get_json_archive_path() {
+    local config_file="${JSON_CONFIG:-/root/.config/zfsutilities.json}"
+    python3 -c "
+import json
+try:
+    with open('${config_file}') as f:
+        c = json.load(f)
+    print(c.get('archive_path', ''), end='')
+except Exception:
+    pass
+"
 }

@@ -6,25 +6,23 @@ snapshot, then incremental copy of remaining snapshots) driven from the GUI.
 """
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
 
-from logging_config import log_msg
+gi.require_version('Gtk', '3.0')
 from feature_config import (
+    _maybe_seed_checkagainst,
     get_pool_names,
     get_restore_config,
     save_restore_config,
-    _maybe_seed_checkagainst,
 )
+from gi.repository import Gtk
+from gui_helpers import bold_label, set_button_markup
+from logging_config import log_msg
 from restore_runner import (
+    build_restore_command,
     compute_auto_destination,
     compute_restore_params,
-    build_restore_command,
 )
 from scrub_manager import attach_step_scrub_callbacks
-from command_builders import BashStep
-from gui_helpers import bold_label
-
 
 # Advanced variables (all plain text entries)
 RESTORE_ADVANCED_VARIABLES = [
@@ -124,14 +122,6 @@ def create_restore_page(app, ctx):
     adv_grid.set_margin_top(5)
     adv_grid.set_margin_bottom(5)
 
-    topic_map = {
-        "depth": "restore_depth",
-        "label": "restore_label",
-        "includes": "restore_includes",
-        "excludes": "restore_excludes",
-        "startwith": "restore_startwith",
-        "endwith": "restore_endwith",
-    }
     for row, key in enumerate(RESTORE_ADVANCED_VARIABLES):
         lbl = Gtk.Label(label=key)
         lbl.set_halign(Gtk.Align.END)
@@ -269,12 +259,6 @@ def check_restore_dirty(app):
     _style_restore_save_button(app, dirty)
 
 
-def mark_restore_clean(app):
-    """Call after saving to update saved state and reset the button."""
-    app._restore_saved_state = collect_restore_config(app)
-    _style_restore_save_button(app, dirty=False)
-
-
 def load_restore_config(app, config):
     """Load a restore config dict into the UI widgets."""
     app.restore_source_entry.set_text(config.get("source", ""))
@@ -292,12 +276,6 @@ def load_restore_config(app, config):
     _on_auto_dest_toggled(app)
 
 
-def revert_restore_config(app):
-    """Restore all restore UI widgets to the last-saved state."""
-    load_restore_config(app, app._restore_saved_state)
-    _style_restore_save_button(app, dirty=False)
-
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -307,9 +285,9 @@ def _style_restore_save_button(app, dirty):
     if btn is None:
         return
     if dirty:
-        _set_button_markup(btn, '<span foreground="red">Save Config</span>')
+        set_button_markup(btn, '<span foreground="red">Save Config</span>')
     else:
-        _set_button_markup(btn, 'Save Config')
+        set_button_markup(btn, 'Save Config')
 
 
 def refresh_restore_destination(app):
@@ -365,22 +343,6 @@ def _on_auto_dest_toggled(app):
             app.restore_dest_entry.set_text(manual)
     app.restore_dest_entry.set_sensitive(not auto)
     check_restore_dirty(app)
-
-
-def _set_button_markup(widget, markup):
-    """Recursively find a Gtk.Label inside a widget and set its markup."""
-    if isinstance(widget, Gtk.Label):
-        widget.set_markup(markup)
-        return True
-    if hasattr(widget, 'get_children'):
-        for child in widget.get_children():
-            if _set_button_markup(child, markup):
-                return True
-    if hasattr(widget, 'get_child'):
-        child = widget.get_child()
-        if child and _set_button_markup(child, markup):
-            return True
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +465,8 @@ def on_restore_save(app, ctx):
     restore_data = collect_restore_config(app)
     try:
         save_restore_config(ctx.config, restore_data)
-        mark_restore_clean(app)
+        app._restore_saved_state = collect_restore_config(app)
+        _style_restore_save_button(app, dirty=False)
         log_msg("INFO: Restore config saved")
     except OSError as e:
         log_msg(f"WARN: Error saving config: {e}")
@@ -514,5 +477,6 @@ def on_restore_revert(app, ctx):
     if not hasattr(app, '_restore_saved_state'):
         log_msg("INFO: Nothing to revert")
         return
-    revert_restore_config(app)
+    load_restore_config(app, app._restore_saved_state)
+    _style_restore_save_button(app, dirty=False)
     log_msg("INFO: Restore config reverted")

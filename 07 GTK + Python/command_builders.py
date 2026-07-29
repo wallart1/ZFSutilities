@@ -1,11 +1,10 @@
 """Shared command builders for backup, offsite, restore, and retention operations."""
 
-import os
 import shlex
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
 
 
 @dataclass
@@ -23,13 +22,13 @@ class BashStep:
             send/receive steps (used to auto-seed checkagainst entries).
     """
 
-    command: List[str]
+    command: list[str]
     description: str
     is_rsync: bool = False
     fatal: bool = False
-    pre_callback: Optional[Callable[[], None]] = None
-    post_callback: Optional[Callable[[], None]] = None
-    metadata: Optional[dict] = None
+    pre_callback: Callable[[], None] | None = None
+    post_callback: Callable[[], None] | None = None
+    metadata: dict | None = None
 
 
 def _dryrun_assignments(dryrun=False):
@@ -74,11 +73,6 @@ def _rsync_log_setup_script(log_path):
     )
 
 
-def _remote_rsync_log_setup_command(host, log_path):
-    """Return an SSH command that ensures the remote log dir exists and truncates stale logs."""
-    return ["ssh", "-q", f"root@{host}", _rsync_log_setup_script(log_path)]
-
-
 def build_rsync_command(source, dest, remote_log_path=None):
     """Build an rsync command list from source and dest strings.
 
@@ -99,7 +93,9 @@ def build_rsync_command(source, dest, remote_log_path=None):
         desc = f"[{src_host}] rsync {source} -> {dest}"
     elif src_host:
         if remote_log_path:
-            setup_cmd = shlex.join(_remote_rsync_log_setup_command(src_host, remote_log_path))
+            setup_cmd = shlex.join(
+                ["ssh", "-q", f"root@{src_host}", _rsync_log_setup_script(remote_log_path)]
+            )
             rsync_cmd = shlex.join(rsync_opts + [f"root@{src_host}:{src_path}", dst_path])
             host_quoted = shlex.quote(src_host)
             log_quoted = shlex.quote(remote_log_path)
@@ -186,25 +182,6 @@ def build_send_receive_command(source, dest, variables, parent_dir, nextsnap,
         is_rsync=False,
         fatal=True,
         metadata=metadata,
-    )
-
-
-def build_installed_programs_command(host):
-    """Build command to run backup-installed-programs on a host."""
-    apt_cmd = "cd /root && apt-mark showmanual > installed-programs"
-    local_host = _get_local_hostname()
-    if host and not _is_local_host(host):
-        return BashStep(
-            ["ssh", f"root@{host}", apt_cmd],
-            f"[{host}] backup-installed-programs",
-            is_rsync=False,
-            fatal=False,
-        )
-    return BashStep(
-        ["bash", "-c", apt_cmd],
-        f"[{local_host}] backup-installed-programs",
-        is_rsync=False,
-        fatal=False,
     )
 
 

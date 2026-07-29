@@ -134,19 +134,6 @@ def _save_history_unlocked(entries):
             pass
 
 
-def save_history(entries):
-    """Write the history list to HISTORY_PATH atomically.
-
-    Writes to a temporary file in the same directory and renames it to
-    avoid corrupting an existing history file on crash or power loss.
-    """
-    try:
-        with history_lock_write():
-            _save_history_unlocked(entries)
-    except OSError:
-        pass
-
-
 def prune_history(entries, days):
     """Return a new list with entries older than `days` removed.
 
@@ -186,7 +173,7 @@ def add_history_entry(entry):
             entries.insert(0, entry)
             # Default to 90 days if we cannot read a config value here.
             # Callers that know the configured retention can call prune_history
-            # themselves before save_history.
+            # themselves before add_history_entry.
             entries = prune_history(entries, 90)
             _save_history_unlocked(entries)
     except OSError:

@@ -55,7 +55,9 @@ rootcheck
 | `log_msg`               | Logs messages with `file:line:` prefix to stderr and to the session log                 |
 | `msg_prefix`            | Emits the same `file:line:` prefix without the message body                             |
 | `calledbybash`          | Returns true when the current file was executed directly (not sourced)                  |
-| `ask_yn`                | Prompts for yes/no and validates the response                                           |
+| `ask_yn`                | Prompts for yes/no with an optional default answer (`Y`/`N`)                            |
+| `die`                   | Logs a `FATAL` message and terminates the process                                       |
+| `warn`                  | Logs a `WARN` message                                                                   |
 | `find_zfsutility_script`| Locates a sibling script/library across repo or deployed layouts; respects `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`; prints absolute path |
 
 **Globals / environment:**
@@ -84,7 +86,9 @@ rootcheck
 1. `bashinit` derives `$mydir` from `BASH_SOURCE[1]` only when it is not already set.
 2. If the script is executed directly and log inheritance is not enabled, it creates a timestamped log file under `$ZFSUTILITIES_LOG_DIR` and exports `$ZFSUTILITIES_LOG_FILE`.
 3. `log_msg` builds a `realpath(file):line:` prefix, writes the message to stderr (with color when connected to a terminal), and appends a timestamped copy to the session log when one is owned by the process.
-4. `ask_yn` loops until the user enters `y`, `yes`, `n`, or `no`.
+4. `ask_yn` loops until the user enters `y`, `yes`, `n`, or `no`. An optional second argument sets the default answer used when the user presses Enter (`N` if omitted).
+5. `warn` is a thin wrapper around `log_msg` that prefixes the message with `WARN:`.
+6. `die` logs `FATAL:` and sources `bashfatal` to terminate with exit code `1`.
 
 ---
 
@@ -238,7 +242,6 @@ source $mydir/zfsconfig
 # Pool list
 poolarray                                   # fills $zfspoolarray from JSON
 zfsconfig_get_pools                         # one pool name per line
-zfsconfig_set_pools threeamigos fivebays    # replace the list
 # Pool entries may be plain strings or {"name": "...", "offsite_candidate": true}
 # objects. String entries are accepted for backward compatibility.
 
@@ -247,7 +250,6 @@ zfsconfig_get_offsite_candidates            # one candidate pool name per line
 
 # Checkagainst table
 zfsconfig_get_checkagainst                  # "<source_root> <dest_root> <label>" per line
-zfsconfig_set_checkagainst_file table.conf  # import a whitespace-formatted file (comment field ignored)
 
 # Retention policy (sourceable bash fragment)
 eval "$(zfsconfig_get_retention threeamigos)"
@@ -262,10 +264,8 @@ zfsconfig_invalidate
 | Function                          | Arguments | Description                                                                                                                         |
 | --------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `zfsconfig_get_pools`             | —         | Print one pool name per line from `config.pools`. Accepts string entries or `{"name", "offsite_candidate"}` objects                 |
-| `zfsconfig_set_pools`             | `POOL...` | Replace the pool list (always stores objects internally via the GUI helpers)                                                        |
 | `zfsconfig_get_offsite_candidates`| —         | Print one offsite-candidate pool name per line (pools with `offsite_candidate: true`)                                               |
 | `zfsconfig_get_checkagainst`      | —         | Print entries: `<source_root> <dest_root> <label>` (the JSON `comment` field is not emitted)                                         |
-| `zfsconfig_set_checkagainst_file` | `<path>`  | Replace from a whitespace-formatted file (comment field is not imported)                                                            |
 | `zfsconfig_get_retention`         | `<pool>`  | Emit `bktname[i]/bktretain[i]/minage[i]` fragment for `<pool>` (falls back to `default`, then to legacy `zfsretainpol-<pool>` file) |
 | `zfsconfig_invalidate`            | —         | Drop the in-shell cache                                                                                                             |
 | `poolarray`                       | —         | Fills `$zfspoolarray` from `config.pools`                                                                                           |
@@ -577,7 +577,6 @@ and suggests `fuser` / `lsof` commands.
 | `archive-vm`          | After `zfs destroy` fails               |
 | `clone-vm`            | After cleanup `zfs destroy` fails       |
 | `dataset_actions.py`  | From `_run_zfs_sudo` when destroy fails |
-| `snapshot_manager.py` | After `zfs destroy` fails               |
 
 **Called modules:** none. `diagnose_dataset_busy` runs external commands
 (`zfs`, `zpool`, `fuser`, `lsof`, `targetcli`, `qm`, `pct`) directly.
@@ -1251,7 +1250,7 @@ steps.
 | `zfsdelallsnaps`           | Clear destination snapshots before full copy     |
 | `zfsdelallholds`           | Release holds during rollback                    |
 | `zfsholds`                 | List holds for diagnostic output                 |
-| `zfsdelfs`                 | Destroy destination dataset when destructive     |
+| `iscsi-lib.sh`             | Tear down and rebuild iSCSI LUNs around VM zvols |
 | `zfsoverrides`             | Apply runtime parameter overrides                |
 | `zfslockmanager`           | Acquire/release per-dataset write locks          |
 | `zfscheckrunningvms`       | Block restores over live VMs                     |

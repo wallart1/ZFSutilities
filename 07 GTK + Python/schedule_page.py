@@ -9,26 +9,35 @@ import subprocess
 import sys
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib
 
-from logging_config import log_msg
-from gui_helpers import (
-    set_button_markup_red, set_monospace_font, enable_textview_copy,
-    configure_treeview_column, ACTIVE_COLUMN_WIDTH,
-    bold_label,
-)
-from profile_manager import (
-    list_profiles, load_profile, save_profile, delete_profile,
-)
+gi.require_version('Gtk', '3.0')
 import cron_manager
-from cron_manager import (
-    write_cron_file, generate_cron_line, interpret_cron, format_next_runs,
-    next_run_times,
-)
-from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
-from path_utils import get_profile_runner_path, is_deployed_layout
 from backup_runner import _PV_RATE_RE
+from cron_manager import (
+    format_next_runs,
+    generate_cron_line,
+    interpret_cron,
+    next_run_times,
+    write_cron_file,
+)
+from gi.repository import GLib, Gtk
+from gui_helpers import (
+    ACTIVE_COLUMN_WIDTH,
+    bold_label,
+    configure_treeview_column,
+    enable_textview_copy,
+    set_button_markup_red,
+    set_monospace_font,
+    show_error_dialog,
+)
+from logging_config import log_msg
+from path_utils import get_profile_runner_path
+from profile_manager import (
+    delete_profile,
+    list_profiles,
+    load_profile,
+    save_profile,
+)
 
 COL_ACTIVE = 0
 COL_NAME = 1
@@ -570,18 +579,7 @@ def _regenerate_cron(app):
     try:
         write_cron_file(profiles, runner_path)
     except OSError as e:
-        _show_error_dialog(app, f"Failed to update cron file:\n{e}")
-
-
-def _show_error_dialog(app, message):
-    dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
-        message_type=Gtk.MessageType.ERROR,
-        buttons=Gtk.ButtonsType.OK,
-        text=message,
-    )
-    dlg.run()
-    dlg.destroy()
+        show_error_dialog(app, f"Failed to update cron file:\n{e}")
 
 
 def _resolve_profile_runner_path():
@@ -765,12 +763,6 @@ def _update_schedule_dirty(app):
 
 def check_schedule_dirty(app):
     """Style the Save button based on pending schedule changes."""
-    _update_schedule_dirty(app)
-
-
-def mark_schedule_clean(app):
-    """Clear pending state and reset the Save button."""
-    app._schedule_pending.clear()
     _update_schedule_dirty(app)
 
 

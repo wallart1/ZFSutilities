@@ -1,29 +1,23 @@
 """Shared profile dialogs used by multiple tab pages."""
 
 import gi
+
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
-
-from backup_config import log_msg
 from gui_helpers import (
+    _ensure_treeview_scrolling,
+    configure_treeview_column,
     create_dialog,
-    configure_treeview_column, _ensure_treeview_scrolling,
+    show_error_dialog,
 )
 from profile_manager import (
-    create_profile, update_profile, profile_exists, get_user, load_profile,
+    create_profile,
+    get_user,
     list_profiles,
+    load_profile,
+    profile_exists,
+    update_profile,
 )
-
-
-def _show_error_dialog(app, message):
-    dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
-        message_type=Gtk.MessageType.ERROR,
-        buttons=Gtk.ButtonsType.OK,
-        text=message,
-    )
-    dlg.run()
-    dlg.destroy()
 
 
 def show_add_profile_dialog(app, tab_type, config_dict, on_success=None,
@@ -81,7 +75,7 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None,
     # Example: "my-backup_01" -> match
     #          "my backup"    -> no match (contains space)
     if not re.match(r"^[A-Za-z0-9_-]+$", custom_name):
-        _show_error_dialog(app, "Invalid profile name.\nUse only letters, digits, hyphens, and underscores.")
+        show_error_dialog(app, "Invalid profile name.\nUse only letters, digits, hyphens, and underscores.")
         return
 
     full_name = prefix + custom_name
@@ -103,14 +97,14 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None,
             profile = update_profile(tab_type, custom_name, config_dict,
                                      dry_run=dry_run)
         except ValueError as e:
-            _show_error_dialog(app, str(e))
+            show_error_dialog(app, str(e))
             return
     else:
         try:
             profile = create_profile(tab_type, custom_name, config_dict,
                                      dry_run=dry_run)
         except ValueError as e:
-            _show_error_dialog(app, str(e))
+            show_error_dialog(app, str(e))
             return
 
     if on_success:
@@ -124,7 +118,7 @@ def show_recall_profile_dialog(app, tab_type, on_select):
     """Show a dialog listing profiles of the given tab type."""
     profiles = [p for p in list_profiles() if p.get("tab_type") == tab_type]
     if not profiles:
-        _show_error_dialog(app, f"No {tab_type} profiles found.")
+        show_error_dialog(app, f"No {tab_type} profiles found.")
         return
 
     dlg = create_dialog(

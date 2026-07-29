@@ -25,7 +25,7 @@ You are a meticulous and expert coding agent. For every task:
 4. Execute only the approved plan.
 5. Always test and debug your work after executing the plan and before responding.
 6. Use concise, professional language.
-7. Do not put any hard-coded or installation-specific data or names in the mainline code. These must be entered by the user at runtime using text-based and GUI dialogs and will usually be saved in a saved configuration file.
+7. Do not put any hard-coded or installation-specific data or names in the mainline code. These must be entered by the user at runtime using text-based and GUI dialogs, or dynamically by the code, and will usually be saved in a saved configuration file.
 8. Look for and correct any deprecated code and features. Do not implement any deprecated code or features.
 9. Don't be lazy. Take the approach that is correct even though it may be more difficult to implement.
 10. Read and strictly follow the coding policies given in '/NFS1/dan(NFS1)/zfsutilities-pub/06 Docs/docs/developer-guide/coding-policies.md'
@@ -106,11 +106,20 @@ library explicitly while production deployments fall back to
 `bashinit` provides `find_zfsutility_script` for locating sibling scripts
 and libraries across the repo or deployed `bin/` directory (e.g.
 `find_zfsutility_script promote-vm-clone`).  `node-lib.sh` provides
-`remote_zfsutility_script` for resolving the active deployed version on a
-remote host (e.g. `remote_zfsutility_script "$HOST" "remove-vm-disk"`).
+mode-aware configuration, pool helpers (`pool_to_target`, `pool_list`,
+`is_known_pool`), remote resolution (`remote_zfsutility_script`), and
+clone/archive helpers (`gen_mac`, `get_json_archive_path`).
 Remote `bash -s` heredocs use
 `mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)` so the code
 running on the remote side locates its own installed copy.
+
+`iscsi-lib.sh` contains the shared iSCSI teardown/rebuild helpers used by
+`zfsdelfs` and `zfs-send-receive`. It declares the `ISCSI_TEARDOWN`
+associative array, sources `node-lib.sh` for remote resolution, and provides
+`iscsi_teardown_zvol` and `iscsi_rebuild_torn_down`. Both callers locate it
+with direct path checks (`$mydir/08 Two-node/iscsi-lib.sh`,
+`$mydir/../lib/iscsi-lib.sh`, `/usr/local/lib/iscsi-lib.sh`) rather than
+relying on transitive sourcing.
 
 ### Core Components
 
@@ -147,6 +156,13 @@ GUI pages and action handlers receive the repository from `app.ctx.zfs_repositor
 (or fall back to `get_default_repository()`). This keeps subprocess mocking
 straightforward: Python tests patch `subprocess.run` and the repository methods
 pass the mocked calls through.
+
+### Session Log Utilities
+
+Per-run session log helpers live in `07 GTK + Python/session_log.py`.
+`BackupRunner` (GUI) and `profile_runner.py` (headless/cron) both use these
+stateless functions to create log files, append raw subprocess output, write
+trailers, and enforce the session-log size cap.
 
 ### Snapshot Naming Convention
 
@@ -255,7 +271,9 @@ The `bashinit` script provides these functions:
 
 - `bashinit` - Sets `$mydir` to the calling script's directory; auto-creates a session log file for directly-executed scripts
 - `log_msg "message"` - Logs with file:line prefix to stderr and to `$ZFSUTILITIES_LOG_FILE` if set. All messages are always emitted; filtering by message level is done in the GUI log viewers.
-- `ask_yn "prompt"` - Prompts for y/n with input validation; returns 0 for yes, 1 for no
+- `ask_yn "prompt" ["Y"|"N"]` - Prompts for y/n with input validation; optional second argument is the default answer (N if omitted); returns 0 for yes, 1 for no
+- `die "message"` - Logs a FATAL message and terminates the process via `bashfatal`
+- `warn "message"` - Logs a WARN message
 - `calledbybash` - Returns 0 if script was executed directly (not sourced)
 - `find_zfsutility_script <name>` - Searches the repo or deployed layout for a sibling script or library and prints its absolute path. Used to locate `node-lib.sh` and `rootcheck` from scripts in `08 Two-node/` and `09 ZFS clone support/` without hard-coding paths. The absolute deployment directories can be overridden with `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`.
 
@@ -263,8 +281,8 @@ The `bashinit` script provides these functions:
 `/usr/local/lib/zfsutilities/versions/<version>/` without touching active
 production. `switch-version` creates and updates production wiring, including
 `/root/bashinit`, `PATH` configuration, library symlinks (`node-lib.sh`,
-`two-node-lib.sh`, and `rootcheck`), and desktop
-shortcuts. When `switch-version` changes the active version, `/root/bashinit`
+`two-node-lib.sh` as a deprecated compatibility wrapper, and `rootcheck`),
+and desktop shortcuts. When `switch-version` changes the active version, `/root/bashinit`
 tracks automatically — no manual copying needed.
 
 For development (running scripts from the repo without `sudo`), keep a local copy:

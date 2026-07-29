@@ -7,8 +7,9 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 
-from config_core import save_config, _deep_copy, BACKUP_DEFAULTS
+from config_core import BACKUP_DEFAULTS, _deep_copy, save_config
 from file_locking import scrub_state_lock_read, scrub_state_lock_write
+from logging_config import log_msg
 
 
 def get_backup_config(config):
@@ -565,7 +566,11 @@ SCRUB_STATE_PATH = "/root/.config/zfsutilities/scrub_state.json"
 
 
 def load_scrub_state():
-    """Load scrub queue state from disk."""
+    """Load scrub queue state from disk.
+
+    Returns a dict with empty-list defaults for the bucket keys. If the file
+    is missing, unreadable, or malformed, the defaults are returned.
+    """
     defaults = {
         "pending": [],
         "active": [],
@@ -576,14 +581,18 @@ def load_scrub_state():
     if not os.path.exists(SCRUB_STATE_PATH):
         return dict(defaults)
     try:
-        with scrub_state_lock_read():
-            with open(SCRUB_STATE_PATH, "r") as f:
-                data = json.load(f)
+        with scrub_state_lock_read(), open(SCRUB_STATE_PATH, "r") as f:
+            data = json.load(f)
         for key in defaults:
             if key not in data:
                 data[key] = defaults[key]
+        # Ensure bucket values are lists (protect against corrupt JSON).
+        for key in ("pending", "active", "paused", "finished"):
+            if not isinstance(data[key], list):
+                data[key] = []
         return data
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as e:
+        log_msg(f"WARN: Could not load scrub state: {e}")
         return dict(defaults)
 
 
@@ -591,11 +600,10 @@ def save_scrub_state(state):
     """Persist scrub queue state to disk."""
     os.makedirs(os.path.dirname(SCRUB_STATE_PATH), exist_ok=True)
     try:
-        with scrub_state_lock_write():
-            with open(SCRUB_STATE_PATH, "w") as f:
-                json.dump(state, f, indent=2)
-    except OSError:
-        pass
+        with scrub_state_lock_write(), open(SCRUB_STATE_PATH, "w") as f:
+            json.dump(state, f, indent=2)
+    except OSError as e:
+        log_msg(f"WARN: Could not save scrub state: {e}")
 
 
 SNAPFILE = "/root/.config/zfsutilities_nextsnap"
@@ -695,8 +703,7 @@ def _save_reservations(reservations):
     _ensure_snapname_dirs()
     try:
         with open(SNAPNAME_RESERVED, "w", encoding="utf-8") as f:
-            for name, reserved_at in reservations.items():
-                f.write(f"{name} {reserved_at}\n")
+            f.writelines(f"{name} {reserved_at}\n" for name, reserved_at in reservations.items())
     except OSError:
         pass
 

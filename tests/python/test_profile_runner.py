@@ -5,12 +5,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import ExitStack
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-from test_support import temp_config_dir, mock_subprocess, capture_logs
+from test_support import capture_logs, mock_subprocess, temp_config_dir
 
 
 def _mock_popen_process(stdout="", stderr="", rc=0):
@@ -20,104 +21,14 @@ def _mock_popen_process(stdout="", stderr="", rc=0):
     proc.wait.return_value = rc
     return proc
 
+import feature_config
 import log_index
 import offsite_runner
 import profile_runner
 import restore_runner
 import scrub_manager as sm
+import session_log
 from command_builders import BashStep
-
-
-class TestIsDatasetEncrypted(unittest.TestCase):
-
-    def test_encrypted_dataset(self):
-        with mock_subprocess() as m:
-            m.set_command_handler(
-                r"zfs list -H -o name /backups/keys",
-                lambda cmd, **kwargs: m._completed("", rc=1)
-            )
-            m.set_command_handler(
-                r"zfs list -H -o name /backups",
-                lambda cmd, **kwargs: m._completed("tank/data")
-            )
-            m.set_command_handler(
-                r"zfs get -H -o value encryption tank/data",
-                lambda cmd, **kwargs: m._completed("aes-256-gcm")
-            )
-            result = profile_runner._is_dataset_encrypted("/backups/keys")
-        self.assertTrue(result)
-
-    def test_unencrypted_dataset(self):
-        with mock_subprocess() as m:
-            m.set_command_handler(
-                r"zfs list -H -o name /backups/keys",
-                lambda cmd, **kwargs: m._completed("", rc=1)
-            )
-            m.set_command_handler(
-                r"zfs list -H -o name /backups",
-                lambda cmd, **kwargs: m._completed("tank/data")
-            )
-            m.set_command_handler(
-                r"zfs get -H -o value encryption tank/data",
-                lambda cmd, **kwargs: m._completed("-")
-            )
-            result = profile_runner._is_dataset_encrypted("/backups/keys")
-        self.assertFalse(result)
-
-    def test_off_encryption_value(self):
-        with mock_subprocess() as m:
-            m.set_command_handler(
-                r"zfs list -H -o name /backups/keys",
-                lambda cmd, **kwargs: m._completed("", rc=1)
-            )
-            m.set_command_handler(
-                r"zfs list -H -o name /backups",
-                lambda cmd, **kwargs: m._completed("tank/data")
-            )
-            m.set_command_handler(
-                r"zfs get -H -o value encryption tank/data",
-                lambda cmd, **kwargs: m._completed("off")
-            )
-            result = profile_runner._is_dataset_encrypted("/backups/keys")
-        self.assertFalse(result)
-
-    def test_no_dataset(self):
-        with mock_subprocess() as m:
-            m.set_command_handler(
-                r"zfs list -H -o name /other/path",
-                lambda cmd, **kwargs: m._completed("", rc=1)
-            )
-            m.set_command_handler(
-                r"zfs list -H -o name /other",
-                lambda cmd, **kwargs: m._completed("", rc=1)
-            )
-            m.set_command_handler(
-                r"zfs list -H -o name /",
-                lambda cmd, **kwargs: m._completed("", rc=1)
-            )
-            result = profile_runner._is_dataset_encrypted("/other/path")
-        self.assertFalse(result)
-
-    def test_zfs_list_failure(self):
-        with mock_subprocess() as m:
-            m.set_command_handler(
-                r"zfs list -H -o name /backups/keys",
-                lambda cmd, **kwargs: m._completed("", rc=1)
-            )
-            m.set_command_handler(
-                r"zfs list -H -o name /backups",
-                lambda cmd, **kwargs: m._completed("", rc=1)
-            )
-            m.set_command_handler(
-                r"zfs list -H -o name /",
-                lambda cmd, **kwargs: m._completed("", rc=1)
-            )
-            result = profile_runner._is_dataset_encrypted("/backups/keys")
-        self.assertFalse(result)
-
-    def test_empty_path(self):
-        result = profile_runner._is_dataset_encrypted("")
-        self.assertFalse(result)
 
 
 class TestComputeRestoreParams(unittest.TestCase):
@@ -239,6 +150,7 @@ class TestRunBackupProfile(unittest.TestCase):
                 m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
                 with capture_logs() as logs:
                     rc = profile_runner.run_backup_profile(profile, config, "/bin")
+                self.assertEqual(rc, 0)
                 # Should have logged snapshot name and steps
                 self.assertTrue(any("Backup snapshot:" in msg for msg in logs))
 
@@ -522,6 +434,7 @@ class TestRunRetentionProfile(unittest.TestCase):
             m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
             with capture_logs() as logs:
                 rc = profile_runner.run_retention_profile(profile, config, "/bin")
+            self.assertEqual(rc, 0)
             self.assertTrue(any("Prune tank" in msg for msg in logs))
 
 
@@ -530,37 +443,39 @@ class TestSessionLogFile(unittest.TestCase):
     def test_create_and_trailer(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
-            orig_dir = profile_runner.SESSION_LOG_DIR
+            orig_dir = session_log.SESSION_LOG_DIR
             orig_log_dir = log_index.SESSION_LOG_DIR
-            profile_runner.SESSION_LOG_DIR = tmpdir
+            session_log.SESSION_LOG_DIR = tmpdir
             log_index.SESSION_LOG_DIR = tmpdir
             try:
-                path = profile_runner._create_session_log_file("backup", "test")
+                path = session_log.create_session_log_file("backup", "test")
                 self.assertIsNotNone(path)
                 self.assertTrue(os.path.exists(path))
-                profile_runner._write_session_trailer(rc=0)
+                session_log.write_session_trailer(path, time.time(), rc=0)
                 with open(path) as f:
                     content = f.read()
                 self.assertIn("rc=0", content)
             finally:
-                profile_runner.SESSION_LOG_DIR = orig_dir
+                session_log.SESSION_LOG_DIR = orig_dir
                 log_index.SESSION_LOG_DIR = orig_log_dir
 
     def test_trailer_persists_done_to_log_index(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
-            orig_dir = profile_runner.SESSION_LOG_DIR
+            orig_dir = session_log.SESSION_LOG_DIR
             orig_log_dir = log_index.SESSION_LOG_DIR
-            profile_runner.SESSION_LOG_DIR = tmpdir
+            session_log.SESSION_LOG_DIR = tmpdir
             log_index.SESSION_LOG_DIR = tmpdir
             try:
-                path = profile_runner._create_session_log_file("backup", "test")
-                profile_runner._write_session_trailer(rc=0, bytes_transferred=5678)
+                path = session_log.create_session_log_file("backup", "test")
+                session_log.write_session_trailer(
+                    path, time.time(), rc=0, bytes_transferred=5678
+                )
 
                 index = log_index.LogIndex.load()
                 entry = index.get(path)
             finally:
-                profile_runner.SESSION_LOG_DIR = orig_dir
+                session_log.SESSION_LOG_DIR = orig_dir
                 log_index.SESSION_LOG_DIR = orig_log_dir
 
         self.assertIsNotNone(entry)
@@ -571,18 +486,18 @@ class TestSessionLogFile(unittest.TestCase):
     def test_trailer_persists_failed_to_log_index(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
-            orig_dir = profile_runner.SESSION_LOG_DIR
+            orig_dir = session_log.SESSION_LOG_DIR
             orig_log_dir = log_index.SESSION_LOG_DIR
-            profile_runner.SESSION_LOG_DIR = tmpdir
+            session_log.SESSION_LOG_DIR = tmpdir
             log_index.SESSION_LOG_DIR = tmpdir
             try:
-                path = profile_runner._create_session_log_file("backup", "test")
-                profile_runner._write_session_trailer(rc=2)
+                path = session_log.create_session_log_file("backup", "test")
+                session_log.write_session_trailer(path, time.time(), rc=2)
 
                 index = log_index.LogIndex.load()
                 entry = index.get(path)
             finally:
-                profile_runner.SESSION_LOG_DIR = orig_dir
+                session_log.SESSION_LOG_DIR = orig_dir
                 log_index.SESSION_LOG_DIR = orig_log_dir
 
         self.assertIsNotNone(entry)
@@ -591,24 +506,24 @@ class TestSessionLogFile(unittest.TestCase):
     def test_maybe_truncate_resets_index(self):
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
-            orig_dir = profile_runner.SESSION_LOG_DIR
+            orig_dir = session_log.SESSION_LOG_DIR
             orig_log_dir = log_index.SESSION_LOG_DIR
-            profile_runner.SESSION_LOG_DIR = tmpdir
+            session_log.SESSION_LOG_DIR = tmpdir
             log_index.SESSION_LOG_DIR = tmpdir
             try:
-                path = profile_runner._create_session_log_file("backup", "test")
+                path = session_log.create_session_log_file("backup", "test")
                 index = log_index.LogIndex.load()
                 index.update(path)
                 index.save()
 
-                with patch("profile_runner.truncate_session_log", return_value=True) as mock_truncate:
-                    profile_runner._maybe_truncate_session_log(path)
+                with patch("session_log.truncate_session_log", return_value=True) as mock_truncate:
+                    session_log.maybe_truncate_session_log(path, 0)
 
                 mock_truncate.assert_called_once_with(path)
                 index2 = log_index.LogIndex.load()
                 self.assertIsNone(index2.get(path))
             finally:
-                profile_runner.SESSION_LOG_DIR = orig_dir
+                session_log.SESSION_LOG_DIR = orig_dir
                 log_index.SESSION_LOG_DIR = orig_log_dir
 
 
@@ -619,7 +534,7 @@ class TestWriteRawLine(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
             path = f.name
         try:
-            profile_runner._write_raw_line(path, "INFO: test line")
+            session_log.write_raw_line(path, "INFO: test line")
             with open(path) as fh:
                 content = fh.read()
             self.assertIn("INFO: test line", content)
@@ -630,8 +545,8 @@ class TestWriteRawLine(unittest.TestCase):
 
     def test_noop_when_no_file(self):
         # Should not raise
-        profile_runner._write_raw_line(None, "INFO: test")
-        profile_runner._write_raw_line("", "INFO: test")
+        session_log.write_raw_line(None, "INFO: test")
+        session_log.write_raw_line("", "INFO: test")
 
 
 class TestRunScrubProfile(unittest.TestCase):
@@ -646,10 +561,9 @@ class TestRunScrubProfile(unittest.TestCase):
 
     def test_runs_and_polls(self):
         import tempfile
-        import scrub_manager as sm
         with tempfile.TemporaryDirectory() as tmpdir:
-            orig_path = sm.SCRUB_STATE_PATH
-            sm.SCRUB_STATE_PATH = os.path.join(tmpdir, "scrub_state.json")
+            orig_path = feature_config.SCRUB_STATE_PATH
+            feature_config.SCRUB_STATE_PATH = os.path.join(tmpdir, "scrub_state.json")
             try:
                 profile = {"config": {"pools": ["tank"], "simultaneous": 1}}
                 config = {}
@@ -673,7 +587,7 @@ class TestRunScrubProfile(unittest.TestCase):
                                 any("Scrub profile started" in msg for msg in logs)
                             )
             finally:
-                sm.SCRUB_STATE_PATH = orig_path
+                feature_config.SCRUB_STATE_PATH = orig_path
 
 
 class TestRunStepList(unittest.TestCase):
@@ -710,7 +624,7 @@ class TestRunStepList(unittest.TestCase):
             mock_popen.return_value = _mock_popen_process(
                 stdout="stdout-line\nstderr-line\n", rc=0
             )
-            with patch("profile_runner._write_raw_line") as mock_write:
+            with patch("session_log.write_raw_line") as mock_write:
                 rc = profile_runner._run_command(
                     BashStep(["echo", "hello"], "Say hello"),
                     session_log_file="/tmp/test.log",
@@ -939,9 +853,9 @@ class TestMainHistoryEntry(unittest.TestCase):
                     stack.enter_context(patch("profile_runner.load_config", return_value={}))
                     stack.enter_context(patch("profile_runner.prune_old_logs"))
                     mock_add = stack.enter_context(patch("profile_runner.add_history_entry"))
-                    stack.enter_context(patch("profile_runner._write_session_trailer"))
+                    stack.enter_context(patch("session_log.write_session_trailer"))
                     stack.enter_context(patch("profile_runner.sys.exit"))
-                    stack.enter_context(patch("profile_runner.SESSION_LOG_DIR", session_log_dir))
+                    stack.enter_context(patch("session_log.SESSION_LOG_DIR", session_log_dir))
                     stack.enter_context(runner_patch)
                     profile_runner.main()
                 return mock_add
@@ -962,7 +876,7 @@ class TestMainHistoryEntry(unittest.TestCase):
     def test_main_omits_log_file_when_creation_fails(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             session_dir = os.path.join(tmpdir, "sessions")
-            with patch("profile_runner._create_session_log_file",
+            with patch("session_log.create_session_log_file",
                        return_value=None):
                 mock_add = self._run_main(
                     session_dir,
@@ -988,7 +902,7 @@ class TestMainEarlyLogging(unittest.TestCase):
                         patch.object(sys, "argv", ["profile_runner.py", "run", "Daily"])
                     )
                     stack.enter_context(
-                        patch("profile_runner.SESSION_LOG_DIR", session_log_dir)
+                        patch("session_log.SESSION_LOG_DIR", session_log_dir)
                     )
                     stack.enter_context(patch("profile_runner.load_config", return_value={}))
                     stack.enter_context(patch("profile_runner.prune_old_logs"))
@@ -1004,7 +918,7 @@ class TestMainEarlyLogging(unittest.TestCase):
 
     def test_missing_profile_creates_session_log(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("profile_runner._write_session_trailer") as mock_trailer:
+            with patch("session_log.write_session_trailer") as mock_trailer:
                 self._run_main_early_exit(
                     tmpdir,
                     **{
@@ -1017,7 +931,8 @@ class TestMainEarlyLogging(unittest.TestCase):
             with open(path) as f:
                 content = f.read()
             self.assertIn("FATAL: Profile not found: Daily", content)
-            mock_trailer.assert_called_once_with(rc=1)
+            mock_trailer.assert_called_once()
+            self.assertEqual(mock_trailer.call_args.kwargs.get("rc"), 1)
 
     def test_lock_held_creates_session_log(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1029,7 +944,7 @@ class TestMainEarlyLogging(unittest.TestCase):
             def held_lock(*args, **kwargs):
                 return None, os.path.join(tmpdir, "daily.lock")
 
-            with patch("profile_runner._write_session_trailer") as mock_trailer:
+            with patch("session_log.write_session_trailer") as mock_trailer:
                 self._run_main_early_exit(
                     tmpdir,
                     **{
@@ -1044,7 +959,8 @@ class TestMainEarlyLogging(unittest.TestCase):
                 content = f.read()
             self.assertIn("already running", content)
             self.assertIn("skipping duplicate invocation", content)
-            mock_trailer.assert_called_once_with(rc=0)
+            mock_trailer.assert_called_once()
+            self.assertEqual(mock_trailer.call_args.kwargs.get("rc"), 0)
 
 
 class TestCheckWeekdayOrdinal(unittest.TestCase):
@@ -1153,7 +1069,7 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
                 },
             }
             config = {}
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with mock_subprocess() as m:
                     m.add_zpool_list(
                         [{"name": "src"}, {"name": "dst"}]
@@ -1195,7 +1111,7 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
                 },
             }
             config = {}
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with mock_subprocess() as m:
                     rc = profile_runner.run_backup_profile(profile, config, "/bin")
             self.assertEqual(rc, 0)
@@ -1223,7 +1139,7 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
                 },
             }
             config = {}
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with mock_subprocess() as m:
                     m.add_zpool_list(
                         [{"name": "src"}, {"name": "offsite"}]
@@ -1257,7 +1173,7 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
                 },
             }
             config = {}
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with mock_subprocess() as m:
                     m.add_zpool_list(
                         [{"name": "backup"}, {"name": "tank"}]
@@ -1299,7 +1215,7 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
                 },
             }
             config = {}
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with mock_subprocess() as m:
                     m.add_zpool_list(
                         [{"name": "src"}, {"name": "dst"}]

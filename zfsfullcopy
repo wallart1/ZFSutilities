@@ -9,6 +9,10 @@
 
 # NOTE: This script (zfsfullcopy) is designed to be called by other scripts. If you want a more
 #       flexible version that you can run yourself, see the zfsrestore script.
+#
+# This file defines a public, sourceable restore helper. It is intentionally
+# kept even though no in-tree caller currently exists, so external tools and
+# documented two-step restore workflows can continue to source it.
 
 # $restorefs                    (Required.) The dataset to be restored. May be not fully-qualified.
 # $sourcefsremovequalifiers     (Optional.) Number of leading qualifiers to remove from $restorefs.

@@ -18,6 +18,9 @@
 
 set -e
 
+source ~/bashinit
+bashinit
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DOCS_DIR="$REPO_DIR/06 Docs"
@@ -27,7 +30,6 @@ CLONE_DIR="$REPO_DIR/09 ZFS clone support"
 NODE_CONF="/etc/zfsutilities-node.conf"
 NODE_LIB_SRC="$TWO_NODE_DIR/node-lib.sh"
 NODE_LIB_DST="/usr/local/lib/node-lib.sh"
-COMPAT_LINK="/usr/local/lib/two-node-lib.sh"
 
 # Scripts installed on BOTH hosts
 BOTH_SCRIPTS="new-vm-disk remove-vm-disk detach-vm-disk attach-vm-disk list-vm-disks resize-vm-disk rescan-storage show-lun-map clone-vm move-vm-disk enroll-efi-keys-vm"
@@ -50,11 +52,6 @@ DROPINS=(
     "rtslib-fb-targetctl-boot-config.conf:boot-config.conf"
     "rtslib-fb-targetctl-wait-for-zfs-keys.conf:wait-for-zfs-keys.conf"
 )
-
-die() {
-    echo "✗ ERROR: $*" >&2
-    exit 1
-}
 
 _check_zfs_root() {
     local root_fs_type
@@ -331,6 +328,26 @@ VERSION=$(cat "$REPO_DIR/VERSION")
 # Initialize retention profiles: new installs get only the default policy;
 # existing user-entered per-pool policies are preserved.
 ensure_retention_profiles
+
+# Run ensure_retention_profiles on a remote host via SSH.
+# Warnings only on failure so the install can continue.
+ensure_retention_profiles_remote() {
+    local host="$1"
+    local config_path="${ZFSCONFIG_PATH:-/root/.config/zfsutilities.json}"
+    local helper="/usr/local/lib/zfsutilities/current/10 Installers/installer_retention.py"
+    local python_src="/usr/local/lib/zfsutilities/current/07 GTK + Python"
+    local installer_src="/usr/local/lib/zfsutilities/current/10 Installers"
+
+    local new_install_flag=""
+    if ssh -o ConnectTimeout=5 "root@$host" "[[ ! -f '$config_path' ]]" >/dev/null 2>&1; then
+        new_install_flag="--new-install"
+    fi
+
+    echo "=== Retention Profiles on $host ==="
+    ssh -o ConnectTimeout=5 "root@$host" \
+        "PYTHONPATH='$python_src:$installer_src' python3 '$helper' --config-path '$config_path' $new_install_flag" \
+        || echo "  ⚠ Could not initialize retention profiles on $host" >&2
+}
 
 # Activate the deployed version on the compute host
 if [[ -n "${COMPUTE_HOST:-}" ]]; then

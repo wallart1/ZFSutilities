@@ -55,9 +55,7 @@ usage() {
     exit 1
 }
 
-warn() {
-    log_msg "WARN: $*"
-}
+# warn is provided by bashinit (sourced above).
 
 # Manifest helpers (duplicated here to keep move-vm-disk self-contained)
 manifest_remove() {

@@ -3,23 +3,28 @@ Retention tab action handlers — extracted from retention_page.py.
 """
 
 import shlex
-import subprocess
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
 
-from backup_config import (
-    get_all_retention, save_retention, save_config,
-    DEFAULT_RETENTION, log_msg,
-)
-from command_builders import _dryrun_assignments, BashStep
-from gui_helpers import set_button_markup_red
+gi.require_version('Gtk', '3.0')
 import zfs_lock_manager as zlm
+from backup_config import (
+    DEFAULT_RETENTION,
+    get_all_retention,
+    log_msg,
+    save_config,
+    save_retention,
+)
+from command_builders import BashStep, _dryrun_assignments
+from gi.repository import Gtk
+from gui_helpers import set_button_markup_red, show_error
 from retention_page import (
-    _get_online_pool_names, _show_error, _update_ret_status,
-    _load_pool_into_store, _on_ret_save, _on_ret_revert,
-    refresh_prune_pools, BUCKET_LABELS,
+    BUCKET_LABELS,
+    _get_online_pool_names,
+    _on_ret_revert,
+    _on_ret_save,
+    _update_ret_status,
+    refresh_prune_pools,
 )
 
 
@@ -91,7 +96,7 @@ def on_retention_add_policy(app, ctx):
     try:
         save_retention(ctx.config, pool, [dict(b) for b in default_buckets])
     except OSError as e:
-        _show_error(app, f"Failed to create policy for '{pool}':\n{e}")
+        show_error(app, f"Failed to create policy for '{pool}':\n{e}")
         return
 
     if pool not in app._ret_pool_list:
@@ -108,7 +113,7 @@ def on_retention_remove_policy(app, ctx):
     """Delete the currently-selected pool's retention policy."""
     pool = app._ret_pool
     if pool == 'default':
-        _show_error(app, "The 'default' retention policy cannot be removed.")
+        show_error(app, "The 'default' retention policy cannot be removed.")
         return
 
     dlg = Gtk.MessageDialog(
@@ -132,7 +137,7 @@ def on_retention_remove_policy(app, ctx):
         try:
             save_config(ctx.config)
         except OSError as e:
-            _show_error(app, f"Failed to save after removing '{pool}':\n{e}")
+            show_error(app, f"Failed to save after removing '{pool}':\n{e}")
             return
         log_msg(f"INFO: Removed retention policy for pool: {pool}")
 
@@ -160,7 +165,7 @@ def on_retention_prune(app, ctx):
 
     label = app._ret_prune_label_entry.get_text().strip()
     if not label:
-        _show_error(app, "Please enter a snapshot label for the prune operation.")
+        show_error(app, "Please enter a snapshot label for the prune operation.")
         return
 
     selected = {model[p][0] for p in paths}
@@ -229,7 +234,7 @@ def on_retention_mass_delete(app, ctx):
 
     label = app._ret_prune_label_entry.get_text().strip()
     if not label:
-        _show_error(app, "Please enter a snapshot label for the mass delete operation.")
+        show_error(app, "Please enter a snapshot label for the mass delete operation.")
         return
 
     selected = {model[p][0] for p in paths}
@@ -259,7 +264,7 @@ def on_retention_mass_delete(app, ctx):
     var_assignments += f'ignore_retention_policies="{ignore}"; '
     var_assignments += f'releaseholds="{releaseholds}"; '
     if releaseholds == "Y":
-        var_assignments += f'releaseholds_tags=("offsite-*"); '
+        var_assignments += 'releaseholds_tags=("offsite-*"); '
     var_assignments += f'snapshot_label="{label}"; '
     var_assignments += f'snapshot_has="{snapshot_has}"; '
     if includes:

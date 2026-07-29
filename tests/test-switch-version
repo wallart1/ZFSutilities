@@ -24,6 +24,7 @@ _make_fake_version() {
     mkdir -p "$version_base/versions/$version/bin"
     mkdir -p "$version_base/versions/$version/lib"
     touch "$version_base/versions/$version/lib/node-lib.sh"
+    touch "$version_base/versions/$version/lib/iscsi-lib.sh"
     printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$version_base/versions/$version/bin/rootcheck"
     chmod +x "$version_base/versions/$version/bin/rootcheck"
 
@@ -50,6 +51,7 @@ _setup_switch_env() {
     export ZFSUTILITIES_SUDOERS_FILE="$_tmpdir/etc/sudoers.d/zfsutilities"
     export ZFSUTILITIES_NODE_LIB_LINK="$_tmpdir/usr/local/lib/node-lib.sh"
     export ZFSUTILITIES_TWO_NODE_LIB_LINK="$_tmpdir/usr/local/lib/two-node-lib.sh"
+    export ZFSUTILITIES_ISCSI_LIB_LINK="$_tmpdir/usr/local/lib/iscsi-lib.sh"
     export ZFSUTILITIES_ROOTCHECK_LINK="$_tmpdir/usr/local/lib/rootcheck"
     export ZFSUTILITIES_LOCAL_BIN_DIR="$_tmpdir/usr/local/bin"
 
@@ -68,6 +70,7 @@ _teardown_switch_env() {
     unset ZFSUTILITIES_SUDOERS_FILE
     unset ZFSUTILITIES_NODE_LIB_LINK
     unset ZFSUTILITIES_TWO_NODE_LIB_LINK
+    unset ZFSUTILITIES_ISCSI_LIB_LINK
     unset ZFSUTILITIES_ROOTCHECK_LINK
     unset ZFSUTILITIES_LOCAL_BIN_DIR
     rm -rf "$tmpdir"
@@ -125,6 +128,10 @@ test_switch_creates_wiring() {
     if [[ ! -L "$tmpdir/usr/local/lib/node-lib.sh" ]]; then
         failed=1
         echo "    node-lib.sh symlink missing"
+    fi
+    if [[ ! -L "$tmpdir/usr/local/lib/iscsi-lib.sh" ]]; then
+        failed=1
+        echo "    iscsi-lib.sh symlink missing"
     fi
     if [[ ! -L "$tmpdir/usr/local/lib/rootcheck" ]]; then
         failed=1
@@ -313,6 +320,10 @@ test_uninstall_removes_wiring() {
     if [[ -L "$tmpdir/usr/local/lib/node-lib.sh" ]]; then
         failed=1
         echo "    node-lib.sh symlink still present"
+    fi
+    if [[ -L "$tmpdir/usr/local/lib/iscsi-lib.sh" ]]; then
+        failed=1
+        echo "    iscsi-lib.sh symlink still present"
     fi
     if [[ -L "$tmpdir/usr/local/lib/rootcheck" ]]; then
         failed=1

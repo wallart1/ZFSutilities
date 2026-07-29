@@ -14,42 +14,54 @@ import subprocess
 import sys
 import time
 from contextlib import nullcontext
-
 from datetime import datetime
 
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
-from logging_config import log_msg, session_log_context, truncate_session_log
-from log_index import LogIndex
-from config_core import load_config, prune_old_logs, SESSION_LOG_DIR
-from feature_config import (
-    generate_snapshot_name,
-    generate_offsite_snapshot_name,
-    remove_snapfile,
-    get_pool_names,
-)
-from backup_history import _parse_human_size, build_entry, add_history_entry
+import session_log
+from backup_history import _parse_human_size, add_history_entry, build_entry
 from command_builders import (
     BashStep,
     _dryrun_assignments,
-    parse_rsync_endpoint as _parse_rsync_endpoint,
-    build_rsync_command as _build_rsync_command,
-    build_send_receive_command as _build_send_receive_command,
-    build_pre_backup_command as _build_pre_backup_command,
+)
+from command_builders import (
     build_post_backup_command as _build_post_backup_command,
+)
+from command_builders import (
+    build_pre_backup_command as _build_pre_backup_command,
+)
+from command_builders import (
     build_retention_command as _build_retention_command,
 )
-from offsite_runner import detect_offsite_pool, build_offsite_step_command
-from restore_runner import compute_restore_params, build_restore_command
-from profile_manager import load_profile
-from scrub_manager import (
-    ScrubQueue, get_all_pool_scrub_states, ScrubState,
-    start_scrub, pause_scrub, resume_scrub, stop_scrub,
-    attach_step_scrub_callbacks,
+from command_builders import (
+    build_rsync_command as _build_rsync_command,
 )
-from cron_manager import _parse_weekday, _match_weekday_ordinal
+from command_builders import (
+    build_send_receive_command as _build_send_receive_command,
+)
+from command_builders import (
+    parse_rsync_endpoint as _parse_rsync_endpoint,
+)
+from config_core import load_config, prune_old_logs
+from cron_manager import _match_weekday_ordinal, _parse_weekday
+from feature_config import (
+    generate_offsite_snapshot_name,
+    generate_snapshot_name,
+    get_pool_names,
+    remove_snapfile,
+)
+from logging_config import log_msg, session_log_context
+from offsite_runner import build_offsite_step_command, detect_offsite_pool
+from profile_manager import load_profile
+from restore_runner import build_restore_command, compute_restore_params
+from scrub_manager import (
+    ScrubQueue,
+    attach_step_scrub_callbacks,
+    get_all_pool_scrub_states,
+)
+from zfs_repository import is_dataset_encrypted
 
 # Directory for per-profile advisory locks. Override for testing.
 PROFILE_LOCK_DIR = os.environ.get(
@@ -109,15 +121,6 @@ def _check_weekday_ordinal(weekday_field):
     return _match_weekday_ordinal(today, wd, specs)
 
 
-def _profile_lock_path(profile_name):
-    """Return the lock file path for *profile_name*.
-
-    The profile name is sanitized so it can be used safely as a filename.
-    """
-    safe = re.sub(r"[^A-Za-z0-9_-]", "_", profile_name)
-    return os.path.join(PROFILE_LOCK_DIR, f"{safe}.lock")
-
-
 def acquire_profile_lock(profile_name, timeout=1.0, log_file=None):
     """Acquire an exclusive advisory lock for *profile_name*.
 
@@ -130,14 +133,15 @@ def acquire_profile_lock(profile_name, timeout=1.0, log_file=None):
     Dashboard can jump directly to the running profile's session log.
     """
     os.makedirs(PROFILE_LOCK_DIR, exist_ok=True)
-    lock_path = _profile_lock_path(profile_name)
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", profile_name)
+    lock_path = os.path.join(PROFILE_LOCK_DIR, f"{safe}.lock")
     fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
     flags = fcntl.LOCK_EX | fcntl.LOCK_NB
 
     if timeout is None:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
-        except OSError as exc:
+        except OSError:
             os.close(fd)
             raise
         return fd, lock_path
@@ -197,125 +201,15 @@ def release_profile_lock(fd, lock_path):
         pass
 
 
-def _is_dataset_encrypted(path):
-    """Check whether *path* resides inside an encrypted ZFS dataset.
-
-    Walks up the directory tree until `zfs list` succeeds, then checks
-    the `encryption` property. Returns True only if the dataset is
-    actually encrypted (not '-', 'off', or empty).
-    """
-    candidate = os.path.normpath(path)
-    while candidate and candidate != "/":
-        result = subprocess.run(
-            ["zfs", "list", "-H", "-o", "name", candidate],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            dataset = result.stdout.strip()
-            enc_result = subprocess.run(
-                ["zfs", "get", "-H", "-o", "value", "encryption", dataset],
-                capture_output=True, text=True,
-            )
-            if enc_result.returncode == 0:
-                val = enc_result.stdout.strip()
-                return val not in ("", "-", "off")
-            return False
-        candidate = os.path.dirname(candidate)
-    return False
-
-
 _session_log_file = None
 _session_start_time = None
 _last_log_size_check = 0.0
 
 # How often to check the session log size while a profile is running.
-_PROFILE_LOG_SIZE_CHECK_INTERVAL = 5  # seconds
+_PROFILE_LOG_SIZE_CHECK_INTERVAL = session_log._LOG_SIZE_CHECK_INTERVAL
 
 # Log path used on the source host for pull-step rsync output in headless mode.
 _REMOTE_RSYNC_LOG_PATH = "/var/log/zfsutilities/rsync-pull.log"
-
-
-def _create_session_log_file(tab_type, profile_name):
-    global _session_log_file
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    # Regex: [^A-Za-z0-9_-]
-    # Purpose: Sanitize tab_type and profile_name for safe use in log filenames.
-    #          Strips any character that is not a letter, digit, hyphen, or underscore.
-    # Example: "Backup Profile #1" -> "BackupProfile1"
-    safe_type = re.sub(r"[^A-Za-z0-9_-]", "", tab_type)
-    safe_name = re.sub(r"[^A-Za-z0-9_-]", "", profile_name)
-    path = os.path.join(
-        SESSION_LOG_DIR, f"{ts}_{safe_type}_profile-{safe_name}.log"
-    )
-    os.makedirs(SESSION_LOG_DIR, exist_ok=True)
-    try:
-        open(path, "a").close()
-    except OSError:
-        path = None
-    _session_log_file = path
-    return path
-
-
-def _write_session_trailer(rc=None, bytes_transferred=0):
-    global _session_log_file, _session_start_time
-    if not _session_log_file:
-        return
-    duration = time.time() - _session_start_time if _session_start_time else 0.0
-    status = f"rc={rc}" if rc is not None else "done"
-    trailer = f"# END: {status}, duration={duration:.1f}s"
-    if bytes_transferred:
-        trailer += f", bytes={bytes_transferred}"
-    try:
-        with open(_session_log_file, "a") as fh:
-            fh.write(trailer + "\n")
-    except OSError:
-        pass
-
-    # Persist final metadata so the Logs tab does not need to rescan.
-    try:
-        index = LogIndex.load()
-        index.set_status(
-            _session_log_file,
-            status="Done" if rc == 0 else "Failed",
-            duration=duration,
-            bytes_transferred=bytes_transferred,
-        )
-        index.save()
-    except Exception as e:
-        log_msg(f"WARN: Could not update log index: {e}")
-
-
-def _write_raw_line(session_log_file, line):
-    """Append a raw subprocess line to the session log file with a timestamp."""
-    if not session_log_file:
-        return
-    try:
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(session_log_file, "a") as fh:
-            fh.write(f"{ts}  {line}\n")
-    except OSError:
-        pass
-
-
-def _maybe_truncate_session_log(session_log_file):
-    """Truncate the session log if it has grown beyond the cap.
-
-    Called periodically while a profile is running.  Returns True if truncation
-    occurred.
-    """
-    global _last_log_size_check
-    if not session_log_file:
-        return False
-    if truncate_session_log(session_log_file):
-        log_msg("WARN: Session log exceeded size cap and was truncated")
-        try:
-            index = LogIndex.load()
-            index.remove(session_log_file)
-            index.save()
-        except Exception as e:
-            log_msg(f"WARN: Could not reset log index after truncation: {e}")
-        return True
-    return False
 
 
 def _run_command(step, session_log_file=None):
@@ -346,11 +240,12 @@ def _run_command(step, session_log_file=None):
                     for line in process.stdout:
                         line = line.rstrip("\n")
                         print(line, file=sys.stderr)
-                        _write_raw_line(session_log_file, line)
-                        now = time.time()
-                        if now - _last_log_size_check >= _PROFILE_LOG_SIZE_CHECK_INTERVAL:
-                            _last_log_size_check = now
-                            _maybe_truncate_session_log(session_log_file)
+                        session_log.write_raw_line(session_log_file, line)
+                        _, _last_log_size_check = session_log.maybe_truncate_session_log(
+                            session_log_file,
+                            _last_log_size_check,
+                            interval=_PROFILE_LOG_SIZE_CHECK_INTERVAL,
+                        )
             finally:
                 returncode = process.wait()
             if returncode != 0:
@@ -377,8 +272,7 @@ def _run_step_list(steps, session_log_file=None):
         if rc != 0:
             if step.fatal:
                 return rc
-            if rc > max_rc:
-                max_rc = rc
+            max_rc = max(max_rc, rc)
     return max_rc
 
 
@@ -397,7 +291,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
         script = cfg.get("pre_backup_script", "").strip()
         if script:
             if dryrun:
-                log_msg(f"INFO: Dry-run: Would run pre-backup command")
+                log_msg("INFO: Dry-run: Would run pre-backup command")
             else:
                 steps.append(_build_pre_backup_command(script))
 
@@ -446,7 +340,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                 except OSError:
                     log_msg(f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not accessible")
                 else:
-                    if not _is_dataset_encrypted(zfs_keys_dest):
+                    if not is_dataset_encrypted(zfs_keys_dest):
                         log_msg(
                             "WARN: Skipping ZFS keys backup — destination is not "
                             "encrypted. Set zfs_keys_dest to an encrypted dataset."
@@ -462,7 +356,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                             remote_log_path=_REMOTE_RSYNC_LOG_PATH,
                         ))
         else:
-            if not _is_dataset_encrypted(zfs_keys_dest):
+            if not is_dataset_encrypted(zfs_keys_dest):
                 log_msg(
                     "WARN: Skipping ZFS keys backup — destination is not "
                     "encrypted. Set zfs_keys_dest to an encrypted dataset."
@@ -643,7 +537,7 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
     def _scrub_log(msg):
         log_msg(msg)
         if session_log_file:
-            _write_raw_line(session_log_file, msg)
+            session_log.write_raw_line(session_log_file, msg)
 
     queue = ScrubQueue(target=simultaneous)
     queue.add_pending(pool_names)
@@ -700,13 +594,17 @@ def main():
     _session_log_file = None
     _session_start_time = time.time()
     _last_log_size_check = time.time()
-    _create_session_log_file(tab_type, profile_name)
+    _session_log_file = session_log.create_session_log_file(
+        tab_type, profile_name
+    )
 
     ctx = session_log_context(_session_log_file) if _session_log_file else nullcontext()
     with ctx:
         if profile is None:
             log_msg(f"FATAL: Profile not found: {profile_name}")
-            _write_session_trailer(rc=1)
+            session_log.write_session_trailer(
+                _session_log_file, _session_start_time, rc=1
+            )
             sys.exit(1)
 
         lock_fd, lock_path = acquire_profile_lock(
@@ -717,7 +615,9 @@ def main():
                 f"INFO: Profile '{profile_name}' is already running; "
                 "skipping duplicate invocation"
             )
-            _write_session_trailer(rc=0)
+            session_log.write_session_trailer(
+                _session_log_file, _session_start_time, rc=0
+            )
             sys.exit(0)
 
         try:
@@ -737,7 +637,9 @@ def main():
                     f"INFO: Skipping profile {profile_name}: today does not match "
                     f"weekday ordinal '{weekday_field}'"
                 )
-                _write_session_trailer(rc=0)
+                session_log.write_session_trailer(
+                    _session_log_file, _session_start_time, rc=0
+                )
                 sys.exit(0)
 
             runners = {
@@ -755,7 +657,11 @@ def main():
                 rc = runner(profile, config, parent_dir, _session_log_file)
 
             log_msg(f"INFO: Profile {profile_name} finished (rc={rc})")
-            _maybe_truncate_session_log(_session_log_file)
+            _, _last_log_size_check = session_log.maybe_truncate_session_log(
+                _session_log_file,
+                _last_log_size_check,
+                interval=_PROFILE_LOG_SIZE_CHECK_INTERVAL,
+            )
             bytes_transferred = _parse_bytes_from_log(_session_log_file)
             duration = time.time() - _session_start_time if _session_start_time else 0.0
             result = "success" if rc == 0 else "failed"
@@ -769,7 +675,12 @@ def main():
                 log_file=_session_log_file,
             )
             add_history_entry(entry)
-            _write_session_trailer(rc=rc, bytes_transferred=bytes_transferred)
+            session_log.write_session_trailer(
+                _session_log_file,
+                _session_start_time,
+                rc=rc,
+                bytes_transferred=bytes_transferred,
+            )
             sys.exit(rc)
         finally:
             release_profile_lock(lock_fd, lock_path)

@@ -73,19 +73,6 @@ function retain {
     unset _retention_fragment
     bktlen=${#bktname[@]}
 
-    # Helper function to look up minage by bucket name
-    get_minage_for_bucket() {
-        local bucket=$1
-        local idx
-        for ((idx=0; idx<bktlen; idx++)); do
-            if [[ ${bktname[$idx]} = "$bucket" ]]; then
-                echo "${minage[$idx]:-0}"
-                return
-            fi
-        done
-        echo "0"  # Default to 0 if bucket not found
-    }
-
     local set_save=$-
     local -i i_save=$i j_save=$j k_save=$k l_save=$l
     local -i i j k l

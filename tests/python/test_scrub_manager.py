@@ -1,23 +1,20 @@
 """Tests for scrub_manager.py — scrub parsing, queue logic, system timers."""
 
-import json
 import os
+import sys
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
-
-import sys
+from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import temp_config_dir, capture_logs
-
+import feature_config
 import file_locking
-
 import scrub_manager as sm
+from test_support import capture_logs, temp_config_dir
 
 
 class TestScrubControlStateChecking(unittest.TestCase):
@@ -293,15 +290,15 @@ class TestScrubQueue(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.state_path = os.path.join(self.tmpdir.name, "scrub_state.json")
-        self._orig_path = sm.SCRUB_STATE_PATH
+        self._orig_path = feature_config.SCRUB_STATE_PATH
         self._orig_lock = file_locking.SCRUB_STATE_LOCK_PATH
-        sm.SCRUB_STATE_PATH = self.state_path
+        feature_config.SCRUB_STATE_PATH = self.state_path
         file_locking.SCRUB_STATE_LOCK_PATH = os.path.join(
             self.tmpdir.name, ".scrub_state.lock"
         )
 
     def tearDown(self):
-        sm.SCRUB_STATE_PATH = self._orig_path
+        feature_config.SCRUB_STATE_PATH = self._orig_path
         file_locking.SCRUB_STATE_LOCK_PATH = self._orig_lock
         self.tmpdir.cleanup()
 
@@ -516,12 +513,11 @@ class TestPoolActionsScrub(unittest.TestCase):
 
         with patch.object(
             pool_actions, "get_selected_pool_names", return_value=["tank", "data"]
-        ):
-            with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
-                with patch.object(
-                    pools_page, "schedule_scrub_refresh_burst"
-                ) as mock_burst:
-                    pool_actions.on_scrub_resume(app)
+        ), patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
+            with patch.object(
+                pools_page, "schedule_scrub_refresh_burst"
+            ) as mock_burst:
+                pool_actions.on_scrub_resume(app)
 
         app.scrub_queue.resume_pools.assert_called_once_with(["tank"])
         mock_refresh.assert_called_once_with(app)
@@ -538,12 +534,11 @@ class TestPoolActionsScrub(unittest.TestCase):
         app = MagicMock()
         with patch.object(
             pool_actions, "get_selected_pool_names", return_value=["tank"]
-        ):
-            with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
-                with patch.object(
-                    pools_page, "schedule_scrub_refresh_burst"
-                ) as mock_burst:
-                    pool_actions.on_scrub_start(app)
+        ), patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
+            with patch.object(
+                pools_page, "schedule_scrub_refresh_burst"
+            ) as mock_burst:
+                pool_actions.on_scrub_start(app)
 
         app.scrub_queue.add_pending.assert_called_once_with(["tank"])
         mock_refresh.assert_called_once_with(app)
@@ -561,10 +556,9 @@ class TestPoolActionsScrub(unittest.TestCase):
         app.scrub_queue.paused = {"tank"}
         with patch.object(
             pool_actions, "get_selected_pool_names", return_value=["tank"]
-        ):
-            with patch.object(pools_page, "refresh_scrub_table"):
-                with patch.object(pools_page, "schedule_scrub_refresh_burst"):
-                    pool_actions.on_scrub_start(app)
+        ), patch.object(pools_page, "refresh_scrub_table"):
+            with patch.object(pools_page, "schedule_scrub_refresh_burst"):
+                pool_actions.on_scrub_start(app)
 
         app.scrub_queue.add_pending.assert_called_once_with(["tank"])
 
@@ -579,13 +573,12 @@ class TestPoolActionsScrub(unittest.TestCase):
         app = MagicMock()
         with patch.object(
             pool_actions, "get_selected_pool_names", return_value=["tank"]
-        ):
-            with patch.object(pool_actions, "pause_scrub"):
-                with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
-                    with patch.object(
-                        pools_page, "schedule_scrub_refresh_burst"
-                    ) as mock_burst:
-                        pool_actions.on_scrub_pause(app)
+        ), patch.object(pool_actions, "pause_scrub"):
+            with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
+                with patch.object(
+                    pools_page, "schedule_scrub_refresh_burst"
+                ) as mock_burst:
+                    pool_actions.on_scrub_pause(app)
 
         app.scrub_queue.pause_pools.assert_called_once_with(["tank"])
         mock_refresh.assert_called_once_with(app)
@@ -593,7 +586,7 @@ class TestPoolActionsScrub(unittest.TestCase):
 
     def test_on_scrub_pause_does_not_log_success_for_finished_pool(self):
         """Pause handler must not claim a finished scrub was paused."""
-        from test_support import mock_gtk, capture_logs
+        from test_support import mock_gtk
 
         with mock_gtk():
             import pool_actions
@@ -603,16 +596,15 @@ class TestPoolActionsScrub(unittest.TestCase):
         app.scrub_queue.paused = set()
         with patch.object(
             pool_actions, "get_selected_pool_names", return_value=["tank"]
-        ):
-            with patch.object(pools_page, "refresh_scrub_table"):
-                with patch.object(pools_page, "schedule_scrub_refresh_burst"):
-                    with patch.object(
-                        sm,
-                        "get_pool_scrub_info",
-                        return_value=sm.ScrubInfo(state=sm.ScrubState.FINISHED),
-                    ):
-                        with capture_logs() as logs:
-                            pool_actions.on_scrub_pause(app)
+        ), patch.object(pools_page, "refresh_scrub_table"):
+            with patch.object(pools_page, "schedule_scrub_refresh_burst"):
+                with patch.object(
+                    sm,
+                    "get_pool_scrub_info",
+                    return_value=sm.ScrubInfo(state=sm.ScrubState.FINISHED),
+                ):
+                    with capture_logs() as logs:
+                        pool_actions.on_scrub_pause(app)
 
         log_text = "\n".join(logs)
         self.assertNotIn("Scrub paused", log_text)
@@ -629,13 +621,12 @@ class TestPoolActionsScrub(unittest.TestCase):
         app = MagicMock()
         with patch.object(
             pool_actions, "get_selected_pool_names", return_value=["tank"]
-        ):
-            with patch.object(pool_actions, "stop_scrub"):
-                with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
-                    with patch.object(
-                        pools_page, "schedule_scrub_refresh_burst"
-                    ) as mock_burst:
-                        pool_actions.on_scrub_stop(app)
+        ), patch.object(pool_actions, "stop_scrub"):
+            with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
+                with patch.object(
+                    pools_page, "schedule_scrub_refresh_burst"
+                ) as mock_burst:
+                    pool_actions.on_scrub_stop(app)
 
         app.scrub_queue.remove_pools.assert_called_once_with(["tank"])
         mock_refresh.assert_called_once_with(app)
@@ -692,7 +683,7 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         }
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with patch.object(
                     sm, "get_all_pool_scrub_states", return_value=states
                 ):
@@ -718,7 +709,7 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         }
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with patch.object(
                     sm, "get_all_pool_scrub_states", return_value=states
                 ):
@@ -740,7 +731,7 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         states = {"src": self._state(sm.ScrubState.SCANNING)}
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with patch.object(
                     sm, "get_all_pool_scrub_states", return_value=states
                 ):
@@ -762,7 +753,7 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         }
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with patch.object(
                     sm, "get_all_pool_scrub_states", return_value=states
                 ):
@@ -809,7 +800,7 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         custom_log = MagicMock()
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with patch.object(
                     sm, "get_all_pool_scrub_states", return_value=states
                 ):
@@ -834,7 +825,7 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         custom_log = MagicMock()
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with patch.object(
                     sm, "get_all_pool_scrub_states", return_value=states
                 ):
@@ -861,7 +852,7 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         states = {"src": self._state(sm.ScrubState.SCANNING)}
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
-            with patch.object(sm, "SCRUB_STATE_PATH", state_path):
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with patch.object(
                     sm, "get_all_pool_scrub_states", return_value=states
                 ):
@@ -877,22 +868,6 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
 
 
 class TestSystemScrubHelpers(unittest.TestCase):
-
-    def test_get_system_scrub_state_parses_enabled(self):
-        with patch("subprocess.run") as mock_run:
-            def side_effect(cmd, **kwargs):
-                result = MagicMock()
-                if "weekly" in cmd[-1]:
-                    result.returncode = 0
-                    result.stdout = "enabled\n"
-                else:
-                    result.returncode = 1
-                    result.stdout = "disabled\n"
-                return result
-            mock_run.side_effect = side_effect
-            state = sm.get_system_scrub_state("tank")
-        self.assertTrue(state["weekly"])
-        self.assertFalse(state["monthly"])
 
     def test_set_system_scrub_enabled(self):
         with patch("subprocess.run") as mock_run:

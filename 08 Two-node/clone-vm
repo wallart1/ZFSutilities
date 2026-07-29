@@ -42,9 +42,7 @@ usage() {
     exit 1
 }
 
-gen_mac() {
-    printf 'BC:24:11:%02X:%02X:%02X' $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256))
-}
+# gen_mac is provided by node-lib.sh (sourced above).
 
 # --- Argument validation ---
 [[ $# -eq 3 ]] || usage
