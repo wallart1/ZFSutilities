@@ -350,14 +350,15 @@ An automated bash test harness lives in `tests/`.
 # Run a specific suite
 ./run-tests test-zfsretain
 
-# Verbose output (show every test)
-./run-tests -v
-
-# Quiet (summary only)
+# Quiet: show suite headers, failures, and summary only
 ./run-tests -q
+./run-tests --quiet
 
-# Large test output
-If, when running the tests, the output is truncated, then break up the tests so that their outputs are not truncated. Or, run tests in a way that reduces their output volume without reducing accuracy.
+# Failures only: show only failing tests and the final summary
+./run-tests --failures-only
+
+# Reduce output volume when running many suites
+If the full-suite output is truncated, run with -q or --failures-only, or run a subset of suites at a time.
 ```
 
 ### Test Suite Files
@@ -448,10 +449,19 @@ A Python test harness lives in `tests/python/` and uses Python's built-in `unitt
 # Run a specific Python suite
 ./tests/run-python-tests test_backup_config
 
+# Quiet: show suite headers, failures, and summary only
+./tests/run-python-tests -q
+./tests/run-python-tests --quiet
+
+# Failures only: show only failing tests and the final summary
+./tests/run-python-tests --failures-only
+
 # Run via the unified harness (bash + Python)
 ./tests/run-tests
 ./tests/run-tests test_backup_config
 ./tests/run-tests test-zfsretain test_backup_config
+./tests/run-tests -q
+./tests/run-tests --failures-only
 ```
 
 #### Test Suite Files

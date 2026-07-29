@@ -189,6 +189,32 @@ class TestOffsiteHandlers(unittest.TestCase):
         self.assertIn("Run Offsite", action_dispatch.ACTION_HANDLERS["offsite"])
 
 
+class TestBackupPageSpec(unittest.TestCase):
+    """Backup page spec uses the DirtyTracker object for dirty checks."""
+
+    def test_dirty_attr_is_backup_tracker(self):
+        self.assertEqual(
+            action_dispatch.PAGE_SPECS["backup"]["dirty_attr"],
+            "_backup_tracker",
+        )
+
+    def test_dirty_check_is_callable(self):
+        self.assertTrue(callable(action_dispatch.PAGE_SPECS["backup"]["dirty_check"]))
+
+
+class TestOffsitePageSpec(unittest.TestCase):
+    """Offsite page spec uses the DirtyTracker object for dirty checks."""
+
+    def test_dirty_attr_is_offsite_tracker(self):
+        self.assertEqual(
+            action_dispatch.PAGE_SPECS["offsite"]["dirty_attr"],
+            "_offsite_tracker",
+        )
+
+    def test_dirty_check_is_callable(self):
+        self.assertTrue(callable(action_dispatch.PAGE_SPECS["offsite"]["dirty_check"]))
+
+
 class TestDatasetsPageSpec(unittest.TestCase):
     """Datasets page exposes Expand Selected next to Collapse All."""
 

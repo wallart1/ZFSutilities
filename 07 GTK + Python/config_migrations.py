@@ -1,6 +1,6 @@
 """Config schema migrations. Bump CONFIG_VERSION when JSON structure changes."""
 
-CONFIG_VERSION = 19
+CONFIG_VERSION = 20
 
 
 def _migrate_1_to_2(config):
@@ -217,6 +217,15 @@ def _migrate_18_to_19(config):
     return config
 
 
+def _migrate_19_to_20(config):
+    """Drop stale offsite_pools now that candidates are resolved at runtime."""
+    offsite = config.get("offsite")
+    if isinstance(offsite, dict):
+        offsite.pop("offsite_pools", None)
+    config["config_version"] = 20
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -236,6 +245,7 @@ MIGRATIONS = [
     _migrate_16_to_17,
     _migrate_17_to_18,
     _migrate_18_to_19,
+    _migrate_19_to_20,
 ]
 
 

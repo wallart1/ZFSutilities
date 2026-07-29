@@ -1660,6 +1660,7 @@ class TestCreateDashboardPage(unittest.TestCase):
         pool_grid_sw = pool_box.children[1]
         self.assertIsInstance(pool_grid_sw, _WidgetRecorder)
         pool_grid_sw.set_policy.assert_called_once()
+        pool_grid_sw.set_min_content_width.assert_called_once_with(300)
         pool_grid_sw.set_propagate_natural_height.assert_called_once_with(True)
         self.assertIn(app.dashboard_pool_grid, pool_grid_sw.children)
 
@@ -1674,6 +1675,25 @@ class TestCreateDashboardPage(unittest.TestCase):
         self.assertEqual(args[0], "value-changed")
         self.assertTrue(callable(args[1]))
         self.assertIs(args[2], app)
+
+    def test_outer_scrolled_window_can_shrink_horizontally(self):
+        """The dashboard outer ScrolledWindow must allow horizontal shrinking."""
+        app = self._create_app()
+        page = self._run_create(app)
+        self.assertIsInstance(page, _WidgetRecorder)
+        page.set_policy.assert_called_once()
+        page.set_min_content_width.assert_called_once_with(400)
+
+    def test_configuration_grid_is_horizontally_scrollable(self):
+        """Configuration grid lives in a horizontally-scrollable ScrolledWindow."""
+        app = self._create_app()
+        self._run_create(app)
+        config_sw = app.dashboard_config_frame.children[0]
+        self.assertIsInstance(config_sw, _WidgetRecorder)
+        config_sw.set_policy.assert_called_once()
+        config_sw.set_min_content_width.assert_called_once_with(300)
+        config_sw.set_propagate_natural_height.assert_called_once_with(True)
+        self.assertIn(app.dashboard_config_grid, config_sw.children)
 
     def test_iscsi_frame_hidden_in_single_node_mode(self):
         app = self._create_app()

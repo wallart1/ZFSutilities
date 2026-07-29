@@ -111,7 +111,7 @@ class TestPoolsAndCheckagainst(unittest.TestCase):
         }
         self.assertEqual(feature_config.get_offsite_candidate_names(config), ["z40tb"])
 
-    def test_save_pools_syncs_offsite_pools(self):
+    def test_save_pools_does_not_sync_offsite_pools(self):
         with temp_config_dir():
             config = {}
             feature_config.save_pools(
@@ -121,7 +121,7 @@ class TestPoolsAndCheckagainst(unittest.TestCase):
                     {"name": "z40tb", "offsite_candidate": True},
                 ],
             )
-            self.assertEqual(config["offsite"]["offsite_pools"], ["z40tb"])
+            self.assertNotIn("offsite_pools", config.get("offsite", {}))
 
     def test_get_checkagainst_creates_nested_defaults(self):
         config = {}

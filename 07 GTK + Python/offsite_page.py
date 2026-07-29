@@ -293,9 +293,6 @@ def collect_offsite_config(app):
         else:
             variables[key] = widget.get_text()
 
-    # Candidate pools are now maintained in the Pools tab registry.
-    offsite_pools = get_offsite_candidate_names(app.ctx.config)
-
     steps = []
     for row in app.offsite_step_store:
         steps.append({
@@ -308,7 +305,6 @@ def collect_offsite_config(app):
 
     return {
         "variables": variables,
-        "offsite_pools": offsite_pools,
         "steps": steps,
         "pause_scrubs": app.offsite_pause_scrubs.get_active(),
     }
@@ -517,11 +513,10 @@ def on_offsite_save(app, ctx):
 
 def on_offsite_revert(app, ctx):
     """Revert offsite UI to last-saved state."""
-    if not hasattr(app, '_offsite_saved_state'):
+    if not hasattr(app, '_offsite_tracker'):
         log_msg("INFO: Nothing to revert")
         return
-    if hasattr(app, '_offsite_tracker'):
-        app._offsite_tracker.revert(lambda cfg: load_offsite_config(app, cfg))
+    app._offsite_tracker.revert(lambda cfg: load_offsite_config(app, cfg))
     log_msg("INFO: Offsite config reverted to last saved state")
 
 

@@ -54,7 +54,6 @@ OFFSITE_DEFAULTS = {
         "startwith": "",
         "endwith": "",
     },
-    "offsite_pools": [],
     "steps": [],
     "pause_scrubs": False,
 }
@@ -66,7 +65,7 @@ def get_offsite_config(config):
     merged_vars = dict(defaults["variables"])
     merged_vars.update(offsite.get("variables", {}))
     offsite["variables"] = merged_vars
-    for key in ("offsite_pools", "steps", "pause_scrubs"):
+    for key in ("steps", "pause_scrubs"):
         if key not in offsite:
             offsite[key] = defaults[key]
     config["offsite"] = offsite
@@ -148,20 +147,7 @@ def get_offsite_candidate_names(config):
 
 
 def save_pools(config, pools):
-    normalized = [_normalize_pool_entry(p) for p in pools]
-    config["pools"] = normalized
-
-    # Mirror offsite candidate names into the offsite config so existing
-    # offsite runners and saved profiles continue to work.
-    candidates = [
-        p["name"] for p in normalized if p.get("offsite_candidate", False)
-    ]
-    offsite = config.get("offsite")
-    if not isinstance(offsite, dict):
-        offsite = {}
-        config["offsite"] = offsite
-    offsite["offsite_pools"] = candidates
-
+    config["pools"] = [_normalize_pool_entry(p) for p in pools]
     save_config(config)
 
 

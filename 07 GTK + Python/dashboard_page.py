@@ -903,6 +903,7 @@ def create_dashboard_page(app):
 
     scrolled = Gtk.ScrolledWindow()
     scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+    scrolled.set_min_content_width(400)
 
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
     box.set_margin_start(15)
@@ -960,6 +961,7 @@ def create_dashboard_page(app):
 
     pool_grid_sw = Gtk.ScrolledWindow()
     pool_grid_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+    pool_grid_sw.set_min_content_width(300)
     pool_grid_sw.set_propagate_natural_height(True)
     pool_grid_sw.add(app.dashboard_pool_grid)
     pool_box.pack_start(pool_grid_sw, False, False, 0)
@@ -1068,7 +1070,13 @@ def create_dashboard_page(app):
     app.dashboard_config_grid.set_margin_end(10)
     app.dashboard_config_grid.set_margin_top(10)
     app.dashboard_config_grid.set_margin_bottom(10)
-    app.dashboard_config_frame.add(app.dashboard_config_grid)
+
+    config_scrolled = Gtk.ScrolledWindow()
+    config_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+    config_scrolled.set_min_content_width(300)
+    config_scrolled.set_propagate_natural_height(True)
+    config_scrolled.add(app.dashboard_config_grid)
+    app.dashboard_config_frame.add(config_scrolled)
     box.pack_start(app.dashboard_config_frame, False, False, 0)
 
     # Initial population
@@ -1427,6 +1435,7 @@ def _refresh_iscsi_section(app, missing_luns, stale=False):
         lbl = Gtk.Label()
         lbl.set_markup(f'<span foreground="#FF8C00">⚠</span> {msg}')
         lbl.set_halign(Gtk.Align.START)
+        lbl.set_line_wrap(True)
         lbl.set_tooltip_text(tooltip_text)
         row.pack_start(lbl, False, False, 0)
 

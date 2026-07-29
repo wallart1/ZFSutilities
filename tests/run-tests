@@ -2,8 +2,10 @@
 # run-tests — Main test harness for ZFS Utilities.
 #
 # Usage:
-#   ./tests/run-tests              # Run all tests
-#   ./tests/run-tests test-foo     # Run specific test(s)
+#   ./tests/run-tests                  # Run all tests
+#   ./tests/run-tests test-foo         # Run specific test(s)
+#   ./tests/run-tests -q               # Quiet: suppress PASS/SKIP lines
+#   ./tests/run-tests --failures-only  # Only show failures
 
 set -euo pipefail
 
@@ -17,15 +19,34 @@ YELLOW='\033[0;33m'
 NC='\033[0m'
 
 # ---------------------------------------------------------------------------
+# Output-reduction flags
+# ---------------------------------------------------------------------------
+
+quiet_mode=""
+failures_only_mode=""
+forward_python_flags=()
+
+# ---------------------------------------------------------------------------
 # Partition arguments into bash and Python tests
 # ---------------------------------------------------------------------------
 
 bash_tests=()
 python_tests=()
+have_test_arg=""
 
 if [[ $# -gt 0 ]]; then
     for arg in "$@"; do
-        # Skip flags
+        if [[ "$arg" == "-q" || "$arg" == "--quiet" ]]; then
+            quiet_mode=1
+            forward_python_flags+=("$arg")
+            continue
+        fi
+        if [[ "$arg" == "--failures-only" ]]; then
+            failures_only_mode=1
+            forward_python_flags+=("$arg")
+            continue
+        fi
+        # Skip unrecognized flags
         if [[ "$arg" == -* ]]; then
             continue
         fi
@@ -36,6 +57,7 @@ if [[ $# -gt 0 ]]; then
         fi
         if [[ -f "tests/python/${py_name}.py" ]]; then
             python_tests+=("$py_name")
+            have_test_arg=1
             continue
         fi
         # Otherwise treat as bash test
@@ -44,11 +66,19 @@ if [[ $# -gt 0 ]]; then
         else
             bash_tests+=("$arg")
         fi
+        have_test_arg=1
     done
-else
+fi
+
+# If no test names were given (only flags), default to the full suite.
+if [[ -z "$have_test_arg" ]]; then
     readarray -t bash_tests < <(find tests -maxdepth 1 -type f -name 'test-*' | sort)
     python_tests=("all")
 fi
+
+# Propagate output-reduction settings to bash suites.
+[[ -n "$quiet_mode" ]] && export ZFSUTILITIES_TESTS_QUIET=1
+[[ -n "$failures_only_mode" ]] && export ZFSUTILITIES_TESTS_FAILURES_ONLY=1
 
 # ---------------------------------------------------------------------------
 # Run bash tests
@@ -62,9 +92,11 @@ any_failed=0
 
 for tf in "${bash_tests[@]}"; do
     suite_name="$(basename "$tf")"
-    echo "========================================"
-    echo "Running: $suite_name"
-    echo "========================================"
+    if [[ -z "$failures_only_mode" ]]; then
+        echo "========================================"
+        echo "Running: $suite_name"
+        echo "========================================"
+    fi
 
     total_suites=$((total_suites + 1))
 
@@ -74,36 +106,35 @@ for tf in "${bash_tests[@]}"; do
     else
         suite_rc=$?
     fi
-    cat "$tmpout"
 
-    last_line=$(tail -n 1 "$tmpout" 2>/dev/null || true)
-    rm -f "$tmpout"
+    # In quiet/failures-only mode, suppress passing-suite output to avoid
+    # truncation. Always show output for failing suites so failures can be
+    # diagnosed.
+    if [[ $suite_rc -ne 0 || -z "$quiet_mode$failures_only_mode" ]]; then
+        cat "$tmpout"
+    fi
 
-    # Parse the bash test suite's final summary line. Each suite ends with a
-    # line from test_summary() that looks like:
+    # Parse the bash test suite's summary. test_summary() emits lines like:
     #
     #     Total:   N
     #     Passed:  M
     #     Failed:  0
-    #     All tests passed!
     #
-    # (or "Some tests failed." when there are failures). The regex below
-    # captures the two numeric values after "passed" and "failed" so we can
-    # aggregate counts across all bash suites. The capture groups are:
-    #   \1 -> number of tests that passed
-    #   \2 -> number of tests that failed
-    # BASH_REMATCH is a bash builtin array populated by the =~ operator.
-    if [[ "$last_line" =~ ([0-9]+)\ passed.*([0-9]+)\ failed ]]; then
+    # Extract the Passed: and Failed: values independently so the order and
+    # any ANSI color codes do not matter.
+    passed_line=$(grep -E "^\s*Passed:" "$tmpout" | tail -n 1 | sed 's/\x1b\[[0-9;]*m//g' || true)
+    failed_line=$(grep -E "^\s*Failed:" "$tmpout" | tail -n 1 | sed 's/\x1b\[[0-9;]*m//g' || true)
+    rm -f "$tmpout"
+
+    if [[ "$passed_line" =~ Passed:[[:space:]]+([0-9]+) ]]; then
         suite_passed="${BASH_REMATCH[1]}"
-        suite_failed="${BASH_REMATCH[2]}"
     else
-        if [[ $suite_rc -eq 0 ]]; then
-            suite_passed=1
-            suite_failed=0
-        else
-            suite_passed=0
-            suite_failed=1
-        fi
+        suite_passed=$([[ $suite_rc -eq 0 ]] && echo 1 || echo 0)
+    fi
+    if [[ "$failed_line" =~ Failed:[[:space:]]+([0-9]+) ]]; then
+        suite_failed="${BASH_REMATCH[1]}"
+    else
+        suite_failed=$([[ $suite_rc -ne 0 ]] && echo 1 || echo 0)
     fi
 
     total_passed=$((total_passed + suite_passed))
@@ -112,10 +143,10 @@ for tf in "${bash_tests[@]}"; do
     if [[ $suite_rc -ne 0 ]]; then
         any_failed=1
         echo -e "${RED}  SUITE FAILED${NC} ($suite_name)"
-    else
+    elif [[ -z "$failures_only_mode" ]]; then
         echo -e "${GREEN}  SUITE PASSED${NC} ($suite_name)"
     fi
-    echo ""
+    [[ -z "$failures_only_mode" ]] && echo ""
 done
 
 # ---------------------------------------------------------------------------
@@ -123,25 +154,33 @@ done
 # ---------------------------------------------------------------------------
 
 if [[ ${#python_tests[@]} -gt 0 ]]; then
-    echo "========================================"
-    echo "Running: Python test suites"
-    echo "========================================"
+    if [[ -z "$failures_only_mode" ]]; then
+        echo "========================================"
+        echo "Running: Python test suites"
+        echo "========================================"
+    fi
 
     py_tmpout=$(mktemp)
     if [[ "${python_tests[0]}" == "all" ]]; then
-        if python3 "$mydir/python/runner.py" > "$py_tmpout" 2>&1; then
+        if python3 "$mydir/python/runner.py" "${forward_python_flags[@]}" > "$py_tmpout" 2>&1; then
             py_rc=0
         else
             py_rc=$?
         fi
     else
-        if python3 "$mydir/python/runner.py" "${python_tests[@]}" > "$py_tmpout" 2>&1; then
+        if python3 "$mydir/python/runner.py" "${forward_python_flags[@]}" "${python_tests[@]}" > "$py_tmpout" 2>&1; then
             py_rc=0
         else
             py_rc=$?
         fi
     fi
-    cat "$py_tmpout"
+
+    # In quiet/failures-only mode, suppress passing-suite output to avoid
+    # truncation. Always show output for failing suites so failures can be
+    # diagnosed.
+    if [[ $py_rc -ne 0 || -z "$quiet_mode$failures_only_mode" ]]; then
+        cat "$py_tmpout"
+    fi
 
     # Parse Python runner summary lines. The custom Python runner prints
     # colored summary lines near the end of its output, e.g.:
@@ -179,10 +218,10 @@ if [[ ${#python_tests[@]} -gt 0 ]]; then
     if [[ $py_rc -ne 0 ]]; then
         any_failed=1
         echo -e "${RED}  SUITE FAILED${NC} (python tests)"
-    else
+    elif [[ -z "$failures_only_mode" ]]; then
         echo -e "${GREEN}  SUITE PASSED${NC} (python tests)"
     fi
-    echo ""
+    [[ -z "$failures_only_mode" ]] && echo ""
 fi
 
 # ---------------------------------------------------------------------------

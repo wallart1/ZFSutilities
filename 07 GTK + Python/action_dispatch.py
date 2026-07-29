@@ -130,7 +130,7 @@ PAGE_SPECS = {
             ("Recall Profile", "document-open", None),
         ],
         "dirty_check": check_backup_dirty,
-        "dirty_attr": "_backup_saved_state",
+        "dirty_attr": "_backup_tracker",
     },
     "offsite": {
         "runner": "offsite_runner",
@@ -145,7 +145,7 @@ PAGE_SPECS = {
             ("Recall Profile", "document-open", None),
         ],
         "dirty_check": check_offsite_dirty,
-        "dirty_attr": "_offsite_saved_state",
+        "dirty_attr": "_offsite_tracker",
     },
     "restore": {
         "runner": "restore_runner",

@@ -20,6 +20,14 @@ rootcheck() { true; }   # Tests do not require root.
 # behavior can save/restore the original function or source bashinit directly.
 _TEST_LOG_FILE="/tmp/zfsutilities-test-$$.log"
 : > "${_TEST_LOG_FILE}"
+
+# Output-reduction flags set by the outer harness.
+_ZFSUTILITIES_TESTS_QUIET="${ZFSUTILITIES_TESTS_QUIET:-}"
+_ZFSUTILITIES_TESTS_FAILURES_ONLY="${ZFSUTILITIES_TESTS_FAILURES_ONLY:-}"
+
+# Track the current test name so failures can still be reported with context
+# when per-test output is suppressed.
+_CURRENT_TEST_NAME=""
 function log_msg {
     local caller_file="${BASH_SOURCE[1]}"
     local caller_line="${BASH_LINENO[0]}"
@@ -64,24 +72,38 @@ NC='\033[0m'
 
 test_start() {
     ((TESTS_RUN++))
-    echo -n "  Test $TESTS_RUN: $1... "
+    _CURRENT_TEST_NAME="$1"
+    if [[ -z "$_ZFSUTILITIES_TESTS_QUIET" && -z "$_ZFSUTILITIES_TESTS_FAILURES_ONLY" ]]; then
+        echo -n "  Test $TESTS_RUN: $1... "
+    fi
 }
 
 test_pass() {
     ((TESTS_PASSED++))
-    echo -e "${GREEN}PASS${NC}"
+    if [[ -z "$_ZFSUTILITIES_TESTS_QUIET" && -z "$_ZFSUTILITIES_TESTS_FAILURES_ONLY" ]]; then
+        echo -e "${GREEN}PASS${NC}"
+    fi
 }
 
 test_fail() {
     ((TESTS_FAILED++))
+    local reason="$1"
+    # Failures must always be visible, even when other per-test output is
+    # suppressed. Emit the full test label when the harness did not already
+    # print it via test_start().
+    if [[ -n "$_ZFSUTILITIES_TESTS_QUIET" || -n "$_ZFSUTILITIES_TESTS_FAILURES_ONLY" ]]; then
+        echo -n "  Test $TESTS_RUN: $_CURRENT_TEST_NAME... "
+    fi
     echo -e "${RED}FAIL${NC}"
-    [[ -n "$1" ]] && echo "    Reason: $1"
+    [[ -n "$reason" ]] && echo "    Reason: $reason"
 }
 
 test_skip() {
     ((TESTS_SKIPPED++))
-    echo -e "${YELLOW}SKIP${NC}"
-    [[ -n "$1" ]] && echo "    Reason: $1"
+    if [[ -z "$_ZFSUTILITIES_TESTS_QUIET" && -z "$_ZFSUTILITIES_TESTS_FAILURES_ONLY" ]]; then
+        echo -e "${YELLOW}SKIP${NC}"
+        [[ -n "$1" ]] && echo "    Reason: $1"
+    fi
 }
 
 # =============================================================================

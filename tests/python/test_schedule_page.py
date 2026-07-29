@@ -433,6 +433,36 @@ class TestConfigSummary(unittest.TestCase):
         self.assertTrue(actual.startswith("Dry run: No\n\n"))
         self.assertNotIn("Crontab entry", actual)
 
+    @patch("schedule_page.set_button_markup_red")
+    def test_offsite_summary_does_not_show_offsite_pools(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "root-offsite-daily", "offsite", "0 2 * * *", "next", ""]]
+        app = self._make_app(rows)
+
+        saved_profile = {
+            "profile_name": "root-offsite-daily",
+            "active": False,
+            "tab_type": "offsite",
+            "cron": {
+                "minute": "0", "hour": "2",
+                "day": "*", "month": "*", "weekday": "*",
+            },
+            "config": {
+                "variables": {},
+                "steps": [
+                    {"source": "tank/src", "dest": "<offsite>/dst", "active": True},
+                ],
+            },
+        }
+        selection = MagicMock()
+        selection.get_selected_rows.return_value = (app.schedule_store, [FakeTreePath(0)])
+
+        with patch("schedule_page.load_profile", return_value=saved_profile):
+            schedule_page._on_selection_changed(selection, app)
+
+        actual = app.schedule_summary_textview.get_buffer().set_text.call_args[0][0]
+        self.assertNotIn("offsite_pools", actual)
+
     @patch("schedule_page.Gtk")
     @patch("schedule_page.enable_textview_copy")
     @patch("schedule_page.list_profiles", return_value=[])

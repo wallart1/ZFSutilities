@@ -785,7 +785,7 @@ whether to warn/continue (when `$skipbusy='Y'`) or exit fatally.
 
 ### `zfsfindoffsitepool`
 
-Finds the first online offsite pool (`z22tb` or `z40tb`).
+Finds the first online offsite pool from the pool registry.
 
 ```bash
 source $mydir/zfsfindoffsitepool
@@ -794,11 +794,16 @@ pool=$(findoffsitepool)
 
 **Arguments:** none.
 
-**Globals:** none (compares imported pool names against the hardcoded offsite pool list).
+**Globals:** none (candidates are read at runtime from
+`zfsconfig_get_offsite_candidates`).
 
 Returns the pool name, or empty string if none are online.
 
-**Called modules:** none.
+**Called modules:**
+
+| Module | Purpose in this command |
+| ------ | ----------------------- |
+| [zfsconfig](modules.md#zfsconfig) | Read offsite-candidate pools from the JSON config |
 
 **Data structures consumed / produced:** none.
 

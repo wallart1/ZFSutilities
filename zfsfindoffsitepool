@@ -3,16 +3,23 @@
 
 source ~/bashinit
 bashinit
+source "$mydir/rootcheck"
+source "$mydir/zfsconfig"
 
 function findoffsitepool {
 
-    source "$mydir/rootcheck"
     rootcheck
-    local offsitepools=('z22tb' 'z40tb')
+    local offsitepools
     local onlinepools
     local onlineoffsitepool=''
     local onlinepool
     local offsitepool
+
+    readarray -t offsitepools < <(zfsconfig_get_offsite_candidates)
+    if [[ ${#offsitepools[@]} -eq 0 ]]; then
+        echo "$onlineoffsitepool"
+        return
+    fi
 
     readarray -t onlinepools < <(zpool list -Ho name)
     for onlinepool in "${onlinepools[@]}"; do
@@ -23,6 +30,6 @@ function findoffsitepool {
             fi
         done
     done
-    echo $onlineoffsitepool
+    echo "$onlineoffsitepool"
 }
 if calledbybash; then findoffsitepool; fi

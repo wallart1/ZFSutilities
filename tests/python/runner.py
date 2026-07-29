@@ -23,6 +23,9 @@ class ColoredResult(unittest.TextTestResult):
     def __init__(self, stream, descriptions, verbosity):
         super().__init__(stream, descriptions, verbosity)
         self._test_counter = 0
+        self.quiet = False
+        self.failures_only = False
+        self.buffer = False
 
     def _write_status(self, test, label, color):
         self._test_counter += 1
@@ -38,6 +41,8 @@ class ColoredResult(unittest.TextTestResult):
 
     def addSuccess(self, test):
         super().addSuccess(test)
+        if self.quiet or self.failures_only:
+            return
         self._write_status(test, "PASS", GREEN)
 
     def addFailure(self, test, err):
@@ -58,6 +63,8 @@ class ColoredResult(unittest.TextTestResult):
 
     def addSkip(self, test, reason):
         super().addSkip(test, reason)
+        if self.quiet or self.failures_only:
+            return
         self._write_status(test, "SKIP", YELLOW)
         self.stream.write(f"    Reason: {reason}\n")
 
@@ -68,11 +75,31 @@ class ColoredResult(unittest.TextTestResult):
 class ColoredRunner(unittest.TextTestRunner):
     resultclass = ColoredResult
 
+    def __init__(
+        self,
+        stream=None,
+        descriptions=False,
+        verbosity=1,
+        *,
+        quiet=False,
+        failures_only=False,
+        buffer=False,
+        **kwargs,
+    ):
+        super().__init__(
+            stream=stream, descriptions=descriptions, verbosity=verbosity, **kwargs
+        )
+        self.quiet = quiet
+        self.failures_only = failures_only
+        self.buffer = buffer
+
     def run(self, test):
         result = self.resultclass(self.stream, self.descriptions, self.verbosity)
         result.failfast = self.failfast
         result.buffer = self.buffer
         result.tb_locals = self.tb_locals
+        result.quiet = self.quiet
+        result.failures_only = self.failures_only
         start_test_run = getattr(result, "startTestRun", None)
         if start_test_run is not None:
             start_test_run()
@@ -95,20 +122,28 @@ def _load_module(path):
     return mod
 
 
-def run_suite(suite, name):
-    print("=" * 40)
-    print(f"Running: {name}")
-    print("=" * 40)
-    runner = ColoredRunner(verbosity=0, stream=sys.stdout)
+def run_suite(suite, name, quiet=False, failures_only=False, buffer=False):
+    if not failures_only:
+        print("=" * 40)
+        print(f"Running: {name}")
+        print("=" * 40)
+    runner = ColoredRunner(
+        verbosity=0,
+        stream=sys.stdout,
+        quiet=quiet,
+        failures_only=failures_only,
+        buffer=buffer,
+    )
     result = runner.run(suite)
     passed = result.testsRun - len(result.failures) - len(result.errors) - len(result.skipped)
     failed = len(result.failures) + len(result.errors)
     skipped = len(result.skipped)
     if failed:
         print(f"{RED}  SUITE FAILED{NC} ({name})")
-    else:
+    elif not failures_only:
         print(f"{GREEN}  SUITE PASSED{NC} ({name})")
-    print("")
+    if not failures_only:
+        print("")
     return passed, failed, skipped
 
 
@@ -117,6 +152,11 @@ def main(argv=None):
     start_dir = os.path.dirname(os.path.abspath(__file__))
     loader = unittest.TestLoader()
 
+    quiet = "--quiet" in argv or "-q" in argv
+    failures_only = "--failures-only" in argv
+    buffer = "--buffer" in argv or "-b" in argv
+    # Quiet/failures-only modes aim to reduce output; imply buffering there.
+    buffer = buffer or quiet or failures_only
     requested = [a for a in argv if not a.startswith("-")]
 
     if requested:
@@ -152,7 +192,9 @@ def main(argv=None):
     total_skipped = 0
 
     for name, suite in suites:
-        p, f, s = run_suite(suite, name)
+        p, f, s = run_suite(
+            suite, name, quiet=quiet, failures_only=failures_only, buffer=buffer
+        )
         total_passed += p
         total_failed += f
         total_skipped += s

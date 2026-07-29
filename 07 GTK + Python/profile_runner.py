@@ -49,6 +49,7 @@ from cron_manager import _match_weekday_ordinal, _parse_weekday
 from feature_config import (
     generate_offsite_snapshot_name,
     generate_snapshot_name,
+    get_offsite_candidate_names,
     get_pool_names,
     remove_snapfile,
 )
@@ -450,7 +451,7 @@ def run_offsite_profile(profile, config, parent_dir, session_log_file=None):
     variables = cfg["variables"]
     nextsnap = generate_offsite_snapshot_name()
     log_msg(f"INFO: Offsite snapshot: {nextsnap}")
-    candidates = cfg.get("offsite_pools", [])
+    candidates = get_offsite_candidate_names(config)
     offsite_pool = detect_offsite_pool(candidates)
     if offsite_pool is None:
         log_msg("FATAL: No offsite pool online. Cannot proceed.")

@@ -405,6 +405,53 @@ class TestRunOffsiteProfile(unittest.TestCase):
             self.assertEqual(rc, 1)
             self.assertTrue(any("No offsite pool online" in msg for msg in logs))
 
+    def test_uses_live_config_candidates_not_profile(self):
+        with temp_config_dir():
+            profile = {
+                "dry_run": True,
+                "config": {
+                    "variables": {},
+                    "offsite_pools": ["z22tb"],
+                    "steps": [
+                        {
+                            "source": "tank/src",
+                            "dest": "<offsite>/dst",
+                            "active": True,
+                        },
+                    ],
+                },
+            }
+            config = {
+                "pools": [
+                    {"name": "z40tb", "offsite_candidate": True},
+                    {"name": "z22tb", "offsite_candidate": True},
+                ],
+            }
+            with mock_subprocess() as m:
+                m.add_zpool_list([
+                    {"name": "z40tb", "health": "ONLINE"},
+                    {"name": "z22tb", "health": "OFFLINE"},
+                ])
+                with patch("profile_runner.subprocess.Popen") as mock_popen:
+                    mock_popen.return_value = _mock_popen_process(rc=0)
+                    with capture_logs() as logs:
+                        rc = profile_runner.run_offsite_profile(
+                            profile, config, "/bin"
+                        )
+            self.assertEqual(rc, 0)
+            self.assertTrue(
+                any("Offsite pool: z40tb" in msg for msg in logs)
+            )
+            bash_scripts = [
+                call[0][0][2]
+                for call in mock_popen.call_args_list
+                if call[0][0] and call[0][0][0] == "bash" and len(call[0][0]) > 2
+            ]
+            self.assertTrue(
+                any("destfs=\"z40tb/dst\"" in s for s in bash_scripts),
+                "Expected destination to use the live-config candidate z40tb",
+            )
+
 
 class TestRunRestoreProfile(unittest.TestCase):
 
@@ -769,7 +816,11 @@ class TestDryRunProfiles(unittest.TestCase):
                     ],
                 },
             }
-            config = {}
+            config = {
+                "pools": [
+                    {"name": "z40tb", "offsite_candidate": True},
+                ],
+            }
             with mock_subprocess() as m:
                 m.add_zpool_list([{"name": "z40tb", "health": "ONLINE"}])
                 with patch("profile_runner.subprocess.Popen") as mock_popen:
@@ -1138,7 +1189,11 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
                     ],
                 },
             }
-            config = {}
+            config = {
+                "pools": [
+                    {"name": "offsite", "offsite_candidate": True},
+                ],
+            }
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with mock_subprocess() as m:
                     m.add_zpool_list(

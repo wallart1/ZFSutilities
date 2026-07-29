@@ -1,0 +1,73 @@
+#!/usr/bin/bash
+# test-findoffsitepool — Unit tests for zfsfindoffsitepool runtime pool discovery.
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+source "$mydir/zfsfindoffsitepool"
+
+# Re-mock rootcheck after zfsfindoffsitepool re-sources the real helper.
+rootcheck() { true; }
+
+# Override the config helper so tests do not need a real JSON config.
+zfsconfig_get_offsite_candidates() {
+    printf '%s\n' "${_mock_offsite_candidates[@]}"
+}
+
+test_first_candidate_online() {
+    _mock_offsite_candidates=("z40tb" "z22tb")
+    mock_zpool_list "z40tb\nz22tb"
+    test_start "Returns first online offsite candidate"
+    local result
+    result=$(findoffsitepool)
+    assert_equals "z40tb" "$result"
+}
+
+test_second_candidate_online() {
+    _mock_offsite_candidates=("z40tb" "z22tb")
+    mock_zpool_list "tank\nz22tb"
+    test_start "Returns second candidate when first is not online"
+    local result
+    result=$(findoffsitepool)
+    assert_equals "z22tb" "$result"
+}
+
+test_no_candidate_online() {
+    _mock_offsite_candidates=("z40tb" "z22tb")
+    mock_zpool_list "tank\nlocal"
+    test_start "Returns empty string when no candidate is online"
+    local result
+    result=$(findoffsitepool)
+    assert_equals "" "$result"
+}
+
+test_no_candidates_configured() {
+    _mock_offsite_candidates=()
+    mock_zpool_list "z40tb\nz22tb"
+    test_start "Returns empty string when no candidates are configured"
+    local result
+    result=$(findoffsitepool)
+    assert_equals "" "$result"
+}
+
+test_first_online_in_zpool_order() {
+    _mock_offsite_candidates=("z40tb" "z22tb")
+    mock_zpool_list "z22tb\nz40tb"
+    test_start "Returns first online candidate in zpool list order"
+    local result
+    result=$(findoffsitepool)
+    assert_equals "z22tb" "$result"
+}
+
+# =============================================================================
+# Run tests
+# =============================================================================
+
+test_first_candidate_online
+test_second_candidate_online
+test_no_candidate_online
+test_no_candidates_configured
+test_first_online_in_zpool_order
+
+test_summary
+teardown_test_env

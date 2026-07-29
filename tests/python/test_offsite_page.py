@@ -109,7 +109,7 @@ class TestDoDetectOffsitePool(unittest.TestCase):
 
 
 class TestCollectOffsiteConfig(unittest.TestCase):
-    """collect_offsite_config uses candidates from the pool registry."""
+    """collect_offsite_config does not persist offsite_pools."""
 
     def _make_app(self, pools):
         app = MagicMock()
@@ -126,7 +126,7 @@ class TestCollectOffsiteConfig(unittest.TestCase):
         app.offsite_step_store = store
         return app
 
-    def test_candidates_from_pool_registry(self):
+    def test_candidates_not_persisted(self):
         op = _import_offsite_page()
         op.Gtk.ComboBoxText = _FakeComboBoxText
         app = self._make_app([
@@ -137,9 +137,9 @@ class TestCollectOffsiteConfig(unittest.TestCase):
 
         cfg = op.collect_offsite_config(app)
 
-        self.assertEqual(cfg["offsite_pools"], ["z40tb", "z22tb"])
+        self.assertNotIn("offsite_pools", cfg)
 
-    def test_no_candidates_empty_list(self):
+    def test_no_candidates_not_persisted(self):
         op = _import_offsite_page()
         op.Gtk.ComboBoxText = _FakeComboBoxText
         app = self._make_app([
@@ -148,7 +148,7 @@ class TestCollectOffsiteConfig(unittest.TestCase):
 
         cfg = op.collect_offsite_config(app)
 
-        self.assertEqual(cfg["offsite_pools"], [])
+        self.assertNotIn("offsite_pools", cfg)
 
     def test_steps_collected(self):
         op = _import_offsite_page()
@@ -402,6 +402,52 @@ class TestOffsiteRunDialog(unittest.TestCase):
             self.assertNotIn("restore", call[0][0].lower())
 
 
+
+
+class _FakeDirtyTracker:
+    """Minimal stand-in for gui_helpers.DirtyTracker under mock GTK."""
+
+    def __init__(self, saved_cfg):
+        self._saved = saved_cfg
+
+    def revert(self, load_fn):
+        load_fn(self._saved)
+
+
+class TestOffsiteRevert(unittest.TestCase):
+    """Tests for on_offsite_revert."""
+
+    def test_revert_restores_saved_state(self):
+        op = _import_offsite_page()
+        saved_cfg = {"variables": {"applyholds": "Y"}, "steps": []}
+        app = MagicMock()
+        app.ctx = MagicMock()
+        app._offsite_tracker = _FakeDirtyTracker(saved_cfg)
+
+        with patch.object(op, "load_offsite_config") as mock_load, \
+             patch.object(op, "log_msg") as mock_log:
+            op.on_offsite_revert(app, app.ctx)
+
+        mock_load.assert_called_once_with(app, saved_cfg)
+        log_messages = [call[0][0] for call in mock_log.call_args_list]
+        self.assertTrue(any("reverted" in msg for msg in log_messages))
+
+    def test_revert_without_tracker_logs_nothing(self):
+        op = _import_offsite_page()
+
+        class _NoTrackerApp:
+            pass
+
+        app = _NoTrackerApp()
+        app.ctx = MagicMock()
+
+        with patch.object(op, "load_offsite_config") as mock_load, \
+             patch.object(op, "log_msg") as mock_log:
+            op.on_offsite_revert(app, app.ctx)
+
+        mock_load.assert_not_called()
+        log_messages = [call[0][0] for call in mock_log.call_args_list]
+        self.assertTrue(any("Nothing to revert" in msg for msg in log_messages))
 
 
 class TestOffsiteSaveValidation(unittest.TestCase):

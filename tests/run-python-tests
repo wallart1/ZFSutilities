@@ -4,6 +4,9 @@
 # Usage:
 #   ./tests/run-python-tests              # Run all Python tests
 #   ./tests/run-python-tests test-foo     # Run specific test(s)
+#   ./tests/run-python-tests -q           # Quiet: suppress PASS/SKIP lines
+#   ./tests/run-python-tests --failures-only  # Only show failures
+#   ./tests/run-python-tests -b           # Buffer stdout/stderr; only show on failure
 
 set -euo pipefail
 

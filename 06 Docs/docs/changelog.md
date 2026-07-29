@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.66.1
+
+*Released 2026-07-29*
+
+### Changed
+
+- **Offsite pool candidates are resolved at runtime** — profiles and the bash
+  `zfsfindoffsitepool` helper no longer store a fixed list of offsite pools.
+  Candidates are read from the Pools tab registry every time an offsite job
+  runs.
+- **`feature_config.py`** — `save_pools()` no longer mirrors candidate names
+  into `config["offsite"]["offsite_pools"]`, and `collect_offsite_config()`
+  no longer includes `offsite_pools` in the saved offsite config.
+- **`profile_runner.py`** — `run_offsite_profile()` now uses
+  `get_offsite_candidate_names(config)` from the live config instead of the
+  profile's snapshotted `offsite_pools`.
+- **`zfsfindoffsitepool`** — Uses `zfsconfig_get_offsite_candidates()` instead
+  of the hard-coded `('z22tb' 'z40tb')` list.
+- **Documentation** — Updated `modules.md` `zfsfindoffsitepool` section to
+  describe runtime candidate resolution.
+
+### Added
+
+- **Config schema version 20** — `_migrate_19_to_20()` drops the stale
+  `offsite_pools` key from existing configs.
+
+### Tests
+
+- Added `tests/test-findoffsitepool` for runtime offsite-pool discovery in the
+  bash helper.
+- Updated `tests/python/test_offsite_page.py`,
+  `tests/python/test_feature_config.py`,
+  `tests/python/test_profile_runner.py`,
+  `tests/python/test_config_migrations.py`, and
+  `tests/python/test_schedule_page.py` for the runtime-resolution behavior.
+- Added `tests/python/test_action_dispatch.py` coverage for the backup/offsite
+  `dirty_attr` values.
+- Fixed `tests/run-tests` so that `-q` and `--failures-only` suppress passing
+  suite output, eliminating truncation caused by log messages from passing
+  tests. Failing suites still print their full output.
+
 ## 0.66.0
 
 *Released 2026-07-29*
