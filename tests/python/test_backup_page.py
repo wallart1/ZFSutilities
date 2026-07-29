@@ -476,5 +476,53 @@ class TestBackupRunDialog(unittest.TestCase):
             self.assertNotIn("restore", call[0][0].lower())
 
 
+
+
+class TestBackupSaveValidation(unittest.TestCase):
+    """on_backup_save validates backup/offsite scope alignment."""
+
+    def _make_app(self):
+        app = _FakeBackupApp()
+        app.ctx = AppContext(
+            config={"pools": []},
+            script_dir="",
+            parent_dir="",
+            version="dev",
+        )
+        app._backup_tracker = MagicMock()
+        return app
+
+    def test_save_without_warnings(self):
+        with mock_gtk():
+            import backup_page
+
+        app = self._make_app()
+        with patch.object(backup_page, "collect_backup_config", return_value={"steps": []}), \
+             patch.object(backup_page, "get_offsite_config", return_value={"steps": []}), \
+             patch.object(backup_page, "validate_gui_settings", return_value=[]), \
+             patch.object(backup_page, "show_warning_dialog") as mock_warn, \
+             patch.object(backup_page, "save_backup_config") as mock_save:
+            backup_page.on_backup_save(app, app.ctx)
+
+        mock_warn.assert_not_called()
+        mock_save.assert_called_once()
+
+    def test_save_shows_warning_on_scope_mismatch(self):
+        with mock_gtk():
+            import backup_page
+
+        app = self._make_app()
+        with patch.object(backup_page, "collect_backup_config", return_value={"steps": []}), \
+             patch.object(backup_page, "get_offsite_config", return_value={"steps": []}), \
+             patch.object(backup_page, "validate_gui_settings", return_value=["mismatch"]), \
+             patch.object(backup_page, "show_warning_dialog") as mock_warn, \
+             patch.object(backup_page, "save_backup_config") as mock_save:
+            backup_page.on_backup_save(app, app.ctx)
+
+        mock_warn.assert_called_once()
+        self.assertIn("mismatch", mock_warn.call_args[0][1])
+        mock_save.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

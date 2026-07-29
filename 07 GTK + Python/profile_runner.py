@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 from contextlib import nullcontext
-from datetime import datetime
+from datetime import datetime, timezone
 
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
@@ -54,7 +54,8 @@ from feature_config import (
 )
 from logging_config import log_msg, session_log_context
 from offsite_runner import build_offsite_step_command, detect_offsite_pool
-from profile_manager import load_profile
+from profile_manager import list_profiles, load_profile
+from profile_validation import validate_profiles
 from restore_runner import build_restore_command, compute_restore_params
 from scrub_manager import (
     ScrubQueue,
@@ -112,7 +113,7 @@ def _check_weekday_ordinal(weekday_field):
         base, specs = _parse_weekday(weekday_field)
     except ValueError:
         return False
-    today = datetime.now()
+    today = datetime.now(tz=timezone.utc).astimezone()
     wd = today.weekday() + 1  # cron: 0=Sun, 1=Mon; python: 0=Mon
     if today.weekday() == 6:
         wd = 0
@@ -164,7 +165,7 @@ def acquire_profile_lock(profile_name, timeout=1.0, log_file=None):
 
     # Record metadata so the Dashboard can identify the owning profile, PID,
     # and (optionally) the live session log.
-    timestamp = datetime.now().isoformat(timespec="seconds")
+    timestamp = datetime.now(tz=timezone.utc).astimezone().isoformat(timespec="seconds")
     metadata = {
         "profile": profile_name,
         "pid": os.getpid(),
@@ -217,7 +218,7 @@ def _run_command(step, session_log_file=None):
     if step.pre_callback is not None:
         try:
             step.pre_callback()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log_msg(f"WARN: Pre-step callback failed: {exc}")
     try:
         log_msg(f"INFO: {step.description}")
@@ -251,14 +252,14 @@ def _run_command(step, session_log_file=None):
             if returncode != 0:
                 log_msg(f"WARN: Step exited with rc={returncode}")
             return returncode
-        except Exception as e:
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
             log_msg(f"FATAL: Error running step: {e}")
             return 1
     finally:
         if step.post_callback is not None:
             try:
                 step.post_callback()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 log_msg(f"WARN: Post-step callback failed: {exc}")
 
 
@@ -276,7 +277,24 @@ def _run_step_list(steps, session_log_file=None):
     return max_rc
 
 
+def _log_scope_warnings(profile):
+    """Validate the current profile against saved profiles and log warnings."""
+    profile_name = profile.get("profile_name", "")
+    try:
+        profiles = list_profiles()
+    except Exception as exc:  # noqa: BLE001
+        log_msg(f"VERB: Could not list profiles for scope validation: {exc}")
+        return
+    names = {p.get("profile_name") for p in profiles}
+    if profile_name and profile_name not in names:
+        profiles.append(profile)
+    for warning in validate_profiles(profiles):
+        if profile_name and profile_name in warning:
+            log_msg(f"WARN: {warning}")
+
+
 def run_backup_profile(profile, config, parent_dir, session_log_file=None):
+    _log_scope_warnings(profile)
     cfg = profile["config"]
     dryrun = profile.get("dry_run", False)
     if dryrun:
@@ -424,6 +442,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
 
 
 def run_offsite_profile(profile, config, parent_dir, session_log_file=None):
+    _log_scope_warnings(profile)
     cfg = profile["config"]
     dryrun = profile.get("dry_run", False)
     if dryrun:
@@ -666,7 +685,7 @@ def main():
             duration = time.time() - _session_start_time if _session_start_time else 0.0
             result = "success" if rc == 0 else "failed"
             entry = build_entry(
-                timestamp=datetime.now().isoformat(),
+                timestamp=datetime.now(tz=timezone.utc).astimezone().isoformat(),
                 run_type=tab_type if tab_type else "backup",
                 name=profile_name,
                 duration=duration,

@@ -53,6 +53,18 @@ NVME1 ───────────────────┘
 The `<offsite>` token is replaced at run time with the first online offsite
 pool marked as an offsite candidate in the pool registry.
 
+### Scope alignment with daily backup
+
+An offsite step must snapshot the same source tree that the daily backup sends
+to the same destination.  If the offsite job snapshots only `NVME1/proxmox`
+while the daily backup sends all of `NVME1` to `fivebays`, the destination
+`fivebays/NVME1` receives `@offsite` snapshots that the source lacks.  The next
+daily backup must roll those `@offsite` snapshots back, which is logged as a
+"scope mismatch" warning.
+
+Configure the offsite source and includes to match the daily backup source, or
+narrow the daily backup to the same subtree the offsite snapshots.
+
 ## Snapshot Label and Holds
 
 Offsite snapshots use the label `offsite` and bucket `s`

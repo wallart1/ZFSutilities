@@ -481,6 +481,18 @@ def show_error_dialog(app, message):
     dlg.destroy()
 
 
+def show_warning_dialog(app, message):
+    """Show a modal warning dialog and wait for the user to dismiss it."""
+    dlg = Gtk.MessageDialog(
+        transient_for=app, modal=True,
+        message_type=Gtk.MessageType.WARNING,
+        buttons=Gtk.ButtonsType.OK,
+        text=message,
+    )
+    dlg.run()
+    dlg.destroy()
+
+
 # ---------------------------------------------------------------------------
 # Dirty state tracker
 # ---------------------------------------------------------------------------
@@ -686,7 +698,7 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
     try:
         result = subprocess.run(
             ["pgrep", "-f", f"zfs send.*{target}"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
         )
         if result.returncode == 0 and result.stdout.strip():
             log_msg(f"WARN:   → An active 'zfs send' involving {target} is running.")
@@ -714,7 +726,7 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
         try:
             result = subprocess.run(
                 ["targetcli", "/backstores/block", "ls"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, check=False,
             )
             if result.returncode == 0 and f" {bsname} " in result.stdout:
                 lun_info = ""

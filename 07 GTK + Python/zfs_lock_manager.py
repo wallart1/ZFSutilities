@@ -11,6 +11,7 @@ import glob
 import json
 import os
 import sys
+import tempfile
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -152,6 +153,13 @@ def _is_stale(lockfile: str) -> bool:
     except OSError:
         return False
 
+    # A live process may have an empty cmdline briefly after fork (before the
+    # new program's argv is visible in /proc). Treat an empty/unreadable cmdline
+    # as inconclusive and leave the lock alone; only mark stale when we can read
+    # a non-empty cmdline and the script is definitively absent.
+    if not cmdline.strip():
+        return False
+
     return script not in cmdline
 
 
@@ -238,9 +246,8 @@ def check(dataset: str, lock_type: str) -> bool:
 
     # Pool ancestor (redundant for non-dataset pools, but matches bash).
     pool = _pool(dataset)
-    if pool:
-        if not _check_file(_lock_file(pool), lock_type, "ancestor"):
-            return False
+    if pool and not _check_file(_lock_file(pool), lock_type, "ancestor"):
+        return False
 
     # Descendants.
     prefix = os.path.join(ZFSLOCK_LOCKS_DIR, f"{_encode(dataset)}%2F*.lock")
@@ -288,9 +295,21 @@ def acquire(dataset: str, lock_type: str, description: str = "") -> str:
     }
 
     try:
-        with open(lockfile, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-            f.write("\n")
+        # Write to a temp file and rename it into place so that other
+        # processes never see a partially-written (empty/truncated) lock file.
+        lock_dir = os.path.dirname(lockfile)
+        fd, tmp_path = tempfile.mkstemp(dir=lock_dir, prefix=".lock-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+                f.write("\n")
+            os.replace(tmp_path, lockfile)
+        except OSError:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except OSError as exc:
         raise RuntimeError(f"failed to write lock file {lockfile}: {exc}") from exc
 

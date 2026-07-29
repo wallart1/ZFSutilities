@@ -197,6 +197,23 @@ resume automatically when the step finishes.
 
 ## Common Issues
 
+### "scope mismatch" warning during send/receive
+
+A backup step reports that it must roll back destination snapshots whose labels
+differ from the snapshot being sent.  This happens when a backup and an offsite
+job send overlapping datasets to the same destination but snapshot different
+subsets: the destination has `@offsite` snapshots that the backup source does
+not.
+
+**Cause**: The offsite profile snapshots a narrower subtree than the daily
+backup sends.  For example, offsite snapshots only `NVME1/proxmox` while the
+daily backup sends all of `NVME1`.
+
+**Action**: Align the source scopes.  Either change the backup source to match
+the offsite source/includes, or change the offsite job to cover the same tree
+as the backup.  The GUI and the profile runner warn about this configuration
+before the rollback occurs.
+
 ### "A common snapshot ... was NOT found"
 
 The source and destination have no snapshot in common. This prevents an

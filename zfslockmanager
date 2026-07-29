@@ -197,6 +197,10 @@ zfslock_is_stale() {
     lock_script=$(_zfslock_read_field "$lockfile" "script") || return 1
     if [[ -f "/proc/$pid/cmdline" ]]; then
         cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+        # A live process may have an empty cmdline briefly after fork. Treat an
+        # empty cmdline as inconclusive and leave the lock alone; only mark stale
+        # when we can read a non-empty cmdline and the script is absent.
+        [[ -z "${cmdline// }" ]] && return 1
         [[ "$cmdline" == *"$lock_script"* ]] || return 0
     fi
     return 1
@@ -343,9 +347,12 @@ zfslock_acquire() {
 
     lockfile=$(_zfslock_file "$dataset")
     local timestamp=$(date -Iseconds) script=$(_zfslock_scriptname)
+    local tmpfile="${lockfile}.tmp.$$"
     printf '{"dataset":"%s","type":"%s","pid":%s,"script":"%s","acquired":"%s","description":"%s"}\n' \
-        "$dataset" "$type" "$$" "$script" "$timestamp" "$description" > "$lockfile" || {
-        log_msg "WARN: Failed to create lock file $lockfile"; return 2; }
+        "$dataset" "$type" "$$" "$script" "$timestamp" "$description" > "$tmpfile" || {
+        rm -f "$tmpfile"; log_msg "WARN: Failed to create lock file $lockfile"; return 2; }
+    mv -f "$tmpfile" "$lockfile" || {
+        rm -f "$tmpfile"; log_msg "WARN: Failed to install lock file $lockfile"; return 2; }
 
     # Track this lock in the PID file
     local pidfile=$(_zfslock_pidfile)

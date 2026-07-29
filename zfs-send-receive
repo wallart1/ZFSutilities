@@ -227,6 +227,24 @@ function send-receive {
             [[ -n "$rollback_datatosend" && "$rollback_datatosend" -gt 0 ]] && _sz=$(echo "$rollback_datatosend" | numfmt --to=iec-i)
             log_msg "INFO: A common snapshot between $fs and $destfs_restorefs was found.\n\tHowever, the destination snapshot is not the most recent one.\n\tThis will roll back snapshot(s) and changes on the destination since the common snapshot, bypassing any holds.\n\tThe common snap is: $commsnap.\n\tApproximate transfer size: $_sz.\n\tThe snapshots to be rolled back are:"
             for snap in "${snaparray_d[@]}"; do echo -e "\t\t$snap"; done
+            local _sent_label="${nextsnap#@}"; _sent_label="${_sent_label%%-*}"
+            local _mismatch_labels=""
+            for _snap in "${snaparray_d[@]}"; do
+                local _snap_name="${_snap##*@}"
+                local _snap_label="${_snap_name%%-*}"
+                if [[ "$_snap_label" != "$_sent_label" ]]; then
+                    if [[ "$_mismatch_labels" != *" $_snap_label "* ]]; then
+                        _mismatch_labels="$_mismatch_labels $_snap_label "
+                    fi
+                fi
+            done
+            if [[ -n "$_mismatch_labels" ]]; then
+                local _label_list=""
+                for _lbl in $_mismatch_labels; do
+                    _label_list="$_label_list @$_lbl"
+                done
+                log_msg "INFO: This rollback is caused by a scope mismatch: the destination has newer${_label_list} snapshot(s), but the source does not. Align the source scopes of your overlapping backup and offsite profiles to avoid this."
+            fi
             local readprompt="Roll back and transfer? (y=proceed, n=skip this dataset): "
             local do_rollback='N'
             if [[ $autoproceed = 'Y' ]]; then

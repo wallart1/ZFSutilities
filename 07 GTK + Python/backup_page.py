@@ -21,6 +21,7 @@ from feature_config import (
     _read_snapfile,
     generate_snapshot_name,
     get_backup_config,
+    get_offsite_config,
     get_pool_names,
     remove_snapfile,
     save_backup_config,
@@ -31,8 +32,10 @@ from gui_helpers import (
     EditableListView,
     add_var_row,
     bold_label,
+    show_warning_dialog,
 )
 from logging_config import log_msg
+from profile_validation import validate_gui_settings
 from scrub_manager import attach_step_scrub_callbacks
 from zfs_repository import is_dataset_encrypted
 
@@ -619,6 +622,11 @@ def on_backup_cancel(app, ctx):
 def on_backup_save(app, ctx):
     """Save current backup config to JSON."""
     backup_data = collect_backup_config(app)
+    offsite_cfg = get_offsite_config(ctx.config)
+    warnings = validate_gui_settings(backup_data, offsite_cfg)
+    if warnings:
+        show_warning_dialog(app, "Backup/offsite scope mismatch detected:\n\n" +
+                            "\n\n".join(warnings))
     try:
         save_backup_config(ctx.config, backup_data)
         if hasattr(app, '_backup_tracker'):

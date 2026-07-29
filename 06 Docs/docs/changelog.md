@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.66.0
+
+*Released 2026-07-29*
+
+### Added
+
+- **`profile_validation.py`** — New Python module that detects backup/offsite
+  scope misalignment.  Warns when a backup and an offsite job send overlapping
+  datasets to the same destination but snapshot different subsets, which would
+  force the daily backup to roll back `@offsite` snapshots.
+- **Scope warnings in the GUI** — Saving Backup/Offsite tab settings or saving a
+  profile now shows a warning dialog when a scope mismatch is detected.
+- **Scope warnings in `profile_runner.py`** — Headless backup and offsite runs
+  log scope-alignment warnings before executing their steps.
+- **Scope mismatch diagnosis in `zfs-send-receive`** — When a rollback is
+  required because destination snapshots are newer than the common snapshot,
+  the script reports which snapshot labels caused the mismatch.
+
+### Changed
+
+- **`zfs_lock_manager.py`** — Lock files are now written atomically via a
+  temporary file and `os.replace()`.  Stale detection no longer treats a live
+  process with an empty `/proc/<pid>/cmdline` as stale.
+- **`zfslockmanager`** — Same atomic-write and empty-cmdline robustness fixes as
+  the Python lock client.
+- **`profile_runner.py`** — Datetime calls are now timezone-aware; broad
+  `except Exception` blocks narrowed to expected subprocess/OSError types.
+- **`gui_helpers.py`** — Added `show_warning_dialog()` and fixed two
+  `subprocess.run` calls in `diagnose_dataset_busy()` to use `check=False`.
+
+### Tests
+
+- Added `tests/python/test_profile_validation.py` covering filter parsing,
+  destination-dataset computation, and scope-alignment scenarios.
+- Extended `tests/python/test_backup_page.py` with save-time validation tests.
+- Extended `tests/python/test_offsite_page.py` with save-time validation tests.
+- Extended `tests/python/test_profile_dialogs.py` with profile-scope warning
+  tests.
+- Extended `tests/python/test_profile_runner.py` with `_log_scope_warnings`
+  tests.
+- Extended `tests/python/test_zfs_lock_manager.py` with atomic-write and
+  empty-cmdline tests.
+- Extended `tests/test-zfslockmanager` with atomic-write and empty-cmdline
+  tests.
+- Extended `tests/test-zfs-send-receive-dryrun` with a scope-mismatch rollback
+  test.
+
+### Documentation
+
+- Updated `commands-and-modules/python-modules.md` to add `profile_validation.py`
+  and document `show_warning_dialog()` in `gui_helpers.py`.
+- Updated `user-guide/profiles.md` with a scope-alignment section.
+- Updated `user-guide/daily-backup.md` and `user-guide/offsite-backup.md` with
+  scope mismatch causes and actions.
+- Updated `developer-guide/lock-manager.md` with atomic-write and empty-cmdline
+  stale-detection details.
+
 ## 0.65.0
 
 *Released 2026-07-28*

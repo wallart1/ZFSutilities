@@ -817,6 +817,39 @@ test_handle_commsnap_rc16_autoproceed_warns() {
 }
 
 # ---------------------------------------------------------------------------
+# Test handle_commsnap_rc rc=16 detects scope mismatch from snapshot labels
+# ---------------------------------------------------------------------------
+
+test_handle_commsnap_rc16_scope_mismatch() {
+    test_start "handle_commsnap_rc rc=16 reports scope mismatch"
+
+    commsnap="@dailybackup-2026-07-28T06:00-04:00-d"
+    nextsnap="@dailybackup-2026-07-29T06:00-04:00-d"
+    autoproceed='Y'
+    doincrementals="Y"
+    dointermediates="Y"
+    dryrun='Y'
+    fs="pool/src/data"
+    destfs="pool/dest"
+    restorefs="/data"
+    _mock_zfs_snap_lists["pool/dest/data"]=\
+"pool/dest/data@offsite-2026-07-29T00:42-04:00-s\npool/dest/data@dailybackup-2026-07-28T06:00-04:00-d"
+    clear_log
+    capture_stderr
+    handle_commsnap_rc 16 "$fs" "pool/dest/data"
+    local rc=$?
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$rc" -eq 0 && "$log" == *"scope mismatch"* && "$log" == *"@offsite"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Test handle_commsnap_rc rc=16 skips in non-interactive mode
 # ---------------------------------------------------------------------------
 
@@ -1107,6 +1140,7 @@ test_full_copy_resumable_verb
 test_clone_dataset_message_verb
 test_handle_commsnap_rc16
 test_handle_commsnap_rc16_autoproceed_warns
+test_handle_commsnap_rc16_scope_mismatch
 test_handle_commsnap_rc16_noninteractive_skips
 test_trailer_written_without_inherit
 test_trailer_suppressed_with_inherit

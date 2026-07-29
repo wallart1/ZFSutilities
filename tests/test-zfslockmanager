@@ -218,6 +218,27 @@ test_basic_acquire_release() {
     test_start "Release all locks"
     zfslock_release_all
     [[ ! -f "$multi_lock1" && ! -f "$multi_lock2" ]] && test_pass || test_fail "Lock files still exist"
+
+    test_start "Acquire writes lock file atomically"
+    cleanup_test_locks
+    if zfslock_acquire "test/atomic" "w" "atomic write test"; then
+        local atomic_lock="$ZFSLOCK_ID"
+        local leftover tmp
+        leftover=""
+        for tmp in "$ZFSLOCK_LOCKS_DIR"/.*.tmp*; do
+            [[ -f "$tmp" ]] && leftover="$tmp"
+        done
+        if [[ -n "$leftover" ]]; then
+            test_fail "Temp lock file left behind: $leftover"
+        elif [[ -f "$atomic_lock" ]] && python3 -m json.tool "$atomic_lock" >/dev/null 2>&1; then
+            test_pass
+        else
+            test_fail "Lock file is missing or invalid JSON"
+        fi
+        zfslock_release "$atomic_lock"
+    else
+        test_fail "Failed to acquire atomic-write lock"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -345,6 +366,20 @@ test_stale_detection() {
     echo ""
     echo "=== Stale Lock Detection Tests ==="
     cleanup_test_locks
+
+    test_start "Live process with empty cmdline is not stale"
+    local fake_lockfile="$ZFSLOCK_LOCKS_DIR/empty%2Fcmdline.lock"
+    printf '{"dataset":"empty/cmdline","type":"w","pid":%s,"script":"%s","acquired":"2026-01-01T00:00:00-05:00","description":"test"}\n' "$$" "$0" > "$fake_lockfile"
+    # Simulate a live process whose /proc/<pid>/cmdline is temporarily empty
+    # (e.g., right after fork before exec).  The lock must not be removed.
+    tr() { echo ""; }
+    if zfslock_is_stale "$fake_lockfile"; then
+        test_fail "Empty cmdline should be treated as inconclusive, not stale"
+    else
+        test_pass
+    fi
+    unset -f tr 2>/dev/null || true
+    rm -f "$fake_lockfile"
 
     test_start "Detect stale lock (dead PID)"
     local fake_lockfile="$ZFSLOCK_LOCKS_DIR/test%2Fstale.lock"

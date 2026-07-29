@@ -79,6 +79,27 @@ interactive/GUI mode) or fails safely (in headless/cron mode).  Examples:
 No data corruption occurs in these cases.  The blocked job logs a warning and
 exits, and cron does not treat a duplicate-run suppression as an error.
 
+## Scope alignment
+
+A backup profile and an offsite profile that send overlapping datasets to the
+same destination must agree on which datasets receive `@offsite` snapshots.
+
+For example, if the offsite job snapshots only `NVME1/proxmox` and sends it to
+`fivebays`, but the daily backup sends all of `NVME1` to `fivebays`, the
+destination `fivebays/NVME1` will end up with `@offsite` snapshots that the
+source `NVME1` does not have.  The next daily backup must roll those `@offsite`
+snapshots back before it can receive the `@dailybackup` snapshot.
+
+ZFS Utilities warns about this mismatch in three places:
+
+1. When you save the Backup tab or Offsite tab settings in the GUI.
+2. When you save a profile that creates or overwrites a profile.
+3. When `profile_runner.py` runs a backup or offsite profile headlessly.
+
+**Action:** Align the source scopes.  Either change the backup source to match
+the offsite source/includes (for example, back up `NVME1/proxmox` instead of
+`NVME1`), or change the offsite job to snapshot the same tree the backup sends.
+
 ## Operational guidance
 
 - Avoid scheduling the same profile so frequently that runs overlap, unless you

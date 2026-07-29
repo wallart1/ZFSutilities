@@ -216,5 +216,54 @@ class TestShowRecallProfileDialog(unittest.TestCase):
         on_select.assert_not_called()
 
 
+
+
+class TestProfileScopeWarnings(unittest.TestCase):
+    """_show_profile_scope_warnings validates newly saved profiles."""
+
+    def _make_app(self):
+        return MagicMock()
+
+    def test_no_warning_when_validation_returns_empty(self):
+        app = self._make_app()
+        profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
+
+        with patch.object(profile_dialogs, "list_profiles", return_value=[]), \
+             patch.object(profile_dialogs, "validate_profiles", return_value=[]), \
+             patch.object(profile_dialogs, "show_warning_dialog") as mock_warn:
+            profile_dialogs._show_profile_scope_warnings(app, profile)
+
+        mock_warn.assert_not_called()
+
+    def test_warning_shown_for_matching_profile(self):
+        app = self._make_app()
+        profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
+
+        with patch.object(profile_dialogs, "list_profiles", return_value=[]), \
+             patch.object(
+                 profile_dialogs, "validate_profiles",
+                 return_value=["root-backup-daily scope mismatch"]
+             ), \
+             patch.object(profile_dialogs, "show_warning_dialog") as mock_warn:
+            profile_dialogs._show_profile_scope_warnings(app, profile)
+
+        mock_warn.assert_called_once()
+        self.assertIn("scope mismatch", mock_warn.call_args[0][1])
+
+    def test_unrelated_warning_not_shown(self):
+        app = self._make_app()
+        profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
+
+        with patch.object(profile_dialogs, "list_profiles", return_value=[]), \
+             patch.object(
+                 profile_dialogs, "validate_profiles",
+                 return_value=["root-offsite-offsite scope mismatch"]
+             ), \
+             patch.object(profile_dialogs, "show_warning_dialog") as mock_warn:
+            profile_dialogs._show_profile_scope_warnings(app, profile)
+
+        mock_warn.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -402,5 +402,45 @@ class TestOffsiteRunDialog(unittest.TestCase):
             self.assertNotIn("restore", call[0][0].lower())
 
 
+
+
+class TestOffsiteSaveValidation(unittest.TestCase):
+    """on_offsite_save validates backup/offsite scope alignment."""
+
+    def _make_app(self):
+        app = MagicMock()
+        app.ctx = MagicMock()
+        app.ctx.config = {"pools": []}
+        app._offsite_tracker = MagicMock()
+        return app
+
+    def test_save_without_warnings(self):
+        op = _import_offsite_page()
+        app = self._make_app()
+        with patch.object(op, "collect_offsite_config", return_value={"steps": []}), \
+             patch.object(op, "get_backup_config", return_value={"steps": []}), \
+             patch.object(op, "validate_gui_settings", return_value=[]), \
+             patch.object(op, "show_warning_dialog") as mock_warn, \
+             patch.object(op, "save_offsite_config") as mock_save:
+            op.on_offsite_save(app, app.ctx)
+
+        mock_warn.assert_not_called()
+        mock_save.assert_called_once()
+
+    def test_save_shows_warning_on_scope_mismatch(self):
+        op = _import_offsite_page()
+        app = self._make_app()
+        with patch.object(op, "collect_offsite_config", return_value={"steps": []}), \
+             patch.object(op, "get_backup_config", return_value={"steps": []}), \
+             patch.object(op, "validate_gui_settings", return_value=["mismatch"]), \
+             patch.object(op, "show_warning_dialog") as mock_warn, \
+             patch.object(op, "save_offsite_config") as mock_save:
+            op.on_offsite_save(app, app.ctx)
+
+        mock_warn.assert_called_once()
+        self.assertIn("mismatch", mock_warn.call_args[0][1])
+        mock_save.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

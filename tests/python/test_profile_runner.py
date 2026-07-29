@@ -1233,5 +1233,46 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
             self.assertNotIn(["zpool", "scrub", "dst"], scrub_cmds)
 
 
+
+class TestLogScopeWarnings(unittest.TestCase):
+    """_log_scope_warnings logs scope-alignment warnings for the profile."""
+
+    def test_logs_matching_warning(self):
+        profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
+        with patch.object(profile_runner, "list_profiles", return_value=[]), \
+             patch.object(
+                 profile_runner, "validate_profiles",
+                 return_value=["root-backup-daily scope mismatch"]
+             ), \
+             capture_logs() as logs:
+            profile_runner._log_scope_warnings(profile)
+
+        self.assertTrue(
+            any("scope mismatch" in msg and "root-backup-daily" in msg for msg in logs)
+        )
+
+    def test_skips_unrelated_warnings(self):
+        profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
+        with patch.object(profile_runner, "list_profiles", return_value=[]), \
+             patch.object(
+                 profile_runner, "validate_profiles",
+                 return_value=["root-offsite-offsite scope mismatch"]
+             ), \
+             capture_logs() as logs:
+            profile_runner._log_scope_warnings(profile)
+
+        self.assertFalse(any("scope mismatch" in msg for msg in logs))
+
+    def test_list_profiles_failure_is_silent(self):
+        profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
+        with patch.object(
+            profile_runner, "list_profiles", side_effect=OSError("no profile dir")
+        ), \
+             capture_logs() as logs:
+            profile_runner._log_scope_warnings(profile)
+
+        self.assertFalse(any("scope mismatch" in msg for msg in logs))
+
+
 if __name__ == "__main__":
     unittest.main()

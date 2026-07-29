@@ -1,10 +1,13 @@
 """Tests for zfs_lock_manager.py — Python client for ZFS dataset locks."""
 
+import builtins
+import io
 import json
 import os
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
@@ -39,7 +42,8 @@ class TestAcquireAndRelease(unittest.TestCase):
         with temp_lock_dir():
             lock_id = zlm.acquire("tank", "w", "test lock")
             self.assertTrue(os.path.isfile(lock_id))
-            data = json.loads(open(lock_id).read())
+            with open(lock_id) as f:
+                data = json.load(f)
             self.assertEqual(data["dataset"], "tank")
             self.assertEqual(data["type"], "w")
             self.assertEqual(data["pid"], os.getpid())
@@ -81,6 +85,21 @@ class TestAcquireAndRelease(unittest.TestCase):
                 }, f)
             self.assertFalse(zlm.release(lockfile))
 
+    def test_acquire_writes_complete_lock_file_atomically(self):
+        """The lock file must be valid JSON and no temp files left behind."""
+        with temp_lock_dir():
+            lock_id = zlm.acquire("tank/atomic", "w", "atomic test")
+            self.assertTrue(os.path.isfile(lock_id))
+            with open(lock_id) as f:
+                data = json.load(f)
+            self.assertEqual(data["dataset"], "tank/atomic")
+            lock_dir = os.path.dirname(lock_id)
+            leftovers = [
+                name for name in os.listdir(lock_dir)
+                if name.startswith(".lock-") and name.endswith(".tmp")
+            ]
+            self.assertEqual(leftovers, [])
+
 
 def _conflicting_lock(dataset, lock_type="w"):
     """Start a real process and write a lock file owned by it."""
@@ -110,7 +129,10 @@ class TestAcquireMultiple(unittest.TestCase):
             lock_ids = zlm.acquire_multiple("w", [
                 "tank/c", "tank/a/b", "tank", "tank/a"
             ])
-            datasets = [json.loads(open(lid).read())["dataset"] for lid in lock_ids]
+            datasets = []
+            for lid in lock_ids:
+                with open(lid) as f:
+                    datasets.append(json.load(f)["dataset"])
             # Ancestors with requested descendants are dropped, leaving only
             # the deepest nodes, sorted by depth then lexicographically.
             self.assertEqual(datasets, ["tank/c", "tank/a/b"])
@@ -118,7 +140,10 @@ class TestAcquireMultiple(unittest.TestCase):
     def test_removes_redundant_ancestors(self):
         with temp_lock_dir():
             lock_ids = zlm.acquire_multiple("w", ["tank", "tank/a", "tank/a/b"])
-            datasets = {json.loads(open(lid).read())["dataset"] for lid in lock_ids}
+            datasets = set()
+            for lid in lock_ids:
+                with open(lid) as f:
+                    datasets.add(json.load(f)["dataset"])
             self.assertEqual(datasets, {"tank/a/b"})
 
     def test_rolls_back_on_conflict(self):
@@ -225,6 +250,26 @@ class TestStaleCleanup(unittest.TestCase):
             self.assertEqual(removed, 1)
             self.assertFalse(os.path.isfile(stale))
             self.assertTrue(os.path.isfile(active))
+
+    def test_is_not_stale_for_live_process_with_empty_cmdline(self):
+        """A live process with an empty /proc/<pid>/cmdline must not be stale.
+
+        This can happen briefly after fork(), before the child's argv is
+        visible. The old behavior treated an empty cmdline as stale and
+        removed valid locks, which caused flaky concurrent-profile tests.
+        """
+        with temp_lock_dir():
+            lockfile = self._write_lock("tank", os.getpid())
+            orig_open = builtins.open
+
+            def _fake_open(path, *args, **kwargs):
+                path_str = str(path)
+                if "/proc/" in path_str and path_str.endswith("/cmdline"):
+                    return io.BytesIO(b"")
+                return orig_open(path, *args, **kwargs)
+
+            with patch("zfs_lock_manager.open", side_effect=_fake_open):
+                self.assertFalse(zlm._is_stale(lockfile))
 
 
 class TestContextManagers(unittest.TestCase):

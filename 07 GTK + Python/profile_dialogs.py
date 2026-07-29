@@ -9,6 +9,7 @@ from gui_helpers import (
     configure_treeview_column,
     create_dialog,
     show_error_dialog,
+    show_warning_dialog,
 )
 from profile_manager import (
     create_profile,
@@ -18,6 +19,7 @@ from profile_manager import (
     profile_exists,
     update_profile,
 )
+from profile_validation import validate_profiles
 
 
 def show_add_profile_dialog(app, tab_type, config_dict, on_success=None,
@@ -107,11 +109,31 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None,
             show_error_dialog(app, str(e))
             return
 
+    _show_profile_scope_warnings(app, profile)
     if on_success:
         on_success(profile)
     if hasattr(app, "schedule_store"):
         from schedule_page import _refresh_profile_list
         _refresh_profile_list(app)
+
+
+def _show_profile_scope_warnings(app, profile):
+    """Validate the saved profile against others and show warnings."""
+    try:
+        profiles = list_profiles()
+    except Exception:  # noqa: BLE001
+        return
+    names = {p.get("profile_name") for p in profiles}
+    if profile.get("profile_name") not in names:
+        profiles.append(profile)
+    warnings = validate_profiles(profiles)
+    profile_name = profile.get("profile_name", "")
+    relevant = [w for w in warnings if profile_name in w]
+    if relevant:
+        show_warning_dialog(
+            app,
+            "Profile scope mismatch detected:\n\n" + "\n\n".join(relevant)
+        )
 
 
 def show_recall_profile_dialog(app, tab_type, on_select):

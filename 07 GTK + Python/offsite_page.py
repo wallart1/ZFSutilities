@@ -14,6 +14,7 @@ from feature_config import (
     _maybe_seed_checkagainst,
     _read_snapfile,
     generate_offsite_snapshot_name,
+    get_backup_config,
     get_offsite_candidate_names,
     get_offsite_config,
     save_offsite_config,
@@ -30,9 +31,11 @@ from gui_helpers import (
     on_row_activated,
     on_toggle,
     setup_row_scroll,
+    show_warning_dialog,
 )
 from logging_config import log_msg
 from offsite_runner import build_offsite_step_command, detect_offsite_pool
+from profile_validation import validate_gui_settings
 from scrub_manager import attach_step_scrub_callbacks
 
 OFFSITE_DATASET_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
@@ -498,6 +501,11 @@ def on_offsite_cancel(app, ctx):
 def on_offsite_save(app, ctx):
     """Save current offsite config to JSON."""
     offsite_data = collect_offsite_config(app)
+    backup_cfg = get_backup_config(ctx.config)
+    warnings = validate_gui_settings(backup_cfg, offsite_data)
+    if warnings:
+        show_warning_dialog(app, "Backup/offsite scope mismatch detected:\n\n" +
+                            "\n\n".join(warnings))
     try:
         save_offsite_config(ctx.config, offsite_data)
         if hasattr(app, '_offsite_tracker'):

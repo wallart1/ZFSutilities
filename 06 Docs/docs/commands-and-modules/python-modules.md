@@ -449,6 +449,32 @@ as the GUI runners but writes its own session logs and history entries.
 
 ---
 
+### `profile_validation.py`
+
+Scope-alignment validation for backup and offsite jobs.  Detects when backup
+and offsite profiles send overlapping datasets to the same destination but
+snap different subsets, which would force the daily backup to roll back
+`@offsite` snapshots on the destination.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `validate_gui_settings(backup_cfg, offsite_cfg)` | Validate the current GUI Backup and Offsite tab settings |
+| `validate_profiles(profiles)` | Validate a list of saved profiles |
+| `validate_effective_steps(items)` | Validate a normalized list of backup/offsite send/receive steps |
+
+**Called modules / imported helpers:** none (stdlib only: `fnmatch`, `shlex`).
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| Backup/offsite config dicts | [JSON config][ds-json] |
+| Profile dicts | [Profiles][ds-profiles] |
+
+---
+
 ### `runner_factory.py`
 
 Creates `BackupRunner` instances pre-bound to the main window's log and
@@ -1176,6 +1202,7 @@ Reusable GTK helpers and utility functions used by nearly every page.
 | `build_full_dataset_name()` | Walk tree parents to build the full ZFS name |
 | Tree loading helpers | Load pools, datasets, and snapshots on demand |
 | `get_busy_processes()` / `diagnose_dataset_busy()` | Find and explain why a dataset is busy |
+| `show_error_dialog()` / `show_warning_dialog()` | Modal error/warning message dialogs |
 | `create_info_panel()` | Build the shared log/info panel |
 | `create_menu_bar()` | Build the application menu bar |
 | `confirm_and_minimize_width()` | Reset column widths and shrink window |
@@ -1451,6 +1478,7 @@ One-time parser for legacy `zfsretainpol-<pool>` bash files.
 [ds-snapfile]: ../developer-guide/data-structures.md#snapshot-name-persistence
 [ds-fss]: ../developer-guide/data-structures.md#fss-table-in-memory-rows-from-zfscheckagainst-json
 [ds-node]: ../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf
+[ds-profiles]: ../user-guide/profiles.md
 [ds-backup]: ../developer-guide/data-structures.md#backup-object
 [ds-config-migrations]: ../developer-guide/data-structures.md#config-migrations
 [ds-retention]: ../developer-guide/data-structures.md#retention-policy-arrays-bktname-bktretain-minage

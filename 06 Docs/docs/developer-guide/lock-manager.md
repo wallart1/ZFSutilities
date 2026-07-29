@@ -142,7 +142,18 @@ trap _zfslock_cleanup_trap EXIT
 A lock is stale if:
 
 1. The PID in the lock file no longer exists (`kill -0 $pid` fails)
-2. The PID exists but is a different process (check /proc/$pid/cmdline)
+2. The PID exists but is a different process (check `/proc/$pid/cmdline`)
+
+A live process may have an empty `/proc/$pid/cmdline` briefly after `fork()`
+before the new program's `argv` is visible.  An empty cmdline is treated as
+inconclusive, so the lock is left in place rather than removed prematurely.
+
+### Atomic Lock File Creation
+
+Lock files are written to a temporary file in the same directory and renamed
+into place.  Other processes therefore never see a partially-written or
+truncated lock file, even if the writer is interrupted between `open()` and
+`close()`.
 
 ### Interactive Conflict Resolution
 

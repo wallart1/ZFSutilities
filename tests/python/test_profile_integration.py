@@ -9,6 +9,7 @@ concurrent cron jobs or GUI runs.
 import io
 import multiprocessing
 import os
+import queue
 import re
 import sys
 import time
@@ -23,7 +24,6 @@ if PYTHON_SRC not in sys.path:
 import profile_runner
 import zfs_lock_manager as zlm
 from test_support import temp_config_dir, temp_lock_dir
-
 
 # ---------------------------------------------------------------------------
 # Bash-script parsing helpers for the mock Popen implementation.
@@ -66,7 +66,7 @@ class _LockingPopen:
     bash scripts.
     """
 
-    def __init__(self, delay=0.5):
+    def __init__(self, delay=1.0):
         self.delay = delay
 
     def __call__(self, cmd, **kwargs):
@@ -161,8 +161,12 @@ def _run_profile_worker(profile, runner_name, result_queue):
     The temp directory overrides from the parent process are inherited via
     fork, so the child uses the same isolated lock/config directories.
     """
+    # After fork(), the child inherits a copy of the parent's lock refcount
+    # table. Start with a clean slate so stale entries from earlier tests do
+    # not confuse the lock manager inside this worker.
+    zlm._lock_refcounts.clear()
     runner = getattr(profile_runner, runner_name)
-    with patch("profile_runner.subprocess.Popen", side_effect=_LockingPopen(delay=0.5)):
+    with patch("profile_runner.subprocess.Popen", side_effect=_LockingPopen()):
         rc = runner(profile, {}, "/bin")
     result_queue.put(rc)
 
@@ -175,8 +179,12 @@ def _run_profile_worker(profile, runner_name, result_queue):
 class TestConcurrentProfiles(unittest.TestCase):
     """Concurrent profile execution scenarios using separate subprocesses."""
 
+    def setUp(self):
+        """Start each test with a clean lock refcount table."""
+        zlm._lock_refcounts.clear()
+
     @staticmethod
-    def _wait_for_lock(dataset, locked=True, timeout=3.0):
+    def _wait_for_lock(dataset, locked=True, timeout=10.0):
         """Poll until *dataset* is locked or unlocked.
 
         Uses zfs_lock_manager.check, which returns False when a w lock is
@@ -192,8 +200,15 @@ class TestConcurrentProfiles(unittest.TestCase):
                 if can_acquire:
                     return
             time.sleep(0.01)
+        # On timeout, dump the current lock directory contents for diagnosis.
+        lock_dir = zlm.ZFSLOCK_LOCKS_DIR
+        try:
+            lock_files = os.listdir(lock_dir) if os.path.isdir(lock_dir) else []
+        except OSError:
+            lock_files = []
         raise RuntimeError(
-            f"timed out waiting for {dataset} lock state locked={locked}"
+            f"timed out waiting for {dataset} lock state locked={locked}; "
+            f"lock files in {lock_dir}: {lock_files}"
         )
 
     def _run_two_profiles(self, profile_a, profile_b, runner_a, runner_b,
@@ -223,8 +238,17 @@ class TestConcurrentProfiles(unittest.TestCase):
         p1.join(timeout=15)
         p2.join(timeout=15)
 
-        rc_a = result_a.get(timeout=1) if p1.exitcode == 0 else p1.exitcode
-        rc_b = result_b.get(timeout=1) if p2.exitcode == 0 else p2.exitcode
+        # Use a generous timeout for the result queue; the background feeder
+        # thread can be delayed under heavy load even though join() returned.
+        try:
+            rc_a = result_a.get(timeout=5) if p1.exitcode == 0 else p1.exitcode
+            rc_b = result_b.get(timeout=5) if p2.exitcode == 0 else p2.exitcode
+        except queue.Empty as exc:
+            raise RuntimeError(
+                f"result queue timeout: p1.exitcode={p1.exitcode}, "
+                f"p1.is_alive()={p1.is_alive()}, p2.exitcode={p2.exitcode}, "
+                f"p2.is_alive()={p2.is_alive()}"
+            ) from exc
 
         if p1.is_alive():
             p1.terminate()
@@ -237,43 +261,47 @@ class TestConcurrentProfiles(unittest.TestCase):
 
     def test_disjoint_datasets_both_succeed(self):
         """Two profiles touching disjoint datasets run to completion."""
-        with temp_config_dir():
-            with temp_lock_dir():
-                profile_a = _backup_profile("tank/a", "backup/a")
-                profile_b = _backup_profile("tank/b", "backup/b")
+        with temp_config_dir(), temp_lock_dir():
+            profile_a = _backup_profile("tank/a", "backup/a")
+            profile_b = _backup_profile("tank/b", "backup/b")
 
-                rc_a, rc_b = self._run_two_profiles(
-                    profile_a, profile_b,
-                    "run_backup_profile",
-                    "run_backup_profile",
-                )
+            rc_a, rc_b = self._run_two_profiles(
+                profile_a, profile_b,
+                "run_backup_profile",
+                "run_backup_profile",
+            )
 
-        self.assertEqual(rc_a, 0)
-        self.assertEqual(rc_b, 0)
+        self.assertEqual(rc_a, 0, f"profile A failed with rc={rc_a}")
+        self.assertEqual(rc_b, 0, f"profile B failed with rc={rc_b}")
 
     def test_same_dataset_one_blocked(self):
         """Two profiles targeting the same dataset cannot both hold the lock."""
-        with temp_config_dir():
-            with temp_lock_dir():
-                # Use different labels so snapshot-name generation does not
-                # serialize the two profiles before the dataset lock test.
-                profile_a = _backup_profile(
-                    "tank/share", "backup/share", label="dailybackup"
-                )
-                profile_b = _backup_profile(
-                    "tank/share", "backup/share", label="weeklybackup"
-                )
+        with temp_config_dir(), temp_lock_dir():
+            # Use different labels so snapshot-name generation does not
+            # serialize the two profiles before the dataset lock test.
+            profile_a = _backup_profile(
+                "tank/share", "backup/share", label="dailybackup"
+            )
+            profile_b = _backup_profile(
+                "tank/share", "backup/share", label="weeklybackup"
+            )
 
-                rc_a, rc_b = self._run_two_profiles(
-                    profile_a, profile_b,
-                    "run_backup_profile",
-                    "run_backup_profile",
-                    wait_dataset="tank/share",
-                )
+            rc_a, rc_b = self._run_two_profiles(
+                profile_a, profile_b,
+                "run_backup_profile",
+                "run_backup_profile",
+                wait_dataset="tank/share",
+            )
 
         # Exactly one should succeed; the other must fail safely.
-        self.assertIn(0, (rc_a, rc_b), "expected one profile to succeed")
-        self.assertNotEqual(rc_a, rc_b, "expected one profile to fail")
+        self.assertIn(
+            0, (rc_a, rc_b),
+            f"expected one profile to succeed; rc_a={rc_a}, rc_b={rc_b}",
+        )
+        self.assertNotEqual(
+            rc_a, rc_b,
+            f"expected one profile to fail; rc_a={rc_a}, rc_b={rc_b}",
+        )
 
     def test_backup_and_prune_serialize(self):
         """A prune step fails safely while a backup holds the dataset.
@@ -281,23 +309,22 @@ class TestConcurrentProfiles(unittest.TestCase):
         The hierarchical lock rules block a w lock on pool "tank" when a
         descendant dataset "tank/share" is already locked for the backup.
         """
-        with temp_config_dir():
-            with temp_lock_dir():
-                profile_backup = _backup_profile("tank/share", "backup/share")
-                profile_prune = _retention_profile("tank")
+        with temp_config_dir(), temp_lock_dir():
+            profile_backup = _backup_profile("tank/share", "backup/share")
+            profile_prune = _retention_profile("tank")
 
-                rc_backup, rc_prune = self._run_two_profiles(
-                    profile_backup, profile_prune,
-                    "run_backup_profile",
-                    "run_retention_profile",
-                    wait_dataset="tank/share",
-                )
+            rc_backup, rc_prune = self._run_two_profiles(
+                profile_backup, profile_prune,
+                "run_backup_profile",
+                "run_retention_profile",
+                wait_dataset="tank/share",
+            )
 
         # The backup should complete normally.
-        self.assertEqual(rc_backup, 0)
+        self.assertEqual(rc_backup, 0, f"backup failed with rc={rc_backup}")
         # The prune must not corrupt anything; because headless mode aborts on
         # lock conflict, it fails safely with rc=1.
-        self.assertEqual(rc_prune, 1)
+        self.assertEqual(rc_prune, 1, f"prune did not fail safely, rc={rc_prune}")
 
 
 if __name__ == "__main__":
