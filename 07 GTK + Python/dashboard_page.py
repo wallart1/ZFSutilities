@@ -6,6 +6,7 @@ import re
 import signal
 import socket
 import subprocess
+import threading
 from datetime import datetime
 
 import gi
@@ -1079,8 +1080,9 @@ def create_dashboard_page(app):
     app.dashboard_config_frame.add(config_scrolled)
     box.pack_start(app.dashboard_config_frame, False, False, 0)
 
-    # Initial population
-    refresh_dashboard_page(app)
+    # The initial population is triggered from main.py after the window is
+    # shown so that the GTK main loop is running and the async refresh can
+    # update widgets without blocking startup.
 
     return scrolled
 
@@ -1097,8 +1099,12 @@ def _make_section_frame(title_text):
     return frame
 
 
-def refresh_dashboard_page(app):
-    """Re-gather all dashboard data and update every section."""
+def _gather_dashboard_data(app):
+    """Collect all dashboard data. Intended to run in a background thread.
+
+    Returns a dict with everything needed by `_update_dashboard_ui`, or None
+    when a critical failure prevents rendering.  No GTK calls are made here.
+    """
     dashboard_cfg = get_dashboard_config(app.config)
     threshold = dashboard_cfg.get("low_space_threshold", 80)
 
@@ -1132,15 +1138,67 @@ def refresh_dashboard_page(app):
     if stale_count > 0:
         warnings.append(f"Stale lock files: {stale_count}")
 
-    _refresh_config_section(app)
-    _refresh_pool_section(app, pools, scrub_states, stale=pools_stale)
-    _refresh_ops_section(app, recent)
-    _refresh_iscsi_section(app, missing_luns, stale=iscsi_stale)
-    _refresh_warnings_section(app, warnings)
-    _refresh_processes_section(app, tasks=tasks)
+    config_data = _gather_config_section_data(app)
+
+    return {
+        "threshold": threshold,
+        "pools": pools,
+        "pools_stale": pools_stale,
+        "recent": recent,
+        "missing_luns": missing_luns,
+        "iscsi_stale": iscsi_stale,
+        "stale_count": stale_count,
+        "scrub_states": scrub_states,
+        "tasks": tasks,
+        "warnings": warnings,
+        "config_data": config_data,
+    }
+
+
+def _set_dashboard_loading(app):
+    """Show a transient loading indicator in each dashboard section."""
+    for frame in (
+        app.dashboard_warn_frame,
+        app.dashboard_pool_frame,
+        app.dashboard_proc_frame,
+        app.dashboard_ops_frame,
+        app.dashboard_iscsi_frame,
+        app.dashboard_config_frame,
+    ):
+        child = frame.get_child()
+        if child is not None:
+            child.set_sensitive(False)
+
+
+def _clear_dashboard_loading(app):
+    """Re-enable dashboard sections after refresh completes."""
+    for frame in (
+        app.dashboard_warn_frame,
+        app.dashboard_pool_frame,
+        app.dashboard_proc_frame,
+        app.dashboard_ops_frame,
+        app.dashboard_iscsi_frame,
+        app.dashboard_config_frame,
+    ):
+        child = frame.get_child()
+        if child is not None:
+            child.set_sensitive(True)
+
+
+def _update_dashboard_ui(app, data):
+    """Update every dashboard section from pre-gathered data.
+
+    Must run on the GTK main thread.
+    """
+    _refresh_config_section_from_data(app, data["config_data"])
+    _refresh_pool_section(app, data["pools"], data["scrub_states"], stale=data["pools_stale"])
+    _refresh_ops_section(app, data["recent"])
+    _refresh_iscsi_section(app, data["missing_luns"], stale=data["iscsi_stale"])
+    _refresh_warnings_section(app, data["warnings"])
+    _refresh_processes_section(app, tasks=data["tasks"])
 
     # Update the contextual "Fix Locks" button visibility
-    _update_fix_locks_button(app, stale_count)
+    _update_fix_locks_button(app, data["stale_count"])
 
     app.dashboard_config_frame.show_all()
     app.dashboard_pool_frame.show_all()
@@ -1154,13 +1212,124 @@ def refresh_dashboard_page(app):
     else:
         app.dashboard_iscsi_frame.hide()
 
+    _clear_dashboard_loading(app)
 
-def _refresh_config_section(app):
-    """Clear and repopulate the Configuration Info grid."""
+
+def _dashboard_refresh_worker(app):
+    """Background thread target: gather dashboard data."""
+    try:
+        data = _gather_dashboard_data(app)
+    except Exception as exc:
+        log_msg(f"WARN: Dashboard data gathering failed: {exc}")
+        data = None
+    GLib.idle_add(_on_dashboard_refresh_done, app, data)
+
+
+def _on_dashboard_refresh_done(app, data):
+    """GLib idle callback: apply gathered data and handle pending refresh."""
+    app._dashboard_refresh_in_progress = False
+    if data is not None:
+        _update_dashboard_ui(app, data)
+    else:
+        _clear_dashboard_loading(app)
+
+    if getattr(app, "_dashboard_refresh_pending", False):
+        app._dashboard_refresh_pending = False
+        GLib.timeout_add_seconds(0, lambda: refresh_dashboard_page(app) or False)
+    return False
+
+
+def refresh_dashboard_page(app, sync=False):
+    """Re-gather all dashboard data and update every section.
+
+    By default the expensive I/O is performed in a background thread so the
+    GTK main thread stays responsive.  Pass ``sync=True`` to refresh
+    synchronously (used by tests and callers that must wait for the result).
+    """
+    if not sync:
+        if getattr(app, "_dashboard_refresh_in_progress", False):
+            app._dashboard_refresh_pending = True
+            return
+        app._dashboard_refresh_in_progress = True
+        app._dashboard_refresh_pending = False
+        _set_dashboard_loading(app)
+        threading.Thread(target=_dashboard_refresh_worker, args=(app,), daemon=True).start()
+        return
+
+    # Synchronous path
+    data = _gather_dashboard_data(app)
+    if data is not None:
+        _update_dashboard_ui(app, data)
+
+
+def _gather_config_section_data(app):
+    """Collect data for the Configuration Info grid.
+
+    This performs the expensive SSH/subprocess calls and is intended to run
+    in a background thread.  It returns a dict that
+    `_refresh_config_section_from_data` can render without further I/O.
+    """
+    cfg = _get_node_config()
+    data = {
+        "cfg": cfg,
+        "mode": cfg["mode"],
+        "hosts": [],
+        "os_info_map": {},
+        "versions": "",
+        "zfs_versions": "",
+    }
+
+    if cfg["mode"] == "two-node":
+        data["hosts"] = [
+            ("This host", cfg["this_host"]),
+            ("Storage host", cfg["storage_host"]),
+            ("Compute host", cfg["compute_host"]),
+        ]
+        if cfg.get("storage_ip"):
+            data["hosts"].append(("Storage IP", cfg["storage_ip"]))
+    else:
+        data["hosts"] = [("Hostname", cfg["this_host"])]
+
+    # Gather OS info once per host to avoid duplicate SSH calls.
+    if cfg["mode"] == "two-node":
+        data["os_info_map"] = {
+            host: _get_host_os_info(host)
+            for host, _roles in _get_host_role_list(cfg)
+        }
+    else:
+        data["os_info_map"] = {
+            cfg["this_host"]: _get_host_os_info(cfg["this_host"])
+        }
+
+    # Versions
+    if cfg["mode"] == "two-node":
+        local_v = _get_host_version(cfg["this_host"])
+        storage_v = _get_host_version(cfg["storage_host"])
+        compute_v = _get_host_version(cfg["compute_host"])
+        data["versions"] = f"local={local_v}  storage={storage_v}  compute={compute_v}"
+    else:
+        data["versions"] = _get_host_version(cfg["this_host"])
+
+    # ZFS versions
+    if cfg["mode"] == "two-node":
+        zfs_parts = []
+        for host, roles in _get_host_role_list(cfg):
+            zfs_out = _get_host_zfs_version(host)
+            header = f"{host} ({','.join(roles)}):"
+            zfs_parts.append(f"{header}\n{zfs_out}")
+        data["zfs_versions"] = "\n\n".join(zfs_parts)
+    else:
+        data["zfs_versions"] = _get_host_zfs_version(cfg["this_host"])
+
+    return data
+
+
+def _refresh_config_section_from_data(app, data):
+    """Render the Configuration Info grid from pre-gathered data."""
     for child in app.dashboard_config_grid.get_children():
         child.destroy()
 
-    cfg = _get_node_config()
+    cfg = data["cfg"]
     row = 0
 
     # Mode
@@ -1169,24 +1338,13 @@ def _refresh_config_section(app):
     mode_lbl.set_halign(Gtk.Align.START)
     app.dashboard_config_grid.attach(mode_lbl, 0, row, 1, 1)
 
-    mode_val = Gtk.Label(label=cfg["mode"])
+    mode_val = Gtk.Label(label=data["mode"])
     mode_val.set_halign(Gtk.Align.START)
     app.dashboard_config_grid.attach(mode_val, 1, row, 1, 1)
     row += 1
 
     # Hostnames
-    if cfg["mode"] == "two-node":
-        hosts = [
-            ("This host", cfg["this_host"]),
-            ("Storage host", cfg["storage_host"]),
-            ("Compute host", cfg["compute_host"]),
-        ]
-        if cfg.get("storage_ip"):
-            hosts.append(("Storage IP", cfg["storage_ip"]))
-    else:
-        hosts = [("Hostname", cfg["this_host"])]
-
-    for label, hostname in hosts:
+    for label, hostname in data["hosts"]:
         lbl = Gtk.Label()
         lbl.set_markup(f"<b>{label}:</b>")
         lbl.set_halign(Gtk.Align.START)
@@ -1197,21 +1355,13 @@ def _refresh_config_section(app):
         app.dashboard_config_grid.attach(val, 1, row, 1, 1)
         row += 1
 
-    # Gather OS info once per host to avoid duplicate SSH calls.
-    if cfg["mode"] == "two-node":
-        os_info_map = {
-            host: _get_host_os_info(host)
-            for host, _roles in _get_host_role_list(cfg)
-        }
-    else:
-        os_info_map = {cfg["this_host"]: _get_host_os_info(cfg["this_host"])}
-
     # Operating system(s)
     os_lbl = Gtk.Label()
     os_lbl.set_markup("<b>Operating system(s):</b>")
     os_lbl.set_halign(Gtk.Align.START)
     app.dashboard_config_grid.attach(os_lbl, 0, row, 1, 1)
 
+    os_info_map = data["os_info_map"]
     if cfg["mode"] == "two-node":
         os_name_parts = []
         for host, roles in _get_host_role_list(cfg):
@@ -1234,15 +1384,7 @@ def _refresh_config_section(app):
     ver_lbl.set_halign(Gtk.Align.START)
     app.dashboard_config_grid.attach(ver_lbl, 0, row, 1, 1)
 
-    if cfg["mode"] == "two-node":
-        local_v = _get_host_version(cfg["this_host"])
-        storage_v = _get_host_version(cfg["storage_host"])
-        compute_v = _get_host_version(cfg["compute_host"])
-        ver_text = f"local={local_v}  storage={storage_v}  compute={compute_v}"
-    else:
-        ver_text = _get_host_version(cfg["this_host"])
-
-    ver_val = Gtk.Label(label=ver_text)
+    ver_val = Gtk.Label(label=data["versions"])
     ver_val.set_halign(Gtk.Align.START)
     app.dashboard_config_grid.attach(ver_val, 1, row, 1, 1)
     row += 1
@@ -1253,19 +1395,14 @@ def _refresh_config_section(app):
     zfs_lbl.set_halign(Gtk.Align.START)
     app.dashboard_config_grid.attach(zfs_lbl, 0, row, 1, 1)
 
-    if cfg["mode"] == "two-node":
-        zfs_parts = []
-        for host, roles in _get_host_role_list(cfg):
-            zfs_out = _get_host_zfs_version(host)
-            header = f"{host} ({','.join(roles)}):"
-            zfs_parts.append(f"{header}\n{zfs_out}")
-        zfs_text = "\n\n".join(zfs_parts)
-    else:
-        zfs_text = _get_host_zfs_version(cfg["this_host"])
-
-    zfs_val = Gtk.Label(label=zfs_text)
+    zfs_val = Gtk.Label(label=data["zfs_versions"])
     zfs_val.set_halign(Gtk.Align.START)
     app.dashboard_config_grid.attach(zfs_val, 1, row, 1, 1)
+
+
+def _refresh_config_section(app):
+    """Clear and repopulate the Configuration Info grid (synchronous)."""
+    _refresh_config_section_from_data(app, _gather_config_section_data(app))
 
 
 def _refresh_pool_section(app, pools, scrub_states=None, stale=False):
@@ -1465,10 +1602,10 @@ def _on_fix_iscsi_clicked(_button, app):
 
         if result.stdout:
             for line in result.stdout.strip().splitlines():
-                log_msg(f"INFO: {line}")
+                log_msg(line)
         if result.stderr:
             for line in result.stderr.strip().splitlines():
-                log_msg(f"WARN: {line}")
+                log_msg(line)
     except (OSError, subprocess.TimeoutExpired) as e:
         log_msg(f"WARN: repair-iscsi-luns failed: {e}")
 

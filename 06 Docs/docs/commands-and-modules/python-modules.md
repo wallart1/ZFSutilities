@@ -779,12 +779,15 @@ Datasets tab: a lazy-loading tree of pools, datasets, snapshots, and holds.
 Dashboard tab: pool health, recent operations, iSCSI issues, running tasks,
 version comparison with a two-node peer, and warnings.
 
+Expensive data gathering (pool queries, SSH version checks) runs in a
+background thread by default so the GTK main loop stays responsive.
+
 **Key functions:**
 
 | Function | Purpose |
 | -------- | ------- |
 | `create_dashboard_page()` | Build the Dashboard tab widget |
-| `refresh_dashboard_page()` | Re-gather all dashboard data |
+| `refresh_dashboard_page(sync=False)` | Re-gather all dashboard data asynchronously (`sync=True` to block) |
 | `_get_pool_health()` | Query `zpool list` via `ZfsRepository` |
 | `_get_warnings()` | Compile warning strings from all sources |
 | `_get_peer_host()` / `_get_host_version()` | Two-node peer version check |
@@ -851,11 +854,15 @@ candidate flags, and scrub state table.
 Schedule tab: list saved profiles, edit cron lines, preview next run times,
 and enable/disable scheduled entries.
 
+Next-run computation is performed in a background thread and cached per
+cron expression per minute so the UI remains responsive.
+
 **Key functions:**
 
 | Function | Purpose |
 | -------- | ------- |
 | `create_schedule_page()` | Build the Schedule tab widget |
+| `refresh_schedule_page(sync=False)` | Refresh the schedule list asynchronously (`sync=True` to block) |
 | `collect_schedule_config()` / `load_schedule_config()` | UI ↔ cron dict |
 | `_regenerate_cron()` | Rewrite the cron drop-in file |
 | `_refresh_profile_list()` | Show all profiles of the current tab type |
@@ -1361,6 +1368,7 @@ Application entry point and single-instance guard.
 2. Check the PID file; if another instance is running and healthy, raise it.
 3. If the instance is stuck, show a wait dialog and terminate it.
 4. Launch `ZFSUtilitiesWindow` from `zfsutilities_gui.py`.
+5. Trigger the first asynchronous Dashboard refresh.
 
 **Called modules / imported helpers:**
 

@@ -651,6 +651,55 @@ class TestWindowHelpers(unittest.TestCase):
             self.assertFalse(main_module._has_visible_window(42))
 
 
+class TestDoActivate(unittest.TestCase):
+    """Tests for ZFSUtilitiesApp.do_activate startup behaviour."""
+
+    def _make_app(self):
+        """Return an app instance with __init__ bypassed."""
+        with patch.object(
+            main_module.ZFSUtilitiesApp, "__init__", lambda self, flags=0: None
+        ):
+            app = main_module.ZFSUtilitiesApp()
+            app._main_window = None
+            return app
+
+    @patch("zfsutilities_gui.ZFSUtilitiesWindow")
+    @patch("dashboard_page.refresh_dashboard_page")
+    def test_creates_window_and_triggers_dashboard_refresh(
+        self, mock_refresh, mock_window_cls
+    ):
+        app = self._make_app()
+        mock_window = MagicMock()
+        mock_window_cls.return_value = mock_window
+
+        with patch.object(main_module.Gtk, "CssProvider", return_value=MagicMock()), \
+             patch.object(main_module.Gtk.StyleContext, "add_provider_for_screen"), \
+             patch.object(main_module.Gdk.Screen, "get_default", return_value=MagicMock()):
+            app.do_activate()
+
+        mock_window.show_all.assert_called_once()
+        mock_window._check_startup_config.assert_called_once()
+        mock_refresh.assert_called_once_with(mock_window)
+        self.assertEqual(app._main_window, mock_window)
+        mock_window.connect.assert_called_once_with("destroy", ANY)
+
+    def test_existing_window_is_presented(self):
+        app = self._make_app()
+        existing = MagicMock()
+        gdk_window = MagicMock()
+        existing.get_window.return_value = gdk_window
+        app._main_window = existing
+
+        with patch("zfsutilities_gui.ZFSUtilitiesWindow") as mock_window_cls, \
+             patch("dashboard_page.refresh_dashboard_page") as mock_refresh:
+            app.do_activate()
+
+        existing.present.assert_called_once()
+        gdk_window.raise_.assert_called_once()
+        mock_window_cls.assert_not_called()
+        mock_refresh.assert_not_called()
+
+
 class TestWaitDialogHelpers(unittest.TestCase):
     """Tests for the transient wait dialog and event-pumping helpers."""
 

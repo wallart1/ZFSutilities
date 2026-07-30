@@ -15,6 +15,7 @@ import time
 import gi
 
 gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
 from backup_config import log_msg
 from gi.repository import Gdk, Gio, Gtk
 
@@ -65,6 +66,13 @@ class ZFSUtilitiesApp(Gtk.Application):
         window = ZFSUtilitiesWindow(application=self)
         window.show_all()
         window._check_startup_config()
+
+        # Trigger the first Dashboard refresh now that the window is visible
+        # and the GTK main loop is running.  This keeps the window responsive
+        # while pool/SSH data is gathered in the background.
+        from dashboard_page import refresh_dashboard_page
+        refresh_dashboard_page(window)
+
         self._main_window = window
         window.connect("destroy", self._on_window_destroy)
 

@@ -127,6 +127,12 @@ class FakeScheduleStore:
         for i, row in enumerate(self._rows):
             yield FakeScheduleRow(row, i)
 
+    def clear(self):
+        self._rows.clear()
+
+    def append(self, row):
+        self._rows.append(list(row))
+
 
 class TestScheduleDirtyTracking(unittest.TestCase):
     """Verify Save/Revert reflects active toggles and cron edits across rows."""
@@ -635,6 +641,7 @@ class TestNextRunStrings(unittest.TestCase):
     @patch("schedule_page.next_run_times", return_value=[])
     def test_next_run_strings_returns_fallback_when_no_runs(self, _mock_next):
         schedule_page = self._import_schedule_page()
+        schedule_page._NEXT_RUN_CACHE.clear()
         display, sort_str = schedule_page._next_run_strings({})
         self.assertEqual(
             display,
@@ -658,6 +665,7 @@ class TestUpdateNextRunForIter(unittest.TestCase):
         self, mock_load, _mock_next
     ):
         schedule_page = self._import_schedule_page()
+        schedule_page._NEXT_RUN_CACHE.clear()
         mock_load.return_value = {"profile_name": "p1", "cron": {}}
         rows = [[True, "p1", "backup", "* * * * *", "old", ""]]
         app = MagicMock()
@@ -1251,7 +1259,7 @@ class TestRefreshSchedulePage(unittest.TestCase):
         mock_load.return_value = profile
 
         with patch("schedule_page.list_profiles", return_value=[profile]):
-            schedule_page.refresh_schedule_page(app)
+            schedule_page.refresh_schedule_page(app, sync=True)
 
         self.assertEqual(
             app.schedule_store.get_value(0, self.COL_NEXT_RUN),
@@ -1287,9 +1295,12 @@ class TestRefreshSchedulePage(unittest.TestCase):
         ]
 
         with patch("schedule_page.list_profiles", return_value=profiles):
-            schedule_page.refresh_schedule_page(app)
+            schedule_page.refresh_schedule_page(app, sync=True)
 
-        mock_refresh.assert_called_once_with(app)
+        # The store should have been rebuilt with both profiles.
+        store_names = {row[self.COL_NAME] for row in app.schedule_store}
+        self.assertEqual(store_names, {"p1", "p2"})
+        mock_refresh.assert_not_called()
 
     @patch("schedule_page.log_msg")
     @patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN])
@@ -1311,7 +1322,7 @@ class TestRefreshSchedulePage(unittest.TestCase):
         mock_load.return_value = profile
 
         with patch("schedule_page.list_profiles", return_value=[profile]):
-            schedule_page.refresh_schedule_page(app)
+            schedule_page.refresh_schedule_page(app, sync=True)
 
         self.assertEqual(app._schedule_pending, {"p1": {"active": False}})
 
@@ -1335,7 +1346,7 @@ class TestRefreshSchedulePage(unittest.TestCase):
         ]
 
         with patch("schedule_page.list_profiles", return_value=profiles):
-            schedule_page.refresh_schedule_page(app)
+            schedule_page.refresh_schedule_page(app, sync=True)
 
         self.assertEqual(app._schedule_pending, {"p2": {"active": True}})
         mock_red.assert_called_once_with(app._schedule_save_button, True)
@@ -1358,11 +1369,128 @@ class TestRefreshSchedulePage(unittest.TestCase):
         mock_load.return_value = profile
 
         with patch("schedule_page.list_profiles", return_value=[profile]):
-            schedule_page.refresh_schedule_page(app)
+            schedule_page.refresh_schedule_page(app, sync=True)
 
         selection = app.schedule_view.get_selection()
         selection.unselect_all.assert_called_once()
         selection.select_iter.assert_called_once()
+
+
+class TestRefreshScheduleAsync(unittest.TestCase):
+    """Verify the default async refresh path does not block the main thread."""
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+            return schedule_page
+
+    def test_async_refresh_starts_background_thread(self):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        app = MagicMock()
+        app.schedule_store = FakeScheduleStore(rows)
+        app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
+            app.schedule_store, [],
+        )
+        app._schedule_pending = {}
+        app._schedule_refresh_in_progress = False
+
+        with patch.object(schedule_page, "threading") as mock_threading:
+            schedule_page.refresh_schedule_page(app, sync=False)
+
+        mock_threading.Thread.assert_called_once()
+        _, kwargs = mock_threading.Thread.call_args
+        self.assertTrue(kwargs.get("daemon"))
+        self.assertEqual(kwargs["target"], schedule_page._schedule_refresh_worker)
+        # UI state is captured on the main thread and passed to the worker.
+        self.assertEqual(kwargs["args"], (app, [], {"p1"}))
+
+    def test_async_refresh_coalesces_overlapping_requests(self):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        app = MagicMock()
+        app.schedule_store = FakeScheduleStore(rows)
+        app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
+            app.schedule_store, [],
+        )
+        app._schedule_refresh_in_progress = True
+
+        with patch.object(schedule_page, "threading") as mock_threading:
+            schedule_page.refresh_schedule_page(app, sync=False)
+
+        self.assertTrue(app._schedule_refresh_pending)
+        mock_threading.Thread.assert_not_called()
+
+
+class TestScheduleRefreshData(unittest.TestCase):
+    """Verify data gathering uses the UI state captured on the main thread."""
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+            return schedule_page
+
+    def test_gather_uses_captured_selection_and_store_names(self):
+        schedule_page = self._import_schedule_page()
+        schedule_page._NEXT_RUN_CACHE.clear()
+        profile = {
+            "profile_name": "p1",
+            "active": True,
+            "tab_type": "backup",
+            "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+        }
+
+        with patch("schedule_page.list_profiles", return_value=[profile]):
+            with patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN]):
+                data = schedule_page._gather_schedule_refresh_data(
+                    MagicMock(), ["p1"], {"p1"}
+                )
+
+        self.assertEqual(data["selected_names"], ["p1"])
+        self.assertEqual(data["store_names"], {"p1"})
+        self.assertEqual(data["profile_names"], {"p1"})
+        self.assertEqual(len(data["rows"]), 1)
+
+
+class TestNextRunCache(unittest.TestCase):
+    """Verify next-run caching is time-bucketed to avoid stale values."""
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+            return schedule_page
+
+    @patch("schedule_page.next_run_times")
+    def test_cache_hits_within_same_minute(self, mock_next):
+        schedule_page = self._import_schedule_page()
+        schedule_page._NEXT_RUN_CACHE.clear()
+        mock_next.return_value = [SAMPLE_NEXT_RUN]
+        cron = {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"}
+
+        fixed = datetime(2025, 6, 15, 9, 0, 0, tzinfo=timezone(-timedelta(hours=4)))
+        with patch.object(schedule_page, "datetime") as mock_dt:
+            mock_dt.now.return_value = fixed
+            result1 = schedule_page._next_run_strings(cron)
+            result2 = schedule_page._next_run_strings(cron)
+
+        self.assertEqual(result1, result2)
+        mock_next.assert_called_once()
+
+    @patch("schedule_page.next_run_times")
+    def test_cache_misses_after_minute_changes(self, mock_next):
+        schedule_page = self._import_schedule_page()
+        schedule_page._NEXT_RUN_CACHE.clear()
+        mock_next.return_value = [SAMPLE_NEXT_RUN]
+        cron = {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"}
+
+        first = datetime(2025, 6, 15, 9, 0, 0, tzinfo=timezone(-timedelta(hours=4)))
+        second = datetime(2025, 6, 15, 9, 1, 0, tzinfo=timezone(-timedelta(hours=4)))
+        with patch.object(schedule_page, "datetime") as mock_dt:
+            mock_dt.now.side_effect = [first, second]
+            schedule_page._next_run_strings(cron)
+            schedule_page._next_run_strings(cron)
+
+        self.assertEqual(mock_next.call_count, 2)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,25 @@ For this environment the terminal has been calibrated to approximately
 Future sessions should target 85 characters per line unless the user
 recalibrates the width.
 
-#
+## Quoting Paths with Shell Metacharacters
+
+When invoking the `Shell` tool with a literal path that contains shell
+metacharacters (e.g. parentheses, spaces, brackets, or quotes), always wrap
+the path in double quotes and use `--` where supported. This prevents bash
+parse errors such as `unexpected token ('`.
+
+Preferred form for changing into the working directory:
+
+```bash
+cd -- "/NFS1/dan(NFS1)/zfsutilities-pub" && git status
+```
+
+Apply the same quoting to any command argument that contains metacharacters:
+
+```bash
+cat -- "/path/with (parens)/file.txt"
+ls -- "/path with spaces/"
+```
 
 # Development Agent
 
@@ -343,22 +361,20 @@ An automated bash test harness lives in `tests/`.
 
 ### Running Tests
 
+When running many suites, start with `-q` or `--failures-only` so the harness
+reports which suites failed without flooding the terminal. Run individual
+suites with full output only when you need the per-test detail.
+
 ```bash
-# Run all suites
-./run-tests
+# Run all suites (use -q or --failures-only to keep output manageable)
+./run-tests -q
+./run-tests --failures-only
 
 # Run a specific suite
 ./run-tests test-zfsretain
 
-# Quiet: show suite headers, failures, and summary only
-./run-tests -q
-./run-tests --quiet
-
-# Failures only: show only failing tests and the final summary
-./run-tests --failures-only
-
-# Reduce output volume when running many suites
-If the full-suite output is truncated, run with -q or --failures-only, or run a subset of suites at a time.
+# Full output for a single suite or a small subset
+./run-tests test-zfsretain test-zfsbuildfsarray
 ```
 
 ### Test Suite Files
@@ -442,26 +458,26 @@ A Python test harness lives in `tests/python/` and uses Python's built-in `unitt
 
 #### Running Python Tests
 
+When running many suites, start with `-q` or `--failures-only` so the harness
+reports which suites failed without flooding the terminal. Run individual
+suites with full output only when you need the per-test detail.
+
 ```bash
-# Run all Python test suites
-./tests/run-python-tests
+# Run all Python test suites (use -q or --failures-only to keep output manageable)
+./tests/run-python-tests -q
+./tests/run-python-tests --failures-only
 
 # Run a specific Python suite
 ./tests/run-python-tests test_backup_config
 
-# Quiet: show suite headers, failures, and summary only
-./tests/run-python-tests -q
-./tests/run-python-tests --quiet
-
-# Failures only: show only failing tests and the final summary
-./tests/run-python-tests --failures-only
+# Full output for a single suite or a small subset
+./tests/run-python-tests test_backup_config test_backup_runner
 
 # Run via the unified harness (bash + Python)
-./tests/run-tests
-./tests/run-tests test_backup_config
-./tests/run-tests test-zfsretain test_backup_config
-./tests/run-tests -q
-./tests/run-tests --failures-only
+./run-tests -q
+./run-tests --failures-only
+./run-tests test_backup_config
+./run-tests test-zfsretain test_backup_config
 ```
 
 #### Test Suite Files
@@ -476,14 +492,14 @@ A Python test harness lives in `tests/python/` and uses Python's built-in `unitt
 | `test_command_builders`   | 31    | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
 | `test_config_migrations`  | 17    | Schema migrations 1→12, idempotency, missing migration errors                                                  |
 | `test_cron_manager`       | 17    | Cron line generation, human-readable interpretation, next-run computation                                      |
-| `test_dashboard_page`     | 107   | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators                             |
+| `test_dashboard_page`     | 167   | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, async refresh loading state |
 | `test_docs_integrity`     | 11    | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability  |
 | `test_gui_infrastructure` | 81    | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling            |
 | `test_installer_retention` | 5     | Installer retention profile initialization: default-only on new install and preservation of existing profiles |
 | `test_legacy_retention`   | 7     | Legacy `zfsretainpol-*` file parsing and pool scanning                                                         |
 | `test_logging_config`     | 24    | Message levels, GUI sink, session log env helpers, and session log truncation                                  |
 | `test_logs_page`          | 33    | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, and column-header label tooltips |
-| `test_main`               | 41    | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic |
+| `test_main`               | 40    | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, initial dashboard refresh |
 | `test_page_runners`       | 6     | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation           |
 | `test_profile_manager`    | 18    | Profile CRUD, update, name validation, listing, existence checks, lifecycle logging                            |
 | `test_profile_dialogs`    | 11    | Add/Recall profile dialogs, duplicate-name overwrite handling                                                  |
@@ -491,7 +507,7 @@ A Python test harness lives in `tests/python/` and uses Python's built-in `unitt
 | `test_profile_runner_concurrency` | 7 | Per-profile advisory locks, duplicate-invocation suppression, and metadata                                  |
 | `test_profile_integration` | 3    | Concurrent profile execution: disjoint datasets, same-dataset conflict, backup+prune serialization             |
 | `test_restore_runner`     | 11    | Restore destination computation and zfs-send-receive parameter mapping                                         |
-| `test_schedule_page`      | 35    | Schedule page path resolution, dirty tracking, run-now child-watch handling, and fatal-fallback logging          |
+| `test_schedule_page`      | 52    | Schedule page path resolution, dirty tracking, run-now child-watch handling, fatal-fallback logging, async refresh, and next-run caching |
 | `test_scrub_manager`      | 24    | Scrub state parsing, queue/target management, tick logic, systemd timers                                       |
 | `test_scrub_page`         | 5     | Scrub page store schema and flicker-free refresh logic                                                         |
 | `test_zfs_diagnostics`    | 8     | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run`                     |

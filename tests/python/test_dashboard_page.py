@@ -17,6 +17,7 @@ if PYTHON_SRC not in sys.path:
 
 import dashboard_page as dp
 import feature_config
+from logging_config import parse_msg_level
 from test_support import (
     capture_logs,
     mock_gtk,
@@ -1303,7 +1304,7 @@ class TestRefreshDashboardCache(unittest.TestCase):
             patch("scrub_manager.get_all_pool_scrub_states", return_value={}),
             patch.object(dp, "_get_recent_entries", return_value=[]),
             patch.object(dp, "_get_warnings", return_value=[]),
-            patch.object(dp, "_refresh_config_section"),
+            patch.object(dp, "_gather_config_section_data", return_value={"cfg": {"mode": "single-node", "this_host": "test"}, "mode": "single-node", "hosts": [("Hostname", "test")], "os_info_map": {"test": ("TestOS", "1")}, "versions": "dev", "zfs_versions": "zfs-1"}),
             patch.object(dp, "_refresh_pool_section"),
             patch.object(dp, "_refresh_ops_section"),
             patch.object(dp, "_refresh_iscsi_section"),
@@ -1330,7 +1331,7 @@ class TestRefreshDashboardCache(unittest.TestCase):
             for p in patches:
                 stack.enter_context(p)
             dp._get_pool_health.return_value = None
-            dp.refresh_dashboard_page(app)
+            dp.refresh_dashboard_page(app, sync=True)
             mock_pool = dp._refresh_pool_section
 
         mock_pool.assert_called_once()
@@ -1355,7 +1356,7 @@ class TestRefreshDashboardCache(unittest.TestCase):
             for p in patches:
                 stack.enter_context(p)
             dp._get_pool_health.return_value = fresh
-            dp.refresh_dashboard_page(app)
+            dp.refresh_dashboard_page(app, sync=True)
             mock_pool = dp._refresh_pool_section
 
         self.assertEqual(app._dashboard_pools, fresh)
@@ -1363,6 +1364,139 @@ class TestRefreshDashboardCache(unittest.TestCase):
         mock_pool.assert_called_once()
         self.assertEqual(mock_pool.call_args[0][1], fresh)
         self.assertFalse(mock_pool.call_args[1]["stale"])
+
+
+class TestRefreshDashboardAsync(unittest.TestCase):
+    """Verify the default async refresh path does not block the main thread."""
+
+    def test_async_refresh_starts_background_thread(self):
+        app = MagicMock()
+        app.config = {}
+        app._dashboard_refresh_in_progress = False
+        with patch.object(dp, "threading") as mock_threading:
+            with patch.object(dp, "_set_dashboard_loading") as mock_loading:
+                dp.refresh_dashboard_page(app, sync=False)
+
+        mock_loading.assert_called_once_with(app)
+        mock_threading.Thread.assert_called_once()
+        _, kwargs = mock_threading.Thread.call_args
+        self.assertTrue(kwargs.get("daemon"))
+        self.assertEqual(kwargs["target"], dp._dashboard_refresh_worker)
+        self.assertEqual(kwargs["args"], (app,))
+
+    def test_async_refresh_coalesces_overlapping_requests(self):
+        app = MagicMock()
+        app.config = {}
+        app._dashboard_refresh_in_progress = True
+        with patch.object(dp, "threading") as mock_threading:
+            dp.refresh_dashboard_page(app, sync=False)
+
+        self.assertTrue(app._dashboard_refresh_pending)
+        mock_threading.Thread.assert_not_called()
+
+
+class TestDashboardLoadingState(unittest.TestCase):
+    """Verify the loading indicator helpers desensitize dashboard sections."""
+
+    FRAME_NAMES = (
+        "dashboard_warn_frame",
+        "dashboard_pool_frame",
+        "dashboard_proc_frame",
+        "dashboard_ops_frame",
+        "dashboard_iscsi_frame",
+        "dashboard_config_frame",
+    )
+
+    def _make_app(self):
+        app = MagicMock()
+        for name in self.FRAME_NAMES:
+            frame = MagicMock()
+            frame.get_child.return_value = MagicMock()
+            setattr(app, name, frame)
+        return app
+
+    def test_set_loading_desensitizes_all_sections(self):
+        app = self._make_app()
+        dp._set_dashboard_loading(app)
+        for name in self.FRAME_NAMES:
+            frame = getattr(app, name)
+            frame.get_child.return_value.set_sensitive.assert_called_once_with(False)
+
+    def test_clear_loading_re_enables_all_sections(self):
+        app = self._make_app()
+        dp._clear_dashboard_loading(app)
+        for name in self.FRAME_NAMES:
+            frame = getattr(app, name)
+            frame.get_child.return_value.set_sensitive.assert_called_once_with(True)
+
+    def test_loading_helpers_skip_frames_without_child(self):
+        app = MagicMock()
+        for name in self.FRAME_NAMES:
+            frame = MagicMock()
+            frame.get_child.return_value = None
+            setattr(app, name, frame)
+        # Should not raise.
+        dp._set_dashboard_loading(app)
+        dp._clear_dashboard_loading(app)
+
+
+class TestDashboardRefreshDone(unittest.TestCase):
+    """Verify the async refresh completion callback behaves correctly."""
+
+    def test_applies_data_via_update_dashboard_ui(self):
+        app = MagicMock()
+        app.config = {}
+        app._dashboard_refresh_in_progress = True
+        app._dashboard_refresh_pending = False
+        data = {"pools": []}
+
+        with patch.object(dp, "_update_dashboard_ui") as mock_update:
+            dp._on_dashboard_refresh_done(app, data)
+
+        mock_update.assert_called_once_with(app, data)
+        self.assertFalse(app._dashboard_refresh_in_progress)
+
+    def test_schedules_pending_refresh(self):
+        app = MagicMock()
+        app.config = {}
+        app._dashboard_refresh_in_progress = True
+        app._dashboard_refresh_pending = True
+        data = {"pools": []}
+
+        with patch.object(dp, "_update_dashboard_ui"), \
+             patch.object(dp, "_clear_dashboard_loading"), \
+             patch.object(dp, "GLib") as mock_glib, \
+             patch.object(dp, "refresh_dashboard_page") as mock_refresh:
+            dp._on_dashboard_refresh_done(app, data)
+            mock_glib.timeout_add_seconds.assert_called_once()
+            callback = mock_glib.timeout_add_seconds.call_args[0][1]
+            callback()
+
+        mock_refresh.assert_called_once_with(app)
+        self.assertFalse(app._dashboard_refresh_pending)
+
+    def test_worker_exception_logs_and_clears_loading(self):
+        app = MagicMock()
+        app.config = {}
+        app._dashboard_refresh_in_progress = True
+        app._dashboard_refresh_pending = False
+
+        with patch.object(dp, "_gather_dashboard_data", side_effect=RuntimeError("boom")), \
+             patch("dashboard_page.log_msg") as mock_log, \
+             patch.object(dp, "GLib") as mock_glib, \
+             patch.object(dp, "_clear_dashboard_loading") as mock_clear:
+            dp._dashboard_refresh_worker(app)
+            idle_callback = mock_glib.idle_add.call_args[0][0]
+            idle_args = mock_glib.idle_add.call_args[0][1:]
+            self.assertEqual(idle_args, (app, None))
+            # Simulate the idle callback running while patches are still active.
+            idle_callback(*idle_args)
+
+        mock_clear.assert_called_once_with(app)
+        self.assertFalse(app._dashboard_refresh_in_progress)
+        self.assertTrue(
+            any("boom" in str(call) for call in mock_log.call_args_list)
+        )
 
 
 class TestUpdateFixLocksButton(unittest.TestCase):
@@ -2167,6 +2301,40 @@ class TestFixIscsiButton(unittest.TestCase):
 
         self.assertTrue(
             any("repair-iscsi-luns failed" in msg for msg in logs)
+        )
+
+    def test_fix_iscsi_preserves_inner_log_level(self):
+        """Bash log_msg lines on stderr must not be reclassified as WARN."""
+        app = self._create_app()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "=== repair-iscsi-luns ===\n"
+            mock_run.return_value.stderr = (
+                "/test/bin/repair-iscsi-luns:370: INFO: Loaded backstores: 33\n"
+                "/test/bin/repair-iscsi-luns:414: WARN: Device not available: "
+                "/dev/zvol/threeamigos/proxmox/vm-215-disk-1 (skipping vm-215-disk-1)\n"
+            )
+            with patch.object(dp, "refresh_dashboard_page"):
+                with patch.object(
+                    dp, "resolve_local_bin", return_value="/test/bin/repair-iscsi-luns"
+                ):
+                    with capture_logs() as logs:
+                        dp._on_fix_iscsi_clicked(None, app)
+
+        levels = [parse_msg_level(msg) for msg in logs]
+        self.assertIn("INFO", levels)
+        self.assertIn("WARN", levels)
+
+        info_msgs = [msg for msg in logs if parse_msg_level(msg) == "INFO"]
+        self.assertTrue(
+            any("Loaded backstores: 33" in msg for msg in info_msgs),
+            f"Expected INFO message about backstores in {info_msgs!r}",
+        )
+
+        warn_msgs = [msg for msg in logs if parse_msg_level(msg) == "WARN"]
+        self.assertTrue(
+            any("vm-215-disk-1" in msg for msg in warn_msgs),
+            f"Expected WARN message about vm-215-disk-1 in {warn_msgs!r}",
         )
 
 

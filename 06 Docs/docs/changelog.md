@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.67.0
+
+*Released 2026-07-29*
+
+### Added
+
+- **Asynchronous Dashboard refresh** — `dashboard_page.refresh_dashboard_page()`
+  now gathers pool health, SSH version, and iSCSI data in a background thread.
+  Dashboard sections are desensitized while refreshing, and overlapping refresh
+  requests are coalesced. Pass `sync=True` to block until the refresh completes.
+- **Asynchronous Schedule refresh** — `schedule_page.refresh_schedule_page()`
+  computes next-run times in a background thread and also coalesces overlapping
+  requests. Next-run results are cached per cron expression per minute.
+- **Initial Dashboard refresh on startup** — `main.py` now triggers the first
+  Dashboard refresh after the window is shown so the GTK main loop is running.
+
+### Changed
+
+- **`refresh_dashboard_page()` and `refresh_schedule_page()`** — Both functions
+  now default to asynchronous refresh. The previous synchronous behavior is
+  still available via the new `sync=True` keyword argument.
+- **`dashboard_page._on_fix_iscsi_clicked()`** — `repair-iscsi-luns` stdout/stderr
+  lines are now passed through unchanged so embedded `INFO`/`WARN` levels from
+  the bash script are preserved instead of being reclassified.
+- **`schedule_page._next_run_strings()`** — Cache key now includes the current
+  minute so cached values cannot become stale as time advances.
+- **`main.py`** — Added `gi.require_version('Gdk', '3.0')` before importing from
+  `gi.repository` to avoid Gdk version conflicts when tests import modules in a
+  different order.
+
+### Tests
+
+- Added `tests/python/test_dashboard_page.py` coverage for loading-state helpers,
+  async refresh completion callbacks, exception handling in the worker thread,
+  and log-level preservation for `repair-iscsi-luns` output.
+- Added `tests/python/test_schedule_page.py` coverage for async refresh
+  argument passing, UI-state capture, and time-bucketed next-run caching.
+- Added `tests/python/test_main.py` coverage for `ZFSUtilitiesApp.do_activate()`
+  creating the window and triggering the initial Dashboard refresh.
+
+### Documentation
+
+- Updated `python-modules.md` to describe the async refresh behavior and new
+  `sync=True` parameter for `dashboard_page.py` and `schedule_page.py`.
+- Updated `testing.md` and `AGENTS.md` test-suite counts.
+
 ## 0.66.1
 
 *Released 2026-07-29*

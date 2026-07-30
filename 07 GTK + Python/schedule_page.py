@@ -7,6 +7,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+from datetime import datetime
 
 import gi
 
@@ -45,6 +47,11 @@ COL_TYPE = 2
 COL_SCHEDULE = 3
 COL_NEXT_RUN = 4
 COL_NEXT_RUN_SORT = 5
+
+# Cache for expensive next-run computations keyed by the cron dict and the
+# current minute.  The result only changes once per minute, so caching by
+# minute avoids stale values while still skipping redundant work.
+_NEXT_RUN_CACHE: dict[tuple[frozenset, datetime], tuple[str, str]] = {}
 
 
 def _interactive_runner_active(app):
@@ -270,18 +277,47 @@ def load_schedule_config(app, cron):
 
 def _next_run_strings(cron):
     """Return (display_string, sort_string) for the next cron execution."""
+    cache_key = (
+        frozenset(cron.items()),
+        datetime.now().replace(second=0, microsecond=0),
+    )
+    cached = _NEXT_RUN_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     times = next_run_times(
         cron.get("minute", "*"), cron.get("hour", "*"),
         cron.get("day", "*"), cron.get("month", "*"),
         cron.get("weekday", "*"), count=1,
     )
     if not times:
-        return (
+        result = (
             "No upcoming runs found (schedule may be invalid or too restrictive.)",
             "",
         )
-    dt = times[0]
-    return dt.strftime("%a %b %d %Y %H:%M"), dt.strftime("%Y-%m-%d %H:%M")
+    else:
+        dt = times[0]
+        result = dt.strftime("%a %b %d %Y %H:%M"), dt.strftime("%Y-%m-%d %H:%M")
+    _NEXT_RUN_CACHE[cache_key] = result
+    return result
+
+
+def _capture_schedule_ui_state(app):
+    """Capture selected names and current store names on the GTK main thread.
+
+    Returns a tuple ``(selected_names, store_names)``.  These values must be
+    gathered on the GTK main thread because they access GTK widgets; the
+    actual next-run computation is then safe to perform in a worker thread.
+    """
+    selection = app.schedule_view.get_selection()
+    model, paths = selection.get_selected_rows()
+    selected_names = []
+    for path in paths:
+        tree_iter = model.get_iter(path)
+        selected_names.append(model.get_value(tree_iter, COL_NAME))
+
+    store_names = {row[COL_NAME] for row in app.schedule_store}
+    return selected_names, store_names
 
 
 def _is_cron_job_line(line):
@@ -353,14 +389,18 @@ def _check_cron_consistency(app):
             )
 
 
-def _refresh_profile_list(app):
-    app.schedule_store.clear()
-    profiles = list_profiles()
+def _build_schedule_rows(profiles):
+    """Return schedule ListStore rows for the given profile dicts.
+
+    This performs the expensive next-run computation and is safe to call from
+    a background thread.
+    """
+    rows = []
     for profile in profiles:
         cron = profile.get("cron", {})
         sched = _format_cron(cron)
         next_run, next_run_sort = _next_run_strings(cron)
-        app.schedule_store.append([
+        rows.append([
             profile.get("active", False),
             profile["profile_name"],
             profile.get("tab_type", ""),
@@ -368,44 +408,64 @@ def _refresh_profile_list(app):
             next_run,
             next_run_sort,
         ])
+    return rows
+
+
+def _populate_schedule_store(app, rows):
+    """Replace the schedule store contents with pre-built rows."""
+    app.schedule_store.clear()
+    for row in rows:
+        app.schedule_store.append(row)
+
+
+def _refresh_profile_list(app):
+    """Rebuild the schedule list from disk (synchronous)."""
+    profiles = list_profiles()
+    rows = _build_schedule_rows(profiles)
+    _populate_schedule_store(app, rows)
     _check_cron_consistency(app)
     app.schedule_detail_box.set_no_show_all(True)
     app.schedule_detail_box.hide()
 
 
-def refresh_schedule_page(app):
-    """Refresh the Schedule tab from disk.
-
-    Updates Next Run values in place when the profile list is unchanged;
-    rebuilds the list when profiles have been added or removed outside the
-    Schedule tab. Preserves the current selection and any pending unsaved
-    changes.
-    """
-    if not hasattr(app, "schedule_store"):
-        return
-
-    selection = app.schedule_view.get_selection()
-    model, paths = selection.get_selected_rows()
-    selected_names = []
-    for path in paths:
-        tree_iter = model.get_iter(path)
-        selected_names.append(model.get_value(tree_iter, COL_NAME))
-
+def _gather_schedule_refresh_data(app, selected_names, store_names):
+    """Collect schedule refresh data. Safe to call from a background thread."""
     profiles = list_profiles()
     profile_names = {p["profile_name"] for p in profiles}
-    store_names = {row[COL_NAME] for row in app.schedule_store}
+    rows = _build_schedule_rows(profiles)
+
+    return {
+        "profiles": profiles,
+        "profile_names": profile_names,
+        "store_names": store_names,
+        "selected_names": selected_names,
+        "rows": rows,
+    }
+
+
+def _apply_schedule_refresh(app, data):
+    """Apply gathered schedule refresh data. Must run on the GTK main thread."""
+    profiles = data["profiles"]
+    profile_names = data["profile_names"]
+    store_names = data["store_names"]
+    selected_names = data["selected_names"]
+    rows = data["rows"]
 
     if profile_names != store_names:
-        _refresh_profile_list(app)
+        _populate_schedule_store(app, rows)
+        _check_cron_consistency(app)
         for name in list(app._schedule_pending.keys()):
             if name not in profile_names:
                 app._schedule_pending.pop(name, None)
         _update_schedule_dirty(app)
+        app.schedule_detail_box.set_no_show_all(True)
+        app.schedule_detail_box.hide()
     else:
         for row in app.schedule_store:
             _update_next_run_for_iter(app, row.iter)
 
     if selected_names:
+        selection = app.schedule_view.get_selection()
         selection.unselect_all()
         for name in selected_names:
             tree_iter = _find_iter_by_name(app, name)
@@ -413,6 +473,59 @@ def refresh_schedule_page(app):
                 selection.select_iter(tree_iter)
 
     log_msg("VERB: Schedule page refreshed")
+
+
+def _schedule_refresh_worker(app, selected_names, store_names):
+    """Background thread target: gather schedule refresh data."""
+    try:
+        data = _gather_schedule_refresh_data(app, selected_names, store_names)
+    except Exception as exc:
+        log_msg(f"WARN: Schedule refresh failed: {exc}")
+        data = None
+    GLib.idle_add(_on_schedule_refresh_done, app, data)
+
+
+def _on_schedule_refresh_done(app, data):
+    """GLib idle callback: apply schedule data and handle pending refresh."""
+    app._schedule_refresh_in_progress = False
+    if data is not None:
+        _apply_schedule_refresh(app, data)
+
+    if getattr(app, "_schedule_refresh_pending", False):
+        app._schedule_refresh_pending = False
+        GLib.timeout_add_seconds(0, lambda: refresh_schedule_page(app) or False)
+    return False
+
+
+def refresh_schedule_page(app, sync=False):
+    """Refresh the Schedule tab from disk.
+
+    By default the expensive next-run computations are performed in a
+    background thread so the GTK main thread stays responsive.  Pass
+    ``sync=True`` to refresh synchronously (used by tests and callers that
+    must wait for the result).
+    """
+    if not hasattr(app, "schedule_store"):
+        return
+
+    selected_names, store_names = _capture_schedule_ui_state(app)
+
+    if sync:
+        data = _gather_schedule_refresh_data(app, selected_names, store_names)
+        _apply_schedule_refresh(app, data)
+        return
+
+    if getattr(app, "_schedule_refresh_in_progress", False):
+        app._schedule_refresh_pending = True
+        return
+
+    app._schedule_refresh_in_progress = True
+    app._schedule_refresh_pending = False
+    threading.Thread(
+        target=_schedule_refresh_worker,
+        args=(app, selected_names, store_names),
+        daemon=True,
+    ).start()
 
 
 def _on_active_toggled(renderer, path, app):
