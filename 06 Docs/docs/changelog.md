@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.67.1
+
+*Released 2026-07-30*
+
+### Fixed
+
+- **`deploy-version` now deploys `attach-vm-disk` and `detach-vm-disk`** — Both
+  scripts existed in `08 Two-node/` but were missing from the `TWO_NODE_SCRIPTS`
+  list, so `deploy-version` / `switch-version` did not symlink them into the
+  production `bin/` directory. They are now wired like the other two-node scripts.
+
+### Tests
+
+- Added `tests/test-attach-vm-disk` covering zvol path parsing, VM ID format,
+  and disk-key format validation.
+- Expanded `tests/test-deploy-version` with in-list and symlink tests for
+  `attach-vm-disk` and `detach-vm-disk`, and updated the existing symlink
+  fixture to include both scripts.
+
+### Documentation
+
+- Updated `developer-guide/testing.md` to list `test-attach-vm-disk` and
+  `test-detach-vm-disk`, and corrected the `test-deploy-version` test count.
+
 ## 0.67.0
 
 *Released 2026-07-29*

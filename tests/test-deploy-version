@@ -349,7 +349,7 @@ _test_two_node_symlink_logic() {
         safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns
         iscsi-restore-luns repair-iscsi-luns
         unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys
-        enroll-efi-keys-vm
+        enroll-efi-keys-vm attach-vm-disk detach-vm-disk
     )
     mkdir -p "$version_dir/bin"
     mkdir -p "$version_dir/08 Two-node"
@@ -429,6 +429,88 @@ test_iscsi_restore_luns_in_deploy_list() {
 
 test_repair_iscsi_luns_in_deploy_list
 test_iscsi_restore_luns_in_deploy_list
+
+test_attach_vm_disk_in_deploy_list() {
+    test_start "deploy-version TWO_NODE_SCRIPTS includes attach-vm-disk"
+    local deploy_script
+    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+
+    if grep -qE '\battach-vm-disk\b' "$deploy_script"; then
+        test_pass
+    else
+        test_fail "attach-vm-disk not found in deploy-version TWO_NODE_SCRIPTS"
+    fi
+}
+
+test_detach_vm_disk_in_deploy_list() {
+    test_start "deploy-version TWO_NODE_SCRIPTS includes detach-vm-disk"
+    local deploy_script
+    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+
+    if grep -qE '\bdetach-vm-disk\b' "$deploy_script"; then
+        test_pass
+    else
+        test_fail "detach-vm-disk not found in deploy-version TWO_NODE_SCRIPTS"
+    fi
+}
+
+test_attach_vm_disk_in_deploy_list
+test_detach_vm_disk_in_deploy_list
+
+test_attach_vm_disk_symlinked() {
+    test_start "deploy-version symlinks attach-vm-disk into bin"
+    local tmpdir=$(mktemp -d)
+    _test_two_node_symlink_logic "$tmpdir"
+
+    local ok=1
+    if [[ ! -L "$tmpdir/bin/attach-vm-disk" ]]; then
+        ok=0
+        echo "    attach-vm-disk symlink missing"
+    fi
+    local target
+    target=$(readlink "$tmpdir/bin/attach-vm-disk" 2>/dev/null || true)
+    if [[ "$target" != "../08 Two-node/attach-vm-disk" ]]; then
+        ok=0
+        echo "    attach-vm-disk target wrong: $target"
+    fi
+
+    rm -rf "$tmpdir"
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "attach-vm-disk was not symlinked correctly"
+    fi
+}
+
+test_detach_vm_disk_symlinked() {
+    test_start "deploy-version symlinks detach-vm-disk into bin"
+    local tmpdir=$(mktemp -d)
+    _test_two_node_symlink_logic "$tmpdir"
+
+    local ok=1
+    if [[ ! -L "$tmpdir/bin/detach-vm-disk" ]]; then
+        ok=0
+        echo "    detach-vm-disk symlink missing"
+    fi
+    local target
+    target=$(readlink "$tmpdir/bin/detach-vm-disk" 2>/dev/null || true)
+    if [[ "$target" != "../08 Two-node/detach-vm-disk" ]]; then
+        ok=0
+        echo "    detach-vm-disk target wrong: $target"
+    fi
+
+    rm -rf "$tmpdir"
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "detach-vm-disk was not symlinked correctly"
+    fi
+}
+
+test_attach_vm_disk_symlinked
+test_detach_vm_disk_symlinked
 
 # ------------------------------------------------------------------
 # Launcher symlinks (from deploy-version deploy_to_host)

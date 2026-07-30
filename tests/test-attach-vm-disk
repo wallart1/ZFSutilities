@@ -1,0 +1,165 @@
+#!/usr/bin/bash
+# test-attach-vm-disk — Unit tests for attach-vm-disk argument validation.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Helpers mirroring the validation logic in attach-vm-disk.
+# ------------------------------------------------------------------
+
+parse_zvol_path() {
+    local zvol="$1"
+    if [[ "$zvol" =~ ^([^/]+)/proxmox/vm-([0-9]+)-disk-([0-9]+)$ ]]; then
+        printf '%s\n%s\n%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+        return 0
+    fi
+    return 1
+}
+
+valid_disk_key() {
+    local key="$1"
+    [[ -z "$key" || "$key" =~ ^[a-z]+[0-9]+$ ]]
+}
+
+valid_vmid() {
+    local vmid="$1"
+    [[ "$vmid" =~ ^[0-9]+$ ]]
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_parse_valid_zvol_path() {
+    test_start "parse valid zvol path"
+
+    local pool src_vmid disknum
+    local output
+    output=$(parse_zvol_path "threeamigos/proxmox/vm-105-disk-0") || {
+        test_fail "Expected valid path to parse"
+        return
+    }
+    pool=$(sed -n '1p' <<< "$output")
+    src_vmid=$(sed -n '2p' <<< "$output")
+    disknum=$(sed -n '3p' <<< "$output")
+
+    assert_equals "threeamigos" "$pool"
+    [[ $? -ne 0 ]] && return
+    assert_equals "105" "$src_vmid"
+    [[ $? -ne 0 ]] && return
+    assert_equals "0" "$disknum"
+}
+
+test_parse_valid_zvol_path_deep_pool() {
+    test_start "parse valid zvol path with multi-digit ids"
+
+    local pool src_vmid disknum
+    local output
+    output=$(parse_zvol_path "tank/proxmox/vm-1234-disk-15") || {
+        test_fail "Expected valid path to parse"
+        return
+    }
+    pool=$(sed -n '1p' <<< "$output")
+    src_vmid=$(sed -n '2p' <<< "$output")
+    disknum=$(sed -n '3p' <<< "$output")
+
+    assert_equals "tank" "$pool"
+    [[ $? -ne 0 ]] && return
+    assert_equals "1234" "$src_vmid"
+    [[ $? -ne 0 ]] && return
+    assert_equals "15" "$disknum"
+}
+
+test_parse_invalid_zvol_path_missing_proxmox() {
+    test_start "reject zvol path missing proxmox component"
+
+    if parse_zvol_path "threeamigos/vm-105-disk-0" >/dev/null 2>&1; then
+        test_fail "Expected path without proxmox to be rejected"
+    else
+        test_pass
+    fi
+}
+
+test_parse_invalid_zvol_path_bad_vm_prefix() {
+    test_start "reject zvol path with wrong vm prefix"
+
+    if parse_zvol_path "threeamigos/proxmox/vol-105-disk-0" >/dev/null 2>&1; then
+        test_fail "Expected wrong vm prefix to be rejected"
+    else
+        test_pass
+    fi
+}
+
+test_parse_invalid_zvol_path_extra_components() {
+    test_start "reject zvol path with extra leading components"
+
+    if parse_zvol_path "some/threeamigos/proxmox/vm-105-disk-0" >/dev/null 2>&1; then
+        test_fail "Expected extra path components to be rejected"
+    else
+        test_pass
+    fi
+}
+
+test_valid_disk_key_formats() {
+    test_start "accept valid disk key formats"
+
+    for key in scsi0 ide1 sata5 virtio10 ""; do
+        if ! valid_disk_key "$key"; then
+            test_fail "Expected '$key' to be accepted"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_invalid_disk_key_formats() {
+    test_start "reject invalid disk key formats"
+
+    for key in SCSI0 0scsi scsi " " "scsi0,backup=1"; do
+        if valid_disk_key "$key"; then
+            test_fail "Expected '$key' to be rejected"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_valid_vmids() {
+    test_start "accept numeric VM IDs"
+
+    for vmid in 0 1 100 9999; do
+        if ! valid_vmid "$vmid"; then
+            test_fail "Expected '$vmid' to be accepted"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_invalid_vmids() {
+    test_start "reject non-numeric VM IDs"
+
+    for vmid in abc "100a" "10 0" "-1"; do
+        if valid_vmid "$vmid"; then
+            test_fail "Expected '$vmid' to be rejected"
+            return
+        fi
+    done
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_parse_valid_zvol_path
+test_parse_valid_zvol_path_deep_pool
+test_parse_invalid_zvol_path_missing_proxmox
+test_parse_invalid_zvol_path_bad_vm_prefix
+test_parse_invalid_zvol_path_extra_components
+test_valid_disk_key_formats
+test_invalid_disk_key_formats
+test_valid_vmids
+test_invalid_vmids
+
+test_summary
