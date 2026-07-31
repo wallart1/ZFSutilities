@@ -704,14 +704,20 @@ def _resolve_profile_runner_path():
 
 
 def _log_profile_line(fd, condition, app, profile_name, prefix):
-    """GLib io_add_watch callback: stream one line to the GUI log panel."""
+    """GLib io_add_watch callback: stream one line to the GUI log panel.
+
+    pv progress lines update the status bar but are not logged, so the log
+    panel is not flooded with one pv update per second.
+    """
     if condition & GLib.IOCondition.IN:
         try:
             data = os.read(fd, 8192)
             if data:
                 for line in data.decode("utf-8", errors="replace").splitlines():
-                    log_msg(f"{prefix}{line}")
-                    _update_profile_status(app, profile_name, line)
+                    if _PV_RATE_RE.search(line):
+                        _update_profile_status(app, profile_name, line)
+                    else:
+                        log_msg(f"{prefix}{line}")
                 return True
         except OSError:
             pass

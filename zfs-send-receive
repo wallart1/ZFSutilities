@@ -69,8 +69,8 @@ function send-receive {
                 # Terminal available — natural progress display
                 _pv_args="-pterb -s $datatosend"
                 _pv_progress_desired="Y"
-            elif [[ -t 0 && "${ZFSUTILITIES_LOG_INHERIT:-}" = "Y" ]]; then
-                # GUI mode (stdin is PTY, stderr is captured) — force output for parser
+            elif [[ "${ZFSUTILITIES_LOG_INHERIT:-}" = "Y" ]]; then
+                # Parent runner is capturing output — force output for parser
                 _pv_args="-fpterb -s $datatosend"
                 _pv_progress_desired="Y"
             fi

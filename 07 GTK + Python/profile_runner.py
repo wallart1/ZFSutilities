@@ -22,6 +22,7 @@ if _script_dir not in sys.path:
 
 import session_log
 from backup_history import _parse_human_size, add_history_entry, build_entry
+from backup_runner import _PV_RATE_RE
 from command_builders import (
     BashStep,
     _dryrun_assignments,
@@ -242,12 +243,16 @@ def _run_command(step, session_log_file=None):
                     for line in process.stdout:
                         line = line.rstrip("\n")
                         print(line, file=sys.stderr)
-                        session_log.write_raw_line(session_log_file, line)
-                        _, _last_log_size_check = session_log.maybe_truncate_session_log(
-                            session_log_file,
-                            _last_log_size_check,
-                            interval=_PROFILE_LOG_SIZE_CHECK_INTERVAL,
-                        )
+                        # pv progress lines update the GUI status bar via stderr
+                        # but are not written to the session log, avoiding one
+                        # line per second in the log file.
+                        if not _PV_RATE_RE.search(line):
+                            session_log.write_raw_line(session_log_file, line)
+                            _, _last_log_size_check = session_log.maybe_truncate_session_log(
+                                session_log_file,
+                                _last_log_size_check,
+                                interval=_PROFILE_LOG_SIZE_CHECK_INTERVAL,
+                            )
             finally:
                 returncode = process.wait()
             if returncode != 0:

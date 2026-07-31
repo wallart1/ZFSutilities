@@ -338,37 +338,60 @@ Sends a single ZFS dataset to an archive file on disk using
 
 ### `run-tests`
 
-Discovers and executes the bash test suites in `tests/`.
+Discovers and executes the bash test suites in `tests/` and the Python test
+suites in `tests/python/`.  The repo-root `run-tests` is a thin wrapper that
+execs the unified harness at `tests/run-tests`.
 
 ```bash
-./run-tests [-v|-q] [suite-name]
+./run-tests [-q|--quiet] [--failures-only] [suite-name ...]
 ```
 
 **Arguments:**
 
 | Argument | Description |
 | -------- | ----------- |
-| `-v` / `--verbose` | Show all test output |
-| `-q` / `--quiet` | Show only the summary |
-| `suite-name` | Run a single suite (e.g. `test-zfsretain`) |
+| `-q` / `--quiet` | Suppress PASS/SKIP lines; show summaries only |
+| `--failures-only` | Show only failing output and the overall summary |
+| `suite-name` | One or more suites to run (e.g. `test-zfsretain`, `test_backup_config`) |
 
-**Globals:** none. Sets `ZFSUTILITIES_TEST_RESULTS` internally for suite coordination.
+**Globals / environment:**
 
-**Called modules:** none.
+No globals are set by the caller.  The runner internally exports these flags
+for bash suites when the corresponding option is used:
+
+| Variable | Meaning |
+| -------- | ------- |
+| `ZFSUTILITIES_TESTS_QUIET=1` | Equivalent to `-q` |
+| `ZFSUTILITIES_TESTS_FAILURES_ONLY=1` | Equivalent to `--failures-only` |
+
+**Called modules:**
+
+| Module | Purpose |
+| ------ | ------- |
+| `tests/run-tests` | Unified bash + Python test harness |
+| `tests/python/runner.py` | Python test discovery and execution |
 
 **Data structures consumed / produced:**
 
 | Structure | Role |
 | --------- | ---- |
-| `tests/test-*` | Test suite files discovered and executed |
-| `/tmp/zfsutilities_test_results_*` | Per-suite result summaries aggregated by the harness |
+| `tests/test-*` | Bash test suite files discovered and executed |
+| `tests/python/test_*.py` | Python test suite files discovered and executed |
+| per-suite stdout | Captured in a temporary file and parsed for the aggregate summary |
+| overall summary | Printed to stdout |
 
 **Internal flow:**
 
-1. Parse options and optional suite name.
-2. Discover test files or use the requested suite.
-3. Run each suite as a separate `bash` process and capture its result record.
-4. Print a pass/fail/skip summary and exit with the overall result.
+1. The repo-root `run-tests` execs `tests/run-tests` with the supplied arguments.
+2. Partition arguments into bash suite names, Python suite names, and
+   output-reduction flags.
+3. If no suite names are given, discover all `tests/test-*` files and run all
+   Python suites.
+4. Run each bash suite as a separate `bash` process, capturing stdout/stderr.
+   Parse `Total:`/`Passed:`/`Failed:` lines for aggregation.
+5. Run Python suites through `tests/python/runner.py`, similarly parsing its
+   summary.
+6. Print an overall pass/fail summary and exit with the overall result.
 
 **Return codes:**
 
@@ -376,7 +399,7 @@ Discovers and executes the bash test suites in `tests/`.
 | ---- | ------- |
 | `0` | All tests passed |
 | `1` | One or more tests failed |
-| `2` | Unknown option or suite not found |
+| `2` | Unified runner executable not found (repo-root wrapper only) |
 
 ---
 

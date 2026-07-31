@@ -36,6 +36,81 @@ but it is no longer required; replacement is now the default behavior.
 For the underlying mechanism (PID file, D-Bus, window detection), see
 [Architecture — GUI ↔ Bash Integration](../developer-guide/architecture.md#gui-bash-integration-architecture).
 
+## The Main Window
+
+When you open the ZFS Utilities GUI, the main window is titled **ZFS Utilities**.
+It is divided into three areas: the menu bar at the top, the working area in the
+middle, and the log panel at the bottom.
+
+### Menu bar
+
+The menu bar runs across the top of the window and contains three menus:
+
+- **File**
+  - **Quit** — closes the application.
+- **View**
+  - **Minimize Width...** — resets every resizable table column to its narrowest
+    width and shrinks the window as small as possible.
+- **Help**
+  - **Documentation** — opens the built-in documentation viewer.
+  - **Help with this page** — opens the viewer at the section for the currently
+    selected tab.
+  - **Set Documentation Editor...** — chooses the external editor used when you
+    click the pencil icon in the documentation viewer.
+  - **About** — shows the version, license, and credits.
+
+### Working area
+
+The middle of the window is split into three parts:
+
+- **Left sidebar** — the vertical list of tabs. Click a tab name to open that
+  page.
+- **Central pane** — the large area that shows the contents of the currently
+  selected tab. This is where you review status, fill in settings, and view lists
+  or tables.
+- **Actions panel** — the vertical panel on the right, labeled **Actions**. The
+  buttons change depending on which tab is open. Common buttons include
+  **Run Backup**, **Run Offsite**, **Save Config**, **Revert Config**,
+  **Add Profile to Schedule**, and **Refresh**. While a job is running, the run
+  button changes to **Cancel**.
+
+The sidebar tabs are:
+
+| Tab | What it is for |
+| --- | -------------- |
+| [Dashboard](#dashboard-tab) | At-a-glance system health, recent operations, and warnings |
+| [Backup](#backup-tab) | Configure and run the daily backup |
+| [Offsite](#offsite-tab) | Configure and run offsite backups |
+| [Restore](#restore-tab) | Restore datasets from backups |
+| [Schedule](#schedule-tab) | Manage scheduled profiles |
+| [Checkagainst](#checkagainst-tab) | Edit snapshot safety checks |
+| [Pools](#pools-tab) | Register pools and manage scrubs |
+| [Datasets](#datasets-tab) | Browse datasets and manage snapshots/holds |
+| [Retention](#retention-tab) | Per-pool retention policies and pruning |
+| [Logs](#logs-tab) | Browse, search, and delete session log files |
+
+### Bottom panel
+
+The bottom panel shows live messages from the application and from any running
+job.
+
+- **Log/output area** — the large read-only text area where progress messages,
+  warnings, and errors appear while a job runs.
+- **Search bar** — above the log area. Type text and use the buttons to find and
+  highlight messages.
+- **Input** box and **Send** button — when a running job asks a question, type
+  your answer in the **Input** box and click **Send** (or press Enter).
+- **Log** dropdown — chooses which message levels are shown in the bottom panel:
+  `DEBUG`, `VERB`, `INFO`, `WARN`, or `FATAL`. The default is `INFO`. This only
+  filters the on-screen view; everything is still written to the session log
+  files.
+- **Short prefix** toggle — when on, each log line shows only the date and time;
+  when off, it shows the full source-location prefix.
+- **Clear** button — empties the visible log text.
+- **Pop-out button** — the window-icon button at the far right detaches the
+  bottom panel into its own separate window; click it again to put the panel
+  back.
+
 ## First Run
 
 On a fresh install the JSON config starts empty — no pools, no backup steps,
@@ -1130,7 +1205,9 @@ Job progress is shown as text in the log stream. Each running step logs its
 description, and `zfs receive` summary lines report bytes transferred. A
 status label below the log view displays the current step and progress text,
 including `pv` progress lines for interactive runs and for profiles started
-with **Run Now** from the Schedule tab.
+with **Run Now** from the Schedule tab. The `pv` progress lines update the
+status label but are not written to the session log, so the log stream is not
+flooded with one update per second.
 
 In the [Logs tab](#logs-tab), the log viewer also has its own status label.
 When you select a **Running** log, the viewer shows the latest `pv` progress

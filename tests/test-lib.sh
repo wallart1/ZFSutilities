@@ -564,14 +564,6 @@ test_summary() {
         echo -e "${RED}Some tests failed.${NC}"
         rc=1
     fi
-    if [[ -n "${ZFSUTILITIES_TEST_RESULTS}" ]]; then
-        local suite_name
-        suite_name=$(basename "${BASH_SOURCE[1]}")
-        printf '%s\t%d\t%d\t%d\t%d\t%d\n' \
-            "$suite_name" "$TESTS_RUN" "$TESTS_PASSED" \
-            "$TESTS_FAILED" "$TESTS_SKIPPED" "$rc" \
-            >> "${ZFSUTILITIES_TEST_RESULTS}"
-    fi
     # Save the result so teardown_test_env can propagate it even when it is
     # called after test_summary.
     _TEST_SUMMARY_RC=$rc

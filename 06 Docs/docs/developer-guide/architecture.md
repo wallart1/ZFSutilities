@@ -396,10 +396,10 @@ sequenceDiagram
 
 ### Single-writer session log
 
-`ZFSUTILITIES_LOG_INHERIT=Y` is the critical switch. When present in a subprocess's environment, `bashinit` does **not** create its own session log; instead, bash `log_msg` writes only to stderr. The Python runner reads stderr (and stdout) from the subprocess pipe and appends every line to the session log file with a timestamp prefix. This guarantees:
+`ZFSUTILITIES_LOG_INHERIT=Y` is the critical switch. When present in a subprocess's environment, `bashinit` does **not** create its own session log; instead, bash `log_msg` writes only to stderr. The Python runner reads stderr (and stdout) from the subprocess pipe and appends every line to the session log file with a timestamp prefix, except for `pv` progress lines which are captured for the live progress indicator but omitted from the log to avoid one line per second. This guarantees:
 
 1. **No duplicate lines** — Both bash and Python log output appear exactly once.
-2. **Raw output preserved** — `zfs receive` progress lines, `pv` rate output, and separator lines are captured even though they are not `log_msg` calls.
+2. **Raw output preserved** — `zfs receive` progress lines and separator lines are written to the session log even though they are not `log_msg` calls. `pv` rate output is captured for the GUI status bar but is not written to the session log.
 3. **Atomic finish** — The runner writes a `# END: rc=..., duration=...s` trailer after the subprocess terminates.
 
 ### Progress parsing

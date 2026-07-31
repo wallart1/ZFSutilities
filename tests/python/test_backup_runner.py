@@ -361,6 +361,25 @@ class TestAbortHandling(unittest.TestCase):
         )
 
 
+class TestFinishProgress(unittest.TestCase):
+    """_finish clears the status bar instead of leaving completion text."""
+
+    def _runner(self):
+        return br.BackupRunner(MagicMock(), MagicMock())
+
+    @patch("backup_runner.add_history_entry")
+    def test_finish_clears_status_bar(self, _mock_add):
+        runner = self._runner()
+        runner.label = "Backup"
+        runner._total_bytes_received = 0
+        runner._session_start_time = time.time()
+        runner.progress = MagicMock()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            runner._finish(rc=0)
+        runner.progress.assert_called_once_with(None, None)
+
+
 class TestHistoryEntry(unittest.TestCase):
     """History entries record the session log path."""
 

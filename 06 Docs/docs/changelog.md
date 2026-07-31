@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.71.0
+
+*Released 2026-07-31*
+
+### Changed
+
+- **`pv` progress lines are no longer written to session logs** — In both
+  `profile_runner.py` (scheduled and **Run Now** profile runs) and the Schedule
+  tab's live log handler, `pv` rate/progress lines still update the GUI status
+  bar but are filtered out before being written to the session log. This
+  prevents the log file from growing by one line per second during large
+  transfers.
+- **`BackupRunner._finish` clears the status bar** — When a GUI-run job
+  finishes, the progress callback now receives `(None, None)` so the status
+  label is cleared instead of leaving stale "… complete" text.
+- **`zfs-send-receive` forces `pv` output for captured runs** — When
+  `ZFSUTILITIES_LOG_INHERIT=Y` is set, `pv` progress output is now forced even
+  when stdin is not a terminal. This ensures profile runs and other captured
+  contexts still produce parseable progress lines.
+- **`run-tests` is now a thin wrapper** — The repo-root `run-tests` script no
+  longer implements its own harness; it execs the unified bash + Python harness
+  at `tests/run-tests`.
+
+### Tests
+
+- Added `test_do_transfer_forces_pv_when_log_inherit` to
+  `tests/test-zfs-send-receive-dryrun`.
+- Added `TestFinishProgress` to `tests/python/test_backup_runner.py`.
+- Added `test_run_command_suppresses_pv_lines_from_session_log` to
+  `tests/python/test_profile_runner.py`.
+- Added `TestLogProfileLine` to `tests/python/test_schedule_page.py`.
+
+### Documentation
+
+- Updated `commands-and-modules/commands.md` to describe the new `run-tests`
+  wrapper behavior.
+- Added a "The Main Window" section to `user-guide/gtk-gui.md` describing the
+  menu bar, working area, and bottom panel.
+- Updated `developer-guide/architecture.md` and `user-guide/gtk-gui.md` to
+  clarify that `pv` progress lines update the status bar but are omitted from
+  the session log.
+
 ## 0.70.0
 
 *Released 2026-07-31*

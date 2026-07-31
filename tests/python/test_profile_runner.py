@@ -682,6 +682,30 @@ class TestRunStepList(unittest.TestCase):
         self.assertEqual(mock_write.call_args_list[0][0][1], "stdout-line")
         self.assertEqual(mock_write.call_args_list[1][0][1], "stderr-line")
 
+    def test_run_command_suppresses_pv_lines_from_session_log(self):
+        """pv progress lines are emitted on stderr but not written to the log."""
+        pv_line = (
+            " 253MiB 0:00:05 [47.2MiB/s] "
+            "[=========>                           ] 21% ETA 0:00:18"
+        )
+        normal_line = "INFO: Step finished"
+        with patch("profile_runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = _mock_popen_process(
+                stdout=f"{pv_line}\n{normal_line}\n", rc=0
+            )
+            with patch("session_log.write_raw_line") as mock_write, \
+                 patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
+                rc = profile_runner._run_command(
+                    BashStep(["bash", "-c", "send-receive"], "zfs send/receive"),
+                    session_log_file="/tmp/test.log",
+                )
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_write.call_count, 1)
+        self.assertEqual(mock_write.call_args[0][1], normal_line)
+        stderr_output = mock_stderr.getvalue()
+        self.assertIn(pv_line, stderr_output)
+        self.assertIn(normal_line, stderr_output)
+
     def test_passes_command_list_not_description(self):
         """Ensure _run_step_list passes the command list to subprocess.Popen,
         not the description string (regression test for the swapped-tuple bug)."""

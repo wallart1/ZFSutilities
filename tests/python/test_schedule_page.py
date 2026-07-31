@@ -1452,6 +1452,53 @@ class TestScheduleRefreshData(unittest.TestCase):
         self.assertEqual(len(data["rows"]), 1)
 
 
+class TestLogProfileLine(unittest.TestCase):
+    """Verify _log_profile_line updates status for pv lines but does not log them."""
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+            return schedule_page
+
+    def _call_log_profile_line(self, schedule_page, app):
+        """Call _log_profile_line with a numeric IOCondition mask.
+
+        Patches GLib.IOCondition.IN locally so the bitmask test passes without
+        mutating the module-level mock used by other tests.
+        """
+        with patch.object(schedule_page.GLib.IOCondition, "IN", 1):
+            return schedule_page._log_profile_line(
+                0, 1, app, "my-profile", "[my-profile] "
+            )
+
+    def test_pv_line_updates_status_but_not_logged(self):
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        pv_line = (
+            " 253MiB 0:00:05 [47.2MiB/s] "
+            "[=========>                           ] 21% ETA 0:00:18"
+        )
+        with patch("schedule_page.os.read", return_value=pv_line.encode()), \
+             patch("schedule_page.log_msg") as mock_log, \
+             patch("schedule_page._update_profile_status") as mock_status:
+            result = self._call_log_profile_line(schedule_page, app)
+        self.assertTrue(result)
+        mock_status.assert_called_once_with(app, "my-profile", pv_line)
+        mock_log.assert_not_called()
+
+    def test_non_pv_line_is_logged(self):
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        normal_line = "INFO: Step finished"
+        with patch("schedule_page.os.read", return_value=normal_line.encode()), \
+             patch("schedule_page.log_msg") as mock_log, \
+             patch("schedule_page._update_profile_status") as mock_status:
+            result = self._call_log_profile_line(schedule_page, app)
+        self.assertTrue(result)
+        mock_status.assert_not_called()
+        mock_log.assert_called_once_with("[my-profile] INFO: Step finished")
+
+
 class TestNextRunCache(unittest.TestCase):
     """Verify next-run caching is time-bucketed to avoid stale values."""
 
