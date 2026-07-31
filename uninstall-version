@@ -3,10 +3,11 @@
 # Removes a deployed version directory. Refuses to remove the active version.
 # Use -y or --yes to skip the confirmation prompt.
 
-set -euo pipefail
-
 source ~/bashinit
 bashinit
+
+set -euo pipefail
+
 source "$mydir/rootcheck"
 rootcheck
 

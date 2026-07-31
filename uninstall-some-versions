@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 # uninstall-some-versions
-# Reads version numbers from a list file and uninstalls each one by invoking
+# Reads version numbers from a list file ./someinstalledversions and uninstalls each one by invoking
 # uninstall-version with the -y flag.
 #
 # Usage:
@@ -9,10 +9,11 @@
 # Globals:
 #   ZFSUTILITIES_VERSION_BASE  Optional override for the version base directory.
 
-set -euo pipefail
-
 source ~/bashinit
 bashinit
+
+set -euo pipefail
+
 source "$mydir/rootcheck"
 rootcheck
 
