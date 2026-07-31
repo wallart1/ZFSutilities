@@ -316,7 +316,9 @@ function retain {
                 x="snapbucket_${bktname[$i]}[$l]"
                 declare $x=${bktsnaparray[$k]}              # Put the snapshot into the bucket array
                 # Increment the bucket array length
-                declare -i snapbucketlen_${bktname[$i]}=$((snapbucketlen_${bktname[$i]} + 1))
+                local _bkt="${bktname[$i]}"
+                local _len_var="snapbucketlen_${_bkt}"
+                declare -i "${_len_var}"=$(( ${!_len_var} + 1 ))
                 break
             fi
         done

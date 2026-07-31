@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 
 import gi
 
@@ -188,8 +188,8 @@ def create_schedule_page(app):
         ("month", "Month (1-12 or *)",
          "1-12, *, lists, ranges, steps", 3),
         ("weekday", "Day of Week (0-7 or *)",
-         "0=Sun, 1=Mon, ..., 7=Sun; lists, ranges, steps; "
-         "ordinals 6#1 (first Sat) through 6#5, 6#L (last)", 4),
+         ("0=Sun, 1=Mon, ..., 7=Sun; lists, ranges, steps; "
+         "ordinals 6#1 (first Sat) through 6#5, 6#L (last)"), 4),
     ]
     app.schedule_cron_entries = {}
     for key, label_text, tooltip, row in cron_fields:
@@ -279,7 +279,7 @@ def _next_run_strings(cron):
     """Return (display_string, sort_string) for the next cron execution."""
     cache_key = (
         frozenset(cron.items()),
-        datetime.now().replace(second=0, microsecond=0),
+        datetime.now(timezone.utc).replace(second=0, microsecond=0),
     )
     cached = _NEXT_RUN_CACHE.get(cache_key)
     if cached is not None:
@@ -445,7 +445,6 @@ def _gather_schedule_refresh_data(app, selected_names, store_names):
 
 def _apply_schedule_refresh(app, data):
     """Apply gathered schedule refresh data. Must run on the GTK main thread."""
-    profiles = data["profiles"]
     profile_names = data["profile_names"]
     store_names = data["store_names"]
     selected_names = data["selected_names"]
@@ -479,7 +478,7 @@ def _schedule_refresh_worker(app, selected_names, store_names):
     """Background thread target: gather schedule refresh data."""
     try:
         data = _gather_schedule_refresh_data(app, selected_names, store_names)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         log_msg(f"WARN: Schedule refresh failed: {exc}")
         data = None
     GLib.idle_add(_on_schedule_refresh_done, app, data)
@@ -724,7 +723,7 @@ def _on_profile_finished(pid, status, user_data):
     app, profile_name, process = user_data
     try:
         process.wait()
-    except Exception:
+    except (OSError, ValueError):
         pass
     running = getattr(app, "_running_profiles", None)
     if running is not None:
@@ -776,11 +775,11 @@ def _run_profile_now(app, profile_name):
             GLib.PRIORITY_DEFAULT, process.pid, _on_profile_finished,
             (app, profile_name, process),
         )
-    except Exception as exc:
+    except (OSError, ValueError, TypeError) as exc:
         log_msg(f"FATAL: Could not watch profile {profile_name} output: {exc}")
         try:
             process.terminate()
-        except Exception:
+        except (OSError, ProcessLookupError):
             pass
         app._running_profiles.discard(profile_name)
         app.update_action_buttons("schedule")

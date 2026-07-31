@@ -12,10 +12,10 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import temp_config_dir, patch_environ
 from unittest.mock import MagicMock, patch
 
 import feature_config
+from test_support import patch_environ, temp_config_dir
 
 
 class TestBackupConfig(unittest.TestCase):

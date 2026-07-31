@@ -615,14 +615,14 @@ def _show_add_pair_assistant(app):
             return
         try:
             dest_root = _compute_destination_root(source, dest)
-        except Exception:
+        except (ValueError, KeyError, TypeError):
             preview_lbl.set_text("Unable to compute destination root.")
             return
         forward = f"{source} → {dest_root}"
         try:
             reverse = _reverse_checkagainst_row(source, dest_root, label or "offsite")
             reverse_text = f"{reverse['source_root']} → {reverse['dest_root']}"
-        except Exception:
+        except (ValueError, KeyError, TypeError):
             reverse_text = "(unable to compute reverse)"
         preview_lbl.set_markup(
             f"<b>Forward:</b> {forward}\n<b>Reverse:</b> {reverse_text}"
@@ -668,7 +668,7 @@ def _show_add_pair_assistant(app):
 
         try:
             _compute_destination_root(source, dest)
-        except Exception:
+        except (ValueError, KeyError, TypeError):
             _show_validation_error(
                 "Could not compute a valid destination root for the given datasets."
             )

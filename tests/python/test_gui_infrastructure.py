@@ -23,17 +23,26 @@ def extract_page_anchors_from_source(filepath):
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "ZFSUtilitiesWindow":
             for item in node.body:
+                value = None
                 if isinstance(item, ast.Assign):
                     for target in item.targets:
                         if (
                             isinstance(target, ast.Name)
                             and target.id == "_PAGE_ANCHORS"
-                            and isinstance(item.value, ast.Dict)
                         ):
-                            return {
-                                ast.literal_eval(k): ast.literal_eval(v)
-                                for k, v in zip(item.value.keys, item.value.values)
-                            }
+                            value = item.value
+                            break
+                elif isinstance(item, ast.AnnAssign):
+                    if (
+                        isinstance(item.target, ast.Name)
+                        and item.target.id == "_PAGE_ANCHORS"
+                    ):
+                        value = item.value
+                if value is not None and isinstance(value, ast.Dict):
+                    return {
+                        ast.literal_eval(k): ast.literal_eval(v)
+                        for k, v in zip(value.keys, value.values)
+                    }
     return {}
 
 

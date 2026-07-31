@@ -8,6 +8,7 @@ A GTK3 frontend for ZFS backup, snapshot, and retention operations.
 import os
 import sys
 import threading
+from typing import ClassVar
 
 import gi
 
@@ -340,10 +341,10 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         """
         if not hasattr(self, 'info_text'):
             return
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         from logging_config import parse_msg_level
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         level = parse_msg_level(message)
 
         self._info_panel_lines.append((timestamp, level, message))
@@ -659,7 +660,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             log_msg(f"INFO: Documentation editor set to: {command or '(system default)'}")
         dialog.destroy()
 
-    _PAGE_ANCHORS = {
+    _PAGE_ANCHORS: ClassVar[dict[str, str]] = {
         "dashboard": "dashboard-tab",
         "backup": "backup-tab",
         "offsite": "offsite-tab",

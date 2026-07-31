@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.69.1
+
+*Released 2026-07-31*
+
+### Fixed
+
+- **Static-analysis and lint compliance** — Addressed `ruff` warnings across
+  Python GUI modules and tests, including timezone-aware `datetime` usage,
+  explicit `subprocess.run(check=False)`, more specific exception handling,
+  and `ClassVar` annotation for the page-anchor mapping.
+- **Bash shellcheck errors** — Fixed a `shellcheck` parsing error in
+  `zfsretain` dynamic bucket-length arithmetic and added a header to the
+  `someinstalledversions` data file.
+
+### Tests
+
+- Updated `tests/python/test_gui_infrastructure.py` to parse both
+  `ast.Assign` and `ast.AnnAssign` when extracting `_PAGE_ANCHORS` from
+  `zfsutilities_gui.py`.
+
 ## 0.69.0
 
 *Released 2026-07-30*

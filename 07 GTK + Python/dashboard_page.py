@@ -172,7 +172,8 @@ def _run_cmd(cmd, timeout=5):
     """Run a command, return stdout text or None on failure/timeout."""
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout
+            cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+            check=False,
         )
         return result.stdout.strip()
     except (subprocess.TimeoutExpired, OSError):
@@ -391,7 +392,7 @@ def _get_host_zfs_version(host):
             result = subprocess.run(
                 ["zfs", "version"],
                 capture_output=True,
-                text=True,
+                text=True, check=False,
                 timeout=10,
             )
             if result.returncode == 0:
@@ -404,7 +405,7 @@ def _get_host_zfs_version(host):
         result = subprocess.run(
             ["ssh", f"root@{host}", "zfs version"],
             capture_output=True,
-            text=True,
+            text=True, check=False,
             timeout=10,
         )
         if result.returncode == 0:
@@ -469,7 +470,7 @@ def _get_host_os_info(host):
         result = subprocess.run(
             pve_cmd,
             capture_output=True,
-            text=True,
+            text=True, check=False,
             timeout=10,
         )
         if result.returncode == 0:
@@ -485,7 +486,7 @@ def _get_host_os_info(host):
         result = subprocess.run(
             os_cmd,
             capture_output=True,
-            text=True,
+            text=True, check=False,
             timeout=10,
         )
         if result.returncode == 0:
@@ -501,7 +502,7 @@ def _get_host_os_info(host):
         result = subprocess.run(
             inxi_cmd,
             capture_output=True,
-            text=True,
+            text=True, check=False,
             timeout=10,
         )
         if result.returncode == 0:
@@ -688,26 +689,26 @@ def _get_iscsi_missing_luns():
             pass
 
     savefile = "/etc/rtslib-fb-target/saveconfig.json"
-    if not target_map or any(n not in target_map for n in missing_names):
-        if os.path.exists(savefile):
-            try:
-                import json
-                with open(savefile) as f:
-                    config = json.load(f)
-                for target in config.get("targets", []):
-                    iqn = target.get("wwn", "")
-                    if not iqn:
-                        continue
-                    target_short = iqn.split(":")[-1]
-                    for tpg in target.get("tpgs", []):
-                        for lun in tpg.get("luns", []):
-                            so = lun.get("storage_object", "")
-                            if so:
-                                bs_name = so.split("/")[-1]
-                                if bs_name in missing_names and bs_name not in target_map:
-                                    target_map[bs_name] = target_short
-            except (OSError, ValueError):
-                pass
+    if (not target_map or any(n not in target_map for n in missing_names)) \
+            and os.path.exists(savefile):
+        try:
+            import json
+            with open(savefile) as f:
+                config = json.load(f)
+            for target in config.get("targets", []):
+                iqn = target.get("wwn", "")
+                if not iqn:
+                    continue
+                target_short = iqn.split(":")[-1]
+                for tpg in target.get("tpgs", []):
+                    for lun in tpg.get("luns", []):
+                        so = lun.get("storage_object", "")
+                        if so:
+                            bs_name = so.split("/")[-1]
+                            if bs_name in missing_names and bs_name not in target_map:
+                                target_map[bs_name] = target_short
+        except (OSError, ValueError):
+            pass
 
     missing = []
     for name in missing_names:
@@ -1232,7 +1233,7 @@ def _dashboard_refresh_worker(app):
     """Background thread target: gather dashboard data."""
     try:
         data = _gather_dashboard_data(app)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         log_msg(f"WARN: Dashboard data gathering failed: {exc}")
         data = None
     GLib.idle_add(_on_dashboard_refresh_done, app, data)
@@ -1605,7 +1606,7 @@ def _on_fix_iscsi_clicked(_button, app):
         result = subprocess.run(
             [repair_script],
             capture_output=True,
-            text=True,
+            text=True, check=False,
             timeout=120,
         )
         if result.returncode == 0:
@@ -1696,7 +1697,7 @@ def _collect_running_tasks(app):
     try:
         result = subprocess.run(
             ["pgrep", "-f", "profile_runner.py"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, check=False,
         )
         if result.returncode == 0:
             for line in result.stdout.strip().splitlines():
@@ -1708,7 +1709,7 @@ def _collect_running_tasks(app):
                 try:
                     ps_result = subprocess.run(
                         ["ps", "-p", pid, "-o", "args="],
-                        capture_output=True, text=True, timeout=5,
+                        capture_output=True, text=True, timeout=5, check=False,
                     )
                     if ps_result.returncode == 0:
                         args = ps_result.stdout.strip()

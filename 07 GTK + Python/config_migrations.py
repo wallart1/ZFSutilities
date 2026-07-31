@@ -46,9 +46,9 @@ def _migrate_5_to_6(config):
 
 def _migrate_6_to_7(config):
     for section in ("backup", "offsite"):
-        if section in config and "variables" in config[section]:
-            if "verify_after_transfer" not in config[section]["variables"]:
-                config[section]["variables"]["verify_after_transfer"] = "Y"
+        if section in config and "variables" in config[section] \
+                and "verify_after_transfer" not in config[section]["variables"]:
+            config[section]["variables"]["verify_after_transfer"] = "Y"
     config["config_version"] = 7
     return config
 

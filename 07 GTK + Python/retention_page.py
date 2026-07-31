@@ -453,8 +453,7 @@ def refresh_prune_pools(app):
             new_order.append(pool)
             seen.add(pool)
 
-    for pool in sorted(candidates - seen):
-        new_order.append(pool)
+    new_order.extend(sorted(candidates - seen))
 
     app._ret_prune_store.clear()
     for pool in new_order:
@@ -561,9 +560,7 @@ def _is_dirty(app):
     for pool, pending in app._ret_pending.items():
         if pending != app._ret_original.get(pool, []):
             return True
-    if _mass_delete_is_dirty(app):
-        return True
-    return False
+    return bool(_mass_delete_is_dirty(app))
 
 
 def _update_ret_status(app):
@@ -670,7 +667,7 @@ def _on_ret_save(btn, app, ctx):
         if renderer is not None:
             try:
                 renderer.stop_editing(False)
-            except Exception:
+            except AttributeError:
                 pass
 
     label = app._ret_prune_label_entry.get_text().strip() or "dailybackup"

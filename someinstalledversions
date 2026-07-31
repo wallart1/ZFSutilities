@@ -1,3 +1,6 @@
+# Plain-text list of installed ZFS Utilities versions, one per line.
+# Read by uninstall-some-versions when no list file is specified.
+# shellcheck shell=bash disable=SC2148
 0.46.0
 0.46.1
 0.46.2

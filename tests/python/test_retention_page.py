@@ -5,8 +5,8 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-from test_support import mock_gtk, temp_config_dir, capture_logs
 from app_context import AppContext
+from test_support import capture_logs, mock_gtk, temp_config_dir
 
 
 def _clear_cached_modules(*names):

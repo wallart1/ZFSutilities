@@ -2,11 +2,11 @@
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config_migrations import CONFIG_VERSION, run_migrations
 from file_locking import config_lock_read, config_lock_write
-from logging_config import log_msg, MSG_LEVELS
+from logging_config import MSG_LEVELS, log_msg
 
 CONFIG_PATH = os.environ.get(
     "ZFSUTILITIES_CONFIG_PATH",
@@ -69,9 +69,8 @@ def load_config():
     config = None
     if os.path.exists(CONFIG_PATH):
         try:
-            with config_lock_read():
-                with open(CONFIG_PATH) as f:
-                    config = json.load(f)
+            with config_lock_read(), open(CONFIG_PATH) as f:
+                config = json.load(f)
         except (json.JSONDecodeError, OSError):
             config = None
 
@@ -109,9 +108,8 @@ def save_config(config):
     """Write config dict to CONFIG_PATH. Raises OSError on permission failure."""
     config_dir = os.path.dirname(CONFIG_PATH)
     os.makedirs(config_dir, exist_ok=True)
-    with config_lock_write():
-        with open(CONFIG_PATH, 'w') as f:
-            json.dump(config, f, indent=2)
+    with config_lock_write(), open(CONFIG_PATH, 'w') as f:
+        json.dump(config, f, indent=2)
 
 
 def save_msg_level(config, level):
@@ -236,7 +234,7 @@ def prune_old_logs(retention_days):
     """Remove session log files older than retention_days. Returns count removed."""
     if not os.path.isdir(SESSION_LOG_DIR):
         return 0
-    cutoff = datetime.now().timestamp() - (retention_days * 86400)
+    cutoff = datetime.now(timezone.utc).timestamp() - (retention_days * 86400)
     removed = 0
     for name in os.listdir(SESSION_LOG_DIR):
         path = os.path.join(SESSION_LOG_DIR, name)

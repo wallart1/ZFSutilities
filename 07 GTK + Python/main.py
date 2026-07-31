@@ -151,9 +151,7 @@ def _is_zfsutilities_process(pid):
     if b"main.py" in cmdline and b"zfsutilities" in lower:
         return True
     # The wrapper script is itself a Python process named "ZFSutilities GUI".
-    if b"zfsutilities" in lower and b"gui" in lower:
-        return True
-    return False
+    return bool(b"zfsutilities" in lower and b"gui" in lower)
 
 
 def _pid_file_status(pid):
@@ -320,6 +318,7 @@ def _get_x11_windows_for_pid(pid):
             text=True,
             timeout=3,
             env=_get_display_env(),
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -342,6 +341,7 @@ def _is_window_visible(window_id):
             text=True,
             timeout=3,
             env=_get_display_env(),
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False

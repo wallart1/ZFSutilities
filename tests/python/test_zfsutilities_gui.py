@@ -41,7 +41,7 @@ class TestCheckPeerVersionAsync(unittest.TestCase):
     @patch("zfsutilities_gui._get_peer_host", return_value=None)
     @patch("zfsutilities_gui.threading.Thread")
     def test_single_node_does_not_spawn_thread(self, mock_thread, _mock_peer):
-        window, gui = self._make_window()
+        window, _gui = self._make_window()
         window._check_peer_version_async()
         mock_thread.assert_not_called()
 

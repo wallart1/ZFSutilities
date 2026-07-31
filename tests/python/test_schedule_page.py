@@ -4,10 +4,10 @@ import json
 import os
 import sys
 import unittest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from test_support import temp_config_dir, mock_gtk, REPO_ROOT, capture_logs
+from test_support import REPO_ROOT, capture_logs, mock_gtk, temp_config_dir
 
 SAMPLE_NEXT_RUN = datetime(2025, 6, 15, 10, 0, tzinfo=timezone(-timedelta(hours=4)))
 
@@ -20,7 +20,7 @@ import cron_manager
 # Import schedule_page once under the GTK mock so that @patch decorators on
 # test methods do not pull in the real GTK module when they resolve names.
 with mock_gtk():
-    import schedule_page
+    pass
 
 
 class TestRegenerateCronPath(unittest.TestCase):

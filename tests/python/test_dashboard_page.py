@@ -1652,7 +1652,7 @@ class TestOnDashboardViewLog(unittest.TestCase):
 
     @patch("dashboard_page.select_log_by_path", return_value=True)
     def test_switches_to_logs_for_running_task(self, mock_select):
-        app, _ops_model, tasks_model = self._make_app(
+        app, _ops_model, _tasks_model = self._make_app(
             "/var/log/zfsutilities/sessions/old.log",
             task_log_path="/var/log/zfsutilities/sessions/current.log",
         )
@@ -1922,7 +1922,7 @@ class TestCancelSelectedButton(unittest.TestCase):
         app._cancel_selected_button.set_sensitive.assert_called_once_with(False)
 
     def test_enables_when_tasks_are_selected(self):
-        app, selection = self._make_app_and_selection(
+        app, _selection = self._make_app_and_selection(
             [MagicMock()], task_keys=["runner:backup_runner"]
         )
         dp.setup_dashboard_actions(app)
@@ -1947,7 +1947,7 @@ class TestCancelSelectedButton(unittest.TestCase):
 
     def test_disabled_when_only_placeholder_selected(self):
         """Selecting the 'No running tasks' placeholder keeps Cancel disabled."""
-        app, selection = self._make_app_and_selection(
+        app, _selection = self._make_app_and_selection(
             [MagicMock()], task_keys=[""]
         )
         dp.setup_dashboard_actions(app)
@@ -1955,14 +1955,14 @@ class TestCancelSelectedButton(unittest.TestCase):
 
     def test_enabled_with_mixed_placeholder_and_real_task(self):
         """A mixed selection containing a real task enables Cancel."""
-        app, selection = self._make_app_and_selection(
+        app, _selection = self._make_app_and_selection(
             [MagicMock(), MagicMock()], task_keys=["", "profile:Daily"]
         )
         dp.setup_dashboard_actions(app)
         app._cancel_selected_button.set_sensitive.assert_called_once_with(True)
 
     def test_no_button_attr_does_not_crash(self):
-        app, selection = self._make_app_and_selection([])
+        app, _selection = self._make_app_and_selection([])
         del app._cancel_selected_button
         dp.setup_dashboard_actions(app)
         # Should not raise
@@ -2362,12 +2362,10 @@ class TestFixIscsiButton(unittest.TestCase):
                 "/test/bin/repair-iscsi-luns:414: WARN: Device not available: "
                 "/dev/zvol/threeamigos/proxmox/vm-215-disk-1 (skipping vm-215-disk-1)\n"
             )
-            with patch.object(dp, "refresh_dashboard_page"):
-                with patch.object(
-                    dp, "resolve_local_bin", return_value="/test/bin/repair-iscsi-luns"
-                ):
-                    with capture_logs() as logs:
-                        dp._on_fix_iscsi_clicked(None, app)
+            with patch.object(dp, "refresh_dashboard_page"), patch.object(
+                dp, "resolve_local_bin", return_value="/test/bin/repair-iscsi-luns"
+            ), capture_logs() as logs:
+                dp._on_fix_iscsi_clicked(None, app)
 
         levels = [parse_msg_level(msg) for msg in logs]
         self.assertIn("INFO", levels)

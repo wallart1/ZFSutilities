@@ -580,9 +580,9 @@ def load_scrub_state():
     try:
         with scrub_state_lock_read(), open(SCRUB_STATE_PATH, "r") as f:
             data = json.load(f)
-        for key in defaults:
+        for key, value in defaults.items():
             if key not in data:
-                data[key] = defaults[key]
+                data[key] = value
         # Ensure bucket values are lists (protect against corrupt JSON).
         for key in ("pending", "active", "paused", "finished"):
             if not isinstance(data[key], list):

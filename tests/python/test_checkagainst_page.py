@@ -1,7 +1,6 @@
 """Tests for checkagainst_page.py — checkagainst table editing."""
 
 import copy
-import html
 import os
 import sys
 import unittest
