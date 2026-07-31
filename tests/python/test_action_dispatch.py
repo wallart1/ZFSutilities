@@ -97,7 +97,6 @@ class TestPoolsAddProfileHandler(unittest.TestCase):
 
         mock_dlg.assert_called_once()
         args = mock_dlg.call_args[0]
-        kwargs = mock_dlg.call_args[1]
         self.assertEqual(args[0], app)
         self.assertEqual(args[1], "scrub")
         self.assertEqual(args[2]["pools"], ["tank"])
@@ -202,7 +201,7 @@ class TestBackupPageSpec(unittest.TestCase):
         self.assertTrue(callable(action_dispatch.PAGE_SPECS["backup"]["dirty_check"]))
 
 
-class TestOffsitePageSpec(unittest.TestCase):
+class TestOffsiteDirtyAttr(unittest.TestCase):
     """Offsite page spec uses the DirtyTracker object for dirty checks."""
 
     def test_dirty_attr_is_offsite_tracker(self):
@@ -256,3 +255,32 @@ class TestDatasetsHandlers(unittest.TestCase):
     def test_collapse_all_handler(self):
         handler = action_dispatch.ACTION_HANDLERS["datasets"]["Collapse All"]
         self.assertTrue(callable(handler))
+
+
+class TestRetentionPageSpec(unittest.TestCase):
+    """Retention page spec no longer exposes the removed Mass Delete button."""
+
+    def test_run_action_is_prune(self):
+        self.assertEqual(
+            action_dispatch.PAGE_SPECS["retention"]["run"],
+            ("Prune", "media-playback-start"),
+        )
+
+    def test_buttons_exclude_mass_delete(self):
+        buttons = action_dispatch.PAGE_SPECS["retention"]["buttons"]
+        names = [b[0] for b in buttons]
+        self.assertNotIn("Mass Delete", names)
+
+
+class TestRetentionHandlers(unittest.TestCase):
+    """Retention action handlers no longer wire the removed Mass Delete action."""
+
+    def test_mass_delete_handler_not_registered(self):
+        self.assertNotIn("Mass Delete", action_dispatch.ACTION_HANDLERS["retention"])
+
+    def test_prune_handler_registered(self):
+        handler = action_dispatch.ACTION_HANDLERS["retention"]["Prune"]
+        self.assertTrue(callable(handler))
+
+    def test_on_retention_mass_delete_not_imported(self):
+        self.assertFalse(hasattr(action_dispatch, "on_retention_mass_delete"))

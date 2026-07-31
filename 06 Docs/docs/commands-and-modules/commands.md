@@ -1639,9 +1639,9 @@ sudo zfsmaketest
 
 ### `zfsmassdelsnaps`
 
-Mass-delete snapshots across one or more pools. This is the backend for the
-Retention tab's **Mass Delete** button; it can also be run directly from the
-command line.
+Mass-delete snapshots across one or more pools. This is the backend used by
+the Retention tab's **Prune** button when **Ignore retention policies** is
+checked; it can also be run directly from the command line.
 
 ```bash
 sudo zfsmassdelsnaps <pool> [pool ...]

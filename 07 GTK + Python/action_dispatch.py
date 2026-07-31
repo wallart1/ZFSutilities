@@ -92,7 +92,6 @@ from retention_actions import (
     check_retention_dirty,
     on_retention_add_bucket,
     on_retention_add_policy,
-    on_retention_mass_delete,
     on_retention_prune,
     on_retention_remove_bucket,
     on_retention_remove_policy,
@@ -245,7 +244,6 @@ PAGE_SPECS = {
             ("Remove Bucket", "list-remove", None),
             ("Save", "document-save", "_ret_save_button"),
             ("Revert", "document-revert", None),
-            ("Mass Delete", "edit-delete", None),
             ("Add Profile to Schedule", "list-add", None),
             ("Recall Profile", "document-open", None),
         ],
@@ -459,7 +457,6 @@ ACTION_HANDLERS = {
             app, "retention", lambda p: load_retention_profile_config(app, p["config"])
         ),
         "Prune": _ctx_handler(on_retention_prune),
-        "Mass Delete": _ctx_handler(on_retention_mass_delete),
         "Cancel": _handler_retention_cancel,
     },
 }

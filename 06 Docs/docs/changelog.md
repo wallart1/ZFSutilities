@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.70.0
+
+*Released 2026-07-31*
+
+### Changed
+
+- **Retention tab Prune/Mass Delete consolidation** — The Retention tab now has
+  a single **Prune** button. Checking **Ignore retention policies** in the
+  **Advanced Prune Options** card runs `zfsmassdelsnaps` instead of
+  `zfscleanup`; unchecking it runs the normal retention-policy prune. The
+  separate **Mass Delete** toolbar button and `on_retention_mass_delete()`
+  handler have been removed.
+- **Advanced Prune Options card** — Renamed the advanced expander and danger
+  frame from "Mass Delete" to "Advanced Prune Options" /
+  "Ignore Retention Policies - Danger Zone". Added a tooltip to the
+  **Ignore retention policies** checkbox explaining that Prune deletes every
+  matching snapshot in that mode.
+
+### Tests
+
+- Added `TestRetentionPageSpec` and `TestRetentionHandlers` in
+  `tests/python/test_action_dispatch.py` to verify the removed **Mass Delete**
+  button/handler and the registered **Prune** handler.
+- Expanded `TestOnRetentionPruneIgnoreMode` in
+  `tests/python/test_retention_actions.py` with dry-run coverage.
+- Added tooltip coverage in `tests/python/test_retention_page.py`.
+- Fixed pre-existing `ruff` warnings in `tests/python/test_action_dispatch.py`
+  (unused variable and a duplicate test class name).
+
+### Documentation
+
+- Updated `user-guide/gtk-gui.md`, `user-guide/retention.md`,
+  `commands-and-modules/commands.md`, `commands-and-modules/python-modules.md`,
+  and `developer-guide/data-structures.md` to describe the consolidated Prune
+  flow and renamed Advanced Prune Options card.
+
 ## 0.69.1
 
 *Released 2026-07-31*

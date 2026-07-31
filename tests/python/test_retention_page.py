@@ -420,9 +420,8 @@ class TestRetentionPageMultiPoolSave(unittest.TestCase):
             rp._on_pool_changed(combo, app)
             app._ret_store._rows[0][2] = 77
 
-            with capture_logs() as logs:
-                with patch.object(rp, "_update_ret_status"):
-                    rp._on_ret_save(None, app, app.ctx)
+            with capture_logs() as logs, patch.object(rp, "_update_ret_status"):
+                rp._on_ret_save(None, app, app.ctx)
 
             self.assertTrue(any(
                 "pools:" in log and "default" in log and "fivebays" in log
@@ -510,9 +509,8 @@ class TestRetentionPageMultiPoolSave(unittest.TestCase):
             combo.get_active_text.return_value = "fivebays"
             rp._on_pool_changed(combo, app)
 
-            with capture_logs() as logs:
-                with patch.object(rp, "_update_ret_status"):
-                    rp._on_ret_save(None, app, app.ctx)
+            with capture_logs() as logs, patch.object(rp, "_update_ret_status"):
+                rp._on_ret_save(None, app, app.ctx)
 
             self.assertEqual(config["retention"]["fivebays"][0]["retain"], 77)
             self.assertTrue(any(
@@ -1017,9 +1015,23 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             label = app._ret_danger_label
             markups = [c[0][0] for c in label.set_markup.call_args_list]
             expected = (
-                "<span color='red'><b>Snapshot Mass Delete - Danger Zone</b></span>"
+                "<span color='red'><b>Ignore Retention Policies - Danger Zone</b></span>"
             )
             self.assertIn(expected, markups)
+
+    def test_ignore_checkbox_has_tooltip(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+            app = self._make_app(rp, {"retention": {"default": []}})
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            tooltip = app._ret_ignore_retention_check.set_tooltip_text.call_args[0][0]
+            self.assertIn("Prune deletes every matching snapshot", tooltip)
+            self.assertIn("filters", tooltip)
 
     def test_loads_saved_mass_delete_config(self):
         with temp_config_dir():

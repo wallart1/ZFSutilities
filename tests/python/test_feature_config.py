@@ -174,7 +174,7 @@ class TestRetentionConfig(unittest.TestCase):
 
 
 class TestMassDeleteConfig(unittest.TestCase):
-    """Mass Delete card configuration defaults and merge."""
+    """Advanced Prune Options card configuration defaults and merge."""
 
     def test_get_retention_mass_delete_config_defaults(self):
         config = {}
@@ -284,7 +284,7 @@ class TestSnapshotNameGeneration(unittest.TestCase):
             def run(label):
                 try:
                     names.append(feature_config.generate_snapshot_name(label))
-                except Exception as exc:
+                except (OSError, RuntimeError) as exc:
                     errors.append(exc)
 
             t1 = threading.Thread(target=run, args=("dailybackup",))

@@ -1,8 +1,8 @@
 #!/usr/bin/bash
 # Mass-delete snapshots across selected pools.
 #
-# This script is invoked from the Retention page when the user clicks the
-# "Mass Delete" toolbar button.  It supports two modes:
+# This script is invoked from the Retention page when the user enables
+# "Ignore retention policies" and clicks Prune.  It supports two modes:
 #   * Ignore retention policies - list all matching snapshots and delete them.
 #   * Respect retention policies - run zfscleanup in dry-run, parse the
 #     candidate list, ask for approval, then run zfscleanup for real.

@@ -37,7 +37,7 @@ from gui_helpers import (
 )
 from logging_config import log_msg
 
-# Mass-delete dataset criteria shown in the Advanced expander
+# Advanced prune dataset criteria shown in the Advanced expander
 MASS_DELETE_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
 
 # Human-readable bucket labels
@@ -253,7 +253,9 @@ def create_retention_page(app, ctx):
 
     prune_desc = Gtk.Label(
         label="Select one or more online pools that have a retention policy and click "
-              "Prune. Each row runs `zfscleanup <pool> '' <label>`."
+              "Prune. By default each row runs `zfscleanup <pool> '' <label>`. "
+              "Check 'Ignore retention policies' in Advanced options to delete all "
+              "matching snapshots instead."
     )
     prune_desc.set_halign(Gtk.Align.START)
     prune_desc.set_line_wrap(True)
@@ -308,9 +310,9 @@ def create_retention_page(app, ctx):
     outer.pack_start(verb_check, False, False, 0)
     app._ret_original_verb = verb_check.get_active()
 
-    # ── Advanced: Mass Delete ─────────────────────────────────────────────────
+    # ── Advanced Prune Options ────────────────────────────────────────────────
     advanced_exp = Gtk.Expander()
-    advanced_exp.set_label_widget(bold_label("Advanced"))
+    advanced_exp.set_label_widget(bold_label("Advanced Prune Options"))
     advanced_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     advanced_box.set_margin_start(10)
     advanced_box.set_margin_end(10)
@@ -322,7 +324,7 @@ def create_retention_page(app, ctx):
     danger_frame = Gtk.Frame()
     danger_label = Gtk.Label()
     danger_label.set_markup(
-        "<span color='red'><b>Snapshot Mass Delete - Danger Zone</b></span>"
+        "<span color='red'><b>Ignore Retention Policies - Danger Zone</b></span>"
     )
     danger_label.set_halign(Gtk.Align.START)
     danger_frame.set_label_widget(danger_label)
@@ -373,6 +375,10 @@ def create_retention_page(app, ctx):
         widget.connect("changed", lambda *_a: _update_ret_status(app))
 
     ignore_check = Gtk.CheckButton(label="Ignore retention policies")
+    ignore_check.set_tooltip_text(
+        "When checked, Prune deletes every matching snapshot regardless of "
+        "retention counts. The filters below restrict which snapshots are matched."
+    )
     ignore_check.set_active(variables["ignore_retention_policies"])
     app._ret_ignore_retention_check = ignore_check
     advanced_box.pack_start(ignore_check, False, False, 0)

@@ -152,7 +152,12 @@ def on_retention_remove_policy(app, ctx):
 
 
 def on_retention_prune(app, ctx):
-    """Run `zfscleanup <pool> '' <label>` for each selected online pool."""
+    """Prune snapshots for each selected online pool.
+
+    If "Ignore retention policies" is checked, run zfsmassdelsnaps in ignore
+    mode instead of zfscleanup, deleting all matching snapshots regardless of
+    retention counts.
+    """
     app.clear_log_status()
     if not hasattr(app, '_ret_prune_view'):
         log_msg("WARN: Retention page not initialized")
@@ -181,8 +186,6 @@ def on_retention_prune(app, ctx):
         return
 
     dryrun = getattr(app, '_dry_run_active', False)
-    verb_check = getattr(app, '_ret_verb_check', None)
-    retain_verb = "Y" if verb_check is not None and verb_check.get_active() else "N"
 
     if dryrun:
         log_msg("INFO: Dry run mode enabled — no changes will be made")
@@ -194,24 +197,76 @@ def on_retention_prune(app, ctx):
             )
             return
 
+    ignore_check = getattr(app, '_ret_ignore_retention_check', None)
+    ignore = ignore_check.get_active() if ignore_check is not None else False
+
     steps = []
-    for pool in pools:
+    if ignore:
+        widgets = app._ret_mass_delete_widgets
+        includes = widgets["includes"].get_text().strip()
+        excludes = widgets["excludes"].get_text().strip()
+        startwith = widgets["startwith"].get_text().strip()
+        endwith = widgets["endwith"].get_text().strip()
+        snapshot_has = widgets["snapshot_has"].get_text().strip()
+        releaseholds = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
+
+        var_assignments = f'{_dryrun_assignments(dryrun)}'
+        var_assignments += 'ignore_retention_policies="Y"; '
+        var_assignments += f'releaseholds="{releaseholds}"; '
+        if releaseholds == "Y":
+            var_assignments += 'releaseholds_tags=("offsite-*"); '
+        var_assignments += f'snapshot_label="{label}"; '
+        var_assignments += f'snapshot_has="{snapshot_has}"; '
+        if includes:
+            items = shlex.split(includes)
+            arr = " ".join(f'"{i}"' for i in items)
+            var_assignments += f'includes=({arr}); '
+        else:
+            var_assignments += 'includes=(); '
+        if excludes:
+            items = shlex.split(excludes)
+            arr = " ".join(f'"{i}"' for i in items)
+            var_assignments += f'excludes=({arr}); '
+        else:
+            var_assignments += 'excludes=(); '
+        if startwith:
+            var_assignments += f'startwith="{startwith}"; '
+        if endwith:
+            var_assignments += f'endwith="{endwith}"; '
+
+        pool_list = " ".join(shlex.quote(p) for p in pools)
         bash_cmd = (
             f'source ~/bashinit; bashinit; mydir="{ctx.parent_dir}"; '
-            f'source "$mydir/zfscleanup"; '
-            f'{_dryrun_assignments(dryrun)}'
-            f'autoproceed="Y"; '
-            f'releaseholds="Y"; '
-            f'releaseholds_tags=("offsite-*"); '
-            f'retain_verb="{retain_verb}"; '
-            f'cleanup "{pool}" "" "{label}"'
+            f'source "$mydir/zfsmassdelsnaps"; '
+            f'{var_assignments}'
+            f'mass_delete_snapshots {pool_list}'
         )
         steps.append(BashStep(
             ["bash", "-c", bash_cmd],
-            f"Prune {pool} (label={label})",
+            f"Prune {', '.join(pools)} (label={label}, ignore retention)",
             is_rsync=False,
             fatal=False,
         ))
+    else:
+        verb_check = getattr(app, '_ret_verb_check', None)
+        retain_verb = "Y" if verb_check is not None and verb_check.get_active() else "N"
+        for pool in pools:
+            bash_cmd = (
+                f'source ~/bashinit; bashinit; mydir="{ctx.parent_dir}"; '
+                f'source "$mydir/zfscleanup"; '
+                f'{_dryrun_assignments(dryrun)}'
+                f'autoproceed="Y"; '
+                f'releaseholds="Y"; '
+                f'releaseholds_tags=("offsite-*"); '
+                f'retain_verb="{retain_verb}"; '
+                f'cleanup "{pool}" "" "{label}"'
+            )
+            steps.append(BashStep(
+                ["bash", "-c", bash_cmd],
+                f"Prune {pool} (label={label})",
+                is_rsync=False,
+                fatal=False,
+            ))
 
     def _on_prune_complete(cancelled=False):
         if hasattr(app, 'update_action_buttons'):
@@ -219,95 +274,6 @@ def on_retention_prune(app, ctx):
 
     runner.set_steps(steps)
     runner.start(on_complete=_on_prune_complete)
-    if hasattr(app, 'update_action_buttons'):
-        app.update_action_buttons("retention")
-
-
-def on_retention_mass_delete(app, ctx):
-    """Mass-delete snapshots across selected prune pools."""
-    app.clear_log_status()
-    if not hasattr(app, '_ret_prune_view'):
-        log_msg("WARN: Retention page not initialized")
-        return
-    selection = app._ret_prune_view.get_selection()
-    model, paths = selection.get_selected_rows()
-    if not paths:
-        log_msg("WARN: Select one or more pools in the Prune list")
-        return
-
-    label = app._ret_prune_label_entry.get_text().strip()
-    if not label:
-        show_error(app, "Please enter a snapshot label for the mass delete operation.")
-        return
-
-    selected = {model[p][0] for p in paths}
-    # Walk the model in visual order so execution order matches the list.
-    pools = [row[0] for row in model if row[0] in selected]
-
-    runner = getattr(app, 'retention_runner', None)
-    if runner is None:
-        log_msg("WARN: Retention runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A retention operation is already running")
-        return
-
-    dryrun = getattr(app, '_dry_run_active', False)
-
-    widgets = app._ret_mass_delete_widgets
-    includes = widgets["includes"].get_text().strip()
-    excludes = widgets["excludes"].get_text().strip()
-    startwith = widgets["startwith"].get_text().strip()
-    endwith = widgets["endwith"].get_text().strip()
-    snapshot_has = widgets["snapshot_has"].get_text().strip()
-    releaseholds = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
-    ignore = "Y" if app._ret_ignore_retention_check.get_active() else "N"
-
-    var_assignments = f'{_dryrun_assignments(dryrun)}'
-    var_assignments += f'ignore_retention_policies="{ignore}"; '
-    var_assignments += f'releaseholds="{releaseholds}"; '
-    if releaseholds == "Y":
-        var_assignments += 'releaseholds_tags=("offsite-*"); '
-    var_assignments += f'snapshot_label="{label}"; '
-    var_assignments += f'snapshot_has="{snapshot_has}"; '
-    if includes:
-        items = shlex.split(includes)
-        arr = " ".join(f'"{i}"' for i in items)
-        var_assignments += f'includes=({arr}); '
-    else:
-        var_assignments += 'includes=(); '
-    if excludes:
-        items = shlex.split(excludes)
-        arr = " ".join(f'"{i}"' for i in items)
-        var_assignments += f'excludes=({arr}); '
-    else:
-        var_assignments += 'excludes=(); '
-    if startwith:
-        var_assignments += f'startwith="{startwith}"; '
-    if endwith:
-        var_assignments += f'endwith="{endwith}"; '
-
-    pool_list = " ".join(shlex.quote(p) for p in pools)
-    bash_cmd = (
-        f'source ~/bashinit; bashinit; mydir="{ctx.parent_dir}"; '
-        f'source "$mydir/zfsmassdelsnaps"; '
-        f'{var_assignments}'
-        f'mass_delete_snapshots {pool_list}'
-    )
-
-    step = BashStep(
-        ["bash", "-c", bash_cmd],
-        f"Mass Delete ({', '.join(pools)})",
-        is_rsync=False,
-        fatal=False,
-    )
-
-    def _on_mass_delete_complete(cancelled=False):
-        if hasattr(app, 'update_action_buttons'):
-            app.update_action_buttons("retention")
-
-    runner.set_steps([step])
-    runner.start(on_complete=_on_mass_delete_complete)
     if hasattr(app, 'update_action_buttons'):
         app.update_action_buttons("retention")
 

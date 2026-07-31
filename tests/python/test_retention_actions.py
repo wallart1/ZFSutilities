@@ -168,7 +168,10 @@ class _FakePruneModel:
         return self._rows[idx]
 
 
-def _make_prune_app(model_rows, selected_paths, verb_active=False):
+def _make_prune_app(model_rows, selected_paths, verb_active=False,
+                    ignore_retention=False, releaseholds_active=0,
+                    includes="", excludes="", startwith="", endwith="",
+                    snapshot_has=""):
     """Return a minimal app mock for prune tests."""
     app = MagicMock()
     app._ret_prune_label_entry = MagicMock()
@@ -178,6 +181,18 @@ def _make_prune_app(model_rows, selected_paths, verb_active=False):
     app._dry_run_active = False
     app.retention_runner = MagicMock()
     app.retention_runner.running = False
+
+    widgets = {
+        "includes": MagicMock(get_text=MagicMock(return_value=includes)),
+        "excludes": MagicMock(get_text=MagicMock(return_value=excludes)),
+        "startwith": MagicMock(get_text=MagicMock(return_value=startwith)),
+        "endwith": MagicMock(get_text=MagicMock(return_value=endwith)),
+        "snapshot_has": MagicMock(get_text=MagicMock(return_value=snapshot_has)),
+        "releaseholds": MagicMock(get_active=MagicMock(return_value=releaseholds_active)),
+    }
+    app._ret_mass_delete_widgets = widgets
+    app._ret_ignore_retention_check = MagicMock()
+    app._ret_ignore_retention_check.get_active.return_value = ignore_retention
 
     model = _FakePruneModel(model_rows)
     selection = MagicMock()
@@ -253,6 +268,130 @@ class TestOnRetentionPruneOrder(unittest.TestCase):
         )
 
 
+class TestOnRetentionPruneIgnoreMode(unittest.TestCase):
+    """Prune uses zfsmassdelsnaps when 'Ignore retention policies' is checked."""
+
+    def test_unchecked_uses_zfscleanup(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["tank", "ONLINE"]],
+            selected_paths=[0],
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, \
+             patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        steps = app.retention_runner.set_steps.call_args[0][0]
+        self.assertEqual(len(steps), 1)
+        self.assertIn("zfscleanup", steps[0].command[2])
+        self.assertNotIn("zfsmassdelsnaps", steps[0].command[2])
+
+    def test_checked_uses_zfsmassdelsnaps(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["archive", "ONLINE"], ["tank", "ONLINE"]],
+            selected_paths=[0, 1],
+            ignore_retention=True,
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, \
+             patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        steps = app.retention_runner.set_steps.call_args[0][0]
+        self.assertEqual(len(steps), 1)
+        cmd = steps[0].command[2]
+        self.assertIn("zfsmassdelsnaps", cmd)
+        self.assertIn("mass_delete_snapshots archive tank", cmd)
+        self.assertIn('ignore_retention_policies="Y"', cmd)
+
+    def test_checked_includes_mass_delete_filters(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["archive", "ONLINE"]],
+            selected_paths=[0],
+            ignore_retention=True,
+            includes="inc1 inc2",
+            excludes="temp",
+            startwith="pool/a",
+            endwith="pool/z",
+            snapshot_has="weekly",
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, \
+             patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
+        self.assertIn('includes=("inc1" "inc2")', cmd)
+        self.assertIn('excludes=("temp")', cmd)
+        self.assertIn('startwith="pool/a"', cmd)
+        self.assertIn('endwith="pool/z"', cmd)
+        self.assertIn('snapshot_has="weekly"', cmd)
+
+    def test_checked_releaseholds_passed(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["archive", "ONLINE"]],
+            selected_paths=[0],
+            ignore_retention=True,
+            releaseholds_active=0,
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, \
+             patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
+        self.assertIn('releaseholds="Y"', cmd)
+        self.assertIn('releaseholds_tags=("offsite-*")', cmd)
+
+    def test_checked_respect_releaseholds_off(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["archive", "ONLINE"]],
+            selected_paths=[0],
+            ignore_retention=True,
+            releaseholds_active=1,
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, \
+             patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
+        self.assertIn('releaseholds="N"', cmd)
+
+    def test_checked_dry_run_sets_dryrun_y(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["archive", "ONLINE"]],
+            selected_paths=[0],
+            ignore_retention=True,
+        )
+        app._dry_run_active = True
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, \
+             patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
+        self.assertIn("dryrun='Y'", cmd)
+
+
 class TestOnRetentionRemovePolicy(unittest.TestCase):
     """on_retention_remove_policy deletes a pool policy and refreshes the list."""
 
@@ -285,142 +424,6 @@ class TestOnRetentionRemovePolicy(unittest.TestCase):
         self.assertNotIn("tank", ctx.config["retention"])
         mock_save_config.assert_called_once_with(ctx.config)
         mock_refresh.assert_called_once_with(app)
-
-
-def _make_mass_delete_app(model_rows, selected_paths, dry_run=False):
-    """Return a minimal app mock for mass-delete tests."""
-    app = MagicMock()
-    app._ret_prune_label_entry = MagicMock()
-    app._ret_prune_label_entry.get_text.return_value = "dailybackup"
-    app._dry_run_active = dry_run
-    app.retention_runner = MagicMock()
-    app.retention_runner.running = False
-
-    widgets = {
-        "includes": MagicMock(get_text=MagicMock(return_value="inc1 inc2")),
-        "excludes": MagicMock(get_text=MagicMock(return_value="temp")),
-        "startwith": MagicMock(get_text=MagicMock(return_value="pool/a")),
-        "endwith": MagicMock(get_text=MagicMock(return_value="pool/z")),
-        "snapshot_has": MagicMock(get_text=MagicMock(return_value="weekly")),
-        "releaseholds": MagicMock(get_active=MagicMock(return_value=0)),
-    }
-    app._ret_mass_delete_widgets = widgets
-    app._ret_ignore_retention_check = MagicMock()
-    app._ret_ignore_retention_check.get_active.return_value = True
-
-    model = _FakePruneModel(model_rows)
-    selection = MagicMock()
-    selection.get_selected_rows.return_value = (model, selected_paths)
-    app._ret_prune_view.get_selection.return_value = selection
-    return app
-
-
-class TestOnRetentionMassDelete(unittest.TestCase):
-    """on_retention_mass_delete builds a zfsmassdelsnaps BashStep."""
-
-    def test_warns_when_no_pools_selected(self):
-        ra = _import_retention_actions()
-        app = _make_mass_delete_app(
-            [["archive", "ONLINE"], ["tank", "ONLINE"]],
-            selected_paths=[],
-        )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
-
-        with patch.object(ra, "log_msg") as mock_log:
-            ra.on_retention_mass_delete(app, ctx)
-
-        mock_log.assert_any_call(
-            "WARN: Select one or more pools in the Prune list"
-        )
-        app.retention_runner.set_steps.assert_not_called()
-
-    def test_builds_step_with_pools_and_label(self):
-        ra = _import_retention_actions()
-        app = _make_mass_delete_app(
-            [["archive", "ONLINE"], ["tank", "ONLINE"]],
-            selected_paths=[0, 1],
-        )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
-
-        with patch.object(ra, "log_msg"):
-            ra.on_retention_mass_delete(app, ctx)
-
-        steps = app.retention_runner.set_steps.call_args[0][0]
-        self.assertEqual(len(steps), 1)
-        self.assertIn("zfsmassdelsnaps", steps[0].command[2])
-        self.assertIn("mass_delete_snapshots", steps[0].command[2])
-        self.assertIn("mass_delete_snapshots archive tank", steps[0].command[2])
-        self.assertIn('snapshot_label="dailybackup"', steps[0].command[2])
-
-    def test_includes_criteria_in_command(self):
-        ra = _import_retention_actions()
-        app = _make_mass_delete_app(
-            [["archive", "ONLINE"]], selected_paths=[0]
-        )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
-
-        with patch.object(ra, "log_msg"):
-            ra.on_retention_mass_delete(app, ctx)
-
-        cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
-        self.assertIn('includes=("inc1" "inc2")', cmd)
-        self.assertIn('excludes=("temp")', cmd)
-        self.assertIn('startwith="pool/a"', cmd)
-        self.assertIn('endwith="pool/z"', cmd)
-        self.assertIn('snapshot_has="weekly"', cmd)
-        self.assertIn('releaseholds="Y"', cmd)
-        self.assertIn('ignore_retention_policies="Y"', cmd)
-
-    def test_dry_run_sets_dryrun_y(self):
-        ra = _import_retention_actions()
-        app = _make_mass_delete_app(
-            [["archive", "ONLINE"]], selected_paths=[0], dry_run=True
-        )
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
-
-        with patch.object(ra, "log_msg"):
-            ra.on_retention_mass_delete(app, ctx)
-
-        cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
-        self.assertIn("dryrun='Y'", cmd)
-
-    def test_respect_mode_uses_releaseholds_n(self):
-        ra = _import_retention_actions()
-        app = _make_mass_delete_app(
-            [["archive", "ONLINE"]], selected_paths=[0]
-        )
-        app._ret_ignore_retention_check.get_active.return_value = False
-        app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 1
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
-
-        with patch.object(ra, "log_msg"):
-            ra.on_retention_mass_delete(app, ctx)
-
-        cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
-        self.assertIn('releaseholds="N"', cmd)
-        self.assertIn('ignore_retention_policies="N"', cmd)
-
-    def test_ignore_mode_uses_releaseholds_y(self):
-        ra = _import_retention_actions()
-        app = _make_mass_delete_app(
-            [["archive", "ONLINE"]], selected_paths=[0]
-        )
-        app._ret_ignore_retention_check.get_active.return_value = True
-        app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 0
-        ctx = MagicMock()
-        ctx.parent_dir = "/bin"
-
-        with patch.object(ra, "log_msg"):
-            ra.on_retention_mass_delete(app, ctx)
-
-        cmd = app.retention_runner.set_steps.call_args[0][0][0].command[2]
-        self.assertIn('releaseholds="Y"', cmd)
-        self.assertIn('ignore_retention_policies="Y"', cmd)
 
 
 if __name__ == "__main__":

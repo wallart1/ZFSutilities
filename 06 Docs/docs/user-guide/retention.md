@@ -163,14 +163,15 @@ export retain_verb='Y'
 sudo -E ./zfscleanup fivebays '' dailybackup
 ```
 
-## Mass Delete
+## Advanced Prune Options
 
-The Retention tab provides a **Mass Delete** action for deleting many snapshots
-at once outside the normal three-phase pruning flow. Select one or more pools in
-the Prune list, configure the filters in the **Mass Delete** card, and click
-**Mass Delete**.
+The Retention tab provides an **Advanced Prune Options** card for fine-tuning
+what the **Prune** button deletes. By default, **Prune** runs `zfscleanup` and
+applies the configured retention policies. When **Ignore retention policies** is
+checked, **Prune** instead deletes every matching snapshot regardless of
+retention counts.
 
-!!! warning "Mass Delete can break incremental chains"
+!!! warning "Ignore retention policies can break incremental chains"
     When **Ignore retention policies** is enabled, snapshots are deleted without
     consulting `zfscheckagainst`. This can remove the last common snapshot shared
     with an offsite or backup pool and break future incremental backups. Use this
@@ -186,15 +187,15 @@ the Prune list, configure the filters in the **Mass Delete** card, and click
 | **End With**       | Stop processing datasets after this substring                          |
 | **Snapshot Has**   | Only consider snapshots whose full name contains this substring        |
 | **Release Holds**  | Release ZFS holds before deleting; enabled only when **Ignore retention policies** is checked |
-| **Ignore Retention Policies** | When enabled, delete all matching snapshots regardless of retention policy |
+| **Ignore Retention Policies** | When enabled, the **Prune** button deletes all matching snapshots regardless of retention policy |
 
 ### Modes
 
-- **Respect retention policies** (default) — behaves like running **Prune** for
+- **Respect retention policies** (default) — **Prune** runs `zfscleanup` for
   each selected pool, using the configured retention policies. Dry Run shows the
   candidates that `zfscleanup` would remove.
-- **Ignore retention policies** — lists every matching snapshot and deletes them
-  after confirmation, bypassing retention counts, `minage`, and
+- **Ignore retention policies** — **Prune** lists every matching snapshot and
+  deletes them after confirmation, bypassing retention counts, `minage`, and
   `zfscheckagainst`. This is the fastest way to free space, but it is also the
   most destructive.
 
@@ -205,12 +206,10 @@ holds are released automatically without an additional confirmation per snapshot
 
 ### Command-line equivalent
 
-The GUI action invokes [`zfsmassdelsnaps`](../commands-and-modules/commands.md#zfsmassdelsnaps):
+When **Ignore retention policies** is checked, the GUI invokes
+[`zfsmassdelsnaps`](../commands-and-modules/commands.md#zfsmassdelsnaps):
 
 ```bash
-# Respect retention policies (default)
-sudo ./zfsmassdelsnaps fivebays
-
 # Ignore retention policies and delete all matching dailybackup snapshots
 export snapshot_label="dailybackup" ignore_retention_policies="Y"
 sudo -E ./zfsmassdelsnaps fivebays
