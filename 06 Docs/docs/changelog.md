@@ -9,10 +9,11 @@
 - **`uninstall-version -y|--yes`** — `uninstall-version` now accepts `-y` or
   `--yes` to skip the interactive `Remove <version>?` confirmation prompt,
   making non-interactive version cleanup possible.
-- **`uninstall-some-versions`** — New bulk-uninstall helper that reads version
-  numbers from `someinstalledversions` (in the script's directory) and invokes
-  `uninstall-version -y` for each entry. Leading whitespace and blank lines in
-  the list file are ignored.
+- **`uninstall-some-versions [listfile]`** — New bulk-uninstall helper that
+  reads version numbers from a list file and invokes `uninstall-version -y`
+  for each entry. The list file defaults to `./someinstalledversions` and may
+  be overridden with a positional argument. Leading whitespace and blank lines
+  are ignored.
 
 ### Changed
 

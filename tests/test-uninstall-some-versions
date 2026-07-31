@@ -54,8 +54,8 @@ _make_fake_version() {
     chmod +x "$version_base/versions/$version/bin/example"
 }
 
-test_bulk_removes_listed_versions() {
-    test_start "bulk uninstall removes listed versions and preserves active"
+test_bulk_removes_listed_versions_from_arg() {
+    test_start "bulk uninstall removes versions from explicit list file"
     local tmpdir
     _setup_bulk_uninstall_env tmpdir
 
@@ -64,13 +64,13 @@ test_bulk_removes_listed_versions() {
     _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.2.0"
     ln -sfn "versions/1.2.0" "$ZFSUTILITIES_VERSION_BASE/current"
 
-    cat > "$tmpdir/someinstalledversions" <<'EOF'
+    cat > "$tmpdir/remove-list.txt" <<'EOF'
 1.0.0
 1.1.0
 EOF
 
     local rc
-    "$tmpdir/uninstall-some-versions" >/dev/null 2>&1
+    "$tmpdir/uninstall-some-versions" "$tmpdir/remove-list.txt" >/dev/null 2>&1
     rc=$?
 
     local failed=0
@@ -100,6 +100,46 @@ EOF
     fi
 }
 
+test_bulk_uses_default_list_file() {
+    test_start "bulk uninstall defaults to ./someinstalledversions"
+    local tmpdir
+    _setup_bulk_uninstall_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.2.0"
+    ln -sfn "versions/1.2.0" "$ZFSUTILITIES_VERSION_BASE/current"
+
+    cat > "$tmpdir/someinstalledversions" <<'EOF'
+1.0.0
+EOF
+
+    local rc
+    (cd "$tmpdir" && ./uninstall-some-versions) >/dev/null 2>&1
+    rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0" ]]; then
+        failed=1
+        echo "    listed version 1.0.0 still exists"
+    fi
+    if [[ ! -d "$ZFSUTILITIES_VERSION_BASE/versions/1.2.0" ]]; then
+        failed=1
+        echo "    active version 1.2.0 was removed"
+    fi
+
+    _teardown_bulk_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "default list file handling failed"
+    fi
+}
+
 test_bulk_handles_whitespace_and_blank_lines() {
     test_start "bulk uninstall tolerates leading whitespace and blank lines"
     local tmpdir
@@ -116,7 +156,7 @@ test_bulk_handles_whitespace_and_blank_lines() {
 EOF
 
     local rc
-    "$tmpdir/uninstall-some-versions" >/dev/null 2>&1
+    "$tmpdir/uninstall-some-versions" "$tmpdir/someinstalledversions" >/dev/null 2>&1
     rc=$?
 
     local failed=0
@@ -148,7 +188,7 @@ test_missing_list_file() {
     _setup_bulk_uninstall_env tmpdir
 
     local rc
-    "$tmpdir/uninstall-some-versions" >/dev/null 2>&1
+    "$tmpdir/uninstall-some-versions" "$tmpdir/no-such-file.txt" >/dev/null 2>&1
     rc=$?
 
     local failed=0
@@ -175,7 +215,7 @@ test_missing_uninstall_version() {
     printf '1.0.0\n' > "$tmpdir/someinstalledversions"
 
     local rc
-    "$tmpdir/uninstall-some-versions" >/dev/null 2>&1
+    "$tmpdir/uninstall-some-versions" "$tmpdir/someinstalledversions" >/dev/null 2>&1
     rc=$?
 
     local failed=0
@@ -193,10 +233,73 @@ test_missing_uninstall_version() {
     fi
 }
 
-test_bulk_removes_listed_versions
+test_usage_help() {
+    test_start "-h and --help print usage"
+    local tmpdir
+    _setup_bulk_uninstall_env tmpdir
+
+    local output rc
+    output=$("$tmpdir/uninstall-some-versions" -h 2>&1)
+    rc=$?
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected non-zero rc for help, got $rc"
+    fi
+    if [[ "$output" != *"Usage:"* ]]; then
+        failed=1
+        echo "    usage text missing"
+    fi
+    if [[ "$output" != *"listfile"* ]]; then
+        failed=1
+        echo "    listfile argument description missing"
+    fi
+
+    _teardown_bulk_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "help output incorrect"
+    fi
+}
+
+test_too_many_arguments() {
+    test_start "too many arguments prints usage"
+    local tmpdir
+    _setup_bulk_uninstall_env tmpdir
+
+    local output rc
+    output=$("$tmpdir/uninstall-some-versions" "a.txt" "b.txt" 2>&1)
+    rc=$?
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected non-zero rc, got $rc"
+    fi
+    if [[ "$output" != *"Usage:"* ]]; then
+        failed=1
+        echo "    usage text missing"
+    fi
+
+    _teardown_bulk_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "too many arguments not rejected"
+    fi
+}
+
+test_bulk_removes_listed_versions_from_arg
+test_bulk_uses_default_list_file
 test_bulk_handles_whitespace_and_blank_lines
 test_missing_list_file
 test_missing_uninstall_version
+test_usage_help
+test_too_many_arguments
 
 test_summary
 teardown_test_env

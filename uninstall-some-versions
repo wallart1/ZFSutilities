@@ -1,10 +1,14 @@
 #!/usr/bin/bash
 # uninstall-some-versions
-# Reads version numbers from a list file ./someinstalledversions and uninstalls each one by invoking
+# Reads version numbers from a list file and uninstalls each one by invoking
 # uninstall-version with the -y flag.
 #
 # Usage:
-#   sudo ./uninstall-some-versions
+#   sudo ./uninstall-some-versions [listfile]
+#
+# Arguments:
+#   listfile  Path to a plain-text list of versions to remove.
+#             Defaults to ./someinstalledversions in the current directory.
 #
 # Globals:
 #   ZFSUTILITIES_VERSION_BASE  Optional override for the version base directory.
@@ -17,7 +21,27 @@ set -euo pipefail
 source "$mydir/rootcheck"
 rootcheck
 
-listfile="$mydir/someinstalledversions"
+usage() {
+    echo "Usage: uninstall-some-versions [listfile]"
+    echo ""
+    echo "Reads version numbers from listfile (default: ./someinstalledversions)"
+    echo "and invokes uninstall-version -y for each entry."
+    echo ""
+    echo "Examples:"
+    echo "  sudo uninstall-some-versions"
+    echo "  sudo uninstall-some-versions /root/versions-to-remove.txt"
+    exit 1
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+fi
+
+if [[ $# -gt 1 ]]; then
+    usage
+fi
+
+listfile="${1:-./someinstalledversions}"
 uninstall="$mydir/uninstall-version"
 
 [[ -f "$listfile" ]] || die "Version list not found: $listfile"

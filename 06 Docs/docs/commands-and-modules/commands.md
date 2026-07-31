@@ -541,15 +541,19 @@ sudo uninstall-version [-y|--yes] <version>
 
 ### `uninstall-some-versions`
 
-Bulk-removes deployed versions listed in `someinstalledversions`. Each listed
-version is passed to `uninstall-version -y`, so the helper is non-interactive
-and refuses to remove the active version.
+Bulk-removes deployed versions listed in a plain-text file. Each listed version
+is passed to `uninstall-version -y`, so the helper is non-interactive and
+refuses to remove the active version.
 
 ```bash
-sudo uninstall-some-versions
+sudo uninstall-some-versions [listfile]
 ```
 
-**Arguments:** none.
+**Arguments:**
+
+| Argument   | Default                   | Description                          |
+| ---------- | ------------------------- | ------------------------------------ |
+| `listfile` | `./someinstalledversions` | Plain-text list of versions to remove |
 
 **Globals:**
 
@@ -563,12 +567,12 @@ sudo uninstall-some-versions
 
 | Structure | Role |
 | --------- | ---- |
-| `someinstalledversions` | Plain-text list of versions to remove (read from the script's directory) |
+| `listfile` | Plain-text list of versions to remove (leading whitespace and blank lines ignored) |
 | `/usr/local/lib/zfsutilities/versions/<version>/` | Removed for each listed version |
 
 **Internal flow:**
 
-1. Read `someinstalledversions` from the script's directory.
+1. Resolve `listfile` (argument or `./someinstalledversions`).
 2. Trim leading whitespace and drop blank lines.
 3. Invoke `uninstall-version -y <version>` for each entry.
 
@@ -577,6 +581,7 @@ sudo uninstall-some-versions
 | Code | Meaning |
 | ---- | ------- |
 | `0` | All listed versions removed |
+| `1` | Missing/too many arguments, or help requested |
 | non-zero | `uninstall-version` failed for at least one entry, or the list file is missing |
 
 ---
