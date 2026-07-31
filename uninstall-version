@@ -1,8 +1,9 @@
 #!/bin/bash
-# uninstall-version <version>
+# uninstall-version [-y|--yes] <version>
 # Removes a deployed version directory. Refuses to remove the active version.
+# Use -y or --yes to skip the confirmation prompt.
 
-set -e
+set -euo pipefail
 
 source ~/bashinit
 bashinit
@@ -15,14 +16,40 @@ VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
 # die is provided by bashinit (sourced above).
 
 usage() {
-    echo "Usage: uninstall-version <version>"
+    echo "Usage: uninstall-version [-y|--yes] <version>"
+    echo ""
+    echo "Options:"
+    echo "  -y, --yes    Skip the confirmation prompt"
     echo ""
     echo "Examples:"
     echo "  sudo uninstall-version 1.0.0"
+    echo "  sudo uninstall-version -y 1.0.0"
     exit 1
 }
 
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+[[ $EUID -eq 0 || ${UNINSTALL_VERSION_TEST_NO_ROOT:-0} == "1" ]] || \
+    die "Must run as root (use sudo)"
+
+FORCE_YES=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -y|--yes)
+            FORCE_YES=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
 [[ $# -eq 1 ]] || usage
 
 VERSION="$1"
@@ -35,11 +62,13 @@ if [[ "$CURRENT" == "$TARGET" ]]; then
     die "Cannot uninstall the currently active version ($VERSION)"
 fi
 
-read -rp "Remove $VERSION? (y/N): " confirm
-# Regex: ^[Yy]$
-# Purpose: Accept any single-character response starting with Y or y as confirmation.
-# Example: "Y" -> match; "y" -> match; "yes" -> no match (triggers abort)
-[[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+if [[ "$FORCE_YES" -eq 0 ]]; then
+    read -rp "Remove $VERSION? (y/N): " confirm
+    # Regex: ^[Yy]$
+    # Purpose: Accept any single-character response starting with Y or y as confirmation.
+    # Example: "Y" -> match; "y" -> match; "yes" -> no match (triggers abort)
+    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+fi
 
 rm -rf "$TARGET"
 

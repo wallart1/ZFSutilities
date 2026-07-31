@@ -2,17 +2,6 @@
 
 This file provides guidance to AI coding assistants when working with code in this repository.
 
-## Terminal Output
-
-All responses in the terminal window must keep lines **10 characters shorter**
-than the terminal width. This prevents missing characters at the end of
-response lines. This rule applies to every response, every session.
-
-For this environment the terminal has been calibrated to approximately
-**95 columns**, so the effective maximum line length is **85 characters**.
-Future sessions should target 85 characters per line unless the user
-recalibrates the width.
-
 ## Quoting Paths with Shell Metacharacters
 
 When invoking the `Shell` tool with a literal path that contains shell

@@ -1,0 +1,374 @@
+#!/usr/bin/bash
+# test-uninstall-version — Verify the version-removal script.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+UNINSTALL_VERSION_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../uninstall-version"
+[[ -f "$UNINSTALL_VERSION_SCRIPT" ]] || die "Missing: $UNINSTALL_VERSION_SCRIPT"
+
+# Helper: set up a temp environment with an isolated copy of uninstall-version.
+# The temp directory is assigned to the caller variable named by $1.
+_setup_uninstall_version_env() {
+    local _varname="$1"
+    local _tmpdir
+    _tmpdir=$(mktemp -d)
+
+    export ZFSUTILITIES_VERSION_BASE="$_tmpdir/usr/local/lib/zfsutilities"
+    export UNINSTALL_VERSION_TEST_NO_ROOT=1
+    export HOME="$_tmpdir/home"
+    mkdir -p "$ZFSUTILITIES_VERSION_BASE/versions" "$HOME"
+
+    # Copy the script under test so it sources our fake rootcheck.
+    cp "$UNINSTALL_VERSION_SCRIPT" "$_tmpdir/uninstall-version"
+    chmod +x "$_tmpdir/uninstall-version"
+    printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$_tmpdir/rootcheck"
+    chmod +x "$_tmpdir/rootcheck"
+    # Provide a minimal bashinit so subshells can source it from $HOME.
+    printf '#!/usr/bin/bash\nfunction bashinit {\n    mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")")\n}\nfunction log_msg { :; }\nfunction die { log_msg "FATAL: $*"; source "$mydir/bashfatal" "${1:-8}"; }\n' > "$HOME/bashinit"
+    printf 'exit "${1:-8}"\n' > "$_tmpdir/bashfatal"
+
+    printf -v "$_varname" '%s' "$_tmpdir"
+}
+
+# Helper: clean up a temp environment and unset overrides.
+_teardown_uninstall_version_env() {
+    local tmpdir="$1"
+    unset ZFSUTILITIES_VERSION_BASE
+    unset UNINSTALL_VERSION_TEST_NO_ROOT
+    unset HOME
+    rm -rf "$tmpdir"
+}
+
+# Helper: create a fake deployed version directory.
+_make_fake_version() {
+    local version_base="$1"
+    local version="$2"
+    mkdir -p "$version_base/versions/$version/bin"
+    printf '#!/usr/bin/bash\nexit 0\n' > "$version_base/versions/$version/bin/example"
+    chmod +x "$version_base/versions/$version/bin/example"
+}
+
+test_default_removes_after_confirmation() {
+    test_start "default invocation prompts and removes version on Y"
+    local tmpdir
+    _setup_uninstall_version_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0"
+
+    local output rc
+    output=$(echo "Y" | "$tmpdir/uninstall-version" "1.0.0" 2>&1)
+    rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0" ]]; then
+        failed=1
+        echo "    version directory still exists"
+    fi
+    if [[ "$output" != *"Removed: 1.0.0"* ]]; then
+        failed=1
+        echo "    expected removal message not found"
+    fi
+
+    _teardown_uninstall_version_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "default removal after confirmation failed"
+    fi
+}
+
+test_default_aborts_after_rejection() {
+    test_start "default invocation aborts on N"
+    local tmpdir
+    _setup_uninstall_version_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0"
+
+    local output rc
+    output=$(echo "N" | "$tmpdir/uninstall-version" "1.0.0" 2>&1)
+    rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0 for abort, got $rc"
+    fi
+    if [[ ! -d "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0" ]]; then
+        failed=1
+        echo "    version directory was removed despite abort"
+    fi
+    if [[ "$output" != *"Aborted."* ]]; then
+        failed=1
+        echo "    expected abort message not found"
+    fi
+
+    _teardown_uninstall_version_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "abort on N failed"
+    fi
+}
+
+test_yes_flag_skips_prompt() {
+    test_start "-y flag skips prompt and removes version"
+    local tmpdir
+    _setup_uninstall_version_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0"
+
+    local output rc
+    output=$("$tmpdir/uninstall-version" -y "1.0.0" 2>&1)
+    rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0" ]]; then
+        failed=1
+        echo "    version directory still exists"
+    fi
+    if [[ "$output" != *"Removed: 1.0.0"* ]]; then
+        failed=1
+        echo "    expected removal message not found"
+    fi
+
+    _teardown_uninstall_version_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "-y flag removal failed"
+    fi
+}
+
+test_long_yes_flag() {
+    test_start "--yes flag skips prompt and removes version"
+    local tmpdir
+    _setup_uninstall_version_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0"
+
+    local rc
+    "$tmpdir/uninstall-version" --yes "1.0.0" >/dev/null 2>&1
+    rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0" ]]; then
+        failed=1
+        echo "    version directory still exists"
+    fi
+
+    _teardown_uninstall_version_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "--yes flag removal failed"
+    fi
+}
+
+test_refuses_active_version() {
+    test_start "refuses to remove the currently active version"
+    local tmpdir
+    _setup_uninstall_version_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0"
+    ln -sfn "versions/1.0.0" "$ZFSUTILITIES_VERSION_BASE/current"
+
+    local rc
+    "$tmpdir/uninstall-version" -y "1.0.0" >/dev/null 2>&1
+    rc=$?
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected non-zero rc, got $rc"
+    fi
+    if [[ ! -d "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0" ]]; then
+        failed=1
+        echo "    active version directory was removed"
+    fi
+
+    _teardown_uninstall_version_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "active version protection failed"
+    fi
+}
+
+test_missing_version_directory() {
+    test_start "fails when version directory does not exist"
+    local tmpdir
+    _setup_uninstall_version_env tmpdir
+
+    local rc
+    "$tmpdir/uninstall-version" -y "1.0.0" >/dev/null 2>&1
+    rc=$?
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected non-zero rc, got $rc"
+    fi
+
+    _teardown_uninstall_version_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "missing version directory was not rejected"
+    fi
+}
+
+test_usage_help() {
+    test_start "-h and --help print usage"
+    local tmpdir
+    _setup_uninstall_version_env tmpdir
+
+    local output rc
+    output=$("$tmpdir/uninstall-version" -h 2>&1)
+    rc=$?
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected non-zero rc for help, got $rc"
+    fi
+    if [[ "$output" != *"Usage:"* ]]; then
+        failed=1
+        echo "    usage text missing"
+    fi
+    if [[ "$output" != *"-y, --yes"* ]]; then
+        failed=1
+        echo "    -y option description missing"
+    fi
+
+    _teardown_uninstall_version_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "help output incorrect"
+    fi
+}
+
+test_unknown_option() {
+    test_start "unknown option prints error and usage"
+    local tmpdir
+    _setup_uninstall_version_env tmpdir
+
+    local output rc
+    output=$("$tmpdir/uninstall-version" --unknown 2>&1)
+    rc=$?
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected non-zero rc, got $rc"
+    fi
+    if [[ "$output" != *"Unknown option"* ]]; then
+        failed=1
+        echo "    unknown option error missing"
+    fi
+    if [[ "$output" != *"Usage:"* ]]; then
+        failed=1
+        echo "    usage text missing"
+    fi
+
+    _teardown_uninstall_version_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "unknown option handling failed"
+    fi
+}
+
+test_missing_argument() {
+    test_start "missing argument prints usage"
+    local tmpdir
+    _setup_uninstall_version_env tmpdir
+
+    local output rc
+    output=$("$tmpdir/uninstall-version" 2>&1)
+    rc=$?
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected non-zero rc, got $rc"
+    fi
+    if [[ "$output" != *"Usage:"* ]]; then
+        failed=1
+        echo "    usage text missing"
+    fi
+
+    _teardown_uninstall_version_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "missing argument handling failed"
+    fi
+}
+
+test_yes_flag_before_version() {
+    test_start "-y must appear before the version argument"
+    local tmpdir
+    _setup_uninstall_version_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0"
+
+    local rc
+    "$tmpdir/uninstall-version" "1.0.0" -y >/dev/null 2>&1
+    rc=$?
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected non-zero rc when -y follows version, got $rc"
+    fi
+    if [[ ! -d "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0" ]]; then
+        failed=1
+        echo "    version directory was removed despite misplaced -y"
+    fi
+
+    _teardown_uninstall_version_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "misplaced -y flag was accepted"
+    fi
+}
+
+test_default_removes_after_confirmation
+test_default_aborts_after_rejection
+test_yes_flag_skips_prompt
+test_long_yes_flag
+test_refuses_active_version
+test_missing_version_directory
+test_usage_help
+test_unknown_option
+test_missing_argument
+test_yes_flag_before_version
+
+test_summary
+teardown_test_env

@@ -27,6 +27,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`startdocserver`](#startdocserver)
 - [`switch-version`](#switch-version)
 - [`uninstall-version`](#uninstall-version)
+- [`uninstall-some-versions`](#uninstall-some-versions)
 - [`unarchive-vm`](#unarchive-vm)
 - [`unroot`](#unroot)
 - [`watchit`](#watchit)
@@ -500,14 +501,16 @@ sudo switch-version <version>|previous|--list|--uninstall
 Removes a deployed version directory. Refuses to remove the currently active version.
 
 ```bash
-sudo uninstall-version <version>
+sudo uninstall-version [-y|--yes] <version>
 ```
 
 **Arguments:**
 
-| Argument | Description |
-| -------- | ----------- |
-| `version` | Version string to remove |
+| Argument | Default | Description |
+| -------- | ------- | ----------- |
+| `-y`     | off     | Skip the confirmation prompt |
+| `--yes`  | off     | Skip the confirmation prompt |
+| `version` | —      | Version string to remove |
 
 **Globals:** none.
 
@@ -524,7 +527,7 @@ sudo uninstall-version <version>
 
 1. Validate root privileges and the version argument.
 2. Refuse if the requested version is the current active version.
-3. Prompt for confirmation.
+3. If `-y`/`--yes` was not given, prompt for confirmation.
 4. `rm -rf` the version directory.
 
 **Return codes:**
@@ -533,6 +536,48 @@ sudo uninstall-version <version>
 | ---- | ------- |
 | `0` | Version removed or operation aborted |
 | `1` | Missing argument, version not found, or version is active |
+
+---
+
+### `uninstall-some-versions`
+
+Bulk-removes deployed versions listed in `someinstalledversions`. Each listed
+version is passed to `uninstall-version -y`, so the helper is non-interactive
+and refuses to remove the active version.
+
+```bash
+sudo uninstall-some-versions
+```
+
+**Arguments:** none.
+
+**Globals:**
+
+| Variable | Role |
+| -------- | ---- |
+| `ZFSUTILITIES_VERSION_BASE` | Optional override for `/usr/local/lib/zfsutilities` |
+
+**Called modules:** `uninstall-version`
+
+**Data structures consumed / produced:**
+
+| Structure | Role |
+| --------- | ---- |
+| `someinstalledversions` | Plain-text list of versions to remove (read from the script's directory) |
+| `/usr/local/lib/zfsutilities/versions/<version>/` | Removed for each listed version |
+
+**Internal flow:**
+
+1. Read `someinstalledversions` from the script's directory.
+2. Trim leading whitespace and drop blank lines.
+3. Invoke `uninstall-version -y <version>` for each entry.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | All listed versions removed |
+| non-zero | `uninstall-version` failed for at least one entry, or the list file is missing |
 
 ---
 

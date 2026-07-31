@@ -1,0 +1,28 @@
+#!/usr/bin/bash
+# uninstall-some-versions
+# Reads version numbers from a list file and uninstalls each one by invoking
+# uninstall-version with the -y flag.
+#
+# Usage:
+#   sudo ./uninstall-some-versions
+#
+# Globals:
+#   ZFSUTILITIES_VERSION_BASE  Optional override for the version base directory.
+
+set -euo pipefail
+
+source ~/bashinit
+bashinit
+source "$mydir/rootcheck"
+rootcheck
+
+listfile="$mydir/someinstalledversions"
+uninstall="$mydir/uninstall-version"
+
+[[ -f "$listfile" ]] || die "Version list not found: $listfile"
+[[ -x "$uninstall" ]] || die "uninstall-version not found: $uninstall"
+
+# Trim leading whitespace, drop blank lines, and run uninstall-version -y
+# once per listed version via xargs (one at a time, destructively).
+sed -e 's/^[[:space:]]*//' -e '/^$/d' "$listfile" | \
+    xargs -I {} "$uninstall" -y {}

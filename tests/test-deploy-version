@@ -457,6 +457,20 @@ test_detach_vm_disk_in_deploy_list() {
 test_attach_vm_disk_in_deploy_list
 test_detach_vm_disk_in_deploy_list
 
+test_uninstall_some_versions_in_deploy_list() {
+    test_start "deploy-version VERSIONING_SCRIPTS includes uninstall-some-versions"
+    local deploy_script
+    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+
+    if grep -qE '\buninstall-some-versions\b' "$deploy_script"; then
+        test_pass
+    else
+        test_fail "uninstall-some-versions not found in deploy-version VERSIONING_SCRIPTS"
+    fi
+}
+
+test_uninstall_some_versions_in_deploy_list
+
 test_attach_vm_disk_symlinked() {
     test_start "deploy-version symlinks attach-vm-disk into bin"
     local tmpdir=$(mktemp -d)

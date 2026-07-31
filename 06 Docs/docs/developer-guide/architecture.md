@@ -288,7 +288,7 @@ via symlinks. This allows instant rollback and co-existence of multiple versions
 - **`deploy-version`** — copies the current repo into a new version directory without touching active production
 - **`switch-version <version>`** — wires a deployed version into active production and atomically repoints the `current` symlink
 - **`switch-version --uninstall`** — removes the production wiring installed by a version
-- **`uninstall-version <version>`** — removes an old version directory
+- **`uninstall-version [-y|--yes] <version>`** — removes an old version directory; use `-y`/`--yes` to skip the confirmation prompt
 
 `bin/` and `lib/` live inside each `versions/<version>/` directory because every
 deployment must be a complete, self-contained installation. If executables were stored

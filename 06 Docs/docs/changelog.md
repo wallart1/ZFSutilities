@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.69.0
+
+*Released 2026-07-30*
+
+### Added
+
+- **`uninstall-version -y|--yes`** — `uninstall-version` now accepts `-y` or
+  `--yes` to skip the interactive `Remove <version>?` confirmation prompt,
+  making non-interactive version cleanup possible.
+- **`uninstall-some-versions`** — New bulk-uninstall helper that reads version
+  numbers from `someinstalledversions` (in the script's directory) and invokes
+  `uninstall-version -y` for each entry. Leading whitespace and blank lines in
+  the list file are ignored.
+
+### Changed
+
+- **`deploy-version` now deploys `uninstall-some-versions`** — The helper is
+  included in `VERSIONING_SCRIPTS` so it is installed alongside the other
+  version-management scripts.
+- **`uninstall-version` strict mode** — Added `set -u` and `set -o pipefail`
+  and a `UNINSTALL_VERSION_TEST_NO_ROOT` escape hatch for the root check so the
+  script can be exercised by the test suite.
+
+### Tests
+
+- Added `tests/test-uninstall-version` covering default confirmation,
+  `-y`/`--yes`, active-version protection, missing-version handling, help,
+  unknown options, missing arguments, and flag ordering.
+- Added `tests/test-uninstall-some-versions` covering bulk removal,
+  whitespace/blank-line tolerance, missing list file, and missing helper.
+- Expanded `tests/test-deploy-version` to verify `uninstall-some-versions` is
+  listed in `VERSIONING_SCRIPTS`.
+
+### Documentation
+
+- Updated `commands-and-modules/commands.md` with the `-y`/`--yes` option and
+  a new `uninstall-some-versions` reference entry.
+- Updated `commands-and-modules/two-node.md` and
+  `developer-guide/architecture.md` to mention the new `uninstall-version`
+  option.
+
 ## 0.68.0
 
 *Released 2026-07-30*

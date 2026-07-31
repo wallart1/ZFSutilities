@@ -1,0 +1,202 @@
+#!/usr/bin/bash
+# test-uninstall-some-versions — Verify the bulk version-removal helper.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+UNINSTALL_SOME_VERSIONS_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../uninstall-some-versions"
+UNINSTALL_VERSION_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../uninstall-version"
+[[ -f "$UNINSTALL_SOME_VERSIONS_SCRIPT" ]] || die "Missing: $UNINSTALL_SOME_VERSIONS_SCRIPT"
+[[ -f "$UNINSTALL_VERSION_SCRIPT" ]] || die "Missing: $UNINSTALL_VERSION_SCRIPT"
+
+# Helper: set up a temp environment with isolated copies of the scripts.
+# The temp directory is assigned to the caller variable named by $1.
+_setup_bulk_uninstall_env() {
+    local _varname="$1"
+    local _tmpdir
+    _tmpdir=$(mktemp -d)
+
+    export ZFSUTILITIES_VERSION_BASE="$_tmpdir/usr/local/lib/zfsutilities"
+    export UNINSTALL_VERSION_TEST_NO_ROOT=1
+    export HOME="$_tmpdir/home"
+    mkdir -p "$ZFSUTILITIES_VERSION_BASE/versions" "$HOME"
+
+    # Copy scripts under test so they source our fake rootcheck.
+    cp "$UNINSTALL_SOME_VERSIONS_SCRIPT" "$_tmpdir/uninstall-some-versions"
+    chmod +x "$_tmpdir/uninstall-some-versions"
+    cp "$UNINSTALL_VERSION_SCRIPT" "$_tmpdir/uninstall-version"
+    chmod +x "$_tmpdir/uninstall-version"
+    printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$_tmpdir/rootcheck"
+    chmod +x "$_tmpdir/rootcheck"
+    # Provide a minimal bashinit so subshells can source it from $HOME.
+    printf '#!/usr/bin/bash\nfunction bashinit {\n    mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")")\n}\nfunction log_msg { :; }\nfunction die { log_msg "FATAL: $*"; source "$mydir/bashfatal" "${1:-8}"; }\n' > "$HOME/bashinit"
+    printf 'exit "${1:-8}"\n' > "$_tmpdir/bashfatal"
+
+    printf -v "$_varname" '%s' "$_tmpdir"
+}
+
+# Helper: clean up a temp environment and unset overrides.
+_teardown_bulk_uninstall_env() {
+    local tmpdir="$1"
+    unset ZFSUTILITIES_VERSION_BASE
+    unset UNINSTALL_VERSION_TEST_NO_ROOT
+    unset HOME
+    rm -rf "$tmpdir"
+}
+
+# Helper: create a fake deployed version directory.
+_make_fake_version() {
+    local version_base="$1"
+    local version="$2"
+    mkdir -p "$version_base/versions/$version/bin"
+    printf '#!/usr/bin/bash\nexit 0\n' > "$version_base/versions/$version/bin/example"
+    chmod +x "$version_base/versions/$version/bin/example"
+}
+
+test_bulk_removes_listed_versions() {
+    test_start "bulk uninstall removes listed versions and preserves active"
+    local tmpdir
+    _setup_bulk_uninstall_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.1.0"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.2.0"
+    ln -sfn "versions/1.2.0" "$ZFSUTILITIES_VERSION_BASE/current"
+
+    cat > "$tmpdir/someinstalledversions" <<'EOF'
+1.0.0
+1.1.0
+EOF
+
+    local rc
+    "$tmpdir/uninstall-some-versions" >/dev/null 2>&1
+    rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0" ]]; then
+        failed=1
+        echo "    listed version 1.0.0 still exists"
+    fi
+    if [[ -d "$ZFSUTILITIES_VERSION_BASE/versions/1.1.0" ]]; then
+        failed=1
+        echo "    listed version 1.1.0 still exists"
+    fi
+    if [[ ! -d "$ZFSUTILITIES_VERSION_BASE/versions/1.2.0" ]]; then
+        failed=1
+        echo "    active version 1.2.0 was removed"
+    fi
+
+    _teardown_bulk_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "bulk uninstall did not remove listed versions"
+    fi
+}
+
+test_bulk_handles_whitespace_and_blank_lines() {
+    test_start "bulk uninstall tolerates leading whitespace and blank lines"
+    local tmpdir
+    _setup_bulk_uninstall_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.2.0"
+    ln -sfn "versions/1.2.0" "$ZFSUTILITIES_VERSION_BASE/current"
+
+    cat > "$tmpdir/someinstalledversions" <<'EOF'
+
+   1.0.0
+
+EOF
+
+    local rc
+    "$tmpdir/uninstall-some-versions" >/dev/null 2>&1
+    rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$ZFSUTILITIES_VERSION_BASE/versions/1.0.0" ]]; then
+        failed=1
+        echo "    listed version 1.0.0 still exists"
+    fi
+    if [[ ! -d "$ZFSUTILITIES_VERSION_BASE/versions/1.2.0" ]]; then
+        failed=1
+        echo "    active version 1.2.0 was removed"
+    fi
+
+    _teardown_bulk_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "whitespace/blank-line handling failed"
+    fi
+}
+
+test_missing_list_file() {
+    test_start "missing list file is reported as fatal"
+    local tmpdir
+    _setup_bulk_uninstall_env tmpdir
+
+    local rc
+    "$tmpdir/uninstall-some-versions" >/dev/null 2>&1
+    rc=$?
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected non-zero rc, got $rc"
+    fi
+
+    _teardown_bulk_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "missing list file was not rejected"
+    fi
+}
+
+test_missing_uninstall_version() {
+    test_start "missing uninstall-version helper is reported as fatal"
+    local tmpdir
+    _setup_bulk_uninstall_env tmpdir
+
+    rm -f "$tmpdir/uninstall-version"
+    printf '1.0.0\n' > "$tmpdir/someinstalledversions"
+
+    local rc
+    "$tmpdir/uninstall-some-versions" >/dev/null 2>&1
+    rc=$?
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected non-zero rc, got $rc"
+    fi
+
+    _teardown_bulk_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "missing uninstall-version was not rejected"
+    fi
+}
+
+test_bulk_removes_listed_versions
+test_bulk_handles_whitespace_and_blank_lines
+test_missing_list_file
+test_missing_uninstall_version
+
+test_summary
+teardown_test_env

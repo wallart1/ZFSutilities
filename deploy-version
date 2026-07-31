@@ -135,7 +135,7 @@ TWO_NODE_SCRIPTS=(
 
 CLONE_SCRIPTS=(zfsclone-vm promote-vm-clone archive-vm unarchive-vm remove-vm)
 INSTALLERS=(install-single-node install-two-node)
-VERSIONING_SCRIPTS=(deploy-version switch-version uninstall-version uninstall-zfsutilities)
+VERSIONING_SCRIPTS=(deploy-version switch-version uninstall-version uninstall-some-versions uninstall-zfsutilities)
 
 # Directories to copy into the versioned deployment (source name -> dest name)
 DEPLOY_DIRS=(

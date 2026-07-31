@@ -1448,14 +1448,16 @@ Removes a deployed version directory. Refuses to remove the currently active
 version.
 
 ```bash
-sudo uninstall-version <version>
+sudo uninstall-version [-y|--yes] <version>
 ```
 
 **Arguments:**
 
-| Argument  | Description              |
-| --------- | ------------------------ |
-| `version` | Version string to remove |
+| Argument    | Default | Description                       |
+| ----------- | ------- | --------------------------------- |
+| `-y`        | off     | Skip the confirmation prompt      |
+| `--yes`     | off     | Skip the confirmation prompt      |
+| `version`   | —       | Version string to remove          |
 
 **Globals:** none.
 
@@ -1468,7 +1470,7 @@ sudo uninstall-version <version>
 1. Verify root privileges and a single argument.
 2. Verify the version directory exists.
 3. Refuse if the version is the current active target.
-4. Prompt for confirmation.
+4. If `-y`/`--yes` was not given, prompt for confirmation.
 5. `rm -rf` the version directory.
 
 **Return codes / side effects:**
