@@ -181,6 +181,8 @@ def on_retention_prune(app, ctx):
         return
 
     dryrun = getattr(app, '_dry_run_active', False)
+    verb_check = getattr(app, '_ret_verb_check', None)
+    retain_verb = "Y" if verb_check is not None and verb_check.get_active() else "N"
 
     if dryrun:
         log_msg("INFO: Dry run mode enabled — no changes will be made")
@@ -201,6 +203,7 @@ def on_retention_prune(app, ctx):
             f'autoproceed="Y"; '
             f'releaseholds="Y"; '
             f'releaseholds_tags=("offsite-*"); '
+            f'retain_verb="{retain_verb}"; '
             f'cleanup "{pool}" "" "{label}"'
         )
         steps.append(BashStep(

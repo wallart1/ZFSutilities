@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.68.0
+
+*Released 2026-07-30*
+
+### Added
+
+- **Verbose retention decisions** — The Retention tab now has a
+  “Verbose retention decisions” checkbox. When enabled, prune runs emit
+  `VERB:`-level messages explaining why individual snapshots are kept
+  (wrong label, protected incremental base, within retention count,
+  clone/bucket `c` exclusion, etc.). Headless runs can opt in by setting
+  `retain_verb='Y'`.
+- **Configurable Dashboard refresh interval** — The Dashboard tab now has
+  a “Refresh every (s):” spinner (1–300 s, default 30 s). The value is
+  persisted in `dashboard.refresh_seconds` and takes effect immediately.
+- **Checkagainst merged-table preview** — The Checkagainst tab now shows
+  a fourth read-only section, “Merged fss table,” which previews the
+  effective runtime table after merging active derived sections and user
+  entries.
+
+### Changed
+
+- **`list-vm-disks` clone annotation** — Clone zvols are now annotated
+  with their full origin snapshot dataset name (e.g.
+  `[clone of threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c]`)
+  instead of `[clone of vm-<id>]`.
+- **Dashboard refresh indicator** — The async refresh no longer
+  desensitizes every dashboard section; it shows a simple “Refreshing”
+  label next to the refresh-interval spinner.
+
+### Tests
+
+- Added `tests/python/test_config_migrations.py` coverage for the
+  20→21 (`retention_verb_messages`) and 21→22 (`dashboard.refresh_seconds`)
+  migrations.
+- Added `tests/python/test_config_core.py` coverage for the default
+  `dashboard.refresh_seconds` value.
+- Added `tests/python/test_retention_actions.py` and
+  `tests/python/test_retention_page.py` coverage for the verbose-retention
+  toggle.
+- Added `tests/python/test_dashboard_page.py` and
+  `tests/python/test_zfsutilities_gui.py` coverage for the configurable
+  refresh interval.
+- Added `tests/python/test_checkagainst_page.py` coverage for the merged
+  fss table preview.
+- Added `tests/test-list-vm-disks` coverage for the full origin snapshot
+  name in both two-node and single-node modes.
+- Added `tests/test-zfsretain` coverage for `retain_verb='Y'` and the
+  default disabled behavior.
+
+### Documentation
+
+- Updated `user-guide/retention.md` with the verbose-retention feature.
+- Updated `user-guide/gtk-gui.md` with the Checkagainst merged-table
+  preview and expanded `<offsite>` examples.
+- Updated `commands-and-modules/two-node.md` and
+  `user-guide/proxmox-integration.md` for the new `list-vm-disks` clone
+  annotation.
+- Updated `commands-and-modules/commands.md` and
+  `commands-and-modules/modules.md` to document `retain_verb`.
+
 ## 0.67.1
 
 *Released 2026-07-30*

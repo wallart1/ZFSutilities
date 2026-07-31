@@ -519,7 +519,9 @@ sudo list-vm-disks [--with-devices]
 5. In two-node mode, gather LUN/zvol metadata from the storage host and merge
    with the VM/guest maps from the compute host.
 6. Annotate each zvol with clone relationships:
-   - `[clone of vm-N]` if the zvol is a ZFS clone.
+   - `[clone of <snapshot>]` if the zvol is a ZFS clone, where `<snapshot>`
+     is the full origin snapshot dataset name (e.g.
+     `threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c`).
    - `[cloned by: vm-N, vm-M]` if any of its snapshots have clone dependents.
 
 **Return codes / side effects:**

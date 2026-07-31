@@ -64,6 +64,7 @@ reset_mocks() {
     skipbusy="Y"
     releaseholds="N"
     releaseholds_tags=()
+    retain_verb="N"
 }
 
 # =============================================================================
@@ -344,6 +345,50 @@ test_releaseholds_tags_default() {
     fi
 }
 
+test_verb_messages_enabled() {
+    echo "=== VERB messages enabled ==="
+    reset_mocks
+    retain_verb="Y"
+    local _logfile
+    _logfile=$(mktemp)
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-31T10:00-04:00-d" "written" "1024"
+    retain "pool/fs" "dailybackup" 2>"$_logfile"
+    test_start "Emits VERB messages explaining kept snapshots"
+    if grep -q "VERB: Keeping pool/fs@dailybackup-2025-03-31T10:00-04:00-d — most recent snapshot in bucket 'd' is protected as incremental base" "$_logfile" \
+        && grep -q "VERB: Keeping pool/fs@dailybackup-2025-03-30T10:00-04:00-d — within retention count for bucket 'd'" "$_logfile"; then
+        test_pass
+    else
+        test_fail "Expected VERB retention messages in log, got: $(cat "$_logfile")"
+    fi
+    rm -f "$_logfile"
+}
+
+test_verb_messages_disabled() {
+    echo "=== VERB messages disabled ==="
+    reset_mocks
+    local _logfile
+    _logfile=$(mktemp)
+    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
+    mock_zfs_prop "pool/fs@dailybackup-2025-03-31T10:00-04:00-d" "written" "1024"
+    retain "pool/fs" "dailybackup" 2>"$_logfile"
+    test_start "Does not emit VERB messages when retain_verb is unset"
+    if ! grep -q "VERB: Keeping" "$_logfile"; then
+        test_pass
+    else
+        test_fail "Unexpected VERB messages in log, got: $(cat "$_logfile")"
+    fi
+    rm -f "$_logfile"
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -364,6 +409,8 @@ main() {
     test_retain_returns_on_missing_policy
     test_retain_returns_on_lock_error
     test_releaseholds_tags_default
+    test_verb_messages_enabled
+    test_verb_messages_disabled
     mydir="$old_mydir"
     rm -rf "$mock_mydir"
     teardown_test_env

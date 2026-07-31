@@ -534,8 +534,10 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             GLib.source_remove(self._dashboard_timer)
             self._dashboard_timer = None
         if page_name == "dashboard":
+            from config_core import get_dashboard_config
+            seconds = get_dashboard_config(self.config).get("refresh_seconds", 30)
             self._dashboard_timer = GLib.timeout_add_seconds(
-                30, self._on_dashboard_timer_tick
+                max(1, seconds), self._on_dashboard_timer_tick
             )
 
     def _start_stop_scrub_timer(self, page_name):

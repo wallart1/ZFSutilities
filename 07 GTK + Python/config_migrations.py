@@ -1,6 +1,6 @@
 """Config schema migrations. Bump CONFIG_VERSION when JSON structure changes."""
 
-CONFIG_VERSION = 20
+CONFIG_VERSION = 22
 
 
 def _migrate_1_to_2(config):
@@ -226,6 +226,26 @@ def _migrate_19_to_20(config):
     return config
 
 
+def _migrate_20_to_21(config):
+    """Seed the retention VERB message toggle (default off)."""
+    if "retention_verb_messages" not in config:
+        config["retention_verb_messages"] = False
+    config["config_version"] = 21
+    return config
+
+
+def _migrate_21_to_22(config):
+    """Add dashboard refresh interval (seconds)."""
+    dashboard = config.get("dashboard")
+    if not isinstance(dashboard, dict):
+        dashboard = {}
+        config["dashboard"] = dashboard
+    if "refresh_seconds" not in dashboard:
+        dashboard["refresh_seconds"] = 30
+    config["config_version"] = 22
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -246,6 +266,8 @@ MIGRATIONS = [
     _migrate_17_to_18,
     _migrate_18_to_19,
     _migrate_19_to_20,
+    _migrate_20_to_21,
+    _migrate_21_to_22,
 ]
 
 

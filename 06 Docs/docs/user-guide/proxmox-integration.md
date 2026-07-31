@@ -392,8 +392,8 @@ Each line shows the LUN number, disk name, size, and clone annotations:
 ```
   lun25   vm-904-disk-0   4M    [cloned by: vm-310, vm-315]
   lun26   vm-904-disk-1   50G   [cloned by: vm-310, vm-315]
-  lun27   vm-310-disk-0   4M    [clone of vm-904]
-  lun28   vm-310-disk-1   50G   [clone of vm-904]
+  lun27   vm-310-disk-0   4M    [clone of threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c]
+  lun28   vm-310-disk-1   50G   [clone of threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c]
 ```
 
 You can also query ZFS directly on the storage node:

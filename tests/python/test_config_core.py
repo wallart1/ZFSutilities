@@ -205,6 +205,7 @@ class TestDashboardConfig(unittest.TestCase):
         config = {}
         dash = config_core.get_dashboard_config(config)
         self.assertEqual(dash["low_space_threshold"], 80)
+        self.assertEqual(dash["refresh_seconds"], 30)
 
     def test_save_dashboard_config(self):
         with temp_config_dir():

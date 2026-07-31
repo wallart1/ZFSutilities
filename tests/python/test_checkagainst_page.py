@@ -129,6 +129,7 @@ class TestDirtyTracking(unittest.TestCase):
         app._ca_store = _FakeStore(user_rows)
         app._ca_backup_store = _FakeStore(backup_derived or [])
         app._ca_offsite_store = _FakeStore(offsite_derived or [])
+        app._ca_merged_store = _FakeStore()
         app._ca_backup_active_chk = _make_checkbox(backup_active)
         app._ca_offsite_active_chk = _make_checkbox(offsite_active)
         app._ca_status_label = MagicMock()
@@ -203,6 +204,7 @@ class TestLoadNormalization(unittest.TestCase):
         app._ca_backup_store = _FakeStore()
         app._ca_offsite_store = _FakeStore()
         app._ca_store = _FakeStore()
+        app._ca_merged_store = _FakeStore()
         app._ca_backup_active_chk = _make_checkbox(True)
         app._ca_offsite_active_chk = _make_checkbox(True)
         app._ca_status_label = MagicMock()
@@ -229,6 +231,7 @@ class TestStatusUpdate(unittest.TestCase):
         app._ca_store = _FakeStore(rows)
         app._ca_backup_store = _FakeStore()
         app._ca_offsite_store = _FakeStore()
+        app._ca_merged_store = _FakeStore()
         app._ca_backup_active_chk = _make_checkbox(True)
         app._ca_offsite_active_chk = _make_checkbox(True)
         app._ca_status_label = MagicMock()
@@ -281,6 +284,7 @@ class TestActionHandlers(unittest.TestCase):
         app._ca_store = _FakeStore(user_rows)
         app._ca_backup_store = _FakeStore()
         app._ca_offsite_store = _FakeStore()
+        app._ca_merged_store = _FakeStore()
         app._ca_backup_active_chk = _make_checkbox(True)
         app._ca_offsite_active_chk = _make_checkbox(True)
         app._ca_status_label = MagicMock()
@@ -404,51 +408,103 @@ class TestActionHandlers(unittest.TestCase):
         mock_log.assert_called_once()
 
 
-class TestPageNotes(unittest.TestCase):
-    """Inline help text documents the source/dest-root model."""
+class TestMergedPreview(unittest.TestCase):
+    """Merged fss table preview reflects the effective runtime table."""
 
-    def test_notes_mention_offsite_placeholder(self):
-        recording_label = MagicMock()
-        recording_label._markups = []
+    def setUp(self):
+        self._p = patch.object(cap, "set_button_markup")
+        self._p.start()
 
-        def _record_markup(markup):
-            recording_label._markups.append(markup)
+    def tearDown(self):
+        self._p.stop()
 
-        recording_label.set_markup.side_effect = _record_markup
-
+    def _make_app(self, backup_derived=None, offsite_derived=None,
+                  user_entries=None, backup_active=True, offsite_active=True):
         app = MagicMock()
-        app.config = {"checkagainst": {"user_entries": []}}
-        with patch.object(cap.Gtk, "Label", return_value=recording_label), \
-             patch.object(cap, "set_button_markup"):
-            cap.create_checkagainst_page(app)
+        app._ca_backup_store = _FakeStore(backup_derived or [])
+        app._ca_offsite_store = _FakeStore(offsite_derived or [])
+        app._ca_store = _FakeStore(user_entries or [])
+        app._ca_merged_store = _FakeStore()
+        app._ca_backup_active_chk = _make_checkbox(backup_active)
+        app._ca_offsite_active_chk = _make_checkbox(offsite_active)
+        app._ca_status_label = MagicMock()
+        app._ca_save_button = MagicMock()
+        app._ca_original_full = {
+            "backup_derived_active": backup_active,
+            "offsite_derived_active": offsite_active,
+            "backup_derived": [
+                {"label": r[0], "source_root": r[1], "dest_root": r[2],
+                 "comment": r[3]}
+                for r in (backup_derived or [])
+            ],
+            "offsite_derived": [
+                {"label": r[0], "source_root": r[1], "dest_root": r[2],
+                 "comment": r[3]}
+                for r in (offsite_derived or [])
+            ],
+            "user_entries": [
+                {"label": r[0], "source_root": r[1], "dest_root": r[2],
+                 "comment": r[3]}
+                for r in (user_entries or [])
+            ],
+        }
+        return app
 
-        self.assertTrue(
-            any("<offsite>" in html.unescape(m) for m in recording_label._markups),
-            "Expected page notes to mention <offsite> placeholder",
+    def test_merged_table_initializes_empty(self):
+        app = self._make_app()
+        cap._refresh_merged_table(app)
+        self.assertEqual(len(app._ca_merged_store), 0)
+
+    def test_merged_table_combines_sections(self):
+        app = self._make_app(
+            backup_derived=[("dailybackup", "poolA/a", "poolB/poolA/a", "")],
+            offsite_derived=[("offsite", "poolA/b", "poolB/poolA/b", "")],
+            user_entries=[("offsite", "poolA/c", "poolB/poolA/c", "user")],
+        )
+        cap._refresh_merged_table(app)
+        rows = [tuple(r) for r in app._ca_merged_store]
+        self.assertIn(("dailybackup", "poolA/a", "poolB/poolA/a", ""), rows)
+        self.assertIn(("offsite", "poolA/b", "poolB/poolA/b", ""), rows)
+        self.assertIn(("offsite", "poolA/c", "poolB/poolA/c", "user"), rows)
+        self.assertEqual(len(rows), 3)
+
+    def test_merged_table_user_overrides_derived(self):
+        app = self._make_app(
+            backup_derived=[("dailybackup", "poolA/a", "poolB/poolA/a", "")],
+            user_entries=[("dailybackup", "poolA/a", "poolC/poolA/a", "override")],
+        )
+        cap._refresh_merged_table(app)
+        rows = [tuple(r) for r in app._ca_merged_store]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0],
+            ("dailybackup", "poolA/a", "poolC/poolA/a", "override"),
         )
 
-    def test_description_mentions_offsite_placeholder(self):
-        recording_label = MagicMock()
-        recording_label._texts = []
+    def test_merged_table_updates_on_toggle(self):
+        app = self._make_app(
+            backup_derived=[("dailybackup", "poolA/a", "poolB/poolA/a", "")],
+            backup_active=False,
+        )
+        cap._refresh_merged_table(app)
+        self.assertEqual(len(app._ca_merged_store), 0)
 
-        def _record_text(text):
-            recording_label._texts.append(text)
-
-        recording_label.set_text.side_effect = _record_text
-        recording_label.set_markup.side_effect = recording_label._texts.append
-
-        app = MagicMock()
-        app.config = {"checkagainst": {"user_entries": []}}
-        with patch.object(cap.Gtk, "Label", return_value=recording_label), \
-             patch.object(cap, "set_button_markup"):
-            cap.create_checkagainst_page(app)
-
-        combined = " ".join(str(t) for t in recording_label._texts)
-        self.assertIn("<offsite>", html.unescape(combined))
+    def test_merged_table_filters_empty_rows(self):
+        app = self._make_app(
+            user_entries=[("offsite", "", "poolB/poolA/a", ""),
+                          ("offsite", "poolA/a", "poolB/poolA/a", "")],
+        )
+        cap._refresh_merged_table(app)
+        rows = [tuple(r) for r in app._ca_merged_store]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0],
+            ("offsite", "poolA/a", "poolB/poolA/a", ""),
+        )
 
 
 class TestPageConstruction(unittest.TestCase):
-    """Checkagainst page builds three 4-column treeviews."""
+    """Checkagainst page builds four 4-column treeviews."""
 
     def _make_app(self):
         app = MagicMock()
@@ -460,16 +516,28 @@ class TestPageConstruction(unittest.TestCase):
         with patch.object(cap.Gtk, "ListStore") as mock_liststore, \
              patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
-        self.assertEqual(mock_liststore.call_count, 3)
+        self.assertEqual(mock_liststore.call_count, 4)
         mock_liststore.assert_called_with(str, str, str, str)
 
     def test_user_treeview_is_reorderable(self):
         app = self._make_app()
-        tv_mock = MagicMock()
-        with patch.object(cap.Gtk, "TreeView", return_value=tv_mock), \
+        tv_mocks = []
+
+        def _make_treeview(**_kwargs):
+            m = MagicMock()
+            tv_mocks.append(m)
+            return m
+
+        with patch.object(cap.Gtk, "TreeView", side_effect=_make_treeview), \
              patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
-        tv_mock.set_reorderable.assert_called_with(True)
+
+        # The user-entry TreeView is the only editable/reorderable one.
+        self.assertTrue(
+            any(m.set_reorderable.call_args == ((True,), {})
+                for m in tv_mocks),
+            "Expected one TreeView to be set reorderable=True",
+        )
 
     def test_columns_are_not_sortable(self):
         app = self._make_app()
@@ -492,12 +560,15 @@ class TestPageConstruction(unittest.TestCase):
              patch.object(cap, "set_button_markup"):
             cap.create_checkagainst_page(app)
         self.assertIn("Comment", titles)
-        self.assertEqual(len(titles), 12)  # 4 columns x 3 treeviews
+        self.assertEqual(len(titles), 16)  # 4 columns x 4 treeviews
 
     def test_page_is_wrapped_in_scrolled_window(self):
         app = self._make_app()
         page_sw = MagicMock()
-        sw_iter = iter([page_sw, MagicMock(), MagicMock(), MagicMock()])
+        sw_iter = iter([
+            page_sw,
+            MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        ])
 
         with patch.object(cap.Gtk, "ScrolledWindow", side_effect=lambda: next(sw_iter)), \
              patch.object(cap, "set_button_markup"):
@@ -666,6 +737,7 @@ class TestStatusUpdateEmptyFields(unittest.TestCase):
         app._ca_store = _FakeStore(rows)
         app._ca_backup_store = _FakeStore()
         app._ca_offsite_store = _FakeStore()
+        app._ca_merged_store = _FakeStore()
         app._ca_backup_active_chk = _make_checkbox(True)
         app._ca_offsite_active_chk = _make_checkbox(True)
         app._ca_status_label = MagicMock()
@@ -814,6 +886,7 @@ class TestActionHandlersEmptyFields(unittest.TestCase):
         app._ca_store = _FakeStore(rows)
         app._ca_backup_store = _FakeStore()
         app._ca_offsite_store = _FakeStore()
+        app._ca_merged_store = _FakeStore()
         app._ca_backup_active_chk = _make_checkbox(True)
         app._ca_offsite_active_chk = _make_checkbox(True)
         app._ca_original_full = {

@@ -18,11 +18,13 @@ from feature_config import (
     get_prune_pools_order,
     get_retention,
     get_retention_mass_delete_config,
+    get_retention_verb_messages,
     import_legacy_retention,
     save_prune_label,
     save_prune_pools_order,
     save_retention,
     save_retention_mass_delete_config,
+    save_retention_verb_messages,
 )
 from gi.repository import Gtk
 from gui_helpers import (
@@ -296,6 +298,16 @@ def create_retention_page(app, ctx):
     label_box.pack_start(app._ret_prune_label_entry, False, False, 0)
     outer.pack_start(label_box, False, False, 0)
 
+    # Verbose retention decisions toggle
+    verb_check = Gtk.CheckButton(
+        label="Verbose retention decisions (logs why each snapshot is kept)"
+    )
+    verb_check.set_active(get_retention_verb_messages(ctx.config))
+    app._ret_verb_check = verb_check
+    verb_check.connect("toggled", lambda *_a: _update_ret_status(app))
+    outer.pack_start(verb_check, False, False, 0)
+    app._ret_original_verb = verb_check.get_active()
+
     # ── Advanced: Mass Delete ─────────────────────────────────────────────────
     advanced_exp = Gtk.Expander()
     advanced_exp.set_label_widget(bold_label("Advanced"))
@@ -539,6 +551,10 @@ def _mass_delete_is_dirty(app):
 def _is_dirty(app):
     if app._ret_prune_label_entry.get_text().strip() != app._ret_original_prune_label:
         return True
+    verb_check = getattr(app, '_ret_verb_check', None)
+    if verb_check is not None \
+            and verb_check.get_active() != app._ret_original_verb:
+        return True
     current = _store_to_buckets(app)
     if current != app._ret_original.get(app._ret_pool, []):
         return True
@@ -694,6 +710,18 @@ def _on_ret_save(btn, app, ctx):
         return
     app._ret_original_prune_label = label
 
+    # Save the verbose retention decisions toggle if it has changed.
+    verb_check = getattr(app, '_ret_verb_check', None)
+    if verb_check is not None:
+        verb_active = verb_check.get_active()
+        if verb_active != app._ret_original_verb:
+            try:
+                save_retention_verb_messages(ctx.config, verb_active)
+            except OSError as e:
+                show_error(app, f"Failed to save verbose retention setting:\n{e}")
+                return
+            app._ret_original_verb = verb_active
+
     # Save mass-delete settings if they have changed.
     widgets = getattr(app, '_ret_mass_delete_widgets', None)
     if isinstance(widgets, dict):
@@ -731,6 +759,11 @@ def _on_ret_revert(btn, app, ctx):
     # have persisted across the whole page.
     app._ret_pending.clear()
     _load_pool_into_store(app, ctx, app._ret_pool)
+
+    # Revert the verbose retention decisions toggle.
+    verb_check = getattr(app, '_ret_verb_check', None)
+    if verb_check is not None:
+        verb_check.set_active(app._ret_original_verb)
 
     # Revert mass-delete widgets to the last saved values.
     widgets = getattr(app, '_ret_mass_delete_widgets', None)

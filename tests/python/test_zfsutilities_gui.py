@@ -307,11 +307,12 @@ class TestDashboardTimer(unittest.TestCase):
             window._dashboard_timer = None
             window._scrub_timer = None
             window.stack = MagicMock()
+            window.config = {"dashboard": {"refresh_seconds": 30}}
             return window
 
     @patch("zfsutilities_gui.GLib")
     def test_dashboard_page_starts_timer(self, mock_glib):
-        """Switching to Dashboard starts a 30-second refresh timer."""
+        """Switching to Dashboard starts a refresh timer from config."""
         window = self._make_window()
         mock_glib.timeout_add_seconds.return_value = 42
         window._start_stop_dashboard_timer("dashboard")
@@ -341,6 +342,39 @@ class TestDashboardTimer(unittest.TestCase):
             30, window._on_dashboard_timer_tick
         )
         self.assertEqual(window._dashboard_timer, 42)
+
+    @patch("zfsutilities_gui.GLib")
+    def test_dashboard_timer_uses_configured_interval(self, mock_glib):
+        """Dashboard timer interval honors dashboard.refresh_seconds."""
+        window = self._make_window()
+        window.config = {"dashboard": {"refresh_seconds": 45}}
+        mock_glib.timeout_add_seconds.return_value = 42
+        window._start_stop_dashboard_timer("dashboard")
+        mock_glib.timeout_add_seconds.assert_called_once_with(
+            45, window._on_dashboard_timer_tick
+        )
+
+    @patch("zfsutilities_gui.GLib")
+    def test_dashboard_timer_defaults_to_30_seconds(self, mock_glib):
+        """Dashboard timer defaults to 30 s when config lacks refresh_seconds."""
+        window = self._make_window()
+        window.config = {}
+        mock_glib.timeout_add_seconds.return_value = 42
+        window._start_stop_dashboard_timer("dashboard")
+        mock_glib.timeout_add_seconds.assert_called_once_with(
+            30, window._on_dashboard_timer_tick
+        )
+
+    @patch("zfsutilities_gui.GLib")
+    def test_dashboard_timer_clamps_to_minimum_one_second(self, mock_glib):
+        """Dashboard timer interval is clamped to at least 1 second."""
+        window = self._make_window()
+        window.config = {"dashboard": {"refresh_seconds": 0}}
+        mock_glib.timeout_add_seconds.return_value = 42
+        window._start_stop_dashboard_timer("dashboard")
+        mock_glib.timeout_add_seconds.assert_called_once_with(
+            1, window._on_dashboard_timer_tick
+        )
 
 
 class TestScheduleTimer(unittest.TestCase):

@@ -49,6 +49,7 @@ BACKUP_DEFAULTS = {
 
 DASHBOARD_DEFAULTS = {
     "low_space_threshold": 80,
+    "refresh_seconds": 30,
 }
 
 
@@ -259,8 +260,9 @@ def get_dashboard_config(config):
     if not isinstance(dashboard, dict):
         dashboard = _deep_copy(DASHBOARD_DEFAULTS)
         config["dashboard"] = dashboard
-    if "low_space_threshold" not in dashboard:
-        dashboard["low_space_threshold"] = DASHBOARD_DEFAULTS["low_space_threshold"]
+    for key, value in DASHBOARD_DEFAULTS.items():
+        if key not in dashboard:
+            dashboard[key] = value
     return dashboard
 
 

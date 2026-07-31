@@ -1066,6 +1066,7 @@ retain <pool> [label]
 | `$autoproceed`                 | `'Y'` = skip per-deletion prompt                                              | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$releaseholds`                | `'Y'` = release holds before `zfsdelsnap`                                     | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$releaseholds_tags`           | Array of hold tag patterns to release (default `offsite-*`)                   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
+| `$retain_verb`                 | `'Y'` = emit `VERB:` messages explaining why snapshots are kept               | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$skipbusy`                    | `'Y'` = warn and continue on held/busy snapshots; `'N'` = fatal               | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$originlabel`, `$targetlabel` | Override label per side                                                       | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 

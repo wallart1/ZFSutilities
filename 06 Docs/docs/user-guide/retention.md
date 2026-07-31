@@ -139,6 +139,30 @@ Deletion blocked for safety. Bring the counterpart pool(s) online to verify.
 For the full safety-check algorithm, see the
 [`zfscheckagainst` module reference](../commands-and-modules/modules.md#zfscheckagainst).
 
+## Verbose Retention Decisions
+
+The Retention tab's **Prune Snapshots** section has an optional checkbox:
+
+> **Verbose retention decisions (logs why each snapshot is kept)**
+
+When enabled, each prune run emits `VERB:`-level messages explaining why
+individual snapshots were **not** selected for deletion. Examples include:
+
+- `Keeping pool/fs@dailybackup-...-d — bucket 'd' count (2) is within retention limit (3).`
+- `Keeping pool/fs@dailybackup-...-d — most recent snapshot in bucket 'd' is protected as incremental base.`
+- `Keeping pool/fs@weeklybackup-...-w — label 'weeklybackup' does not match target label 'dailybackup'.`
+- `Keeping pool/fs@offsite-...-s — most recent offsite snapshot for 2026-May (replaces pool/fs@offsite-...-s).`
+
+These messages are filtered by the GUI log viewer unless the viewer's message
+level is set to **VERB** or lower. The checkbox is off by default so normal
+prune runs stay quiet. It only affects GUI-initiated prune operations; headless
+runs of `zfscleanup` can opt in by setting `retain_verb='Y'`:
+
+```bash
+export retain_verb='Y'
+sudo -E ./zfscleanup fivebays '' dailybackup
+```
+
 ## Mass Delete
 
 The Retention tab provides a **Mass Delete** action for deleting many snapshots

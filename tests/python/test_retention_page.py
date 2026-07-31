@@ -192,6 +192,8 @@ class TestRetentionPageLabelDirtyState(unittest.TestCase):
         app = MagicMock()
         app._ret_prune_label_entry = _FakeEntry(label)
         app._ret_original_prune_label = label
+        app._ret_verb_check = None
+        app._ret_original_verb = None
         app._ret_store = _FakeStore(buckets or [
             ["d", "Daily", 3, 0],
             ["w", "Weekly", 2, 0],
@@ -353,6 +355,8 @@ class TestRetentionPageMultiPoolSave(unittest.TestCase):
         )
         app._ret_prune_label_entry = _FakeEntry("dailybackup")
         app._ret_original_prune_label = "dailybackup"
+        app._ret_verb_check = None
+        app._ret_original_verb = None
         app._ret_status_label = _FakeLabel()
         app._ret_save_button = None
         app._ret_pool_list = ["default", "fivebays"]
@@ -981,6 +985,8 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             ),
             version="dev",
         )
+        app._ret_verb_check = None
+        app._ret_original_verb = None
         return app
 
     def test_mass_delete_widgets_created(self):
@@ -1048,6 +1054,8 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             app = MagicMock()
             app._ret_prune_label_entry = _FakeEntry("dailybackup")
             app._ret_original_prune_label = "dailybackup"
+            app._ret_verb_check = None
+            app._ret_original_verb = None
             app._ret_store = _FakeStore([
                 ["d", "Daily", 3, 0],
             ])
@@ -1112,6 +1120,8 @@ class TestRetentionPageMassDelete(unittest.TestCase):
         app = MagicMock()
         app._ret_prune_label_entry = _FakeEntry("dailybackup")
         app._ret_original_prune_label = "dailybackup"
+        app._ret_verb_check = None
+        app._ret_original_verb = None
         app._ret_store = _FakeStore([])
         app._ret_original = {"default": []}
         app._ret_pool = "default"
@@ -1242,6 +1252,79 @@ class TestRetentionPageLayout(unittest.TestCase):
                 page = rp.create_retention_page(app, app.ctx)
 
             self.assertIs(page, sentinels[0])
+
+
+class TestRetentionVerbCheckbox(unittest.TestCase):
+    """Verbose retention decisions toggle."""
+
+    def _fresh_module(self):
+        _clear_cached_modules(
+            "retention_page",
+            "retention_actions",
+            "action_dispatch",
+            "zfsutilities_gui",
+        )
+        with mock_gtk():
+            import retention_page as rp
+            return rp
+
+    def test_checkbox_created_and_loaded_from_config(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={
+                    "retention": {"default": []},
+                    "retention_verb_messages": True,
+                },
+                script_dir="",
+                parent_dir=os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))
+                ),
+                version="dev",
+            )
+
+            with patch.object(rp, "import_legacy_retention", return_value=False), \
+                 patch.object(rp, "get_retention_verb_messages", return_value=True) as mock_verb:
+                rp.create_retention_page(app, app.ctx)
+
+            self.assertIsNotNone(app._ret_verb_check)
+            mock_verb.assert_called_once_with(app.ctx.config)
+
+    def test_checkbox_dirty_detection(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            app = MagicMock()
+            app._ret_prune_label_entry = _FakeEntry("dailybackup")
+            app._ret_original_prune_label = "dailybackup"
+            app._ret_verb_check = MagicMock()
+            app._ret_verb_check.get_active.return_value = False
+            app._ret_original_verb = False
+            app._ret_store = _FakeStore([
+                ["d", "Daily", 3, 0],
+            ])
+            app._ret_original = {"default": [
+                {"name": "d", "retain": 3, "minage": 0},
+            ]}
+            app._ret_pool = "default"
+            app._ret_status_label = _FakeLabel()
+            app._ret_save_button = None
+            app._ret_pending = {}
+            app._ret_mass_delete_widgets = {
+                key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES
+            }
+            app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")
+            app._ret_mass_delete_widgets["releaseholds"] = MagicMock()
+            app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 1
+            app._ret_mass_delete_original = rp.MASS_DELETE_DEFAULTS.copy()
+            app._ret_ignore_retention_check = MagicMock()
+            app._ret_ignore_retention_check.get_active.return_value = False
+
+            self.assertFalse(rp._is_dirty(app))
+            app._ret_verb_check.get_active.return_value = True
+            self.assertTrue(rp._is_dirty(app))
 
 
 if __name__ == "__main__":

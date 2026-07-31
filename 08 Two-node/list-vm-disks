@@ -223,8 +223,7 @@ emit_lun_data() {
             clone_info=""
             origin=$(zfs get -H -o value origin "$ZVOL" 2>/dev/null)
             if [[ "$origin" != "-" && -n "$origin" ]]; then
-                src_vmid=$(echo "$origin" | grep -oP '/vm-\K[0-9]+(?=-disk-)')
-                [[ -n "$src_vmid" ]] && clone_info="[clone of vm-${src_vmid}]"
+                clone_info="[clone of ${origin}]"
             fi
 
             clone_list=$(zfs list -H -t snapshot -o clones -r "$ZVOL" 2>/dev/null \
@@ -395,8 +394,7 @@ run_single_node() {
             clone_info=""
             origin=$(zfs get -H -o value origin "$zvol" 2>/dev/null)
             if [[ "$origin" != "-" && -n "$origin" ]]; then
-                src_vmid=$(echo "$origin" | grep -oP '/vm-\K[0-9]+(?=-disk-)')
-                [[ -n "$src_vmid" ]] && clone_info="[clone of vm-${src_vmid}]"
+                clone_info="[clone of ${origin}]"
             fi
 
             clone_list=$(zfs list -H -t snapshot -o clones -r "$zvol" 2>/dev/null \

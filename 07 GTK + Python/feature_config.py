@@ -481,6 +481,17 @@ def save_prune_pools_order(config, order):
     save_config(config)
 
 
+def get_retention_verb_messages(config):
+    """Return whether VERB-level retention decision messages are enabled."""
+    return bool(config.get("retention_verb_messages", False))
+
+
+def save_retention_verb_messages(config, enabled):
+    """Persist the VERB-level retention decision message toggle."""
+    config["retention_verb_messages"] = bool(enabled)
+    save_config(config)
+
+
 MASS_DELETE_DEFAULTS = {
     "includes": "",
     "excludes": "",

@@ -386,6 +386,25 @@ class TestPrunePoolsOrder(unittest.TestCase):
             self.assertEqual(config["prune_pools_order"], ["archive", "tank"])
 
 
+class TestRetentionVerbMessages(unittest.TestCase):
+    """Retention VERB message toggle helpers."""
+
+    def test_get_retention_verb_messages_default_false(self):
+        self.assertFalse(feature_config.get_retention_verb_messages({}))
+        self.assertFalse(feature_config.get_retention_verb_messages({"retention_verb_messages": False}))
+
+    def test_get_retention_verb_messages_true(self):
+        self.assertTrue(feature_config.get_retention_verb_messages({"retention_verb_messages": True}))
+
+    def test_save_retention_verb_messages_persists_bool(self):
+        with temp_config_dir():
+            config = {}
+            feature_config.save_retention_verb_messages(config, True)
+            self.assertIs(config["retention_verb_messages"], True)
+            feature_config.save_retention_verb_messages(config, False)
+            self.assertIs(config["retention_verb_messages"], False)
+
+
 class TestMaybeSeedCheckagainst(unittest.TestCase):
     """Auto-seeding checkagainst rows after successful GUI send/receive."""
 

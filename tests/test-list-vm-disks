@@ -416,6 +416,58 @@ test_emit_lun_data_machine_readable() {
     fi
 }
 
+test_emit_lun_data_clone_origin_full_name() {
+    test_start "emit_lun_data shows full origin snapshot name for clone"
+    reset_mocks
+    setup_two_node_zfs
+    mock_zfs_prop "threeamigos/proxmox/vm-200-disk-0" "origin" \
+        "threeamigos/proxmox/vm-100-disk-0@clone-2026-07-30T12:00-0400-c"
+    _test_hostname="stewie"
+
+    local output
+    output=$(emit_lun_data)
+
+    if [[ "$output" == *"[clone of threeamigos/proxmox/vm-100-disk-0@clone-2026-07-30T12:00-0400-c]"* ]]; then
+        test_pass
+    else
+        test_fail "Expected full origin snapshot name in output:\n$output"
+    fi
+}
+
+test_single_node_clone_origin_full_name() {
+    test_start "run_single_node shows full origin snapshot name for clone"
+    reset_mocks
+    export NODE_CONF="$node_conf_single"
+    _test_hostname="single"
+    rm -f "$pve_dir"/*.conf
+    cat > "$pve_dir/310.conf" << 'EOF'
+name: clone-vm
+scsi0: threeamigos:vm-310-disk-0,format=raw,size=4G
+EOF
+
+    mock_zpool_list $'threeamigos'
+    mock_zfs_fs_list $'threeamigos/proxmox/vm-310-disk-0'
+    mock_zfs_prop "threeamigos/proxmox/vm-310-disk-0" "volsize" "4G"
+    mock_zfs_prop "threeamigos/proxmox/vm-310-disk-0" "origin" \
+        "threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c"
+
+    # Re-source node-lib.sh so is_single_node reflects the new config.
+    source "$mydir/08 Two-node/node-lib.sh"
+
+    local output
+    output=$(run_single_node 2>&1)
+
+    # Restore two-node config for remaining tests.
+    export NODE_CONF="$node_conf_two"
+    source "$mydir/08 Two-node/node-lib.sh"
+
+    if [[ "$output" == *"[clone of threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c]"* ]]; then
+        test_pass
+    else
+        test_fail "Expected full origin snapshot name in single-node output:\n$output"
+    fi
+}
+
 # ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
@@ -431,6 +483,8 @@ test_two_node_output_storage_host
 test_single_node_output
 test_emit_vm_data_machine_readable
 test_emit_lun_data_machine_readable
+test_emit_lun_data_clone_origin_full_name
+test_single_node_clone_origin_full_name
 
 # ------------------------------------------------------------------------------
 # Cleanup

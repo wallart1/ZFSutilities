@@ -719,6 +719,7 @@ sudo zfscleanup <pool> only <label> [overrides]
 | `$dryrun`                   | `'Y'` = report without deleting                                   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$releaseholds`             | `'Y'` = release matching holds before deletion                    | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$releaseholds_tags`        | Array of hold tag patterns to release (default `offsite-*`)       | [Execution Control](../developer-guide/global-variables.md#execution-control) |
+| `$retain_verb`              | `'Y'` = emit `VERB:` messages explaining why snapshots are kept   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 
 Calls [`zfsretain`](modules.md#zfsretain) for each pool.
 

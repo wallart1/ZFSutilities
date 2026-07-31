@@ -1369,15 +1369,15 @@ class TestRefreshDashboardCache(unittest.TestCase):
 class TestRefreshDashboardAsync(unittest.TestCase):
     """Verify the default async refresh path does not block the main thread."""
 
-    def test_async_refresh_starts_background_thread(self):
+    def test_async_refresh_shows_refreshing_indicator(self):
         app = MagicMock()
         app.config = {}
         app._dashboard_refresh_in_progress = False
         with patch.object(dp, "threading") as mock_threading:
-            with patch.object(dp, "_set_dashboard_loading") as mock_loading:
+            with patch.object(dp, "_show_dashboard_refreshing") as mock_show:
                 dp.refresh_dashboard_page(app, sync=False)
 
-        mock_loading.assert_called_once_with(app)
+        mock_show.assert_called_once_with(app)
         mock_threading.Thread.assert_called_once()
         _, kwargs = mock_threading.Thread.call_args
         self.assertTrue(kwargs.get("daemon"))
@@ -1395,49 +1395,30 @@ class TestRefreshDashboardAsync(unittest.TestCase):
         mock_threading.Thread.assert_not_called()
 
 
-class TestDashboardLoadingState(unittest.TestCase):
-    """Verify the loading indicator helpers desensitize dashboard sections."""
+class TestDashboardRefreshingIndicator(unittest.TestCase):
+    """Verify the 'Refreshing' label visibility helpers."""
 
-    FRAME_NAMES = (
-        "dashboard_warn_frame",
-        "dashboard_pool_frame",
-        "dashboard_proc_frame",
-        "dashboard_ops_frame",
-        "dashboard_iscsi_frame",
-        "dashboard_config_frame",
-    )
-
-    def _make_app(self):
+    def test_show_refreshing_makes_label_visible(self):
         app = MagicMock()
-        for name in self.FRAME_NAMES:
-            frame = MagicMock()
-            frame.get_child.return_value = MagicMock()
-            setattr(app, name, frame)
-        return app
+        dp._show_dashboard_refreshing(app)
+        app.dashboard_refreshing_label.show.assert_called_once_with()
 
-    def test_set_loading_desensitizes_all_sections(self):
-        app = self._make_app()
-        dp._set_dashboard_loading(app)
-        for name in self.FRAME_NAMES:
-            frame = getattr(app, name)
-            frame.get_child.return_value.set_sensitive.assert_called_once_with(False)
-
-    def test_clear_loading_re_enables_all_sections(self):
-        app = self._make_app()
-        dp._clear_dashboard_loading(app)
-        for name in self.FRAME_NAMES:
-            frame = getattr(app, name)
-            frame.get_child.return_value.set_sensitive.assert_called_once_with(True)
-
-    def test_loading_helpers_skip_frames_without_child(self):
+    def test_hide_refreshing_hides_label(self):
         app = MagicMock()
-        for name in self.FRAME_NAMES:
-            frame = MagicMock()
-            frame.get_child.return_value = None
-            setattr(app, name, frame)
+        dp._hide_dashboard_refreshing(app)
+        app.dashboard_refreshing_label.hide.assert_called_once_with()
+
+    def test_show_refreshing_skips_missing_label(self):
+        app = MagicMock()
+        del app.dashboard_refreshing_label
         # Should not raise.
-        dp._set_dashboard_loading(app)
-        dp._clear_dashboard_loading(app)
+        dp._show_dashboard_refreshing(app)
+
+    def test_hide_refreshing_skips_missing_label(self):
+        app = MagicMock()
+        del app.dashboard_refreshing_label
+        # Should not raise.
+        dp._hide_dashboard_refreshing(app)
 
 
 class TestDashboardRefreshDone(unittest.TestCase):
@@ -1464,7 +1445,7 @@ class TestDashboardRefreshDone(unittest.TestCase):
         data = {"pools": []}
 
         with patch.object(dp, "_update_dashboard_ui"), \
-             patch.object(dp, "_clear_dashboard_loading"), \
+             patch.object(dp, "_hide_dashboard_refreshing") as mock_hide, \
              patch.object(dp, "GLib") as mock_glib, \
              patch.object(dp, "refresh_dashboard_page") as mock_refresh:
             dp._on_dashboard_refresh_done(app, data)
@@ -1474,8 +1455,10 @@ class TestDashboardRefreshDone(unittest.TestCase):
 
         mock_refresh.assert_called_once_with(app)
         self.assertFalse(app._dashboard_refresh_pending)
+        # Label stays visible while a pending refresh is queued.
+        mock_hide.assert_not_called()
 
-    def test_worker_exception_logs_and_clears_loading(self):
+    def test_worker_exception_logs_and_hides_refreshing(self):
         app = MagicMock()
         app.config = {}
         app._dashboard_refresh_in_progress = True
@@ -1484,7 +1467,7 @@ class TestDashboardRefreshDone(unittest.TestCase):
         with patch.object(dp, "_gather_dashboard_data", side_effect=RuntimeError("boom")), \
              patch("dashboard_page.log_msg") as mock_log, \
              patch.object(dp, "GLib") as mock_glib, \
-             patch.object(dp, "_clear_dashboard_loading") as mock_clear:
+             patch.object(dp, "_hide_dashboard_refreshing") as mock_hide:
             dp._dashboard_refresh_worker(app)
             idle_callback = mock_glib.idle_add.call_args[0][0]
             idle_args = mock_glib.idle_add.call_args[0][1:]
@@ -1492,11 +1475,52 @@ class TestDashboardRefreshDone(unittest.TestCase):
             # Simulate the idle callback running while patches are still active.
             idle_callback(*idle_args)
 
-        mock_clear.assert_called_once_with(app)
+        mock_hide.assert_called_once_with(app)
         self.assertFalse(app._dashboard_refresh_in_progress)
         self.assertTrue(
             any("boom" in str(call) for call in mock_log.call_args_list)
         )
+
+    def test_hides_refreshing_when_done_without_pending(self):
+        app = MagicMock()
+        app.config = {}
+        app._dashboard_refresh_in_progress = True
+        app._dashboard_refresh_pending = False
+        data = {"pools": []}
+
+        with patch.object(dp, "_update_dashboard_ui"), \
+             patch.object(dp, "_hide_dashboard_refreshing") as mock_hide:
+            dp._on_dashboard_refresh_done(app, data)
+
+        mock_hide.assert_called_once_with(app)
+
+
+class TestRefreshIntervalChanged(unittest.TestCase):
+    """Dashboard refresh interval spinner persists and restarts the timer."""
+
+    def test_saves_new_interval_to_config(self):
+        app = MagicMock()
+        app.config = {"dashboard": {"low_space_threshold": 80, "refresh_seconds": 30}}
+        spin = MagicMock()
+        spin.get_value.return_value = 45
+        dp._on_refresh_interval_changed(spin, app)
+        self.assertEqual(app.config["dashboard"]["refresh_seconds"], 45)
+
+    def test_restarts_dashboard_timer(self):
+        app = MagicMock()
+        app.config = {"dashboard": {"low_space_threshold": 80, "refresh_seconds": 30}}
+        spin = MagicMock()
+        spin.get_value.return_value = 45
+        dp._on_refresh_interval_changed(spin, app)
+        app._start_stop_dashboard_timer.assert_called_once_with("dashboard")
+
+    def test_no_restart_when_value_unchanged(self):
+        app = MagicMock()
+        app.config = {"dashboard": {"low_space_threshold": 80, "refresh_seconds": 30}}
+        spin = MagicMock()
+        spin.get_value.return_value = 30
+        dp._on_refresh_interval_changed(spin, app)
+        app._start_stop_dashboard_timer.assert_not_called()
 
 
 class TestUpdateFixLocksButton(unittest.TestCase):
@@ -1730,6 +1754,7 @@ class TestCreateDashboardPage(unittest.TestCase):
             gtk_mock.Frame = _WidgetRecorder
             gtk_mock.ScrolledWindow = _WidgetRecorder
             gtk_mock.Label = MagicMock
+            gtk_mock.SpinButton = MagicMock
             with patch.object(dp, "Gtk", gtk_mock):
                 with patch.object(dp, "refresh_dashboard_page"):
                     with patch.object(dp, "_is_two_node", return_value=two_node):
@@ -1747,6 +1772,8 @@ class TestCreateDashboardPage(unittest.TestCase):
         self.assertIsNotNone(app.dashboard_config_frame)
         self.assertIsNotNone(app.dashboard_pool_grid)
         self.assertIsNotNone(app.dashboard_threshold_spin)
+        self.assertIsNotNone(app.dashboard_refresh_spin)
+        self.assertIsNotNone(app.dashboard_refreshing_label)
         self.assertIsNotNone(app.dashboard_tasks_view)
         self.assertIsNotNone(app.dashboard_ops_view)
         self.assertIsNotNone(app.dashboard_ops_store)
@@ -1772,9 +1799,30 @@ class TestCreateDashboardPage(unittest.TestCase):
             "<b>iSCSI Issues</b>",
             "<b>Configuration</b>",
         ]
-        frame_children = top_box.children[1:]
+        # children[0] is the title label; children[1] is the refresh controls;
+        # the remaining children are the section frames.
+        frame_children = top_box.children[2:]
         self.assertEqual(len(frame_children), 6)
         self.assertEqual([_frame_title(f) for f in frame_children], expected_titles)
+
+    def test_refresh_spinner_configuration(self):
+        app = self._create_app()
+        self._run_create(app)
+        spin = app.dashboard_refresh_spin
+        spin.set_range.assert_called_once_with(1, 300)
+        spin.set_increments.assert_called_once_with(1, 10)
+        spin.set_value.assert_called_once_with(30)
+        args = spin.connect.call_args[0]
+        self.assertEqual(args[0], "value-changed")
+        self.assertTrue(callable(args[1]))
+        self.assertIs(args[2], app)
+
+    def test_refreshing_indicator_initially_hidden(self):
+        app = self._create_app()
+        self._run_create(app)
+        lbl = app.dashboard_refreshing_label
+        lbl.set_no_show_all.assert_called_once_with(True)
+        lbl.hide.assert_called_once_with()
 
     def test_threshold_spinner_inside_pool_health(self):
         app = self._create_app()

@@ -822,7 +822,7 @@ Scheduled jobs run in the background and execute the same commands the GUI would
 This tab edits the [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst)
 table used for verification when deleting snapshots.
 
-The table is split into three sections:
+The table is split into four sections:
 
 - **Backup-derived entries** — rows generated from active Backup tab
   send/receive steps.
@@ -830,6 +830,8 @@ The table is split into three sections:
   send/receive steps.
 - **User entries** — manually maintained rows that always override
   derived rows for the same `(source_root, label)` pair.
+- **Merged fss table** — read-only preview of the effective runtime table
+  after the active derived sections and user entries are merged.
 
 `zfscheckagainst` uses the merged table to map a snapshot to its
 counterpart dataset(s). Before a snapshot is deleted, the script verifies
@@ -870,13 +872,52 @@ Hover over any column header to see a tooltip explaining the field.
 `zfscheckagainst` builds the counterpart dataset by replacing the snapshot's
 source-root prefix with the destination-root prefix.
 
-For example, with a snapshot on
-`threeamigos/proxmox/vm-101-disk-0@dailybackup-…-d`:
+For example, with a snapshot dataset of `poolA/data/vm-101-disk-0`:
+
+| Source root            | Destination root            | Counterpart dataset                     |
+| ---------------------- | --------------------------- | --------------------------------------- |
+| `poolA/data`           | `poolB/poolA/data`          | `poolB/poolA/data/vm-101-disk-0`        |
+| `poolB/poolA/data`     | `poolA/data`                | `poolA/data/vm-101-disk-0`              |
+
+For the project's normal Backup/Restore pool names, a snapshot on
+`threeamigos/proxmox/vm-101-disk-0@dailybackup-…-d` produces:
 
 | Source root            | Destination root            | Counterpart dataset                            |
 | ---------------------- | --------------------------- | ---------------------------------------------- |
 | `threeamigos`          | `fivebays/threeamigos`      | `fivebays/threeamigos/proxmox/vm-101-disk-0`   |
 | `fivebays/threeamigos` | `threeamigos`               | `threeamigos/proxmox/vm-101-disk-0`            |
+
+### Special value `<offsite>`
+
+`<offsite>` may be used anywhere in the Source root or Destination root
+column. Every occurrence is replaced at run time with every pool marked as
+an offsite candidate in the [Pools tab](#pools-tab).
+
+Examples using a snapshot dataset of `poolA/data/vm-101-disk-0`:
+
+| Source root         | Destination root | Counterpart dataset(s)                                   |
+| ------------------- | ---------------- | -------------------------------------------------------- |
+| `poolA/data`        | `<offsite>`      | `z22tb/poolA/data/vm-101-disk-0`, `z40tb/poolA/data/vm-101-disk-0`, … |
+| `<offsite>/temp`    | `temp`           | `temp/vm-101-disk-0` (after replacing `z22tb/temp`, `z40tb/temp`, …) |
+
+### Merged fss table preview
+
+The **Merged fss table** section at the bottom of the tab is a read-only,
+live-updating preview of the table that `zfscheckagainst` will actually use.
+It is built by merging the active derived sections and the user entries with
+this precedence for the same `(source_root, label)` key:
+
+1. **User entries** — highest precedence.
+2. **Offsite-derived entries**.
+3. **Backup-derived entries** — lowest precedence.
+
+Rows that are missing a required field (Snapshot label, Source root, or
+Destination root) are not shown in the preview, because they cannot be used
+by `zfscheckagainst`.
+
+`<offsite>` is displayed as a literal placeholder in the preview. Expansion
+to the actual offsite-candidate pools happens at run time inside
+`zfscheckagainst`.
 
 ### Derived entries
 

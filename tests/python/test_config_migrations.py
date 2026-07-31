@@ -174,8 +174,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_20(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 20)
+    def test_config_version_is_22(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 22)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -203,6 +203,46 @@ class TestIndividualMigrations(unittest.TestCase):
         }
         result1 = config_migrations._migrate_19_to_20(dict(config))
         result2 = config_migrations._migrate_19_to_20(result1)
+        self.assertEqual(result1, result2)
+
+    def test_migrate_20_to_21_adds_retention_verb_messages(self):
+        config = {"config_version": 20}
+        result = config_migrations._migrate_20_to_21(config)
+        self.assertEqual(result["config_version"], 21)
+        self.assertIs(result["retention_verb_messages"], False)
+
+    def test_migrate_20_to_21_preserves_existing_value(self):
+        config = {"config_version": 20, "retention_verb_messages": True}
+        result = config_migrations._migrate_20_to_21(config)
+        self.assertEqual(result["config_version"], 21)
+        self.assertIs(result["retention_verb_messages"], True)
+
+    def test_migrate_20_to_21_idempotent(self):
+        config = {"config_version": 20}
+        result1 = config_migrations._migrate_20_to_21(dict(config))
+        result2 = config_migrations._migrate_20_to_21(result1)
+        self.assertEqual(result1, result2)
+
+    def test_migrate_21_to_22_adds_dashboard_refresh_seconds(self):
+        config = {"config_version": 21}
+        result = config_migrations._migrate_21_to_22(config)
+        self.assertEqual(result["config_version"], 22)
+        self.assertEqual(result["dashboard"]["refresh_seconds"], 30)
+
+    def test_migrate_21_to_22_preserves_existing_refresh_seconds(self):
+        config = {
+            "config_version": 21,
+            "dashboard": {"low_space_threshold": 75, "refresh_seconds": 120},
+        }
+        result = config_migrations._migrate_21_to_22(config)
+        self.assertEqual(result["config_version"], 22)
+        self.assertEqual(result["dashboard"]["refresh_seconds"], 120)
+        self.assertEqual(result["dashboard"]["low_space_threshold"], 75)
+
+    def test_migrate_21_to_22_idempotent(self):
+        config = {"config_version": 21}
+        result1 = config_migrations._migrate_21_to_22(dict(config))
+        result2 = config_migrations._migrate_21_to_22(result1)
         self.assertEqual(result1, result2)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
@@ -363,8 +403,9 @@ class TestRunMigrations(unittest.TestCase):
             "offsite": {"offsite_pools": ["z40tb"]},
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 20)
+        self.assertEqual(result["config_version"], 22)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))
+        self.assertEqual(result["dashboard"]["refresh_seconds"], 30)
         row = result["checkagainst"]["user_entries"][0]
         self.assertEqual(row["source_root"], "tank/a")
         self.assertEqual(row["dest_root"], "backup/a/tank/a")
@@ -389,8 +430,11 @@ class TestRunMigrations(unittest.TestCase):
             },
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 20)
+        self.assertEqual(result["config_version"], 22)
+        self.assertIn("retention_verb_messages", result)
+        self.assertIs(result["retention_verb_messages"], False)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))
+        self.assertEqual(result["dashboard"]["refresh_seconds"], 30)
 
 
 if __name__ == "__main__":

@@ -919,6 +919,26 @@ def create_dashboard_page(app):
     title.set_halign(Gtk.Align.START)
     box.pack_start(title, False, False, 0)
 
+    # Refresh interval control and "Refreshing" indicator
+    refresh_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    refresh_box.set_halign(Gtk.Align.START)
+    refresh_box.pack_start(Gtk.Label(label="Refresh every (s):"), False, False, 0)
+
+    dashboard_cfg = get_dashboard_config(app.config)
+    app.dashboard_refresh_spin = Gtk.SpinButton()
+    app.dashboard_refresh_spin.set_range(1, 300)
+    app.dashboard_refresh_spin.set_increments(1, 10)
+    app.dashboard_refresh_spin.set_value(dashboard_cfg.get("refresh_seconds", 30))
+    app.dashboard_refresh_spin.connect("value-changed", _on_refresh_interval_changed, app)
+    refresh_box.pack_start(app.dashboard_refresh_spin, False, False, 0)
+
+    app.dashboard_refreshing_label = Gtk.Label(label="Refreshing")
+    app.dashboard_refreshing_label.set_no_show_all(True)
+    app.dashboard_refreshing_label.hide()
+    refresh_box.pack_start(app.dashboard_refreshing_label, False, False, 0)
+
+    box.pack_start(refresh_box, False, False, 0)
+
     # Low-space warning threshold (packed inside Pool Health)
     threshold_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     threshold_box.set_halign(Gtk.Align.START)
@@ -1155,34 +1175,29 @@ def _gather_dashboard_data(app):
     }
 
 
-def _set_dashboard_loading(app):
-    """Show a transient loading indicator in each dashboard section."""
-    for frame in (
-        app.dashboard_warn_frame,
-        app.dashboard_pool_frame,
-        app.dashboard_proc_frame,
-        app.dashboard_ops_frame,
-        app.dashboard_iscsi_frame,
-        app.dashboard_config_frame,
-    ):
-        child = frame.get_child()
-        if child is not None:
-            child.set_sensitive(False)
+def _show_dashboard_refreshing(app):
+    """Show the 'Refreshing' indicator next to the refresh interval spinner."""
+    if hasattr(app, "dashboard_refreshing_label"):
+        app.dashboard_refreshing_label.show()
 
 
-def _clear_dashboard_loading(app):
-    """Re-enable dashboard sections after refresh completes."""
-    for frame in (
-        app.dashboard_warn_frame,
-        app.dashboard_pool_frame,
-        app.dashboard_proc_frame,
-        app.dashboard_ops_frame,
-        app.dashboard_iscsi_frame,
-        app.dashboard_config_frame,
-    ):
-        child = frame.get_child()
-        if child is not None:
-            child.set_sensitive(True)
+def _hide_dashboard_refreshing(app):
+    """Hide the 'Refreshing' indicator after refresh completes."""
+    if hasattr(app, "dashboard_refreshing_label"):
+        app.dashboard_refreshing_label.hide()
+
+
+def _on_refresh_interval_changed(spin, app):
+    """Persist the new dashboard refresh interval and restart the timer."""
+    value = int(spin.get_value())
+    dashboard_cfg = get_dashboard_config(app.config)
+    if dashboard_cfg.get("refresh_seconds") != value:
+        dashboard_cfg["refresh_seconds"] = value
+        save_dashboard_config(app.config, dashboard_cfg)
+        # Restart the timer so the new interval takes effect immediately
+        # while the Dashboard tab is active.
+        if hasattr(app, "_start_stop_dashboard_timer"):
+            app._start_stop_dashboard_timer("dashboard")
 
 
 def _update_dashboard_ui(app, data):
@@ -1212,8 +1227,6 @@ def _update_dashboard_ui(app, data):
     else:
         app.dashboard_iscsi_frame.hide()
 
-    _clear_dashboard_loading(app)
-
 
 def _dashboard_refresh_worker(app):
     """Background thread target: gather dashboard data."""
@@ -1230,12 +1243,12 @@ def _on_dashboard_refresh_done(app, data):
     app._dashboard_refresh_in_progress = False
     if data is not None:
         _update_dashboard_ui(app, data)
-    else:
-        _clear_dashboard_loading(app)
 
     if getattr(app, "_dashboard_refresh_pending", False):
         app._dashboard_refresh_pending = False
         GLib.timeout_add_seconds(0, lambda: refresh_dashboard_page(app) or False)
+    else:
+        _hide_dashboard_refreshing(app)
     return False
 
 
@@ -1252,7 +1265,7 @@ def refresh_dashboard_page(app, sync=False):
             return
         app._dashboard_refresh_in_progress = True
         app._dashboard_refresh_pending = False
-        _set_dashboard_loading(app)
+        _show_dashboard_refreshing(app)
         threading.Thread(target=_dashboard_refresh_worker, args=(app,), daemon=True).start()
         return
 

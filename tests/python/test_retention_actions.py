@@ -168,11 +168,13 @@ class _FakePruneModel:
         return self._rows[idx]
 
 
-def _make_prune_app(model_rows, selected_paths):
+def _make_prune_app(model_rows, selected_paths, verb_active=False):
     """Return a minimal app mock for prune tests."""
     app = MagicMock()
     app._ret_prune_label_entry = MagicMock()
     app._ret_prune_label_entry.get_text.return_value = "dailybackup"
+    app._ret_verb_check = MagicMock()
+    app._ret_verb_check.get_active.return_value = verb_active
     app._dry_run_active = False
     app.retention_runner = MagicMock()
     app.retention_runner.running = False
@@ -182,6 +184,44 @@ def _make_prune_app(model_rows, selected_paths):
     selection.get_selected_rows.return_value = (model, selected_paths)
     app._ret_prune_view.get_selection.return_value = selection
     return app, model
+
+
+class TestOnRetentionPruneVerb(unittest.TestCase):
+    """Prune passes retain_verb to zfscleanup based on the GUI toggle."""
+
+    def test_includes_retain_verb_when_toggle_active(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["tank", "ONLINE"]],
+            selected_paths=[0],
+            verb_active=True,
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, \
+             patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        steps = app.retention_runner.set_steps.call_args[0][0]
+        self.assertIn('retain_verb="Y"; ', steps[0].command[2])
+
+    def test_omits_retain_verb_when_toggle_inactive(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["tank", "ONLINE"]],
+            selected_paths=[0],
+            verb_active=False,
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, \
+             patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        steps = app.retention_runner.set_steps.call_args[0][0]
+        self.assertIn('retain_verb="N"; ', steps[0].command[2])
 
 
 class TestOnRetentionPruneOrder(unittest.TestCase):

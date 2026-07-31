@@ -2,15 +2,18 @@
 Checkagainst configuration page — edit the fss table stored in the JSON
 config (config["checkagainst"]).
 
-The page now shows three sections:
+The page shows four sections:
 
 - Backup-derived entries: rows derived from active Backup send/receive steps.
 - Offsite-derived entries: rows derived from active Offsite steps.
 - User entries: manually maintained rows.
+- Merged fss table: read-only preview of the effective runtime table after
+  merging the active derived sections and user entries.
 
-The Counterpart column accepts a literal pool/path (or "-" for no prefix)
-and the special placeholder "<offsite>", which resolves at run-time to all
-pools marked as offsite candidates in the Pools tab.
+The Destination root column accepts a literal pool/path and the special
+placeholder "<offsite>", which resolves at run-time to all pools marked as
+offsite candidates in the Pools tab. Full documentation and examples are in
+the user guide.
 """
 
 import copy
@@ -24,6 +27,7 @@ from feature_config import (
     derive_checkagainst_entries,
     get_checkagainst,
     get_pool_names,
+    merge_checkagainst_entries,
     save_checkagainst,
 )
 from gi.repository import Gtk
@@ -123,10 +127,11 @@ def create_checkagainst_page(app):
     desc.set_line_wrap(True)
     outer.pack_start(desc, False, False, 0)
 
-    # Derived sections
+    # Derived sections and merged preview
     app._ca_backup_store = Gtk.ListStore(str, str, str, str)
     app._ca_offsite_store = Gtk.ListStore(str, str, str, str)
     app._ca_store = Gtk.ListStore(str, str, str, str)
+    app._ca_merged_store = Gtk.ListStore(str, str, str, str)
 
     app._ca_backup_active_chk = Gtk.CheckButton(label="Active")
     app._ca_backup_active_chk.set_tooltip_text(
@@ -192,30 +197,24 @@ def create_checkagainst_page(app):
     app._ca_status_label.set_halign(Gtk.Align.START)
     outer.pack_start(app._ca_status_label, False, False, 0)
 
-    # Notes
-    notes = Gtk.Label()
-    notes.set_markup(
-        "<small><b>How the destination dataset is constructed:</b>\n"
-        "  Replace the <b>Source root</b> prefix of the snapshot's dataset with the "
-        "<b>Destination root</b>.\n\n"
-        "<b>Special value:</b>\n"
-        "  <b>&lt;offsite&gt;</b> may be used anywhere in the Source root or "
-        "Destination root column. Every occurrence is replaced with every pool "
-        "marked as an offsite candidate in the Pools tab.\n\n"
-        "<b>Examples:</b>\n"
-        "  Source root <b>poolA/data</b>, Destination root <b>poolB/poolA/data</b>: "
-        "poolA/data/vm-101 → <b>poolB/poolA/data/vm-101</b>\n"
-        "  Source root <b>poolB/poolA/data</b>, Destination root <b>poolA/data</b>: "
-        "poolB/poolA/data/vm-101 → <b>poolA/data/vm-101</b>\n"
-        "  Source root <b>poolA/data</b>, Destination root <b>&lt;offsite&gt;</b>: "
-        "poolA/data/vm-101 → <b>z22tb/poolA/data/vm-101</b>, "
-        "<b>z40tb/poolA/data/vm-101</b>, …\n"
-        "  Source root <b>&lt;offsite&gt;/temp</b>, Destination root <b>temp</b>: "
-        "z22tb/temp/vm-101 → <b>temp/vm-101</b></small>"
+    # Merged fss table preview (read-only)
+    merged_section, merged_tv = _build_section_box(
+        "Merged fss table", app._ca_merged_store,
+        None, "checkagainst_merged_view",
     )
-    notes.set_halign(Gtk.Align.START)
-    notes.set_line_wrap(True)
-    outer.pack_start(notes, False, False, 6)
+    outer.pack_start(merged_section, True, True, 0)
+    app._ui_state.bind_treeview(merged_tv, "checkagainst_merged_view")
+
+    merged_hint = Gtk.Label()
+    merged_hint.set_markup(
+        "<small>Effective runtime table after merging the active derived "
+        "sections and user entries. See the user guide for details on how "
+        "counterpart datasets are constructed and how the &lt;offsite&gt; "
+        "placeholder is expanded.</small>"
+    )
+    merged_hint.set_halign(Gtk.Align.START)
+    merged_hint.set_line_wrap(True)
+    outer.pack_start(merged_hint, False, False, 0)
 
     # Load initial data
     _load_fss_into_store(app)
@@ -270,7 +269,7 @@ def _build_readonly_treeview(store, state_key):
 
 
 def _build_section_box(title, store, checkbox, state_key):
-    """Assemble a labeled section with an Active checkbox and a TreeView."""
+    """Assemble a labeled section with an optional Active checkbox and a TreeView."""
     frame = Gtk.Frame(label=title)
     frame.set_label_align(0.0, 0.5)
 
@@ -280,9 +279,10 @@ def _build_section_box(title, store, checkbox, state_key):
     box.set_margin_top(6)
     box.set_margin_bottom(6)
 
-    header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-    header.pack_start(checkbox, False, False, 0)
-    box.pack_start(header, False, False, 0)
+    if checkbox is not None:
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        header.pack_start(checkbox, False, False, 0)
+        box.pack_start(header, False, False, 0)
 
     tv, sw = _build_readonly_treeview(store, state_key)
     box.pack_start(sw, True, True, 0)
@@ -300,8 +300,25 @@ def _load_store(store, entries):
         store.append(list(entry))
 
 
+def _refresh_merged_table(app):
+    """Update the read-only merged fss table preview from the current UI."""
+    data = _full_dict_from_ui(app)
+    merged = merge_checkagainst_entries({"checkagainst": data})
+    rows = [
+        (
+            e.get("label", ""),
+            e.get("source_root", ""),
+            e.get("dest_root", ""),
+            e.get("comment", ""),
+        )
+        for e in merged
+        if e.get("source_root") and e.get("dest_root") and e.get("label")
+    ]
+    _load_store(app._ca_merged_store, rows)
+
+
 def _load_fss_into_store(app):
-    """Load all three sections from config and snapshot the saved state."""
+    """Load all sections from config and snapshot the saved state."""
     data = get_checkagainst(app.config)
     app._ca_backup_active_chk.set_active(
         data.get("backup_derived_active", True))
@@ -372,6 +389,9 @@ def _update_ca_status(app):
         app._ca_status_label.set_markup("<span foreground='orange'>Unsaved changes.</span>")
     else:
         app._ca_status_label.set_text("")
+
+    # Refresh the merged preview after every change.
+    _refresh_merged_table(app)
 
     # Also update Save button styling
     check_checkagainst_dirty(app)
