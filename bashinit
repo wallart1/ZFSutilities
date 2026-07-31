@@ -59,6 +59,9 @@ function bashinit {
 #   ZFSUTILITIES_SYSTEM_LIB_DIR  (default: /usr/local/lib)
 # Prints the resolved path and returns 0 on success, otherwise logs a FATAL
 # message and returns 1.
+# Guarded so that test mocks can take precedence when scripts re-source
+# bashinit during a test run.
+if ! declare -f find_zfsutility_script >/dev/null 2>&1; then
 function find_zfsutility_script {
     local name="$1"
     local bin_dir="${ZFSUTILITIES_BIN_DIR:-/usr/local/lib/zfsutilities/bin}"
@@ -84,6 +87,7 @@ function find_zfsutility_script {
     log_msg "FATAL: Could not find sibling script: $name"
     return 1
 }
+fi
 
 # Logging function with automatic prefix.
 # Usage:
