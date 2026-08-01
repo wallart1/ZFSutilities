@@ -8,8 +8,6 @@ of command-line scripts. It is designed for system administrators who want
 the power of ZFS backups without memorizing every `zfs` and `zpool`
 option, and also for Proxmox VE users who need safe VM disk lifecycle management.
 
-**Current release: 0.71.0**
-
 ---
 
 ![ZFS Utilities GUI](<06 Docs/images/Screenshot from 2026-07-13 20-22-13.png>)
