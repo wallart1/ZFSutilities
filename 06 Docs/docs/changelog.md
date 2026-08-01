@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.72.0
+
+*Released 2026-08-01*
+
+### Added
+
+- **Datasets tab "Show Big Stuff" action** — Select exactly one pool in the
+  Datasets tab and click **Show Big Stuff** to run `zfsshowbigstuff` on that
+  pool. Output streams to the log panel.
+- **Rsync failure diagnosis** — When an rsync step fails during a GUI or
+  scheduled backup run, `BackupRunner` now appends a human-readable diagnosis
+  to the session log. Common cases such as SSH connection refused, permission
+  denied, no space left on destination, and vanished source files are detected
+  from the exit code and stderr output.
+
+### Changed
+
+- **Dashboard selection preservation** — The **Recent Operations** list now
+  preserves its current selection across automatic Dashboard refreshes when
+  the selected log file is still present. The **View Log** action also caches
+  the log path when the button becomes sensitive, so it opens the intended log
+  even if a background refresh clears or moves the selection before the click.
+
+### Tests
+
+- Added `TestShowBigStuff` to `tests/python/test_dataset_actions.py`.
+- Added Show Big Stuff button/handler coverage to
+  `tests/python/test_action_dispatch.py` and sensitivity tests to
+  `tests/python/test_datasets_page.py`.
+- Added `TestRsyncFailureDiagnosis` to `tests/python/test_backup_runner.py`.
+- Added Dashboard selection-preservation and cached View Log tests to
+  `tests/python/test_dashboard_page.py`.
+
+### Documentation
+
+- Updated `user-guide/gtk-gui.md` to describe the new **Show Big Stuff** button,
+  the cached **View Log** behavior, and the rsync failure-diagnosis messages.
+- Updated `commands-and-modules/commands.md` to note that `zfsshowbigstuff` is
+  reachable from the GUI Datasets tab.
+
 ## 0.71.0
 
 *Released 2026-07-31*

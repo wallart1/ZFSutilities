@@ -974,5 +974,91 @@ class TestRunnerRobustness(unittest.TestCase):
         self.assertEqual(runner.current_step, 1)
 
 
+class TestRsyncFailureDiagnosis(unittest.TestCase):
+    """_diagnose_rsync_failure explains common rsync failure modes."""
+
+    def test_success_returns_empty(self):
+        self.assertEqual(br._diagnose_rsync_failure(0, []), "")
+
+    def test_partial_transfer(self):
+        diagnosis = br._diagnose_rsync_failure(23, [
+            "rsync: send_files failed to open \"foo\": Permission denied (13)",
+        ])
+        self.assertIn("Partial transfer due to error", diagnosis)
+
+    def test_vanished_source_files(self):
+        diagnosis = br._diagnose_rsync_failure(24, [
+            "file has vanished: \"/src/foo\"",
+        ])
+        self.assertIn("vanished", diagnosis.lower())
+
+    def test_connection_refused(self):
+        diagnosis = br._diagnose_rsync_failure(255, [
+            "ssh: connect to host tweety port 22: Connection refused",
+        ])
+        self.assertIn("connection refused", diagnosis.lower())
+
+    def test_no_route_to_host(self):
+        diagnosis = br._diagnose_rsync_failure(255, [
+            "ssh: connect to host tweety port 22: No route to host",
+        ])
+        self.assertIn("reachable", diagnosis.lower())
+
+    def test_permission_denied(self):
+        diagnosis = br._diagnose_rsync_failure(255, [
+            "root@tweety: Permission denied (publickey).",
+        ])
+        self.assertIn("permission denied", diagnosis.lower())
+
+    def test_timeout(self):
+        diagnosis = br._diagnose_rsync_failure(30, [
+            "rsync error: timeout in data send/receive (code 30)",
+        ])
+        self.assertIn("timeout", diagnosis.lower())
+
+    def test_no_space_left(self):
+        diagnosis = br._diagnose_rsync_failure(11, [
+            "rsync: write failed on \"/dst/foo\": No space left on device (28)",
+        ])
+        self.assertIn("no space left", diagnosis.lower())
+
+    def test_unknown_exit_code(self):
+        diagnosis = br._diagnose_rsync_failure(99, ["rsync: unexplained failure"])
+        self.assertIn("exit code 99", diagnosis)
+        self.assertIn("unknown error", diagnosis)
+
+    def test_check_process_logs_rsync_diagnosis(self):
+        """A failed rsync step writes the diagnosis into the session log."""
+        runner = br.BackupRunner(MagicMock(), MagicMock())
+        runner.label = "Backup"
+        runner.running = True
+        runner.current_step = 0
+        runner._session_start_time = time.time()
+        runner.steps = [
+            BashStep([], "rsync pull", is_rsync=True, fatal=False)
+        ]
+        runner._current_rsync_stderr = [
+            "ssh: connect to host tweety port 22: Connection refused",
+        ]
+        runner._on_complete = MagicMock()
+        fake_process = MagicMock()
+        fake_process.poll.return_value = 255
+        fake_process.stdout.fileno.return_value = 3
+        fake_process.stdout.closed = True
+        fake_process.stderr.fileno.return_value = 4
+        fake_process.stderr.closed = True
+        runner.process = fake_process
+
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+            log_path = runner._session_log_file
+            runner._check_process()
+            with open(log_path) as fh:
+                content = fh.read()
+
+        self.assertIn("connection refused", content.lower())
+        self.assertIn("failed:", content.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

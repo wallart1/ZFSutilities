@@ -18,6 +18,109 @@ import zfs_lock_manager as zlm
 _MISSING_RUNNER = object()
 
 
+def _make_show_big_stuff_app(runner=_MISSING_RUNNER, parent_dir="/repo"):
+    """Return a minimal app mock for testing Show Big Stuff."""
+    app = MagicMock()
+    app.parent_dir = parent_dir
+    if runner is _MISSING_RUNNER:
+        app.dataset_runner = MagicMock()
+        app.dataset_runner.running = False
+    else:
+        app.dataset_runner = runner
+    return app
+
+
+class TestShowBigStuff(unittest.TestCase):
+    """on_datasets_show_big_stuff delegates to app.dataset_runner via BashStep."""
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+            return da
+
+    def test_warns_when_not_exactly_one_pool(self):
+        da = self._import_under_mock()
+        app = _make_show_big_stuff_app()
+        app.datasets_view = MagicMock()
+
+        with patch.object(da, "get_tree_selection_items", return_value=[]), \
+             patch.object(da, "log_msg") as mock_log:
+            da.on_datasets_show_big_stuff(app)
+
+        mock_log.assert_called_once_with(
+            "WARN: Select exactly one pool to show big stuff"
+        )
+        app.dataset_runner.set_steps.assert_not_called()
+
+    def test_builds_bash_step_for_selected_pool(self):
+        da = self._import_under_mock()
+        app = _make_show_big_stuff_app(parent_dir="/repo")
+        app.datasets_view = MagicMock()
+
+        with patch.object(
+            da, "get_tree_selection_items",
+            return_value=[{"type": "pool", "name": "tank"}]
+        ):
+            da.on_datasets_show_big_stuff(app)
+
+        app.dataset_runner.set_steps.assert_called_once()
+        steps = app.dataset_runner.set_steps.call_args[0][0]
+        self.assertEqual(len(steps), 1)
+        step = steps[0]
+        self.assertIsInstance(step, BashStep)
+        self.assertEqual(step.description, "Show big stuff for tank")
+        self.assertFalse(step.is_rsync)
+        self.assertFalse(step.fatal)
+        self.assertEqual(step.command[0], "bash")
+        self.assertEqual(step.command[1], "-c")
+        self.assertIn('"$mydir/zfsshowbigstuff"', step.command[2])
+        self.assertIn("tank", step.command[2])
+        self.assertIn('mydir="/repo"', step.command[2])
+
+    def test_starts_runner(self):
+        da = self._import_under_mock()
+        app = _make_show_big_stuff_app()
+        app.datasets_view = MagicMock()
+
+        with patch.object(
+            da, "get_tree_selection_items",
+            return_value=[{"type": "pool", "name": "tank"}]
+        ):
+            da.on_datasets_show_big_stuff(app)
+
+        app.dataset_runner.start.assert_called_once()
+
+    def test_warns_when_runner_missing(self):
+        da = self._import_under_mock()
+        app = _make_show_big_stuff_app(runner=None)
+        app.datasets_view = MagicMock()
+
+        with patch.object(
+            da, "get_tree_selection_items",
+            return_value=[{"type": "pool", "name": "tank"}]
+        ), patch.object(da, "log_msg") as mock_log:
+            da.on_datasets_show_big_stuff(app)
+
+        mock_log.assert_called_once_with("WARN: Dataset runner not available")
+
+    def test_warns_when_runner_busy(self):
+        da = self._import_under_mock()
+        runner = MagicMock()
+        runner.running = True
+        app = _make_show_big_stuff_app(runner=runner)
+        app.datasets_view = MagicMock()
+
+        with patch.object(
+            da, "get_tree_selection_items",
+            return_value=[{"type": "pool", "name": "tank"}]
+        ), patch.object(da, "log_msg") as mock_log:
+            da.on_datasets_show_big_stuff(app)
+
+        mock_log.assert_called_once_with("WARN: A dataset action is already running")
+        runner.set_steps.assert_not_called()
+        runner.start.assert_not_called()
+
+
 def _make_app(runner=_MISSING_RUNNER, parent_dir="/repo"):
     """Return a minimal app mock with a dataset runner and repository."""
     app = MagicMock()

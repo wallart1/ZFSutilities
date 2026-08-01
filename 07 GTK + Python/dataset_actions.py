@@ -4,22 +4,26 @@ Dataset action handlers — snapshot, delete, hold, rollback, browse, etc.
 Called exclusively through the action dispatch table in action_dispatch.py.
 """
 
+import shlex
 import subprocess
 from datetime import datetime
 
 import gi
+
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib
-
-from backup_config import log_msg
-from gui_helpers import (
-    create_dialog, add_scrolled_text_view, get_tree_selection_items,
-    get_snapshot_mountpoint, get_busy_processes, diagnose_dataset_busy,
-)
-from datasets_page import refresh_datasets_page, update_ds_button_sensitivity
-from command_builders import BashStep
 import zfs_lock_manager as zlm
-
+from backup_config import log_msg
+from command_builders import BashStep
+from datasets_page import refresh_datasets_page, update_ds_button_sensitivity
+from gi.repository import GLib, Gtk
+from gui_helpers import (
+    add_scrolled_text_view,
+    create_dialog,
+    diagnose_dataset_busy,
+    get_busy_processes,
+    get_snapshot_mountpoint,
+    get_tree_selection_items,
+)
 
 # ---------------------------------------------------------------------------
 # Local helpers
@@ -226,7 +230,7 @@ def _delete_datasets(app, datasets):
     if response != Gtk.ResponseType.OK:
         return
 
-    runner = getattr(app, 'dataset_runner', None)
+    runner = getattr(app, "dataset_runner", None)
     if runner is None:
         log_msg("WARN: Dataset runner not available")
         return
@@ -377,6 +381,41 @@ def on_datasets_rollback(app):
     except RuntimeError as exc:
         log_msg(f"WARN: cannot rollback {dataset}: {exc}")
     refresh_datasets_page(app)
+
+
+def on_datasets_show_big_stuff(app):
+    """Run zfsshowbigstuff on the selected pool and log the output."""
+    items = get_tree_selection_items(app.datasets_view)
+    pool_items = [i for i in items if i["type"] == "pool"]
+    if len(pool_items) != 1:
+        log_msg("WARN: Select exactly one pool to show big stuff")
+        return
+
+    pool = pool_items[0]["name"]
+
+    runner = getattr(app, 'dataset_runner', None)
+    if runner is None:
+        log_msg("WARN: Dataset runner not available")
+        return
+    if runner.running:
+        log_msg("WARN: A dataset action is already running")
+        return
+
+    parent_dir = app.parent_dir
+    pool_quoted = shlex.quote(pool)
+    bash_cmd = (
+        f'source ~/bashinit; bashinit; '
+        f'mydir="{parent_dir}"; '
+        f'"$mydir/zfsshowbigstuff" {pool_quoted}'
+    )
+    step = BashStep(
+        ["bash", "-c", bash_cmd],
+        f"Show big stuff for {pool}",
+        is_rsync=False,
+        fatal=False,
+    )
+    runner.set_steps([step])
+    runner.start()
 
 
 def on_datasets_show_files(app):

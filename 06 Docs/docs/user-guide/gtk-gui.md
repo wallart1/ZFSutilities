@@ -534,7 +534,7 @@ remote host cannot be reached, its version is shown as *unknown*.
 | **Refresh**               | Re-gather all dashboard data immediately                                                        |
 | **Fix Locks**             | Removes stale locks and refreshes the view                                                      |
 | **Cancel Selected Tasks** | Cancels the selected rows in the **Running Tasks** list                                         |
-| **View Log**              | Switches to the Logs tab and selects the session log for the selected **Recent Operations** row |
+| **View Log**              | Switches to the Logs tab and selects the session log for the selected **Running Tasks** or **Recent Operations** row. The log path is cached when the button becomes sensitive, so the action still opens the intended log even if a background refresh changes the selection before you click. |
 
 ---
 
@@ -564,7 +564,10 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
   
   A pull-step failure is **non-fatal**: it is logged as a warning, the backup
   continues with the remaining steps, and the job returns the failing pull's
-  return code at the end.
+  return code at the end. When an rsync step fails, a short human-readable
+  diagnosis (for example, "SSH connection refused" or "No space left on
+  destination") is appended to the session log after the exit code to make
+  common network, permission, and disk-space failures easier to identify.
 
 - **Snapshot** — Enter a snapshot name (or click **Generate** to build one
   from the current time). The `@` prefix is added automatically if omitted. This name will be used for every snapshot that is created during the job run.
@@ -1380,6 +1383,7 @@ based on what is selected.
 | **Refresh**          | Always                                           | Re-reads all pools, datasets, snapshots, and holds while preserving the tree's vertical scroll position and current selection whenever possible                                                                  |
 | **Expand Selected**  | One or more pool/dataset/snapshot rows selected  | Recursively expands each selected row and its lazy-loaded descendants. Placeholder rows and hold tags are skipped.                                                                                               |
 | **Collapse All**     | Always                                           | Collapses the entire tree                                                                                                                                                                                        |
+| **Show Big Stuff**   | Exactly one pool selected                        | Runs [`zfsshowbigstuff`](../commands-and-modules/commands.md#zfsshowbigstuff) on the selected pool and streams the output to the log panel. Useful for quickly finding the largest datasets in a pool.          |
 
 Right-click any cell for a context menu:
 

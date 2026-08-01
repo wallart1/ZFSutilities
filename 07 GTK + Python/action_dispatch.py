@@ -37,6 +37,7 @@ from dataset_actions import (
     on_datasets_delete,
     on_datasets_hold,
     on_datasets_rollback,
+    on_datasets_show_big_stuff,
     on_datasets_show_files,
     on_datasets_snapshot,
     on_datasets_unmount_snapshot,
@@ -179,7 +180,7 @@ PAGE_SPECS = {
             ("Save", "document-save", "_pools_save_button"),
             ("Revert", "document-revert", None),
             ("Refresh", "view-refresh", None),
-            (None, None, None),                       # spacer
+            (None, None, None),  # spacer
             ("Start Scrub", "media-playback-start", None),
             ("Pause Scrub", "media-playback-pause", None),
             ("Resume Scrub", "media-seek-forward", None),
@@ -201,6 +202,8 @@ PAGE_SPECS = {
             ("Refresh", "view-refresh", None),
             ("Expand Selected", "zoom-in", "_ds_expand_selected_btn"),
             ("Collapse All", "list-remove", None),
+            (None, None, None),                       # spacer
+            ("Show Big Stuff", "zoom-fit-best", "_ds_showbigstuff_btn"),
         ],
         "post_setup": update_ds_button_sensitivity,
     },
@@ -416,6 +419,7 @@ ACTION_HANDLERS = {
         "Refresh": _handler_datasets_refresh,
         "Expand Selected": expand_selected_datasets,
         "Collapse All": lambda app: app.datasets_view.collapse_all(),
+        "Show Big Stuff": on_datasets_show_big_stuff,
     },
     "checkagainst": {
         "Add Row": on_checkagainst_add,

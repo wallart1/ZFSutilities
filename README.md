@@ -8,6 +8,8 @@ of command-line scripts. It is designed for system administrators who want
 the power of ZFS backups without memorizing every `zfs` and `zpool`
 option, and also for Proxmox VE users who need safe VM disk lifecycle management.
 
+**Current release: 0.71.0**
+
 ---
 
 ![ZFS Utilities GUI](<06 Docs/images/Screenshot from 2026-07-13 20-22-13.png>)
@@ -28,7 +30,8 @@ guided GUI:
 - **Pool health and scrubbing** — Monitor pool status, start/pause/resume
   scrubs, and manage a scrub queue from the GUI.
 - **VM disk lifecycle** *(Proxmox VE / two-node)* — Create, resize, move,
-  clone, promote, retire, and remove VM disks backed by iSCSI zvols.
+  attach, detach, clone, promote, archive, unarchive, and remove VM disks
+  backed by iSCSI zvols, plus repair missing iSCSI LUN exports.
 - **Schedule** — Jobs can be scheduled to run in the background even when you
   are not logged in or when the GUI is not running.
 
@@ -49,6 +52,9 @@ so concurrent jobs do not collide on the same datasets.
 - **Versioned deployment** — Multiple installed versions coexist under
   `/usr/local/lib/zfsutilities/versions/`; switch or roll back instantly with
   `switch-version`.
+- **Clean uninstall** — `uninstall-zfsutilities` removes deployed software and
+  production wiring interactively, with optional `--purge` and `--all-nodes`
+  modes.
 - **Single-node and two-node** — Run everything on one host, or split compute
   and storage across two hosts connected by iSCSI.
 - **Session logging** — Every run creates a timestamped log file; the Logs tab
@@ -147,6 +153,8 @@ directions between the storage host and the compute host.
    sudo zfsdailybackup
    sudo zfssendoffsite
    sudo zfsrestore
+   sudo zfscleanup
+   sudo zfsmassdelsnaps
    ```
 
 ## Versioned Upgrades

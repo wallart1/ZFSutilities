@@ -1510,13 +1510,25 @@ def _refresh_pool_section(app, pools, scrub_states=None, stale=False):
 
 
 def _refresh_ops_section(app, recent):
-    """Clear and repopulate the Recent Operations list."""
+    """Clear and repopulate the Recent Operations list.
+
+    Preserves the current selection when the selected log file is still
+    present after refresh so that a background update does not drop the
+    row the user is about to act on.
+    """
+    selection = app.dashboard_ops_view.get_selection()
+    model, selected_iter = selection.get_selected()
+    selected_log_file = (
+        model.get_value(selected_iter, 4) if selected_iter is not None else None
+    )
+
     app.dashboard_ops_store.clear()
 
     if not recent:
         app.dashboard_ops_store.append(["No operations yet.", "", "", "", ""])
         return
 
+    new_iter_to_select = None
     for entry in recent:
         ts = _format_history_timestamp(entry.get("timestamp", "?"))
         etype = entry.get("type", "?")
@@ -1524,7 +1536,14 @@ def _refresh_ops_section(app, recent):
         result = entry.get("result", "unknown")
         outcome = f"{_result_icon(result)} {result}"
         log_file = entry.get("log_file", "")
-        app.dashboard_ops_store.append([ts, etype, name, outcome, log_file])
+        tree_iter = app.dashboard_ops_store.append(
+            [ts, etype, name, outcome, log_file]
+        )
+        if selected_log_file and log_file == selected_log_file:
+            new_iter_to_select = tree_iter
+
+    if new_iter_to_select is not None:
+        selection.select_iter(new_iter_to_select)
 
 
 def _format_iscsi_missing_message(lun):
@@ -1870,25 +1889,32 @@ def _update_view_log_button(app, enabled):
 
 
 def _update_view_log_button_state(app):
-    """Enable View Log if a task or recent operation with a log is selected."""
-    enabled = False
+    """Enable View Log if a task or recent operation with a log is selected.
 
-    # Running Tasks view supports multiple selection; enable if any selected
-    # row has a non-empty log_file (column 4).
+    Caches the log path that View Log would open so the handler can use it
+    even if the dashboard store is cleared between the button-enable and the
+    click (e.g., by a background refresh).
+    """
+    log_path = None
+
+    # Prefer a Running Tasks row that has a log_file (column 4).
     tasks_selection = app.dashboard_tasks_view.get_selection()
     model, pathlist = tasks_selection.get_selected_rows()
     for path in pathlist:
         tree_iter = model.get_iter(path)
-        log_file = model.get_value(tree_iter, 4)
-        if log_file:
-            enabled = True
+        candidate = model.get_value(tree_iter, 4)
+        if candidate:
+            log_path = candidate
             break
 
-    if not enabled:
+    if log_path is None:
         ops_selection = app.dashboard_ops_view.get_selection()
         model, tree_iter = ops_selection.get_selected()
-        enabled = tree_iter is not None
+        if tree_iter is not None:
+            log_path = model.get_value(tree_iter, 4)
 
+    enabled = bool(log_path)
+    app._dashboard_view_log_path = log_path if enabled else None
     _update_view_log_button(app, enabled)
 
 
@@ -1900,20 +1926,23 @@ def _on_dashboard_ops_selection_changed(selection, app):
 def on_dashboard_view_log(app):
     """Switch to the Logs tab and select the log for the selected task/op.
 
-    Prefers a selected Running Tasks row that has a log_file; falls back to
-    the selected Recent Operations row.
+    Uses the path cached by _update_view_log_button_state so the action
+    succeeds even if the dashboard selection was cleared after the button
+    became sensitive. Falls back to reading the current selection if no
+    cache is available.
     """
-    log_path = None
+    log_path = getattr(app, "_dashboard_view_log_path", None)
 
-    # Prefer Running Tasks selection (supports multiple rows).
-    tasks_selection = app.dashboard_tasks_view.get_selection()
-    model, pathlist = tasks_selection.get_selected_rows()
-    for path in pathlist:
-        tree_iter = model.get_iter(path)
-        candidate = model.get_value(tree_iter, 4)
-        if candidate:
-            log_path = candidate
-            break
+    if not log_path:
+        # No cached path; fall back to current selection.
+        tasks_selection = app.dashboard_tasks_view.get_selection()
+        model, pathlist = tasks_selection.get_selected_rows()
+        for path in pathlist:
+            tree_iter = model.get_iter(path)
+            candidate = model.get_value(tree_iter, 4)
+            if candidate:
+                log_path = candidate
+                break
 
     if not log_path:
         selection = app.dashboard_ops_view.get_selection()

@@ -228,6 +228,13 @@ class TestDatasetsPageSpec(unittest.TestCase):
         buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
         self.assertIn(("Collapse All", "list-remove", None), buttons)
 
+    def test_show_big_stuff_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
+        self.assertIn(
+            ("Show Big Stuff", "zoom-fit-best", "_ds_showbigstuff_btn"),
+            buttons,
+        )
+
 
 class TestSchedulePageSpec(unittest.TestCase):
     """Schedule page exposes Run Now alongside Save/Revert/Delete."""
@@ -255,6 +262,10 @@ class TestDatasetsHandlers(unittest.TestCase):
     def test_collapse_all_handler(self):
         handler = action_dispatch.ACTION_HANDLERS["datasets"]["Collapse All"]
         self.assertTrue(callable(handler))
+
+    def test_show_big_stuff_handler(self):
+        handler = action_dispatch.ACTION_HANDLERS["datasets"]["Show Big Stuff"]
+        self.assertIs(handler, action_dispatch.on_datasets_show_big_stuff)
 
 
 class TestRetentionPageSpec(unittest.TestCase):

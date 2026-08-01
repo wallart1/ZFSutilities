@@ -1549,12 +1549,17 @@ class TestUpdateFixLocksButton(unittest.TestCase):
 class TestViewLogButton(unittest.TestCase):
     """Dashboard View Log button tracks running tasks and recent operations."""
 
-    def _make_app(self, ops_iter=None, task_paths=None, task_log_files=None):
+    def _make_app(
+        self, ops_iter=None, ops_log_file=None,
+        task_paths=None, task_log_files=None,
+    ):
         app = MagicMock()
         app._view_log_button = MagicMock()
 
+        ops_model = MagicMock()
+        ops_model.get_value.return_value = ops_log_file or ""
         ops_selection = MagicMock()
-        ops_selection.get_selected.return_value = (MagicMock(), ops_iter)
+        ops_selection.get_selected.return_value = (ops_model, ops_iter)
         app.dashboard_ops_view.get_selection.return_value = ops_selection
 
         tasks_selection = MagicMock()
@@ -1583,9 +1588,12 @@ class TestViewLogButton(unittest.TestCase):
         app._view_log_button.set_sensitive.assert_called_with(False)
 
     def test_enables_when_operation_selected(self):
-        app, _selection = self._make_app(ops_iter=MagicMock())
+        app, _selection = self._make_app(
+            ops_iter=MagicMock(), ops_log_file="/var/log/ops.log"
+        )
         dp.setup_dashboard_actions(app)
         app._view_log_button.set_sensitive.assert_called_with(True)
+        self.assertEqual(app._dashboard_view_log_path, "/var/log/ops.log")
 
     def test_enables_when_running_task_with_log_selected(self):
         path = MagicMock()
@@ -1608,10 +1616,32 @@ class TestViewLogButton(unittest.TestCase):
         dp.setup_dashboard_actions(app)
         app._view_log_button.reset_mock()
 
-        ops_selection.get_selected.return_value = (MagicMock(), MagicMock())
+        ops_model = MagicMock()
+        ops_model.get_value.return_value = "/var/log/ops.log"
+        ops_selection.get_selected.return_value = (ops_model, MagicMock())
         callback = ops_selection.connect.call_args_list[0][0][1]
         callback(ops_selection, app)
         app._view_log_button.set_sensitive.assert_called_once_with(True)
+        self.assertEqual(app._dashboard_view_log_path, "/var/log/ops.log")
+
+    def test_disabled_when_operation_selected_without_log(self):
+        app, _selection = self._make_app(
+            ops_iter=MagicMock(), ops_log_file=""
+        )
+        dp.setup_dashboard_actions(app)
+        app._view_log_button.set_sensitive.assert_called_with(False)
+        self.assertIsNone(app._dashboard_view_log_path)
+
+    def test_uses_cached_path_when_selection_lost(self):
+        app, _selection = self._make_app()
+        app._dashboard_view_log_path = "/var/log/cached.log"
+        app.dashboard_ops_view.get_selection.return_value.get_selected.return_value = (
+            MagicMock(), None,
+        )
+        with patch("dashboard_page.select_log_by_path", return_value=True) as mock_select:
+            dp.on_dashboard_view_log(app)
+        app.stack.set_visible_child_name.assert_called_once_with("logs")
+        mock_select.assert_called_once_with(app, "/var/log/cached.log")
 
     def test_no_button_attr_does_not_crash(self):
         app, _selection = self._make_app()
@@ -1623,6 +1653,8 @@ class TestOnDashboardViewLog(unittest.TestCase):
 
     def _make_app(self, ops_log_path, task_log_path=None):
         app = MagicMock()
+        # Ensure the handler falls back to reading the current selection.
+        app._dashboard_view_log_path = None
 
         # Recent Operations selection
         ops_model = MagicMock()
@@ -1707,6 +1739,9 @@ class TestRefreshOpsSection(unittest.TestCase):
             app = MagicMock()
             store = MagicMock()
             app.dashboard_ops_store = store
+            selection = MagicMock()
+            selection.get_selected.return_value = (MagicMock(), None)
+            app.dashboard_ops_view.get_selection.return_value = selection
             recent = [{
                 "timestamp": "2026-05-28T14:32:00",
                 "type": "backup",
@@ -1718,6 +1753,70 @@ class TestRefreshOpsSection(unittest.TestCase):
         store.append.assert_called_once()
         appended = store.append.call_args[0][0]
         self.assertEqual(appended[4], "/var/log/zfsutilities/sessions/daily.log")
+
+    def test_preserves_selection_when_log_file_still_present(self):
+        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
+            app = MagicMock()
+            store = MagicMock()
+            app.dashboard_ops_store = store
+
+            selected_iter = MagicMock()
+            selection = MagicMock()
+            selection.get_selected.return_value = (store, selected_iter)
+            app.dashboard_ops_view.get_selection.return_value = selection
+            store.get_value.return_value = "/var/log/zfsutilities/sessions/keep.log"
+
+            first_iter = MagicMock()
+            second_iter = MagicMock()
+            store.append.side_effect = [first_iter, second_iter]
+
+            recent = [
+                {
+                    "timestamp": "2026-05-28T14:30:00",
+                    "type": "backup",
+                    "name": "Other",
+                    "result": "success",
+                    "log_file": "/var/log/zfsutilities/sessions/other.log",
+                },
+                {
+                    "timestamp": "2026-05-28T14:32:00",
+                    "type": "backup",
+                    "name": "Daily",
+                    "result": "success",
+                    "log_file": "/var/log/zfsutilities/sessions/keep.log",
+                },
+            ]
+            dp._refresh_ops_section(app, recent)
+
+        store.clear.assert_called_once()
+        self.assertEqual(store.append.call_count, 2)
+        selection.select_iter.assert_called_once_with(second_iter)
+
+    def test_clears_selection_when_log_file_no_longer_present(self):
+        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
+            app = MagicMock()
+            store = MagicMock()
+            app.dashboard_ops_store = store
+
+            selected_iter = MagicMock()
+            selection = MagicMock()
+            selection.get_selected.return_value = (store, selected_iter)
+            app.dashboard_ops_view.get_selection.return_value = selection
+            store.get_value.return_value = "/var/log/zfsutilities/sessions/gone.log"
+
+            store.append.return_value = MagicMock()
+
+            recent = [{
+                "timestamp": "2026-05-28T14:32:00",
+                "type": "backup",
+                "name": "Daily",
+                "result": "success",
+                "log_file": "/var/log/zfsutilities/sessions/daily.log",
+            }]
+            dp._refresh_ops_section(app, recent)
+
+        store.clear.assert_called_once()
+        selection.select_iter.assert_not_called()
 
 
 class TestRefreshProcessesSection(unittest.TestCase):

@@ -383,6 +383,8 @@ def update_ds_button_sensitivity(app):
         i["type"] in ("pool", "dataset", "snapshot") for i in items
     )
 
+    can_show_big_stuff = len(items) == 1 and types == {"pool"}
+
     for attr, sensitive in [
         ('_ds_snapshot_btn', can_snapshot),
         ('_ds_delete_btn', can_delete),
@@ -392,6 +394,7 @@ def update_ds_button_sensitivity(app):
         ('_ds_browsesnap_btn', can_browse_snapshot),
         ('_ds_unmountsnap_btn', can_unmount_snapshot),
         ('_ds_expand_selected_btn', can_expand_selected),
+        ('_ds_showbigstuff_btn', can_show_big_stuff),
     ]:
         btn = getattr(app, attr, None)
         if btn:

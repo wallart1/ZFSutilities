@@ -2350,7 +2350,8 @@ inside the script before running.
 ### `zfsshowbigstuff`
 
 Shows the largest (or smallest) datasets within a pool or dataset, sorted by
-multiple metrics.
+multiple metrics. Also accessible from the GUI **Datasets** tab via the
+**Show Big Stuff** action button.
 
 ```bash
 zfsshowbigstuff <pool-or-dataset> [largest|smallest] [count]

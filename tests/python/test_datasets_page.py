@@ -254,6 +254,25 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         app = self._make_app([{"type": "hold", "tag": "x"}])
         app._ds_expand_selected_btn.set_sensitive.assert_called_once_with(False)
 
+    def test_show_big_stuff_enabled_for_single_pool(self):
+        app = self._make_app([{"type": "pool", "name": "tank"}])
+        app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_show_big_stuff_disabled_for_dataset(self):
+        app = self._make_app([{"type": "dataset", "name": "tank/a"}])
+        app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_show_big_stuff_disabled_for_multiple_selections(self):
+        app = self._make_app([
+            {"type": "pool", "name": "tank"},
+            {"type": "pool", "name": "backup"},
+        ])
+        app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_show_big_stuff_disabled_when_empty(self):
+        app = self._make_app([])
+        app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(False)
+
 
 class TestExpandSelectedDatasets(unittest.TestCase):
     """expand_selected_datasets recursively expands selected tree rows."""
