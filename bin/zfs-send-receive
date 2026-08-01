@@ -19,12 +19,8 @@ function send-receive {
     source $mydir/zfsdelallsnaps
     source $mydir/zfsdelallholds
     source $mydir/zfsholds
-    local iscsi_lib=""
-    for cand in "$mydir/08 Two-node/iscsi-lib.sh" \
-                "$mydir/../lib/iscsi-lib.sh" \
-                "/usr/local/lib/iscsi-lib.sh"; do
-        [[ -f "$cand" ]] && { iscsi_lib="$cand"; break; }
-    done
+    local iscsi_lib
+    iscsi_lib=$(find_zfsutility_script iscsi-lib.sh)
     if [[ -z "$iscsi_lib" ]]; then
         log_msg "FATAL: Could not locate iscsi-lib.sh"
         source "$mydir/bashfatal"

@@ -112,8 +112,9 @@ library explicitly while production deployments fall back to
 
 `bashinit` provides `find_zfsutility_script` for locating sibling scripts
 and libraries across the repo or deployed `bin/` directory (e.g.
-`find_zfsutility_script promote-vm-clone`).  `node-lib.sh` provides
-mode-aware configuration, pool helpers (`pool_to_target`, `pool_list`,
+`find_zfsutility_script promote-vm-clone`).  `node-lib.sh` consumes this
+helper rather than defining its own copy; it provides mode-aware
+configuration, pool helpers (`pool_to_target`, `pool_list`,
 `is_known_pool`), remote resolution (`remote_zfsutility_script`), and
 clone/archive helpers (`gen_mac`, `get_json_archive_path`).
 Remote `bash -s` heredocs use
@@ -124,9 +125,7 @@ running on the remote side locates its own installed copy.
 `zfsdelfs` and `zfs-send-receive`. It declares the `ISCSI_TEARDOWN`
 associative array, sources `node-lib.sh` for remote resolution, and provides
 `iscsi_teardown_zvol` and `iscsi_rebuild_torn_down`. Both callers locate it
-with direct path checks (`$mydir/08 Two-node/iscsi-lib.sh`,
-`$mydir/../lib/iscsi-lib.sh`, `/usr/local/lib/iscsi-lib.sh`) rather than
-relying on transitive sourcing.
+via `find_zfsutility_script iscsi-lib.sh`.
 
 ### Core Components
 

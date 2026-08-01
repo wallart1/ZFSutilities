@@ -125,56 +125,6 @@ is_known_pool() {
     [[ -n "${POOL_TARGET[$1]:-}" ]]
 }
 
-# find_zfsutility_script <name>
-# Locate a sibling script when running from the repo or from a deployed bin/
-# directory.  Candidate directories are checked in the order listed below;
-# the first existing regular file wins.
-#   1. $mydir/<name>
-#   2. $mydir/../<name>                      (repo subdir -> root)
-#   3. $mydir/08 Two-node/<name>             (repo root -> two-node)
-#   4. $mydir/../08 Two-node/<name>          (repo clone-support -> two-node)
-#   5. $mydir/09 ZFS clone support/<name>    (repo root -> clone-support)
-#   6. $mydir/../09 ZFS clone support/<name> (repo two-node -> clone-support)
-#   7. $mydir/../lib/<name>                  (deployed bin/ -> lib/)
-#   8. /usr/local/lib/zfsutilities/bin/<name>  (active PATH bin/)
-#   9. /usr/local/lib/zfsutilities/current/bin/<name> (current version bin/)
-#  10. /usr/local/lib/<name>                   (system-wide library symlink)
-#
-# The absolute deployment directories can be overridden via environment
-# variables for testing or non-standard layouts:
-#   ZFSUTILITIES_BIN_DIR         (default: /usr/local/lib/zfsutilities/bin)
-#   ZFSUTILITIES_CURRENT_BIN_DIR (default: /usr/local/lib/zfsutilities/current/bin)
-#   ZFSUTILITIES_SYSTEM_LIB_DIR  (default: /usr/local/lib)
-# Prints the resolved path and returns 0 on success, otherwise logs a FATAL
-# message and returns 1.
-if [[ $(type -t find_zfsutility_script 2>/dev/null) != "function" ]]; then
-    find_zfsutility_script() {
-        local name="$1"
-        local bin_dir="${ZFSUTILITIES_BIN_DIR:-/usr/local/lib/zfsutilities/bin}"
-        local current_bin_dir="${ZFSUTILITIES_CURRENT_BIN_DIR:-/usr/local/lib/zfsutilities/current/bin}"
-        local system_lib_dir="${ZFSUTILITIES_SYSTEM_LIB_DIR:-/usr/local/lib}"
-        local candidate
-        for candidate in \
-            "$mydir/$name" \
-            "$mydir/../$name" \
-            "$mydir/08 Two-node/$name" \
-            "$mydir/../08 Two-node/$name" \
-            "$mydir/09 ZFS clone support/$name" \
-            "$mydir/../09 ZFS clone support/$name" \
-            "$mydir/../lib/$name" \
-            "$bin_dir/$name" \
-            "$current_bin_dir/$name" \
-            "$system_lib_dir/$name"; do
-            if [[ -f "$candidate" ]]; then
-                realpath "$candidate"
-                return 0
-            fi
-        done
-        log_msg "FATAL: Could not find sibling script: $name"
-        return 1
-    }
-fi
-
 # remote_zfsutilities_bin <host>
 # SSH to root@host and resolve the active version's bin/ directory via the
 # /usr/local/lib/zfsutilities/current symlink.  Prints the resolved path and

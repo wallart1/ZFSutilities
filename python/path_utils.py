@@ -35,8 +35,15 @@ def get_script_dir(depth=1):
     return os.path.dirname(os.path.realpath(frame.filename))
 
 
-def _candidate_dirs(script_dir=None):
-    """Return the ordered list of directories to search for sibling scripts."""
+# Relative path from a repo/deployment root to the built docs index.
+_DOCS_INDEX = os.path.join("06 Docs", "site", "index.html")
+
+# Relative path from a repo/deployment root to the Python source directory.
+_PYTHON_DIR = "07 GTK + Python"
+
+
+def _repo_candidate_dirs(script_dir=None):
+    """Return the ordered list of repo-layout directories to search."""
     if script_dir is None:
         script_dir = get_script_dir(depth=2)
     return [
@@ -47,6 +54,11 @@ def _candidate_dirs(script_dir=None):
         os.path.join(script_dir, "09 ZFS clone support"),
         os.path.join(script_dir, "..", "09 ZFS clone support"),
     ]
+
+
+def _candidate_dirs(script_dir=None):
+    """Return the ordered list of directories to search for sibling scripts."""
+    return _repo_candidate_dirs(script_dir)
 
 
 def find_script(name, script_dir=None):
@@ -117,8 +129,8 @@ def get_docs_path(script_dir=None):
     if no built docs are found.
     """
     candidates = [
-        os.path.join(_version_base(script_dir), "06 Docs", "site", "index.html"),
-        os.path.join(_DEPLOYMENT_BASE, "current", "06 Docs", "site", "index.html"),
+        os.path.join(_version_base(script_dir), _DOCS_INDEX),
+        os.path.join(_DEPLOYMENT_BASE, "current", _DOCS_INDEX),
     ]
     for path in candidates:
         if os.path.isfile(path):
@@ -133,13 +145,7 @@ def get_profile_runner_path(script_dir=None):
     ad-hoc runs track version switches automatically.  In the repo it returns
     the sibling copy.
     """
-    if is_deployed_layout(script_dir):
-        return os.path.join(
-            _DEPLOYMENT_BASE, "current", "07 GTK + Python", "profile_runner.py"
-        )
-    if script_dir is None:
-        script_dir = get_script_dir(depth=2)
-    return os.path.join(script_dir, "profile_runner.py")
+    return os.path.join(_version_base(script_dir), _PYTHON_DIR, "profile_runner.py")
 
 
 def resolve_remote_bin(host, timeout=15):

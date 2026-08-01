@@ -11,12 +11,7 @@
 source ~/bashinit
 bashinit
 
-NODE_LIB="${NODE_LIB:-}"
-if [[ -z "$NODE_LIB" ]]; then
-    for cand in "$mydir/node-lib.sh" "$mydir/../lib/node-lib.sh" "/usr/local/lib/node-lib.sh"; do
-        [[ -f "$cand" ]] && { NODE_LIB="$cand"; break; }
-    done
-fi
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 if [[ -z "$NODE_LIB" ]]; then
     log_msg "FATAL: Could not locate node-lib.sh"
     exit 1

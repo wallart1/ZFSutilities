@@ -33,11 +33,7 @@ if [[ "$NODE_MODE" == "single-node" ]]; then
 fi
 
 # Shared iSCSI teardown/rebuild helpers.
-ISCSI_LIB=""
-for cand in "$_zfsdelfs_dir/08 Two-node/iscsi-lib.sh" \
-            "$_zfsdelfs_dir/../lib/iscsi-lib.sh"; do
-    [[ -f "$cand" ]] && { ISCSI_LIB="$cand"; break; }
-done
+ISCSI_LIB=$(mydir="$_zfsdelfs_dir" find_zfsutility_script iscsi-lib.sh)
 if [[ -z "$ISCSI_LIB" ]]; then
     log_msg "FATAL: Could not locate iscsi-lib.sh"
     source "$_zfsdelfs_dir/bashfatal"
@@ -59,12 +55,10 @@ function delfs {
     # rootcheck was deliberately deferred to this entry function.
     bashinit
 
-    # Locate node-lib.sh without hard-coding the deployment path.
+    # Locate node-lib.sh through the centralized helper.
     # Use $_zfsdelfs_dir because callers (and tests) may override $mydir.
-    local node_lib=""
-    for cand in "$_zfsdelfs_dir/08 Two-node/node-lib.sh" "$_zfsdelfs_dir/../lib/node-lib.sh"; do
-        [[ -f "$cand" ]] && { node_lib="$cand"; break; }
-    done
+    local node_lib
+    node_lib=$(mydir="$_zfsdelfs_dir" find_zfsutility_script node-lib.sh)
     if [[ -z "$node_lib" ]]; then
         log_msg "FATAL: Could not locate node-lib.sh"
         source "$_zfsdelfs_dir/bashfatal"
