@@ -1,0 +1,5138 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation for ZFS backup, snapshot, and retention management utilities">
+      
+      
+      
+      
+        <link rel="prev" href="../profiles/">
+      
+      
+        <link rel="next" href="../daily-backup/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>GTK GUI Reference - ZFS Utilities</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#gtk-gui-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ZFS Utilities" class="md-header__button md-logo" aria-label="ZFS Utilities" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ZFS Utilities
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              GTK GUI Reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="blue-grey" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../installation/" class="md-tabs__link">
+          
+  
+  
+  Installation
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../developer-guide/" class="md-tabs__link">
+          
+  
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../commands-and-modules/" class="md-tabs__link">
+          
+  
+  
+  Commands & Modules
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../messages/" class="md-tabs__link">
+          
+  
+  
+  Messages
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ZFS Utilities" class="md-nav__button md-logo" aria-label="ZFS Utilities" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ZFS Utilities
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Installation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/zfs-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ZFS Key Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts and Terminology
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts and Terminology
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../profiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Profiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GTK GUI Reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GTK GUI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#single-instance-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-Instance Behavior
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-main-window" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Main Window
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Main Window">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#menu-bar" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Menu bar
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#working-area" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working area
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bottom-panel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bottom panel
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#first-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        First Run
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#startup-version-check-two-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Startup Version Check (Two-Node)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dry-run-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry Run Mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#log-level" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log Level
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#help-menu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Help Menu
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Help Menu">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#documentation-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Documentation Viewer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Documentation Viewer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#palette-toggle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Palette Toggle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#remembered-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remembered State
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editing-pages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editing Pages
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#blocked-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blocked Links
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fallback-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fallback Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#view-menu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        View Menu
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tabs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tabs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dataset-selection-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dataset Selection Criteria
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Dataset Selection Criteria">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#execution-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution sequence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#syntax" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Syntax
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#quoting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quoting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced Options
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dashboard-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard Tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Dashboard Tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#warnings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warnings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pool-health" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pool Health
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#running-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running Tasks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recent-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recent Operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#iscsi-issues-two-node-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        iSCSI Issues (two-node only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backup-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backup Tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Backup Tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actions_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#offsite-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Offsite Tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Offsite Tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#layout_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actions_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restore-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restore Tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Restore Tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#layout_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actions_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scrub-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scrub profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#schedule-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schedule Tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Schedule Tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#profile-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profile list
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-now" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run Now
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#creating-a-profile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating a profile
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recalling-and-editing-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recalling and editing profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#detail-pane-profile-selected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Detail pane (profile selected)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cron-syntax" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cron syntax
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actions_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-cron-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How cron works
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checkagainst-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkagainst Tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Checkagainst Tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#layout_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-the-counterpart-dataset-is-constructed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the counterpart dataset is constructed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#special-value-offsite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Special value &lt;offsite&gt;
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#merged-fss-table-preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merged fss table preview
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#derived-entries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Derived entries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actions_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-seeding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-seeding
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pools-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pools Tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Pools Tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pool-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pool table
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actions-pool-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Actions — Pool Registry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scrub-manager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scrub Manager
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scrub Manager">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Controls
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scrub-status-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scrub status table
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actions-scrub-manager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Actions — Scrub Manager
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-the-queue-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the queue works
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#log-panel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log Panel
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Log Panel">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#search-and-clear" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Search and Clear
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#warning-and-error-indicator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warning and error indicator
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#logs-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logs Tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Logs Tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#log-list-top-pane" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log list (top pane)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log-viewer-bottom-pane" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log viewer (bottom pane)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retention-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retention control
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#actions_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#datasets-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Datasets Tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Datasets Tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tree-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tree conventions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#snapshot-and-hold-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Snapshot and hold actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#retention-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retention Tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Retention Tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pool-selector-and-policy-editor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pool selector and policy editor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#editor-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Editor table
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Policy actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prune-runner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prune runner
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prune runner">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-happens-during-a-prune" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What happens during a prune
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ignore-retention-policies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ignore retention policies
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pool-watch-windows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pool Watch Windows
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context-menus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context Menus
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command Line Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Command Line Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../daily-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Daily Backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../offsite-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Offsite Backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restore Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../retention/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retention Policies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../proxmox-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Developer Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/coding-policies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Policies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/lock-manager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lock Manager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/concurrency-collisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concurrency Collisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/two-node-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/global-variables/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Global Variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/data-structures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Structures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/doc-server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands & Modules
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Commands & Modules
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/two-node/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Two-Node Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/python-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Messages
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Messages
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/user-guide/gtk-gui.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="gtk-gui-reference">GTK GUI Reference<a class="headerlink" href="#gtk-gui-reference" title="Permanent link">&para;</a></h1>
+<p>The <code>zfsutilities_gui.py</code> application (in <code>07 GTK + Python/</code>) is a GTK3
+graphical frontend for the ZFSutilities scripts. It must be run as root:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>zfsutilities-gui
+</code></pre></div>
+<p>The installer creates a symbolic link named <strong>ZFSutilities GUI</strong> in the
+installing user's home directory. You can also launch the script directly or
+add <code>/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui</code> to a panel or
+start-menu launcher.</p>
+<p>All settings are persisted to <code>/root/.config/zfsutilities.json</code>, the same
+shared config read by the bash scripts. See
+<a href="../../developer-guide/architecture/">Architecture — JSON config</a> for details.</p>
+<h2 id="single-instance-behavior">Single-Instance Behavior<a class="headerlink" href="#single-instance-behavior" title="Permanent link">&para;</a></h2>
+<p>Only one primary GUI instance is allowed. If the GUI is already running, a
+second launch automatically terminates the existing instance and starts a fresh
+primary instance. A transient wait dialog is shown while the previous window is
+closing:</p>
+<div class="highlight"><pre><span></span><code>Please wait: closing the previous ZFS Utilities window...
+</code></pre></div>
+<p>If a previous launch crashed or hung without showing a usable window, it is
+detected as stuck and terminated automatically without prompting.</p>
+<p>The <code>--replace</code> command-line flag is still accepted for backward compatibility,
+but it is no longer required; replacement is now the default behavior.</p>
+<p>For the underlying mechanism (PID file, D-Bus, window detection), see
+<a href="../../developer-guide/architecture/#gui-bash-integration-architecture">Architecture — GUI ↔ Bash Integration</a>.</p>
+<h2 id="the-main-window">The Main Window<a class="headerlink" href="#the-main-window" title="Permanent link">&para;</a></h2>
+<p>When you open the ZFS Utilities GUI, the main window is titled <strong>ZFS Utilities</strong>.
+It is divided into three areas: the menu bar at the top, the working area in the
+middle, and the log panel at the bottom.</p>
+<h3 id="menu-bar">Menu bar<a class="headerlink" href="#menu-bar" title="Permanent link">&para;</a></h3>
+<p>The menu bar runs across the top of the window and contains three menus:</p>
+<ul>
+<li><strong>File</strong></li>
+<li><strong>Quit</strong> — closes the application.</li>
+<li><strong>View</strong></li>
+<li><strong>Minimize Width...</strong> — resets every resizable table column to its narrowest
+    width and shrinks the window as small as possible.</li>
+<li><strong>Help</strong></li>
+<li><strong>Documentation</strong> — opens the built-in documentation viewer.</li>
+<li><strong>Help with this page</strong> — opens the viewer at the section for the currently
+    selected tab.</li>
+<li><strong>Set Documentation Editor...</strong> — chooses the external editor used when you
+    click the pencil icon in the documentation viewer.</li>
+<li><strong>About</strong> — shows the version, license, and credits.</li>
+</ul>
+<h3 id="working-area">Working area<a class="headerlink" href="#working-area" title="Permanent link">&para;</a></h3>
+<p>The middle of the window is split into three parts:</p>
+<ul>
+<li><strong>Left sidebar</strong> — the vertical list of tabs. Click a tab name to open that
+  page.</li>
+<li><strong>Central pane</strong> — the large area that shows the contents of the currently
+  selected tab. This is where you review status, fill in settings, and view lists
+  or tables.</li>
+<li><strong>Actions panel</strong> — the vertical panel on the right, labeled <strong>Actions</strong>. The
+  buttons change depending on which tab is open. Common buttons include
+  <strong>Run Backup</strong>, <strong>Run Offsite</strong>, <strong>Save Config</strong>, <strong>Revert Config</strong>,
+  <strong>Add Profile to Schedule</strong>, and <strong>Refresh</strong>. While a job is running, the run
+  button changes to <strong>Cancel</strong>.</li>
+</ul>
+<p>The sidebar tabs are:</p>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>What it is for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#dashboard-tab">Dashboard</a></td>
+<td>At-a-glance system health, recent operations, and warnings</td>
+</tr>
+<tr>
+<td><a href="#backup-tab">Backup</a></td>
+<td>Configure and run the daily backup</td>
+</tr>
+<tr>
+<td><a href="#offsite-tab">Offsite</a></td>
+<td>Configure and run offsite backups</td>
+</tr>
+<tr>
+<td><a href="#restore-tab">Restore</a></td>
+<td>Restore datasets from backups</td>
+</tr>
+<tr>
+<td><a href="#schedule-tab">Schedule</a></td>
+<td>Manage scheduled profiles</td>
+</tr>
+<tr>
+<td><a href="#checkagainst-tab">Checkagainst</a></td>
+<td>Edit snapshot safety checks</td>
+</tr>
+<tr>
+<td><a href="#pools-tab">Pools</a></td>
+<td>Register pools and manage scrubs</td>
+</tr>
+<tr>
+<td><a href="#datasets-tab">Datasets</a></td>
+<td>Browse datasets and manage snapshots/holds</td>
+</tr>
+<tr>
+<td><a href="#retention-tab">Retention</a></td>
+<td>Per-pool retention policies and pruning</td>
+</tr>
+<tr>
+<td><a href="#logs-tab">Logs</a></td>
+<td>Browse, search, and delete session log files</td>
+</tr>
+</tbody>
+</table>
+<h3 id="bottom-panel">Bottom panel<a class="headerlink" href="#bottom-panel" title="Permanent link">&para;</a></h3>
+<p>The bottom panel shows live messages from the application and from any running
+job.</p>
+<ul>
+<li><strong>Log/output area</strong> — the large read-only text area where progress messages,
+  warnings, and errors appear while a job runs.</li>
+<li><strong>Search bar</strong> — above the log area. Type text and use the buttons to find and
+  highlight messages.</li>
+<li><strong>Input</strong> box and <strong>Send</strong> button — when a running job asks a question, type
+  your answer in the <strong>Input</strong> box and click <strong>Send</strong> (or press Enter).</li>
+<li><strong>Log</strong> dropdown — chooses which message levels are shown in the bottom panel:
+  <code>DEBUG</code>, <code>VERB</code>, <code>INFO</code>, <code>WARN</code>, or <code>FATAL</code>. The default is <code>INFO</code>. This only
+  filters the on-screen view; everything is still written to the session log
+  files.</li>
+<li><strong>Short prefix</strong> toggle — when on, each log line shows only the date and time;
+  when off, it shows the full source-location prefix.</li>
+<li><strong>Clear</strong> button — empties the visible log text.</li>
+<li><strong>Pop-out button</strong> — the window-icon button at the far right detaches the
+  bottom panel into its own separate window; click it again to put the panel
+  back.</li>
+</ul>
+<h2 id="first-run">First Run<a class="headerlink" href="#first-run" title="Permanent link">&para;</a></h2>
+<p>On a fresh install the JSON config starts empty — no pools, no backup steps,
+no offsite steps, and no checkagainst entries. The log panel will show
+warnings for each missing section. Configure them through the relevant tabs:</p>
+<ol>
+<li><strong><a href="#dashboard-tab">Dashboard</a></strong> — review system health at a glance</li>
+<li><strong><a href="#pools-tab">Pools</a></strong> — online pools appear in red; select the pool, click <strong>Add</strong> then <strong>Save</strong>
+   to register them. Check the <strong>Offsite</strong> box for any registered pool that will spend time offline. Use the Scrub Manager below the registry to queue, start, pause, resume, and stop scrubs.</li>
+<li><strong><a href="#backup-tab">Backup</a></strong> — add rsync pull steps and send/receive steps</li>
+<li><strong><a href="#offsite-tab">Offsite</a></strong> — review the automatically detected offsite pool and add offsite backup steps</li>
+<li><strong><a href="#checkagainst-tab">Checkagainst</a></strong> — add dataset-counterpart mappings</li>
+<li><strong><a href="#retention-tab">Retention</a></strong> — a <code>default</code> policy is auto-created. Add per-pool policies with <strong>Add Policy</strong> when needed.</li>
+</ol>
+<h2 id="startup-version-check-two-node">Startup Version Check (Two-Node)<a class="headerlink" href="#startup-version-check-two-node" title="Permanent link">&para;</a></h2>
+<p>When the GUI starts on a host configured for two-node operation, it
+checks the peer node's ZFSutilities version by reading
+<code>/usr/local/lib/zfsutilities/current/VERSION</code>. The result is
+logged in the GUI's log panel:</p>
+<ul>
+<li><strong>INFO</strong> — the peer is running the same version as this node.</li>
+<li><strong>WARN</strong> — the peer is running a different version, or the peer could not be
+  reached.</li>
+</ul>
+<p>The check is non-blocking; the GUI starts normally even if the peer is offline
+or the connection fails. Keeping both nodes on the same version is
+important, especially before running backup, restore, or iSCSI operations.</p>
+<h2 id="dry-run-mode">Dry Run Mode<a class="headerlink" href="#dry-run-mode" title="Permanent link">&para;</a></h2>
+<p>A <strong>Dry Run</strong> toggle button appears in the action panel for the <strong>Backup</strong>,
+<strong>Offsite</strong>, <strong>Restore</strong>, and <strong>Retention</strong> tabs. When enabled, operations are
+simulated without making changes and the button label turns <strong>red</strong> so the
+active state is obvious at a glance.</p>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>What Dry Run does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Backup</strong></td>
+<td>Skips rsync pulls, pre-backup commands, ZFS send/receive (logs what it would do), snapfile cleanup, and retention pruning</td>
+</tr>
+<tr>
+<td><strong>Offsite</strong></td>
+<td>Skips ZFS send/receive (logs what it would do) and hold application</td>
+</tr>
+<tr>
+<td><strong>Restore</strong></td>
+<td>Skips ZFS send/receive (logs what it would do) for both Part 1 and Part 2</td>
+</tr>
+<tr>
+<td><strong>Retention</strong></td>
+<td>Logs what snapshots would be pruned without deleting them</td>
+</tr>
+</tbody>
+</table>
+<p>The toggle state persists while the GUI is running and is reset on restart.</p>
+<p>When you click <strong>Add Profile to Schedule</strong> in a tab, the current dry-run state
+is captured in the profile. Scheduled executions of that profile then run in
+dry-run mode automatically, independent of the GUI's live toggle. Recalling a
+profile loads its saved dry-run flag into the tab so you can review or change it
+before re-saving.</p>
+<h2 id="log-level">Log Level<a class="headerlink" href="#log-level" title="Permanent link">&para;</a></h2>
+<p>The <strong>Log</strong> dropdown in the bottom panel (next to the <strong>Send</strong> button) filters
+which messages are shown in the live info panel. It does <strong>not</strong> affect what is
+written to log files. Levels are <code>DEBUG</code>, <code>VERB</code>, <code>INFO</code>, <code>WARN</code>, and <code>FATAL</code> (default: <code>INFO</code>).</p>
+<ul>
+<li><code>DEBUG</code> — shows verbose diagnostics</li>
+<li><code>VERB</code> — shows INFO plus extra detail messages</li>
+<li><code>INFO</code> — shows routine progress output</li>
+<li><code>WARN</code> — shows warnings and fatal errors only</li>
+<li><code>FATAL</code> — shows fatal errors only</li>
+</ul>
+<p>The setting controls only the bottom-panel viewer. The <a href="#logs-tab">Logs tab</a>
+viewer has its own independent <strong>Level</strong> filter. Both filters use the same
+rule: a message is visible when its priority is greater than or equal to the
+selected level. Messages without a recognized priority prefix (raw subprocess
+output, trailers, etc.) use the implied "(none)" level and are always displayed.</p>
+<p>See <a href="../../messages/#priority-prefixes">Messages — Priority prefixes</a>
+for details on the priority tokens.</p>
+<div class="admonition tip">
+<p class="admonition-title">Session log files</p>
+<p>Every GUI run, scheduled profile run, and direct CLI script execution
+automatically creates a session log file in
+<code>/var/log/zfsutilities/sessions/</code>. These files capture both
+<code>file:line</code>-prefixed <code>log_msg</code> output and raw subprocess stdout/stderr
+(dataset lists, <code>zfs receive</code> progress, separator lines, etc.). Use the
+<a href="#logs-tab">Logs tab</a> to browse and search them.</p>
+<p>When multiple GUI runners are active at the same time (for example, a Backup
+and an Offsite job running concurrently), each runner writes its Python-level
+messages to its own session log so the logs do not cross-write.</p>
+<p>Scheduled backup profiles also stream rsync pull-step output (both remote
+pulls and local pulls that resolve to the current host) to
+<code>/var/log/zfsutilities/rsync-pull.log</code> instead of the session log, so the
+GUI Logs tab is not flooded with file-list progress from routine rsync jobs.</p>
+<p>For how the single-writer log mechanism works, see
+<a href="../../developer-guide/architecture/#session-logging">Architecture — Session logging</a>.</p>
+</div>
+<h2 id="help-menu">Help Menu<a class="headerlink" href="#help-menu" title="Permanent link">&para;</a></h2>
+<p>The <strong>Help</strong> menu contains:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Documentation</strong></td>
+<td>Open the embedded documentation viewer</td>
+</tr>
+<tr>
+<td><strong>Help with this page</strong></td>
+<td>Open the viewer scrolled to the section for the currently visible tab</td>
+</tr>
+<tr>
+<td><strong>Set Documentation Editor...</strong></td>
+<td>Choose the external editor for the pencil (edit) icon inside the viewer</td>
+</tr>
+<tr>
+<td><strong>About</strong></td>
+<td>Version, license, and credits</td>
+</tr>
+</tbody>
+</table>
+<h3 id="documentation-viewer">Documentation Viewer<a class="headerlink" href="#documentation-viewer" title="Permanent link">&para;</a></h3>
+<p><strong>Help → Documentation</strong> opens a standalone window that renders the
+documentation website using an embedded browser. </p>
+<p>The installer creates a symbolic link named <strong>ZFSutilities Documentation</strong>
+in the installing user's home directory. This can be used to open the documentation viewer independently of the GUI. Open the link directly, or run <code>zfsutilities-docs</code>; the documentation viewer does not require root.</p>
+<p>The viewer window includes a toolbar:</p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>←</strong></td>
+<td>Go back in page history</td>
+</tr>
+<tr>
+<td><strong>→</strong></td>
+<td>Go forward in page history</td>
+</tr>
+<tr>
+<td><strong>↻</strong></td>
+<td>Refresh the current page</td>
+</tr>
+<tr>
+<td><strong>⌂</strong></td>
+<td>Return to the documentation home page</td>
+</tr>
+<tr>
+<td><strong>+</strong></td>
+<td>Zoom in</td>
+</tr>
+<tr>
+<td><strong>−</strong></td>
+<td>Zoom out</td>
+</tr>
+<tr>
+<td><strong>0</strong></td>
+<td>Reset zoom to 100%</td>
+</tr>
+</tbody>
+</table>
+<p>If a page fails to load, a status message appears and the <strong>Home</strong> button resets
+the view.</p>
+<h4 id="palette-toggle">Palette Toggle<a class="headerlink" href="#palette-toggle" title="Permanent link">&para;</a></h4>
+<p>The Material theme provides a light / dark palette toggle (sun/moon icon at the
+top-right of each page). The selected mode persists across sessions via the
+browser's local storage and is also remembered by the GUI so the viewer reopens
+in the same mode.</p>
+<h4 id="remembered-state">Remembered State<a class="headerlink" href="#remembered-state" title="Permanent link">&para;</a></h4>
+<p>The viewer remembers its window size, position, maximized state, zoom level,
+and the active Material light / dark palette. These values are stored in the
+<code>ui_state.docs_viewer</code> section of the GUI configuration file and are restored
+the next time the documentation window opens.</p>
+<h4 id="editing-pages">Editing Pages<a class="headerlink" href="#editing-pages" title="Permanent link">&para;</a></h4>
+<p>Every documentation page has a pencil icon at the upper-right. Clicking it opens
+the source <code>.md</code> (markdown) file in the editor configured via <strong>Help → Set Documentation Editor...</strong></p>
+<ul>
+<li><strong>Default</strong> — if no editor is configured, the system default application for
+  markdown files is used (<code>xdg-open</code>).</li>
+<li><strong>Custom command</strong> — enter any executable path or command name (e.g.
+  <code>gedit</code>, <code>/home/dan/MarkText/marktext</code>, <code>runuser -u dan xdg-open</code>).
+  The file path is always appended as the final argument.</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Editor runs as the desktop user</p>
+<p>The GUI runs as root when it is started, but the editor is automatically
+dropped to the original desktop user so Electron-based editors (such as
+MarkText) do not crash inside their sandboxes.</p>
+</div>
+<h4 id="blocked-links">Blocked Links<a class="headerlink" href="#blocked-links" title="Permanent link">&para;</a></h4>
+<p>Links that use unknown URI schemes (anything other than <code>http://</code>, <code>https://</code>,
+<code>file://</code>, or <code>about:</code>) are cancelled and a brief status message is shown in
+the toolbar. This prevents accidental navigation to external sites from the
+offline documentation. Directory-style <code>file://</code> links are automatically
+rewritten to <code>index.html</code> before loading.</p>
+<h4 id="fallback-mode">Fallback Mode<a class="headerlink" href="#fallback-mode" title="Permanent link">&para;</a></h4>
+<p>If WebKit2 is not installed or the pre-built site is missing, the viewer shows
+a plain-text message instead of the rendered page.</p>
+<p>For how the embedded server and edit links are implemented, see
+<a href="../../developer-guide/doc-server/">Documentation Server</a>.</p>
+<h2 id="view-menu">View Menu<a class="headerlink" href="#view-menu" title="Permanent link">&para;</a></h2>
+<p>The GUI's <strong>View</strong> menu contains global display actions.</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Minimize Width...</strong></td>
+<td>Reset every resizable table column to its own minimum width, clear saved column widths, and shrink the main window as narrow as possible</td>
+</tr>
+</tbody>
+</table>
+<p>Column widths across the GUI are normally restored from the saved <code>ui_state</code>
+when the window opens. Each resizable column's width is stored by its header
+title, so adding, removing, or renaming a column does not silently misapply old
+widths. Widths are saved as the user's set width rather than GTK's allocated
+width, and they are not scaled against the saved window size, so maximized
+sessions no longer shrink columns based on a stale non-maximized window width.
+All tables use fixed-width, resizable columns hosted inside scrollable
+viewports, so the main window can always be shrunk horizontally even when
+columns were previously widened.</p>
+<p>Choosing <strong>Minimize Width...</strong> flushes any pending save, discards saved widths,
+and resets every resizable column to its own minimum width. The action asks for
+confirmation before resizing the window.</p>
+<h2 id="tabs">Tabs<a class="headerlink" href="#tabs" title="Permanent link">&para;</a></h2>
+<p>The sidebar exposes these pages:</p>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#dashboard-tab">Dashboard</a></td>
+<td>At-a-glance system health, recent operations, and warnings</td>
+</tr>
+<tr>
+<td><a href="#backup-tab">Backup</a></td>
+<td>Configure and run <a href="../../commands-and-modules/commands/#zfsdailybackup"><code>zfsdailybackup</code></a></td>
+</tr>
+<tr>
+<td><a href="#offsite-tab">Offsite</a></td>
+<td>Configure and run <a href="../../commands-and-modules/commands/#zfssendoffsite"><code>zfssendoffsite</code></a></td>
+</tr>
+<tr>
+<td><a href="#restore-tab">Restore</a></td>
+<td>Configure and run <a href="../../commands-and-modules/commands/#zfsrestore"><code>zfsrestore</code></a></td>
+</tr>
+<tr>
+<td><a href="#schedule-tab">Schedule</a></td>
+<td>Manage scheduled jobs</td>
+</tr>
+<tr>
+<td><a href="#checkagainst-tab">Checkagainst</a></td>
+<td>Edit the <a href="../../commands-and-modules/modules/#zfscheckagainst"><code>zfscheckagainst</code></a> table</td>
+</tr>
+<tr>
+<td><a href="#pools-tab">Pools</a></td>
+<td>Pool registry + live <code>zpool list</code> status + scrub manager</td>
+</tr>
+<tr>
+<td><a href="#datasets-tab">Datasets</a></td>
+<td>Collapsible dataset tree with inline snapshot/hold management</td>
+</tr>
+<tr>
+<td><a href="#retention-tab">Retention</a></td>
+<td>Per-pool retention policies + prune runner</td>
+</tr>
+<tr>
+<td><a href="#logs-tab">Logs</a></td>
+<td>Browse, search, and prune session log files</td>
+</tr>
+</tbody>
+</table>
+<h2 id="dataset-selection-criteria">Dataset Selection Criteria<a class="headerlink" href="#dataset-selection-criteria" title="Permanent link">&para;</a></h2>
+<p>The <strong>Advanced</strong> expander on the <a href="#backup-tab">Backup</a>, <a href="#offsite-tab">Offsite</a>,
+and <a href="#restore-tab">Restore</a> tabs controls which datasets are included in an
+operation. These settings are passed to
+<a href="../../commands-and-modules/modules/#zfsbuildfsarray"><code>zfsbuildfsarray</code></a>.</p>
+<h3 id="execution-sequence">Execution sequence<a class="headerlink" href="#execution-sequence" title="Permanent link">&para;</a></h3>
+<p>The filters are applied in this order:</p>
+<ol>
+<li><strong>Start pool / source dataset</strong> — every dataset under the source pool or
+   dataset is enumerated.</li>
+<li><strong>Includes</strong> — keep only datasets that match at least one include pattern.
+   If no includes are specified, all datasets are kept.</li>
+<li><strong>Excludes</strong> — remove any dataset that matches an exclude pattern.</li>
+<li><strong>Depth</strong> — limit recursion depth (<code>0</code> = root dataset only, <code>""</code> = unlimited).</li>
+<li><strong>Startwith</strong> — remove all datasets <em>before</em> the first match. The match
+   itself is kept.</li>
+<li><strong>Endwith</strong> — remove all datasets <em>after</em> the first match. The match itself
+   is kept.</li>
+</ol>
+<p>If <code>startwith</code> or <code>endwith</code> is specified and no dataset matches it, the
+operation aborts with an error.</p>
+<h3 id="fields">Fields<a class="headerlink" href="#fields" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>GUI Widget</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Includes</strong></td>
+<td>Entry</td>
+<td>Space-separated list of substrings. Only datasets whose full name contains at least one of these substrings are kept.</td>
+</tr>
+<tr>
+<td><strong>Excludes</strong></td>
+<td>Entry</td>
+<td>Space-separated list of substrings. Any dataset whose full name contains one of these substrings is dropped.</td>
+</tr>
+<tr>
+<td><strong>Depth</strong></td>
+<td>Entry</td>
+<td>Recursion depth passed to <code>zfs list -d</code>. <code>0</code> = root only, <code>""</code> = unlimited.</td>
+</tr>
+<tr>
+<td><strong>Startwith</strong></td>
+<td>Entry</td>
+<td>A single substring. All datasets before the first match are discarded.</td>
+</tr>
+<tr>
+<td><strong>Endwith</strong></td>
+<td>Entry</td>
+<td>A single substring. All datasets after the first match are discarded.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="syntax">Syntax<a class="headerlink" href="#syntax" title="Permanent link">&para;</a></h3>
+<p>By default, every pattern is a <strong>substring</strong> match. It can appear anywhere in
+the dataset name:</p>
+<ul>
+<li><code>data</code> matches <code>pool/data</code> and <code>pool/data/dataset-a</code></li>
+<li><code>dataset-a</code> matches <code>pool/data/dataset-a</code></li>
+<li><code>dataset</code> matches any dataset with <code>dataset</code></li>
+</ul>
+<p>Prefix a pattern with <code>=</code> to require an <strong>exact</strong> match instead of a substring:</p>
+<ul>
+<li><code>=pool/data</code> matches <strong>only</strong> <code>pool/data</code></li>
+<li><code>=pool/data/dataset-a</code> matches <strong>only</strong> that exact dataset</li>
+</ul>
+<h3 id="quoting">Quoting<a class="headerlink" href="#quoting" title="Permanent link">&para;</a></h3>
+<p>Patterns may be quoted with double quotes so that spaces become part of the
+pattern rather than separators:</p>
+<ul>
+<li><code>"dataset a"</code> — matches a dataset whose name contains <code>dataset a</code> (with a space)</li>
+<li><code>="my exact dataset"</code> — exact-match a dataset name that contains spaces</li>
+</ul>
+<p>Unquoted strings are split on whitespace, so <code>dataset a</code> is two separate patterns
+(<code>dataset</code> and <code>a</code>).</p>
+<h3 id="examples">Examples<a class="headerlink" href="#examples" title="Permanent link">&para;</a></h3>
+<p><strong>Include only data datasets:</strong></p>
+<ul>
+<li>Includes: <code>data</code></li>
+<li>Result: only dataset names containing <code>data</code> are included.</li>
+</ul>
+<p><strong>Exclude temp and scratch datasets:</strong></p>
+<ul>
+<li>Excludes: <code>temp scratch</code></li>
+<li>Result: any dataset whose name contains <code>temp</code> or <code>scratch</code> is skipped.</li>
+</ul>
+<p><strong>Process only dataset-a through dataset-e:</strong></p>
+<ul>
+<li>Startwith: <code>dataset-a</code></li>
+<li>Endwith: <code>dataset-e</code></li>
+<li>Result: datasets are sorted alphabetically; everything before the first <code>dataset-a</code> and
+  after the first <code>dataset-e</code> is removed.</li>
+</ul>
+<p><strong>Exact-match a single dataset:</strong></p>
+<ul>
+<li>Includes: <code>=pool/data/dataset-a</code></li>
+<li>Result: only that exact dataset is processed.</li>
+</ul>
+<h2 id="advanced-options">Advanced Options<a class="headerlink" href="#advanced-options" title="Permanent link">&para;</a></h2>
+<p>The <strong>Advanced</strong> expander on the <a href="#backup-tab">Backup</a>, <a href="#offsite-tab">Offsite</a>,
+and <a href="#restore-tab">Restore</a> tabs also exposes the variables below. They control
+send/receive behaviour, holds, and verification rather than dataset selection.</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Tabs</th>
+<th>Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>label</strong></td>
+<td>Backup, Offsite, Restore</td>
+<td>text</td>
+<td>Snapshot label for matching and bucket assignment (e.g. <code>dailybackup</code>, <code>offsite</code>).</td>
+</tr>
+<tr>
+<td><strong>autoresume</strong></td>
+<td>Backup</td>
+<td>Y/N</td>
+<td><code>'Y'</code> = allow resumable-receive tokens to be picked up (<code>zfs receive -s</code>).</td>
+</tr>
+<tr>
+<td><strong>receive_F_option</strong></td>
+<td>Backup, Offsite</td>
+<td>text</td>
+<td><code>'F'</code> = force rollback of destination modifications later than the common snapshot.</td>
+</tr>
+<tr>
+<td><strong>releaseholds</strong></td>
+<td>Backup</td>
+<td>Y/N</td>
+<td><code>'Y'</code> = release holds on snapshots before destroying rather than refusing.</td>
+</tr>
+<tr>
+<td><strong>doincrementals</strong></td>
+<td>Backup, Offsite</td>
+<td>Y/N</td>
+<td><code>'Y'</code> = incremental send from the most recent common snapshot; <code>'N'</code> = full send.</td>
+</tr>
+<tr>
+<td><strong>dointermediates</strong></td>
+<td>Backup, Offsite</td>
+<td>Y/N</td>
+<td><code>'Y'</code> = include all intermediate snapshots (<code>-I</code>); <code>'N'</code> = skip them (<code>-i</code>).</td>
+</tr>
+<tr>
+<td><strong>allow_destructive</strong></td>
+<td>Backup, Offsite</td>
+<td>Y/N</td>
+<td><code>'Y'</code> = full copy may destroy an existing destination dataset and its children.</td>
+</tr>
+<tr>
+<td><strong>verify_after_transfer</strong></td>
+<td>Backup, Offsite</td>
+<td>Y/N</td>
+<td><code>'Y'</code> = after each receive, compare destination snapshot GUID with source; treat mismatch as fatal.</td>
+</tr>
+<tr>
+<td><strong>pv_rate_limit</strong></td>
+<td>Backup, Offsite</td>
+<td>text</td>
+<td>Max transfer rate for <code>pv -L</code> (e.g. <code>200M</code>, <code>1G</code>). Empty = no limit.</td>
+</tr>
+<tr>
+<td><strong>applyholds</strong></td>
+<td>Offsite</td>
+<td>Y/N</td>
+<td><code>'Y'</code> = apply <code>offsite-&lt;pool&gt;</code> holds after each offsite step.</td>
+</tr>
+</tbody>
+</table>
+<p>For more detail on how these map to the bash engine, see
+<a href="../../developer-guide/architecture/#sendreceive-decision-flow">Architecture — Send/Receive Decision Flow</a>
+and <a href="../../commands-and-modules/modules/#zfs-send-receive">Commands &amp; Modules — zfs-send-receive</a>.</p>
+<hr />
+<h2 id="dashboard-tab">Dashboard Tab<a class="headerlink" href="#dashboard-tab" title="Permanent link">&para;</a></h2>
+<p>The Dashboard provides an at-a-glance overview of ZFS health. It refreshes
+automatically every 30 seconds while visible, or manually via the <strong>Refresh</strong>
+action button.</p>
+<div class="admonition tip">
+<p class="admonition-title">Dashboard data during heavy load</p>
+<p>Pool and iSCSI information comes from live <code>zpool</code>/<code>targetcli</code> commands with
+a short timeout. If a refresh happens while the pools are very busy (for
+example, during a large backup), the command may time out. Instead of
+showing empty cards, the Dashboard keeps the last successful data and
+displays an italic <em>"data may be stale"</em> note until the next refresh
+succeeds.</p>
+</div>
+<h3 id="warnings">Warnings<a class="headerlink" href="#warnings" title="Permanent link">&para;</a></h3>
+<p>Live compilation of issues that need attention:</p>
+<ul>
+<li>Degraded or offline pools</li>
+<li>Pools above the low-space threshold</li>
+<li>Pools with ZFS errors (vdev or permanent data errors)</li>
+<li>Pools with an active ZFS checkpoint</li>
+<li>Missing backup/offsite/checkagainst configuration</li>
+<li>Unregistered pools</li>
+<li>Stale lock files in <code>/run/lock/zfs/.locks/</code></li>
+</ul>
+<h3 id="pool-health">Pool Health<a class="headerlink" href="#pool-health" title="Permanent link">&para;</a></h3>
+<p>A live table from <code>zpool list</code> showing:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Pool</strong></td>
+<td>Pool name, prefixed with a green ● (online), red ● (degraded), or orange ● (other)</td>
+</tr>
+<tr>
+<td><strong>Capacity</strong></td>
+<td>Progress bar showing used percentage; turns <strong>red</strong> at the low-space warning threshold or above</td>
+</tr>
+<tr>
+<td><strong>Last Scrub</strong></td>
+<td>Date of the most recent scrub (including the date a scrub was canceled), or <em>"In progress"</em> if one is running.</td>
+</tr>
+<tr>
+<td><strong>Scrub</strong></td>
+<td>Current scrub status: progress bar while <strong>scrubbing</strong>, or <code>paused</code> / <code>—</code> / <code>finished</code></td>
+</tr>
+<tr>
+<td><strong>Errors</strong></td>
+<td><code>No errors</code> (green) or a short summary of vdev/data errors from <code>zpool status</code> (red)</td>
+</tr>
+</tbody>
+</table>
+<p>A <strong>Low-space warning threshold</strong> spin button sits above the pool table. It
+sets the capacity percentage at which the Dashboard warns about low space.
+The default is <strong>80 %</strong> (range 50–95 %). </p>
+<h3 id="running-tasks">Running Tasks<a class="headerlink" href="#running-tasks" title="Permanent link">&para;</a></h3>
+<p>A unified view of all currently running operations. Select one or more rows
+and click <strong>Cancel Selected Tasks</strong> to stop them. The cancel button is enabled
+only when the selection contains at least one real task; selecting the
+<em>"No running tasks"</em> placeholder row keeps it disabled.</p>
+<table>
+<thead>
+<tr>
+<th>Task type</th>
+<th>Source</th>
+<th>Cancel behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>GUI</strong></td>
+<td>Backup, Offsite, Restore, or Prune started from their respective tabs</td>
+<td>Graceful cancel (SIGTERM the runner subprocess)</td>
+</tr>
+<tr>
+<td><strong>Scrub</strong></td>
+<td>Pool scrubs started from the Pools tab or detected as externally running</td>
+<td><code>zpool scrub -s &lt;pool&gt;</code>. While running, the progress text includes an ETA when <code>zpool status</code> reports remaining time.</td>
+</tr>
+<tr>
+<td><strong>Profile</strong></td>
+<td><code>profile_runner.py</code> jobs launched by <strong>Run Now</strong> in the Schedule tab</td>
+<td>SIGTERM the profile-runner process</td>
+</tr>
+<tr>
+<td><strong>Scheduled</strong></td>
+<td><code>profile_runner.py</code> jobs launched by cron</td>
+<td>SIGTERM the profile-runner process</td>
+</tr>
+</tbody>
+</table>
+<p>The scrub list is reconciled against live <code>zpool status</code> on every refresh, so
+scrubs that finish or are paused externally — for example, by a headless
+profile that uses the <strong>Pause scrubs during each step</strong> option — do not keep
+showing as running after the actual scrub state changes.</p>
+<h3 id="recent-operations">Recent Operations<a class="headerlink" href="#recent-operations" title="Permanent link">&para;</a></h3>
+<p>A scrollable table showing the last <strong>10</strong> history entries:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Date/Time</strong></td>
+<td>When the operation finished (<code>YYYY-MM-DDTHH:MM±TZ</code>)</td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>backup</code>, <code>offsite</code>, <code>restore</code>, or <code>prune</code></td>
+</tr>
+<tr>
+<td><strong>Name</strong></td>
+<td>GUI label or scheduled profile name</td>
+</tr>
+<tr>
+<td><strong>Outcome</strong></td>
+<td>Coloured icon + text (<code>✓ success</code>, <code>✗ failed</code>, <code>⏹ cancelled</code>, <em>running</em>)</td>
+</tr>
+</tbody>
+</table>
+<p>The list refreshes automatically with the rest of the Dashboard.</p>
+<p>Each row also stores the operation's session-log path in a hidden column. The
+<a href="#actions"><strong>View Log</strong></a> action uses this path to jump to the log in the
+<a href="#logs-tab">Logs tab</a>.</p>
+<h3 id="iscsi-issues-two-node-only">iSCSI Issues <em>(two-node only)</em><a class="headerlink" href="#iscsi-issues-two-node-only" title="Permanent link">&para;</a></h3>
+<p>Compares the expected LUN list against <code>targetcli</code> backstores. If any LUN is
+missing, an orange warning row appears with a <strong>Fix this</strong> button that runs
+<a href="../../commands-and-modules/two-node/#repair-iscsi-luns-storage-node"><code>repair-iscsi-luns</code></a>
+on the storage host. The button output is displayed in the GUI log so you can
+see which backstores and LUN mappings were added or verified.</p>
+<p>This section is hidden entirely on single-node systems.</p>
+<h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
+<p>Shows the current node mode (<code>single-node</code> or <code>two-node</code>), hostnames, the
+ZFSutilities version, and the <strong>ZFS version(s)</strong> in use. In two-node mode the
+versions of the storage host and compute host are fetched remotely; if both
+roles resolve to the same host it is shown once with both role labels. If a
+remote host cannot be reached, its version is shown as <em>unknown</em>.</p>
+<h3 id="actions">Actions<a class="headerlink" href="#actions" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Refresh</strong></td>
+<td>Re-gather all dashboard data immediately</td>
+</tr>
+<tr>
+<td><strong>Fix Locks</strong></td>
+<td>Removes stale locks and refreshes the view</td>
+</tr>
+<tr>
+<td><strong>Cancel Selected Tasks</strong></td>
+<td>Cancels the selected rows in the <strong>Running Tasks</strong> list</td>
+</tr>
+<tr>
+<td><strong>View Log</strong></td>
+<td>Switches to the Logs tab and selects the session log for the selected <strong>Running Tasks</strong> or <strong>Recent Operations</strong> row. The log path is cached when the button becomes sensitive, so the action still opens the intended log even if a background refresh changes the selection before you click.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="backup-tab">Backup Tab<a class="headerlink" href="#backup-tab" title="Permanent link">&para;</a></h2>
+<p>This tab configures and runs the daily backup job (<a href="../../commands-and-modules/commands/#zfsdailybackup"><code>zfsdailybackup</code></a>).</p>
+<h3 id="layout">Layout<a class="headerlink" href="#layout" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><strong>Pre-Backup</strong> — One checkbox and a command entry:
+  <strong>Run pre-backup command</strong> — Enable a custom command that runs before all backup steps. If it fails, the backup aborts. </p>
+</li>
+<li>
+<p><strong>Advanced</strong> — Collapsible expander with
+  <a href="#dataset-selection-criteria">dataset-selection criteria</a>
+  (<code>includes</code>, <code>excludes</code>, <code>depth</code>, <code>startwith</code>, <code>endwith</code>) plus <a href="#advanced-options">advanced options</a>.</p>
+</li>
+<li>
+<p><strong>Pull Steps</strong> — Editable list of rsync pull operations. The frame header has
+  an <strong>Active</strong> checkbox; unchecking it bypasses every pull step while still
+  running the other backup steps. Each row has two columns:</p>
+</li>
+<li>
+<p><strong>Source</strong> — the remote hostname or IP and file path to pull from. Examples:
+    <code>proxmox1:/etc</code>, <code>192.168.1.50:/root</code>, <code>backup-server.local:/home</code>.</p>
+</li>
+<li><strong>Destination path</strong> — the local directory where pulled files are placed.
+    Example: <code>/backups/proxmox1</code></li>
+</ul>
+<p>Add or remove rows with the buttons; reorder by dragging rows.</p>
+<p>A pull-step failure is <strong>non-fatal</strong>: it is logged as a warning, the backup
+  continues with the remaining steps, and the job returns the failing pull's
+  return code at the end. When an rsync step fails, a short human-readable
+  diagnosis (for example, "SSH connection refused" or "No space left on
+  destination") is appended to the session log after the exit code to make
+  common network, permission, and disk-space failures easier to identify.</p>
+<ul>
+<li>
+<p><strong>Snapshot</strong> — Enter a snapshot name (or click <strong>Generate</strong> to build one
+  from the current time). The <code>@</code> prefix is added automatically if omitted. This name will be used for every snapshot that is created during the job run.
+  This section sits just above the <strong>Send/Receive Steps</strong> so you can review the
+  snapshot name immediately before running the backup.</p>
+</li>
+<li>
+<p><strong>Send/Receive Steps</strong> — Editable list of ZFS send/receive operations
+  (Source pool, Destination pool). Reorder by dragging rows.</p>
+</li>
+<li>
+<p><strong>Post-Backup Steps</strong> — Three checkboxes and a command entry:</p>
+</li>
+<li>
+<p><strong>Clear snapshot name memory</strong> after sending</p>
+</li>
+<li><strong>Prune snapshots</strong> when the backup finishes</li>
+<li>
+<p><strong>Run post-backup command</strong> — Enable a custom command that runs after all
+    backup steps finish. It executes even if a fatal error aborts the backup early.</p>
+</li>
+<li>
+<p><strong>ZFS Keys Backup</strong> — Two entries in the Advanced expander:</p>
+</li>
+<li>
+<p><strong>ZFS keys source</strong> — rsync endpoint where the key files currently live
+    (e.g. <code>/mnt/ZFSkeys/</code> or <code>storage-host:/backups/zfs-keys/</code>)</p>
+</li>
+<li><strong>ZFS keys destination</strong> — rsync endpoint where the copied keys should be placed.
+    Must resolve to an <strong>encrypted ZFS dataset</strong>; the step is skipped with a
+    warning if it does not. See <a href="../daily-backup/#zfs-keys-backup">Daily Backup — ZFS Keys Backup</a>
+    for the security implications.</li>
+</ul>
+<h3 id="actions_1">Actions<a class="headerlink" href="#actions_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Run Backup</strong></td>
+<td>Shows a confirmation dialog with the new snapshot name.<br>Click <strong>OK</strong> to proceed, <strong>Cancel</strong> to abort, or <strong>Generate</strong> to build a new snapshot name and review again.<br>Then launches <code>zfsdailybackup</code>.</td>
+</tr>
+<tr>
+<td><strong>Cancel</strong></td>
+<td>Appears while a backup is running; stops the backup job</td>
+</tr>
+<tr>
+<td><strong>Select All</strong></td>
+<td>Marks every step as active</td>
+</tr>
+<tr>
+<td><strong>Select None</strong></td>
+<td>Marks every step as inactive</td>
+</tr>
+<tr>
+<td><strong>Save Config</strong></td>
+<td>Persists the current tab state to JSON. Turns <strong>red</strong> while there are unsaved changes.</td>
+</tr>
+<tr>
+<td><strong>Revert Config</strong></td>
+<td>Discards edits and reloads from JSON</td>
+</tr>
+<tr>
+<td><strong>Add Profile to Schedule</strong></td>
+<td>Saves a snapshot of current backup settings as a scheduled profile (see <a href="#schedule-tab">Schedule tab</a>)</td>
+</tr>
+<tr>
+<td><strong>Recall Profile</strong></td>
+<td>Loads a previously-saved profile into this tab so you can edit it and/or run on demand (see <a href="#recalling-and-editing-profiles">Recalling profiles</a>)</td>
+</tr>
+</tbody>
+</table>
+<p>While a backup runs, messages stream to the log panel and any interactive
+prompts from the job may be responded to in the <strong>Input</strong> entry next to the
+<strong>Send</strong> button.</p>
+<div class="admonition note">
+<p class="admonition-title">Concurrent GUI runners</p>
+<p>The Backup, Offsite, and Restore tabs are no longer globally serialized.
+You can start a backup while an offsite or restore job is running, provided
+they operate on disjoint datasets. Per-dataset locks still prevent two jobs
+from modifying the same dataset at the same time.</p>
+</div>
+<hr />
+<h2 id="offsite-tab">Offsite Tab<a class="headerlink" href="#offsite-tab" title="Permanent link">&para;</a></h2>
+<p>This tab configures offsite backups (<a href="../../commands-and-modules/commands/#zfssendoffsite"><code>zfssendoffsite</code></a>).</p>
+<h3 id="layout_1">Layout<a class="headerlink" href="#layout_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><strong>Offsite Pool</strong> — A read-only <strong>Detected pool</strong> label. Candidates are
+  selected in the <a href="#pools-tab">Pools tab</a> entries using the <strong>Offsite</strong> checkbox; the
+  first online candidate becomes the active offsite target at run time. Updates automatically.</p>
+</li>
+<li>
+<p><strong>Advanced</strong> — Collapsible expander with
+  <a href="#dataset-selection-criteria">dataset-selection criteria</a>
+  (<code>includes</code>, <code>excludes</code>, <code>depth</code>, <code>startwith</code>, <code>endwith</code>) and advanced send/receive options.</p>
+</li>
+<li>
+<p><strong>Snapshot</strong> — Enter a snapshot name (or click <strong>Generate</strong> to build one
+  from the current time). The <code>@</code> prefix is added automatically if omitted.</p>
+</li>
+<li>
+<p><strong>Send/Receive Steps</strong> — Editable list with columns: Active, Source,
+  Destination, Includes, Excludes. Reorder rows by dragging. The <code>&lt;offsite&gt;</code>
+  token in the Destination column is replaced at runtime with the detected
+  offsite pool name.</p>
+</li>
+</ul>
+<h3 id="actions_2">Actions<a class="headerlink" href="#actions_2" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Run Offsite</strong></td>
+<td>Detects the offsite pool, then shows a confirmation dialog with the new snapshot name and detected pool.<br>Click <strong>OK</strong> to proceed, <strong>Cancel</strong> to abort, or <strong>Generate</strong> to build a new snapshot name and review again.<br>Then launches the send/receive steps</td>
+</tr>
+<tr>
+<td><strong>Cancel</strong></td>
+<td>Appears while a job is running. Click to immediately terminate the job.</td>
+</tr>
+<tr>
+<td><strong>Select All / Select None</strong></td>
+<td>Mark every step active or inactive</td>
+</tr>
+<tr>
+<td><strong>Save Config</strong></td>
+<td>Persists the tab state; turns <strong>red</strong> when there are unsaved changes.</td>
+</tr>
+<tr>
+<td><strong>Revert Config</strong></td>
+<td>Reloads from JSON and refreshes the detected pool label</td>
+</tr>
+<tr>
+<td><strong>Add Profile to Schedule</strong></td>
+<td>Saves a copy of the current offsite settings as a profile in the Schedule tab.</td>
+</tr>
+<tr>
+<td><strong>Recall Profile</strong></td>
+<td>Loads a previously-saved offsite profile into this tab for editing or on-demand execution</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Concurrent GUI runners</p>
+<p>The Offsite tab can run at the same time as the Backup or Restore tabs when
+the operations touch disjoint datasets. Per-dataset locks prevent collisions
+on the same datasets.</p>
+</div>
+<hr />
+<h2 id="restore-tab">Restore Tab<a class="headerlink" href="#restore-tab" title="Permanent link">&para;</a></h2>
+<p>This tab restores a backup dataset (<a href="../../commands-and-modules/commands/#zfsrestore"><code>zfsrestore</code></a>).</p>
+<h3 id="layout_2">Layout<a class="headerlink" href="#layout_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Source and Destination</strong> — Two text entries for the source dataset and
+  the destination pool/dataset. The source dataset is the one created by the
+  Backup tab. The destination dataset is the one that was originally backed up.
+  Any pre-existing dataset with the same name as the destination will be
+  destroyed before being restored from the source.</li>
+</ul>
+<p>Enable <strong>Auto-determine destination</strong> to have the GUI compute the destination
+  from the source. When
+  the checkbox is active, the destination entry is disabled and populated with
+  the computed destination. When you uncheck it, the previously entered manual
+  destination is restored and the entry becomes editable again. The computed
+  destination is also refreshed when the Restore tab is opened or when the
+  source entry changes while auto-destination is enabled.</p>
+<ul>
+<li><strong>Advanced</strong> — Collapsible expander with
+  <a href="#dataset-selection-criteria">dataset-selection criteria</a>
+  (<code>depth</code>, <code>includes</code>, <code>excludes</code>, <code>startwith</code>, <code>endwith</code>) and:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>label</strong></td>
+<td>Snapshot label for matching. Only snapshots with this label are considered as source candidates for the restore.</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>
+<p><strong>Restore Steps</strong> — Two checkboxes:</p>
+</li>
+<li>
+<p><strong>Part 1</strong> — Full copy of the oldest common snapshot</p>
+</li>
+<li>
+<p><strong>Part 2</strong> — Incremental copy of remaining snapshots</p>
+</li>
+<li>
+<p><strong>Notes</strong> — A reminder that Part 1 is destructive on the destination.
+  Part 1 asks once for confirmation of the dataset list and then proceeds
+  automatically; Part 2 runs incrementally without prompting.</p>
+</li>
+</ul>
+<h3 id="actions_3">Actions<a class="headerlink" href="#actions_3" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Run Restore</strong></td>
+<td>Validates entries, warns if Part 1 is selected, then launches the restore</td>
+</tr>
+<tr>
+<td><strong>Cancel</strong></td>
+<td>Stops a running restore</td>
+</tr>
+<tr>
+<td><strong>Save Config</strong></td>
+<td>Saves settings; turns <strong>red</strong> when there are unsaved changes</td>
+</tr>
+<tr>
+<td><strong>Revert Config</strong></td>
+<td>Reloads from saved settings</td>
+</tr>
+<tr>
+<td><strong>Add Profile to Schedule</strong></td>
+<td>Saves the current restore settings as a profile in the Schedule tab.</td>
+</tr>
+<tr>
+<td><strong>Recall Profile</strong></td>
+<td>Loads a previously-saved Schedule tab profile into this tab for editing or on-demand execution. Click the Add Profile to Schedule button to save changes to the schedule.</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Concurrent GUI runners</p>
+<p>The Restore tab can run at the same time as the Backup or Offsite tabs when
+the operations touch disjoint datasets. Per-dataset locks prevent collisions
+on the same datasets.</p>
+</div>
+<h3 id="scrub-profiles">Scrub profiles<a class="headerlink" href="#scrub-profiles" title="Permanent link">&para;</a></h3>
+<p>The <strong>Pools</strong> tab can also save scrub settings as a scheduled profile.
+Click <strong>Add Profile to Schedule</strong> to snapshot the currently <strong>selected</strong>
+pools in the scrub table along with all settings (simultaneous count,
+refresh interval, and system scrub toggles). The profile runner starts
+the scrubs and polls until they finish.</p>
+<hr />
+<h2 id="schedule-tab">Schedule Tab<a class="headerlink" href="#schedule-tab" title="Permanent link">&para;</a></h2>
+<p>This tab manages scheduled profiles. Profiles are created by clicking "Add Profile to Schedule" from the
+<strong>Backup</strong>, <strong>Offsite</strong>, <strong>Restore</strong>, <strong>Retention</strong> and <strong>Pools (Scrub Manager)</strong> tabs. They appear here as disabled entries where they may be scheduled and activated.</p>
+<h3 id="profile-list">Profile list<a class="headerlink" href="#profile-list" title="Permanent link">&para;</a></h3>
+<p>The top pane lists every saved profile with columns:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Active</strong></td>
+<td>Checkbox — toggles whether the profile is active</td>
+</tr>
+<tr>
+<td><strong>Profile Name</strong></td>
+<td>Full name: <code>&lt;user&gt;-&lt;tab&gt;-&lt;custom&gt;</code> (e.g. <code>root-backup-daily</code>)</td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>backup</code>, <code>offsite</code>, <code>restore</code>, <code>retention</code>, or <code>scrub</code></td>
+</tr>
+<tr>
+<td><strong>Schedule</strong></td>
+<td>Current cron expression (<code>min hour day month weekday</code>)</td>
+</tr>
+<tr>
+<td><strong>Next Run</strong></td>
+<td>Next scheduled execution time</td>
+</tr>
+</tbody>
+</table>
+<p>Click any column header to sort by <strong>Profile Name</strong>, <strong>Type</strong>, or <strong>Next Run</strong>.
+Click any row to select it; use <strong>Ctrl</strong>/<strong>Shift</strong>-click to select multiple rows.
+The detail pane below populates with the first selected profile's cron settings
+(the first row in tree order when multiple rows are selected).</p>
+<p>The profile list refreshes automatically every <strong>60 seconds</strong> while the Schedule
+tab is visible, and immediately when you switch to the tab or click
+<strong>Refresh</strong>. If the set of profiles has not changed, the <strong>Next Run</strong> values are
+updated in place and the current selection is preserved. If profiles were added
+or removed outside the Schedule tab (for example, by another GUI instance or by
+editing the profile files directly), the list is rebuilt and any pending
+unsaved changes for deleted profiles are discarded.</p>
+<h3 id="run-now">Run Now<a class="headerlink" href="#run-now" title="Permanent link">&para;</a></h3>
+<p>Select one or more profiles and click <strong>Run Now</strong> in the Actions panel to execute
+them immediately. <strong>Run Now ignores the Active checkbox</strong> — even disabled
+profiles run. Each profile is launched via <code>profile_runner.py</code>, so it produces
+its own session log and history entry exactly like a scheduled cron run. Output
+streams to the info panel with a <code>[profile-name]</code> prefix so you can tell which
+log line came from which running profile.</p>
+<h3 id="creating-a-profile">Creating a profile<a class="headerlink" href="#creating-a-profile" title="Permanent link">&para;</a></h3>
+<p>Profiles are <strong>not</strong> created from the Schedule tab. Go to the relevant
+tab, configure the settings you want, and click <strong>Add Profile to Schedule</strong> in
+the Actions panel. A dialog asks for a custom name and prepends the
+<code>&lt;user&gt;-&lt;tab&gt;-</code> prefix automatically. The current tab settings — including the
+<strong>Dry Run</strong> toggle state — are placed into the profile file.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Clicking <strong>Add Profile to Schedule</strong> does <strong>not</strong> save the tab's normal config
+settings. It only creates the profile in the Schedule tab. Use <strong>Save Config</strong>
+separately if you also want to save the settings as the default. Click <strong>Revert</strong> to bring back the original saved settings.</p>
+</div>
+<h3 id="recalling-and-editing-profiles">Recalling and editing profiles<a class="headerlink" href="#recalling-and-editing-profiles" title="Permanent link">&para;</a></h3>
+<p>Every tab that supports <strong>Add Profile to Schedule</strong> also has a <strong>Recall
+Profile</strong> button. Clicking it opens a dialog listing all saved profiles for
+that tab. Selecting a profile loads its saved settings into the tab's
+widgets, just as if you had typed them manually.</p>
+<p>This is useful for two workflows:</p>
+<ol>
+<li><strong>Edit and re-save</strong> — Recall a profile, tweak the settings, then click
+   <strong>Add Profile to Schedule</strong> again and give it the same name (to overwrite)
+   or a new name (to create a variant).</li>
+<li><strong>Run on demand</strong> — Either click <strong>Run Now</strong> on the Schedule tab to run the
+   selected profile(s) immediately, or recall a profile and click the tab's
+   <strong>Run</strong> button. The job executes using the saved profile settings without
+   waiting for the scheduled cron time.</li>
+</ol>
+<p>Recalling a profile does <strong>not</strong> modify the saved config file. If you want to
+make the recalled settings the new default, click <strong>Save Config</strong>
+after recalling.</p>
+<h3 id="detail-pane-profile-selected">Detail pane (profile selected)<a class="headerlink" href="#detail-pane-profile-selected" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Profile / Type</strong> — read-only name and tab type</li>
+<li><strong>Cron Parameters</strong> — five editable fields. Each field accepts numbers, <code>*</code> (any value), comma-separated lists,
+  ranges, and steps:</li>
+<li><strong>Minute</strong> — <code>0-59</code>, <code>*</code>, e.g. <code>1,15,30</code>, <code>9-17</code>, <code>*/5</code></li>
+<li><strong>Hour</strong> — <code>0-23</code>, <code>*</code>, e.g. <code>0,6,12</code>, <code>9-17</code>, <code>*/2</code></li>
+<li><strong>Day of Month</strong> — <code>1-31</code>, <code>*</code>, e.g. <code>1,15</code>, <code>10-20</code></li>
+<li><strong>Month</strong> — <code>1-12</code>, <code>*</code>, e.g. <code>1,4,7,10</code>, <code>3-5</code></li>
+<li><strong>Day of Week</strong> — <code>0-7</code> (<code>0</code> and <code>7</code> are Sunday), <code>*</code>, e.g. <code>1-5</code>, <code>*/2</code>,
+    plus ordinal qualifiers <code>6#1</code> (first Saturday) through <code>6#5</code>, <code>6#L</code> (last
+    Saturday), lists <code>6#1,3</code>, and ranges <code>6#1,3-5</code></li>
+<li><strong>Interpretation</strong> — live prose explanation of the cron expression
+  (e.g. <em>"At 02:00 every day"</em> or <em>"Every 15 minutes on weekdays"</em>)</li>
+<li><strong>Examples</strong> — next three datetimes that match the expression</li>
+<li><strong>Crontab entry</strong> — for active profiles, the exact cron line that was written
+  to <code>/etc/cron.d/zfsutilities</code>. This is shown at the top of the detail pane so
+  you can verify the command, arguments, and output redirect without opening the
+  cron file manually.</li>
+<li><strong>Config Summary</strong> — collapsible, scrollable JSON dump of the full profile
+  config. The text is selectable; right-click for <strong>Copy</strong> and <strong>Select All</strong>.</li>
+</ul>
+<h3 id="cron-syntax">Cron syntax<a class="headerlink" href="#cron-syntax" title="Permanent link">&para;</a></h3>
+<p>The Schedule tab supports a subset of standard Vixie cron syntax in each
+field:</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Example</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Single value</td>
+<td><code>15</code></td>
+<td>At minute 15</td>
+</tr>
+<tr>
+<td>Any value</td>
+<td><code>*</code></td>
+<td>Every minute/hour/day/etc.</td>
+</tr>
+<tr>
+<td>List</td>
+<td><code>1,15,30</code></td>
+<td>At minutes 1, 15, and 30</td>
+</tr>
+<tr>
+<td>Range</td>
+<td><code>9-17</code></td>
+<td>From 9 through 17 (inclusive)</td>
+</tr>
+<tr>
+<td>Step</td>
+<td><code>*/5</code> or <code>9-17/2</code></td>
+<td>Every 5 units, or every 2 units inside the range</td>
+</tr>
+</tbody>
+</table>
+<p>These patterns can be combined within a field (e.g. <code>1,9-17/2,30</code>).</p>
+<p><strong>Weekday ordinals:</strong> The Day-of-Week field supports ordinal qualifiers using
+<code>#</code> to schedule a specific occurrence of a weekday within the month. Standard
+Vixie cron does not understand this syntax, so the GUI writes a plain weekday
+to <code>/etc/cron.d/zfsutilities</code> and <code>profile_runner.py</code> applies the ordinal
+check at runtime.</p>
+<table>
+<thead>
+<tr>
+<th>Example</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>6#1</code></td>
+<td>First Saturday of the month</td>
+</tr>
+<tr>
+<td><code>6#2</code></td>
+<td>Second Saturday of the month</td>
+</tr>
+<tr>
+<td><code>6#3</code></td>
+<td>Third Saturday of the month</td>
+</tr>
+<tr>
+<td><code>6#4</code></td>
+<td>Fourth Saturday of the month</td>
+</tr>
+<tr>
+<td><code>6#5</code></td>
+<td>Fifth Saturday of the month (may not occur)</td>
+</tr>
+<tr>
+<td><code>6#L</code></td>
+<td>Last Saturday of the month</td>
+</tr>
+<tr>
+<td><code>6#1,3</code></td>
+<td>First and third Saturdays</td>
+</tr>
+<tr>
+<td><code>6#1,3-5</code></td>
+<td>First, third, fourth, and fifth Saturdays</td>
+</tr>
+<tr>
+<td><code>6#1,L</code></td>
+<td>First and last Saturdays</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Not supported:</strong> textual weekday or month names (<code>MON</code>, <code>JAN</code>), cron
+special strings (<code>@daily</code>, <code>@hourly</code>), <code>L</code>/<code>W</code> qualifiers for non-weekday
+fields, <code>W</code>/<code>?</code> qualifiers, or question marks. For a full cron syntax
+reference, see <a href="https://crontab.guru/">crontab.guru</a>.</p>
+<h3 id="actions_4">Actions<a class="headerlink" href="#actions_4" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Save</strong></td>
+<td>Saves all pending changes (active toggles and cron parameters) and regenerates <code>/etc/cron.d/zfsutilities</code>. Turns <strong>red</strong> when any row or cron field has unsaved changes.</td>
+</tr>
+<tr>
+<td><strong>Revert</strong></td>
+<td>Restores all pending changes to their last-saved values.</td>
+</tr>
+<tr>
+<td><strong>Delete</strong></td>
+<td>Removes the selected profile file and its cron entry (with confirmation)</td>
+</tr>
+</tbody>
+</table>
+<p>Toggling the <strong>Active</strong> checkbox marks that profile as dirty. The change
+is committed when you click <strong>Save</strong>.</p>
+<h3 id="how-cron-works">How cron works<a class="headerlink" href="#how-cron-works" title="Permanent link">&para;</a></h3>
+<p>Each active profile becomes one line in <code>/etc/cron.d/zfsutilities</code>, a
+system drop-in file managed exclusively by the ZFS Utilities GUI. The file
+sets <code>MAILTO=""</code> so cron does not send email; the GUI and runner write their
+own session logs.</p>
+<p>Scheduled jobs automatically
+track whatever active version is installed.</p>
+<p>Scheduled jobs run in the background and execute the same commands the GUI would run:</p>
+<ul>
+<li><strong>backup</strong> — generates snapshot name, runs the pre-backup command, rsync
+  pulls, ZFS send/receive, and the post-backup snapshot prune</li>
+<li><strong>offsite</strong> — generates offsite snapshot, detects online offsite pool,
+  runs send/receive steps with optional holds</li>
+<li><strong>restore</strong> — runs the two-part restore (full + incremental)</li>
+<li><strong>retention</strong> — runs <code>zfscleanup</code> for each selected pool with the specified snapshot label</li>
+<li><strong>scrub</strong> — queues pools for scrubbing and polls until all finish or time out</li>
+</ul>
+<div class="admonition notice">
+<p class="admonition-title">Notice</p>
+<p>To change the tab-related parameters of a profile
+(pull steps, send/receive steps, pool lists, etc.), go to the appropriate
+tab, recall the profile, make your changes and click <strong>Add Profile to Schedule</strong>.</p>
+<p>The <strong>Save</strong> button on the Schedule tab commits only the items whose <strong>Active</strong> checkbox is selected. Others are removed from cron.</p>
+</div>
+<hr />
+<h2 id="checkagainst-tab">Checkagainst Tab<a class="headerlink" href="#checkagainst-tab" title="Permanent link">&para;</a></h2>
+<p>This tab edits the <a href="../../commands-and-modules/modules/#zfscheckagainst"><code>zfscheckagainst</code></a>
+table used for verification when deleting snapshots.</p>
+<p>The table is split into four sections:</p>
+<ul>
+<li><strong>Backup-derived entries</strong> — rows generated from active Backup tab
+  send/receive steps.</li>
+<li><strong>Offsite-derived entries</strong> — rows generated from active Offsite tab
+  send/receive steps.</li>
+<li><strong>User entries</strong> — manually maintained rows that always override
+  derived rows for the same <code>(source_root, label)</code> pair.</li>
+<li><strong>Merged fss table</strong> — read-only preview of the effective runtime table
+  after the active derived sections and user entries are merged.</li>
+</ul>
+<p><code>zfscheckagainst</code> uses the merged table to map a snapshot to its
+counterpart dataset(s). Before a snapshot is deleted, the script verifies
+that the candidate snapshot is not the last common snapshot shared with any
+counterpart. If the counterpart pool is offline and the snapshot label is
+<code>offsite</code>, hold tags are used as receipts to decide whether deletion is
+safe.</p>
+<p>For the full algorithm and return codes, see the
+<a href="../../commands-and-modules/modules/#zfscheckagainst"><code>zfscheckagainst</code> module reference</a>.</p>
+<h3 id="layout_3">Layout<a class="headerlink" href="#layout_3" title="Permanent link">&para;</a></h3>
+<p>The tab content scrolls vertically when the derived and user-entry tables do
+not fit in the window.</p>
+<p>The two derived sections are read-only tables. Each has an <strong>Active</strong>
+checkbox at the top:</p>
+<ul>
+<li>When checked, the rows in that section are included in the merged
+  runtime table.</li>
+<li>When unchecked, the section is ignored.</li>
+</ul>
+<p>The bottom <strong>User entries</strong> section is an editable, reorderable table.
+Drag rows to reorder them; click a cell to edit it.</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Snapshot label</strong></td>
+<td>Snapshot label to match. This entry applies only to snapshots carrying this label (e.g. <code>dailybackup</code>, <code>offsite</code>).</td>
+</tr>
+<tr>
+<td><strong>Source root</strong></td>
+<td>Source dataset tree this row applies to. A snapshot's dataset must be this root or one of its descendants. <code>&lt;offsite&gt;</code> may appear anywhere and expands per offsite-candidate pool at run-time.</td>
+</tr>
+<tr>
+<td><strong>Destination root</strong></td>
+<td>Destination dataset tree where the counterpart is expected. The counterpart is built by replacing the source-root prefix of the snapshot's dataset with this value. <code>&lt;offsite&gt;</code> may appear anywhere and expands per offsite-candidate pool at run-time.</td>
+</tr>
+<tr>
+<td><strong>Comment</strong></td>
+<td>Optional note stored in the saved configuration and shown in this table. Use for documenting the entry's purpose.</td>
+</tr>
+</tbody>
+</table>
+<p>Hover over any column header to see a tooltip explaining the field.</p>
+<h3 id="how-the-counterpart-dataset-is-constructed">How the counterpart dataset is constructed<a class="headerlink" href="#how-the-counterpart-dataset-is-constructed" title="Permanent link">&para;</a></h3>
+<p><code>zfscheckagainst</code> builds the counterpart dataset by replacing the snapshot's
+source-root prefix with the destination-root prefix.</p>
+<p>For example, with a snapshot dataset of <code>poolA/data/vm-101-disk-0</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Source root</th>
+<th>Destination root</th>
+<th>Counterpart dataset</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>poolA/data</code></td>
+<td><code>poolB/poolA/data</code></td>
+<td><code>poolB/poolA/data/vm-101-disk-0</code></td>
+</tr>
+<tr>
+<td><code>poolB/poolA/data</code></td>
+<td><code>poolA/data</code></td>
+<td><code>poolA/data/vm-101-disk-0</code></td>
+</tr>
+</tbody>
+</table>
+<p>For the project's normal Backup/Restore pool names, a snapshot on
+<code>threeamigos/proxmox/vm-101-disk-0@dailybackup-…-d</code> produces:</p>
+<table>
+<thead>
+<tr>
+<th>Source root</th>
+<th>Destination root</th>
+<th>Counterpart dataset</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>threeamigos</code></td>
+<td><code>fivebays/threeamigos</code></td>
+<td><code>fivebays/threeamigos/proxmox/vm-101-disk-0</code></td>
+</tr>
+<tr>
+<td><code>fivebays/threeamigos</code></td>
+<td><code>threeamigos</code></td>
+<td><code>threeamigos/proxmox/vm-101-disk-0</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="special-value-offsite">Special value <code>&lt;offsite&gt;</code><a class="headerlink" href="#special-value-offsite" title="Permanent link">&para;</a></h3>
+<p><code>&lt;offsite&gt;</code> may be used anywhere in the Source root or Destination root
+column. Every occurrence is replaced at run time with every pool marked as
+an offsite candidate in the <a href="#pools-tab">Pools tab</a>.</p>
+<p>Examples using a snapshot dataset of <code>poolA/data/vm-101-disk-0</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Source root</th>
+<th>Destination root</th>
+<th>Counterpart dataset(s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>poolA/data</code></td>
+<td><code>&lt;offsite&gt;</code></td>
+<td><code>z22tb/poolA/data/vm-101-disk-0</code>, <code>z40tb/poolA/data/vm-101-disk-0</code>, …</td>
+</tr>
+<tr>
+<td><code>&lt;offsite&gt;/temp</code></td>
+<td><code>temp</code></td>
+<td><code>temp/vm-101-disk-0</code> (after replacing <code>z22tb/temp</code>, <code>z40tb/temp</code>, …)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="merged-fss-table-preview">Merged fss table preview<a class="headerlink" href="#merged-fss-table-preview" title="Permanent link">&para;</a></h3>
+<p>The <strong>Merged fss table</strong> section at the bottom of the tab is a read-only,
+live-updating preview of the table that <code>zfscheckagainst</code> will actually use.
+It is built by merging the active derived sections and the user entries with
+this precedence for the same <code>(source_root, label)</code> key:</p>
+<ol>
+<li><strong>User entries</strong> — highest precedence.</li>
+<li><strong>Offsite-derived entries</strong>.</li>
+<li><strong>Backup-derived entries</strong> — lowest precedence.</li>
+</ol>
+<p>Rows that are missing a required field (Snapshot label, Source root, or
+Destination root) are not shown in the preview, because they cannot be used
+by <code>zfscheckagainst</code>.</p>
+<p><code>&lt;offsite&gt;</code> is displayed as a literal placeholder in the preview. Expansion
+to the actual offsite-candidate pools happens at run time inside
+<code>zfscheckagainst</code>.</p>
+<h3 id="derived-entries">Derived entries<a class="headerlink" href="#derived-entries" title="Permanent link">&para;</a></h3>
+<p>Derived rows are generated automatically from the Backup and Offsite tab
+send/receive steps. For each active step <code>source → dest</code> with label
+<code>dailybackup</code> (Backup) or <code>offsite</code> (Offsite), two rows are produced:</p>
+<ul>
+<li><strong>Forward</strong>: <code>source &lt;actual_destination&gt; &lt;label&gt;</code></li>
+<li><strong>Reverse</strong>: <code>&lt;actual_destination&gt; source &lt;label&gt;</code></li>
+</ul>
+<p>The actual destination root is the destination path that <code>zfs-send-receive</code>
+will use. When the Offsite Destination column contains <code>&lt;offsite&gt;</code>, the
+derived row keeps the placeholder literal. <code>zfscheckagainst</code> expands it to
+every pool marked as an offsite candidate in the <a href="#pools-tab">Pools tab</a> at
+run time, so one derived row can verify against all candidate pools.</p>
+<h3 id="actions_5">Actions<a class="headerlink" href="#actions_5" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Get Entries</strong></td>
+<td>Refresh the Backup-derived and Offsite-derived sections from the current Backup/Offsite configs. Marks the tab dirty.</td>
+</tr>
+<tr>
+<td><strong>Add pair...</strong></td>
+<td>Open an assistant that asks for snapshot label, source root, destination root, and comment; it appends the forward row and the reverse row to the user table.</td>
+</tr>
+<tr>
+<td><strong>Add Row</strong></td>
+<td>Appends a new empty row to the user table.</td>
+</tr>
+<tr>
+<td><strong>Remove Row</strong></td>
+<td>Deletes the selected row(s) from the user table.</td>
+</tr>
+<tr>
+<td><strong>Save</strong></td>
+<td>Saves the whole <code>checkagainst</code> object after validation. Turns <strong>red</strong> while there are unsaved changes.</td>
+</tr>
+<tr>
+<td><strong>Revert</strong></td>
+<td>Discards all changes and reloads from the last saved object.</td>
+</tr>
+</tbody>
+</table>
+<p>A status label below the table shows <strong>orange</strong> "Unsaved changes" while
+edits are pending, or a <strong>red</strong> validation error if a row is missing a
+required field (Source root, Destination root, or Snapshot label).</p>
+<h3 id="auto-seeding">Auto-seeding<a class="headerlink" href="#auto-seeding" title="Permanent link">&para;</a></h3>
+<p>After a successful Backup, Offsite, or Restore run started from the GUI,
+the corresponding source/destination pair is automatically added to the
+<strong>User entries</strong> table. This only happens when:</p>
+<ul>
+<li>The run completed successfully.</li>
+<li>The destination does <strong>not</strong> contain <code>&lt;offsite&gt;</code>.</li>
+<li>An equivalent row (same source dataset, label, and destination dataset)
+  does not already exist.</li>
+</ul>
+<p>When a row is added this way, an <code>INFO</code> message is logged. Auto-seeding
+does not happen for scheduled profile or cron runs; it is GUI-only.</p>
+<hr />
+<h2 id="pools-tab">Pools Tab<a class="headerlink" href="#pools-tab" title="Permanent link">&para;</a></h2>
+<p>This tab shows every pool known to the system (from <code>zpool list</code>) and
+lets you maintain the pool registry stored in JSON. It also contains the
+<strong>Scrub Manager</strong> for starting, pausing, resuming, and stopping pool scrubs.</p>
+<h3 id="pool-table">Pool table<a class="headerlink" href="#pool-table" title="Permanent link">&para;</a></h3>
+<p>Columns: <strong>Pool</strong>, <strong>Offsite</strong>, <strong>Health</strong>, <strong>Errors</strong>, <strong>Size</strong>, <strong>Alloc</strong>, <strong>Free</strong>, <strong>Freeing</strong>,
+<strong>Ckpoint</strong>, <strong>Frag</strong>, <strong>Cap</strong>.</p>
+<p>Multiple pools can be selected at once (Ctrl+click or Shift+click). Most
+actions operate on every selected row.</p>
+<p><strong>Pool name column:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Style</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Red</strong></td>
+<td>Pool is online but <em>not</em> in the registry. Select the pool, click <strong>Add</strong> then <strong>Save</strong> to register it.</td>
+</tr>
+<tr>
+<td>Orange</td>
+<td>Pool is registered but currently offline (not returned by <code>zpool list</code>).</td>
+</tr>
+<tr>
+<td>Default color</td>
+<td>Pool is registered and online.</td>
+</tr>
+</tbody>
+</table>
+<p>The <strong>Offsite</strong> column shows a checkbox for every registered pool. Checking it
+marks that pool as an offsite candidate; the Offsite tab detects the first
+online candidate at run time. Unregistered pools cannot be marked as offsite
+candidates. The checkbox state is saved with the registry when you click
+<strong>Save</strong>.</p>
+<p><strong>Health column:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Style</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Green</td>
+<td><code>ONLINE</code></td>
+</tr>
+<tr>
+<td>Orange, bold</td>
+<td><code>DEGRADED</code></td>
+</tr>
+<tr>
+<td>Orange, normal</td>
+<td><code>OFFLINE</code> (not present in <code>zpool list</code>)</td>
+</tr>
+<tr>
+<td>Red</td>
+<td>Any other state (<code>FAULTED</code>, <code>UNAVAIL</code>, <code>REMOVED</code>, …)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Errors column:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Style</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Green</td>
+<td><code>No errors</code> — <code>zpool status</code> reports no data or vdev errors</td>
+</tr>
+<tr>
+<td>Red, bold</td>
+<td>Error summary from <code>zpool status</code> (vdev READ/WRITE/CKSUM counters or permanent data errors)</td>
+</tr>
+<tr>
+<td>Default color</td>
+<td><code>—</code> — pool is offline or status could not be fetched</td>
+</tr>
+</tbody>
+</table>
+<h3 id="actions-pool-registry">Actions — Pool Registry<a class="headerlink" href="#actions-pool-registry" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Watch</strong></td>
+<td>Opens a <a href="#pool-watch-windows">Pool Watch window</a> for each selected online pool</td>
+</tr>
+<tr>
+<td><strong>Add</strong></td>
+<td>Adds the selected unregistered pool to the registry (or opens a dialog to type a name if none is selected)</td>
+</tr>
+<tr>
+<td><strong>Remove</strong></td>
+<td>Removes all selected registered pools from the registry (not from ZFS) after confirmation</td>
+</tr>
+<tr>
+<td><strong>Import</strong></td>
+<td>Imports selected offline pools directly, or opens a dialog listing importable pools if none are selected</td>
+</tr>
+<tr>
+<td><strong>Export</strong></td>
+<td>Confirms, then runs <code>zpool export</code> on all selected pools</td>
+</tr>
+<tr>
+<td><strong>Save</strong></td>
+<td>Saves registry changes; turns <strong>red</strong> while there are unsaved changes</td>
+</tr>
+<tr>
+<td><strong>Revert</strong></td>
+<td>Reloads registry from the last saved settings</td>
+</tr>
+<tr>
+<td><strong>Refresh</strong></td>
+<td>Re-runs <code>zpool list</code> and refreshes the table</td>
+</tr>
+</tbody>
+</table>
+<p>Right-click any cell to <strong>Copy</strong> the cell value or the full row
+(tab-separated).</p>
+<h3 id="scrub-manager">Scrub Manager<a class="headerlink" href="#scrub-manager" title="Permanent link">&para;</a></h3>
+<p>Below the pool registry is the Scrub Manager, separated by a draggable
+divider. It maintains a queue of pending, active, paused, and finished
+scrubs. The queue is saved to disk automatically and survives GUI restarts.</p>
+<h4 id="controls">Controls<a class="headerlink" href="#controls" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Simultaneous scrubs</strong></td>
+<td>Target number of scrubs running at the same time (1–10). Default: <strong>1</strong>.</td>
+</tr>
+<tr>
+<td><strong>Refresh every (s)</strong></td>
+<td>How often the scrub status table updates (1–300 seconds). Default: <strong>10</strong>.</td>
+</tr>
+<tr>
+<td><strong>System weekly scrub</strong></td>
+<td>Enable the pre-installed <code>zfs-scrub-weekly@&lt;pool&gt;.timer</code> for every registered pool</td>
+</tr>
+<tr>
+<td><strong>System monthly scrub</strong></td>
+<td>Enable the pre-installed <code>zfs-scrub-monthly@&lt;pool&gt;.timer</code> for every registered pool</td>
+</tr>
+</tbody>
+</table>
+<p>The system-scrub toggles are independent of the ZFS Utilities schedule.
+They modify systemd timer units directly and persist across GUI restarts.</p>
+<h4 id="scrub-status-table">Scrub status table<a class="headerlink" href="#scrub-status-table" title="Permanent link">&para;</a></h4>
+<p>Columns: <strong>Pool</strong>, <strong>Status</strong>, <strong>Progress</strong>, <strong>Last Scrub</strong>, <strong>Scan Line</strong>.</p>
+<p><code>Last Scrub</code> shows the date the last scrub finished or was canceled; it is
+blank (<code>—</code>) if the pool has never been scrubbed.</p>
+<p>Multi-select rows with Ctrl+click or Shift+click, then use the action
+buttons to control them.</p>
+<h4 id="actions-scrub-manager">Actions — Scrub Manager<a class="headerlink" href="#actions-scrub-manager" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Start Scrub</strong></td>
+<td>Adds selected pools to the pending queue. Pools that are currently paused are re-queued as pending. The manager automatically starts them up to the target.</td>
+</tr>
+<tr>
+<td><strong>Pause Scrub</strong></td>
+<td>Pauses selected active or pending scrubs (<code>zpool scrub -p</code>)</td>
+</tr>
+<tr>
+<td><strong>Resume Scrub</strong></td>
+<td>Returns selected paused pools to the pending queue. They resume when a scrub slot is available and do not preempt scrubs that are already running.</td>
+</tr>
+<tr>
+<td><strong>Stop Scrub</strong></td>
+<td>Stops selected scrubs (<code>zpool scrub -s</code>) and removes them from the queue</td>
+</tr>
+<tr>
+<td><strong>Add Profile to Schedule</strong></td>
+<td>Saves selected pools and all settings as a scheduled profile</td>
+</tr>
+</tbody>
+</table>
+<p>After any scrub action, the status table refreshes in a short burst so state
+changes appear quickly even when the normal refresh interval is long.</p>
+<p>Scrub actions are independent of backup, restore, prune, and dataset-deletion
+jobs.  They use live <code>zpool status</code> to decide whether a requested transition is
+valid, so pressing <strong>Pause Scrub</strong> does not fail just because a backup is
+running on a dataset in the same pool.</p>
+<h4 id="how-the-queue-works">How the queue works<a class="headerlink" href="#how-the-queue-works" title="Permanent link">&para;</a></h4>
+<ol>
+<li><strong>Pending</strong> — pools waiting to be scrubbed. A pool is added here when
+   you press <strong>Start Scrub</strong>, even if <code>zpool status</code> currently shows a prior
+   finished or canceled scrub; the manager still starts a fresh scrub. The manager starts pending pools until the simultaneous target is reached.</li>
+<li><strong>Active</strong> — pools currently <strong>scrubbing</strong>.</li>
+<li><strong>Paused</strong> — pools that were paused manually or by lowering the target.
+   A manually paused pool stays paused until you press <strong>Resume Scrub</strong> or
+   <strong>Start Scrub</strong>; either action returns it to the pending queue. It then
+   waits for an available scrub slot and does not preempt running scrubs.
+   Pools paused only because the target was lowered are resumed automatically
+   when the target is raised again or a running scrub finishes.</li>
+<li><strong>Finished</strong> — pools whose scrub completed or was canceled. Finished
+   entries are automatically replaced when a new scrub starts on the same pool.</li>
+</ol>
+<p>If you lower the simultaneous target below the current active count, the
+manager pauses the newest active scrubs. If you raise it, pending scrubs are started or paused scrubs are resumed.</p>
+<p>Externally-started scrubs (e.g. from the command line or a systemd timer)
+are detected automatically and incorporated into the active, paused, or
+finished buckets. A 30-second grace period prevents freshly-started scrubs
+from being mistakenly marked finished while ZFS is still initializing them.</p>
+<hr />
+<h2 id="log-panel">Log Panel<a class="headerlink" href="#log-panel" title="Permanent link">&para;</a></h2>
+<p>The bottom panel shows a scrollable log of all operations. Every line is
+prefixed with a <code>YYYY-MM-DD HH:MM:SS</code> timestamp. The divider between
+the main content area and the log panel can be dragged to resize the log.</p>
+<p>A <strong>Pop Out</strong> button (window icon) next to the <strong>Log</strong> level dropdown detaches the
+entire bottom panel into an independent window. This lets you further resize the
+window or move it to a second monitor. Click the button again (or close
+the pop-out window) to dock it back. The pop-out window's size and position are
+remembered across sessions. The search bar and Clear button travel with the
+panel when popped out.</p>
+<h3 id="search-and-clear">Search and Clear<a class="headerlink" href="#search-and-clear" title="Permanent link">&para;</a></h3>
+<p>Above the text view, a search bar provides:</p>
+<ul>
+<li><strong>Search entry</strong> — type a query and press Enter (or click <strong>Search</strong>)</li>
+<li><strong>Search</strong> button — finds and highlights every match. The current match is
+  highlighted in <strong>orange</strong>; all other matches are highlighted in <strong>yellow</strong>.</li>
+<li><strong>Reset</strong> button — clears highlights and empties the search field</li>
+<li><strong>Previous / Next</strong> arrow buttons — cycle through matches, wrapping around at
+  the first/last match. A counter shows the current position (e.g. <code>3 / 12</code>).
+  The viewer scrolls so the current match is visible.</li>
+<li>Searches are <strong>case-insensitive</strong>.</li>
+</ul>
+<p>A <strong>Clear</strong> button next to the <strong>Input</strong> entry empties the log buffer, clears
+search highlights, and resets the warning/error indicator.</p>
+<p>Job progress is shown as text in the log stream. Each running step logs its
+description, and <code>zfs receive</code> summary lines report bytes transferred. A
+status label below the log view displays the current step and progress text,
+including <code>pv</code> progress lines for interactive runs and for profiles started
+with <strong>Run Now</strong> from the Schedule tab. The <code>pv</code> progress lines update the
+status label but are not written to the session log, so the log stream is not
+flooded with one update per second.</p>
+<p>In the <a href="#logs-tab">Logs tab</a>, the log viewer also has its own status label.
+When you select a <strong>Running</strong> log, the viewer shows the latest <code>pv</code> progress
+line for that specific task.</p>
+<h3 id="warning-and-error-indicator">Warning and error indicator<a class="headerlink" href="#warning-and-error-indicator" title="Permanent link">&para;</a></h3>
+<p>Next to the <strong>Log</strong> level dropdown, a colored indicator appears when the log
+contains a <code>WARN:</code> or <code>FATAL:</code> message:</p>
+<table>
+<thead>
+<tr>
+<th>Indicator</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Orange</strong> <code>⚠ Warning</code></td>
+<td>At least one <code>WARN:</code> message has been logged</td>
+</tr>
+<tr>
+<td><strong>Red</strong> <code>✗ Error</code></td>
+<td>At least one <code>FATAL:</code> message has been logged</td>
+</tr>
+</tbody>
+</table>
+<p>The indicator remains until you initiate a new action (e.g., clicking <strong>Run
+Backup</strong> or <strong>Run Offsite</strong>), so you can notice warnings even if they scrolled
+out of view. <code>FATAL:</code> takes precedence over <code>WARN:</code>. Clearing the log buffer
+with the <strong>Clear</strong> button also resets the indicator.</p>
+<p><code>WARN:</code> and <code>FATAL:</code> lines are also shown in color inside the log panel
+itself (orange and red, respectively).</p>
+<div class="admonition tip">
+<p class="admonition-title">Jump to the latest warning/error</p>
+<p>Click the indicator to search the log for the most recent message of the
+same level. The search box opens (if it is hidden) and the view jumps to
+the latest <code>WARN:</code> or <code>FATAL:</code> entry.</p>
+</div>
+<div class="admonition tip">
+<p class="admonition-title">Tip</p>
+<p>The live log panel is useful for the current operation. For reviewing
+historical runs, open the <a href="#logs-tab">Logs tab</a>.</p>
+</div>
+<hr />
+<h2 id="logs-tab">Logs Tab<a class="headerlink" href="#logs-tab" title="Permanent link">&para;</a></h2>
+<p>Browse, view, search, and manage session log files produced by every GUI run,
+scheduled cron job, and direct CLI script execution.</p>
+<h3 id="log-list-top-pane">Log list (top pane)<a class="headerlink" href="#log-list-top-pane" title="Permanent link">&para;</a></h3>
+<p>A sortable table with columns:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Date/Time</strong></td>
+<td>When the session started. Default sort is <strong>descending</strong> (newest first).</td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td><code>backup</code>, <code>offsite</code>, <code>restore</code>, <code>prune</code> — the operation type</td>
+</tr>
+<tr>
+<td><strong>Name</strong></td>
+<td><code>gui</code> for GUI runs, or <code>profile-&lt;name&gt;</code> for scheduled/cron runs</td>
+</tr>
+<tr>
+<td><strong>Status</strong></td>
+<td><code>Done</code>, <code>Failed</code>, <code>Cancelled</code>, <code>Running</code>, <code>Warn</code>, or <code>Fatal</code>.</td>
+</tr>
+<tr>
+<td><strong>Log Size</strong></td>
+<td>Size of the log file on disk</td>
+</tr>
+<tr>
+<td><strong>Duration</strong></td>
+<td>Total elapsed time in <code>HH:MM:SS</code></td>
+</tr>
+<tr>
+<td><strong>Transfer</strong></td>
+<td>Total bytes transferred during ZFS send/receive steps</td>
+</tr>
+</tbody>
+</table>
+<p>Click any column heading to change the sort order.</p>
+<p>Click any row to load that log into the viewer below. Hold Ctrl or Shift to
+select multiple rows; the <strong>Delete Selected</strong> action and the right-click menu
+operate on the full selection.</p>
+<p>Right-click any row to open a context menu:</p>
+<ul>
+<li><strong>Copy path</strong> — copy the full log file path to the clipboard</li>
+<li><strong>Delete selected log(s)</strong> — remove every selected log file after confirmation</li>
+</ul>
+<h3 id="log-viewer-bottom-pane">Log viewer (bottom pane)<a class="headerlink" href="#log-viewer-bottom-pane" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><strong>Text view</strong> — The currently-selected log appears here.</p>
+</li>
+<li>
+<p><strong>Level filter</strong> — a dropdown above the text view lets you show only messages
+  at the selected priority or higher. It works the same way as the bottom-panel
+  <strong>Log</strong> level filter and does not affect what is stored in the log file.</p>
+</li>
+<li>
+<p><strong>Live tail</strong> — when a log with status <strong>Running</strong> is selected, the viewer
+  automatically loads all existing content and shows new lines as they arrive.
+  Auto-scroll to the bottom occurs only if the scroll position was already near
+  the bottom; if you have scrolled up to read earlier output, your position is
+  preserved. To prevent unbounded memory growth on very long-running jobs, the
+  live viewer keeps only the most recent <strong>2 MB</strong> of characters in the text
+  buffer and drops older content.</p>
+</li>
+<li>
+<p><strong>Large logs</strong> — log files larger than <strong>1 MB</strong> are opened tail-first. The
+  viewer shows a header indicating that the beginning is skipped and displays a
+  <strong>Load Full Log</strong> button. Clicking it prompts for confirmation, then reads the
+  entire file from the start. This prevents the GUI from hanging if a session
+  log grows very large.</p>
+</li>
+<li>
+<p><strong>Reused or appended logs</strong> — if a session log file is reused or appended to,
+  the log list and viewer show the status, duration, and transfer bytes from the
+  <strong>final</strong> run, because <code>log_index.py</code> treats the last <code># END</code> trailer as
+  authoritative.</p>
+</li>
+<li>
+<p><strong>Pop Out</strong> — a button in the search bar detaches the entire viewer (search
+  controls + text view + Show More) into an independent window.</p>
+</li>
+<li>
+<p><strong>Search bar</strong> — above the text view:</p>
+</li>
+<li>
+<p><strong>Search entry</strong> — type a query and press Enter (or click <strong>Search</strong>)</p>
+</li>
+<li><strong>Search</strong> button — finds and highlights every occurrence. The current
+    match is highlighted in <strong>orange</strong>; all other matches are highlighted in
+    <strong>yellow</strong>.</li>
+<li><strong>Reset</strong> button — clears highlights and empties the search field</li>
+<li><strong>Previous / Next</strong> arrow buttons — cycle through matches, wrapping around
+    at the first/last match. A counter shows the current position (e.g. <code>3 / 12</code>).
+    The viewer scrolls so the current match is visible.</li>
+<li>Searches are <strong>case-insensitive</strong>.</li>
+<li>The search query is <strong>retained</strong> when you switch to a different log file;
+    the search automatically reruns against the newly loaded text.</li>
+</ul>
+<h3 id="retention-control">Retention control<a class="headerlink" href="#retention-control" title="Permanent link">&para;</a></h3>
+<p>A <strong>success-rate summary</strong> appears above the log list (e.g. <em>"Success rate (30 days): 95 % (19 / 20)"</em>). It is computed from the backup history file and updates automatically every time the log list refreshes.</p>
+<p>A <strong>Retention (days)</strong> spin button above the log list sets how long session
+files are kept. The default is <strong>30 days</strong>. Old files are pruned automatically
+when a scheduled run starts, or manually via the <strong>Prune Old</strong> action button.</p>
+<div class="admonition warning">
+<p class="admonition-title">Setting retention to 0</p>
+<p>A value of <strong>0</strong> means <strong>all</strong> session log files will be deleted. Use this with caution.</p>
+</div>
+<h3 id="actions_6">Actions<a class="headerlink" href="#actions_6" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Refresh</strong></td>
+<td>Rescan <code>/var/log/zfsutilities/sessions/</code> and refresh the list. The list also refreshes automatically whenever files are created, modified, or deleted in the sessions directory.</td>
+</tr>
+<tr>
+<td><strong>Delete Selected</strong></td>
+<td>Remove the selected log file(s) after confirmation</td>
+</tr>
+<tr>
+<td><strong>Prune Old</strong></td>
+<td>Delete all session files older than the retention setting</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="datasets-tab">Datasets Tab<a class="headerlink" href="#datasets-tab" title="Permanent link">&para;</a></h2>
+<p>This tab displays a hierarchical, collapsible tree of all pools, datasets,
+snapshots, and hold tags.</p>
+<h3 id="tree-conventions">Tree conventions<a class="headerlink" href="#tree-conventions" title="Permanent link">&para;</a></h3>
+<p>The dataset tree uses typography to indicate row kind:</p>
+<table>
+<thead>
+<tr>
+<th>Style</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Bold</strong></td>
+<td>Pool name (top-level row)</td>
+</tr>
+<tr>
+<td>Normal</td>
+<td>Regular dataset</td>
+</tr>
+<tr>
+<td>Normal <code>[clone]</code></td>
+<td>Dataset that is a ZFS clone (origin shown in last column)</td>
+</tr>
+<tr>
+<td><em>Italic</em></td>
+<td>Snapshot or hold tag</td>
+</tr>
+</tbody>
+</table>
+<p>Holds are shown as children of their snapshot. Expanding a snapshot
+row reveals any hold tags attached to it.</p>
+<p>The <strong>Origin / Clones</strong> column shows:</p>
+<ul>
+<li>For clone datasets: the origin snapshot the clone was created from</li>
+<li>For snapshots with dependent clones: a comma-separated list of clone
+  dataset names</li>
+<li>Empty for all other rows</li>
+</ul>
+<h3 id="snapshot-and-hold-actions">Snapshot and hold actions<a class="headerlink" href="#snapshot-and-hold-actions" title="Permanent link">&para;</a></h3>
+<p>The list supports multi-select; action buttons are enabled or disabled
+based on what is selected.</p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Enabled when</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Snapshot</strong></td>
+<td>Exactly one pool or dataset selected</td>
+<td>Creates a new snapshot (prompts for name; suggests <code>manual-YYYY-mm-ddTHH:MM</code>)</td>
+</tr>
+<tr>
+<td><strong>Delete</strong></td>
+<td>Only snapshots and/or holds selected</td>
+<td>Holds are released (<code>zfs release</code>); snapshots are destroyed (<code>zfs destroy</code>). Mixed selections are supported: holds are released first, then snapshots deleted. Snapshots with remaining holds won't be deleted.</td>
+</tr>
+<tr>
+<td><strong>Add Hold</strong></td>
+<td>At least one snapshot selected</td>
+<td>Prompts for a tag (default <code>keep</code>) and applies it to each selected snapshot</td>
+</tr>
+<tr>
+<td><strong>Rollback</strong></td>
+<td>Exactly one snapshot selected</td>
+<td>Rolls the dataset back to that snapshot (destroys newer snapshots)</td>
+</tr>
+<tr>
+<td><strong>Show Files</strong></td>
+<td>Exactly one mounted filesystem selected</td>
+<td>Opens the dataset's mountpoint in the default file manager (via <code>xdg-open</code>). Disabled for pools, volumes, snapshots, holds, and unmounted filesystems.</td>
+</tr>
+<tr>
+<td><strong>Browse Snapshot</strong></td>
+<td>Exactly one snapshot selected, parent mounted</td>
+<td>Opens the snapshot via <code>.zfs/snapshot/&lt;name&gt;</code> in the default file manager. ZFS auto-mounts the snapshot on first access.</td>
+</tr>
+<tr>
+<td><strong>Unmount Snapshot</strong></td>
+<td>Exactly one snapshot selected, currently mounted</td>
+<td>Runs <code>sudo umount</code> on the snapshot's <code>.zfs/snapshot/&lt;name&gt;</code> path. If processes are still using the snapshot, a warning dialog lists them and asks you to close them before retrying.</td>
+</tr>
+<tr>
+<td><strong>Refresh</strong></td>
+<td>Always</td>
+<td>Re-reads all pools, datasets, snapshots, and holds while preserving the tree's vertical scroll position and current selection whenever possible</td>
+</tr>
+<tr>
+<td><strong>Expand Selected</strong></td>
+<td>One or more pool/dataset/snapshot rows selected</td>
+<td>Recursively expands each selected row and its lazy-loaded descendants. Placeholder rows and hold tags are skipped.</td>
+</tr>
+<tr>
+<td><strong>Collapse All</strong></td>
+<td>Always</td>
+<td>Collapses the entire tree</td>
+</tr>
+<tr>
+<td><strong>Show Big Stuff</strong></td>
+<td>Exactly one pool selected</td>
+<td>Runs <a href="../../commands-and-modules/commands/#zfsshowbigstuff"><code>zfsshowbigstuff</code></a> on the selected pool and streams the output to the log panel. Useful for quickly finding the largest datasets in a pool.</td>
+</tr>
+</tbody>
+</table>
+<p>Right-click any cell for a context menu:</p>
+<ul>
+<li><strong>Copy</strong> — copies the clicked cell value</li>
+<li><strong>Copy row</strong> — copies the full row (tab-separated)</li>
+<li><strong>Copy full name</strong> — copies the fully-qualified dataset or snapshot name
+  (e.g. <code>pool/data/dataset-a@offsite-…</code>). For hold tags,
+  this copies the parent snapshot name.</li>
+</ul>
+<hr />
+<h2 id="retention-tab">Retention Tab<a class="headerlink" href="#retention-tab" title="Permanent link">&para;</a></h2>
+<p>This tab manages per-pool retention policies (see also
+<a href="../retention/">Retention Policies</a>).</p>
+<h3 id="pool-selector-and-policy-editor">Pool selector and policy editor<a class="headerlink" href="#pool-selector-and-policy-editor" title="Permanent link">&para;</a></h3>
+<p>The drop-down list at the top lists <code>default</code> plus every pool with an
+explicit entry. Selecting a pool loads its bucket list into the editor
+table; edits show <strong>Unsaved changes</strong> in orange until you click <strong>Save</strong>
+or <strong>Revert</strong>.</p>
+<p>The label above the editor table shows which pool is currently being edited
+(e.g. <em>"Editing retention policy for pool: default"</em>).</p>
+<h3 id="editor-table">Editor table<a class="headerlink" href="#editor-table" title="Permanent link">&para;</a></h3>
+<p>The editor table has four columns:</p>
+<ul>
+<li><strong>Bucket</strong> — the single-letter bucket key (<code>d</code>, <code>w</code>, <code>m</code>, <code>s</code>, or a custom
+  letter). The GUI groups snapshots by this letter during pruning. You can add
+  or remove bucket rows with the <strong>Add Bucket</strong> / <strong>Remove Bucket</strong> buttons.</li>
+<li><strong>Type</strong> — a read-only display name derived from the bucket letter (<code>d</code>→Daily,
+  <code>w</code>→Weekly, <code>m</code>→Monthly, <code>s</code>→Offsite). Custom buckets show the uppercase letter.
+  This column is gray to indicate it is not editable.</li>
+<li><strong>Retain Count</strong> — how many snapshots in this bucket to keep. When a bucket
+  exceeds this count, older snapshots become candidates for deletion.</li>
+<li><strong>Min Age</strong> — minimum age in <strong>days</strong> before a snapshot in this bucket can be
+  pruned. A snapshot younger than this is protected even if the bucket is over
+  its Retain Count. Setting Min Age &gt; 0 while Retain Count is 0 has no effect;
+  the status line warns you when this happens.</li>
+</ul>
+<p>The status line below the table turns <strong>orange</strong> when there are unsaved changes
+or when a Min Age is set on a bucket whose Retain Count is 0.</p>
+<h3 id="policy-actions">Policy actions<a class="headerlink" href="#policy-actions" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Add Policy</strong></td>
+<td>Creates a new pool-level retention entry seeded from <code>default</code>. A dialog offers a drop-down list of known and online pools that do not already have a policy, or a free-form entry if all candidates are covered.</td>
+</tr>
+<tr>
+<td><strong>Remove Policy</strong></td>
+<td>Deletes the currently-selected pool's entry (after confirmation). Blocked for <code>default</code>. The pool is removed from the Prune list and falls back to the <code>default</code> policy.</td>
+</tr>
+<tr>
+<td><strong>Add Bucket</strong></td>
+<td>Adds a new bucket row to the editor table</td>
+</tr>
+<tr>
+<td><strong>Remove Bucket</strong></td>
+<td>Removes the selected bucket row</td>
+</tr>
+<tr>
+<td><strong>Save</strong></td>
+<td>Saves the policy for the currently-selected pool, any pending bucket edits made to other pools, the prune snapshot label, and the advanced prune options</td>
+</tr>
+<tr>
+<td><strong>Revert</strong></td>
+<td>Discards all pending edits (for every pool) and reloads the saved policy, prune label, and advanced prune options</td>
+</tr>
+<tr>
+<td><strong>Add Profile to Schedule</strong></td>
+<td>Saves a snapshot of current prune settings (label + selected pools) as a scheduled profile</td>
+</tr>
+<tr>
+<td><strong>Recall Profile</strong></td>
+<td>Loads a previously-saved retention profile into this tab for editing or on-demand execution</td>
+</tr>
+</tbody>
+</table>
+<h3 id="prune-runner">Prune runner<a class="headerlink" href="#prune-runner" title="Permanent link">&para;</a></h3>
+<p>Below the editor, a multi-select list shows online pools that have an explicit
+retention policy. Drag rows to reorder the pool list. Select one or more, set
+the snapshot label (default <code>dailybackup</code>), and click <strong>Prune</strong> to run a prune
+job for each pool in sequence. Pools without an explicit policy are not shown
+here; they are pruned according to the <code>default</code> policy only when called from
+<code>zfsdailybackup</code>.</p>
+<p>The label is persisted in the JSON config under <code>prune_label</code> and survives
+across GUI restarts. Changing the label marks the page dirty; click <strong>Save</strong>
+to persist it, or <strong>Revert</strong> to restore the saved value.</p>
+<p>The <strong>Prune</strong> button becomes <strong>Cancel</strong> while a prune job is running;
+output streams to the log panel at the bottom of the window, and any
+interactive prompts may be responded to in the <strong>Input</strong> entry next to the <strong>Send</strong>
+button.</p>
+<h4 id="what-happens-during-a-prune">What happens during a prune<a class="headerlink" href="#what-happens-during-a-prune" title="Permanent link">&para;</a></h4>
+<p>By default, for each selected pool, the GUI runs a prune job that applies the
+pool's retention policy to all datasets. It prunes in three phases: offsite
+same-month deduplication (only for <code>@offsite</code> snapshots), same-day
+deduplication within each bucket, and bucket-count enforcement. The most
+recent snapshot in each bucket is protected as the incremental backup base.
+Clone snapshots (<code>c</code> bucket) are skipped entirely.</p>
+<p>Before any snapshot is destroyed, <code>zfscheckagainst</code> verifies it is not the
+last common snapshot shared with a counterpart dataset (e.g. an offsite pool).</p>
+<p>If <strong>Dry Run</strong> is active, deletions are simulated and the log panel shows what
+would be deleted without actually destroying anything.</p>
+<p>For the full algorithm, see the
+<a href="../../commands-and-modules/modules/#zfsretain"><code>zfsretain</code> module reference</a>.</p>
+<h4 id="ignore-retention-policies">Ignore retention policies<a class="headerlink" href="#ignore-retention-policies" title="Permanent link">&para;</a></h4>
+<p>The <strong>Advanced Prune Options</strong> card lets you change what the <strong>Prune</strong> button
+deletes. Open the card and check <strong>Ignore Retention Policies</strong> to run
+<a href="../../commands-and-modules/commands/#zfsmassdelsnaps"><code>zfsmassdelsnaps</code></a> instead
+of <code>zfscleanup</code>. In this mode, <strong>Prune</strong> lists every matching snapshot and
+deletes them after confirmation, bypassing retention counts, <code>minage</code>, and
+<code>zfscheckagainst</code>.</p>
+<p>Available filters:</p>
+<ul>
+<li><strong>Includes / Excludes / Start With / End With</strong> — dataset name filters passed
+  to <code>zfsbuildfsarray</code></li>
+<li><strong>Snapshot Has</strong> — only snapshots whose full name contains this substring are
+  considered</li>
+<li><strong>Release Holds</strong> — release ZFS holds before deleting (only when ignore mode
+  is active)</li>
+</ul>
+<p>Dry Run previews the affected snapshots without deleting anything. Before
+confirming a real delete, the candidate list is followed by an estimated amount
+of disk space that would be freed (the sum of each snapshot's <code>used</code> property).
+When <strong>Release Holds</strong> is enabled, holds are released automatically without an
+additional confirmation for each snapshot.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Ignore mode can delete snapshots that are still needed for incremental
+backups. Use it only when you are certain the snapshots are no longer needed.</p>
+</div>
+<hr />
+<h2 id="pool-watch-windows">Pool Watch Windows<a class="headerlink" href="#pool-watch-windows" title="Permanent link">&para;</a></h2>
+<p>The <strong>Watch</strong> action on the Pools tab opens an <strong>independent</strong> window for
+the selected pool. Each window:</p>
+<ul>
+<li>Has its own dataset tree, refreshed every 30 seconds</li>
+<li>Starts collapsed; use <strong>Expand All</strong> / <strong>Collapse All</strong></li>
+<li>Can be opened for multiple pools simultaneously</li>
+<li>Runs its own refresh timer, stopped automatically when the window is closed</li>
+<li>Clicking <strong>Watch</strong> again for a pool that already has a window brings that
+  window to the front instead of creating a duplicate</li>
+</ul>
+<p>The list inside a Pool Watch window follows the same conventions as the
+<a href="#datasets-tab">Datasets tab</a>.</p>
+<hr />
+<h2 id="context-menus">Context Menus<a class="headerlink" href="#context-menus" title="Permanent link">&para;</a></h2>
+<p>All dataset lists in the GUI support right-click → <strong>Copy</strong> for the clicked
+cell and the full row (tab-separated). The Datasets view and Pool Watch
+windows additionally offer <strong>Copy full name</strong>, which copies the
+fully-qualified dataset or snapshot name.</p>
+<p>The <strong>Schedule</strong> tab's Config Summary text view also has a right-click menu
+with <strong>Copy</strong> (current selection, or all text if nothing is selected) and
+<strong>Select All</strong>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      ZFS Utilities v0.72.1
+    </div>
+  
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

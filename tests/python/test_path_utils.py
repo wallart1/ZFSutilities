@@ -6,9 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from test_support import mock_subprocess, patch_environ
-
 import path_utils
+from test_support import mock_subprocess, patch_environ
 
 
 class TestGetScriptDir(unittest.TestCase):

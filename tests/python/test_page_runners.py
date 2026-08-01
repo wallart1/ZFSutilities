@@ -10,10 +10,9 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk, temp_config_dir
 from app_context import AppContext
 from command_builders import BashStep
-from feature_config import _maybe_seed_checkagainst
+from test_support import mock_gtk, temp_config_dir
 
 
 def _mock_app_with_runner():

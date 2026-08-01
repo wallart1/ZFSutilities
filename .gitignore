@@ -18,8 +18,6 @@ venv/
 .coverage
 htmlcov/
 
-# Generated documentation site
-06 Docs/site/
 
 # Large / working files not meant for version control
 *.png

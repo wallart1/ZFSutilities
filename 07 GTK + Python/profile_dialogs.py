@@ -121,7 +121,7 @@ def _show_profile_scope_warnings(app, profile):
     """Validate the saved profile against others and show warnings."""
     try:
         profiles = list_profiles()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return
     names = {p.get("profile_name") for p in profiles}
     if profile.get("profile_name") not in names:

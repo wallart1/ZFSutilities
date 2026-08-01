@@ -1,11 +1,11 @@
 """Tests for the Backup tab UI."""
 
-import os
 import unittest
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
-from test_support import mock_gtk, temp_config_dir
 from app_context import AppContext
+from test_support import mock_gtk, temp_config_dir
 
 
 class _NoOpDirtyTracker:
@@ -66,7 +66,7 @@ class _FakeCheckButton(_FakeWidgetBase):
 
 
 class _FakeApp:
-    config = {}
+    config: ClassVar[dict] = {}
     _ui_state = MagicMock()
     _save_config_button = MagicMock()
     ctx = AppContext(
@@ -103,77 +103,74 @@ class TestBackupPageLabels(unittest.TestCase):
     """Verify user-visible labels on the Backup tab."""
 
     def test_post_step_labels_use_clear_language(self):
-        with temp_config_dir():
-            with mock_gtk():
-                import backup_page
-                import gui_helpers
+        with temp_config_dir(), mock_gtk():
+            import backup_page
+            import gui_helpers
 
-                # Provide concrete widget classes so isinstance() checks pass.
-                backup_page.Gtk.Entry = _FakeEntry
-                backup_page.Gtk.CheckButton = _FakeCheckButton
-                gui_helpers.Gtk.Entry = _FakeEntry
-                gui_helpers.Gtk.CheckButton = _FakeCheckButton
-                backup_page.DirtyTracker = _NoOpDirtyTracker
+            # Provide concrete widget classes so isinstance() checks pass.
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+            gui_helpers.Gtk.Entry = _FakeEntry
+            gui_helpers.Gtk.CheckButton = _FakeCheckButton
+            backup_page.DirtyTracker = _NoOpDirtyTracker
 
-                app = _FakeApp()
-                backup_page.create_backup_page(app, app.ctx)
+            app = _FakeApp()
+            backup_page.create_backup_page(app, app.ctx)
 
-                self.assertEqual(
-                    app.backup_post_snapfile.label,
-                    "Clear snapshot name memory",
-                )
-                self.assertEqual(
-                    app.backup_post_retention.label,
-                    "Prune snapshots",
-                )
-                self.assertEqual(
-                    app.backup_pull_steps_active.label,
-                    "Active",
-                )
+            self.assertEqual(
+                app.backup_post_snapfile.label,
+                "Clear snapshot name memory",
+            )
+            self.assertEqual(
+                app.backup_post_retention.label,
+                "Prune snapshots",
+            )
+            self.assertEqual(
+                app.backup_pull_steps_active.label,
+                "Active",
+            )
 
 
 class TestBackupPageScriptLabels(unittest.TestCase):
     """Verify pre/post backup labels use 'command' instead of 'script'."""
 
     def test_pre_backup_label_says_command(self):
-        with temp_config_dir():
-            with mock_gtk():
-                import backup_page
-                import gui_helpers
+        with temp_config_dir(), mock_gtk():
+            import backup_page
+            import gui_helpers
 
-                backup_page.Gtk.Entry = _FakeEntry
-                backup_page.Gtk.CheckButton = _FakeCheckButton
-                gui_helpers.Gtk.Entry = _FakeEntry
-                gui_helpers.Gtk.CheckButton = _FakeCheckButton
-                backup_page.DirtyTracker = _NoOpDirtyTracker
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+            gui_helpers.Gtk.Entry = _FakeEntry
+            gui_helpers.Gtk.CheckButton = _FakeCheckButton
+            backup_page.DirtyTracker = _NoOpDirtyTracker
 
-                app = _FakeApp()
-                backup_page.create_backup_page(app, app.ctx)
+            app = _FakeApp()
+            backup_page.create_backup_page(app, app.ctx)
 
-                self.assertEqual(
-                    app.backup_pre_script_enabled.label,
-                    "Run pre-backup command",
-                )
+            self.assertEqual(
+                app.backup_pre_script_enabled.label,
+                "Run pre-backup command",
+            )
 
     def test_post_backup_label_says_command(self):
-        with temp_config_dir():
-            with mock_gtk():
-                import backup_page
-                import gui_helpers
+        with temp_config_dir(), mock_gtk():
+            import backup_page
+            import gui_helpers
 
-                backup_page.Gtk.Entry = _FakeEntry
-                backup_page.Gtk.CheckButton = _FakeCheckButton
-                gui_helpers.Gtk.Entry = _FakeEntry
-                gui_helpers.Gtk.CheckButton = _FakeCheckButton
-                backup_page.DirtyTracker = _NoOpDirtyTracker
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+            gui_helpers.Gtk.Entry = _FakeEntry
+            gui_helpers.Gtk.CheckButton = _FakeCheckButton
+            backup_page.DirtyTracker = _NoOpDirtyTracker
 
-                app = _FakeApp()
-                backup_page.create_backup_page(app, app.ctx)
+            app = _FakeApp()
+            backup_page.create_backup_page(app, app.ctx)
 
-                self.assertEqual(
-                    app.backup_post_script_enabled.label,
-                    "Run post-backup command",
-                )
+            self.assertEqual(
+                app.backup_post_script_enabled.label,
+                "Run post-backup command",
+            )
 
 
 class TestBackupVariables(unittest.TestCase):
@@ -285,7 +282,7 @@ class _FakeBackupApp:
     """Minimal app stand-in for dialog-loop tests."""
 
     _dry_run_active = False
-    config = {}
+    config: ClassVar[dict] = {}
     ctx = AppContext(config=config, script_dir="", parent_dir="", version="dev")
 
     def clear_log_status(self):

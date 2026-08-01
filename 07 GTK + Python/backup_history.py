@@ -85,7 +85,7 @@ def format_duration(seconds):
     """
     if seconds is None or seconds < 0:
         seconds = 0
-    total = int(round(seconds))
+    total = round(seconds)
     hours = total // 3600
     minutes = (total % 3600) // 60
     secs = total % 60

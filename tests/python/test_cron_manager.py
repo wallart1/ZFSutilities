@@ -3,9 +3,8 @@
 import os
 import unittest
 
-from test_support import temp_config_dir, capture_logs
-
 import cron_manager
+from test_support import temp_config_dir
 
 
 class TestGenerateCronLine(unittest.TestCase):
@@ -90,7 +89,7 @@ class TestInterpretCron(unittest.TestCase):
 class TestWriteCronFile(unittest.TestCase):
 
     def test_writes_file(self):
-        with temp_config_dir() as tmpdir:
+        with temp_config_dir():
             profiles = [
                 {"profile_name": "p1", "active": True, "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"}},
                 {"profile_name": "p2", "active": False, "cron": {"minute": "0", "hour": "3", "day": "*", "month": "*", "weekday": "*"}},

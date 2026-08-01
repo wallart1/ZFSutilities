@@ -478,7 +478,7 @@ def _schedule_refresh_worker(app, selected_names, store_names):
     """Background thread target: gather schedule refresh data."""
     try:
         data = _gather_schedule_refresh_data(app, selected_names, store_names)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log_msg(f"WARN: Schedule refresh failed: {exc}")
         data = None
     GLib.idle_add(_on_schedule_refresh_done, app, data)

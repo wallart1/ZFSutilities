@@ -308,3 +308,5 @@ function and calling `wait` before reading it back.
 output. It works for both Python modules and bash scripts invoked via
 `subprocess.run` because the bash `log_msg` writes to stderr, which can be
 captured separately with `capture_stderr()`.
+* **Linting** — Run `ruff check .` from the repository root before committing
+Python changes. The Ruff configuration is in `pyproject.toml`.

@@ -4,7 +4,6 @@ import fcntl
 import multiprocessing
 import os
 import tempfile
-import time
 import unittest
 
 import file_locking as fl

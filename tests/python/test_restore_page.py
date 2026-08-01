@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -70,9 +71,9 @@ class _FakeCheckButton:
 
 
 class _FakeApp:
-    config = {}
+    config: ClassVar[dict] = {}
     ctx = MagicMock()
-    ctx.config = {"pools": [{"name": "threeamigos"}, {"name": "fivebays"}]}
+    ctx.config: ClassVar[dict] = {"pools": [{"name": "threeamigos"}, {"name": "fivebays"}]}
 
 
 def _restore_app(source="", dest="", auto_dest=False):

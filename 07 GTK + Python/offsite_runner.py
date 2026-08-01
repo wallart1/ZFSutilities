@@ -9,7 +9,6 @@ deletion.
 import shlex
 import subprocess
 
-from backup_config import log_msg
 from command_builders import BashStep, _dryrun_assignments
 
 

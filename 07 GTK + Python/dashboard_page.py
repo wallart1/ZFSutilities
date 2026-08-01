@@ -1233,7 +1233,7 @@ def _dashboard_refresh_worker(app):
     """Background thread target: gather dashboard data."""
     try:
         data = _gather_dashboard_data(app)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log_msg(f"WARN: Dashboard data gathering failed: {exc}")
         data = None
     GLib.idle_add(_on_dashboard_refresh_done, app, data)

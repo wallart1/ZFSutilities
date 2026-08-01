@@ -1,0 +1,2570 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation for ZFS backup, snapshot, and retention management utilities">
+      
+      
+      
+      
+        <link rel="prev" href="../lock-manager/">
+      
+      
+        <link rel="next" href="../two-node-config/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>Concurrency Collisions - ZFS Utilities</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#concurrency-and-collision-risks-in-zfs-utilities" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ZFS Utilities" class="md-header__button md-logo" aria-label="ZFS Utilities" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ZFS Utilities
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Concurrency Collisions
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="blue-grey" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../installation/" class="md-tabs__link">
+          
+  
+  
+  Installation
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../user-guide/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../commands-and-modules/" class="md-tabs__link">
+          
+  
+  
+  Commands & Modules
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../messages/" class="md-tabs__link">
+          
+  
+  
+  Messages
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ZFS Utilities" class="md-nav__button md-logo" aria-label="ZFS Utilities" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ZFS Utilities
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Installation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/zfs-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ZFS Key Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts and Terminology
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts and Terminology
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/profiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Profiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/gtk-gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GTK GUI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command Line Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Command Line Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/daily-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Daily Backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/offsite-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Offsite Backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restore Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/retention/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retention Policies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/proxmox-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Developer Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coding-policies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Policies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lock-manager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lock Manager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concurrency Collisions
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concurrency Collisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-protected-today" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is protected today
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#job-types-and-the-resources-they-touch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Job types and the resources they touch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#unaccounted-for-collision-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unaccounted-for collision scenarios
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Unaccounted-for collision scenarios">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-prune-running-at-the-same-time-as-a-backup-or-restore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Prune running at the same time as a backup or restore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-two-prune-jobs-on-the-same-pool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Two prune jobs on the same pool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-dataset-destroy-colliding-with-backup-restore-or-prune" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Dataset destroy colliding with backup, restore, or prune
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-snapshot-name-collisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Snapshot-name collisions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-config-and-state-file-write-races" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Config and state-file write races
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-scrub-jobs-managed-by-multiple-uncoordinated-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Scrub jobs managed by multiple uncoordinated paths
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-headless-profile_runnerpy-has-no-global-lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Headless profile_runner.py has no global lock
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-checkagainst-reads-while-deletions-are-in-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Checkagainst reads while deletions are in progress
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#9-gui-tab-isolation-is-incomplete" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. GUI tab isolation is incomplete
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#10-two-restores-targeting-the-same-destination" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Two restores targeting the same destination
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#severity-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Severity summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#short-term-operational-guidance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Short-term operational guidance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#longer-term-hardening-recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Longer-term hardening recommendations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recently-resolved-phase-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recently resolved (Phase 2)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recently-resolved-phase-3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recently resolved (Phase 3)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recently-resolved-phase-6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recently resolved (Phase 6)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recently-resolved-snapshot-before-lock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recently resolved (snapshot-before-lock)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-files-and-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related files and tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../two-node-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../global-variables/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Global Variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-structures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Structures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../doc-server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands & Modules
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Commands & Modules
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/two-node/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Two-Node Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/python-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Messages
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Messages
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/developer-guide/concurrency-collisions.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="concurrency-and-collision-risks-in-zfs-utilities">Concurrency and Collision Risks in ZFS Utilities<a class="headerlink" href="#concurrency-and-collision-risks-in-zfs-utilities" title="Permanent link">&para;</a></h1>
+<p>This document describes what happens when two or more ZFS Utilities jobs run at
+the same time, and which collisions are <strong>not</strong> currently prevented by the
+existing locking code.</p>
+<h2 id="what-is-protected-today">What is protected today<a class="headerlink" href="#what-is-protected-today" title="Permanent link">&para;</a></h2>
+<p>The project has a hierarchical lock manager, <code>zfslockmanager</code>, that supports
+three lock types on ZFS datasets:</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Meaning</th>
+<th>Conflicts with</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>r</code></td>
+<td>Shared read (metadata/listing)</td>
+<td><code>w</code>, <code>x</code></td>
+</tr>
+<tr>
+<td><code>w</code></td>
+<td>Exclusive write (snapshots, send/receive)</td>
+<td><code>r</code>, <code>w</code>, <code>x</code></td>
+</tr>
+<tr>
+<td><code>x</code></td>
+<td>Exclusive destroy (dataset/snapshot destruction)</td>
+<td><code>r</code>, <code>w</code>, <code>x</code></td>
+</tr>
+</tbody>
+</table>
+<p>Locks are stored in <code>/run/lock/zfs/.locks/</code> and are automatically released on
+process exit. The manager also detects hierarchical conflicts: a lock on
+<code>pool/parent</code> blocks conflicting locks on descendants, and locks on descendants
+block a parent <code>x</code> lock.</p>
+<p>Only two modules currently use the lock manager:</p>
+<ul>
+<li><strong><code>zfs-send-receive</code></strong> acquires a <code>w</code> lock on the source dataset <strong>and</strong> a <code>w</code>
+  lock on the destination dataset before creating or choosing a snapshot and
+  before each transfer.</li>
+<li><strong><code>zfsdelsnap</code></strong> acquires a <code>w</code> lock on the parent dataset before deleting a
+  snapshot.</li>
+</ul>
+<p>The GUI no longer globally serializes <code>Backup</code>, <code>Offsite</code>, and <code>Restore</code>.
+All three may run concurrently; per-dataset locks still serialize them when
+they touch the same datasets. Each GUI runner keeps its Python-level log
+output in its own session log so concurrent runs do not cross-write.</p>
+<p>Everything else runs without coordination.</p>
+<h2 id="job-types-and-the-resources-they-touch">Job types and the resources they touch<a class="headerlink" href="#job-types-and-the-resources-they-touch" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Job type</th>
+<th>Entry points</th>
+<th>Datasets / pools</th>
+<th>Snapshots</th>
+<th>Config / state files</th>
+<th>Other shared resources</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Backup</strong></td>
+<td><code>zfsdailybackup</code>, GUI Backup, profiles</td>
+<td>Source + dest pools (e.g. <code>threeamigos/proxmox</code>, <code>NVME1</code> → <code>fivebays</code>)</td>
+<td>Creates <code>@dailybackup-*</code></td>
+<td>Reads backup steps, pools</td>
+<td><code>/tmp/zfsnextsnap_*</code>, session log, rsync endpoints</td>
+</tr>
+<tr>
+<td><strong>Offsite</strong></td>
+<td><code>zfssendoffsite</code>, GUI Offsite, profiles</td>
+<td>Source pools → offsite pool</td>
+<td>Creates <code>@offsite-*</code>, applies holds</td>
+<td>Reads offsite pool list</td>
+<td><code>/tmp/zfsnextsnap_*</code>, session log</td>
+</tr>
+<tr>
+<td><strong>Restore</strong></td>
+<td><code>zfsrestore</code>/<code>zfsfullcopy</code>, GUI Restore, profiles</td>
+<td>Source backup pool → dest pool</td>
+<td>Copies/rolls back snapshots</td>
+<td>Restore params</td>
+<td>iSCSI LUNs if restoring zvols</td>
+</tr>
+<tr>
+<td><strong>Prune</strong></td>
+<td><code>zfscleanup</code>/<code>zfsretain</code>, GUI Retention, profiles</td>
+<td>All configured/online pools</td>
+<td><strong>Destroys</strong> snapshots</td>
+<td>Retention policies</td>
+<td>Calls <code>delsnap</code></td>
+</tr>
+<tr>
+<td><strong>Scrub</strong></td>
+<td><code>zfsscruball</code>, GUI Pools, profiles, systemd timers</td>
+<td>One or more pools</td>
+<td>—</td>
+<td><code>scrub_state.json</code></td>
+<td><code>/tmp/zfsscruball.state</code></td>
+</tr>
+<tr>
+<td><strong>Dataset destroy</strong></td>
+<td>GUI Datasets → Delete</td>
+<td>Selected subtree</td>
+<td>Destroys all snapshots</td>
+<td>—</td>
+<td>iSCSI manifest, encrypted-LUN config</td>
+</tr>
+<tr>
+<td><strong>Snapshot delete</strong></td>
+<td>GUI Datasets → Delete selected snapshots</td>
+<td>Selected snapshots</td>
+<td>Destroys snapshots</td>
+<td>—</td>
+<td>Holds must be released first</td>
+</tr>
+<tr>
+<td><strong>Checkagainst</strong></td>
+<td><code>zfscheckagainst</code>, GUI Checkagainst</td>
+<td>Counterpart pools/datasets</td>
+<td>Reads snapshot GUIDs</td>
+<td><code>checkagainst</code> table</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h2 id="unaccounted-for-collision-scenarios">Unaccounted-for collision scenarios<a class="headerlink" href="#unaccounted-for-collision-scenarios" title="Permanent link">&para;</a></h2>
+<p>The scenarios below are ordered roughly by severity.</p>
+<h3 id="1-prune-running-at-the-same-time-as-a-backup-or-restore">1. Prune running at the same time as a backup or restore<a class="headerlink" href="#1-prune-running-at-the-same-time-as-a-backup-or-restore" title="Permanent link">&para;</a></h3>
+<p><code>zfscleanup</code> and <code>zfsretain</code> never lock the datasets they iterate. Only the
+individual <code>delsnap</code> calls lock the parent dataset for the moment of deletion.
+This means a prune job can enumerate snapshots, decide which ones to delete, and
+start deleting them while another job is in the middle of a long-running
+<code>zfs-send-receive</code> that depends on those snapshots.</p>
+<p><strong>Possible outcomes</strong></p>
+<ul>
+<li>An incremental send fails because its base snapshot was deleted.</li>
+<li>A restore that needs an older common snapshot cannot find it.</li>
+<li>A resumable receive cannot be resumed because the snapshot it depends on is
+gone.</li>
+<li>The prune itself logs a "Dataset is busy" warning (<code>skipbusy='Y'</code>) and skips
+a snapshot that was actually deleted by the concurrent job, but the warning is
+not treated as an error.</li>
+</ul>
+<p><strong>How to trigger it</strong></p>
+<p>Start a restore or offsite backup, then click <strong>Prune</strong> in the GUI while the
+first job is still sending/receiving. There is no GUI check that prevents this.</p>
+<h3 id="2-two-prune-jobs-on-the-same-pool">2. Two prune jobs on the same pool<a class="headerlink" href="#2-two-prune-jobs-on-the-same-pool" title="Permanent link">&para;</a></h3>
+<p>Nothing prevents two <code>zfscleanup</code> runs (GUI + profile, profile + profile, or GUI
++ GUI) from targeting the same pool at the same time. Both enumerate the same
+snapshot list and try to delete the same snapshots. One will succeed; the other
+will get "dataset does not exist" or "Dataset is busy" warnings that are logged
+and ignored.</p>
+<h3 id="3-dataset-destroy-colliding-with-backup-restore-or-prune">3. Dataset destroy colliding with backup, restore, or prune<a class="headerlink" href="#3-dataset-destroy-colliding-with-backup-restore-or-prune" title="Permanent link">&para;</a></h3>
+<p><code>zfsdelfs</code> does not call <code>zfslockmanager</code>. It destroys a dataset and all its
+snapshots without acquiring an <code>x</code> lock. If a backup is sending/receiving that
+dataset, or a prune is deleting snapshots inside it, the concurrent destroy can
+fail partway through, leave partial state, or cause the other job to fail.</p>
+<p>This is especially risky for restores: a full-copy restore calls <code>delfs</code> on the
+destination before receiving, and <code>zfsdelfs</code> does not coordinate with another
+restore or backup targeting the same destination.</p>
+<h3 id="4-snapshot-name-collisions">4. Snapshot-name collisions<a class="headerlink" href="#4-snapshot-name-collisions" title="Permanent link">&para;</a></h3>
+<p>Snapshot names are generated from the current minute. Both bash and Python
+generators now serialize name generation with a brief global lock and record the
+issued name in a one-minute reservation file (<code>/run/lock/zfs/.snapname.reserved</code>).</p>
+<ul>
+<li>Bash callers use <code>zfssnapbuild</code>, which writes <code>/tmp/zfsnextsnap_&lt;caller&gt;</code>.</li>
+<li>Python callers use <code>feature_config.generate_snapshot_name()</code> and
+  <code>generate_offsite_snapshot_name()</code>, which write
+  <code>/root/.config/zfsutilities_nextsnap</code> and
+  <code>/root/.config/zfsutilities_offsite_nextsnap</code>.</li>
+</ul>
+<p>The lock prevents two jobs from generating a name at the exact same instant. Two
+jobs that run sequentially within the same minute still receive the same name,
+but any collision on the same dataset is prevented by the per-dataset <code>w</code> locks
+from Phases 1 and 2.</p>
+<h3 id="5-config-and-state-file-write-races">5. Config and state-file write races<a class="headerlink" href="#5-config-and-state-file-write-races" title="Permanent link">&para;</a></h3>
+<p><strong>Resolved by Phase 4.</strong></p>
+<p>Shared JSON/state files now use advisory <code>flock</code> locking with one lock file per
+data file. Python callers use <code>fcntl.flock</code>; the <code>zfsconfig</code> bash helper uses
+the system <code>flock</code> command on the same lock files so both environments
+interoperate.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Writers</th>
+<th>Readers</th>
+<th>Lock file</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/root/.config/zfsutilities.json</code></td>
+<td>GUI (<code>save_config</code>), <code>zfsconfig</code> bash helper</td>
+<td>Bash scripts via <code>zfsconfig</code>, <code>profile_runner.py</code> at startup</td>
+<td><code>/run/lock/zfs/.config.lock</code></td>
+</tr>
+<tr>
+<td><code>/root/.config/zfsutilities-history.json</code></td>
+<td><code>BackupRunner._finish()</code>, <code>profile_runner.py</code></td>
+<td>Logs tab, dashboard</td>
+<td><code>/run/lock/zfs/.history.lock</code></td>
+</tr>
+<tr>
+<td><code>/var/log/zfsutilities/sessions/.log_index.json</code></td>
+<td><code>BackupRunner</code>, <code>profile_runner.py</code>, Logs tab</td>
+<td>Logs tab</td>
+<td><code>/run/lock/zfs/.log_index.lock</code></td>
+</tr>
+<tr>
+<td><code>/root/.config/zfsutilities/scrub_state.json</code></td>
+<td><code>ScrubQueue</code></td>
+<td><code>ScrubQueue</code> on restart</td>
+<td><code>/run/lock/zfs/.scrub_state.lock</code></td>
+</tr>
+</tbody>
+</table>
+<p>The following files are still not lock-protected because they are outside the
+scope of this phase:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Writers</th>
+<th>Readers</th>
+<th>Risk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
+<td><code>zfsdelfs</code>, <code>new-vm-disk</code>, <code>remove-vm-disk</code>, two-node scripts</td>
+<td>Two-node target rebuild</td>
+<td>Concurrent modifications can leave an inconsistent manifest.</td>
+</tr>
+<tr>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Same as above</td>
+<td>Same as above</td>
+<td>Encrypted LUN entries can be duplicated or lost.</td>
+</tr>
+<tr>
+<td><code>/var/log/zfsutilities/rsync-backup.log</code></td>
+<td>rsync pull/push steps</td>
+<td>Users</td>
+<td><code>BackupRunner</code> truncates this file once per day (when its mtime is from a previous day); concurrent runners append and may interleave output.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="6-scrub-jobs-managed-by-multiple-uncoordinated-paths">6. Scrub jobs managed by multiple uncoordinated paths<a class="headerlink" href="#6-scrub-jobs-managed-by-multiple-uncoordinated-paths" title="Permanent link">&para;</a></h3>
+<p>There are at least four ways a scrub can be started or controlled:</p>
+<ul>
+<li>GUI Pools tab (<code>ScrubQueue</code> in <code>scrub_manager.py</code>).</li>
+<li>Scheduled scrub profiles via <code>profile_runner.py</code>.</li>
+<li>Standalone <code>zfsscruball</code>.</li>
+<li>Systemd timers (if <code>system_scrub_weekly</code> / <code>system_scrub_monthly</code> are enabled).</li>
+</ul>
+<p>Scrub actions do not use the hierarchical dataset lock manager because a scrub
+has no dependency on backup, restore, prune, or dataset destruction.  Instead,
+each action consults the live <code>zpool status</code> scrub state and skips itself when
+the requested transition is invalid (for example, pausing a pool that is not
+currently scanning).  ZFS itself rejects invalid transitions, so the worst-case
+outcome of concurrent scrub control is a logged warning, not data loss.</p>
+<h3 id="7-headless-profile_runnerpy-has-no-global-lock">7. Headless <code>profile_runner.py</code> has no global lock<a class="headerlink" href="#7-headless-profile_runnerpy-has-no-global-lock" title="Permanent link">&para;</a></h3>
+<p><code>profile_runner.py run &lt;profile&gt;</code> is what cron executes. It:</p>
+<ul>
+<li>Sets <code>ZFSUTILITIES_HEADLESS=Y</code>, which makes <code>zfslock_wait_or_resolve</code> <strong>abort</strong>
+  immediately on a dataset lock conflict instead of waiting.</li>
+<li>Has no global mutex, so the same profile can be started again by cron while the
+  previous instance is still running.</li>
+<li>Can run at the same time as the GUI, a manual CLI script, or another profile.</li>
+</ul>
+<p>Because headless mode aborts on lock conflict, a scheduled job can fail with
+<code>rc=9</code> just because a manual operation happened to be holding a dataset lock at
+that moment.</p>
+<h3 id="8-checkagainst-reads-while-deletions-are-in-progress">8. Checkagainst reads while deletions are in progress<a class="headerlink" href="#8-checkagainst-reads-while-deletions-are-in-progress" title="Permanent link">&para;</a></h3>
+<p><code>zfscheckagainst</code> reads snapshot lists and GUIDs to compare source and
+counterpart datasets. It does not lock the datasets it reads. If a prune or
+dataset destroy runs concurrently, <code>zfscheckagainst</code> may see a snapshot that
+disappears before it finishes, or it may report spurious mismatches.</p>
+<h3 id="9-gui-tab-isolation-is-incomplete">9. GUI tab isolation is incomplete<a class="headerlink" href="#9-gui-tab-isolation-is-incomplete" title="Permanent link">&para;</a></h3>
+<p>The GUI only blocks <code>Backup</code>, <code>Offsite</code>, and <code>Restore</code> from starting while
+another of those three is running. It does <strong>not</strong> block:</p>
+<ul>
+<li>Prune while Backup/Offsite/Restore is running.</li>
+<li>Dataset destroy while Backup/Offsite/Restore/Prune is running.</li>
+<li>Scrub while any of the above is running.</li>
+<li>Snapshot creation while any of the above is running.</li>
+<li>Checkagainst while Prune is running.</li>
+</ul>
+<p>Each of these has its own <code>running</code> flag (<code>retention_runner</code>,
+<code>dataset_runner</code>, <code>scrub_queue</code>, etc.), but there is no cross-type guard.</p>
+<p>The Backup, Offsite, and Restore tabs now offer an optional <strong>Pause scrubs on
+source/destination pools during each step</strong> setting. When enabled, the runner
+pauses scrubs on the pools used by the current send/receive step and resumes
+them after the step finishes. This closes the scrub-versus-backup/restore gap
+for those pools, but it does not block other concurrent actions such as prune
+or destroy.</p>
+<h3 id="10-two-restores-targeting-the-same-destination">10. Two restores targeting the same destination<a class="headerlink" href="#10-two-restores-targeting-the-same-destination" title="Permanent link">&para;</a></h3>
+<p>A restore does lock the source and destination datasets inside
+<code>zfs-send-receive</code>, but that protection is per-dataset and per-step. Two restore
+jobs can both decide to destroy the same destination dataset (via <code>delfs</code> inside
+<code>zfsfullcopy</code>) before the send/receive lock is acquired, because the destroy
+happens before or during destination preparation.</p>
+<h2 id="severity-summary">Severity summary<a class="headerlink" href="#severity-summary" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Severity</th>
+<th>Currently detected?</th>
+<th>Currently prevented?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Prune deletes snapshot needed by running backup/restore</td>
+<td><strong>High</strong></td>
+<td>Only as a logged WARN</td>
+<td><strong>Yes</strong> (Phase 1 bash locks + Phase 2 GUI pre-check)</td>
+</tr>
+<tr>
+<td>Dataset destroy collides with backup/restore/prune</td>
+<td><strong>High</strong></td>
+<td>Error from <code>zfs</code></td>
+<td><strong>Yes</strong> (Phase 1 bash <code>x</code> lock + Phase 2 GUI pre-check)</td>
+</tr>
+<tr>
+<td>Two restores targeting same destination</td>
+<td><strong>High</strong></td>
+<td>Per-dataset lock after prepare</td>
+<td><strong>Yes</strong> (Phase 1 bash <code>x</code> lock on <code>zfsdelfs</code> + <code>w</code> lock in <code>zfs-send-receive</code>)</td>
+</tr>
+<tr>
+<td>Snapshot-name collision</td>
+<td><strong>Medium</strong></td>
+<td><code>zfs snapshot</code> fails</td>
+<td><strong>Partially</strong> (Phase 3 global lock + one-minute reservation)</td>
+</tr>
+<tr>
+<td>Concurrent snapshot creation on the same dataset</td>
+<td><strong>High</strong></td>
+<td>Rollback during receive</td>
+<td><strong>Yes</strong> (lock before snapshot in <code>zfs-send-receive</code>)</td>
+</tr>
+<tr>
+<td>Two prune jobs on same pool</td>
+<td><strong>Medium</strong></td>
+<td>Logged warnings</td>
+<td><strong>Yes</strong> (Phase 1 per-dataset <code>w</code> lock)</td>
+</tr>
+<tr>
+<td>History/log-index/config write races</td>
+<td><strong>Medium</strong></td>
+<td>Silent data loss or stale UI</td>
+<td><strong>Yes</strong> (Phase 4 file locking)</td>
+</tr>
+<tr>
+<td>Uncoordinated scrub paths</td>
+<td><strong>Low</strong></td>
+<td>Live state check + <code>zpool scrub</code> reject</td>
+<td><strong>Yes</strong> (live <code>zpool status</code> checks)</td>
+</tr>
+<tr>
+<td>Headless profile overlap</td>
+<td><strong>Medium</strong></td>
+<td><code>rc=9</code> on lock conflict</td>
+<td><strong>Yes</strong> (Phase 5 per-profile <code>flock</code>)</td>
+</tr>
+<tr>
+<td>Checkagainst during deletions</td>
+<td><strong>Low</strong></td>
+<td>Spurious mismatch or error</td>
+<td><strong>No</strong></td>
+</tr>
+<tr>
+<td>rsync log truncation/interleaving</td>
+<td><strong>Low</strong></td>
+<td>Mixed or missing output</td>
+<td><strong>No</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="short-term-operational-guidance">Short-term operational guidance<a class="headerlink" href="#short-term-operational-guidance" title="Permanent link">&para;</a></h2>
+<p>Until the gaps are closed:</p>
+<ol>
+<li>Do not run <strong>Prune</strong>, <strong>Destroy Dataset</strong>, or <strong>Scrub</strong> while a
+   <strong>Backup</strong>, <strong>Offsite</strong>, or <strong>Restore</strong> is in progress. If you want scrubs
+   paused automatically during these jobs, enable the <strong>Pause scrubs on
+   source/destination pools during each step</strong> option on the corresponding tab.</li>
+<li>Avoid scheduling profiles so close together that they can overlap.</li>
+<li>Do not run <code>zfsscruball</code> from the command line while the GUI is managing
+   scrubs.</li>
+<li>Do not edit retention policies or pool lists while a headless profile is
+   running.</li>
+<li>If a scheduled profile fails with <code>rc=9</code>, check whether another job was
+   holding the dataset lock at that time.</li>
+</ol>
+<h2 id="longer-term-hardening-recommendations">Longer-term hardening recommendations<a class="headerlink" href="#longer-term-hardening-recommendations" title="Permanent link">&para;</a></h2>
+<p>The safest fix is to extend the existing <code>zfslockmanager</code> usage to the jobs that
+mutate shared resources:</p>
+<ol>
+<li><strong><code>zfscleanup</code> / <code>zfsretain</code></strong> should acquire at least a <code>w</code> lock on each
+dataset before enumerating its snapshots, and hold it for the duration of prune
+on that dataset. This prevents prune vs. backup/restore collisions and
+overlapping prunes.</li>
+<li><strong><code>zfsdelfs</code></strong> should acquire an <code>x</code> lock on the dataset being destroyed
+before teardown and hold it until destruction is complete.</li>
+<li><strong>Snapshot-name generation</strong> is now serialized with a brief global lock and a
+   one-minute reservation file. The naming format was kept unchanged; a future
+   enhancement could add a sequence suffix if guaranteed distinct same-minute
+   names become required.</li>
+<li><strong>Config/state-file writes</strong> should use <code>flock</code> around the read-modify-write
+sequence, or move critical shared updates through a single writer process.</li>
+<li><strong>Scrub management</strong> should have a single authority: either consolidate on
+<code>ScrubQueue</code> and disable direct <code>zfsscruball</code>/systemd scrub, or have all paths
+consult a shared scrub lock/state file.</li>
+<li><strong>GUI</strong> should add cross-type guards so that destructive or state-changing
+actions (prune, destroy, scrub) cannot start while a backup/offsite/restore is
+running, and vice versa.</li>
+<li><strong><code>profile_runner.py</code></strong> should acquire a global per-profile or per-job-type
+lock before starting, so cron cannot launch a second instance of the same
+profile while the first is still running.</li>
+</ol>
+<h2 id="recently-resolved-phase-2">Recently resolved (Phase 2)<a class="headerlink" href="#recently-resolved-phase-2" title="Permanent link">&para;</a></h2>
+<p>Python/GUI mutators now participate in the lock manager:</p>
+<ul>
+<li>New <code>07 GTK + Python/zfs_lock_manager.py</code> reads and writes the same JSON
+  lock files as <code>zfslockmanager</code>, so Python operations interoperate with bash
+  locks.</li>
+<li>Direct Python mutators acquire <code>w</code> locks:</li>
+<li><code>dataset_actions.on_datasets_snapshot</code> locks the target dataset.</li>
+<li><code>dataset_actions._delete_snapshots</code> locks the parent datasets.</li>
+<li><code>dataset_actions._release_holds</code> locks the parent datasets.</li>
+<li><code>dataset_actions.on_datasets_hold</code> locks the parent datasets.</li>
+<li><code>dataset_actions.on_datasets_rollback</code> locks the parent dataset.</li>
+<li>Bash-wrapped GUI mutators perform a pre-flight conflict check instead of
+  holding Python locks (to avoid cross-PID hierarchy deadlock):</li>
+<li><code>dataset_actions._delete_datasets</code> aborts if any selected dataset is
+    already locked.</li>
+<li><code>retention_actions.on_retention_prune</code> aborts if any selected pool is
+    already locked.</li>
+<li>Scrub control has been moved out of the lock manager.  <code>scrub_manager</code>
+  consults live <code>zpool status</code> before start/pause/resume/stop, and <code>zfsscruball</code>
+  no longer acquires a pool lock while scrubbing.</li>
+</ul>
+<h2 id="recently-resolved-phase-3">Recently resolved (Phase 3)<a class="headerlink" href="#recently-resolved-phase-3" title="Permanent link">&para;</a></h2>
+<p>Snapshot-name generation is now coordinated across bash and Python:</p>
+<ul>
+<li>Both <code>zfssnapbuild</code> and <code>feature_config.generate_snapshot_name()</code> /
+  <code>generate_offsite_snapshot_name()</code> acquire a brief global lock
+  (<code>/run/lock/zfs/.snapname.lock</code>) while building a name.</li>
+<li>Each generated name is recorded in a one-minute reservation file
+  (<code>/run/lock/zfs/.snapname.reserved</code>) shared between bash and Python.</li>
+<li>The existing snapshot naming format is unchanged.</li>
+</ul>
+<h2 id="recently-resolved-phase-6">Recently resolved (Phase 6)<a class="headerlink" href="#recently-resolved-phase-6" title="Permanent link">&para;</a></h2>
+<p>Integration tests now exercise concurrent profile execution end-to-end, and
+user documentation explains the new behavior.</p>
+<ul>
+<li><code>tests/python/test_profile_integration.py</code> runs two profiles in separate
+  subprocesses and verifies:</li>
+<li>Disjoint datasets: both profiles succeed.</li>
+<li>Same dataset: one profile fails safely with a lock conflict rather than
+    corrupting data.</li>
+<li>Backup + prune: the prune step is blocked by the backup's dataset lock and
+    exits safely.</li>
+<li><code>06 Docs/docs/user-guide/profiles.md</code> documents what profiles are, how they
+  run concurrently, and how conflicts are resolved.</li>
+<li>The severity summary table above has been refreshed to mark Phase 5
+  (headless profile overlap) and remaining Phase 1 gaps (two prunes on the same
+  pool, two restores to the same destination, scrub path coordination) as
+  resolved.</li>
+</ul>
+<h2 id="recently-resolved-snapshot-before-lock">Recently resolved (snapshot-before-lock)<a class="headerlink" href="#recently-resolved-snapshot-before-lock" title="Permanent link">&para;</a></h2>
+<p><code>zfs-send-receive</code> now acquires <code>w</code> locks on the source and destination datasets
+before it creates or selects a snapshot.  This closes the race where two
+concurrent jobs could create snapshots on the same dataset, causing a later
+incremental receive with <code>-F</code> to roll back a newer ZFSutilities-generated
+snapshot.</p>
+<ul>
+<li><code>zfs-send-receive</code> reordered so locks precede <code>zfs snapshot</code> and
+  <code>getcommonsnap</code>.</li>
+<li><code>tests/test-zfs-send-receive-dryrun</code> checks the lock-before-snapshot ordering.</li>
+</ul>
+<h2 id="related-files-and-tests">Related files and tests<a class="headerlink" href="#related-files-and-tests" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>zfslockmanager</code> — lock implementation.</li>
+<li><code>zfs-send-receive</code> — example of per-dataset <code>w</code> locking.</li>
+<li><code>zfsdelsnap</code> — example of parent-dataset <code>w</code> locking.</li>
+<li><code>zfscleanup</code>, <code>zfsretain</code>, <code>zfsdelfs</code>, <code>zfsscruball</code>, <code>zfscheckagainst</code> —
+  lock-protected by Phase 1.</li>
+<li><code>zfssnapbuild</code> and <code>07 GTK + Python/feature_config.py</code> — snapshot-name
+  generation, now coordinated by Phase 3.</li>
+<li><code>07 GTK + Python/zfs_lock_manager.py</code> — Python lock client.</li>
+<li><code>07 GTK + Python/profile_runner.py</code>, <code>backup_runner.py</code>, <code>scrub_manager.py</code>,
+  <code>dataset_actions.py</code>, <code>retention_actions.py</code> — Python dispatch paths.</li>
+<li><code>tests/test-zfslockmanager</code> — covers the lock manager itself.</li>
+<li><code>tests/test-zfssnapbuild</code> — Phase 3 bash coverage.</li>
+<li><code>tests/python/test_zfs_lock_manager.py</code>,
+  <code>tests/python/test_dataset_actions.py</code>,
+  <code>tests/python/test_retention_actions.py</code>,
+  <code>tests/python/test_scrub_manager.py</code>,
+  <code>tests/python/test_feature_config.py</code> — Phase 2 and Phase 3 coverage.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      ZFS Utilities v0.72.1
+    </div>
+  
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

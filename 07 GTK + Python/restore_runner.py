@@ -13,7 +13,6 @@ datasets.
 
 import shlex
 
-from backup_config import log_msg
 from command_builders import BashStep, _dryrun_assignments
 
 
@@ -176,44 +175,44 @@ def build_restore_command(source, removequalifiers, destfs, parent_dir,
 
     if do_part1:
         parts.append(
-            f'log_msg "Part one: Full copy using the oldest available snapshot."; '
-            f'force="Y"; releaseholds="Y"; '
-            f'releaseholds_tags=("offsite-*"); '
-            f'doincrementals="N"; dointermediates="N"; '
-            f'commsnap_mostrecent="OLDEST"; '
-            f'autoproceed="N"; '
-            f'send-receive "$sourcefs"; rc=$?; '
-            f'if [[ $rc -ne 0 ]]; then rm -f "$fsarray_file"; exit $rc; fi; '
+            'log_msg "Part one: Full copy using the oldest available snapshot."; '
+            'force="Y"; releaseholds="Y"; '
+            'releaseholds_tags=("offsite-*"); '
+            'doincrementals="N"; dointermediates="N"; '
+            'commsnap_mostrecent="OLDEST"; '
+            'autoproceed="N"; '
+            'send-receive "$sourcefs"; rc=$?; '
+            'if [[ $rc -ne 0 ]]; then rm -f "$fsarray_file"; exit $rc; fi; '
             # Save fsarray for Part 2
-            f'printf "%s\\n" "${{fsarray[@]}}" > "$fsarray_file"; '
+            'printf "%s\\n" "${fsarray[@]}" > "$fsarray_file"; '
         )
 
     if do_part2:
         part2_script = (
-            f'log_msg "Part two: Incremental copy of remaining snapshots."; '
-            f'force="N"; releaseholds="N"; '
-            f'doincrementals="Y"; dointermediates="Y"; '
-            f'commsnap_mostrecent=""; '
-            f'autoproceed="Y"; '
+            'log_msg "Part two: Incremental copy of remaining snapshots."; '
+            'force="N"; releaseholds="N"; '
+            'doincrementals="Y"; dointermediates="Y"; '
+            'commsnap_mostrecent=""; '
+            'autoproceed="Y"; '
         )
         if do_part1:
             # Load saved fsarray as exact-match includes
             part2_script += (
-                f'if [[ -f "$fsarray_file" ]]; then '
-                f'includes=(); '
-                f'while IFS= read -r _ds; do includes+=("=$_ds"); done < "$fsarray_file"; '
-                f'rm -f "$fsarray_file"; '
-                f'fi; '
+                'if [[ -f "$fsarray_file" ]]; then '
+                'includes=(); '
+                'while IFS= read -r _ds; do includes+=("=$_ds"); done < "$fsarray_file"; '
+                'rm -f "$fsarray_file"; '
+                'fi; '
             )
         part2_script += (
-            f'send-receive "$sourcefs"; rc=$?; '
-            f'rm -f "$fsarray_file"; '
-            f'exit $rc'
+            'send-receive "$sourcefs"; rc=$?; '
+            'rm -f "$fsarray_file"; '
+            'exit $rc'
         )
         parts.append(part2_script)
     else:
         # Part 1 only — clean up temp file
-        parts.append(f'rm -f "$fsarray_file"; exit 0')
+        parts.append('rm -f "$fsarray_file"; exit 0')
 
     bash_script = preamble + "".join(parts)
     cmd = ["bash", "-c", bash_script]

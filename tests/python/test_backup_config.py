@@ -4,9 +4,13 @@ import json
 import os
 import unittest
 
-from test_support import temp_config_dir, write_config, read_config, capture_logs, patch_environ
-
 import backup_config
+from test_support import (
+    capture_logs,
+    patch_environ,
+    temp_config_dir,
+    write_config,
+)
 
 
 class TestLoadConfig(unittest.TestCase):

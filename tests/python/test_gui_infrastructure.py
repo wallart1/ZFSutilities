@@ -7,10 +7,9 @@ import re
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from test_support import mock_gtk, REPO_ROOT, capture_logs
-
+from test_support import REPO_ROOT, capture_logs, mock_gtk
 
 GUI_PY_PATH = os.path.join(REPO_ROOT, "07 GTK + Python", "zfsutilities_gui.py")
 GTK_GUI_HTML_PATH = os.path.join(REPO_ROOT, "06 Docs", "site", "user-guide", "gtk-gui", "index.html")
@@ -32,12 +31,11 @@ def extract_page_anchors_from_source(filepath):
                         ):
                             value = item.value
                             break
-                elif isinstance(item, ast.AnnAssign):
-                    if (
-                        isinstance(item.target, ast.Name)
-                        and item.target.id == "_PAGE_ANCHORS"
-                    ):
-                        value = item.value
+                elif isinstance(item, ast.AnnAssign) and (
+                    isinstance(item.target, ast.Name)
+                    and item.target.id == "_PAGE_ANCHORS"
+                ):
+                    value = item.value
                 if value is not None and isinstance(value, ast.Dict):
                     return {
                         ast.literal_eval(k): ast.literal_eval(v)
@@ -93,8 +91,9 @@ class TestDocsViewerNavigation(unittest.TestCase):
     _FINISHED = 2
 
     def _make_window(self, gtk_mock):
-        import docs_viewer
         from unittest.mock import MagicMock
+
+        import docs_viewer
         script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
         win = docs_viewer.DocsViewerWindow(script_dir)
         # Replace the shared webview mock with a fresh one so call counts
@@ -180,8 +179,9 @@ class TestDocsViewerNavigation(unittest.TestCase):
 
     def test_toolbar_buttons_use_symbolic_icons(self):
         with mock_gtk() as gtk_mock:
-            import docs_viewer
             import importlib
+
+            import docs_viewer
             importlib.reload(docs_viewer)
             gtk_mock.Image.new_from_icon_name.reset_mock()
             script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
@@ -203,8 +203,9 @@ class TestDocsViewerNavigation(unittest.TestCase):
 
     def test_tool_button_can_use_text_label(self):
         with mock_gtk() as gtk_mock:
-            import docs_viewer
             import importlib
+
+            import docs_viewer
             importlib.reload(docs_viewer)
             win = self._make_window(gtk_mock)
             gtk_mock.Label.reset_mock()
@@ -386,9 +387,10 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
 
     def test_loads_default_state_when_no_config(self):
         with mock_gtk() as gtk_mock:
+            import tempfile
+
             import backup_config
             import config_core
-            import tempfile
             original_path = backup_config.CONFIG_PATH
             with tempfile.TemporaryDirectory() as tmpdir:
                 path = os.path.join(tmpdir, "zfsutilities.json")
@@ -488,7 +490,6 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
 
     def test_theme_script_message_updates_saved_theme(self):
         with mock_gtk() as gtk_mock:
-            import docs_viewer
             import backup_config
             import config_core
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -519,7 +520,6 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
 
     def test_save_persists_docs_viewer_state(self):
         with mock_gtk() as gtk_mock:
-            import docs_viewer
             import backup_config
             import config_core
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -571,7 +571,7 @@ class TestGtkMocking(unittest.TestCase):
             self.assertTrue(hasattr(gtk_mock.Pango, "Weight"))
 
     def test_webkit2_mocked(self):
-        with mock_gtk() as gtk_mock:
+        with mock_gtk():
             import gi
             self.assertTrue(hasattr(gi.repository, "WebKit2"))
             self.assertTrue(hasattr(gi.repository.WebKit2, "WebView"))
@@ -584,6 +584,7 @@ class TestGtkMocking(unittest.TestCase):
     def test_bold_label_applies_markup_and_alignment(self):
         with mock_gtk():
             import importlib
+
             import gui_helpers
             importlib.reload(gui_helpers)
             label = gui_helpers.bold_label("Snapshot")
@@ -605,7 +606,7 @@ class TestGtkMocking(unittest.TestCase):
             self.assertTrue(hasattr(path_utils, "get_docs_path"))
 
     def test_docs_viewer_window_instantiates(self):
-        with mock_gtk() as gtk_mock:
+        with mock_gtk():
             import docs_viewer
             script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
             win = docs_viewer.DocsViewerWindow(script_dir)
@@ -751,7 +752,6 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
     def test_bind_treeview_restores_saved_widths(self, mock_save):
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
             win = MagicMock()
@@ -790,7 +790,6 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
         """Saved column widths are not scaled down to fit a stale window width."""
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
             win = MagicMock()
@@ -835,7 +834,6 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
         """
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
             win = MagicMock()
@@ -893,7 +891,6 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
         """The parent ScrolledWindow is configured so the window can shrink."""
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
 
@@ -1128,7 +1125,6 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
         """If the TreeView is not yet realized, configure scrolling on realize."""
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
 
@@ -1183,7 +1179,6 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
         """If the TreeView has no ScrolledWindow ancestor, bind_treeview still works."""
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
 
@@ -1209,7 +1204,6 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
         """The helper walks up through intermediate containers to find the ScrolledWindow."""
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
 
@@ -1298,7 +1292,6 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
         """Title-keyed dict format restores each column by header title."""
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
             win = MagicMock()
@@ -1342,7 +1335,6 @@ class TestUIStateManagerTreeviewColumns(unittest.TestCase):
         """Unmatched titles keep their default width instead of getting zero."""
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
             win = MagicMock()
@@ -1410,7 +1402,6 @@ class TestTreeviewColumnHelpers(unittest.TestCase):
     def test_bind_treeview_clamps_saved_width_to_min_width(self, mock_save):
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
             win = MagicMock()
@@ -1442,7 +1433,6 @@ class TestTreeviewColumnHelpers(unittest.TestCase):
         """Saved widths must apply to resizable columns, skipping fixed ones."""
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
             win = MagicMock()
@@ -1522,7 +1512,6 @@ class TestTreeviewColumnHelpers(unittest.TestCase):
         """A treeview with only fixed columns should not crash or resize."""
         with mock_gtk():
             import gui_helpers
-            import backup_config
             gui_helpers.Gtk.TreeViewColumnSizing = MagicMock()
             gui_helpers.Gtk.TreeViewColumnSizing.FIXED = 2
             win = MagicMock()
@@ -1585,7 +1574,7 @@ class TestUIStateManagerPanedPositions(unittest.TestCase):
 
     @patch("backup_config.save_ui_state")
     def test_bind_paned_restores_saved_position(self, mock_save):
-        with mock_gtk() as gtk_mock:
+        with mock_gtk():
             import gui_helpers
             win = MagicMock()
             win.get_window.return_value = None
@@ -1610,7 +1599,7 @@ class TestUIStateManagerPanedPositions(unittest.TestCase):
 
     @patch("backup_config.save_ui_state")
     def test_bind_paned_does_not_set_position_when_unsaved(self, mock_save):
-        with mock_gtk() as gtk_mock:
+        with mock_gtk():
             import gui_helpers
             win = MagicMock()
             win.get_window.return_value = None
@@ -1776,6 +1765,7 @@ class TestGuiHelpersMisc(unittest.TestCase):
     def test_add_scrolled_text_view(self):
         with mock_gtk():
             import importlib
+
             import gui_helpers
             importlib.reload(gui_helpers)
             parent = MagicMock()
@@ -1931,6 +1921,7 @@ class TestPageLabelWrapping(unittest.TestCase):
         _clear_cached_modules("checkagainst_page")
         with mock_gtk() as gtk_mock:
             from unittest.mock import patch
+
             import checkagainst_page as cp
             labels = []
             def make_label(*args, **kwargs):
@@ -1955,6 +1946,7 @@ class TestPoolsControlsLayout(unittest.TestCase):
         _clear_cached_modules("pools_page")
         with mock_gtk() as gtk_mock:
             from unittest.mock import patch
+
             import pools_page as pp
             boxes = []
             def make_box(*args, **kwargs):
@@ -1981,6 +1973,7 @@ class TestPoolsControlsLayout(unittest.TestCase):
         _clear_cached_modules("pools_page")
         with mock_gtk() as gtk_mock:
             from unittest.mock import patch
+
             import pools_page as pp
             boxes = []
             def make_box(*args, **kwargs):
@@ -2052,7 +2045,7 @@ class TestMinimizeWidth(unittest.TestCase):
     def test_reset_resizable_columns_to_min_width(self):
         """Only resizable columns are reset to their own minimum width."""
         _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk():
             import gui_helpers as gh
 
             class FakeTreeView:
@@ -2128,9 +2121,9 @@ class TestMinimizeWidth(unittest.TestCase):
         """Cancel response leaves columns, config, and window unchanged."""
         _clear_cached_modules("gui_helpers")
         with mock_gtk() as gtk_mock:
-            import gui_helpers as gh
             import backup_config
             import config_core
+            import gui_helpers as gh
             with tempfile.TemporaryDirectory() as tmpdir:
                 path = os.path.join(tmpdir, "zfsutilities.json")
                 backup_config.CONFIG_PATH = path
@@ -2160,9 +2153,9 @@ class TestMinimizeWidth(unittest.TestCase):
         """OK response resets columns, clears saved widths, and resizes."""
         _clear_cached_modules("gui_helpers")
         with mock_gtk() as gtk_mock:
-            import gui_helpers as gh
             import backup_config
             import config_core
+            import gui_helpers as gh
             with tempfile.TemporaryDirectory() as tmpdir:
                 path = os.path.join(tmpdir, "zfsutilities.json")
                 backup_config.CONFIG_PATH = path
@@ -2508,7 +2501,7 @@ class TestExpandTreeRecursively(unittest.TestCase):
             return kids[0] if kids else None
 
         def _iter_next(node):
-            for parent, kids in _children.items():
+            for kids in _children.values():
                 try:
                     idx = kids.index(node)
                     if idx + 1 < len(kids):
@@ -2527,7 +2520,7 @@ class TestExpandTreeRecursively(unittest.TestCase):
 
             view = MagicMock()
             view.row_expanded.return_value = False
-            store, root, child, grandchild = self._make_store()
+            store, _root, _child, _grandchild = self._make_store()
 
             gh.expand_tree_recursively(view, store)
 
@@ -2566,7 +2559,7 @@ class TestExpandTreeRecursively(unittest.TestCase):
 
             view = MagicMock()
             view.row_expanded.return_value = False
-            store, _root, child, grandchild = self._make_store()
+            store, _root, child, _grandchild = self._make_store()
 
             gh.expand_tree_recursively(view, store, child)
 
@@ -3007,7 +3000,7 @@ class TestHandleEditingKeyPress(unittest.TestCase):
             gh.Gdk.KEY_Tab = 1
             gh.Gdk.KEY_ISO_Left_Tab = 2
 
-            widget, treeview, model, event = self._setup(
+            widget, treeview, _model, event = self._setup(
                 gh, 1, "0", 2, [0, 1, 2], has_next=False)
 
             result = gh.handle_editing_key_press(

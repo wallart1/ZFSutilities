@@ -1,11 +1,9 @@
 """Tests for profile_manager.py — profile CRUD operations."""
 
-import os
 import unittest
 
-from test_support import temp_config_dir, capture_logs
-
 import profile_manager
+from test_support import capture_logs, temp_config_dir
 
 
 class TestValidateCustomName(unittest.TestCase):
@@ -54,8 +52,8 @@ class TestProfileCrud(unittest.TestCase):
 
     def test_list_profiles_sorted(self):
         with temp_config_dir():
-            p1 = profile_manager.create_profile("backup", "alpha", {"foo": 1})
-            p2 = profile_manager.create_profile("backup", "beta", {"foo": 2})
+            profile_manager.create_profile("backup", "alpha", {"foo": 1})
+            profile_manager.create_profile("backup", "beta", {"foo": 2})
             profiles = profile_manager.list_profiles()
             names = [p["profile_name"] for p in profiles]
             self.assertEqual(names, sorted(names))
@@ -126,9 +124,8 @@ class TestProfileCrud(unittest.TestCase):
             self.assertEqual(loaded["config"]["variables"]["label"], "new")
 
     def test_update_missing_profile_raises(self):
-        with temp_config_dir():
-            with self.assertRaises(ValueError):
-                profile_manager.update_profile("backup", "missing", {})
+        with temp_config_dir(), self.assertRaises(ValueError):
+            profile_manager.update_profile("backup", "missing", {})
 
     def test_delete_profile_logs(self):
         with temp_config_dir():

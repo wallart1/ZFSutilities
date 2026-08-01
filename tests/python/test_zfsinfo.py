@@ -2,9 +2,8 @@
 
 import unittest
 
-from test_support import mock_subprocess
-
 import zfsinfo
+from test_support import mock_subprocess
 
 
 class TestGetPools(unittest.TestCase):

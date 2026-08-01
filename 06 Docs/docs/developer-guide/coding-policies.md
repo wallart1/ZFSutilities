@@ -274,3 +274,25 @@ log_msg("DEBUG: variable =", value)
         target.append(item)
         return target
     ```
+
+### Linting
+
+The Python code base is checked with **[Ruff](https://docs.astral.sh/ruff/)**.
+Configuration lives in `pyproject.toml` at the repository root:
+
+```toml
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+```
+
+Run the checker from the repository root:
+
+```bash
+ruff check .
+```
+
+A small set of rules is intentionally ignored in `pyproject.toml` because they
+conflict with project conventions (for example, naive datetimes are used
+deliberately throughout the GUI and tests, and broad exception handling is kept
+for callbacks, cleanup, and worker threads).

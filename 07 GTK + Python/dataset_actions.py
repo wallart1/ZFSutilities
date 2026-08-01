@@ -492,7 +492,9 @@ def on_datasets_unmount_snapshot(app):
         dialog.destroy()
         return
 
-    result = subprocess.run(["sudo", "umount", path], capture_output=True, text=True)
+    result = subprocess.run(
+        ["sudo", "umount", path], capture_output=True, text=True, check=False
+    )
     if result.returncode == 0:
         log_msg(f"INFO: Unmounted snapshot {full_snap}")
         update_ds_button_sensitivity(app)

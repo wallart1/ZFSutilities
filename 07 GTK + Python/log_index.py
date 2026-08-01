@@ -12,7 +12,8 @@ import time
 
 from config_core import SESSION_LOG_DIR
 from file_locking import log_index_lock_read, log_index_lock_write
-from logging_config import log_msg, parse_msg_level, MSG_LEVELS
+from logging_config import MSG_LEVELS, log_msg, parse_msg_level
+
 
 def index_file():
     """Return the path to the persistent log index file."""
@@ -39,9 +40,8 @@ def _load_index_data():
     if not os.path.isfile(path):
         return {}
     try:
-        with log_index_lock_read():
-            with open(path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
+        with log_index_lock_read(), open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
         if isinstance(data, dict):
             return data
     except (OSError, json.JSONDecodeError) as e:
@@ -206,7 +206,7 @@ def update_entry_incrementally(entry, path):
         return entry
 
     text = data.decode("utf-8", errors="replace")
-    lines, consumed = _parse_lines(text)
+    _lines, consumed = _parse_lines(text)
 
     # Process complete lines; leave a trailing fragment for next time.
     _update_entry_from_text(entry, text)

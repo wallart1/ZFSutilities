@@ -12,24 +12,22 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 from logging_config import (
-    log_msg,
-    set_log_sink,
-    get_log_sink,
-    set_session_log,
-    restore_session_log,
-    session_log_context,
-    truncate_session_log,
     DEFAULT_MAX_SESSION_LOG_BYTES,
-    DEFAULT_SESSION_LOG_TAIL_BYTES,
     DEFAULT_SESSION_LOG_START_BYTES,
+    DEFAULT_SESSION_LOG_TAIL_BYTES,
     MSG_LEVELS,
-    parse_msg_level,
-    viewer_should_show,
     NONE_LEVEL,
-    NONE_PRIORITY,
-    _MSG_PRIORITY,
     format_log_line_short,
     format_log_text_short,
+    get_log_sink,
+    log_msg,
+    parse_msg_level,
+    restore_session_log,
+    session_log_context,
+    set_log_sink,
+    set_session_log,
+    truncate_session_log,
+    viewer_should_show,
 )
 
 
@@ -321,8 +319,6 @@ class TestTruncateSessionLog(unittest.TestCase):
             f.write("TAIL\n")
         try:
             custom_max = 500
-            custom_tail = 200
-            custom_start = 100
             with patch("config_core.load_config", return_value={
                 "session_log_max_bytes": custom_max,
             }):

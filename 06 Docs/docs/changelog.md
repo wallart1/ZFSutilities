@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.72.1
+
+*Released 2026-08-01*
+
+### Changed
+
+- **Python import and formatting cleanup** — Sorted and normalised imports
+  across the GUI modules and tests, removed unused imports, and fixed minor
+  formatting inconsistencies (for example, `restore_runner.py` now uses plain
+  string literals where no interpolation is required).
+
+### Added
+
+- **`pyproject.toml` with Ruff configuration** — Added a project-level
+  `pyproject.toml` configuring Ruff (`line-length = 100`, `target-version =
+  "py310"`) and documenting the intentionally ignored rules.
+
+### Tests
+
+- Updated imports and minor assertions across the Python test suite to match
+  the cleaned-up module structure.
+- Expanded `tests/python/test_docs_integrity.py` coverage.
+
+### Documentation
+
+- Added a **Linting** subsection to `developer-guide/coding-policies.md`
+  describing the Ruff setup in `pyproject.toml`.
+- Added a linting tip to `developer-guide/testing.md`.
+
 ## 0.72.0
 
 *Released 2026-08-01*

@@ -22,7 +22,6 @@ import cron_manager
 import feature_config
 import file_locking
 
-
 # ---------------------------------------------------------------------------
 # Documentation helpers
 # ---------------------------------------------------------------------------
@@ -95,7 +94,7 @@ def collect_nav_files(nav, results=None):
         for item in nav:
             collect_nav_files(item, results)
     elif isinstance(nav, dict):
-        for _key, val in nav.items():
+        for val in nav.values():
             if isinstance(val, str) and val.endswith(".md"):
                 results.append(val)
             else:

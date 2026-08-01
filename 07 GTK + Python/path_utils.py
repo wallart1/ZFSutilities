@@ -9,7 +9,6 @@ locations.
 import os
 import subprocess
 
-
 # Base directory for versioned deployments.  Overridable for tests and for
 # non-standard installations.
 _DEPLOYMENT_BASE = os.environ.get(

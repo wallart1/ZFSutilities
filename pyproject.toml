@@ -1,0 +1,17 @@
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+ignore = [
+    # Project convention: naive datetimes are used throughout the GUI and tests.
+    "DTZ001",
+    "DTZ005",
+    "DTZ006",
+    # Broad exception handling is intentional for callbacks, cleanup, and worker threads.
+    "BLE001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test code commonly uses nested with statements for context-manager patches.
+"tests/python/*" = ["SIM117"]

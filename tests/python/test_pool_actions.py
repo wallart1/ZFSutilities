@@ -76,7 +76,6 @@ def _make_add_dialog(pool_name):
 
     def fake_add(widget):
         """No-op; we rely on the patched Gtk.Entry returning our entry mock."""
-        pass
 
     content.add.side_effect = fake_add
     return dialog
@@ -180,7 +179,7 @@ class TestOnPoolsAdd(unittest.TestCase):
 class TestOnPoolsRemove(unittest.TestCase):
     """on_pools_remove filters dict pools by name."""
 
-    def _make_app_with_selection(self, pools, selected):
+    def _make_app_with_selection(self, pa, pools, selected):
         app = _make_app(pools)
         model = MagicMock()
         paths = []

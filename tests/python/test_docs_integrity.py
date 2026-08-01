@@ -2,13 +2,19 @@
 
 import importlib.util
 import os
-import re
 import unittest
 
 from test_support import (
-    check_pyyaml, collect_nav_files, extract_markdown_headers,
-    extract_markdown_links, extract_python_module_names, list_all_md_files,
-    resolve_relative_link, DOCS_DIR, MKDOCS_YML, PYTHON_SRC, REPO_ROOT
+    DOCS_DIR,
+    MKDOCS_YML,
+    PYTHON_SRC,
+    check_pyyaml,
+    collect_nav_files,
+    extract_markdown_headers,
+    extract_markdown_links,
+    extract_python_module_names,
+    list_all_md_files,
+    resolve_relative_link,
 )
 
 

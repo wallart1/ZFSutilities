@@ -11,23 +11,29 @@ import re
 import subprocess
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Pango, GLib
 
-from logging_config import log_msg
+gi.require_version('Gtk', '3.0')
 from feature_config import (
-    get_pools, get_pool_names, get_offsite_candidate_names,
-    get_scrub_manager_config, save_scrub_manager_config,
+    get_offsite_candidate_names,
+    get_pool_names,
+    get_pools,
+    get_scrub_manager_config,
+    save_scrub_manager_config,
 )
+from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
-    setup_row_scroll, set_button_markup_red, set_monospace_font,
     configure_treeview_column,
+    set_button_markup_red,
+    set_monospace_font,
+    setup_row_scroll,
 )
+from logging_config import log_msg
 from scrub_manager import (
-    ScrubQueue, get_all_pool_scrub_states, ScrubState,
+    ScrubQueue,
+    ScrubState,
+    get_all_pool_scrub_states,
     sync_system_scrub_for_pools,
 )
-
 
 # ListStore columns:
 #   0 name, 1 health, 2 size, 3 alloc, 4 free, 5 freeing,

@@ -1,19 +1,17 @@
 """Tests for pools_page.py scrub UI additions."""
 
 import os
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
-
-import sys
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk, temp_config_dir, write_config
-
 import scrub_manager as sm
+from test_support import mock_gtk
 
 
 class TestScrubPageWidgets(unittest.TestCase):

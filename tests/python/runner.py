@@ -143,7 +143,7 @@ def run_suite(suite, name, quiet=False, failures_only=False, buffer=False):
     elif not failures_only:
         print(f"{GREEN}  SUITE PASSED{NC} ({name})")
     if not failures_only:
-        print("")
+        print()
     return passed, failed, skipped
 
 
@@ -208,7 +208,7 @@ def main(argv=None):
     if total_skipped:
         print(f"  Skipped: {total_skipped}")
 
-    print("")
+    print()
     if total_failed:
         print("Some test suites failed.")
         return 1

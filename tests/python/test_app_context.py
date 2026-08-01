@@ -3,7 +3,6 @@
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")

@@ -57,7 +57,7 @@ class TestShowAddProfileDialog(unittest.TestCase):
         }) as mock_create, \
              patch.object(profile_dialogs, "profile_exists", return_value=False), \
              patch.object(schedule_page, "_refresh_profile_list") as mock_refresh:
-            dialog, _, _ = self._run_add_dialog(
+            _dialog, _, _ = self._run_add_dialog(
                 app, profile_dialogs.Gtk.ResponseType.OK, "nightly"
             )
 
@@ -73,7 +73,7 @@ class TestShowAddProfileDialog(unittest.TestCase):
 
         with patch.object(profile_dialogs, "create_profile", return_value={
             "profile_name": "root-backup-nightly",
-        }) as mock_create, \
+        }), \
              patch.object(profile_dialogs, "profile_exists", return_value=False), \
              patch.object(schedule_page, "_refresh_profile_list"):
             dialog = MagicMock()
@@ -133,7 +133,7 @@ class TestShowAddProfileDialog(unittest.TestCase):
              }) as mock_update, \
              patch.object(profile_dialogs, "profile_exists", return_value=True), \
              patch.object(schedule_page, "_refresh_profile_list") as mock_refresh:
-            dialog, _, confirm = self._run_add_dialog(
+            _dialog, _, confirm = self._run_add_dialog(
                 app, profile_dialogs.Gtk.ResponseType.OK, "daily",
                 duplicate_response=profile_dialogs.Gtk.ResponseType.YES,
             )

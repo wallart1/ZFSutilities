@@ -11,12 +11,11 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 import gi
+
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
-
+from gui_helpers import build_full_dataset_name, on_row_expanded
 from zfs_repository import ZfsRepository
-from gui_helpers import on_row_expanded, build_full_dataset_name
-
 
 SNAPSHOT_CMD = (
     "zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones -d 1"

@@ -10,7 +10,7 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk, mock_subprocess, temp_config_dir
+from test_support import mock_gtk, mock_subprocess
 
 
 class _FakeComboBoxText:
@@ -362,9 +362,8 @@ class TestOffsiteRunDialog(unittest.TestCase):
                       "dest": "<offsite>/a", "includes": "", "excludes": ""},
                  ],
                  "variables": {},
-             }):
-            with patch.object(op, "log_msg") as mock_log:
-                op.on_offsite_run(app, app.ctx)
+             }), patch.object(op, "log_msg") as mock_log:
+            op.on_offsite_run(app, app.ctx)
 
         app.offsite_runner.prepare_session_log.assert_called_once()
         app.offsite_runner.set_steps.assert_called_once()
@@ -391,9 +390,8 @@ class TestOffsiteRunDialog(unittest.TestCase):
                       "dest": "<offsite>/a", "includes": "", "excludes": ""},
                  ],
                  "variables": {},
-             }):
-            with patch.object(op, "log_msg") as mock_log:
-                op.on_offsite_run(app, app.ctx)
+             }), patch.object(op, "log_msg") as mock_log:
+            op.on_offsite_run(app, app.ctx)
 
         app.offsite_runner.prepare_session_log.assert_called_once()
         app.offsite_runner.set_steps.assert_called_once()

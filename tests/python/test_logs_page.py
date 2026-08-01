@@ -136,7 +136,7 @@ class TestSelectLogByPath(unittest.TestCase):
 
     @patch("logs_page._sync_log_list")
     def test_returns_false_for_empty_path(self, mock_sync):
-        app, selection = self._make_app([])
+        app, _selection = self._make_app([])
         result = lp.select_log_by_path(app, "")
         self.assertFalse(result)
         mock_sync.assert_not_called()
@@ -176,7 +176,7 @@ class TestDeleteSelectedLogs(unittest.TestCase):
             mock_dialog.run.return_value = lp.Gtk.ResponseType.YES
             mock_dialog_cls.return_value = mock_dialog
 
-            app, selection, _model = self._make_app(paths)
+            app, _selection, _model = self._make_app(paths)
             with patch("logs_page._sync_log_list") as mock_sync:
                 lp._on_delete_selected(app)
 
@@ -195,7 +195,7 @@ class TestDeleteSelectedLogs(unittest.TestCase):
             mock_dialog.run.return_value = lp.Gtk.ResponseType.NO
             mock_dialog_cls.return_value = mock_dialog
 
-            app, selection, _model = self._make_app([path])
+            app, _selection, _model = self._make_app([path])
             with patch("logs_page._sync_log_list") as mock_sync:
                 lp._on_delete_selected(app)
 
@@ -203,7 +203,7 @@ class TestDeleteSelectedLogs(unittest.TestCase):
             mock_sync.assert_not_called()
 
     def test_warns_when_no_logs_selected(self):
-        app, selection, _model = self._make_app([])
+        app, _selection, _model = self._make_app([])
         with patch("logs_page.log_msg") as mock_log_msg:
             lp._on_delete_selected(app)
         mock_log_msg.assert_called_once_with("WARN: No log selected")
@@ -221,7 +221,7 @@ class TestDeleteSelectedLogs(unittest.TestCase):
             mock_dialog.run.return_value = lp.Gtk.ResponseType.YES
             mock_dialog_cls.return_value = mock_dialog
 
-            app, selection, _model = self._make_app([path_good, path_bad])
+            app, _selection, _model = self._make_app([path_good, path_bad])
             with patch("logs_page._sync_log_list") as mock_sync:
                 lp._on_delete_selected(app)
 
@@ -341,8 +341,7 @@ class TestLoadLogIntoViewer(unittest.TestCase):
             path = os.path.join(tmpdir, "large.log")
             with open(path, "w") as fh:
                 fh.write("START\n")
-                for i in range(50000):
-                    fh.write(f"line {i} padding to make the file large enough\n")
+                fh.writelines(f"line {i} padding to make the file large enough\n" for i in range(50000))
                 fh.write("END\n")
             size = os.path.getsize(path)
             self.assertGreater(size, lp.MAX_VIEWER_FULL_READ_BYTES)
@@ -417,8 +416,7 @@ class TestLoadFullLogClicked(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "medium.log")
             with open(path, "w") as fh:
-                for i in range(100):
-                    fh.write(f"line {i}\n")
+                fh.writelines(f"line {i}\n" for i in range(100))
             app = MagicMock()
             app._logs_current_path = path
             app._logs_file_size = os.path.getsize(path)
@@ -433,8 +431,7 @@ class TestLoadFullLogClicked(unittest.TestCase):
             path = os.path.join(tmpdir, "large.log")
             with open(path, "w") as fh:
                 fh.write("START\n")
-                for i in range(50000):
-                    fh.write(f"line {i} padding to make the file large enough\n")
+                fh.writelines(f"line {i} padding to make the file large enough\n" for i in range(50000))
                 fh.write("END\n")
             app = MagicMock()
             app._logs_current_path = path

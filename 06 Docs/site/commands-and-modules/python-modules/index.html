@@ -1,0 +1,5782 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation for ZFS backup, snapshot, and retention management utilities">
+      
+      
+      
+      
+        <link rel="prev" href="../modules/">
+      
+      
+        <link rel="next" href="../../messages/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>Python Modules - ZFS Utilities</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#python-modules-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ZFS Utilities" class="md-header__button md-logo" aria-label="ZFS Utilities" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ZFS Utilities
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Python Modules
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="blue-grey" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../installation/" class="md-tabs__link">
+          
+  
+  
+  Installation
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../user-guide/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../developer-guide/" class="md-tabs__link">
+          
+  
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Commands & Modules
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../messages/" class="md-tabs__link">
+          
+  
+  
+  Messages
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ZFS Utilities" class="md-nav__button md-logo" aria-label="ZFS Utilities" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ZFS Utilities
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Installation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/zfs-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ZFS Key Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts and Terminology
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts and Terminology
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/profiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Profiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/gtk-gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GTK GUI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command Line Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Command Line Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/daily-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Daily Backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/offsite-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Offsite Backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restore Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/retention/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retention Policies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/proxmox-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Developer Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/coding-policies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Policies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/lock-manager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lock Manager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/concurrency-collisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concurrency Collisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/two-node-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/global-variables/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Global Variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/data-structures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Structures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/doc-server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands & Modules
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Commands & Modules
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../two-node/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Two-Node Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python Modules
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#config-and-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config and data
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Config and data">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#config_corepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        config_core.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#feature_configpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        feature_config.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backup_configpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        backup_config.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config_migrationspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        config_migrations.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zfs-repository-and-info" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ZFS repository and info
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ZFS repository and info">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#zfs_repositorypy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        zfs_repository.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zfsinfopy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        zfsinfo.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diagnose_zfs_repositorypy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        diagnose_zfs_repository.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command-builders-and-runners" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command builders and runners
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Command builders and runners">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#command_builderspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        command_builders.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session_logpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        session_log.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backup_runnerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        backup_runner.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#offsite_runnerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        offsite_runner.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restore_runnerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        restore_runner.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profile_runnerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        profile_runner.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profile_validationpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        profile_validation.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runner_factorypy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        runner_factory.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backup_historypy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        backup_history.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gui-pages-and-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GUI pages and actions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="GUI pages and actions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#app_contextpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        app_context.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#action_dispatchpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        action_dispatch.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backup_pagepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        backup_page.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#offsite_pagepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        offsite_page.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restore_pagepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        restore_page.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retention_pagepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        retention_page.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkagainst_pagepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        checkagainst_page.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#datasets_pagepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        datasets_page.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dashboard_pagepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dashboard_page.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pools_pagepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pools_page.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#schedule_pagepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        schedule_page.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logs_pagepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        logs_page.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managers-and-helpers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managers and helpers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Managers and helpers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#path_utilspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        path_utils.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profile_managerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        profile_manager.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profile_dialogspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        profile_dialogs.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cron_managerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cron_manager.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scrub_managerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        scrub_manager.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pool_watchpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pool_watch.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dataset_actionspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dataset_actions.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pool_actionspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pool_actions.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retention_actionspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        retention_actions.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gui_helperspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        gui_helpers.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log_indexpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        log_index.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#file_lockingpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        file_locking.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zfs_lock_managerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        zfs_lock_manager.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logging_configpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        logging_config.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#entry-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entry points
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Entry points">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mainpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        main.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zfsutilities_guipy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        zfsutilities_gui.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#docs_viewerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        docs_viewer.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#legacy_retentionpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        legacy_retention.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Messages
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Messages
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/commands-and-modules/python-modules.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="python-modules-reference">Python Modules Reference<a class="headerlink" href="#python-modules-reference" title="Permanent link">&para;</a></h1>
+<p>These modules make up the GTK GUI and command-orchestration layer of ZFS
+Utilities. They read and write the shared JSON config, build <code>bash</code> commands,
+run them through <code>subprocess</code>, and present the results in the GTK interface.</p>
+<p>Most modules are in <code>07 GTK + Python/</code>. They are grouped below by role:</p>
+<ul>
+<li><a href="#config-and-data">Config and data</a></li>
+<li><a href="#zfs-repository-and-info">ZFS repository and info</a></li>
+<li><a href="#command-builders-and-runners">Command builders and runners</a></li>
+<li><a href="#gui-pages-and-actions">GUI pages and actions</a></li>
+<li><a href="#managers-and-helpers">Managers and helpers</a></li>
+<li><a href="#entry-points">Entry points</a></li>
+</ul>
+<p>Cross-references:</p>
+<ul>
+<li>Shared data structures are documented in full on
+  <a href="../../developer-guide/data-structures/">Data Structures</a>.</li>
+<li>Bash commands and modules that the Python layer invokes are in
+  <a href="../commands/">Commands</a> and <a href="../modules/">Modules</a>.</li>
+</ul>
+<hr />
+<h2 id="config-and-data">Config and data<a class="headerlink" href="#config-and-data" title="Permanent link">&para;</a></h2>
+<h3 id="config_corepy"><code>config_core.py</code><a class="headerlink" href="#config_corepy" title="Permanent link">&para;</a></h3>
+<p>Low-level config I/O and small, cross-cutting configuration helpers.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>load_config()</code></td>
+<td>Read the JSON config from <code>CONFIG_PATH</code>, applying migrations</td>
+</tr>
+<tr>
+<td><code>save_config(config)</code></td>
+<td>Atomically write the full config dict back to disk</td>
+</tr>
+<tr>
+<td><code>run_migrations(config)</code></td>
+<td>Apply pending migrations via <code>config_migrations.py</code></td>
+</tr>
+<tr>
+<td><code>get_ui_state()</code> / <code>save_ui_state()</code></td>
+<td>Load/save window geometry and paned positions</td>
+</tr>
+<tr>
+<td><code>get_dashboard_config()</code> / <code>save_dashboard_config()</code></td>
+<td>Dashboard threshold settings</td>
+</tr>
+<tr>
+<td><code>get_log_retention_days()</code> / <code>save_log_retention_days()</code></td>
+<td>Session-log retention days</td>
+</tr>
+<tr>
+<td><code>get_history_retention_days()</code> / <code>save_history_retention_days()</code></td>
+<td>History retention days</td>
+</tr>
+<tr>
+<td><code>get_session_log_max_bytes()</code> / <code>save_session_log_max_bytes()</code></td>
+<td>Session-log size cap</td>
+</tr>
+<tr>
+<td><code>prune_old_logs(retention_days)</code></td>
+<td>Delete session logs older than the retention setting</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config_migrations</code></td>
+<td>Run schema migrations on load</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code> for warnings</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>JSON config (<code>/root/.config/zfsutilities.json</code>)</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+<tr>
+<td>Session log directory</td>
+<td><a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="feature_configpy"><code>feature_config.py</code><a class="headerlink" href="#feature_configpy" title="Permanent link">&para;</a></h3>
+<p>Feature-specific getters and setters for the JSON config sections that back
+the GUI tabs and the bash scripts.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_backup_config()</code> / <code>save_backup_config()</code></td>
+<td>Backup tab state</td>
+</tr>
+<tr>
+<td><code>get_offsite_config()</code> / <code>save_offsite_config()</code></td>
+<td>Offsite tab state</td>
+</tr>
+<tr>
+<td><code>get_restore_config()</code> / <code>save_restore_config()</code></td>
+<td>Restore tab state</td>
+</tr>
+<tr>
+<td><code>get_pools()</code> / <code>save_pools()</code></td>
+<td>Registered pool list, including <code>offsite_candidate</code> flag</td>
+</tr>
+<tr>
+<td><code>get_checkagainst()</code> / <code>save_checkagainst()</code></td>
+<td>Nested checkagainst object (derived + user entries)</td>
+</tr>
+<tr>
+<td><code>derive_checkagainst_entries()</code></td>
+<td>Build forward/reverse rows from active Backup/Offsite steps</td>
+</tr>
+<tr>
+<td><code>merge_checkagainst_entries()</code></td>
+<td>Merge derived and user entries for <code>zfsconfig_get_checkagainst</code></td>
+</tr>
+<tr>
+<td><code>add_checkagainst_entry()</code></td>
+<td>Append a row to <code>user_entries</code> if not already present</td>
+</tr>
+<tr>
+<td><code>get_retention()</code> / <code>save_retention()</code></td>
+<td>Per-pool retention policies</td>
+</tr>
+<tr>
+<td><code>get_archive_path()</code> / <code>save_archive_path()</code></td>
+<td>Offsite archive path</td>
+</tr>
+<tr>
+<td><code>get_prune_label()</code> / <code>save_prune_label()</code></td>
+<td>Global retention prune label</td>
+</tr>
+<tr>
+<td><code>get_prune_pools_order()</code> / <code>save_prune_pools_order()</code></td>
+<td>Retention Prune pool order</td>
+</tr>
+<tr>
+<td><code>get_retention_mass_delete_config()</code> / <code>save_retention_mass_delete_config()</code></td>
+<td>Retention tab Advanced Prune Options card settings</td>
+</tr>
+<tr>
+<td><code>get_scrub_manager_config()</code> / <code>save_scrub_manager_config()</code></td>
+<td>Scrub queue settings</td>
+</tr>
+<tr>
+<td><code>load_scrub_state()</code> / <code>save_scrub_state()</code></td>
+<td>Scrub queue persistence</td>
+</tr>
+<tr>
+<td><code>generate_snapshot_name()</code></td>
+<td>Generate a backup snapshot name and update the snapfile</td>
+</tr>
+<tr>
+<td><code>generate_offsite_snapshot_name()</code></td>
+<td>Generate an offsite snapshot name and update the snapfile</td>
+</tr>
+<tr>
+<td><code>import_legacy_retention()</code></td>
+<td>One-time scan of <code>zfsretainpol-*</code> files</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config_core</code></td>
+<td><code>save_config</code>, <code>_deep_copy</code>, default constants</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>JSON config feature sections</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">backup/offsite/restore/pools/retention/checkagainst/scrub</a></td>
+</tr>
+<tr>
+<td>Snapshot name persistence and one-minute reservation</td>
+<td><a href="../../developer-guide/data-structures/#snapshot-name-persistence">Snapshot name persistence</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="backup_configpy"><code>backup_config.py</code><a class="headerlink" href="#backup_configpy" title="Permanent link">&para;</a></h3>
+<p>Backward-compatibility facade that re-exports the public API of
+<code>config_core</code>, <code>feature_config</code>, and <code>logging_config</code>. Older modules import
+from <code>backup_config</code>; newer code imports directly from the specialised module.</p>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>logging_config</code></td>
+<td>Re-export <code>log_msg</code>, message levels, log sink helpers</td>
+</tr>
+<tr>
+<td><code>config_core</code></td>
+<td>Re-export config I/O and UI-state helpers</td>
+</tr>
+<tr>
+<td><code>feature_config</code></td>
+<td>Re-export feature getters/setters and snapshot naming</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Same as <code>config_core</code> and <code>feature_config</code></td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="config_migrationspy"><code>config_migrations.py</code><a class="headerlink" href="#config_migrationspy" title="Permanent link">&para;</a></h3>
+<p>Config schema migrations. <code>CONFIG_VERSION</code> and the <code>MIGRATIONS</code> list are the
+single source of truth for the JSON config format version.</p>
+<p><strong>Key items:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CONFIG_VERSION</code></td>
+<td>Current schema version</td>
+</tr>
+<tr>
+<td><code>MIGRATIONS</code></td>
+<td>Ordered list of one-version migration functions</td>
+</tr>
+<tr>
+<td><code>run_migrations(config)</code></td>
+<td>Apply all pending migrations</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none.</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config_version</code> field</td>
+<td><a href="../../developer-guide/data-structures/#config-migrations">config_version</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="zfs-repository-and-info">ZFS repository and info<a class="headerlink" href="#zfs-repository-and-info" title="Permanent link">&para;</a></h2>
+<h3 id="zfs_repositorypy"><code>zfs_repository.py</code><a class="headerlink" href="#zfs_repositorypy" title="Permanent link">&para;</a></h3>
+<p>Isolates all direct <code>zfs</code>/<code>zpool</code> subprocess calls. The repository returns
+typed dataclasses instead of raw tab-separated strings, which makes the GUI
+and tests easy to mock.</p>
+<p><strong>Key classes:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PoolRow</code></td>
+<td>One row from <code>zpool list -H -o name,health,size,alloc,free,cap,ckpoint</code></td>
+</tr>
+<tr>
+<td><code>DatasetRow</code></td>
+<td>One row from <code>zfs list -H -o name,creation,type,used,avail,refer,origin,clones</code></td>
+</tr>
+<tr>
+<td><code>SnapshotRow</code></td>
+<td>One row from <code>zfs list -t snapshot -H -o ...</code></td>
+</tr>
+<tr>
+<td><code>HoldRow</code></td>
+<td>One row from <code>zfs holds -H &lt;snapshot&gt;</code></td>
+</tr>
+<tr>
+<td><code>ZfsRepository</code></td>
+<td>Wraps all <code>zfs</code>/<code>zpool</code> subprocess commands</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_default_repository()</code></td>
+<td>Returns a module-level default <code>ZfsRepository</code> instance</td>
+</tr>
+<tr>
+<td><code>is_dataset_encrypted(path)</code></td>
+<td>Return <code>True</code> if <em>path</em> resides on an encrypted ZFS dataset</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none (uses <code>subprocess</code> directly).</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZfsRepository</code> dataclasses</td>
+<td><a href="../../developer-guide/data-structures/#zfsrepository-dataclasses-zfs_repositorypy">ZfsRepository dataclasses</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="zfsinfopy"><code>zfsinfo.py</code><a class="headerlink" href="#zfsinfopy" title="Permanent link">&para;</a></h3>
+<p>Small CLI helper that prints pool, dataset, and snapshot information. It is
+the Python equivalent of a few ad-hoc <code>zpool list</code> / <code>zfs list</code> one-liners.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_pools()</code></td>
+<td>Return pool health list via <code>ZfsRepository</code></td>
+</tr>
+<tr>
+<td><code>get_datasets(pool)</code></td>
+<td>Return dataset tree via <code>ZfsRepository</code></td>
+</tr>
+<tr>
+<td><code>get_snapshot_counts()</code></td>
+<td>Return snapshot count per dataset</td>
+</tr>
+<tr>
+<td><code>print_summary()</code></td>
+<td>Print aggregate statistics</td>
+</tr>
+<tr>
+<td><code>main()</code></td>
+<td>CLI entry point</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>zfs_repository</code></td>
+<td><code>get_default_repository</code> and row dataclasses</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZfsRepository</code> dataclasses</td>
+<td><a href="../../developer-guide/data-structures/#zfsrepository-dataclasses-zfs_repositorypy">ZfsRepository dataclasses</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="diagnose_zfs_repositorypy"><code>diagnose_zfs_repository.py</code><a class="headerlink" href="#diagnose_zfs_repositorypy" title="Permanent link">&para;</a></h3>
+<p>CLI diagnostic wrapper around <code>ZfsRepository</code>. Used to exercise repository
+methods directly for troubleshooting.</p>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>zfs_repository</code></td>
+<td><code>ZfsRepository</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="command-builders-and-runners">Command builders and runners<a class="headerlink" href="#command-builders-and-runners" title="Permanent link">&para;</a></h2>
+<h3 id="command_builderspy"><code>command_builders.py</code><a class="headerlink" href="#command_builderspy" title="Permanent link">&para;</a></h3>
+<p>Builds the <code>bash</code> command strings and <code>BashStep</code> objects used by the backup,
+offsite, restore, and retention runners.</p>
+<p><strong>Key class:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BashStep</code></td>
+<td>A single executable step: <code>command</code> list, <code>description</code>, <code>is_rsync</code>, <code>fatal</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>parse_rsync_endpoint(endpoint)</code></td>
+<td>Split <code>user@host:path</code> into host and path</td>
+</tr>
+<tr>
+<td><code>build_rsync_command(source, dest, remote_log_path=None)</code></td>
+<td>Build an rsync pull/push command</td>
+</tr>
+<tr>
+<td><code>build_send_receive_command(...)</code></td>
+<td>Build the <code>bash</code> command for a ZFS send/receive step</td>
+</tr>
+<tr>
+<td><code>build_pre_backup_command(cmd)</code> / <code>build_post_backup_command(cmd)</code></td>
+<td>Wrap user pre/post commands</td>
+</tr>
+<tr>
+<td><code>build_retention_command(...)</code></td>
+<td>Build the <code>zfscleanup</code> invocation</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none (stdlib only).</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BashStep</code></td>
+<td><a href="../../developer-guide/data-structures/#bashstep-command_builderspy">BashStep</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="session_logpy"><code>session_log.py</code><a class="headerlink" href="#session_logpy" title="Permanent link">&para;</a></h3>
+<p>Low-level, stateless helpers for per-run session log files. Used by both the
+GUI runner (<code>backup_runner.py</code>) and the headless profile runner
+(<code>profile_runner.py</code>) so both paths create, append, and truncate logs the same
+way.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_session_log_file(tab_type, name=None)</code></td>
+<td>Create a timestamped log file under <code>SESSION_LOG_DIR</code></td>
+</tr>
+<tr>
+<td><code>write_raw_line(session_log_file, line)</code></td>
+<td>Append a raw subprocess line with a timestamp</td>
+</tr>
+<tr>
+<td><code>write_session_trailer(...)</code></td>
+<td>Write the <code># END</code> trailer and update the log index</td>
+</tr>
+<tr>
+<td><code>maybe_truncate_session_log(...)</code></td>
+<td>Enforce the configured session-log size cap</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config_core</code></td>
+<td><code>SESSION_LOG_DIR</code></td>
+</tr>
+<tr>
+<td><code>log_index</code></td>
+<td><code>LogIndex</code> for cached log metadata</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code>, <code>truncate_session_log</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Session log files</td>
+<td><a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a></td>
+</tr>
+<tr>
+<td>Session log index</td>
+<td><a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="backup_runnerpy"><code>backup_runner.py</code><a class="headerlink" href="#backup_runnerpy" title="Permanent link">&para;</a></h3>
+<p>Runs a list of <code>BashStep</code> objects asynchronously. Manages the session log,
+progress parsing, cancellation, and final history/log-index entries.</p>
+<p><strong>Key class:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BackupRunner</code></td>
+<td>Async runner for GUI-initiated backup/offsite/restore operations</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow:</strong></p>
+<ol>
+<li><code>prepare_session_log()</code> uses <code>session_log.create_session_log_file()</code> to
+   create a timestamped log under <code>SESSION_LOG_DIR</code>.</li>
+<li><code>start()</code> spawns each step in a PTY so output can be streamed.</li>
+<li><code>_on_stdout()</code> / <code>_on_stderr()</code> parse <code>pv</code>/<code>zfs receive</code> progress and
+   append raw lines to the log via <code>session_log.write_raw_line()</code>.</li>
+<li><code>_write_session_trailer()</code> uses <code>session_log.write_session_trailer()</code> to
+   write the <code># END</code> trailer and update the log index.</li>
+<li><code>_maybe_truncate_session_log()</code> uses <code>session_log.maybe_truncate_session_log()</code>
+   to enforce the configured size cap.</li>
+</ol>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>session_log</code></td>
+<td>Create, append, truncate, and finalize session logs</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td>Session log context, <code>log_msg</code></td>
+</tr>
+<tr>
+<td><code>log_index</code></td>
+<td><code>LogIndex</code> for updating cached log metadata</td>
+</tr>
+<tr>
+<td><code>backup_history</code></td>
+<td>Build and append history entries</td>
+</tr>
+<tr>
+<td><code>command_builders</code></td>
+<td><code>BashStep</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BashStep</code></td>
+<td><a href="../../developer-guide/data-structures/#bashstep-command_builderspy">BashStep</a></td>
+</tr>
+<tr>
+<td>Session log files</td>
+<td><a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a></td>
+</tr>
+<tr>
+<td>Session log index</td>
+<td><a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a></td>
+</tr>
+<tr>
+<td>Backup history</td>
+<td><a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="offsite_runnerpy"><code>offsite_runner.py</code><a class="headerlink" href="#offsite_runnerpy" title="Permanent link">&para;</a></h3>
+<p>Offsite-specific command building and pool detection.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>detect_offsite_pool(candidates)</code></td>
+<td>Find the first online pool in the candidate list</td>
+</tr>
+<tr>
+<td><code>build_offsite_step_command(...)</code></td>
+<td>Build an offsite send/receive step with optional holds</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>command_builders</code></td>
+<td><code>BashStep</code>, <code>_dryrun_assignments</code></td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BashStep</code></td>
+<td><a href="../../developer-guide/data-structures/#bashstep-command_builderspy">BashStep</a></td>
+</tr>
+<tr>
+<td>Offsite candidate pool list (JSON config <code>pools</code>)</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="restore_runnerpy"><code>restore_runner.py</code><a class="headerlink" href="#restore_runnerpy" title="Permanent link">&para;</a></h3>
+<p>Computes restore destination paths and builds the restore <code>BashStep</code>.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>compute_auto_destination(...)</code></td>
+<td>Derive default destination by stripping qualifiers</td>
+</tr>
+<tr>
+<td><code>compute_restore_params(sourcefs, destfs)</code></td>
+<td>Compute send/receive parameters for restore</td>
+</tr>
+<tr>
+<td><code>build_restore_command(...)</code></td>
+<td>Build the <code>bash</code> command for a restore operation</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>command_builders</code></td>
+<td><code>BashStep</code>, <code>_dryrun_assignments</code></td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BashStep</code></td>
+<td><a href="../../developer-guide/data-structures/#bashstep-command_builderspy">BashStep</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="profile_runnerpy"><code>profile_runner.py</code><a class="headerlink" href="#profile_runnerpy" title="Permanent link">&para;</a></h3>
+<p>Runs scheduled/cron profiles from JSON files. Reuses much of the same logic
+as the GUI runners but writes its own session logs and history entries.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_backup_profile(profile)</code></td>
+<td>Build and run a backup profile</td>
+</tr>
+<tr>
+<td><code>run_offsite_profile(profile)</code></td>
+<td>Build and run an offsite profile</td>
+</tr>
+<tr>
+<td><code>run_restore_profile(profile)</code></td>
+<td>Build and run a restore profile</td>
+</tr>
+<tr>
+<td><code>run_retention_profile(profile)</code></td>
+<td>Run retention/cleanup for configured pools</td>
+</tr>
+<tr>
+<td><code>run_scrub_profile(profile)</code></td>
+<td>Queue and poll scrubs for configured pools</td>
+</tr>
+<tr>
+<td><code>_check_weekday_ordinal(weekday_field)</code></td>
+<td>Runtime guard for weekday ordinal expressions</td>
+</tr>
+<tr>
+<td><code>acquire_profile_lock(profile_name, timeout=1.0)</code></td>
+<td>Acquire the profile lock; suppress duplicate runs</td>
+</tr>
+<tr>
+<td><code>release_profile_lock(fd, lock_path)</code></td>
+<td>Release the profile lock</td>
+</tr>
+<tr>
+<td><code>main()</code></td>
+<td>CLI entry point for cron execution</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow:</strong></p>
+<ol>
+<li>Load the requested profile from disk to determine its tab type.</li>
+<li>Create a session log with <code>session_log.create_session_log_file()</code> so that
+   lock-skip messages and early errors are recorded.</li>
+<li>Acquire a per-profile advisory lock so a duplicate cron invocation exits
+   cleanly instead of running the profile twice.</li>
+<li>If the profile's cron weekday field contains an ordinal expression
+   (<code>#1</code>–<code>#5</code> or <code>#L</code>), verify today matches it; otherwise skip the run.</li>
+<li>Generate snapshot names and build <code>BashStep</code> lists using the same helpers
+   as the GUI pages.</li>
+<li>Run each step, write the trailer, and append a history entry.</li>
+</ol>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>command_builders</code></td>
+<td>Build rsync, send/receive, retention, pre/post <code>BashStep</code>s</td>
+</tr>
+<tr>
+<td><code>offsite_runner</code></td>
+<td>Detect offsite pool and build offsite steps</td>
+</tr>
+<tr>
+<td><code>restore_runner</code></td>
+<td>Compute restore params</td>
+</tr>
+<tr>
+<td><code>profile_manager</code></td>
+<td>Load profile JSON</td>
+</tr>
+<tr>
+<td><code>scrub_manager</code></td>
+<td>Scrub queue operations</td>
+</tr>
+<tr>
+<td><code>config_core</code></td>
+<td><code>load_config</code>, session log directory</td>
+</tr>
+<tr>
+<td><code>feature_config</code></td>
+<td>Snapshot naming, pool names, snapfile removal, scrub state</td>
+</tr>
+<tr>
+<td><code>session_log</code></td>
+<td>Create, append, truncate, and finalize session logs</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td>Session log context, <code>log_msg</code></td>
+</tr>
+<tr>
+<td><code>log_index</code></td>
+<td>Update log index entries</td>
+</tr>
+<tr>
+<td><code>backup_history</code></td>
+<td>Append history entries</td>
+</tr>
+<tr>
+<td><code>zfs_repository</code></td>
+<td><code>is_dataset_encrypted</code> for ZFS keys destination checks</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BashStep</code></td>
+<td><a href="../../developer-guide/data-structures/#bashstep-command_builderspy">BashStep</a></td>
+</tr>
+<tr>
+<td>JSON config</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+<tr>
+<td>Session log files / index</td>
+<td><a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a></td>
+</tr>
+<tr>
+<td>Backup history</td>
+<td><a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a></td>
+</tr>
+<tr>
+<td>Scrub state / <code>ScrubQueue</code></td>
+<td><a href="../../developer-guide/data-structures/#scrub-state-scrub_managerpy">Scrub state</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="profile_validationpy"><code>profile_validation.py</code><a class="headerlink" href="#profile_validationpy" title="Permanent link">&para;</a></h3>
+<p>Scope-alignment validation for backup and offsite jobs.  Detects when backup
+and offsite profiles send overlapping datasets to the same destination but
+snap different subsets, which would force the daily backup to roll back
+<code>@offsite</code> snapshots on the destination.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>validate_gui_settings(backup_cfg, offsite_cfg)</code></td>
+<td>Validate the current GUI Backup and Offsite tab settings</td>
+</tr>
+<tr>
+<td><code>validate_profiles(profiles)</code></td>
+<td>Validate a list of saved profiles</td>
+</tr>
+<tr>
+<td><code>validate_effective_steps(items)</code></td>
+<td>Validate a normalized list of backup/offsite send/receive steps</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none (stdlib only: <code>fnmatch</code>, <code>shlex</code>).</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Backup/offsite config dicts</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+<tr>
+<td>Profile dicts</td>
+<td><a href="../../user-guide/profiles/">Profiles</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="runner_factorypy"><code>runner_factory.py</code><a class="headerlink" href="#runner_factorypy" title="Permanent link">&para;</a></h3>
+<p>Creates <code>BackupRunner</code> instances pre-bound to the main window's log and
+progress callbacks.</p>
+<p><strong>Key class:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RunnerFactory</code></td>
+<td>Factory for runners sharing the same GUI sink</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backup_runner</code></td>
+<td><code>BackupRunner</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BackupRunner</code></td>
+<td>produced by this module</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="backup_historypy"><code>backup_history.py</code><a class="headerlink" href="#backup_historypy" title="Permanent link">&para;</a></h3>
+<p>Append-only history store for backup/offsite/restore/prune runs.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>load_history()</code> / <code>save_history()</code></td>
+<td>Read/write <code>/root/.config/zfsutilities-history.json</code></td>
+</tr>
+<tr>
+<td><code>add_history_entry(entry)</code></td>
+<td>Append a new entry and prune old ones</td>
+</tr>
+<tr>
+<td><code>prune_history(history, days)</code></td>
+<td>Remove entries older than <code>days</code></td>
+</tr>
+<tr>
+<td><code>get_success_rate(history, days)</code></td>
+<td>Compute success percentage for recent entries</td>
+</tr>
+<tr>
+<td><code>get_recent_entries(limit)</code></td>
+<td>Return newest entries</td>
+</tr>
+<tr>
+<td><code>format_duration(seconds)</code></td>
+<td>Format seconds as <code>HH:MM:SS</code></td>
+</tr>
+<tr>
+<td><code>_parse_human_size(size)</code></td>
+<td>Parse <code>pv</code> size strings to bytes</td>
+</tr>
+<tr>
+<td><code>build_entry(...)</code></td>
+<td>Construct a standard history dict</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none (stdlib only).</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Backup history</td>
+<td><a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="gui-pages-and-actions">GUI pages and actions<a class="headerlink" href="#gui-pages-and-actions" title="Permanent link">&para;</a></h2>
+<h3 id="app_contextpy"><code>app_context.py</code><a class="headerlink" href="#app_contextpy" title="Permanent link">&para;</a></h3>
+<p>Cross-cutting, non-GTK state container passed to GUI pages and action
+handlers.</p>
+<p><strong>Key class:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AppContext</code></td>
+<td>Shared state: loaded config, script directories, version, <code>ZfsRepository</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AppContext</code></td>
+<td><a href="../../developer-guide/data-structures/#appcontext-app_contextpy">AppContext</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="action_dispatchpy"><code>action_dispatch.py</code><a class="headerlink" href="#action_dispatchpy" title="Permanent link">&para;</a></h3>
+<p>Central dispatch tables for the main-window action panel. Each page exports
+button specifications; this module maps them to the correct handler function
+and wraps handlers that need the <code>AppContext</code>.</p>
+<p><strong>Key items:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PAGE_SPECS</code></td>
+<td>List of page button specs used to build the action panel</td>
+</tr>
+<tr>
+<td><code>ACTION_HANDLERS</code></td>
+<td>Dictionary mapping action names to handler functions</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backup_page</code></td>
+<td>Backup tab handlers</td>
+</tr>
+<tr>
+<td><code>offsite_page</code></td>
+<td>Offsite tab handlers</td>
+</tr>
+<tr>
+<td><code>restore_page</code></td>
+<td>Restore tab handlers</td>
+</tr>
+<tr>
+<td><code>pools_page</code> / <code>pool_actions</code></td>
+<td>Pool tab handlers</td>
+</tr>
+<tr>
+<td><code>datasets_page</code> / <code>dataset_actions</code></td>
+<td>Datasets tab handlers</td>
+</tr>
+<tr>
+<td><code>retention_page</code> / <code>retention_actions</code></td>
+<td>Retention tab handlers</td>
+</tr>
+<tr>
+<td><code>checkagainst_page</code></td>
+<td>Checkagainst tab handlers</td>
+</tr>
+<tr>
+<td><code>schedule_page</code></td>
+<td>Schedule tab handlers</td>
+</tr>
+<tr>
+<td><code>dashboard_page</code></td>
+<td>Dashboard tab handlers</td>
+</tr>
+<tr>
+<td><code>logs_page</code></td>
+<td>Logs tab handlers</td>
+</tr>
+<tr>
+<td><code>profile_dialogs</code></td>
+<td>Add/recall profile dialogs</td>
+</tr>
+<tr>
+<td><code>backup_config</code></td>
+<td><code>log_msg</code>, scrub config helpers</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="backup_pagepy"><code>backup_page.py</code><a class="headerlink" href="#backup_pagepy" title="Permanent link">&para;</a></h3>
+<p>Backup tab: UI for pull steps, send/receive steps, pre/post commands, and
+snapshot-name generation.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_backup_page(ctx, ...)</code></td>
+<td>Build the Backup tab widget</td>
+</tr>
+<tr>
+<td><code>load_backup_config()</code> / <code>collect_backup_config()</code></td>
+<td>Move data between UI and config dict</td>
+</tr>
+<tr>
+<td><code>check_backup_dirty()</code> / <code>mark_backup_clean()</code></td>
+<td>Track unsaved changes</td>
+</tr>
+<tr>
+<td><code>on_backup_run()</code></td>
+<td>Build <code>BashStep</code>s and start a <code>BackupRunner</code></td>
+</tr>
+<tr>
+<td><code>on_backup_cancel()</code></td>
+<td>Cancel the running backup</td>
+</tr>
+<tr>
+<td><code>on_backup_save()</code> / <code>on_backup_revert()</code></td>
+<td>Persist or revert config</td>
+</tr>
+<tr>
+<td><code>backup_set_all_active()</code></td>
+<td>Toggle all step Active checkboxes</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>feature_config</code></td>
+<td>Read/write backup config and snapshot names</td>
+</tr>
+<tr>
+<td><code>command_builders</code></td>
+<td>Build <code>BashStep</code>s</td>
+</tr>
+<tr>
+<td><code>backup_runner</code></td>
+<td>Run the generated steps</td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Widget helpers, dirty tracking</td>
+</tr>
+<tr>
+<td><code>profile_dialogs</code></td>
+<td>Add/recall profile dialogs</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backup</code> config object</td>
+<td><a href="../../developer-guide/data-structures/#backup-object">backup object</a></td>
+</tr>
+<tr>
+<td><code>BashStep</code></td>
+<td><a href="../../developer-guide/data-structures/#bashstep-command_builderspy">BashStep</a></td>
+</tr>
+<tr>
+<td>Snapshot name persistence</td>
+<td><a href="../../developer-guide/data-structures/#snapshot-name-persistence">Snapshot name persistence</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="offsite_pagepy"><code>offsite_page.py</code><a class="headerlink" href="#offsite_pagepy" title="Permanent link">&para;</a></h3>
+<p>Offsite Backup tab: one or more offsite send/receive steps, offsite pool
+detection, and snapshot-name generation.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_offsite_page()</code></td>
+<td>Build the Offsite tab widget</td>
+</tr>
+<tr>
+<td><code>collect_offsite_config()</code> / <code>load_offsite_config()</code></td>
+<td>UI ↔ config</td>
+</tr>
+<tr>
+<td><code>check_offsite_dirty()</code> / <code>mark_offsite_clean()</code></td>
+<td>Dirty-state tracking</td>
+</tr>
+<tr>
+<td><code>do_detect_offsite_pool()</code></td>
+<td>Find an online offsite candidate pool</td>
+</tr>
+<tr>
+<td><code>on_offsite_run()</code> / <code>on_offsite_cancel()</code></td>
+<td>Start/cancel an offsite run</td>
+</tr>
+<tr>
+<td><code>offsite_set_all_active()</code></td>
+<td>Toggle step Active checkboxes</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>feature_config</code></td>
+<td>Offsite config and snapshot names</td>
+</tr>
+<tr>
+<td><code>offsite_runner</code></td>
+<td>Detect pool and build offsite steps</td>
+</tr>
+<tr>
+<td><code>backup_runner</code></td>
+<td>Run steps (via returned <code>BashStep</code>s)</td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Widget helpers</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>offsite</code> config object</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+<tr>
+<td><code>BashStep</code></td>
+<td><a href="../../developer-guide/data-structures/#bashstep-command_builderspy">BashStep</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="restore_pagepy"><code>restore_page.py</code><a class="headerlink" href="#restore_pagepy" title="Permanent link">&para;</a></h3>
+<p>Restore tab: choose a source snapshot, compute an auto-destination, and run
+<code>zfs-send-receive</code> in restore mode.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_restore_page()</code></td>
+<td>Build the Restore tab widget</td>
+</tr>
+<tr>
+<td><code>collect_restore_config()</code> / <code>load_restore_config()</code></td>
+<td>UI ↔ config</td>
+</tr>
+<tr>
+<td><code>check_restore_dirty()</code> / <code>mark_restore_clean()</code></td>
+<td>Dirty-state tracking</td>
+</tr>
+<tr>
+<td><code>refresh_restore_destination()</code></td>
+<td>Recompute default destination</td>
+</tr>
+<tr>
+<td><code>on_restore_run()</code> / <code>on_restore_cancel()</code></td>
+<td>Start/cancel a restore</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>feature_config</code></td>
+<td>Pool list and restore config</td>
+</tr>
+<tr>
+<td><code>restore_runner</code></td>
+<td>Destination computation and command building</td>
+</tr>
+<tr>
+<td><code>backup_runner</code></td>
+<td>Run restore steps</td>
+</tr>
+<tr>
+<td><code>command_builders</code></td>
+<td><code>BashStep</code></td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Widget helpers</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>restore</code> config object</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+<tr>
+<td><code>BashStep</code></td>
+<td><a href="../../developer-guide/data-structures/#bashstep-command_builderspy">BashStep</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="retention_pagepy"><code>retention_page.py</code><a class="headerlink" href="#retention_pagepy" title="Permanent link">&para;</a></h3>
+<p>Retention Policies tab: edit per-pool bucket policies and the prune pool
+list.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_retention_page()</code></td>
+<td>Build the Retention tab widget</td>
+</tr>
+<tr>
+<td><code>collect_retention_profile_config()</code> / <code>load_retention_profile_config()</code></td>
+<td>Profile support</td>
+</tr>
+<tr>
+<td><code>refresh_prune_pools()</code></td>
+<td>Refresh the prune list with online pools that have policies</td>
+</tr>
+<tr>
+<td><code>_on_ret_save()</code> / <code>_on_ret_revert()</code></td>
+<td>Persist or revert policy changes</td>
+</tr>
+<tr>
+<td><code>_clear_non_default_policies_on_new_install()</code></td>
+<td>Fresh-install cleanup</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>feature_config</code></td>
+<td>Retention getters/setters, legacy import</td>
+</tr>
+<tr>
+<td><code>config_core</code></td>
+<td><code>save_config</code></td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>TreeView helpers</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>retention</code> config object</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="checkagainst_pagepy"><code>checkagainst_page.py</code><a class="headerlink" href="#checkagainst_pagepy" title="Permanent link">&para;</a></h3>
+<p>Checkagainst tab: edit the fss table that tells
+<a href="../modules/#zfscheckagainst"><code>zfscheckagainst</code></a> which counterpart datasets must
+share a common snapshot before a source snapshot can be deleted safely.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_checkagainst_page()</code></td>
+<td>Build the Checkagainst tab widget</td>
+</tr>
+<tr>
+<td><code>on_checkagainst_add()</code> / <code>on_checkagainst_remove()</code></td>
+<td>Add/remove rows</td>
+</tr>
+<tr>
+<td><code>on_checkagainst_save()</code> / <code>on_checkagainst_revert()</code></td>
+<td>Persist or revert</td>
+</tr>
+<tr>
+<td><code>check_checkagainst_dirty()</code></td>
+<td>Highlight unsaved changes</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>feature_config</code></td>
+<td>Read/write fss table</td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>TreeView column setup</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>zfscheckagainst</code> config rows / fss table</td>
+<td><a href="../../developer-guide/data-structures/#fss-table-in-memory-rows-from-zfscheckagainst-json">fss table</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="datasets_pagepy"><code>datasets_page.py</code><a class="headerlink" href="#datasets_pagepy" title="Permanent link">&para;</a></h3>
+<p>Datasets tab: a lazy-loading tree of pools, datasets, snapshots, and holds.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_datasets_page()</code></td>
+<td>Build the Datasets tab widget</td>
+</tr>
+<tr>
+<td><code>refresh_datasets_page()</code></td>
+<td>Refresh the tree, preserving expansion state</td>
+</tr>
+<tr>
+<td><code>expand_selected_datasets()</code></td>
+<td>Expand selected rows recursively</td>
+</tr>
+<tr>
+<td><code>update_ds_button_sensitivity()</code></td>
+<td>Enable/disable action buttons</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Tree building, search, selection helpers</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZfsRepository</code> dataclasses (via helper functions)</td>
+<td><a href="../../developer-guide/data-structures/#zfsrepository-dataclasses-zfs_repositorypy">ZfsRepository dataclasses</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="dashboard_pagepy"><code>dashboard_page.py</code><a class="headerlink" href="#dashboard_pagepy" title="Permanent link">&para;</a></h3>
+<p>Dashboard tab: pool health, recent operations, iSCSI issues, running tasks,
+version comparison with a two-node peer, and warnings.</p>
+<p>Expensive data gathering (pool queries, SSH version checks) runs in a
+background thread by default so the GTK main loop stays responsive.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_dashboard_page()</code></td>
+<td>Build the Dashboard tab widget</td>
+</tr>
+<tr>
+<td><code>refresh_dashboard_page(sync=False)</code></td>
+<td>Re-gather all dashboard data asynchronously (<code>sync=True</code> to block)</td>
+</tr>
+<tr>
+<td><code>_get_pool_health()</code></td>
+<td>Query <code>zpool list</code> via <code>ZfsRepository</code></td>
+</tr>
+<tr>
+<td><code>_get_warnings()</code></td>
+<td>Compile warning strings from all sources</td>
+</tr>
+<tr>
+<td><code>_get_peer_host()</code> / <code>_get_host_version()</code></td>
+<td>Two-node peer version check</td>
+</tr>
+<tr>
+<td>Dashboard action handlers</td>
+<td>Refresh, fix locks, cancel tasks, view log</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>zfs_repository</code></td>
+<td>Default repository for pool queries</td>
+</tr>
+<tr>
+<td><code>config_core</code></td>
+<td>Dashboard config</td>
+</tr>
+<tr>
+<td><code>backup_history</code></td>
+<td>Recent operations</td>
+</tr>
+<tr>
+<td><code>logs_page</code></td>
+<td>Select log by path</td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>TreeView helpers</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZfsRepository</code> dataclasses</td>
+<td><a href="../../developer-guide/data-structures/#zfsrepository-dataclasses-zfs_repositorypy">ZfsRepository dataclasses</a></td>
+</tr>
+<tr>
+<td>Backup history</td>
+<td><a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a></td>
+</tr>
+<tr>
+<td>Session log index</td>
+<td><a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a></td>
+</tr>
+<tr>
+<td>Node configuration</td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilities-nodeconf">Node configuration</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="pools_pagepy"><code>pools_page.py</code><a class="headerlink" href="#pools_pagepy" title="Permanent link">&para;</a></h3>
+<p>Pools tab: registered pool list, health/capacity/errors table, offsite
+candidate flags, and scrub state table.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_pools_page()</code></td>
+<td>Build the Pools tab widget</td>
+</tr>
+<tr>
+<td><code>refresh_pools_page()</code></td>
+<td>Refresh pool table from <code>zpool list</code></td>
+</tr>
+<tr>
+<td><code>refresh_scrub_table()</code></td>
+<td>Update scrub state table</td>
+</tr>
+<tr>
+<td><code>get_selected_pool_names()</code></td>
+<td>Return selected pool names</td>
+</tr>
+<tr>
+<td><code>_on_offsite_toggled()</code></td>
+<td>Toggle <code>offsite_candidate</code> flag</td>
+</tr>
+<tr>
+<td><code>_on_pools_drag_end()</code></td>
+<td>Persist pool reordering</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>feature_config</code></td>
+<td>Pool registry and scrub config</td>
+</tr>
+<tr>
+<td><code>scrub_manager</code></td>
+<td>Scrub queue and state parsing</td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>TreeView helpers</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pools</code> config object</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+<tr>
+<td>Scrub state / <code>ScrubQueue</code></td>
+<td><a href="../../developer-guide/data-structures/#scrub-state-scrub_managerpy">Scrub state</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="schedule_pagepy"><code>schedule_page.py</code><a class="headerlink" href="#schedule_pagepy" title="Permanent link">&para;</a></h3>
+<p>Schedule tab: list saved profiles, edit cron lines, preview next run times,
+and enable/disable scheduled entries.</p>
+<p>Next-run computation is performed in a background thread and cached per
+cron expression per minute so the UI remains responsive.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_schedule_page()</code></td>
+<td>Build the Schedule tab widget</td>
+</tr>
+<tr>
+<td><code>refresh_schedule_page(sync=False)</code></td>
+<td>Refresh the schedule list asynchronously (<code>sync=True</code> to block)</td>
+</tr>
+<tr>
+<td><code>collect_schedule_config()</code> / <code>load_schedule_config()</code></td>
+<td>UI ↔ cron dict</td>
+</tr>
+<tr>
+<td><code>_regenerate_cron()</code></td>
+<td>Rewrite the cron drop-in file</td>
+</tr>
+<tr>
+<td><code>_refresh_profile_list()</code></td>
+<td>Show all profiles of the current tab type</td>
+</tr>
+<tr>
+<td><code>_on_selection_changed()</code></td>
+<td>Update the detail pane (cron entry + config summary)</td>
+</tr>
+<tr>
+<td><code>on_schedule_save()</code> / <code>on_schedule_revert()</code> / <code>on_schedule_delete()</code></td>
+<td>Persist/revert/delete</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>profile_manager</code></td>
+<td>Profile CRUD</td>
+</tr>
+<tr>
+<td><code>cron_manager</code></td>
+<td>Cron line generation/interpretation</td>
+</tr>
+<tr>
+<td><code>profile_dialogs</code></td>
+<td>Add/recall profile dialogs</td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Widget helpers</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="logs_pagepy"><code>logs_page.py</code><a class="headerlink" href="#logs_pagepy" title="Permanent link">&para;</a></h3>
+<p>Logs tab: scan session log files, show metadata, tail running logs, filter by
+message level, and display the success-rate summary.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>create_logs_page()</code></td>
+<td>Build the Logs tab widget</td>
+</tr>
+<tr>
+<td><code>_sync_log_list()</code></td>
+<td>Rescan <code>SESSION_LOG_DIR</code> and update the list</td>
+</tr>
+<tr>
+<td><code>_tail_log_file()</code></td>
+<td>Append new lines from a running log</td>
+</tr>
+<tr>
+<td><code>_load_log_into_viewer()</code></td>
+<td>Load selected log, tail-first if large</td>
+</tr>
+<tr>
+<td><code>_on_load_full_log_clicked()</code></td>
+<td>Switch from tail to full-file mode</td>
+</tr>
+<tr>
+<td><code>_on_prune_old()</code></td>
+<td>Delete logs older than retention</td>
+</tr>
+<tr>
+<td><code>_update_success_rate_label()</code></td>
+<td>Show recent success rate from history</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>log_index</code></td>
+<td>Persistent log metadata</td>
+</tr>
+<tr>
+<td><code>backup_history</code></td>
+<td>Success-rate calculation</td>
+</tr>
+<tr>
+<td><code>config_core</code></td>
+<td>Session log dir, retention settings</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td>Message levels and filtering</td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Text-view search, popout window</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Session log files / index</td>
+<td><a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a></td>
+</tr>
+<tr>
+<td>Backup history</td>
+<td><a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="managers-and-helpers">Managers and helpers<a class="headerlink" href="#managers-and-helpers" title="Permanent link">&para;</a></h2>
+<h3 id="path_utilspy"><code>path_utils.py</code><a class="headerlink" href="#path_utilspy" title="Permanent link">&para;</a></h3>
+<p>Shared path-resolution helpers for the Python layer. Mirrors the Bash
+<code>$mydir</code> / <code>find_zfsutility_script</code> / <code>remote_zfsutilities_bin</code> behavior so
+the GTK GUI can locate sibling scripts, read the deployed version, resolve
+the built docs path, and resolve remote SSH paths without hard-coding
+installation locations.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_script_dir(depth=1)</code></td>
+<td>Return the caller's source-file directory</td>
+</tr>
+<tr>
+<td><code>find_script(name, script_dir=None)</code></td>
+<td>Search candidate directories for a sibling script</td>
+</tr>
+<tr>
+<td><code>resolve_local_bin(name, script_dir=None)</code></td>
+<td>Absolute path to a sibling executable, or <code>None</code></td>
+</tr>
+<tr>
+<td><code>is_deployed_layout(script_dir=None)</code></td>
+<td><code>True</code> if running inside a versioned deployment</td>
+</tr>
+<tr>
+<td><code>get_version(script_dir=None)</code></td>
+<td>Read the <code>VERSION</code> file for the current layout</td>
+</tr>
+<tr>
+<td><code>get_docs_path(script_dir=None)</code></td>
+<td>Path to built docs <code>index.html</code>, or <code>None</code></td>
+</tr>
+<tr>
+<td><code>get_profile_runner_path(script_dir=None)</code></td>
+<td>Path to <code>profile_runner.py</code> for cron / Run Now</td>
+</tr>
+<tr>
+<td><code>resolve_remote_bin(host, timeout=15)</code></td>
+<td>Resolve remote active-version <code>bin/</code> over SSH</td>
+</tr>
+<tr>
+<td><code>resolve_remote_script(host, name)</code></td>
+<td>Remote path to a script, or just <code>name</code> on failure</td>
+</tr>
+<tr>
+<td><code>resolve_remote_version(host, timeout=15)</code></td>
+<td>Read remote <code>VERSION</code> file over SSH</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Environment overrides:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZFSUTILITIES_VERSION_BASE</code></td>
+<td>Base directory for versioned deployments (default <code>/usr/local/lib/zfsutilities</code>)</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_REMOTE_BIN</code></td>
+<td>Remote <code>bin/</code> path used by <code>resolve_remote_bin</code></td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_REMOTE_VERSION</code></td>
+<td>Remote <code>VERSION</code> path used by <code>resolve_remote_version</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none (stdlib only).</p>
+<hr />
+<h3 id="profile_managerpy"><code>profile_manager.py</code><a class="headerlink" href="#profile_managerpy" title="Permanent link">&para;</a></h3>
+<p>CRUD for saved profile JSON files under the profiles directory.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>build_profile_name(user, tab, name)</code></td>
+<td>Construct <code>&lt;user&gt;-&lt;tab&gt;-&lt;name&gt;</code></td>
+</tr>
+<tr>
+<td><code>create_profile(...)</code></td>
+<td>Save current tab settings as a profile</td>
+</tr>
+<tr>
+<td><code>load_profile(name)</code> / <code>save_profile(name, data)</code> / <code>delete_profile(name)</code></td>
+<td>Profile CRUD</td>
+</tr>
+<tr>
+<td><code>list_profiles()</code></td>
+<td>Return all profiles sorted by name</td>
+</tr>
+<tr>
+<td><code>profile_exists(name)</code></td>
+<td>Check for duplicate names</td>
+</tr>
+<tr>
+<td><code>validate_custom_name(name)</code></td>
+<td>Reject illegal characters</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backup_config</code></td>
+<td>Profiles directory and <code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="profile_dialogspy"><code>profile_dialogs.py</code><a class="headerlink" href="#profile_dialogspy" title="Permanent link">&para;</a></h3>
+<p>Simple GTK dialogs for adding a new profile and recalling an existing one.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>show_add_profile_dialog(...)</code></td>
+<td>Prompt for a profile name and save</td>
+</tr>
+<tr>
+<td><code>show_recall_profile_dialog(...)</code></td>
+<td>List profiles of a given tab type</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>profile_manager</code></td>
+<td>Profile CRUD</td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Dialog helpers</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="cron_managerpy"><code>cron_manager.py</code><a class="headerlink" href="#cron_managerpy" title="Permanent link">&para;</a></h3>
+<p>Generates, interprets, and previews the cron drop-in file that schedules
+profiles.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>write_cron_file(profiles)</code></td>
+<td>Regenerate the cron drop-in from scratch</td>
+</tr>
+<tr>
+<td><code>generate_cron_line(profile)</code></td>
+<td>Build one crontab line</td>
+</tr>
+<tr>
+<td><code>interpret_cron(expression)</code></td>
+<td>Human-readable description of a cron expression</td>
+</tr>
+<tr>
+<td><code>next_run_times(expression, count)</code></td>
+<td>Next <code>count</code> datetimes matching the expression</td>
+</tr>
+<tr>
+<td><code>format_next_runs(expression)</code></td>
+<td>Formatted next-run preview</td>
+</tr>
+<tr>
+<td><code>_parse_weekday(value)</code></td>
+<td>Parse weekday field with optional <code>#n</code>/<code>#L</code> ordinal suffix</td>
+</tr>
+<tr>
+<td><code>_match_weekday_ordinal(date, weekday, specs)</code></td>
+<td>Check whether <code>date</code> satisfies ordinal specs</td>
+</tr>
+<tr>
+<td><code>_format_ordinal_specs(specs)</code></td>
+<td>Human-readable phrase for ordinal specs</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backup_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="scrub_managerpy"><code>scrub_manager.py</code><a class="headerlink" href="#scrub_managerpy" title="Permanent link">&para;</a></h3>
+<p>Scrub state parsing, queue management, and start/pause/resume/stop actions.</p>
+<p><strong>Key classes:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ScrubState</code></td>
+<td>Enum: <code>NONE</code>, <code>PENDING</code>, <code>SCANNING</code>, <code>PAUSED</code>, <code>FINISHED</code>, <code>CANCELED</code>, <code>UNKNOWN</code></td>
+</tr>
+<tr>
+<td><code>ScrubInfo</code></td>
+<td>Dataclass with state, progress, remaining time, ETA, errors</td>
+</tr>
+<tr>
+<td><code>ScrubQueue</code></td>
+<td>Persistent pending/active/paused/finished pool sets with concurrency target</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>parse_scrub_status(text)</code></td>
+<td>Parse <code>zpool status</code> output into <code>ScrubInfo</code></td>
+</tr>
+<tr>
+<td><code>get_all_pool_scrub_states()</code></td>
+<td>Map every online pool to its <code>ScrubInfo</code></td>
+</tr>
+<tr>
+<td><code>start_scrub()</code> / <code>pause_scrub()</code> / <code>resume_scrub()</code> / <code>stop_scrub()</code></td>
+<td>Scrub actions</td>
+</tr>
+<tr>
+<td><code>sync_system_scrub_for_pools()</code></td>
+<td>Enable/disable systemd weekly/monthly scrub timers</td>
+</tr>
+<tr>
+<td><code>load_scrub_state()</code> / <code>save_scrub_state()</code></td>
+<td>Persist queue state</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>zfs_repository</code></td>
+<td>Pool status and scrub commands</td>
+</tr>
+<tr>
+<td><code>file_locking</code></td>
+<td><code>scrub_state_*</code> lock helpers</td>
+</tr>
+<tr>
+<td><code>zfs_lock_manager</code></td>
+<td>Per-pool scrub locks</td>
+</tr>
+<tr>
+<td><code>backup_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scrub state / <code>ScrubInfo</code> / <code>ScrubQueue</code></td>
+<td><a href="../../developer-guide/data-structures/#scrub-state-scrub_managerpy">Scrub state</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="pool_watchpy"><code>pool_watch.py</code><a class="headerlink" href="#pool_watchpy" title="Permanent link">&para;</a></h3>
+<p>Independent per-pool watch window that auto-refreshes a dataset tree for a
+single pool.</p>
+<p><strong>Key class:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PoolWatchWindow</code></td>
+<td>Standalone window with auto-refresh timer</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Tree building helpers</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="dataset_actionspy"><code>dataset_actions.py</code><a class="headerlink" href="#dataset_actionspy" title="Permanent link">&para;</a></h3>
+<p>Action handlers for the Datasets tab: snapshot, delete, hold, rollback, browse,
+and unmount snapshots.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>on_datasets_snapshot()</code></td>
+<td>Snapshot selected datasets</td>
+</tr>
+<tr>
+<td><code>on_datasets_delete()</code></td>
+<td>Delete selected datasets/snapshots/holds</td>
+</tr>
+<tr>
+<td><code>on_datasets_hold()</code></td>
+<td>Place holds on selected snapshots</td>
+</tr>
+<tr>
+<td><code>on_datasets_rollback()</code></td>
+<td>Rollback a dataset to a selected snapshot</td>
+</tr>
+<tr>
+<td><code>on_datasets_show_files()</code> / <code>on_datasets_browse_snapshot()</code></td>
+<td>Open file manager</td>
+</tr>
+<tr>
+<td><code>on_datasets_unmount_snapshot()</code></td>
+<td>Unmount a <code>.zfs/snapshot</code> mount</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Dialogs, busy-process diagnosis</td>
+</tr>
+<tr>
+<td><code>datasets_page</code></td>
+<td>Refresh tree and button sensitivity</td>
+</tr>
+<tr>
+<td><code>command_builders</code></td>
+<td><code>BashStep</code> for destructive operations</td>
+</tr>
+<tr>
+<td><code>zfs_lock_manager</code></td>
+<td>Pre-flight lock checks and direct locks</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BashStep</code></td>
+<td><a href="../../developer-guide/data-structures/#bashstep-command_builderspy">BashStep</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="pool_actionspy"><code>pool_actions.py</code><a class="headerlink" href="#pool_actionspy" title="Permanent link">&para;</a></h3>
+<p>Action handlers for the Pools tab: watch, details, import/export, add/remove
+registry entries, and scrub queue operations.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>on_pools_watch()</code></td>
+<td>Open <code>PoolWatchWindow</code> for selected pools</td>
+</tr>
+<tr>
+<td><code>on_pools_import()</code> / <code>on_pools_export()</code></td>
+<td>Import/export pools</td>
+</tr>
+<tr>
+<td><code>on_pools_add()</code> / <code>on_pools_remove()</code></td>
+<td>Modify the registered pool list</td>
+</tr>
+<tr>
+<td><code>on_pools_save()</code> / <code>on_pools_revert()</code></td>
+<td>Persist/revert pool registry</td>
+</tr>
+<tr>
+<td>Scrub action handlers</td>
+<td>start, pause, resume, stop</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pools_page</code></td>
+<td>Refresh and selection helpers</td>
+</tr>
+<tr>
+<td><code>scrub_manager</code></td>
+<td>Scrub queue actions</td>
+</tr>
+<tr>
+<td><code>pool_watch</code></td>
+<td>Watch window</td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Dialog helpers</td>
+</tr>
+<tr>
+<td><code>backup_config</code></td>
+<td>Save pools, <code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pools</code> config object</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+<tr>
+<td>Scrub state / <code>ScrubQueue</code></td>
+<td><a href="../../developer-guide/data-structures/#scrub-state-scrub_managerpy">Scrub state</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="retention_actionspy"><code>retention_actions.py</code><a class="headerlink" href="#retention_actionspy" title="Permanent link">&para;</a></h3>
+<p>Action handlers for the Retention Policies tab: add/remove policies and
+buckets, run prune, and dirty-state tracking.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>on_retention_add_policy()</code> / <code>on_retention_remove_policy()</code></td>
+<td>Manage per-pool policies</td>
+</tr>
+<tr>
+<td><code>on_retention_add_bucket()</code> / <code>on_retention_remove_bucket()</code></td>
+<td>Manage buckets</td>
+</tr>
+<tr>
+<td><code>on_retention_prune()</code></td>
+<td>Prune selected pools; respects retention policies by default, or deletes all matching snapshots when <strong>Ignore retention policies</strong> is checked</td>
+</tr>
+<tr>
+<td><code>on_retention_save()</code> / <code>on_retention_revert()</code></td>
+<td>Persist/revert</td>
+</tr>
+<tr>
+<td><code>check_retention_dirty()</code></td>
+<td>Highlight unsaved changes</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>feature_config</code></td>
+<td>Retention getters/setters, defaults</td>
+</tr>
+<tr>
+<td><code>retention_page</code></td>
+<td>Page helpers and constants</td>
+</tr>
+<tr>
+<td><code>command_builders</code></td>
+<td>Build retention <code>BashStep</code></td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Button markup helpers</td>
+</tr>
+<tr>
+<td><code>zfs_lock_manager</code></td>
+<td>Pre-flight pool lock checks</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>retention</code> config object</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+<tr>
+<td><code>BashStep</code></td>
+<td><a href="../../developer-guide/data-structures/#bashstep-command_builderspy">BashStep</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="gui_helperspy"><code>gui_helpers.py</code><a class="headerlink" href="#gui_helperspy" title="Permanent link">&para;</a></h3>
+<p>Reusable GTK helpers and utility functions used by nearly every page.</p>
+<p><strong>Key classes:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DirtyTracker</code></td>
+<td>Generic save/revert dirty-state tracker</td>
+</tr>
+<tr>
+<td><code>EditableListView</code></td>
+<td>Reusable ListStore with Add/Remove/Move</td>
+</tr>
+<tr>
+<td><code>TreeSearch</code></td>
+<td>Debounced search with prev/next for a <code>Gtk.TreeView</code></td>
+</tr>
+<tr>
+<td><code>TextViewSearch</code></td>
+<td>Search/navigation for a <code>Gtk.TextView</code></td>
+</tr>
+<tr>
+<td><code>LogPopoutWindow</code></td>
+<td>Independent window for popping out the info panel</td>
+</tr>
+<tr>
+<td><code>UIStateManager</code></td>
+<td>Debounced save/restore of window geometry</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>build_full_dataset_name()</code></td>
+<td>Walk tree parents to build the full ZFS name</td>
+</tr>
+<tr>
+<td>Tree loading helpers</td>
+<td>Load pools, datasets, and snapshots on demand</td>
+</tr>
+<tr>
+<td><code>get_busy_processes()</code> / <code>diagnose_dataset_busy()</code></td>
+<td>Find and explain why a dataset is busy</td>
+</tr>
+<tr>
+<td><code>show_error_dialog()</code> / <code>show_warning_dialog()</code></td>
+<td>Modal error/warning message dialogs</td>
+</tr>
+<tr>
+<td><code>create_info_panel()</code></td>
+<td>Build the shared log/info panel</td>
+</tr>
+<tr>
+<td><code>create_menu_bar()</code></td>
+<td>Build the application menu bar</td>
+</tr>
+<tr>
+<td><code>confirm_and_minimize_width()</code></td>
+<td>Reset column widths and shrink window</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code>, message levels, log sink</td>
+</tr>
+<tr>
+<td><code>zfs_repository</code></td>
+<td>Default repository, <code>DatasetRow</code></td>
+</tr>
+<tr>
+<td><code>backup_config</code></td>
+<td><code>log_msg</code> re-export (historical)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZfsRepository</code> dataclasses</td>
+<td><a href="../../developer-guide/data-structures/#zfsrepository-dataclasses-zfs_repositorypy">ZfsRepository dataclasses</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="log_indexpy"><code>log_index.py</code><a class="headerlink" href="#log_indexpy" title="Permanent link">&para;</a></h3>
+<p>Persistent index of session-log metadata so the Logs tab does not re-read
+every log file on refresh.</p>
+<p><strong>Key class:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LogIndex</code></td>
+<td>Load/save/update <code>/var/log/zfsutilities/sessions/.log_index.json</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>scan_file(path)</code></td>
+<td>Parse a log file and return a complete index entry</td>
+</tr>
+<tr>
+<td><code>update_entry_incrementally(entry, path)</code></td>
+<td>Update an entry with only newly appended bytes</td>
+</tr>
+<tr>
+<td><code>_status_from_trailer()</code></td>
+<td>Map trailer return code to Done/Failed/Cancelled</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config_core</code></td>
+<td><code>SESSION_LOG_DIR</code></td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td>Message-level parsing, <code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Session log index</td>
+<td><a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="file_lockingpy"><code>file_locking.py</code><a class="headerlink" href="#file_lockingpy" title="Permanent link">&para;</a></h3>
+<p>Advisory <code>flock</code> wrappers for the shared JSON and state files used by both
+Python and bash code.</p>
+<p><strong>Key functions / context managers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>file_lock(path, lock_type, timeout=None)</code></td>
+<td>Acquire <code>LOCK_SH</code>/<code>LOCK_EX</code> on <code>path</code></td>
+</tr>
+<tr>
+<td><code>config_lock_read()</code> / <code>config_lock_write()</code></td>
+<td>Lock the JSON config file</td>
+</tr>
+<tr>
+<td><code>history_lock_read()</code> / <code>history_lock_write()</code></td>
+<td>Lock the backup history file</td>
+</tr>
+<tr>
+<td><code>log_index_lock_read()</code> / <code>log_index_lock_write()</code></td>
+<td>Lock the session-log index</td>
+</tr>
+<tr>
+<td><code>scrub_state_lock_read()</code> / <code>scrub_state_lock_write()</code></td>
+<td>Lock the scrub queue state</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none (stdlib only).</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>JSON config / history / log index / scrub state</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a>, <a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a>, <a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a>, <a href="../../developer-guide/data-structures/#scrub-state-scrub_managerpy">Scrub state</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="zfs_lock_managerpy"><code>zfs_lock_manager.py</code><a class="headerlink" href="#zfs_lock_managerpy" title="Permanent link">&para;</a></h3>
+<p>Python client for the same advisory-lock scheme that <code>zfslockmanager</code> uses.
+Python mutators use this module so they can interoperate with bash scripts
+without conflicting on the same lock files.</p>
+<p><strong>Key functions / context managers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>check(dataset, lock_type)</code></td>
+<td>Return whether a lock can be acquired</td>
+</tr>
+<tr>
+<td><code>acquire(dataset, lock_type, description="")</code></td>
+<td>Acquire a lock and return a lock ID</td>
+</tr>
+<tr>
+<td><code>acquire_multiple(lock_type, datasets)</code></td>
+<td>Acquire several locks in deadlock-free order</td>
+</tr>
+<tr>
+<td><code>release(lock_id)</code> / <code>release_all()</code></td>
+<td>Release one lock or all locks held by this process</td>
+</tr>
+<tr>
+<td><code>lock(dataset, lock_type, description="")</code></td>
+<td>Context manager for a single lock</td>
+</tr>
+<tr>
+<td><code>locks(lock_type, datasets)</code></td>
+<td>Context manager for multiple locks</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none (stdlib only).</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Lock files</td>
+<td><a href="../../developer-guide/data-structures/#lock-files">Lock files</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="logging_configpy"><code>logging_config.py</code><a class="headerlink" href="#logging_configpy" title="Permanent link">&para;</a></h3>
+<p>Priority-based logging, session-log management, and GUI sink routing.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>log_msg(*args)</code></td>
+<td>Log with <code>file:line:</code> prefix, GUI sink, and session log</td>
+</tr>
+<tr>
+<td><code>set_log_sink()</code> / <code>get_log_sink()</code></td>
+<td>Route messages to the GUI info panel</td>
+</tr>
+<tr>
+<td><code>set_session_log()</code> / <code>restore_session_log()</code></td>
+<td>Manage <code>ZFSUTILITIES_LOG_FILE</code> env</td>
+</tr>
+<tr>
+<td><code>truncate_session_log()</code></td>
+<td>Enforce the 1 GB cap with tail retention</td>
+</tr>
+<tr>
+<td><code>session_log_context()</code></td>
+<td>Context manager for session log env</td>
+</tr>
+<tr>
+<td><code>parse_msg_level()</code> / <code>viewer_should_show()</code></td>
+<td>Message-level parsing and filtering</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none.</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Session log files</td>
+<td><a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="entry-points">Entry points<a class="headerlink" href="#entry-points" title="Permanent link">&para;</a></h2>
+<h3 id="mainpy"><code>main.py</code><a class="headerlink" href="#mainpy" title="Permanent link">&para;</a></h3>
+<p>Application entry point and single-instance guard.</p>
+<p><strong>Key class:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZFSUtilitiesApp</code></td>
+<td>GTK <code>Gtk.Application</code> subclass</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_pid_file_status()</code></td>
+<td>Detect stale PID files</td>
+</tr>
+<tr>
+<td><code>_terminate_with_wait()</code></td>
+<td>Gracefully replace a stuck instance</td>
+</tr>
+<tr>
+<td><code>_show_wait_dialog()</code> / <code>_pump_events_for()</code></td>
+<td>Transient wait dialog during instance replacement</td>
+</tr>
+<tr>
+<td><code>main()</code></td>
+<td>Entry point</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow:</strong></p>
+<ol>
+<li>Parse arguments.</li>
+<li>Check the PID file; if another instance is running and healthy, raise it.</li>
+<li>If the instance is stuck, show a wait dialog and terminate it.</li>
+<li>Launch <code>ZFSUtilitiesWindow</code> from <code>zfsutilities_gui.py</code>.</li>
+<li>Trigger the first asynchronous Dashboard refresh.</li>
+</ol>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="zfsutilities_guipy"><code>zfsutilities_gui.py</code><a class="headerlink" href="#zfsutilities_guipy" title="Permanent link">&para;</a></h3>
+<p>Main application window. Builds the sidebar, stack of pages, action panel,
+info panel, dry-run toggle, and startup checks.</p>
+<p><strong>Key class:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZFSUtilitiesWindow</code></td>
+<td>Main GTK window</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_detect_parent_dir()</code></td>
+<td>Find the directory containing the bash scripts</td>
+</tr>
+<tr>
+<td><code>create_sidebar_and_stack()</code></td>
+<td>Build the left sidebar and page stack</td>
+</tr>
+<tr>
+<td><code>update_action_buttons()</code></td>
+<td>Show the action buttons for the current page</td>
+</tr>
+<tr>
+<td><code>log_message()</code> / <code>_update_progress()</code></td>
+<td>Feed the info panel</td>
+</tr>
+<tr>
+<td><code>_check_peer_version_async()</code></td>
+<td>Two-node peer version comparison</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow:</strong></p>
+<ol>
+<li>Build an <code>AppContext</code> with config, directories, version, and repository.</li>
+<li>Create each page and add it to the stack.</li>
+<li>Connect the action panel to <code>action_dispatch.PAGE_SPECS</code> and
+   <code>ACTION_HANDLERS</code>.</li>
+<li>Start dashboard and scrub refresh timers.</li>
+<li>On startup, compare versions with the peer node in a background thread.</li>
+</ol>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app_context</code></td>
+<td><code>AppContext</code></td>
+</tr>
+<tr>
+<td><code>action_dispatch</code></td>
+<td>Page/action dispatch tables</td>
+</tr>
+<tr>
+<td><code>backup_runner</code> / <code>runner_factory</code></td>
+<td>Run GUI-initiated operations</td>
+</tr>
+<tr>
+<td><code>config_core</code> / <code>feature_config</code> / <code>logging_config</code></td>
+<td>Config and logging setup</td>
+</tr>
+<tr>
+<td>All page modules</td>
+<td>Build each tab</td>
+</tr>
+<tr>
+<td><code>docs_viewer</code></td>
+<td>Standalone documentation window</td>
+</tr>
+<tr>
+<td><code>gui_helpers</code></td>
+<td>Menu bar, info panel, UI state</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AppContext</code></td>
+<td><a href="../../developer-guide/data-structures/#appcontext-app_contextpy">AppContext</a></td>
+</tr>
+<tr>
+<td>JSON config</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="docs_viewerpy"><code>docs_viewer.py</code><a class="headerlink" href="#docs_viewerpy" title="Permanent link">&para;</a></h3>
+<p>Standalone documentation viewer. Serves the built MkDocs site from a local
+HTTP server and renders it in a WebKit window.</p>
+<p><strong>Key classes:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_DocsServer</code></td>
+<td>Tiny static-file server for the built docs</td>
+</tr>
+<tr>
+<td><code>DocsViewerWindow</code></td>
+<td>WebKit window with zoom, navigation, and state persistence</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>resolve_docs_path()</code></td>
+<td>Locate <code>06 Docs/site/index.html</code> or deployed equivalent</td>
+</tr>
+<tr>
+<td><code>main()</code></td>
+<td>Launch the viewer</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config_core</code> / <code>backup_config</code></td>
+<td>UI state, docs editor, <code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="legacy_retentionpy"><code>legacy_retention.py</code><a class="headerlink" href="#legacy_retentionpy" title="Permanent link">&para;</a></h3>
+<p>One-time parser for legacy <code>zfsretainpol-&lt;pool&gt;</code> bash files.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_parse_legacy_retention_file(path)</code></td>
+<td>Parse a single legacy retention file</td>
+</tr>
+<tr>
+<td><code>scan_legacy_retention(parent_dir, retention_dict)</code></td>
+<td>Add missing pools from legacy files</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none.</p>
+<p><strong>See also:</strong></p>
+<ul>
+<li><a href="#feature_configpy"><code>feature_config.import_legacy_retention()</code></a> — the GUI hook
+  that calls this scanner.</li>
+<li>Retention policy arrays in
+  <a href="../../developer-guide/data-structures/#retention-policy-arrays-bktname-bktretain-minage">Retention policy arrays</a>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      ZFS Utilities v0.72.1
+    </div>
+  
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

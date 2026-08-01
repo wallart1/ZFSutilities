@@ -35,9 +35,10 @@ def is_dataset_encrypted(path):
         candidate = None
         for ds, mp in datasets:
             mp = mp.rstrip("/")
-            if abs_path.startswith(mp + "/") or abs_path == mp:
-                if candidate is None or len(mp) > len(candidate[1]):
-                    candidate = (ds, mp)
+            if (abs_path.startswith(mp + "/") or abs_path == mp) and (
+                candidate is None or len(mp) > len(candidate[1])
+            ):
+                candidate = (ds, mp)
         if candidate is None:
             return False
         ds_name = candidate[0]

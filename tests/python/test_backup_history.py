@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 import backup_history
 import file_locking

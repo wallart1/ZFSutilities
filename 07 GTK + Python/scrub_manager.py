@@ -99,7 +99,7 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
             in_scan = True
             scan_lines.append(stripped)
         elif in_scan:
-            if stripped == "" or stripped.startswith("config:") or stripped.startswith("pool:"):
+            if stripped == "" or stripped.startswith(("config:", "pool:")):
                 break
             scan_lines.append(stripped)
 

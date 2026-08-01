@@ -7,7 +7,6 @@ import sys
 from contextlib import contextmanager
 from datetime import datetime
 
-
 MSG_LEVELS = ("DEBUG", "VERB", "INFO", "WARN", "FATAL")
 DEFAULT_MSG_LEVEL = "INFO"
 
@@ -95,10 +94,10 @@ def _get_session_log_cap():
     """
     try:
         from config_core import (
-            load_config,
-            get_session_log_max_bytes,
-            DEFAULT_SESSION_LOG_TAIL_BYTES,
             DEFAULT_SESSION_LOG_START_BYTES,
+            DEFAULT_SESSION_LOG_TAIL_BYTES,
+            get_session_log_max_bytes,
+            load_config,
         )
         config = load_config()
         max_bytes = get_session_log_max_bytes(config)

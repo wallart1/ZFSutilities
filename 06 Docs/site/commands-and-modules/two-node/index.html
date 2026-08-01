@@ -1,0 +1,4872 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation for ZFS backup, snapshot, and retention management utilities">
+      
+      
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../commands/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>Two-Node Infrastructure - ZFS Utilities</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#two-node-infrastructure-commands" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ZFS Utilities" class="md-header__button md-logo" aria-label="ZFS Utilities" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ZFS Utilities
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Two-Node Infrastructure
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="blue-grey" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../installation/" class="md-tabs__link">
+          
+  
+  
+  Installation
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../user-guide/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../developer-guide/" class="md-tabs__link">
+          
+  
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Commands & Modules
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../messages/" class="md-tabs__link">
+          
+  
+  
+  Messages
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ZFS Utilities" class="md-nav__button md-logo" aria-label="ZFS Utilities" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ZFS Utilities
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Installation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/zfs-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ZFS Key Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts and Terminology
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts and Terminology
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/profiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Profiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/gtk-gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GTK GUI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command Line Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Command Line Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/daily-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Daily Backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/offsite-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Offsite Backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restore Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/retention/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retention Policies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/proxmox-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Developer Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/coding-policies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Policies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/lock-manager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lock Manager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/concurrency-collisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concurrency Collisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/two-node-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/global-variables/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Global Variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/data-structures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Structures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/doc-server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands & Modules
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Commands & Modules
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Two-Node Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Two-Node Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#dashboard-iscsi-issues-two-node-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard iSCSI Issues (two-node GUI)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Dashboard iSCSI Issues (two-node GUI)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-not-exported-means" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What "not exported" means
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-causes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common causes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fix-this-button" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fix this button
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#intentionally-detached-disks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Intentionally detached disks
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jump-to" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Jump to
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Jump to">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#clone-vm-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        clone-vm (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-version-repo-root" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        deploy-version (repo root)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#iscsi-add-encrypted-luns-storage-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        iscsi-add-encrypted-luns (storage node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#iscsi-restore-luns-storage-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        iscsi-restore-luns (storage node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#repair-iscsi-luns-storage-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        repair-iscsi-luns (storage node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#list-vm-disks-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        list-vm-disks (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lock-zfs-keys-storage-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lock-zfs-keys (storage node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#attach-vm-disk-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        attach-vm-disk (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#detach-vm-disk-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        detach-vm-disk (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#enroll-efi-keys-vm-compute-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        enroll-efi-keys-vm (compute node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#move-vm-disk-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        move-vm-disk (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#new-vm-disk-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        new-vm-disk (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#promote-vm-clone-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        promote-vm-clone (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#remove-vm-disk-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        remove-vm-disk (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unarchive-vm-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        unarchive-vm (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rescan-storage-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rescan-storage (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resize-vm-disk-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        resize-vm-disk (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restart-iscsi-services-storage-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        restart-iscsi-services (storage node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#safe-iscsi-save-storage-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        safe-iscsi-save (storage node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#show-lun-map-compute-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show-lun-map (compute node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#switch-version-any-host" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        switch-version (any host)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#uninstall-version-any-host" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        uninstall-version (any host)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unlock-zfs-keys-storage-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        unlock-zfs-keys (storage node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#unlock-zfs-keys-auto-storage-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        unlock-zfs-keys-auto (storage node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zfsclone-vm-both" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        zfsclone-vm (both)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Messages
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Messages
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/commands-and-modules/two-node.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="two-node-infrastructure-commands">Two-Node Infrastructure Commands<a class="headerlink" href="#two-node-infrastructure-commands" title="Permanent link">&para;</a></h1>
+<p>These scripts manage the two-node Proxmox/ZFS setup: a <strong>compute node</strong> (running VMs) and a dedicated <strong>storage node</strong> (hosting the ZFS pools and exporting VM disks via iSCSI). They are deployed via the versioned installation to <code>/usr/local/lib/zfsutilities/bin/</code> on one or both nodes and are not part of the core ZFS Utilities backup system.</p>
+<p>Scripts marked <strong>both</strong> run on either node and delegate automatically via SSH as appropriate. Scripts marked <strong>storage node</strong> or <strong>compute node</strong> are node-specific.</p>
+<p>Every script that touches VM disks or iSCSI configuration begins by sourcing
+<code>/usr/local/lib/node-lib.sh</code> (repo: <code>08 Two-node/node-lib.sh</code>). That library
+reads <code>/etc/zfsutilities-node.conf</code> (falling back to <code>/etc/two-node.conf</code>) and
+populates the node-configuration global variables below. These variables apply to
+every entry below — they are documented once here rather than repeated in every
+entry:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NODE_MODE</code></td>
+<td><code>single-node</code> or <code>two-node</code> — gates all iSCSI and SSH-delegation logic</td>
+<td><a href="../../developer-guide/global-variables/#node-configuration">Node Configuration</a></td>
+</tr>
+<tr>
+<td><code>THIS_HOST</code></td>
+<td>Short hostname of the current node</td>
+<td><a href="../../developer-guide/global-variables/#node-configuration">Node Configuration</a></td>
+</tr>
+<tr>
+<td><code>STORAGE_HOST</code>, <code>COMPUTE_HOST</code></td>
+<td>Short hostnames of the two nodes (two-node); both equal <code>THIS_HOST</code> in single-node</td>
+<td><a href="../../developer-guide/global-variables/#node-configuration">Node Configuration</a></td>
+</tr>
+<tr>
+<td><code>STORAGE_IP</code></td>
+<td>Storage-network IP of the storage node</td>
+<td><a href="../../developer-guide/global-variables/#node-configuration">Node Configuration</a></td>
+</tr>
+<tr>
+<td><code>IQN_PREFIX</code></td>
+<td>iSCSI IQN prefix for all targets</td>
+<td><a href="../../developer-guide/global-variables/#node-configuration">Node Configuration</a></td>
+</tr>
+<tr>
+<td><code>POOL_TARGET</code></td>
+<td>Pool → target short-name map</td>
+<td><a href="../../developer-guide/data-structures/#pool_target-associative-array">POOL_TARGET</a></td>
+</tr>
+</tbody>
+</table>
+<p>The library also defines helper functions used throughout these scripts:</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>is_single_node</code></td>
+<td>Returns 0 in <code>single-node</code> mode</td>
+</tr>
+<tr>
+<td><code>is_two_node</code></td>
+<td>Returns 0 in <code>two-node</code> mode</td>
+</tr>
+<tr>
+<td><code>pool_to_target &lt;pool&gt;</code></td>
+<td>Echoes the full IQN for a pool; returns 1 if unknown or single-node</td>
+</tr>
+<tr>
+<td><code>pool_list</code></td>
+<td>Echoes valid pool names from <code>POOL_TARGET</code> (empty in single-node)</td>
+</tr>
+<tr>
+<td><code>is_known_pool &lt;pool&gt;</code></td>
+<td>Returns 0 if the pool is in <code>POOL_TARGET</code> (always 1 in single-node)</td>
+</tr>
+<tr>
+<td><code>find_zfsutility_script &lt;name&gt;</code></td>
+<td>Locates a sibling script across repo or deployed layouts; respects <code>ZFSUTILITIES_BIN_DIR</code>, <code>ZFSUTILITIES_CURRENT_BIN_DIR</code>, and <code>ZFSUTILITIES_SYSTEM_LIB_DIR</code> overrides</td>
+</tr>
+<tr>
+<td><code>remote_zfsutility_script &lt;host&gt; &lt;name&gt;</code></td>
+<td>Returns the remote path to <code>&lt;name&gt;</code> on <code>&lt;host&gt;</code>, or just <code>&lt;name&gt;</code> on failure</td>
+</tr>
+</tbody>
+</table>
+<p>The script-specific Arguments and Globals tables below omit these unless a
+script uses one in a non-obvious way.</p>
+<h2 id="dashboard-iscsi-issues-two-node-gui">Dashboard iSCSI Issues (two-node GUI)<a class="headerlink" href="#dashboard-iscsi-issues-two-node-gui" title="Permanent link">&para;</a></h2>
+<p>In two-node mode the Dashboard shows an <strong>iSCSI Issues</strong> box that compares the
+authoritative <a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest"><code>expected-backstores.txt</code></a>
+manifest against the backstores currently loaded in <code>targetcli</code>.</p>
+<h3 id="what-not-exported-means">What "not exported" means<a class="headerlink" href="#what-not-exported-means" title="Permanent link">&para;</a></h3>
+<p>Each VM disk is a ZFS zvol that is shared to the compute node over iSCSI. When
+the Dashboard reports that a disk is <strong>not exported</strong>, the disk is still listed
+as expected but is not currently loaded in the iSCSI target. The affected VM
+may not be able to see or use the disk until the export is restored.</p>
+<p>A message like:</p>
+<div class="highlight"><pre><span></span><code>VM 207 disk 2 (vm-207-disk-2) is not exported as an iSCSI LUN on target
+threeamigos. The VM may not see this disk.
+</code></pre></div>
+<p>means VM 207's second disk should be exported from the pool/target named
+<code>threeamigos</code>, but the iSCSI backstore or LUN mapping is missing.</p>
+<h3 id="common-causes">Common causes<a class="headerlink" href="#common-causes" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Detached disk</strong> — the disk was removed from a VM with <code>detach-vm-disk</code> but
+  the expected-backstores manifest was not updated.</li>
+<li><strong>Encryption key not loaded</strong> — the backing zvol is encrypted and its key has
+  not been loaded yet.</li>
+<li><strong>Pool not imported</strong> — the source pool is offline or not imported.</li>
+<li><strong>Missing backstore/LUN</strong> — the iSCSI export was never created or was deleted
+  manually.</li>
+</ul>
+<h3 id="fix-this-button">Fix this button<a class="headerlink" href="#fix-this-button" title="Permanent link">&para;</a></h3>
+<p>Clicking <strong>Fix this</strong> runs <a href="#repair-iscsi-luns-storage-node"><code>repair-iscsi-luns</code></a>
+on the storage host. It recreates any missing backstores/LUNs for entries in the
+manifest, regenerates the manifest, saves the target configuration, and rescans
+the compute host.</p>
+<h3 id="intentionally-detached-disks">Intentionally detached disks<a class="headerlink" href="#intentionally-detached-disks" title="Permanent link">&para;</a></h3>
+<p>A disk that has been deliberately detached from a VM should <strong>not</strong> appear as an
+issue. <a href="#detach-vm-disk-both"><code>detach-vm-disk</code></a> removes the backstore/LUN from
+the target and also removes the entry from <code>expected-backstores.txt</code>, so the
+Dashboard will not warn about it. <a href="#repair-iscsi-luns-storage-node"><code>repair-iscsi-luns</code></a>
+only exports disks that are listed in the manifest, so detached disks stay
+detached unless you later re-attach them with <code>attach-vm-disk</code> or <code>new-vm-disk</code>.</p>
+<h2 id="jump-to">Jump to<a class="headerlink" href="#jump-to" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="#dashboard-iscsi-issues-two-node-gui">Dashboard iSCSI Issues</a></li>
+<li><a href="#attach-vm-disk-both"><code>attach-vm-disk</code> (both)</a></li>
+<li><a href="#clone-vm-both"><code>clone-vm</code> (both)</a></li>
+<li><a href="#deploy-version-repo-root"><code>deploy-version</code> (repo root)</a></li>
+<li><a href="#detach-vm-disk-both"><code>detach-vm-disk</code> (both)</a></li>
+<li><a href="#enroll-efi-keys-vm-compute-node"><code>enroll-efi-keys-vm</code> (compute node)</a></li>
+<li><a href="#iscsi-add-encrypted-luns-storage-node"><code>iscsi-add-encrypted-luns</code> (storage node)</a></li>
+<li><a href="#iscsi-restore-luns-storage-node"><code>iscsi-restore-luns</code> (storage node)</a></li>
+<li><a href="#list-vm-disks-both"><code>list-vm-disks</code> (both)</a></li>
+<li><a href="#repair-iscsi-luns-storage-node"><code>repair-iscsi-luns</code> (storage node)</a></li>
+<li><a href="#lock-zfs-keys-storage-node"><code>lock-zfs-keys</code> (storage node)</a></li>
+<li><a href="#move-vm-disk-both"><code>move-vm-disk</code> (both)</a></li>
+<li><a href="#new-vm-disk-both"><code>new-vm-disk</code> (both)</a></li>
+<li><a href="#switch-version-any-host"><code>switch-version</code> (any host)</a></li>
+<li><a href="#uninstall-version-any-host"><code>uninstall-version</code> (any host)</a></li>
+<li><a href="#promote-vm-clone-both"><code>promote-vm-clone</code> (both)</a></li>
+<li><a href="../commands/#archive-vm"><code>archive-vm</code> (both)</a></li>
+<li><a href="../commands/#remove-vm"><code>remove-vm</code> (both)</a></li>
+<li><a href="#remove-vm-disk-both"><code>remove-vm-disk</code> (both)</a></li>
+<li><a href="#unarchive-vm-both"><code>unarchive-vm</code> (both)</a></li>
+<li><a href="#rescan-storage-both"><code>rescan-storage</code> (both)</a></li>
+<li><a href="#resize-vm-disk-both"><code>resize-vm-disk</code> (both)</a></li>
+<li><a href="#restart-iscsi-services-storage-node"><code>restart-iscsi-services</code> (storage node)</a></li>
+<li><a href="#safe-iscsi-save-storage-node"><code>safe-iscsi-save</code> (storage node)</a></li>
+<li><a href="#show-lun-map-compute-node"><code>show-lun-map</code> (compute node)</a></li>
+<li><a href="#unlock-zfs-keys-storage-node"><code>unlock-zfs-keys</code> (storage node)</a></li>
+<li><a href="#unlock-zfs-keys-auto-storage-node"><code>unlock-zfs-keys-auto</code> (storage node)</a></li>
+<li><a href="#zfsclone-vm-both"><code>zfsclone-vm</code> (both)</a></li>
+</ul>
+<hr />
+<h3 id="clone-vm-both"><code>clone-vm</code> (both)<a class="headerlink" href="#clone-vm-both" title="Permanent link">&para;</a></h3>
+<p>Creates a new Proxmox VM by copying its source VM's disk zvols via <code>zfs send/receive</code>.
+Produces a fully independent copy with no ongoing ZFS dependency on the source.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>clone-vm<span class="w"> </span>&lt;src_vmid&gt;<span class="w"> </span>&lt;dst_vmid&gt;<span class="w"> </span>&lt;new_name&gt;
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>src_vmid</code></td>
+<td>Source VM ID (must be stopped)</td>
+</tr>
+<tr>
+<td><code>dst_vmid</code></td>
+<td>New VM ID</td>
+</tr>
+<tr>
+<td><code>new_name</code></td>
+<td>Name for the new VM</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only (see table above).</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script / command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>safe-iscsi-save</code> (storage host)</td>
+<td>Persist new backstores/LUNs after clone</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Make new LUNs visible on the compute host</td>
+</tr>
+<tr>
+<td><code>zfs-diagnose-busy</code></td>
+<td>Diagnose snapshot-destroy failures</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source/dest VM configs</td>
+<td>Read source; write destination</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>expected-backstores.txt</code></td>
+<td>New backstore added on storage host</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Validate arguments and delegate to the compute host in two-node mode.</li>
+<li>Parse disk lines from the source VM config (single-node: <code>storage:vm-...</code>;
+   two-node: iSCSI <code>by-path</code>).</li>
+<li>For each disk:</li>
+<li>Snapshot the source zvol as <code>@clone-to-&lt;dst&gt;</code>.</li>
+<li><code>zfs send | zfs receive</code> to a new destination zvol.</li>
+<li>Destroy the source and destination clone snapshots.</li>
+<li>In two-node mode, create an iSCSI backstore and LUN on the storage host.</li>
+<li>Add the new backstore to <code>expected-backstores.txt</code>.</li>
+<li>In two-node mode, save iSCSI config on the storage host.</li>
+<li>Write the destination VM config with new LUN numbers, fresh MAC addresses,
+   and a new <code>vmgenid</code>.</li>
+<li>Trigger iSCSI rescan on the compute host.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Clone completed successfully</td>
+</tr>
+<tr>
+<td>non-zero</td>
+<td>Validation, SSH, ZFS, or iSCSI failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: new zvols, new iSCSI LUNs (two-node), new VM config file.</p>
+<p>For space-efficient provisioning from a gold template, use
+<a href="#zfsclone-vm-both"><code>zfsclone-vm</code></a> instead.</p>
+<hr />
+<h3 id="deploy-version-repo-root"><code>deploy-version</code> (repo root)<a class="headerlink" href="#deploy-version-repo-root" title="Permanent link">&para;</a></h3>
+<p>Deploys the current repository state as a new versioned installation without
+activating it. Run from the repository root.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>./deploy-version<span class="w"> </span><span class="o">[</span>version<span class="o">]</span><span class="w"> </span><span class="o">[</span>group<span class="w"> </span>...<span class="o">]</span>
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>version</code></td>
+<td>Optional version string (default: reads <code>./VERSION</code>)</td>
+</tr>
+<tr>
+<td><code>group</code></td>
+<td>Optional deployment-group name(s) (see <code>/etc/zfsutilities-deploy.conf</code>). If omitted, all groups are deployed.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NODE_MODE</code>, <code>STORAGE_HOST</code>, <code>COMPUTE_HOST</code></td>
+<td>Legacy remote-host fallback when no deploy.conf exists</td>
+<td><a href="../../developer-guide/global-variables/#node-configuration">Node Configuration</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>10 Installers/desktop-launcher-lib.sh</code></td>
+<td>Desktop shortcut helpers</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/zfsutilities-deploy.conf</code></td>
+<td>Deployment group definitions</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Node config</td>
+<td>Legacy remote host list</td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilities-nodeconf">Node config</a></td>
+</tr>
+<tr>
+<td><code>/usr/local/lib/zfsutilities/versions/&lt;version&gt;/</code></td>
+<td>Deployed version directory</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Parse arguments; read <code>./VERSION</code> if no version is supplied.</li>
+<li>Load <code>/etc/zfsutilities-deploy.conf</code> groups, or fall back to the node config for remote hosts.</li>
+<li>Create the version directory (<code>versions/&lt;version&gt;/bin</code>, <code>lib</code>).</li>
+<li>Symlink two-node, clone, installer, and versioning scripts into <code>bin/</code>.</li>
+<li>Copy root-level scripts that are executable or have a shebang, with named exclusions.</li>
+<li>Copy project subdirectories (<code>06 Docs</code>, <code>07 GTK + Python</code>, <code>08 Two-node</code>, etc.) via <code>rsync</code>.</li>
+<li>Rebuild the static MkDocs site.</li>
+<li>Validate that critical root-level scripts are present in the deployed <code>bin/</code> directory.</li>
+<li><code>rsync</code> the version directory to each remote host in the selected groups.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Deployment completed</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Fatal error (wrong directory, missing version, unknown group, etc.)</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: creates the versioned installation tree; does not touch active
+production wiring (<code>current</code>, <code>PATH</code>, <code>/root/bashinit</code>, etc.).</p>
+<p><strong>Deployment targets:</strong></p>
+<ul>
+<li>
+<p><strong>Local host</strong> — always deployed directly</p>
+</li>
+<li>
+<p><strong>Remote hosts</strong> — defined by <code>/etc/zfsutilities-deploy.conf</code> via named groups:</p>
+</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="c1"># /etc/zfsutilities-deploy.conf</span>
+<span class="nv">DEPLOY_GROUP_production</span><span class="o">=</span><span class="s2">&quot;stewie tweety&quot;</span>
+<span class="nv">DEPLOY_GROUP_staging</span><span class="o">=</span><span class="s2">&quot;staging-host&quot;</span>
+</code></pre></div>
+<p>Each host in the selected group(s) receives the version. The group names do not have any special meaning to ZFSutilities. The hosts must be reachable via <code>ssh root@&lt;hostname&gt;</code>(password prompting  works if running from a terminal).</p>
+<p><code>deploy-version</code> creates a self-contained version directory at <code>/usr/local/lib/zfsutilities/versions/&lt;version&gt;/</code>.
+Each version carries its own <code>bin/</code> (executable scripts) and <code>lib/</code> (helper libraries)
+so that multiple versions can coexist on disk. Because every version is complete, rollback is
+just <code>switch-version</code> repointing <code>current</code> and refreshing the production wiring — no files need to be copied or restored.</p>
+<p><code>deploy-version</code> does <strong>not</strong> touch active production wiring. It does not update the <code>current</code>
+symlink, <code>PATH</code> configuration, <code>/root/bashinit</code>, library symlinks, or desktop shortcuts. It is safe to run at any time.</p>
+<p>Files in the repository root are copied if they are <strong>executable OR have a shebang</strong> (<code>#!</code>),
+so a script missing the executable bit in the repository is still deployed.
+Retention policy files (<code>zfsretainpol-*</code>) and other executable data files are
+also copied. Repository root exclusions: <code>*.md</code>, <code>.gitignore</code>, <code>installed-programs</code>, <code>PROMPT*</code>,
+<code>VERSION</code>.</p>
+<p>After copying files, <code>deploy-version</code> validates that critical root-level scripts
+(<code>zfs-diagnose-busy</code>, <code>zfsdelsnap</code>, <code>zfscleanup</code>, <code>zfsretain</code>, <code>zfs-send-receive</code>)
+are present in the versioned <code>bin/</code> directory. If any are missing, a warning is
+printed so the operator knows the deployment is incomplete.</p>
+<p><code>deploy-version</code> refuses to run from a deployed path (it checks that the current
+directory contains <code>.git/</code> or <code>VERSION</code>). This prevents accidentally deploying
+an incomplete set of files when the script is invoked from <code>$PATH</code> rather than
+the repository root.</p>
+<p><code>deploy-version</code> also rebuilds the static documentation site in the deployed
+directory so the built site carries the correct version stamp.</p>
+<p><code>deploy-version</code> creates two launcher symlinks in the versioned <code>bin/</code>
+directory:</p>
+<ul>
+<li><code>zfsutilities-gui</code> → <code>../07 GTK + Python/zfsutilities_gui.py</code></li>
+<li><code>zfsutilities-docs</code> → <code>../07 GTK + Python/docs_viewer.py</code></li>
+</ul>
+<p>These let you launch the GUI and standalone documentation viewer by name after
+activating the version.</p>
+<p><code>deploy-version</code> also generates <code>/etc/zfsutilities-deploy.conf</code> at install time
+(from <code>10 Installers/deploy.conf.template</code>) so the production hostnames are
+available for future deployments.</p>
+<p>See <a href="../../installation/">Installation</a> for the full workflow.</p>
+<hr />
+<h3 id="iscsi-add-encrypted-luns-storage-node"><code>iscsi-add-encrypted-luns</code> (storage node)<a class="headerlink" href="#iscsi-add-encrypted-luns-storage-node" title="Permanent link">&para;</a></h3>
+<p>Adds iSCSI backstores and LUNs for encrypted zvols whose keys are currently loaded. ZFS encryption keys are not available at boot-time (when iSCSI is initiated), so the encrypted backstores are added separately when the encryption keys are available and loaded by ZFS.
+Called automatically by <a href="#unlock-zfs-keys-storage-node"><code>unlock-zfs-keys</code></a> after
+manual key loading and by <a href="#restart-iscsi-services-storage-node"><code>restart-iscsi-services</code></a>
+at service startup.</p>
+<p><strong>Arguments:</strong> none.</p>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>safe-iscsi-save</code></td>
+<td>Persist config after adding encrypted LUNs</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Authoritative list of encrypted backstores to add</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
+</tr>
+<tr>
+<td><code>/etc/rtslib-fb-target/saveconfig.json</code></td>
+<td>Used to look up original LUN indexes</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-boot-safe-config">iSCSI boot-safe config</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Exit silently in single-node mode.</li>
+<li>For each entry in <code>/etc/iscsi-encrypted-luns.conf</code>:</li>
+<li>Skip if the device node is not present (keys not loaded).</li>
+<li>Skip if the backstore already exists.</li>
+<li>Look up the original LUN index from <code>saveconfig.json</code> to preserve stable
+     compute-node <code>by-path</code> symlinks.</li>
+<li>Create the block backstore and map it to the target at the original LUN
+     index (or auto-allocate if no index is found).</li>
+<li>Save the iSCSI config via <code>safe-iscsi-save</code>.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Completed (may have added zero LUNs)</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: creates missing encrypted backstores/LUNs; regenerates
+<code>saveconfig-boot.json</code> via <code>safe-iscsi-save</code>.</p>
+<hr />
+<h3 id="iscsi-restore-luns-storage-node"><code>iscsi-restore-luns</code> (storage node)<a class="headerlink" href="#iscsi-restore-luns-storage-node" title="Permanent link">&para;</a></h3>
+<p>Restores missing iSCSI backstores and LUN mappings from <code>saveconfig.json</code>.
+Idempotent — safe to run even if nothing is missing.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>iscsi-restore-luns
+</code></pre></div>
+<p><strong>Arguments:</strong> none.</p>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>safe-iscsi-save</code></td>
+<td>Persist restored config only when all expected LUNs are active</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Make restored LUNs visible on the compute host</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/rtslib-fb-target/saveconfig.json</code></td>
+<td>Authoritative source of expected backstores and LUN indexes</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-boot-safe-config">iSCSI boot-safe config</a></td>
+</tr>
+<tr>
+<td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
+<td>Verified by <code>safe-iscsi-save</code> before saving</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Exit silently in single-node mode.</li>
+<li>Parse <code>/etc/rtslib-fb-target/saveconfig.json</code> directly (not <code>expected-backstores.txt</code>).</li>
+<li>For each block storage object in <code>saveconfig.json</code>, create the backstore if
+   missing and its backing device is available.</li>
+<li>For each LUN mapping in <code>saveconfig.json</code>, recreate the mapping at the
+   original LUN index if missing.</li>
+<li>Save the updated iSCSI config via <code>safe-iscsi-save</code>.</li>
+<li>If any backstores or LUNs were added, trigger a compute-host rescan.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Restore completed (nothing added, or backstores/LUNs restored)</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td><code>saveconfig.json</code> not found</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: recreates missing iSCSI resources; updates <code>saveconfig.json</code> and
+<code>saveconfig-boot.json</code>.</p>
+<p>Handles both encrypted and non-encrypted LUNs. Preserves original LUN indexes so compute node configs remain valid.</p>
+<hr />
+<h3 id="repair-iscsi-luns-storage-node"><code>repair-iscsi-luns</code> (storage node)<a class="headerlink" href="#repair-iscsi-luns-storage-node" title="Permanent link">&para;</a></h3>
+<p>Diagnoses and repairs missing iSCSI LUN exports on the storage host. Discovers
+all VM zvols in the configured pools, ensures each one has a block backstore and
+a LUN mapping, preserves existing LUN indexes, regenerates the authoritative
+<code>expected-backstores.txt</code> manifest, saves the target config, and always rescans
+the compute host. It only exports disks that are listed in the manifest, so
+intentionally detached disks stay detached. Use <code>--dry-run</code> to preview changes
+and <code>--force-relogin</code> to re-log iSCSI sessions when a rescan alone does not
+reveal all LUNs.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>repair-iscsi-luns<span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span><span class="w"> </span><span class="o">[</span>--force-relogin<span class="o">]</span>
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--dry-run</code></td>
+<td>Report what would be changed without making changes</td>
+</tr>
+<tr>
+<td><code>--force-relogin</code></td>
+<td>Re-log iSCSI sessions if the rescan does not increase visible devices (briefly disconnects all LUNs)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>safe-iscsi-save</code></td>
+<td>Persist repaired config after verifying all expected LUNs are active</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Make repaired LUNs visible on the compute host</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/rtslib-fb-target/saveconfig.json</code></td>
+<td>Full targetcli config (backed up and overwritten)</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-boot-safe-config">iSCSI boot-safe config</a></td>
+</tr>
+<tr>
+<td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
+<td>Regenerated from current targetcli backstores</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Exit silently in single-node mode.</li>
+<li>Parse current targetcli backstores and LUN mappings.</li>
+<li>Discover all VM zvols (<code>vm-&lt;N&gt;-disk-&lt;N&gt;</code>) under configured pools.</li>
+<li>Read <code>/etc/rtslib-fb-target/expected-backstores.txt</code>. If the manifest is
+   missing, fall back to the discovered zvol list. If it exists but is empty,
+   treat it as authoritative (nothing expected).</li>
+<li>For each expected backstore that has a corresponding zvol, create the
+   backstore and LUN mapping if missing.</li>
+<li>For each loaded backstore that is listed in the manifest but not mapped to a
+   LUN, create the missing LUN mapping at the next free index.</li>
+<li>Report any zvols that exist but are not in the manifest without exporting
+   them.</li>
+<li>If any target-side changes were made, back up <code>saveconfig.json</code>, regenerate
+   <code>expected-backstores.txt</code>, and save the config via <code>safe-iscsi-save</code>.</li>
+<li>If no target-side changes were needed, still regenerate
+   <code>expected-backstores.txt</code> to keep the manifest authoritative.</li>
+<li>Rescan the compute host. If <code>--force-relogin</code> is set and the visible device
+    count did not increase, re-log iSCSI sessions.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Repair completed (nothing added, or backstores/LUNs repaired)</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Not running on the storage host, not running as root, or invalid option</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: may create backstores/LUNs; updates <code>saveconfig.json</code>,
+<code>saveconfig-boot.json</code>, and <code>expected-backstores.txt</code>; triggers compute-host
+rescan (and optionally re-login).</p>
+<hr />
+<h3 id="list-vm-disks-both"><code>list-vm-disks</code> (both)<a class="headerlink" href="#list-vm-disks-both" title="Permanent link">&para;</a></h3>
+<p>Lists all zvols currently exported as iSCSI LUNs, together with the VM that
+owns each disk, the VM name, the host-side device names, and (when the VM is
+running and the QEMU guest agent is available) the device names seen inside the
+guest.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>list-vm-disks<span class="w"> </span><span class="o">[</span>--with-devices<span class="o">]</span>
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--with-devices</code></td>
+<td>Accepted for backward compatibility; device information is now included by default.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>qm list</code> / <code>qm guest exec</code> (compute host)</td>
+<td>Detect running VMs and query guest device names.</td>
+</tr>
+<tr>
+<td><code>targetcli</code> (storage host)</td>
+<td>Enumerate exported LUNs.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code></td>
+<td>Map LUNs/zvols to actual VMID and name.</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>/dev/disk/by-path/ip-&lt;storage-ip&gt;*</code></td>
+<td>Map LUNs to compute-host <code>/dev/sdX</code> and by-path names.</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>zpool list</code> / <code>zfs list -t volume</code></td>
+<td>Enumerate local zvols (single-node)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>targetcli</code> backstores/luns</td>
+<td>Enumerate exported LUNs (two-node)</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Scan <code>/etc/pve/qemu-server/*.conf</code> on the compute host to build a map from
+   LUN/zvol to the actual VMID, VM name, and Proxmox disk key.  This reflects
+   disks that have been moved between VMs.</li>
+<li>On the compute host, build a LUN-to-host-device map from
+   <code>/dev/disk/by-path/ip-${STORAGE_IP}*</code>.</li>
+<li>For running VMs, use <code>qm guest exec</code> to list the guest's
+   <code>/dev/disk/by-path</code> entries and resolve the symlink to the guest's
+   <code>/dev/sdX</code>.  SCSI disks are matched by disk key (<code>scsiN</code> →
+   <code>*scsi-0:0:N:0</code> inside the guest).</li>
+<li>In single-node mode, enumerate local pools and their <code>vm-*</code> zvols directly
+   and merge with the VM/guest maps.</li>
+<li>In two-node mode, gather LUN/zvol metadata from the storage host and merge
+   with the VM/guest maps from the compute host.</li>
+<li>Annotate each zvol with clone relationships:</li>
+<li><code>[clone of &lt;snapshot&gt;]</code> if the zvol is a ZFS clone, where <code>&lt;snapshot&gt;</code>
+     is the full origin snapshot dataset name (e.g.
+     <code>threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c</code>).</li>
+<li><code>[cloned by: vm-N, vm-M]</code> if any of its snapshots have clone dependents.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Inventory displayed</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Error (e.g., SSH failure)</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: read-only; no changes to ZFS or iSCSI state.</p>
+<p>Guest device information is best-effort: it is shown only when the VM is
+running and the QEMU guest agent responds.  Stopped VMs or guests without the
+agent show <code>-</code> for guest device names.</p>
+<hr />
+<h3 id="lock-zfs-keys-storage-node"><code>lock-zfs-keys</code> (storage node)<a class="headerlink" href="#lock-zfs-keys-storage-node" title="Permanent link">&para;</a></h3>
+<p>Safely unmounts <code>/mnt/ZFSkeys</code> and closes the LUKS mapper opened by the unlock
+scripts. Run this before physically removing the USB drive. If udisksd opened a
+different mapper name, it is left alone.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>lock-zfs-keys
+</code></pre></div>
+<p><strong>Arguments:</strong> none.</p>
+<p><strong>Globals:</strong> none.</p>
+<p><strong>Called modules / commands:</strong> none.</p>
+<p><strong>Data structures consumed / produced:</strong> none.</p>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Remove a legacy <code>/mnt/ZFSkeys</code> symlink if present.</li>
+<li>Unmount <code>/mnt/ZFSkeys</code> if it is a mount point.</li>
+<li>Close <code>/dev/mapper/keys</code> if the LUKS container exists.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Keys locked / USB safe to remove</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: unmounts the key filesystem; closes the LUKS mapper. ZFS keys
+already loaded into kernel memory remain loaded.</p>
+<p>See <a href="../../installation/zfs-keys/">ZFS Key Handling</a>.</p>
+<hr />
+<h3 id="attach-vm-disk-both"><code>attach-vm-disk</code> (both)<a class="headerlink" href="#attach-vm-disk-both" title="Permanent link">&para;</a></h3>
+<p>Attaches an existing zvol to a Proxmox VM. In two-node mode, rebuilds the iSCSI
+backstore and LUN if they do not exist. The destination disk slot is
+auto-detected (next free <code>scsiN</code>) unless overridden. Adds the disk to the VM's configuration.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>attach-vm-disk<span class="w"> </span>&lt;zvol&gt;<span class="w"> </span>&lt;vmid&gt;<span class="w"> </span><span class="o">[</span>dst-disk-key<span class="o">]</span>
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>zvol</code></td>
+<td>Full zvol path, e.g. <code>threeamigos/proxmox/vm-100-disk-0</code></td>
+</tr>
+<tr>
+<td><code>vmid</code></td>
+<td>Destination Proxmox VM ID</td>
+</tr>
+<tr>
+<td><code>dst-disk-key</code></td>
+<td>Optional target slot in the VM's configuration, e.g. <code>scsi2</code>. Auto-detected if omitted.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>safe-iscsi-save</code> (storage host)</td>
+<td>Persist backstore/LUN changes</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Make the LUN visible on the compute host</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source zvol</td>
+<td>Existing zvol to attach</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code></td>
+<td>Destination VM config</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Validate arguments and delegate to the compute host in two-node mode.</li>
+<li>Parse the zvol path into pool, source VMID, and disk number.</li>
+<li>Verify the zvol exists and read its <code>volsize</code>.</li>
+<li>Determine the destination disk key (auto-detect next free <code>scsiN</code>).</li>
+<li>In two-node mode, SSH to the storage host to create/reuse the backstore and
+   LUN, then save iSCSI config and rescan.</li>
+<li>Build a <code>by-path</code> disk line (two-node) or <code>storage:vm-...</code> disk line
+   (single-node).</li>
+<li>Prompt for confirmation and append the disk line to the VM config.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Disk attached (or user aborted)</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation, SSH, or targetcli failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: may create a new iSCSI backstore/LUN; appends a disk line to the
+VM config.</p>
+<hr />
+<h3 id="detach-vm-disk-both"><code>detach-vm-disk</code> (both)<a class="headerlink" href="#detach-vm-disk-both" title="Permanent link">&para;</a></h3>
+<p>Removes a disk from a Proxmox VM config and tears down the iSCSI LUN and
+backstore (two-node), leaving the underlying zvol intact so it can be
+re-attached later.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>detach-vm-disk<span class="w"> </span>&lt;vmid&gt;<span class="w"> </span>&lt;disk-key&gt;
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vmid</code></td>
+<td>Proxmox VM ID</td>
+</tr>
+<tr>
+<td><code>disk-key</code></td>
+<td>Disk key to detach, e.g. <code>scsi0</code>, <code>scsi1</code>, <code>efidisk0</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>safe-iscsi-save</code> (storage host)</td>
+<td>Persist LUN/backstore removal</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code> (compute host)</td>
+<td>Update compute host device view</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code></td>
+<td>Source VM config</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
+<td>Backstore removed so the detached disk is no longer expected</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Validate arguments and delegate to the compute host in two-node mode.
+   When delegating, the script resolves the compute host's active
+   <code>/usr/local/lib/zfsutilities/current</code> symlink so the remote copy of
+   <code>detach-vm-disk</code> is invoked from the active deployed version rather than a
+   hardcoded path.</li>
+<li>Read the VM config and locate the requested disk line.</li>
+<li>Warn if the VM is running; prompt for confirmation.</li>
+<li>Remove the disk line from the VM config.</li>
+<li>In two-node mode:</li>
+<li>Parse the target and LUN from the disk line and remove the LUN mapping and
+     backstore on the storage host.</li>
+<li>Remove the backstore name from <code>expected-backstores.txt</code> so the Dashboard
+     does not report the detached disk as missing and <code>safe-iscsi-save</code> can
+     save the degraded-but-intentional config.</li>
+<li>Save the iSCSI config via <code>safe-iscsi-save</code> (found relative to this
+     script).</li>
+<li>Resolve the compute host's active deployed version again and trigger a
+     compute-host rescan using that version's <code>rescan-storage</code>.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Disk detached (or user aborted)</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation or targetcli failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: removes the disk line from the VM config; removes the iSCSI LUN
+and backstore in two-node mode; removes the backstore entry from
+<code>expected-backstores.txt</code>. The zvol is <strong>not</strong> destroyed.</p>
+<hr />
+<h3 id="enroll-efi-keys-vm-compute-node"><code>enroll-efi-keys-vm</code> (compute node)<a class="headerlink" href="#enroll-efi-keys-vm-compute-node" title="Permanent link">&para;</a></h3>
+<p>Re-initializes a VM's EFI vars disk with the Microsoft UEFI CA 2023
+certificates. This is useful when Proxmox warns that the EFI disk is missing
+<code>ms-cert=2023k</code>, and it is required for iSCSI-backed VMs: both the Proxmox
+GUI <strong>Enroll Updated Certificates</strong> action and <code>qm enroll-efi-keys</code> split the
+volume identifier on <code>:</code> and cannot parse the raw <code>by-path</code> path (for example,
+<code>unable to parse volume ID '/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-...'</code>).</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>enroll-efi-keys-vm<span class="w"> </span>&lt;vmid&gt;
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vmid</code></td>
+<td>Proxmox VM ID to enroll</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Refresh compute-host view of the resized EFI device</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code></td>
+<td>VM config updated with <code>size=4M</code>, <code>ms-cert=2023k</code></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Delegate to the compute host in two-node mode.</li>
+<li>Shut down the VM gracefully if it is running.</li>
+<li>Parse <code>efidisk0:</code> from the VM config and resolve the backing zvol via the
+   iSCSI target/LUN (two-node) or storage reference (single-node).</li>
+<li>Grow the EFI zvol to 4M if it is smaller.</li>
+<li>Rescan iSCSI on the compute node so the new size is visible.</li>
+<li>Wait for the <code>by-path</code> device to appear at the new size.</li>
+<li>Write <code>/usr/share/pve-edk2-firmware/OVMF_VARS_4M.ms.fd</code> to the EFI disk.</li>
+<li>Update the Proxmox config to <code>size=4M</code> and add <code>ms-cert=2023k</code>.</li>
+<li>Remove any stale <code>[PENDING]</code> change block.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>EFI keys enrolled</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation, shutdown, resize, or write failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: grows the EFI zvol; rewrites EFI vars; updates the VM config.
+The VM is left stopped. After starting it, watch the console — the UEFI boot
+order is reset and may need to be re-selected in the firmware setup.</p>
+<hr />
+<h3 id="move-vm-disk-both"><code>move-vm-disk</code> (both)<a class="headerlink" href="#move-vm-disk-both" title="Permanent link">&para;</a></h3>
+<p>Moves an existing VM disk from one Proxmox VM to another. The underlying zvol
+is renamed from <code>vm-&lt;src&gt;-disk-&lt;N&gt;</code> to <code>vm-&lt;dst&gt;-disk-&lt;M&gt;</code> so the zvol name
+remains authoritative for VM ownership. The iSCSI backstore is recreated with
+the new name, and the original LUN number is reused whenever possible so
+compute-node <code>by-path</code> symlinks remain stable.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>move-vm-disk<span class="w"> </span>&lt;src-vmid&gt;<span class="w"> </span>&lt;src-disk-key&gt;<span class="w"> </span>&lt;dst-vmid&gt;<span class="w"> </span><span class="o">[</span>dst-disk-key<span class="o">]</span>
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>src-vmid</code></td>
+<td>Source VM ID (must be stopped)</td>
+</tr>
+<tr>
+<td><code>src-disk-key</code></td>
+<td>Disk key in the source VM config (e.g. <code>scsi0</code>, <code>scsi1</code>, <code>efidisk0</code>)</td>
+</tr>
+<tr>
+<td><code>dst-vmid</code></td>
+<td>Destination VM ID (must be stopped)</td>
+</tr>
+<tr>
+<td><code>dst-disk-key</code></td>
+<td>Optional. Desired disk key in the destination VM. If omitted, the next free slot of the same bus type is auto-selected.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Recovery options:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--continue &lt;state&gt;</code></td>
+<td>Resume an interrupted move from the recorded state file.</td>
+</tr>
+<tr>
+<td><code>--rollback &lt;state&gt;</code></td>
+<td>Revert a partially completed move using the recorded state file.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>safe-iscsi-save</code> (inside SSH on storage host)</td>
+<td>Persist teardown/rebuild</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Refresh compute-host device view</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source/dest VM configs</td>
+<td>Read source; rewrite destination</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
+<td>Source removed, destination added</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
+</tr>
+<tr>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Source removed, destination added if encrypted</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
+</tr>
+<tr>
+<td><code>/tmp/move-vm-disk-&lt;src&gt;-&lt;dst&gt;-&lt;ts&gt;.state</code></td>
+<td>Recovery state file</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Validate arguments; <code>--continue</code>/<code>--rollback</code> must run on the compute host.</li>
+<li>Parse the source disk line to determine pool, target, LUN, and backing zvol.
+   The zvol is discovered by searching the entire pool for the backstore name,
+   so disks living outside the <code>proxmox</code> dataset are handled correctly.</li>
+<li>Verify both VMs are stopped and the destination zvol name is free.</li>
+<li>Write an initial state file (<code>/tmp/move-vm-disk-&lt;src&gt;-&lt;dst&gt;-&lt;timestamp&gt;.state</code>).</li>
+<li>Prompt for confirmation.</li>
+<li><strong>Storage-node operations (two-node):</strong></li>
+<li>Tear down the old LUN and backstore.</li>
+<li>Remove the source entry from <code>expected-backstores.txt</code> and
+     <code>iscsi-encrypted-luns.conf</code> if encrypted.</li>
+<li><code>zfs rename</code> the zvol to the destination name.</li>
+<li>The destination zvol is placed in the same parent dataset as the source
+     zvol (for example, <code>pool/custom/vm-100-disk-0</code> → <code>pool/custom/vm-200-disk-0</code>).</li>
+<li>Create the new backstore and LUN, reusing the original LUN number if possible.</li>
+<li>Add the destination entry to the manifests.</li>
+<li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
+<li><strong>Single-node operations:</strong> <code>zfs rename</code> the zvol to the destination name.</li>
+<li>Move the disk line from the source VM config to the destination VM config.</li>
+<li>Rescan iSCSI on the compute host.</li>
+<li>Mark the state file as completed.</li>
+</ol>
+<p><strong>Rollback (<code>--rollback</code>):</strong></p>
+<ul>
+<li>Removes the destination config line and restores the source line.</li>
+<li>Tears down the destination backstore/LUN and recreates the original source
+  backstore/LUN if the source zvol still exists.</li>
+<li>Renames the zvol back to the source name.</li>
+<li>Rescans iSCSI and deletes the state file.</li>
+</ul>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Move completed or rolled back</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation, SSH, ZFS rename, or targetcli failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: renames the zvol; recreates iSCSI backstore/LUN with the new name;
+updates manifests and VM configs.</p>
+<p><strong>Safety checks:</strong></p>
+<ul>
+<li>Both VMs must be stopped.</li>
+<li>The destination disk key must not already exist in the destination VM config.</li>
+<li>The destination zvol name must not already exist.</li>
+<li>Prompts for confirmation before making changes.</li>
+<li>Writes a state file to <code>/tmp/move-vm-disk-&lt;src&gt;-&lt;dst&gt;-&lt;timestamp&gt;.state</code> for
+  recovery if the operation is interrupted.</li>
+</ul>
+<p>To move the disk back, run the command with source and destination swapped.</p>
+<hr />
+<h3 id="new-vm-disk-both"><code>new-vm-disk</code> (both)<a class="headerlink" href="#new-vm-disk-both" title="Permanent link">&para;</a></h3>
+<p>Creates a new zvol on the storage node, registers it as an iSCSI LUN, and writes
+the disk line to the VM config on the compute node.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>new-vm-disk<span class="w"> </span>&lt;pool&gt;<span class="w"> </span>&lt;vmid&gt;<span class="w"> </span>&lt;disk-num&gt;<span class="w"> </span>&lt;size&gt;<span class="w"> </span><span class="o">[</span>--encrypted<span class="o">]</span>
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pool</code></td>
+<td>ZFS pool (e.g. <code>threeamigos</code>, <code>NVME1</code>)</td>
+</tr>
+<tr>
+<td><code>vmid</code></td>
+<td>Proxmox VM ID</td>
+</tr>
+<tr>
+<td><code>disk-num</code></td>
+<td>Disk number (appended to zvol name: <code>vm-&lt;vmid&gt;-disk-&lt;N&gt;</code>)</td>
+</tr>
+<tr>
+<td><code>size</code></td>
+<td>Zvol size (e.g., <code>50G</code>, <code>4M</code> for EFI, or <code>EFI</code> as a shorthand for a 4 MiB EFI zvol with Secure Boot enrollment prompt)</td>
+</tr>
+<tr>
+<td><code>--encrypted</code></td>
+<td>Optional. Create as an encrypted zvol; records the backstore in <code>/etc/iscsi-encrypted-luns.conf</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lock-zfs-keys</code></td>
+<td>Secure the key USB after encrypted zvol creation</td>
+</tr>
+<tr>
+<td><code>safe-iscsi-save</code></td>
+<td>Persist new backstore/LUN</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Make the new LUN visible on the compute host</td>
+</tr>
+<tr>
+<td><code>new-vm-disk --config-only=&lt;lun&gt;</code> (self-delegation on compute host)</td>
+<td>Write VM config line / initialize EFI vars</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
+<td>Backstore added</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
+</tr>
+<tr>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Entry added with <code>--encrypted</code></td>
+<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
+</tr>
+<tr>
+<td><code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code></td>
+<td>Disk or EFI lines appended</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Validate arguments and delegate storage work to the storage host via SSH in
+   two-node mode.</li>
+<li>If <code>--encrypted</code>:</li>
+<li>Mount the ZFS keys USB if needed.</li>
+<li>Auto-detect encryption algorithm/keyformat from existing encrypted LUNs.</li>
+<li>Prompt for the key file name.</li>
+<li>Create the zvol (<code>zfs create -V ... -s -o compression=lz4</code>); for encrypted
+   zvols, also set <code>encryption</code>, <code>keyformat</code>, and <code>keylocation</code>.</li>
+<li>For encrypted zvols, immediately secure the keys with <code>lock-zfs-keys</code>.</li>
+<li>In two-node mode:</li>
+<li>Create the iSCSI backstore and LUN.</li>
+<li>Add the backstore to <code>expected-backstores.txt</code>.</li>
+<li>Add an entry to <code>iscsi-encrypted-luns.conf</code> if encrypted.</li>
+<li>Save config via <code>safe-iscsi-save</code>.</li>
+<li>Determine the assigned LUN number.</li>
+<li>Trigger a compute-host rescan.</li>
+<li>Re-invoke <code>new-vm-disk --config-only=&lt;lun&gt;</code> on the compute host to write
+     the VM config line (or initialize EFI vars for <code>EFI</code> size).</li>
+<li>Single-node mode: build a <code>storage:vm-...</code> disk line and append it to the VM
+   config.</li>
+</ol>
+<p><strong>EFI special case:</strong></p>
+<ul>
+<li><code>size=EFI</code> creates a 4M zvol.</li>
+<li>Prompts whether to pre-enroll Secure Boot keys (<code>ms-cert=2023k</code>).</li>
+<li>Writes <code>bios: ovmf</code> and <code>efidisk0:</code> lines to the VM config.</li>
+<li>Initializes the EFI disk by writing the OVMF vars file to the LUN device.</li>
+</ul>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Zvol created and registered (or user aborted)</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation, key, ZFS, or iSCSI failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: creates a zvol; creates iSCSI backstore/LUN (two-node); updates
+manifests; appends disk lines to the VM config.</p>
+<p>All zvols are created sparse (<code>-s</code>) with <code>compression=lz4</code>.</p>
+<p>With <code>--encrypted</code>, the following additional ZFS properties are set:</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>encryption</code></td>
+<td><code>aes-256-gcm</code> by default; auto-detected from an existing entry in <code>/etc/iscsi-encrypted-luns.conf</code> if available</td>
+</tr>
+<tr>
+<td><code>keyformat</code></td>
+<td><code>raw</code> by default; auto-detected from an existing entry in <code>/etc/iscsi-encrypted-luns.conf</code> if available</td>
+</tr>
+<tr>
+<td><code>keylocation</code></td>
+<td><code>file:///mnt/ZFSkeys/&lt;keyname&gt;</code> (the script checks the file exists but never reads its contents)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="promote-vm-clone-both"><code>promote-vm-clone</code> (both)<a class="headerlink" href="#promote-vm-clone-both" title="Permanent link">&para;</a></h3>
+<p>Promotes a ZFS-cloned VM's disk zvols, cutting the dependency on the source VM.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>promote-vm-clone<span class="w"> </span>&lt;vmid&gt;
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vmid</code></td>
+<td>VM ID whose zvols should be promoted</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong> none.</p>
+<p><strong>Data structures consumed / produced:</strong> none.</p>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Validate arguments and delegate to the compute host in two-node mode.</li>
+<li>Discover zvols of the VM that have an origin (are clones).</li>
+<li>Display the clone dependencies and prompt for confirmation.</li>
+<li>Run <code>zfs promote</code> on each clone zvol locally or via SSH to the storage host.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Promotion completed (or user aborted)</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation, SSH, or <code>zfs promote</code> failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: reverses the clone/origin relationship — the VM's zvols become
+independent, shared clone-origin snapshots move to this VM, and other clones
+re-parent automatically. No iSCSI reconfiguration is required. Safe to run while
+the VM is running.</p>
+<p>See <a href="../../user-guide/proxmox-integration/#archiving-a-vm">Archiving a VM</a>
+for the full workflow.</p>
+<hr />
+<h3 id="remove-vm-disk-both"><code>remove-vm-disk</code> (both)<a class="headerlink" href="#remove-vm-disk-both" title="Permanent link">&para;</a></h3>
+<p>Removes a VM disk from iSCSI and destroys the zvol.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>remove-vm-disk<span class="w"> </span>&lt;pool&gt;<span class="w"> </span>&lt;vmid&gt;<span class="w"> </span>&lt;disk-num&gt;
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pool</code></td>
+<td>ZFS pool</td>
+</tr>
+<tr>
+<td><code>vmid</code></td>
+<td>Proxmox VM ID</td>
+</tr>
+<tr>
+<td><code>disk-num</code></td>
+<td>Disk number to remove</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>safe-iscsi-save</code></td>
+<td>Persist LUN/backstore removal</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Refresh compute-host device view</td>
+</tr>
+<tr>
+<td><code>zfs-diagnose-busy</code></td>
+<td>Diagnose <code>zfs destroy</code> failure</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
+<td>Entry removed</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
+</tr>
+<tr>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Entry removed if present</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Validate arguments and delegate storage work to the storage host via SSH in
+   two-node mode.</li>
+<li>Resolve the zvol path, target, and backstore name.</li>
+<li>Prompt twice for confirmation.</li>
+<li>In two-node mode:</li>
+<li>Find and remove the LUN mapping.</li>
+<li>Remove the block backstore.</li>
+<li>Remove entries from <code>expected-backstores.txt</code> and
+     <code>iscsi-encrypted-luns.conf</code>.</li>
+<li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
+<li>Trigger a compute-host rescan.</li>
+<li>Destroy the zvol. If <code>zfs destroy</code> fails, source <code>zfs-diagnose-busy</code> and
+   print the cause before exiting fatally.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Disk removed (or user aborted)</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation, targetcli, or destroy failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: destroys the zvol and its data; removes iSCSI LUN/backstore and
+manifest entries in two-node mode.</p>
+<hr />
+<h3 id="unarchive-vm-both"><code>unarchive-vm</code> (both)<a class="headerlink" href="#unarchive-vm-both" title="Permanent link">&para;</a></h3>
+<p>Restores an archived VM from archive. Rebuilds iSCSI backstores and LUNs for
+each restored zvol and rewrites the Proxmox config disk lines with new LUN numbers.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>unarchive-vm<span class="w"> </span>&lt;vmid&gt;<span class="w"> </span><span class="o">[</span>archive_base<span class="o">]</span><span class="w"> </span><span class="o">[</span>--new-vmid<span class="w"> </span>&lt;new_vmid&gt;<span class="o">]</span>
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vmid</code></td>
+<td>VM ID of the archived VM to restore</td>
+</tr>
+<tr>
+<td><code>archive_base</code></td>
+<td>Optional ZFS dataset that contains the archive. If not specified, the last-used <code>archive-base</code> is used.</td>
+</tr>
+<tr>
+<td><code>--new-vmid</code></td>
+<td>Optional new VM ID for restored zvols, iSCSI resources, and Proxmox config</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>safe-iscsi-save</code> (inside SSH on storage host)</td>
+<td>Persist rebuilt iSCSI config</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Refresh compute-host device view</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
+<td>Restored backstores added</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
+</tr>
+<tr>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Encrypted restored LUNs added</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
+</tr>
+<tr>
+<td>JSON config <code>archive_path</code></td>
+<td>Default archive base</td>
+<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+</tr>
+<tr>
+<td><code>.original_volblocksize</code> sidecars</td>
+<td>Restore original <code>volblocksize</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>.disk_info</code> sidecars</td>
+<td>Map disk keys to restored zvols/LUNs</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Validate arguments and delegate to the compute host in two-node mode.</li>
+<li>Resolve the archive base (argument, JSON config, or prompt).</li>
+<li>Discover archived zvol datasets and the archived Proxmox config.</li>
+<li>Verify sidecar files exist and destination zvols/config do not already exist.</li>
+<li>If the original VMID is in use and <code>--new-vmid</code> is not supplied, prompt for a
+   new VMID.</li>
+<li>Restore each archived zvol with <code>zfs send -cw | zfs receive -o volblocksize=&lt;original&gt;</code>.</li>
+<li>In two-node mode, create backstores and LUNs for each restored zvol and
+   update <code>expected-backstores.txt</code> and <code>iscsi-encrypted-luns.conf</code>.</li>
+<li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
+<li>Restore/rewrite the Proxmox config:</li>
+<li>Single-node: rewrite VMID in disk lines if <code>--new-vmid</code> was used.</li>
+<li>Two-node: rewrite disk lines with new target/LUN paths using <code>.disk_info</code>.</li>
+<li>Regenerate <code>vmgenid</code> and <code>smbios1</code> UUIDs when <code>--new-vmid</code> is used.</li>
+<li>Trigger iSCSI rescan on the compute host.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>VM unretired</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation, archive, SSH, ZFS, or iSCSI failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: creates new zvols; creates iSCSI backstores/LUNs (two-node);
+updates manifests; writes a new VM config.</p>
+<p>See <a href="../../user-guide/proxmox-integration/#unarchiving-a-vm">Unarchiving a VM</a>
+for the full workflow.</p>
+<hr />
+<h3 id="rescan-storage-both"><code>rescan-storage</code> (both)<a class="headerlink" href="#rescan-storage-both" title="Permanent link">&para;</a></h3>
+<p>Triggers an iSCSI rescan on the compute node so newly added or resized LUNs become visible.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>rescan-storage
+</code></pre></div>
+<p><strong>Arguments:</strong> none.</p>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong> none.</p>
+<p><strong>Data structures consumed / produced:</strong> none.</p>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Exit silently in single-node mode.</li>
+<li>Delegate to the compute host if run elsewhere.</li>
+<li>List active iSCSI sessions; abort if none are found.</li>
+<li>Run <code>iscsiadm -m session --rescan</code>.</li>
+<li>Count <code>/dev/disk/by-path/ip-${STORAGE_IP}*</code> devices and warn if the count is
+   unexpectedly low.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Rescan completed</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>No iSCSI sessions or rescan error</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: read-only rescan; no changes to ZFS or iSCSI configuration.</p>
+<hr />
+<h3 id="resize-vm-disk-both"><code>resize-vm-disk</code> (both)<a class="headerlink" href="#resize-vm-disk-both" title="Permanent link">&para;</a></h3>
+<p>Resizes a VM disk zvol and rescans so the compute node sees the new size.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>resize-vm-disk<span class="w"> </span>&lt;pool&gt;<span class="w"> </span>&lt;vmid&gt;<span class="w"> </span>&lt;disk-num&gt;<span class="w"> </span>&lt;new-size&gt;
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pool</code></td>
+<td>ZFS pool</td>
+</tr>
+<tr>
+<td><code>vmid</code></td>
+<td>Proxmox VM ID</td>
+</tr>
+<tr>
+<td><code>disk-num</code></td>
+<td>Disk number to resize</td>
+</tr>
+<tr>
+<td><code>new-size</code></td>
+<td>Target size (e.g., <code>100G</code>) — must be larger than the current size</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Refresh compute-host device view after resize</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong> none.</p>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Validate arguments and delegate storage work to the storage host via SSH in
+   two-node mode.</li>
+<li>Verify the zvol exists and read its current <code>volsize</code>.</li>
+<li>Run <code>zfs set volsize=&lt;new-size&gt;</code> on the zvol.</li>
+<li>In two-node mode, trigger a compute-host rescan.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Zvol resized</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation, ZFS, or SSH failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: grows the zvol. ZFS supports online zvol growth. The guest OS may
+require additional steps (e.g., <code>growpart</code>, filesystem resize) after the block
+device grows.</p>
+<hr />
+<h3 id="restart-iscsi-services-storage-node"><code>restart-iscsi-services</code> (storage node)<a class="headerlink" href="#restart-iscsi-services-storage-node" title="Permanent link">&para;</a></h3>
+<p>Stops and restarts the iSCSI target service, then adds any encrypted LUNs whose
+keys are currently loaded.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>restart-iscsi-services
+</code></pre></div>
+<p><strong>Arguments:</strong> none.</p>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>iscsi-add-encrypted-luns</code></td>
+<td>Re-add encrypted LUNs after service start (called via service drop-in)</td>
+</tr>
+<tr>
+<td><code>safe-iscsi-save</code></td>
+<td>Persist final config</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Lists encrypted backstores to restore</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
+</tr>
+<tr>
+<td><code>/etc/rtslib-fb-target/saveconfig-boot.json</code></td>
+<td>Boot-safe config restored by the service</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-boot-safe-config">iSCSI boot-safe config</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Check whether any VMs attached to exported LUNs are running on the compute
+   host; abort if any are running.</li>
+<li>Stop <code>rtslib-fb-targetctl</code>.</li>
+<li>Start <code>rtslib-fb-targetctl</code>. The systemd drop-in restores
+   <code>saveconfig-boot.json</code> (encrypted backstores excluded), then runs
+   <code>iscsi-add-encrypted-luns</code> to add encrypted LUNs whose devices are available.</li>
+<li>Display encrypted LUN status from <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
+<li>Save the config via <code>safe-iscsi-save</code>.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Service restarted and config saved</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Running VMs detected, service failure, or degraded save</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: restarts the iSCSI target; may add encrypted LUNs; updates
+<code>saveconfig.json</code> and <code>saveconfig-boot.json</code>.</p>
+<hr />
+<h3 id="safe-iscsi-save-storage-node"><code>safe-iscsi-save</code> (storage node)<a class="headerlink" href="#safe-iscsi-save-storage-node" title="Permanent link">&para;</a></h3>
+<p>Saves the iSCSI targetcli configuration only if all expected LUNs are currently
+active. Compares active backstores against an authoritative manifest file,
+preventing a degraded state from overwriting a good config.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>safe-iscsi-save
+</code></pre></div>
+<p><strong>Arguments:</strong> none.</p>
+<p><strong>Globals:</strong> none.</p>
+<p><strong>Called modules / commands:</strong> none.</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
+<td>Authoritative expected backstore list</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
+</tr>
+<tr>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Backstores to exclude from boot config</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
+</tr>
+<tr>
+<td><code>/etc/rtslib-fb-target/saveconfig.json</code></td>
+<td>Full targetcli config (read and overwritten)</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-boot-safe-config">iSCSI boot-safe config</a></td>
+</tr>
+<tr>
+<td><code>/etc/rtslib-fb-target/saveconfig-boot.json</code></td>
+<td>Boot-safe copy with encrypted backstores stripped</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-boot-safe-config">iSCSI boot-safe config</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Verify <code>saveconfig.json</code> and <code>expected-backstores.txt</code> exist.</li>
+<li>Count expected backstores from the manifest (ignoring comments and blanks).</li>
+<li>Count active block backstores in <code>targetcli</code>.</li>
+<li>If active &lt; expected, abort without overwriting <code>saveconfig.json</code>.</li>
+<li>If active &gt; expected, warn but save anyway.</li>
+<li>Run <code>targetcli saveconfig</code>.</li>
+<li>Generate <code>saveconfig-boot.json</code> by stripping encrypted backstores listed in
+   <code>iscsi-encrypted-luns.conf</code>.</li>
+<li>Regenerate <code>expected-backstores.txt</code> from the current list of loaded
+   backstores so the manifest stays authoritative after LUN moves or repairs.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Config saved successfully</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Missing files, degraded state, or save skipped</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: overwrites <code>saveconfig.json</code>; regenerates <code>saveconfig-boot.json</code>;
+regenerates <code>expected-backstores.txt</code>.</p>
+<p>The manifest contains one backstore name per line (<code>vm-&lt;vmid&gt;-disk-&lt;N&gt;</code> format).
+Comments and blank lines are ignored. This file is the authoritative source of
+truth for expected LUN count — it is not derived from <code>saveconfig.json</code> or ZFS.</p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Manifest action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#new-vm-disk-both"><code>new-vm-disk</code></a></td>
+<td>Adds entry when creating a disk</td>
+</tr>
+<tr>
+<td><a href="#remove-vm-disk-both"><code>remove-vm-disk</code></a></td>
+<td>Removes entry when destroying a disk</td>
+</tr>
+<tr>
+<td><a href="../commands/#zfsdelfs"><code>zfsdelfs</code></a></td>
+<td>Removes entry during teardown; <code>zfs-send-receive</code> rebuild re-adds</td>
+</tr>
+<tr>
+<td><a href="#move-vm-disk-both"><code>move-vm-disk</code></a></td>
+<td>Removes source entry and adds destination entry</td>
+</tr>
+<tr>
+<td><a href="#repair-iscsi-luns-storage-node"><code>repair-iscsi-luns</code></a></td>
+<td>Regenerates the entire manifest from current targetcli backstores</td>
+</tr>
+</tbody>
+</table>
+<p>Use <code>safe-iscsi-save</code> instead of <code>targetcli saveconfig</code> in any script that modifies
+iSCSI config.</p>
+<hr />
+<h3 id="show-lun-map-compute-node"><code>show-lun-map</code> (compute node)<a class="headerlink" href="#show-lun-map-compute-node" title="Permanent link">&para;</a></h3>
+<p>Shows which iSCSI LUN maps to which block device (<code>/dev/sdX</code>) and which Proxmox VM
+on the compute node.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>show-lun-map
+</code></pre></div>
+<p><strong>Arguments:</strong> none.</p>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong> none.</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/dev/disk/by-path/ip-${STORAGE_IP}*</code></td>
+<td>iSCSI device symlinks</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>POOL_TARGET</code></td>
+<td>Valid target short names for filtering</td>
+<td><a href="../../developer-guide/data-structures/#pool_target-associative-array">POOL_TARGET</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Exit silently in single-node mode.</li>
+<li>Delegate to the compute host if run elsewhere.</li>
+<li>Build a target regex from <code>POOL_TARGET</code> values.</li>
+<li>Iterate over <code>/dev/disk/by-path/ip-${STORAGE_IP}*</code> symlinks, extracting target
+   and LUN from each basename.</li>
+<li>Resolve each symlink to its <code>/dev/sdX</code> device and read its size.</li>
+<li>Print a sorted target/LUN/device/size table.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Map displayed</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>No iSCSI devices found or error</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: read-only; no changes to ZFS or iSCSI state.</p>
+<hr />
+<h3 id="switch-version-any-host"><code>switch-version</code> (any host)<a class="headerlink" href="#switch-version-any-host" title="Permanent link">&para;</a></h3>
+<p>Wires a deployed version into active production and updates the <code>current</code> symlink.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>switch-version<span class="w"> </span>&lt;version&gt;<span class="p">|</span>previous<span class="p">|</span>--list<span class="p">|</span>--uninstall
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>version</code></td>
+<td>Version string to activate</td>
+</tr>
+<tr>
+<td><code>previous</code></td>
+<td>Roll back to the previously active version</td>
+</tr>
+<tr>
+<td><code>--list</code></td>
+<td>Show all installed versions and which is active</td>
+</tr>
+<tr>
+<td><code>--uninstall</code></td>
+<td>Remove this version's production wiring</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZFSUTILITIES_VERSION_BASE</code></td>
+<td>Override base directory (tests)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_BASHINIT_LINK</code>, etc.</td>
+<td>Override wiring targets (tests)</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rootcheck</code></td>
+<td>Verify root privileges</td>
+</tr>
+<tr>
+<td><code>10 Installers/desktop-launcher-lib.sh</code></td>
+<td>Desktop shortcut helpers</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/usr/local/lib/zfsutilities/current</code></td>
+<td>Active version symlink</td>
+</tr>
+<tr>
+<td><code>/usr/local/lib/zfsutilities/previous</code></td>
+<td>Previous version symlink</td>
+</tr>
+<tr>
+<td><code>/usr/local/lib/zfsutilities/bin</code></td>
+<td>PATH symlink</td>
+</tr>
+<tr>
+<td><code>/etc/profile.d/zfsutilities.sh</code></td>
+<td>PATH export</td>
+</tr>
+<tr>
+<td><code>/etc/sudoers.d/zfsutilities</code></td>
+<td><code>secure_path</code> for sudo</td>
+</tr>
+<tr>
+<td><code>/root/bashinit</code></td>
+<td>Symlink to active version's <code>bashinit</code></td>
+</tr>
+<tr>
+<td><code>/usr/local/lib/node-lib.sh</code>, <code>/usr/local/lib/two-node-lib.sh</code>, <code>/usr/local/lib/rootcheck</code></td>
+<td>Library symlinks</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li><code>--list</code>: enumerate installed versions and mark current/previous.</li>
+<li><code>--uninstall</code>: remove production wiring (symlinks, profile, sudoers, desktop
+   shortcuts) while leaving the version directory intact.</li>
+<li>Version activation:</li>
+<li>Resolve <code>previous</code> to a version name if requested.</li>
+<li>Verify the target version directory exists.</li>
+<li>If the requested version is not already active:<ul>
+<li>Call the prior version's own <code>switch-version --uninstall</code> to clean up its
+   wiring.</li>
+<li>Record the current version as <code>previous</code>.</li>
+<li>Repoint the <code>current</code> symlink.</li>
+<li>Re-execute the target version's <code>switch-version</code> so its code performs the
+   wiring.</li>
+</ul>
+</li>
+<li>Install wiring: <code>bin</code> symlink, <code>/etc/profile.d</code>, <code>/etc/sudoers.d</code>,
+     <code>/root/bashinit</code>, library symlinks, desktop shortcuts.</li>
+<li>Stop any running documentation server on port 8000.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Version switched, listed, or unwired</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation or filesystem error</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: repoints symlinks; writes/updates <code>profile.d</code>, <code>sudoers.d</code>, and
+desktop shortcuts. New script invocations immediately use the new version;
+already-running scripts are unaffected.</p>
+<hr />
+<h3 id="uninstall-version-any-host"><code>uninstall-version</code> (any host)<a class="headerlink" href="#uninstall-version-any-host" title="Permanent link">&para;</a></h3>
+<p>Removes a deployed version directory. Refuses to remove the currently active
+version.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>uninstall-version<span class="w"> </span><span class="o">[</span>-y<span class="p">|</span>--yes<span class="o">]</span><span class="w"> </span>&lt;version&gt;
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-y</code></td>
+<td>off</td>
+<td>Skip the confirmation prompt</td>
+</tr>
+<tr>
+<td><code>--yes</code></td>
+<td>off</td>
+<td>Skip the confirmation prompt</td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td>—</td>
+<td>Version string to remove</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> none.</p>
+<p><strong>Called modules / commands:</strong> none.</p>
+<p><strong>Data structures consumed / produced:</strong> none.</p>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Verify root privileges and a single argument.</li>
+<li>Verify the version directory exists.</li>
+<li>Refuse if the version is the current active target.</li>
+<li>If <code>-y</code>/<code>--yes</code> was not given, prompt for confirmation.</li>
+<li><code>rm -rf</code> the version directory.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Version removed (or user aborted)</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Validation error or attempt to remove active version</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: deletes the version directory under
+<code>/usr/local/lib/zfsutilities/versions/&lt;version&gt;/</code>.</p>
+<hr />
+<h3 id="unlock-zfs-keys-storage-node"><code>unlock-zfs-keys</code> (storage node)<a class="headerlink" href="#unlock-zfs-keys-storage-node" title="Permanent link">&para;</a></h3>
+<p>Unlocks the LUKS-encrypted USB key drive, mounts the key files at <code>/mnt/ZFSkeys</code>,
+loads ZFS encryption keys for all encrypted zvols, and adds any missing encrypted
+iSCSI LUNs without restarting the target service. This keeps running VMs connected.</p>
+<p>If <code>/mnt/ZFSkeys</code> is already mounted (for example by Cinnamon/udisksd after the
+USB was inserted post-boot), the script reuses the existing mount. If
+<code>/mnt/ZFSkeys</code> already contains files, they are left untouched and the script
+attempts to load keys from there.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>unlock-zfs-keys<span class="w"> </span><span class="o">[</span>device<span class="o">]</span>
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>device</code></td>
+<td>Optional LUKS partition path. If omitted, auto-detects the USB drive by partition label <code>ZFSkeys</code>.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> none.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lock-zfs-keys</code></td>
+<td>Secure the key USB after keys are loaded</td>
+</tr>
+<tr>
+<td><code>iscsi-add-encrypted-luns</code></td>
+<td>Add encrypted LUNs without restarting the target</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Lists encrypted datasets to load keys for</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
+</tr>
+<tr>
+<td><code>/mnt/ZFSkeys</code></td>
+<td>Mount point for the LUKS-encrypted USB</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>/dev/mapper/keys</code></td>
+<td>LUKS mapper for the key USB</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>/root/.luks-key</code></td>
+<td>Optional unattended unlock keyfile</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>If <code>/mnt/ZFSkeys</code> is not already usable, locate the USB device by
+   <code>PARTLABEL=ZFSkeys</code> (or use the supplied device).</li>
+<li>Unlock the LUKS container (using <code>/root/.luks-key</code> if present).</li>
+<li>Mount the key filesystem at <code>/mnt/ZFSkeys</code>.</li>
+<li>For each entry in <code>/etc/iscsi-encrypted-luns.conf</code>, derive the dataset name
+   and load its ZFS key if <code>keystatus</code> is <code>unavailable</code>.</li>
+<li>Secure the keys with <code>lock-zfs-keys</code> (unmount and close LUKS).</li>
+<li>Add missing encrypted LUNs with <code>iscsi-add-encrypted-luns</code>.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Keys loaded and encrypted LUNs added</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Device not found, LUKS failure, or <code>iscsi-add-encrypted-luns</code> failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: loads ZFS encryption keys into kernel memory; may create encrypted
+iSCSI backstores/LUNs.</p>
+<p>See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for the full workflow.</p>
+<hr />
+<h3 id="unlock-zfs-keys-auto-storage-node"><code>unlock-zfs-keys-auto</code> (storage node)<a class="headerlink" href="#unlock-zfs-keys-auto-storage-node" title="Permanent link">&para;</a></h3>
+<p>Automatic version of <a href="#unlock-zfs-keys-storage-node"><code>unlock-zfs-keys</code></a>. Waits
+for USB insertion and auto-detects the drive by partition label <code>ZFSkeys</code>. Uses
+<code>/root/.luks-key</code> to unlock the LUKS volume non-interactively. Intended for
+systemd service use.</p>
+<p>If the USB is not present at boot, or <code>/root/.luks-key</code> does not exist, the
+script exits cleanly so iSCSI can start without the encrypted LUNs.</p>
+<p><strong>Arguments:</strong> none.</p>
+<p><strong>Globals:</strong> none.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lock-zfs-keys</code></td>
+<td>Secure the key USB after keys are loaded</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Lists encrypted datasets to load keys for</td>
+<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
+</tr>
+<tr>
+<td><code>/root/.luks-key</code></td>
+<td>Unattended LUKS unlock keyfile</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Reuse an existing <code>/mnt/ZFSkeys</code> mount if present.</li>
+<li>If no keyfile exists, exit cleanly (encrypted LUNs stay offline).</li>
+<li>Wait up to 60 seconds for a USB device with <code>PARTLABEL=ZFSkeys</code>.</li>
+<li>If not found, exit cleanly.</li>
+<li>Unlock LUKS with the keyfile, mount <code>/mnt/ZFSkeys</code>, load ZFS keys, then
+   secure the keys with <code>lock-zfs-keys</code>.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Keys loaded, or clean exit because USB/keyfile was unavailable</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Mount or key-load failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: loads ZFS encryption keys into kernel memory; unmounts and closes
+the LUKS container.</p>
+<p>See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for how to create
+<code>/root/.luks-key</code>.</p>
+<hr />
+<h3 id="zfsclone-vm-both"><code>zfsclone-vm</code> (both)<a class="headerlink" href="#zfsclone-vm-both" title="Permanent link">&para;</a></h3>
+<p>Creates a new Proxmox VM by ZFS-cloning the source VM's disk zvols. The new VM initially shares all blocks with the source via
+copy-on-write.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>zfsclone-vm<span class="w"> </span>&lt;src_vmid&gt;<span class="w"> </span>&lt;dst_vmid&gt;<span class="w"> </span>&lt;new_name&gt;
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>src_vmid</code></td>
+<td>Source VM ID (must be stopped)</td>
+</tr>
+<tr>
+<td><code>dst_vmid</code></td>
+<td>New VM ID</td>
+</tr>
+<tr>
+<td><code>new_name</code></td>
+<td>Name for the new VM</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>safe-iscsi-save</code> (storage host)</td>
+<td>Persist new backstores/LUNs</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Make new LUNs visible on the compute host</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source/dest VM configs</td>
+<td>Read source; write destination</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>@clone-&lt;timestamp&gt;-c</code> snapshots</td>
+<td>Clone-origin snapshots retained on source zvols</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Validate arguments and delegate to the compute host in two-node mode.</li>
+<li>Parse disk lines from the source VM config (single-node: <code>storage:vm-...</code>;
+   two-node: iSCSI <code>by-path</code>).</li>
+<li>For each disk:</li>
+<li>Create a <code>@clone-&lt;timestamp&gt;-c</code> snapshot on the source zvol if it does not
+     already exist (same snapshot reused across all disks in this operation).</li>
+<li><code>zfs clone</code> the snapshot to a new destination zvol.</li>
+<li>In two-node mode, create an iSCSI backstore and LUN on the storage host.</li>
+<li>In two-node mode, save iSCSI config on the storage host via <code>safe-iscsi-save</code>.</li>
+<li>Write the destination VM config with new LUN numbers, fresh MAC addresses,
+   new <code>vmgenid</code>, and new SMBIOS UUID.</li>
+<li>Drop <code>protection:</code> and <code>meta:</code> fields from the cloned config.</li>
+<li>Trigger iSCSI rescan on the compute host.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Clone completed successfully</td>
+</tr>
+<tr>
+<td>non-zero</td>
+<td>Validation, SSH, ZFS, or iSCSI failure</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: creates ZFS clone zvols dependent on the source snapshots; creates
+new iSCSI LUNs (two-node); writes a new VM config. The clone-origin snapshot is
+<strong>retained</strong> on the source zvols. ZFS prevents its deletion while any clone
+created from it exists.</p>
+<p>Use <a href="#promote-vm-clone-both"><code>promote-vm-clone</code></a>
+to cut dependencies before retiring the source VM.</p>
+<p>See <a href="../../user-guide/proxmox-integration/#cloning-a-vm">VM Clone Provisioning</a> for the full workflow.</p>
+<hr />
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      ZFS Utilities v0.72.1
+    </div>
+  
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

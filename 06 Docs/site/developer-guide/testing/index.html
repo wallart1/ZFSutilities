@@ -1,0 +1,2643 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Documentation for ZFS backup, snapshot, and retention management utilities">
+      
+      
+      
+      
+        <link rel="prev" href="../coding-policies/">
+      
+      
+        <link rel="next" href="../lock-manager/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
+    
+    
+      
+        <title>Testing - ZFS Utilities</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#testing" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ZFS Utilities" class="md-header__button md-logo" aria-label="ZFS Utilities" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ZFS Utilities
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Testing
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="blue-grey" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="blue-grey" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../installation/" class="md-tabs__link">
+          
+  
+  
+  Installation
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../user-guide/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../commands-and-modules/" class="md-tabs__link">
+          
+  
+  
+  Commands & Modules
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../messages/" class="md-tabs__link">
+          
+  
+  
+  Messages
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ZFS Utilities" class="md-nav__button md-logo" aria-label="ZFS Utilities" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    ZFS Utilities
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Installation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../installation/zfs-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ZFS Key Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts and Terminology
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts and Terminology
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/profiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Profiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/gtk-gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GTK GUI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command Line Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Command Line Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/daily-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Daily Backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/offsite-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Offsite Backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restore Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/retention/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retention Policies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/proxmox-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proxmox Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Developer Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coding-policies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Policies
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#running-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bash-test-suites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bash Test Suites
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Bash Test Suites">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#writing-a-new-bash-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Writing a New Bash Suite
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bash-assertion-helpers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bash Assertion Helpers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bash-mock-infrastructure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bash Mock Infrastructure
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Bash Mock Infrastructure">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#common-mock-state-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Mock State Variables
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setting-up-mocks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setting Up Mocks
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#python-test-suites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Test Suites
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Python Test Suites">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#python-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Dependencies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#running-python-suites-directly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running Python Suites Directly
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#writing-a-new-python-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Writing a New Python Suite
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-test-support-fixtures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Test Support Fixtures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-mock-subprocess" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Mock Subprocess
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tips-and-gotchas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tips and Gotchas
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tips and Gotchas">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bash" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bash
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lock-manager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lock Manager
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concurrency-collisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concurrency Collisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../two-node-config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../global-variables/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Global Variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-structures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Structures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../doc-server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../provenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Provenance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands & Modules
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Commands & Modules
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/two-node/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Two-Node Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../commands-and-modules/python-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Messages
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Messages
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/developer-guide/testing.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h1>
+<p>ZFS Utilities has a two-layer test framework:</p>
+<ul>
+<li><strong>Bash suites</strong> in <code>tests/</code> — test bash scripts with mock <code>zfs</code> / <code>zpool</code> overrides.</li>
+<li><strong>Python suites</strong> in <code>tests/python/</code> — test Python modules (<code>backup_config.py</code>,
+  <code>command_builders.py</code>, GUI helpers, etc.) with <code>unittest</code> and <code>MagicMock</code>.</li>
+</ul>
+<p>Both layers are run automatically by <code>./run-tests</code>.</p>
+<hr />
+<h2 id="running-tests">Running Tests<a class="headerlink" href="#running-tests" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="c1"># All suites (bash + Python)</span>
+./run-tests
+
+<span class="c1"># Single bash suite</span>
+./run-tests<span class="w"> </span>test-zfsretain
+
+<span class="c1"># Single Python suite</span>
+./run-tests<span class="w"> </span>test_backup_config
+
+<span class="c1"># Verbose — show every assertion</span>
+./run-tests<span class="w"> </span>-v
+
+<span class="c1"># Quiet — summary only</span>
+./run-tests<span class="w"> </span>-q
+</code></pre></div>
+<p>The <code>./run-tests</code> harness detects whether a name starts with <code>test_</code> (Python) or
+<code>test-</code> (bash) and routes it to the correct runner.</p>
+<hr />
+<h2 id="bash-test-suites">Bash Test Suites<a class="headerlink" href="#bash-test-suites" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Suite</th>
+<th>Tests</th>
+<th>What it covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test-deploy-version</code></td>
+<td>28</td>
+<td>Root-level script selection logic: executable files, shebang files, exclusions; validation of critical scripts; Two-node script symlinks including <code>repair-iscsi-luns</code>, <code>iscsi-restore-luns</code>, <code>attach-vm-disk</code>, and <code>detach-vm-disk</code>; GUI and docs launcher symlinks; no production wiring</td>
+</tr>
+<tr>
+<td><code>test-attach-vm-disk</code></td>
+<td>9</td>
+<td><code>attach-vm-disk</code> argument validation: zvol path parsing, VM ID format, and disk-key format</td>
+</tr>
+<tr>
+<td><code>test-detach-vm-disk</code></td>
+<td>2</td>
+<td><code>detach-vm-disk</code> manifest handling: exact backstore removal and no-match pass-through</td>
+</tr>
+<tr>
+<td><code>test-installer-checks</code></td>
+<td>12</td>
+<td>Installer safety checks: ZFS root filesystem detection with <code>findmnt</code>; desktop-user detection; home-directory symlink creation and removal</td>
+</tr>
+<tr>
+<td><code>test-move-vm-disk</code></td>
+<td>8</td>
+<td><code>move-vm-disk</code> helper functions: disk-key parsing, manifest add/remove</td>
+</tr>
+<tr>
+<td><code>test-switch-version</code></td>
+<td>6</td>
+<td>Version switching, production wiring, prior-version uninstall invocation, rollback, <code>--uninstall</code>, and <code>--list</code></td>
+</tr>
+<tr>
+<td><code>test-repair-iscsi-luns</code></td>
+<td>9</td>
+<td>Backstore/LUN parsing, zvol discovery, gap-free LUN index allocation, missing backstore/LUN creation, dry-run mode, and compute-host rescan</td>
+</tr>
+<tr>
+<td><code>test-restart-iscsi-services</code></td>
+<td>8</td>
+<td>VM running-state detection before iSCSI target restart</td>
+</tr>
+<tr>
+<td><code>test-safe-iscsi-save</code></td>
+<td>5</td>
+<td>Degraded-config guard: refuses save when active backstores are missing, saves when counts match, and regenerates the manifest after a successful save</td>
+</tr>
+<tr>
+<td><code>test-startdocserver</code></td>
+<td>15</td>
+<td>Server health checks (<code>curl</code>), PID discovery (<code>lsof</code> / <code>fuser</code> / <code>pgrep</code> / <code>http.server</code>), CWD mismatch detection, <code>--restart</code> logic</td>
+</tr>
+<tr>
+<td><code>test-unlock-zfs-keys</code></td>
+<td>9</td>
+<td>ZFS key file loading and unlock helper functions</td>
+</tr>
+<tr>
+<td><code>test-zfsbuildfsarray</code></td>
+<td>14</td>
+<td>Dataset array building with includes, excludes, exact-match (<code>=</code> prefix), depth limits, <code>startwith</code> / <code>endwith</code>, clone skipping</td>
+</tr>
+<tr>
+<td><code>test-zfscommsnap</code></td>
+<td>6</td>
+<td>Common snapshot detection by GUID, most-recent / oldest modes, return codes (0, 4, 8, 16)</td>
+</tr>
+<tr>
+<td><code>test-zfscleanup</code></td>
+<td>5</td>
+<td>Pool selection: configured pools, explicit argument, fallback to online pools, offline-pool skipping</td>
+</tr>
+<tr>
+<td><code>test-zfscheckagainst</code></td>
+<td>26</td>
+<td><code>&lt;offsite&gt;</code> placeholder expansion in Source root and Destination root columns, offline hold-tag verification, literal counterparts, missing-snapshot fatal error, legacy <code>.conf</code> fallback</td>
+</tr>
+<tr>
+<td><code>test-zfsconfig</code></td>
+<td>13</td>
+<td>Pool entry parsing: strings, dicts, mixed entries, missing/empty/null names; offsite-candidate selection; checkagainst field emission and default/incomplete-entry handling</td>
+</tr>
+<tr>
+<td><code>test-zfs-diagnose-busy</code></td>
+<td>8</td>
+<td>Diagnostic output from <code>zfs-diagnose-busy</code> — detects busy dataset causes (clones, holds, open files, sends, receives, shares, iSCSI LUNs)</td>
+</tr>
+<tr>
+<td><code>test-zfsdelfs</code></td>
+<td>7</td>
+<td>iSCSI teardown/rebuild manifest cleanup for <code>zfsdelfs</code></td>
+</tr>
+<tr>
+<td><code>test-zfsdelsnap</code></td>
+<td>7</td>
+<td>Fatal error when required helper <code>zfs-diagnose-busy</code> is missing; normal operation when helper is present; <code>checkagainst</code> rc handling; regression test that the real <code>zfscheckagainst</code> sources <code>zfsremoveleadingqualifiers</code></td>
+</tr>
+<tr>
+<td><code>test-zfsdelallsnaps</code></td>
+<td>4</td>
+<td>Return-code behavior of <code>zfsdelallsnaps</code>: all-success returns <code>0</code>, any <code>delsnap</code> failure returns <code>1</code>, empty list returns <code>0</code></td>
+</tr>
+<tr>
+<td><code>test-zfslockmanager</code></td>
+<td>33</td>
+<td>Lock acquire / release, same-dataset conflicts, hierarchy conflicts, stale detection, concurrent access, path encoding. <strong>Requires root.</strong></td>
+</tr>
+<tr>
+<td><code>test-zfsretain</code></td>
+<td>10</td>
+<td>Retention policy phases: offsite monthly dedup, same-day dedup, bucket pruning with empty-snapshot preference, empty logging, retain=0</td>
+</tr>
+<tr>
+<td><code>test-zfs-send-receive-dryrun</code></td>
+<td>22</td>
+<td>Dry-run logging, space-check logic, resume-token decisions, <code>handle_commsnap_rc</code> paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling</td>
+</tr>
+<tr>
+<td><code>test-zfssnapbuild</code></td>
+<td>9</td>
+<td>Snapshot name generation, bucket logic (daily / weekly / monthly / offsite), snapfile reuse</td>
+</tr>
+<tr>
+<td><code>test-logging</code></td>
+<td>4</td>
+<td><code>log_msg</code> writes all messages to the session log file and ignores <code>msg_level</code></td>
+</tr>
+<tr>
+<td><code>test-module-dependencies</code></td>
+<td>1</td>
+<td>Static analysis: every root-level bash module call to a known module function is satisfied by a local definition, a sourced module, or <code>bashinit</code></td>
+</tr>
+</tbody>
+</table>
+<p>Bash tests run without a real ZFS pool — commands are intercepted with bash
+function overrides so every suite can execute as a normal user (root is only
+needed for the lock-manager suite).</p>
+<h3 id="writing-a-new-bash-suite">Writing a New Bash Suite<a class="headerlink" href="#writing-a-new-bash-suite" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Create <code>tests/test-&lt;scriptname&gt;</code> (executable, no extension).</li>
+<li>Source <code>test-lib.sh</code> at the top.</li>
+<li>Define test functions that call <code>test_start</code> plus any assertion helpers.</li>
+<li>Call <code>test_summary</code> at the end.</li>
+</ol>
+<p>Minimal example:</p>
+<div class="highlight"><pre><span></span><code><span class="ch">#!/usr/bin/bash</span>
+<span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">/test-lib.sh&quot;</span>
+
+test_example<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+<span class="w">    </span>test_start<span class="w"> </span><span class="s2">&quot;Addition works&quot;</span>
+<span class="w">    </span><span class="nb">local</span><span class="w"> </span><span class="nv">result</span><span class="o">=</span><span class="k">$((</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="k">))</span>
+<span class="w">    </span>assert_equals<span class="w"> </span><span class="s2">&quot;4&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$result</span><span class="s2">&quot;</span>
+<span class="o">}</span>
+
+test_example
+test_summary
+</code></pre></div>
+<h3 id="bash-assertion-helpers">Bash Assertion Helpers<a class="headerlink" href="#bash-assertion-helpers" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Helper</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>assert_equals expected actual</code></td>
+<td>Pass if strings match</td>
+</tr>
+<tr>
+<td><code>assert_contains haystack needle</code></td>
+<td>Pass if haystack contains needle</td>
+</tr>
+<tr>
+<td><code>assert_rc expected actual</code></td>
+<td>Pass if return codes match</td>
+</tr>
+<tr>
+<td><code>assert_array_len expected "${arr[@]}"</code></td>
+<td>Pass if array length matches</td>
+</tr>
+</tbody>
+</table>
+<h3 id="bash-mock-infrastructure">Bash Mock Infrastructure<a class="headerlink" href="#bash-mock-infrastructure" title="Permanent link">&para;</a></h3>
+<p><code>test-lib.sh</code> overrides <code>zfs()</code>, <code>zpool()</code>, <code>delsnap()</code>, <code>ask_yn()</code>, <code>date()</code>, and
+<code>log_msg()</code> (redirected to a per-test log file).
+Because scripts are <em>sourced</em> into the test shell, these overrides intercept
+<code>$(zfs ...)</code> and pipeline invocations automatically — no <code>PATH</code> manipulation is
+needed.</p>
+<h4 id="common-mock-state-variables">Common Mock State Variables<a class="headerlink" href="#common-mock-state-variables" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_mock_zfs_fs_list</code></td>
+<td>Output for general <code>zfs list</code> dataset listings</td>
+</tr>
+<tr>
+<td><code>_mock_zfs_snap_lists[&lt;dataset&gt;]</code></td>
+<td>Snapshot names per dataset (for <code>zfs list -t snap</code>)</td>
+</tr>
+<tr>
+<td><code>_mock_zfs_guid_lists[&lt;dataset&gt;]</code></td>
+<td>GUID list per dataset (for <code>zfs list -o guid</code>)</td>
+</tr>
+<tr>
+<td><code>_mock_zfs_props[&lt;dataset&gt;:&lt;property&gt;]</code></td>
+<td>Property values returned by <code>zfs get</code></td>
+</tr>
+<tr>
+<td><code>_mock_zfs_snaps[&lt;snapshot&gt;]</code></td>
+<td>Snapshot existence flag (for <code>zfs list -t snapshot &lt;snap&gt;</code>)</td>
+</tr>
+<tr>
+<td><code>_mock_zfs_datasets[&lt;dataset&gt;]</code></td>
+<td>Dataset existence flag (for <code>zfs list &lt;dataset&gt;</code>)</td>
+</tr>
+<tr>
+<td><code>_mock_zfs_send_size</code></td>
+<td>Byte size returned by <code>zfs send -nP</code></td>
+</tr>
+<tr>
+<td><code>_mock_zpool_list</code></td>
+<td>Output for <code>zpool list -Ho name</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="setting-up-mocks">Setting Up Mocks<a class="headerlink" href="#setting-up-mocks" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Dataset listing</span>
+mock_zfs_fs_list<span class="w"> </span><span class="s2">&quot;pool/src/data\npool/src/vm&quot;</span>
+
+<span class="c1"># Snapshots for a specific dataset</span>
+mock_zfs_snap_list_for<span class="w"> </span><span class="s2">&quot;pool/src&quot;</span><span class="w"> </span><span class="s2">&quot;pool/src@snap1\npool/src@snap2&quot;</span>
+
+<span class="c1"># Property lookup</span>
+mock_zfs_prop<span class="w"> </span><span class="s2">&quot;pool/src&quot;</span><span class="w"> </span><span class="s2">&quot;available&quot;</span><span class="w"> </span><span class="s2">&quot;10000000000&quot;</span>
+mock_zfs_prop<span class="w"> </span><span class="s2">&quot;pool/src@snap1&quot;</span><span class="w"> </span><span class="s2">&quot;type&quot;</span><span class="w"> </span><span class="s2">&quot;snapshot&quot;</span>
+</code></pre></div>
+<hr />
+<h2 id="python-test-suites">Python Test Suites<a class="headerlink" href="#python-test-suites" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Suite</th>
+<th>Tests</th>
+<th>What it covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_action_dispatch</code></td>
+<td>18</td>
+<td>Page button specs, action dispatch table, and Logs/Datasets/Offsite button wiring</td>
+</tr>
+<tr>
+<td><code>test_app_context</code></td>
+<td>5</td>
+<td><code>AppContext</code> dataclass fields, <code>is_new_install</code>, and default repository</td>
+</tr>
+<tr>
+<td><code>test_backup_config</code></td>
+<td>32</td>
+<td>Config load/save, defaults, pools, retention, UI state, snapshot name generation, log pruning, message level</td>
+</tr>
+<tr>
+<td><code>test_config_core</code></td>
+<td>23</td>
+<td>Core config load/save, UI state, log/history retention, session-log size cap, dashboard config, pruning</td>
+</tr>
+<tr>
+<td><code>test_checkagainst_page</code></td>
+<td>35</td>
+<td>Checkagainst tab page construction, Comment column, dirty tracking, cell editing, Save/Revert/Add/Remove handlers</td>
+</tr>
+<tr>
+<td><code>test_feature_config</code></td>
+<td>23</td>
+<td>Backup/offsite/restore config, retention, snapshot names, scrub manager, pools/checkagainst, prune label</td>
+</tr>
+<tr>
+<td><code>test_backup_history</code></td>
+<td>36</td>
+<td>History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting</td>
+</tr>
+<tr>
+<td><code>test_backup_page</code></td>
+<td>8</td>
+<td>Backup tab UI labels (including pre/post command labels), config load/collect helpers, and frame header widget support</td>
+</tr>
+<tr>
+<td><code>test_backup_runner</code></td>
+<td>24</td>
+<td>Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and session-log reuse</td>
+</tr>
+<tr>
+<td><code>test_command_builders</code></td>
+<td>30</td>
+<td>Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection</td>
+</tr>
+<tr>
+<td><code>test_config_migrations</code></td>
+<td>28</td>
+<td>JSON config migration chain (v1 → v15), idempotency, missing-migration handling</td>
+</tr>
+<tr>
+<td><code>test_cron_manager</code></td>
+<td>34</td>
+<td>Cron expression formatting, next-run calculation, profile scheduling, cron file generation, weekday ordinal support</td>
+</tr>
+<tr>
+<td><code>test_dashboard_page</code></td>
+<td>167</td>
+<td>Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, ZFS version display, async refresh loading state</td>
+</tr>
+<tr>
+<td><code>test_docs_integrity</code></td>
+<td>11</td>
+<td>MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability</td>
+</tr>
+<tr>
+<td><code>test_docs_viewer</code></td>
+<td>1</td>
+<td>Standalone documentation viewer launcher (<code>docs_viewer.main()</code>)</td>
+</tr>
+<tr>
+<td><code>test_gui_infrastructure</code></td>
+<td>88</td>
+<td>GTK mock setup, <code>gi.repository</code> patching, module imports without a display server, docs viewer HTTP server, zoom/navigation/state persistence, anchor scrolling, tree expansion helpers, TreeSearch freeze/thaw, clear-button status-bar reset, paned position persistence</td>
+</tr>
+<tr>
+<td><code>test_legacy_retention</code></td>
+<td>7</td>
+<td>Legacy <code>zfsretainpol-*</code> file parsing, malformed-line handling, JSON config import</td>
+</tr>
+<tr>
+<td><code>test_log_index</code></td>
+<td>29</td>
+<td>Persistent session-log index: scan/update, trailer and level extraction, large-file tail scanning, and last-trailer-wins behavior</td>
+</tr>
+<tr>
+<td><code>test_logging_config</code></td>
+<td>26</td>
+<td><code>log_msg</code> sink/file behavior, session log environment helpers, viewer level helpers, and configurable session-log size cap</td>
+</tr>
+<tr>
+<td><code>test_main</code></td>
+<td>40</td>
+<td>GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, X11 window visibility for stuck-instance detection, initial dashboard refresh</td>
+</tr>
+<tr>
+<td><code>test_page_runners</code></td>
+<td>6</td>
+<td>Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation</td>
+</tr>
+<tr>
+<td><code>test_profile_manager</code></td>
+<td>15</td>
+<td>Profile CRUD, name validation, duplicate detection, override string generation</td>
+</tr>
+<tr>
+<td><code>test_profile_runner</code></td>
+<td>56</td>
+<td>Step building, pool selection, rsync/ZFS command generation, error handling, dataset encryption detection, dry-run profile execution, weekday ordinal runtime guard</td>
+</tr>
+<tr>
+<td><code>test_restore_runner</code></td>
+<td>11</td>
+<td>Restore destination computation and zfs-send-receive parameter mapping</td>
+</tr>
+<tr>
+<td><code>test_retention_page</code></td>
+<td>22</td>
+<td>Retention tab: prune-label persistence, dirty detection, multi-pool Save/Revert, profile round-trip, fresh-install cleanup, prune-list filtering</td>
+</tr>
+<tr>
+<td><code>test_runner_factory</code></td>
+<td>4</td>
+<td><code>RunnerFactory</code> creates <code>BackupRunner</code> instances with shared callbacks</td>
+</tr>
+<tr>
+<td><code>test_schedule_page</code></td>
+<td>52</td>
+<td>Schedule page path resolution for deployed vs repo layouts; dirty tracking and multi-row Save/Revert for active toggles and cron edits; dry-run flag display in profile summary; async refresh and next-run caching</td>
+</tr>
+<tr>
+<td><code>test_scrub_manager</code></td>
+<td>35</td>
+<td>Scrub state parsing, queue/target management, tick logic, systemd timers, remaining-time ETA</td>
+</tr>
+<tr>
+<td><code>test_scrub_page</code></td>
+<td>5</td>
+<td>Scrub page store schema and flicker-free refresh logic</td>
+</tr>
+<tr>
+<td><code>test_zfs_diagnostics</code></td>
+<td>8</td>
+<td><code>gui_helpers.diagnose_dataset_busy</code> — detects each known cause via mocked <code>subprocess.run</code></td>
+</tr>
+<tr>
+<td><code>test_datasets_page</code></td>
+<td>17</td>
+<td>Datasets tab UI: page construction, pool refresh, button sensitivity, and the Expand Selected action</td>
+</tr>
+<tr>
+<td><code>test_datasets_tree</code></td>
+<td>6</td>
+<td>Datasets tree lazy loading: row expansion, full-name building, exact-dataset snapshot filtering</td>
+</tr>
+<tr>
+<td><code>test_zfsinfo</code></td>
+<td>10</td>
+<td>Pool/dataset/snapshot parsing, summary counting, CLI output formatting</td>
+</tr>
+<tr>
+<td><code>test_dataset_actions</code></td>
+<td>6</td>
+<td>Dataset destruction routed through <code>BackupRunner</code>: <code>BashStep</code> building, runner start/callback, missing/busy runner, cancel handling</td>
+</tr>
+<tr>
+<td><code>test_logs_page</code></td>
+<td>35</td>
+<td>Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, Load Full Log confirmation, column-header label tooltips, and live-viewer buffer cap</td>
+</tr>
+<tr>
+<td><code>test_zfs_repository</code></td>
+<td>30</td>
+<td><code>ZfsRepository</code> pool/dataset/snapshot/hold parsing, pool error parsing, and write-method success/failure</td>
+</tr>
+<tr>
+<td><code>test_zfsutilities_gui</code></td>
+<td>17</td>
+<td>Window behavior: peer-version check, dry-run toggle, dataset-runner creation, stdin forwarding, info-panel level filtering, Restore tab destination refresh</td>
+</tr>
+</tbody>
+</table>
+<p>Python tests run with the standard library <code>unittest</code> module (no pytest required).
+A custom coloured runner (<code>tests/python/runner.py</code>) produces output that matches
+the bash harness format.</p>
+<h3 id="python-dependencies">Python Dependencies<a class="headerlink" href="#python-dependencies" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>pyyaml</code> — required only for <code>test_docs_integrity</code> (parses <code>mkdocs.yml</code>).
+  Install with <code>python3 -m pip install pyyaml</code>.</li>
+<li><code>gi</code> — the GTK tests mock <code>gi.repository</code> so no display server is needed.</li>
+</ul>
+<h3 id="running-python-suites-directly">Running Python Suites Directly<a class="headerlink" href="#running-python-suites-directly" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># All Python suites</span>
+./tests/run-python-tests
+
+<span class="c1"># Specific suite</span>
+./tests/run-python-tests<span class="w"> </span>test_backup_config
+
+<span class="c1"># Run from inside tests/python</span>
+<span class="nb">cd</span><span class="w"> </span>tests/python<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>python3<span class="w"> </span>runner.py
+
+<span class="c1"># Specific suite</span>
+<span class="nb">cd</span><span class="w"> </span>tests/python<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>python3<span class="w"> </span>runner.py<span class="w"> </span>test_backup_config
+
+<span class="c1"># Verbose / quiet</span>
+<span class="nb">cd</span><span class="w"> </span>tests/python<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>python3<span class="w"> </span>runner.py<span class="w"> </span>-v
+<span class="nb">cd</span><span class="w"> </span>tests/python<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>python3<span class="w"> </span>runner.py<span class="w"> </span>-q
+</code></pre></div>
+<h3 id="writing-a-new-python-suite">Writing a New Python Suite<a class="headerlink" href="#writing-a-new-python-suite" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Create <code>tests/python/test_&lt;modulename&gt;.py</code>.</li>
+<li>Import <code>unittest</code> and helpers from <code>test_support.py</code>.</li>
+<li>Define <code>unittest.TestCase</code> subclasses.</li>
+<li>Use <code>test_support</code> fixtures for config isolation, log capture, subprocess
+   mocking, and GTK mocking.</li>
+</ol>
+<p>Minimal example:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">unittest</span>
+<span class="kn">from</span> <span class="nn">test_support</span> <span class="kn">import</span> <span class="n">temp_config_dir</span><span class="p">,</span> <span class="n">capture_logs</span>
+
+<span class="kn">import</span> <span class="nn">config_core</span>
+
+<span class="k">class</span> <span class="nc">TestMyFeature</span><span class="p">(</span><span class="n">unittest</span><span class="o">.</span><span class="n">TestCase</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="nf">test_loads_default</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">with</span> <span class="n">temp_config_dir</span><span class="p">():</span>
+            <span class="n">cfg</span> <span class="o">=</span> <span class="n">config_core</span><span class="o">.</span><span class="n">load_config</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">assertIn</span><span class="p">(</span><span class="s2">&quot;pools&quot;</span><span class="p">,</span> <span class="n">cfg</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">unittest</span><span class="o">.</span><span class="n">main</span><span class="p">()</span>
+</code></pre></div>
+<h3 id="python-test-support-fixtures">Python Test Support Fixtures<a class="headerlink" href="#python-test-support-fixtures" title="Permanent link">&para;</a></h3>
+<p><code>tests/python/test_support.py</code> provides shared infrastructure:</p>
+<table>
+<thead>
+<tr>
+<th>Fixture</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>temp_config_dir()</code></td>
+<td>Overrides <code>CONFIG_PATH</code>, <code>CRON_FILE</code>, <code>SNAPFILE</code>, and <code>OFFSITE_SNAPFILE</code> to a temp directory</td>
+</tr>
+<tr>
+<td><code>mock_subprocess()</code></td>
+<td>Patches <code>subprocess.run</code> with a stateful mock that handles <code>zfs</code>, <code>zpool</code>, <code>rsync</code>, and <code>ssh</code> commands</td>
+</tr>
+<tr>
+<td><code>capture_logs()</code></td>
+<td>Captures <code>log_msg</code> output to a list for assertions</td>
+</tr>
+<tr>
+<td><code>capture_stderr()</code></td>
+<td>Captures <code>sys.stderr</code> to a string</td>
+</tr>
+<tr>
+<td><code>mock_gtk()</code></td>
+<td>Patches <code>gi.repository</code> with <code>MagicMock</code> so GUI modules import without a display</td>
+</tr>
+<tr>
+<td><code>check_pyyaml()</code></td>
+<td>Skips the current test if <code>pyyaml</code> is not installed</td>
+</tr>
+</tbody>
+</table>
+<h3 id="python-mock-subprocess">Python Mock Subprocess<a class="headerlink" href="#python-mock-subprocess" title="Permanent link">&para;</a></h3>
+<p>The <code>MockSubprocess</code> class tracks every call and returns canned output:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">test_support</span> <span class="kn">import</span> <span class="n">mock_subprocess</span>
+
+<span class="k">with</span> <span class="n">mock_subprocess</span><span class="p">()</span> <span class="k">as</span> <span class="n">m</span><span class="p">:</span>
+    <span class="n">m</span><span class="o">.</span><span class="n">add_zpool_list</span><span class="p">([</span>
+        <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;tank&quot;</span><span class="p">,</span> <span class="s2">&quot;health&quot;</span><span class="p">:</span> <span class="s2">&quot;ONLINE&quot;</span><span class="p">}</span>
+    <span class="p">])</span>
+    <span class="n">m</span><span class="o">.</span><span class="n">add_zfs_list</span><span class="p">([</span>
+        <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;tank/data&quot;</span><span class="p">,</span> <span class="s2">&quot;used&quot;</span><span class="p">:</span> <span class="s2">&quot;10G&quot;</span><span class="p">}</span>
+    <span class="p">])</span>
+    <span class="c1"># ... code that calls subprocess.run(...) ...</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">assertEqual</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">m</span><span class="o">.</span><span class="n">calls</span><span class="p">),</span> <span class="mi">2</span><span class="p">)</span>
+</code></pre></div>
+<hr />
+<h2 id="tips-and-gotchas">Tips and Gotchas<a class="headerlink" href="#tips-and-gotchas" title="Permanent link">&para;</a></h2>
+<h3 id="bash">Bash<a class="headerlink" href="#bash" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Log redirection</strong> — <code>log_msg</code> output is redirected to a per-test log file by
+<code>test-lib.sh</code> so the harness stays quiet.  Tests that need to assert on
+<code>log_msg</code> output should read the file returned by <code>get_test_log_file()</code> (or
+use <code>get_stderr_log()</code> from <code>test-zfs-send-receive-dryrun</code>).</li>
+<li><strong>Root check</strong> — <a href="../../commands-and-modules/modules/#rootcheck">rootcheck</a> is mocked to a no-op.  Suites that require root
+(e.g. <code>test-zfslockmanager</code>) should check <code>$EUID</code> and call <code>test_skip</code> when
+non-root.</li>
+<li><strong>Inner functions</strong> — Functions defined <em>inside</em> another function (e.g.
+<code>check_space_available</code> inside <code>send-receive</code>) become available for direct
+testing <strong>after</strong> the outer function has been executed once.</li>
+<li><strong>Bash array scope</strong> — Always declare and assign arrays on one line:
+  <code>local arr=($@)</code>.  Splitting <code>arr=($@); local arr</code> can create an empty
+array in bash 5.2.</li>
+<li><strong>Snapshot existence</strong> — The <code>zfs list -t snapshot &lt;name@snap&gt;</code> mock returns
+exit code 1 when the snapshot is not present in <code>_mock_zfs_snaps</code>, so scripts
+that test existence with <code>! zfs list ...</code> work correctly.</li>
+<li><strong>Combined short options</strong> — The mock parses <code>-Hp</code> as combined flags, so
+<code>zfs get -Hp -o value available pool</code> resolves the property and dataset
+correctly.</li>
+</ul>
+<h3 id="python">Python<a class="headerlink" href="#python" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Config isolation</strong> — Always wrap config-mutating tests in
+<code>temp_config_dir()</code> so they do not touch the real <code>/root/.config/zfsutilities.json</code>.</li>
+<li><strong>GTK mocking</strong> — Use <code>mock_gtk()</code> as a context manager when importing any
+module that touches <code>gi.repository.Gtk</code>. The mock provides enough structure
+for <code>Window</code> subclasses to instantiate without a display.</li>
+<li><strong>Subprocess in background</strong> — Some code spawns subprocesses with <code>&amp;</code>.
+Capturing output from a mock requires writing to a temp file from the mock
+function and calling <code>wait</code> before reading it back.</li>
+<li><strong>Log capture</strong> — <code>capture_logs()</code> intercepts <code>backup_config.log_msg()</code>
+output. It works for both Python modules and bash scripts invoked via
+<code>subprocess.run</code> because the bash <code>log_msg</code> writes to stderr, which can be
+captured separately with <code>capture_stderr()</code>.</li>
+<li><strong>Linting</strong> — Run <code>ruff check .</code> from the repository root before committing
+Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      ZFS Utilities v0.72.1
+    </div>
+  
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -9,10 +9,9 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
+import offsite_runner
 from command_builders import BashStep
 from test_support import mock_subprocess
-
-import offsite_runner
 
 
 class TestDetectOffsitePool(unittest.TestCase):

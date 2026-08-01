@@ -3,10 +3,9 @@
 import os
 import sys
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from test_support import mock_gtk, REPO_ROOT
-
+from test_support import REPO_ROOT, mock_gtk
 
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
 

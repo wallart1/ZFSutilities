@@ -7,29 +7,36 @@ Log files live in /var/log/zfsutilities/sessions/ and are named:
 
 import os
 import re
-import time
 
 import gi
-gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GLib, Gdk, Gio, Pango
 
-from logging_config import (
-    log_msg, MSG_LEVELS, DEFAULT_MSG_LEVEL,
-    parse_msg_level, viewer_should_show,
-    format_log_text_short,
-)
+gi.require_version('Gtk', '3.0')
+from backup_history import format_duration, get_success_rate, load_history
+from backup_runner import _PV_RATE_RE
 from config_core import (
+    SESSION_LOG_DIR,
+    get_history_retention_days,
+    get_log_retention_days,
     prune_old_logs,
-    get_log_retention_days, save_log_retention_days,
-    get_history_retention_days, SESSION_LOG_DIR,
+    save_log_retention_days,
+)
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango
+from gui_helpers import (
+    LogPopoutWindow,
+    TextViewSearch,
+    bold_label,
+    configure_treeview_column,
+    set_monospace_font,
 )
 from log_index import LogIndex
-from backup_history import load_history, get_success_rate, format_duration
-from gui_helpers import (
-    LogPopoutWindow, TextViewSearch, set_monospace_font,
-    configure_treeview_column, bold_label,
+from logging_config import (
+    DEFAULT_MSG_LEVEL,
+    MSG_LEVELS,
+    format_log_text_short,
+    log_msg,
+    parse_msg_level,
+    viewer_should_show,
 )
-from backup_runner import _PV_RATE_RE
 
 # Column indices
 COL_DATETIME = 0
@@ -614,7 +621,7 @@ def _on_log_button_press(treeview, event, app):
     path_info = treeview.get_path_at_pos(int(event.x), int(event.y))
     if path_info is None:
         return False
-    tree_path, column, cell_x, cell_y = path_info
+    tree_path, _column, _cell_x, _cell_y = path_info
 
     # Select the row that was right-clicked if it is not already selected
     selection = treeview.get_selection()

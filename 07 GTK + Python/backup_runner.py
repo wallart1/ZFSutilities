@@ -409,7 +409,7 @@ class BackupRunner:
         if is_rsync:
             _ensure_rsync_log_dir()
             try:
-                self._rsync_log_fh = open(RSYNC_LOG_FILE, "a")
+                self._rsync_log_fh = open(RSYNC_LOG_FILE, "a")  # noqa: SIM115
                 self._rsync_log_fh.write(f"\n{'='*60}\n{desc}\n{'='*60}\n")
             except OSError:
                 self._rsync_log_fh = None

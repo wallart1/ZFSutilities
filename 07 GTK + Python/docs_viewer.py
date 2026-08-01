@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Embedded documentation viewer using WebKit2."""
 
+import contextlib
 import functools
 import os
 import pwd
@@ -13,10 +14,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
 
 import gi
+
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
-from gi.repository import Gdk
-from gi.repository import GLib
+from gi.repository import Gdk, GLib, Gtk
 
 try:
     gi.require_version('WebKit2', '4.1')
@@ -29,10 +29,13 @@ except (ValueError, ImportError):
     _WEBKIT_AVAILABLE = False
 
 from backup_config import (
-    get_docs_editor, load_config, log_msg,
-    get_ui_state, save_ui_state,
+    get_docs_editor,
+    get_ui_state,
+    load_config,
+    log_msg,
+    save_ui_state,
 )
-from path_utils import get_docs_path, _DEPLOYMENT_BASE
+from path_utils import _DEPLOYMENT_BASE, get_docs_path
 
 # URI schemes the viewer is allowed to navigate to.
 _ALLOWED_SCHEMES = ("file:", "http:", "https:", "about:")
@@ -372,22 +375,18 @@ class DocsViewerWindow(Gtk.Window):
     def _on_theme_captured(self, _webview, result, _user_data=None):
         """Store the scheme reported by the page and persist it if it changed."""
         scheme = "default"
-        try:
+        with contextlib.suppress(Exception):
             value = self._webview.evaluate_javascript_finish(result)
             scheme = value.to_string() or "default"
-        except Exception:
-            pass
         scheme = scheme.strip('"') or "default"
         self._set_theme(scheme)
 
     def _on_theme_script_message(self, _manager, js_result):
         """Handle a theme-change message posted by the page's palette toggle."""
         scheme = "default"
-        try:
+        with contextlib.suppress(Exception):
             value = js_result.get_js_value()
             scheme = value.to_string() or "default"
-        except Exception:
-            pass
         scheme = scheme.strip('"') or "default"
         self._set_theme(scheme)
 

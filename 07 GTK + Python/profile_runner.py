@@ -220,7 +220,7 @@ def _run_command(step, session_log_file=None):
     if step.pre_callback is not None:
         try:
             step.pre_callback()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log_msg(f"WARN: Pre-step callback failed: {exc}")
     try:
         log_msg(f"INFO: {step.description}")
@@ -265,7 +265,7 @@ def _run_command(step, session_log_file=None):
         if step.post_callback is not None:
             try:
                 step.post_callback()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log_msg(f"WARN: Post-step callback failed: {exc}")
 
 
@@ -288,7 +288,7 @@ def _log_scope_warnings(profile):
     profile_name = profile.get("profile_name", "")
     try:
         profiles = list_profiles()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log_msg(f"VERB: Could not list profiles for scope validation: {exc}")
         return
     names = {p.get("profile_name") for p in profiles}

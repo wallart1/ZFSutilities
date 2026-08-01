@@ -41,7 +41,7 @@ class TestPoolWatchWindow(unittest.TestCase):
     def test_refresh_clears_and_seeds_store(self):
         parent = self._make_parent()
         with patch.object(PoolWatchWindow, "_start_timer"), \
-             patch.object(PoolWatchWindow, "refresh") as mock_refresh:
+             patch.object(PoolWatchWindow, "refresh"):
             win = PoolWatchWindow("tank", parent)
 
         # Replace mocked store with a fake to inspect behavior

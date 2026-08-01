@@ -3,7 +3,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch, ANY
+from unittest.mock import ANY, MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
@@ -427,12 +427,11 @@ class TestPoolsPageLayout(unittest.TestCase):
     def test_paned_bottom_pane_is_resizable(self):
         pp = _import_pools_page()
         paned_mock = MagicMock()
-        with mock_gtk():
-            with patch.object(pp.Gtk, "Paned", return_value=paned_mock):
-                with patch.object(pp, "refresh_pools_page", MagicMock()):
-                    with patch.object(pp, "ScrubQueue", MagicMock()):
-                        app = self._make_app()
-                        pp.create_pools_page(app)
+        with mock_gtk(), patch.object(pp.Gtk, "Paned", return_value=paned_mock):
+            with patch.object(pp, "refresh_pools_page", MagicMock()):
+                with patch.object(pp, "ScrubQueue", MagicMock()):
+                    app = self._make_app()
+                    pp.create_pools_page(app)
 
         paned_mock.pack2.assert_called_with(ANY, True, False)
 

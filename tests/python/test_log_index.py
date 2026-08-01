@@ -1,14 +1,12 @@
 """Tests for log_index.py — persistent session-log metadata index."""
 
 import os
-import sys
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
 
 import file_locking
-
 from test_support import mock_gtk
 
 with mock_gtk():
@@ -358,8 +356,7 @@ class TestLogIndex(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "big.log")
             with open(path, "w", encoding="utf-8") as fh:
-                for i in range(200):
-                    fh.write(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n")
+                fh.writelines(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n" for i in range(200))
                 fh.write("2026-06-22 07:03:20  /a:1: WARN: near end\n")
                 fh.write("# END: rc=0, duration=123.4s, bytes=1073741824\n")
 
@@ -376,8 +373,7 @@ class TestLogIndex(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "big_running.log")
             with open(path, "w", encoding="utf-8") as fh:
-                for i in range(200):
-                    fh.write(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n")
+                fh.writelines(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n" for i in range(200))
 
             with patch("log_index.SESSION_LOG_DIR", tmpdir):
                 entry = li.scan_file(path, max_tail_bytes=200)
@@ -389,8 +385,7 @@ class TestLogIndex(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "big.log")
             with open(path, "w", encoding="utf-8") as fh:
-                for i in range(200):
-                    fh.write(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n")
+                fh.writelines(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n" for i in range(200))
                 fh.write("2026-06-22 07:03:20  /a:1: FATAL: near end\n")
                 fh.write("# END: rc=1, duration=1.0s\n")
 
