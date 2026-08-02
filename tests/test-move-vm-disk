@@ -9,9 +9,9 @@ setup_test_env
 # The state-file functions contain heredocs, so they are not extracted.
 # ------------------------------------------------------------------
 old_mydir="$mydir"
-func_text=$(sed -n '/^disk_num_from_key() {/,/^}$/p' "$old_mydir/08 Two-node/move-vm-disk" | head -20)
+func_text=$(sed -n '/^disk_num_from_key() {/,/^}$/p' "$old_mydir/bin/move-vm-disk" | head -20)
 func_text+=$'\n'
-func_text+=$(sed -n '/^auto_select_dst_key() {/,/^}$/p' "$old_mydir/08 Two-node/move-vm-disk" | head -30)
+func_text+=$(sed -n '/^auto_select_dst_key() {/,/^}$/p' "$old_mydir/bin/move-vm-disk" | head -30)
 func_text+=$'\n'
 eval "$func_text"
 

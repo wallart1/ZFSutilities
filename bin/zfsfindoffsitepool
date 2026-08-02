@@ -3,8 +3,8 @@
 
 source ~/bashinit
 bashinit
-source "$mydir/rootcheck"
-source "$mydir/zfsconfig"
+source "$(find_zfsutility_script rootcheck)"
+source "$(find_zfsutility_script zfsconfig)"
 
 function findoffsitepool {
 
@@ -24,7 +24,7 @@ function findoffsitepool {
     readarray -t onlinepools < <(zpool list -Ho name)
     for onlinepool in "${onlinepools[@]}"; do
         for offsitepool in "${offsitepools[@]}"; do
-            if [[ $onlinepool = $offsitepool ]]; then
+            if [[ $onlinepool = "$offsitepool" ]]; then
                 onlineoffsitepool="$onlinepool"
                 break 2
             fi

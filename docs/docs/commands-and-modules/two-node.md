@@ -5,7 +5,7 @@ These scripts manage the two-node Proxmox/ZFS setup: a **compute node** (running
 Scripts marked **both** run on either node and delegate automatically via SSH as appropriate. Scripts marked **storage node** or **compute node** are node-specific.
 
 Every script that touches VM disks or iSCSI configuration begins by sourcing
-`/usr/local/lib/node-lib.sh` (repo: `08 Two-node/node-lib.sh`). That library
+`/usr/local/lib/node-lib.sh` (repo: `lib/node-lib.sh`). That library
 reads `/etc/zfsutilities-node.conf` (falling back to `/etc/two-node.conf`) and
 populates the node-configuration global variables below. These variables apply to
 every entry below — they are documented once here rather than repeated in every
@@ -207,7 +207,7 @@ sudo ./deploy-version [version] [group ...]
 
 | Script | Purpose |
 | ------ | ------- |
-| `10 Installers/desktop-launcher-lib.sh` | Desktop shortcut helpers |
+| `lib/desktop-launcher-lib.sh` | Desktop shortcut helpers |
 
 **Data structures consumed / produced:**
 
@@ -221,12 +221,12 @@ sudo ./deploy-version [version] [group ...]
 
 1. Parse arguments; read `./VERSION` if no version is supplied.
 2. Load `/etc/zfsutilities-deploy.conf` groups, or fall back to the node config for remote hosts.
-3. Create the version directory (`versions/<version>/bin`, `lib`).
-4. Symlink two-node, clone, installer, and versioning scripts into `bin/`.
-5. Copy root-level scripts that are executable or have a shebang, with named exclusions.
-6. Copy project subdirectories (`06 Docs`, `07 GTK + Python`, `08 Two-node`, etc.) via `rsync`.
-7. Rebuild the static MkDocs site.
-8. Validate that critical root-level scripts are present in the deployed `bin/` directory.
+3. Create the version directory (`versions/<version>/bin`, `lib`, `python`, `docs`, `share`).
+4. Copy `bin/`, `lib/`, `python/`, `docs/`, and `share/` from the repository into the version directory via `rsync`.
+5. Create launcher symlinks `zfsutilities-gui` → `../python/zfsutilities_gui.py` and `zfsutilities-docs` → `../python/docs_viewer.py` in the versioned `bin/` directory.
+6. Copy the `VERSION` file into the version directory.
+7. Rebuild the static MkDocs site in the versioned `docs/` directory.
+8. Validate that critical scripts (`zfs-diagnose-busy`, `zfsdelsnap`, `zfscleanup`, `zfsretain`, `zfs-send-receive`) are present in the deployed `bin/` directory.
 9. `rsync` the version directory to each remote host in the selected groups.
 
 **Return codes / side effects:**
@@ -254,20 +254,20 @@ production wiring (`current`, `PATH`, `/root/bashinit`, etc.).
   Each host in the selected group(s) receives the version. The group names do not have any special meaning to ZFSutilities. The hosts must be reachable via `ssh root@<hostname>`(password prompting  works if running from a terminal).
 
 `deploy-version` creates a self-contained version directory at `/usr/local/lib/zfsutilities/versions/<version>/`.
-Each version carries its own `bin/` (executable scripts) and `lib/` (helper libraries)
-so that multiple versions can coexist on disk. Because every version is complete, rollback is
-just `switch-version` repointing `current` and refreshing the production wiring — no files need to be copied or restored.
+Each version carries its own `bin/` (executable scripts), `lib/` (helper libraries),
+`python/` (GUI and Python helpers), `docs/` (built documentation), and `share/`
+(templates and sample configs) so that multiple versions can coexist on disk.
+Because every version is complete, rollback is just `switch-version` repointing
+`current` and refreshing the production wiring — no files need to be copied or restored.
 
 `deploy-version` does **not** touch active production wiring. It does not update the `current`
 symlink, `PATH` configuration, `/root/bashinit`, library symlinks, or desktop shortcuts. It is safe to run at any time.
 
-Files in the repository root are copied if they are **executable OR have a shebang** (`#!`),
-so a script missing the executable bit in the repository is still deployed.
-Retention policy files (`zfsretainpol-*`) and other executable data files are
-also copied. Repository root exclusions: `*.md`, `.gitignore`, `installed-programs`, `PROMPT*`,
-`VERSION`.
+The repository directories `bin/`, `lib/`, `python/`, `docs/`, and `share/` are copied
+wholesale into the version directory. The `VERSION` file is copied separately. Exclusions
+are limited to build artifacts such as `__pycache__/` and `*.pyc`.
 
-After copying files, `deploy-version` validates that critical root-level scripts
+After copying files, `deploy-version` validates that critical scripts
 (`zfs-diagnose-busy`, `zfsdelsnap`, `zfscleanup`, `zfsretain`, `zfs-send-receive`)
 are present in the versioned `bin/` directory. If any are missing, a warning is
 printed so the operator knows the deployment is incomplete.
@@ -283,14 +283,14 @@ directory so the built site carries the correct version stamp.
 `deploy-version` creates two launcher symlinks in the versioned `bin/`
 directory:
 
-- `zfsutilities-gui` → `../07 GTK + Python/zfsutilities_gui.py`
-- `zfsutilities-docs` → `../07 GTK + Python/docs_viewer.py`
+- `zfsutilities-gui` → `../python/zfsutilities_gui.py`
+- `zfsutilities-docs` → `../python/docs_viewer.py`
 
 These let you launch the GUI and standalone documentation viewer by name after
 activating the version.
 
 `deploy-version` also generates `/etc/zfsutilities-deploy.conf` at install time
-(from `10 Installers/deploy.conf.template`) so the production hostnames are
+(from `share/installer/deploy.conf.template`) so the production hostnames are
 available for future deployments.
 
 See [Installation](../installation/index.md) for the full workflow.
@@ -1396,7 +1396,7 @@ sudo switch-version <version>|previous|--list|--uninstall
 | Script | Purpose |
 | ------ | ------- |
 | `rootcheck` | Verify root privileges |
-| `10 Installers/desktop-launcher-lib.sh` | Desktop shortcut helpers |
+| `lib/desktop-launcher-lib.sh` | Desktop shortcut helpers |
 
 **Data structures consumed / produced:**
 

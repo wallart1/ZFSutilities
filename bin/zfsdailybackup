@@ -23,7 +23,7 @@ if [[ ! -r "$NODE_CONF" ]]; then
     if [[ -r /etc/two-node.conf ]]; then
         NODE_CONF="/etc/two-node.conf"
     else
-        echo "✗ Missing $NODE_CONF — install via: 10 Installers/install-single-node" >&2
+        echo "✗ Missing $NODE_CONF — install via: bin/install-single-node" >&2
         exit 1
     fi
 fi

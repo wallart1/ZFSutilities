@@ -67,7 +67,7 @@ run_remove() {
         setup_node_config "$mode"
 
         export REMOVE_VM_TEST_NO_ROOT=1
-        export NODE_LIB="$mydir/08 Two-node/node-lib.sh"
+        export NODE_LIB="$mydir/lib/node-lib.sh"
         export PVE_CONF_DIR="$pve_dir"
         export _capture_dir="$capture_dir"
 
@@ -94,7 +94,7 @@ EOF
                     echo "$_mock_zfs_state_dir/rescan-storage"
                     ;;
                 node-lib.sh)
-                    echo "$mydir/08 Two-node/node-lib.sh"
+                    echo "$mydir/lib/node-lib.sh"
                     ;;
                 rootcheck)
                     # Leave the test-lib mock in place.
@@ -156,7 +156,7 @@ EOF
             return 0
         }
 
-        source "$mydir/09 ZFS clone support/remove-vm" "$vmid"
+        source "$mydir/bin/remove-vm" "$vmid"
     ) 2>&1 <<EOF
 $stdin_input
 EOF

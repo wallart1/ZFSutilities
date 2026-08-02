@@ -4,7 +4,9 @@
 # has been executed once, so the first test bootstraps the function and the
 # remaining tests exercise the helpers directly.
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+# shellcheck disable=SC2218
+# (source() override below is intentionally not active for test-lib.sh itself.)
+builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
 # Prevent re-sourcing bashinit / rootcheck / zfslockmanager / bashsetx / iscsi-lib
 # inside send-receive from overwriting our mocks, enabling xtrace, or requiring
@@ -18,6 +20,11 @@ source() {
     [[ "$expanded" == *"iscsi-lib.sh" ]] && return 0
     builtin source "$@"
 }
+
+# zfs-send-receive sources helpers with $mydir-relative paths; in the new layout
+# $mydir must be the bin/ directory.
+repo_root="$mydir"
+mydir="$mydir/bin"
 
 # iscsi-lib.sh is skipped above; provide the one function send-receive calls.
 iscsi_rebuild_torn_down() { :; }
@@ -1058,7 +1065,7 @@ test_trailer_suppressed_with_inherit() {
 
 _extract_dailybackup_trailer() {
     local outfile="$1"
-    awk '/^_write_trailer\(\) \{/,/^}$/' "$mydir/zfsdailybackup" > "$outfile"
+    awk '/^_write_trailer\(\) \{/,/^}$/' "$repo_root/bin/zfsdailybackup" > "$outfile"
 }
 
 _run_dailybackup_trailer() {

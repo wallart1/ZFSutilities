@@ -8,7 +8,7 @@ setup_test_env
 export msg_level="INFO"
 
 old_mydir="$mydir"
-source "$old_mydir/zfs-diagnose-busy"
+source "$old_mydir/bin/zfs-diagnose-busy"
 
 # Capture log_msg output to a file for assertions
 _DIAG_LOG=""

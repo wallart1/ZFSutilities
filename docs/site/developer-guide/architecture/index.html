@@ -2123,7 +2123,7 @@
 
 
   
-    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/developer-guide/architecture.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/docs/docs/developer-guide/architecture.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2240,7 +2240,7 @@ rescans the smaller file.</p>
 recent <strong>2 MB</strong> of characters while tailing a running log, dropping older
 content to prevent unbounded RAM growth.</p>
 <h3 id="persistent-log-index">Persistent log index<a class="headerlink" href="#persistent-log-index" title="Permanent link">&para;</a></h3>
-<p>The Logs tab uses <code>07 GTK + Python/log_index.py</code> to avoid re-reading every
+<p>The Logs tab uses <code>python/log_index.py</code> to avoid re-reading every
 historical session log on startup or refresh. The index is a JSON file at
 <code>/var/log/zfsutilities/sessions/.log_index.json</code> that stores, per log file:</p>
 <table>
@@ -2570,7 +2570,7 @@ copying or deleting files; with the symlink model, rollback is instantaneous and
 </ul>
 <hr />
 <h2 id="gui-bash-integration-architecture">GUI ↔ Bash Integration Architecture<a class="headerlink" href="#gui-bash-integration-architecture" title="Permanent link">&para;</a></h2>
-<p>The GTK GUI (<code>07 GTK + Python/</code>) does not reimplement ZFS logic in Python. Instead, it <strong>orchestrates</strong> the same bash scripts used on the command line. Two Python runners handle this:</p>
+<p>The GTK GUI (<code>python/</code>) does not reimplement ZFS logic in Python. Instead, it <strong>orchestrates</strong> the same bash scripts used on the command line. Two Python runners handle this:</p>
 <ul>
 <li><strong><code>BackupRunner</code></strong> (<code>backup_runner.py</code>) — used by the GUI for interactive Backup, Offsite, Restore, and Retention tabs.</li>
 <li><strong><code>profile_runner.py</code></strong> — used by cron for scheduled, headless execution.</li>
@@ -2610,7 +2610,7 @@ stderr:</p>
 </ul>
 <p><code>profile_runner.py</code> uses the same <code>_ZFS_RECEIVED_RE</code> regex when scanning the session log after completion to compute total bytes transferred.</p>
 <h3 id="python-gui-architecture">Python GUI architecture<a class="headerlink" href="#python-gui-architecture" title="Permanent link">&para;</a></h3>
-<p>The Python layer in <code>07 GTK + Python/</code> was refactored to reduce coupling and
+<p>The Python layer in <code>python/</code> was refactored to reduce coupling and
 improve testability while keeping the same bash orchestration contract:</p>
 <table>
 <thead>
@@ -2806,7 +2806,7 @@ incrementally.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.72.1
+      ZFS Utilities v0.73.0
     </div>
   
   
@@ -2831,7 +2831,7 @@ incrementally.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

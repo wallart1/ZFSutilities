@@ -60,7 +60,7 @@ usage() {
 [[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
 
 # Guard: must be run from the repo root, not a deployed path
-if [[ ! -d "$MYDIR/08 Two-node" ]]; then
+if [[ ! -d "$MYDIR/bin" || ! -d "$MYDIR/lib" ]]; then
     die "deploy-version must be run from the repository root.\n" \
         "  Wrong:  sudo deploy-version  (runs from deployed PATH)\n" \
         "  Right:  cd /path/to/zfsutilities-dev && sudo ./deploy-version"
@@ -122,44 +122,6 @@ fi
 MY_HOST=$(hostname -s)
 
 # ------------------------------------------------------------------
-# Define file sets to deploy
-# ------------------------------------------------------------------
-TWO_NODE_SCRIPTS=(
-    new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk
-    rescan-storage show-lun-map clone-vm move-vm-disk
-    safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns
-    iscsi-restore-luns repair-iscsi-luns
-    unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys
-    enroll-efi-keys-vm attach-vm-disk detach-vm-disk
-)
-
-CLONE_SCRIPTS=(zfsclone-vm promote-vm-clone archive-vm unarchive-vm remove-vm)
-INSTALLERS=(install-single-node install-two-node)
-VERSIONING_SCRIPTS=(deploy-version switch-version uninstall-version uninstall-some-versions uninstall-zfsutilities)
-
-# Directories to copy into the versioned deployment (source name -> dest name)
-DEPLOY_DIRS=(
-    "06 Docs"
-    "07 GTK + Python"
-    "08 Two-node"
-    "09 ZFS clone support"
-    "10 Installers"
-    "Cache-warm"
-    "Watchall"
-)
-
-# Directories to exclude entirely (not copied to versioned dir)
-EXCLUDE_TOP_DIRS=(
-    ".git"
-    ".claude"
-    "00 Active Development"
-    "02 History"
-    "03 Stash"
-    "04 Old and Obsolete"
-    "05 ZFS IO rate tuning"
-)
-
-# ------------------------------------------------------------------
 # Helper: verify critical scripts were deployed
 # ------------------------------------------------------------------
 validate_critical_scripts() {
@@ -185,125 +147,76 @@ deploy_to_host() {
     echo "=== Deploying to $host_label ==="
 
     # Create version directory structure
-    mkdir -p "$VERSION_DIR/bin" "$VERSION_DIR/lib"
+    mkdir -p "$VERSION_DIR/bin" "$VERSION_DIR/lib" \
+        "$VERSION_DIR/python" "$VERSION_DIR/docs" "$VERSION_DIR/share"
 
-    # Symlink Two-node scripts into bin/ (canonical copy stays in 08 Two-node/)
-    for script in "${TWO_NODE_SCRIPTS[@]}"; do
-        src="$MYDIR/08 Two-node/$script"
-        if [[ -f "$src" ]]; then
-            ln -sfn "../08 Two-node/$script" "$VERSION_DIR/bin/$script"
-        else
-            log_msg "WARN: Missing: $src"
-        fi
-    done
+    # Copy executables and helper scripts into bin/
+    rsync -a --delete \
+        --exclude='__pycache__/' \
+        --exclude='*.pyc' \
+        --exclude='.nfs*' \
+        "$MYDIR/bin/" "$VERSION_DIR/bin/"
 
-    # Symlink clone support scripts into bin/
-    for script in "${CLONE_SCRIPTS[@]}"; do
-        src="$MYDIR/09 ZFS clone support/$script"
-        if [[ -f "$src" ]]; then
-            ln -sfn "../09 ZFS clone support/$script" "$VERSION_DIR/bin/$script"
-        fi
-    done
-
-    # Symlink installers into bin/
-    for script in "${INSTALLERS[@]}"; do
-        src="$MYDIR/10 Installers/$script"
-        if [[ -f "$src" ]]; then
-            ln -sfn "../10 Installers/$script" "$VERSION_DIR/bin/$script"
-        fi
-    done
-
-    # Copy root-level scripts (executable OR shebang)
-    for script in "$MYDIR/"*; do
-        [[ -f "$script" ]] || continue
-        local name
-        name=$(basename "$script")
-        [[ "$name" == *.md ]] && continue
-        [[ "$name" == .gitignore ]] && continue
-        [[ "$name" == installed-programs ]] && continue
-        [[ "$name" == PROMPT* ]] && continue
-        [[ "$name" == VERSION ]] && continue
-        # Only ship the default legacy retention policy; pool-specific sample
-        # policies should not be installed on new systems.
-        if [[ "$name" == zfsretainpol-* && "$name" != zfsretainpol-default ]]; then
-            continue
-        fi
-        # Accept executable files OR files with a shebang
-        if [[ -x "$script" ]]; then
-            install -m 0755 "$script" "$VERSION_DIR/bin/"
-            continue
-        fi
-        if head -c2 "$script" | grep -q '^#!'; then
-            install -m 0755 "$script" "$VERSION_DIR/bin/"
-        fi
-    done
-
-    # Copy versioning scripts
-    for script in "${VERSIONING_SCRIPTS[@]}"; do
-        src="$MYDIR/$script"
-        if [[ -f "$src" ]]; then
-            install -m 0755 "$src" "$VERSION_DIR/bin/"
-        fi
-    done
-
-    # Symlink GUI launcher to Python script (replaces old bash wrapper)
+    # Symlink GUI launcher to Python script
     rm -f "$VERSION_DIR/bin/zfsutilities-gui"
-    ln -sfn "../07 GTK + Python/zfsutilities_gui.py" "$VERSION_DIR/bin/zfsutilities-gui"
+    ln -sfn "../python/zfsutilities_gui.py" "$VERSION_DIR/bin/zfsutilities-gui"
 
     # Symlink documentation-viewer launcher to Python script
     rm -f "$VERSION_DIR/bin/zfsutilities-docs"
-    ln -sfn "../07 GTK + Python/docs_viewer.py" "$VERSION_DIR/bin/zfsutilities-docs"
+    ln -sfn "../python/docs_viewer.py" "$VERSION_DIR/bin/zfsutilities-docs"
+
+    # Copy sourced libraries into lib/
+    rsync -a --delete \
+        --exclude='__pycache__/' \
+        --exclude='*.pyc' \
+        --exclude='.nfs*' \
+        "$MYDIR/lib/" "$VERSION_DIR/lib/"
+
+    # Copy Python source into python/
+    rsync -a --delete \
+        --exclude='__pycache__/' \
+        --exclude='*.pyc' \
+        --exclude='.nfs*' \
+        "$MYDIR/python/" "$VERSION_DIR/python/"
+
+    # Copy documentation source and built site into docs/
+    rsync -a --delete \
+        --exclude='__pycache__/' \
+        --exclude='*.pyc' \
+        --exclude='.nfs*' \
+        "$MYDIR/docs/" "$VERSION_DIR/docs/"
+
+    # Copy shared resources into share/
+    rsync -a --delete \
+        --exclude='__pycache__/' \
+        --exclude='*.pyc' \
+        --exclude='.nfs*' \
+        "$MYDIR/share/" "$VERSION_DIR/share/"
 
     # Copy VERSION file for reference
     if [[ -f "$MYDIR/VERSION" ]]; then
         install -m 0644 "$MYDIR/VERSION" "$VERSION_DIR/"
     fi
 
-    # Copy libraries
-    if [[ -f "$MYDIR/08 Two-node/node-lib.sh" ]]; then
-        install -m 0644 "$MYDIR/08 Two-node/node-lib.sh" "$VERSION_DIR/lib/"
-    fi
-    if [[ -f "$MYDIR/08 Two-node/two-node-lib.sh" ]]; then
-        install -m 0644 "$MYDIR/08 Two-node/two-node-lib.sh" "$VERSION_DIR/lib/"
-    fi
-    if [[ -f "$MYDIR/08 Two-node/iscsi-lib.sh" ]]; then
-        install -m 0644 "$MYDIR/08 Two-node/iscsi-lib.sh" "$VERSION_DIR/lib/"
-    fi
-
-    # Copy project subdirectories
-    for dir in "${DEPLOY_DIRS[@]}"; do
-        src="$MYDIR/$dir"
-        if [[ -d "$src" ]]; then
-            local dest_name
-            dest_name=$(basename "$dir")
-            # Use rsync to preserve structure and exclude ephemeral files
-            rsync -a --delete \
-                --exclude='__pycache__/' \
-                --exclude='*.pyc' \
-                --exclude='.nfs*' \
-                "$src/" "$VERSION_DIR/$dest_name/"
-        fi
-    done
-
     # Rebuild static documentation site so it is version-correct
     if ! command -v mkdocs &>/dev/null; then
         log_msg "FATAL: mkdocs is not installed. Cannot build documentation."
         source "$MYDIR/bashfatal" 1
     fi
-    if [[ -f "$VERSION_DIR/06 Docs/mkdocs.yml" ]]; then
-        if ! (cd "$VERSION_DIR/06 Docs" && mkdocs build >/dev/null 2>&1); then
+    if [[ -f "$VERSION_DIR/docs/mkdocs.yml" ]]; then
+        if ! (cd "$VERSION_DIR/docs" && mkdocs build >/dev/null 2>&1); then
             log_msg "FATAL: Documentation build failed."
             source "$MYDIR/bashfatal" 1
         fi
     fi
 
     # Ensure the built documentation site is readable by non-root users
-    if [[ -d "$VERSION_DIR/06 Docs/site" ]]; then
-        find "$VERSION_DIR/06 Docs/site" -type d -exec chmod 0755 {} \;
-        find "$VERSION_DIR/06 Docs/site" -type f -exec chmod 0644 {} \;
+    if [[ -d "$VERSION_DIR/docs/site" ]]; then
+        find "$VERSION_DIR/docs/site" -type d -exec chmod 0755 {} \;
+        find "$VERSION_DIR/docs/site" -type f -exec chmod 0644 {} \;
     fi
 
-    # Verify critical root-level scripts were copied
+    # Verify critical scripts were copied
     validate_critical_scripts
 
     echo "  ✓ $host_label complete"

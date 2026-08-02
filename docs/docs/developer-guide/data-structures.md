@@ -332,7 +332,7 @@ Adding a new migration:
 
 ## Python command and I/O structures
 
-These dataclasses live in `07 GTK + Python/` and carry state between the GUI,
+These dataclasses live in `python/` and carry state between the GUI,
 the command builders, and the runners.
 
 ### `BashStep` (`command_builders.py`)

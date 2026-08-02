@@ -1,6 +1,6 @@
 # GTK GUI Reference
 
-The `zfsutilities_gui.py` application (in `07 GTK + Python/`) is a GTK3
+The `zfsutilities_gui.py` application (in `python/`) is a GTK3
 graphical frontend for the ZFSutilities scripts. It must be run as root:
 
 ```bash

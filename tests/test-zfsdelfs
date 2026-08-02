@@ -24,7 +24,7 @@ NODE_CONF="$NODE_CONF_FILE"
 # ------------------------------------------------------------------
 # Source zfsdelfs (it will not run delfs because it is being sourced).
 # ------------------------------------------------------------------
-source "$mydir/zfsdelfs"
+source "$mydir/bin/zfsdelfs"
 
 # ------------------------------------------------------------------
 # Mock targetcli
@@ -252,7 +252,7 @@ EOF
         NODE_CONF="$_state_dir/node.conf"
         mydir="$_mock_mydir"
         # shellcheck source=/dev/null
-        source "$_old_mydir/zfsdelfs"
+        source "$_old_mydir/bin/zfsdelfs"
         autoproceed='Y'
         _mock_delfs_fsarray=(pool/data)
         mock_zfs_dataset_exists "pool/data"

@@ -194,7 +194,7 @@ sudo ./deploy-version [version] [group ...]
 
 | Script | Purpose |
 | ------ | ------- |
-| `10 Installers/desktop-launcher-lib.sh` | Desktop shortcut helpers |
+| `lib/desktop-launcher-lib.sh` | Desktop shortcut helpers |
 
 **Data structures consumed / produced:**
 
@@ -208,10 +208,9 @@ sudo ./deploy-version [version] [group ...]
 
 1. Parse arguments; read `./VERSION` if no version is supplied.
 2. Load `/etc/zfsutilities-deploy.conf` groups, or fall back to the node config for remote hosts.
-3. Build the version directory, copy root-level scripts, and symlink two-node,
-   clone, installer, and versioning scripts.
-4. Copy project subdirectories (`06 Docs`, `07 GTK + Python`, etc.) and rebuild
-   static docs.
+3. Build the version directory and copy `bin/`, `lib/`, `python/`, `docs/`,
+   and `share/` from the repository.
+4. Rebuild the static docs.
 5. Verify that critical scripts are present in the deployed `bin/` directory.
 6. `rsync` the version directory to each remote host in the selected groups.
 
@@ -432,12 +431,12 @@ live-reload site; MkDocs is required.
 | Structure | Role |
 | --------- | ---- |
 | `~/docserver.log` | Server stdout/stderr |
-| `06 Docs/site/` | Built static documentation site |
+| `docs/site/` | Built static documentation site |
 | `http://localhost:8000` | Documentation URL |
 
 **Internal flow:**
 
-1. Locate the docs directory relative to the script (`06 Docs` or `../06 Docs`).
+1. Locate the docs directory relative to the script (`docs` or `../docs`).
 2. Probe `localhost:8000` to see if a server is already running.
 3. If the running server serves the wrong directory, stop it.
 4. Start `mkdocs serve --livereload`.
@@ -486,7 +485,7 @@ sudo switch-version <version>|previous|--list|--uninstall
 | Module / Script | Purpose |
 | --------------- | ------- |
 | [rootcheck](modules.md#rootcheck) | Verify root privileges |
-| `10 Installers/desktop-launcher-lib.sh` | Desktop shortcut helpers |
+| `lib/desktop-launcher-lib.sh` | Desktop shortcut helpers |
 
 **Data structures consumed / produced:**
 
@@ -661,13 +660,13 @@ watchit pool-or-dataset
 
 **Globals:** none.
 
-Uses `Watchall/watchall` with `zpool list` and `zfs list` output.
+Uses `bin/watchall` with `zpool list` and `zfs list` output.
 
 **Called modules:**
 
 | Script | Purpose |
 | ------ | ------- |
-| `Watchall/watchall` | Periodically display pool/dataset status |
+| `bin/watchall` | Periodically display pool/dataset status |
 
 **Data structures consumed / produced:** none.
 
@@ -2499,7 +2498,7 @@ sudo zfsshowzpooldevices <pool>
 ### `zfsstatus`
 
 Auto-refreshing ZFS status display (pool list + pool status). Refreshes
-every 60 seconds. Implemented as a one-liner that calls `Watchall/watchall`.
+every 60 seconds. Implemented as a one-liner that calls `bin/watchall`.
 
 ```bash
 zfsstatus
@@ -2513,7 +2512,7 @@ zfsstatus
 
 | Script | Purpose |
 | ------ | ------- |
-| `Watchall/watchall` | Auto-refresh pool list and status |
+| `bin/watchall` | Auto-refresh pool list and status |
 
 **Data structures consumed / produced:** none.
 

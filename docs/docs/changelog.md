@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.73.0
+
+*Released 2026-08-02*
+
+### Changed
+
+- **Repository directory restructure** — Replaced the old numbered/named
+  directories (`06 Docs/`, `07 GTK + Python/`, `08 Two-node/`,
+  `09 ZFS clone support/`, `10 Installers/`, `Cache-warm/`, `Watchall/`) with a
+  clean, conventional layout:
+  - `bin/` — all executable bash scripts
+  - `lib/` — sourced shell libraries (`node-lib.sh`, `installer-lib.sh`, etc.)
+  - `python/` — GTK GUI and Python helpers
+  - `docs/` — MkDocs documentation source and built site
+  - `share/` — static resources, templates, and sample configurations
+  - `tests/` — bash and Python test suites (unchanged location)
+- **`deploy-version`** — Now copies the `bin/`, `lib/`, `python/`, `docs/`, and
+  `share/` directories wholesale into the versioned deployment, and creates the
+  GUI/docs launcher symlinks relative to `python/`. Removed the old root-level
+  script selection and per-directory symlink logic.
+- **`switch-version`** and **installers** — Updated to resolve libraries and
+  resources from the new `lib/` directory.
+- **`bashinit` / `find_zfsutility_script`** — Search paths now cover the new
+  repo layout (`bin/`, `lib/`, `python/`, `share/`) instead of the old
+  directory names.
+- **`python/path_utils.py`** — Updated repo-relative paths to use `python/`,
+  `docs/`, `lib/`, `bin/`, and `share/`.
+
+### Tests
+
+- Updated bash test suites to locate scripts under `bin/` and libraries under
+  `lib/`.
+- Rewrote `tests/test-deploy-version` to validate the new directory-copy
+  deployment model.
+- Updated `tests/test-module-dependencies` to guard against stale legacy
+  directory literals.
+
+### Documentation
+
+- Updated all developer-guide, installation, commands-and-modules, and
+  user-guide source files to reference the new directory layout.
+- Fixed a duplicated directory reference in
+  `developer-guide/conventions.md`.
+
 ## 0.72.1
 
 *Released 2026-08-01*

@@ -23,12 +23,11 @@ bashinit
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-DOCS_DIR="$REPO_DIR/06 Docs"
-TWO_NODE_DIR="$REPO_DIR/08 Two-node"
-CLONE_DIR="$REPO_DIR/09 ZFS clone support"
+DOCS_DIR="$REPO_DIR/docs"
+TWO_NODE_DIR="$REPO_DIR/share/two-node"
 
 NODE_CONF="/etc/zfsutilities-node.conf"
-NODE_LIB_SRC="$TWO_NODE_DIR/node-lib.sh"
+NODE_LIB_SRC="$REPO_DIR/lib/node-lib.sh"
 NODE_LIB_DST="/usr/local/lib/node-lib.sh"
 
 # Scripts installed on BOTH hosts
@@ -316,14 +315,14 @@ echo ""
 echo "=== Step 5: Deploying Versioned Installation ==="
 echo ""
 
-DEPLOY_VERSION="$REPO_DIR/deploy-version"
+DEPLOY_VERSION="$REPO_DIR/bin/deploy-version"
 [[ -f "$DEPLOY_VERSION" ]] || die "Missing: $DEPLOY_VERSION"
 "$DEPLOY_VERSION"
 
 # Activate the deployed version on the storage host.  switch-version creates
 # all production wiring, including the desktop shortcuts.
 VERSION=$(cat "$REPO_DIR/VERSION")
-"$REPO_DIR/switch-version" "$VERSION"
+"$REPO_DIR/bin/switch-version" "$VERSION"
 
 # Initialize retention profiles: new installs get only the default policy;
 # existing user-entered per-pool policies are preserved.
@@ -334,9 +333,8 @@ ensure_retention_profiles
 ensure_retention_profiles_remote() {
     local host="$1"
     local config_path="${ZFSCONFIG_PATH:-/root/.config/zfsutilities.json}"
-    local helper="/usr/local/lib/zfsutilities/current/10 Installers/installer_retention.py"
-    local python_src="/usr/local/lib/zfsutilities/current/07 GTK + Python"
-    local installer_src="/usr/local/lib/zfsutilities/current/10 Installers"
+    local helper="/usr/local/lib/zfsutilities/current/python/installer_retention.py"
+    local python_src="/usr/local/lib/zfsutilities/current/python"
 
     local new_install_flag=""
     if ssh -o ConnectTimeout=5 "root@$host" "[[ ! -f '$config_path' ]]" >/dev/null 2>&1; then
@@ -345,7 +343,7 @@ ensure_retention_profiles_remote() {
 
     echo "=== Retention Profiles on $host ==="
     ssh -o ConnectTimeout=5 "root@$host" \
-        "PYTHONPATH='$python_src:$installer_src' python3 '$helper' --config-path '$config_path' $new_install_flag" \
+        "PYTHONPATH='$python_src' python3 '$helper' --config-path '$config_path' $new_install_flag" \
         || echo "  ⚠ Could not initialize retention profiles on $host" >&2
 }
 
@@ -570,6 +568,6 @@ echo "  1. Run: safe-iscsi-save    (generates saveconfig-boot.json)"
 echo "  2. Run all scripts from $COMPUTE_HOST as: sudo <script-name> [args]"
 echo ""
 echo "  To switch to single-node mode later:"
-echo "    sudo $REPO_DIR/10 Installers/install-single-node"
+echo "    sudo $REPO_DIR/bin/install-single-node"
 echo ""
 

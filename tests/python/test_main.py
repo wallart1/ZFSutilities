@@ -377,7 +377,7 @@ class TestPidHelpers(unittest.TestCase):
         def fake_open(path, mode):
             if "1234" in path:
                 return mock_open(
-                    read_data=b"/usr/bin/python3\x00/usr/local/lib/zfsutilities/versions/0.55.2/07 GTK + Python/main.py\x00"
+                    read_data=b"/usr/bin/python3\x00/usr/local/lib/zfsutilities/versions/0.55.2/python/main.py\x00"
                 )(path, mode)
             raise FileNotFoundError(path)
 

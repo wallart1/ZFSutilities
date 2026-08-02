@@ -125,8 +125,11 @@ prepare_script() {
         -e "s|/dev/mapper/keys|$TEST_MAPPER/keys|g" \
         -e "s|/usr/local/lib/zfsutilities/bin/lock-zfs-keys|lock-zfs-keys|g" \
         -e "s|/usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns|iscsi-add-encrypted-luns|g" \
+        -e "s|\"\$mydir/bin/lock-zfs-keys\"|lock-zfs-keys|g" \
+        -e "s|\"\$mydir/bin/iscsi-add-encrypted-luns\"|iscsi-add-encrypted-luns|g" \
         -e "s|\"\$mydir/lock-zfs-keys\"|lock-zfs-keys|g" \
         -e "s|\"\$mydir/iscsi-add-encrypted-luns\"|iscsi-add-encrypted-luns|g" \
+        -e "s|source ~/bashinit|source \"$repo_root/bin/bashinit\"|g" \
         "$src" > "$dst"
 }
 
@@ -139,7 +142,7 @@ run_under_mocks() {
         export ZFSUTILITIES_LOG_FILE=""
         export NODE_CONF="$NODE_CONF"
         export mydir="$repo_root"
-        cd "$repo_root"
+        cd "$repo_root" || exit
         bash "$script" "$@"
     )
 }
@@ -169,7 +172,7 @@ EOF
 
     local script_copy
     script_copy=$(mktemp)
-    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys-auto" "$script_copy"
+    prepare_script "$repo_root/bin/unlock-zfs-keys-auto" "$script_copy"
 
     local rc=0
     run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
@@ -192,7 +195,7 @@ test_auto_unlock_exits_cleanly_when_keyfile_absent() {
 
     local script_copy
     script_copy=$(mktemp)
-    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys-auto" "$script_copy"
+    prepare_script "$repo_root/bin/unlock-zfs-keys-auto" "$script_copy"
 
     local rc=0
     run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
@@ -235,7 +238,7 @@ EOF
 
     local script_copy
     script_copy=$(mktemp)
-    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys-auto" "$script_copy"
+    prepare_script "$repo_root/bin/unlock-zfs-keys-auto" "$script_copy"
 
     local rc=0
     run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
@@ -276,7 +279,7 @@ EOF
 
     local script_copy
     script_copy=$(mktemp)
-    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys-auto" "$script_copy"
+    prepare_script "$repo_root/bin/unlock-zfs-keys-auto" "$script_copy"
 
     local rc=0
     run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
@@ -318,7 +321,7 @@ EOF
 
     local script_copy
     script_copy=$(mktemp)
-    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys" "$script_copy"
+    prepare_script "$repo_root/bin/unlock-zfs-keys" "$script_copy"
 
     local rc=0
     run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
@@ -359,7 +362,7 @@ EOF
 
     local script_copy
     script_copy=$(mktemp)
-    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys" "$script_copy"
+    prepare_script "$repo_root/bin/unlock-zfs-keys" "$script_copy"
 
     local rc=0
     run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
@@ -400,7 +403,7 @@ EOF
 
     local script_copy
     script_copy=$(mktemp)
-    prepare_script "$repo_root/08 Two-node/unlock-zfs-keys" "$script_copy"
+    prepare_script "$repo_root/bin/unlock-zfs-keys" "$script_copy"
 
     local rc=0
     run_under_mocks "$script_copy" >/dev/null 2>&1 || rc=$?
@@ -427,7 +430,7 @@ test_lock_zfs_keys_closes_mapper() {
 
     local script_copy
     script_copy=$(mktemp)
-    prepare_script "$repo_root/08 Two-node/lock-zfs-keys" "$script_copy"
+    prepare_script "$repo_root/bin/lock-zfs-keys" "$script_copy"
 
     run_under_mocks "$script_copy" >/dev/null 2>&1
 
@@ -454,7 +457,7 @@ test_lock_zfs_keys_leaves_udisksd_mapper() {
 
     local script_copy
     script_copy=$(mktemp)
-    prepare_script "$repo_root/08 Two-node/lock-zfs-keys" "$script_copy"
+    prepare_script "$repo_root/bin/lock-zfs-keys" "$script_copy"
 
     run_under_mocks "$script_copy" >/dev/null 2>&1
 

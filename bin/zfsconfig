@@ -50,8 +50,8 @@ _zfsconfig_pylib() {
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local candidate
     for candidate in \
-        "$script_dir/07 GTK + Python" \
-        "$script_dir/../07 GTK + Python"; do
+        "$script_dir/python" \
+        "$script_dir/../python"; do
         if [[ -f "$candidate/feature_config.py" ]]; then
             realpath "$candidate"
             return 0

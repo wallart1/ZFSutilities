@@ -45,6 +45,7 @@ _run_dailybackup() {
                 *) break ;;
             esac
         done
+        mydir="$mydir/bin"
         source "$mydir/zfsdailybackup" "$overrides"
     } 2>&1)
     echo "$output"
@@ -72,6 +73,7 @@ test_local_pull_failure_continues() {
     output=$({
         msg_level="INFO"
         _mock_interactive
+        mydir="$mydir/bin"
         source "$mydir/zfsdailybackup" "$DISABLE_ALL_STEPS"
         backup-installed-programs() { return 5; }
         rsync-dailybackup() { return 6; }

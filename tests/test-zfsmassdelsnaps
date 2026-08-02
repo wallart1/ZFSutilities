@@ -52,7 +52,7 @@ cleanup() {
 }
 EOF
 
-source "$old_mydir/zfsmassdelsnaps"
+source "$old_mydir/bin/zfsmassdelsnaps"
 
 reset_state() {
     _mock_delsnap_calls=()

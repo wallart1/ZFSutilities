@@ -449,14 +449,14 @@ ensure_retention_profiles() {
 
     local lib_dir
     lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local helper="$lib_dir/installer_retention.py"
 
     local python_src
-    if [[ -d "/usr/local/lib/zfsutilities/current/07 GTK + Python" ]]; then
-        python_src="/usr/local/lib/zfsutilities/current/07 GTK + Python"
+    if [[ -d "/usr/local/lib/zfsutilities/current/python" ]]; then
+        python_src="/usr/local/lib/zfsutilities/current/python"
     else
-        python_src="$(cd "$lib_dir/../07 GTK + Python" && pwd)"
+        python_src="$(cd "$lib_dir/../python" && pwd)"
     fi
+    local helper="$python_src/installer_retention.py"
 
     local new_install_flag=""
     if [[ "$new_install" == "true" ]]; then

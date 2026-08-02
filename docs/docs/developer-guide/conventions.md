@@ -16,7 +16,7 @@ calls use `$mydir` to find sibling scripts.
 
 ### Node-aware scripts
 
-Scripts in `08 Two-node/` and `09 ZFS clone support/` that interact with the
+Scripts in `bin/` that interact with the
 storage or compute hosts add `node-lib.sh` to the standard header:
 
 ```bash
@@ -162,12 +162,12 @@ Empty arrays: `includes=()`, `excludes=()`.
 
 ## Documentation Changes
 
-The rendered website under `06 Docs/site/` is generated from the Markdown
-sources in `06 Docs/docs/` by MkDocs. After editing any documentation source
+The rendered website under `docs/site/` is generated from the Markdown
+sources in `docs/docs/` by MkDocs. After editing any documentation source
 file, or after changing `VERSION`, run:
 
 ```bash
-cd "06 Docs"
+cd "docs"
 mkdocs build
 ```
 

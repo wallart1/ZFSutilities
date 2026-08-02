@@ -99,7 +99,7 @@ content to prevent unbounded RAM growth.
 
 ### Persistent log index
 
-The Logs tab uses `07 GTK + Python/log_index.py` to avoid re-reading every
+The Logs tab uses `python/log_index.py` to avoid re-reading every
 historical session log on startup or refresh. The index is a JSON file at
 `/var/log/zfsutilities/sessions/.log_index.json` that stores, per log file:
 
@@ -366,7 +366,7 @@ Key branches:
 
 ## GUI ↔ Bash Integration Architecture
 
-The GTK GUI (`07 GTK + Python/`) does not reimplement ZFS logic in Python. Instead, it **orchestrates** the same bash scripts used on the command line. Two Python runners handle this:
+The GTK GUI (`python/`) does not reimplement ZFS logic in Python. Instead, it **orchestrates** the same bash scripts used on the command line. Two Python runners handle this:
 
 - **`BackupRunner`** (`backup_runner.py`) — used by the GUI for interactive Backup, Offsite, Restore, and Retention tabs.
 - **`profile_runner.py`** — used by cron for scheduled, headless execution.
@@ -414,7 +414,7 @@ stderr:
 
 ### Python GUI architecture
 
-The Python layer in `07 GTK + Python/` was refactored to reduce coupling and
+The Python layer in `python/` was refactored to reduce coupling and
 improve testability while keeping the same bash orchestration contract:
 
 | Module | Responsibility |

@@ -62,7 +62,7 @@ zfslock_release() { true; }
 zfslock_release_all() { true; }
 EOF
 
-source "$old_mydir/zfscleanup"
+source "$old_mydir/bin/zfscleanup"
 
 reset_state() {
     zfscleanup_processed=()

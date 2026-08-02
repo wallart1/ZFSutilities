@@ -61,7 +61,7 @@ def _detect_parent_dir(script_dir):
     """Auto-detect the directory containing bash scripts.
 
     In production, scripts live in version_root/bin/.  In development,
-    they live in version_root/ (the repo root, parent of 07 GTK + Python/).
+    they live in version_root/ (the repo root, parent of python/).
     """
     version_root = os.path.dirname(script_dir)
     bin_dir = os.path.join(version_root, "bin")

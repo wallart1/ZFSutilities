@@ -10,7 +10,7 @@ option, and also for Proxmox VE users who need safe VM disk lifecycle management
 
 ---
 
-![ZFS Utilities GUI](<06 Docs/images/Screenshot from 2026-07-13 20-22-13.png>)
+![ZFS Utilities GUI](<docs/images/Screenshot from 2026-07-13 20-22-13.png>)
 
 ## What is ZFS Utilities?
 
@@ -65,7 +65,7 @@ so concurrent jobs do not collide on the same datasets.
 Save a tab configuration as a reusable profile and schedule it with standard
 cron syntax:
 
-![Schedule tab](<06 Docs/images/Screenshot from 2026-07-13 20-24-10.png>)
+![Schedule tab](<docs/images/Screenshot from 2026-07-13 20-24-10.png>)
 
 ## Requirements
 
@@ -94,7 +94,7 @@ cron syntax:
 - ZFS pools already created and online (may be imported on the Pools tab)
 
 - MkDocs and the Material theme (required; the installer builds the HTML
-  documentation site from `06 Docs/docs/`):
+  documentation site from `docs/docs/`):
   
   ```bash
   pip install mkdocs mkdocs-material
@@ -119,13 +119,13 @@ directions between the storage host and the compute host.
    For a **single-node** setup (compute and storage on the same host):
    
    ```bash
-   sudo ./10\ Installers/install-single-node
+   sudo ./bin/install-single-node
    ```
    
    For a **two-node** setup (storage host plus a separate compute host):
    
    ```bash
-   sudo ./10\ Installers/install-two-node
+   sudo ./bin/install-two-node
    ```
    
    The installer deploys a versioned installation under
@@ -161,7 +161,7 @@ Deploy a new version without touching the running system:
 
 ```bash
 cd /path/to/ZFSutilities
-sudo ./deploy-version
+sudo ./bin/deploy-version
 sudo switch-version <version>
 ```
 
@@ -212,19 +212,19 @@ software (such as MkDocs).
 
 ## Documentation
 
-The full documentation is built with MkDocs from `06 Docs/docs/` and is
+The full documentation is built with MkDocs from `docs/docs/` and is
 included with the installed system. The GUI's **Help → Documentation** menu
 opens the same docs in an embedded browser.
 
 Key sections:
 
-- [Installation Guide](<06 Docs/docs/installation/index.md>) — single-node and
+- [Installation Guide](<docs/docs/installation/index.md>) — single-node and
   two-node setup details
-- [User Guide](<06 Docs/docs/user-guide/index.md>) — day-to-day operating
+- [User Guide](<docs/docs/user-guide/index.md>) — day-to-day operating
   procedures
-- [Developer Guide](<06 Docs/docs/developer-guide/index.md>) — architecture,
+- [Developer Guide](<docs/docs/developer-guide/index.md>) — architecture,
   conventions, and testing
-- [Commands & Modules Reference](<06 Docs/docs/commands-and-modules/index.md>)
+- [Commands & Modules Reference](<docs/docs/commands-and-modules/index.md>)
   — complete script and module reference
 
 To browse the docs directly from a clone:
@@ -257,7 +257,7 @@ Run the Python tests:
 ./tests/run-python-tests
 ```
 
-See [developer-guide/testing.md](<06 Docs/docs/developer-guide/testing.md>)
+See [developer-guide/testing.md](<docs/docs/developer-guide/testing.md>)
 for details on writing new tests.
 
 ## Support

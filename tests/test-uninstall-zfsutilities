@@ -5,7 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
 setup_test_env
 
-UNINSTALL_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../uninstall-zfsutilities"
+UNINSTALL_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/uninstall-zfsutilities"
 [[ -f "$UNINSTALL_SCRIPT" ]] || die "Missing: $UNINSTALL_SCRIPT"
 
 # Source the real uninstall script for direct function tests. rootcheck is
@@ -680,9 +680,9 @@ test_missing_desktop_lib_tolerated() {
 
     # Create an isolated copy of uninstall-zfsutilities without the launcher library.
     mkdir -p "$tmpdir/bin"
-    cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../uninstall-zfsutilities" \
+    cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/uninstall-zfsutilities" \
         "$tmpdir/bin/uninstall-zfsutilities"
-    cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bashinit" \
+    cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/bashinit" \
         "$tmpdir/bashinit"
     printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$tmpdir/bin/rootcheck"
     chmod +x "$tmpdir/bin/rootcheck"

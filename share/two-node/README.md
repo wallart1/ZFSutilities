@@ -61,7 +61,7 @@ ssh-copy-id root@<storage-host>
 Use the versioned installer from the repository root:
 
 ```bash
-sudo /path/to/zfsutilities-dev/10 Installers/install-two-node
+sudo /path/to/zfsutilities-dev/bin/install-two-node
 ```
 
 This deploys scripts as a versioned installation to
@@ -71,7 +71,7 @@ PATH configuration via `/usr/local/lib/zfsutilities/bin/`, and checks SSH/sudo p
 For a simpler single-node setup (no separate storage host):
 
 ```bash
-sudo /path/to/zfsutilities-dev/10 Installers/install-single-node
+sudo /path/to/zfsutilities-dev/bin/install-single-node
 ```
 
 
@@ -271,6 +271,6 @@ sudo resize-vm-disk tank 300 1 200G
 - **Stop VMs before removing disks.** Removing an active LUN causes I/O errors.
 - **ZFS only grows, never shrinks.** `resize-vm-disk` only accepts larger sizes.
 - **Encrypted zvols**: vm-101-disk-1 and vm-202-disk-5 require the LUKS USB key
-  to be loaded. See `06 Docs/docs/installation/zfs-keys.md` for the full
+  to be loaded. See `docs/docs/installation/zfs-keys.md` for the full
   key-handling workflow.
 - All zvols are created with `compression=lz4`.

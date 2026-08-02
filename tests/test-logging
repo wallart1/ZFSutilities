@@ -5,7 +5,7 @@ mydir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Source the working-tree bashinit directly so we test the current log_msg,
 # ask_yn, warn, and die implementations, not the test harness overrides.
-source "$mydir/bashinit"
+source "$mydir/bin/bashinit"
 bashinit
 
 # Preserve bashinit's helpers before test-lib.sh replaces log_msg and ask_yn.

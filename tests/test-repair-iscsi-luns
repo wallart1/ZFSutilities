@@ -151,7 +151,7 @@ find_zfsutility_script() { echo "/dev/null"; }
 old_mydir="$mydir"
 REPAIR_ISCSI_LUNS_SKIP_ROOT="Y"
 REPAIR_ISCSI_LUNS_TEST_MODE="Y"
-script_text=$(cat "$old_mydir/08 Two-node/repair-iscsi-luns")
+script_text=$(cat "$old_mydir/bin/repair-iscsi-luns")
 # Ensure MY_HOST is set to the storage host so main() can be tested.
 script_text="${script_text/MY_HOST=\$(hostname -s)/MY_HOST=stewie}"
 eval "$script_text"

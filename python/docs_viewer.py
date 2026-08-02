@@ -154,17 +154,17 @@ class DocsViewerWindow(Gtk.Window):
 
         if not self._docs_path:
             repo_path = os.path.join(
-                os.path.dirname(script_dir), "06 Docs", "site", "index.html"
+                os.path.dirname(script_dir), "docs", "site", "index.html"
             )
             deployed_path = os.path.join(
-                _DEPLOYMENT_BASE, "current", "06 Docs", "site", "index.html"
+                _DEPLOYMENT_BASE, "current", "docs", "site", "index.html"
             )
             self._show_fallback(
                 "Documentation site not found.\n\n"
                 "path_utils.get_docs_path() checked:\n"
                 f"  {repo_path}\n"
                 f"  {deployed_path}\n\n"
-                "Run 'mkdocs build' in the 06 Docs directory."
+                "Run 'mkdocs build' in the docs directory."
             )
             return
 

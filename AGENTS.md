@@ -35,7 +35,7 @@ You are a meticulous and expert coding agent. For every task:
 7. Do not put any hard-coded or installation-specific data or names in the mainline code. These must be entered by the user at runtime using text-based and GUI dialogs, or dynamically by the code, and will usually be saved in a saved configuration file.
 8. Look for and correct any deprecated code and features. Do not implement any deprecated code or features.
 9. Don't be lazy. Take the approach that is correct even though it may be more difficult to implement.
-10. Read and strictly follow the coding policies given in '/NFS1/dan(NFS1)/zfsutilities-pub/06 Docs/docs/developer-guide/coding-policies.md'
+10. Read and strictly follow the coding policies given in '/NFS1/dan(NFS1)/zfsutilities-pub/docs/docs/developer-guide/coding-policies.md'
 11. If you run across pre-existing errors or bugs that are unrelated to the immediate task, identify them with a clear messages so that I can put them on my TODO list.
 12. When I give you a plan file to execute, as in "Please execute the plan file ...," that means that I just want you to execute the plan. No not modify the plan. Do not enter plan mode. Just execute the plan.
 13. You may see uncommitted changed files that you did not change. Do not be alarmed by this. They are either the user's manual changes or were changed by Kimi in an earlier session. These changes will be included when I instruct you to perform a commit.
@@ -92,10 +92,10 @@ rootcheck
 - `$mydir` is set by `bashinit` to the calling script's directory
 - Function scripts are sourced (not executed) and call functions by name
 
-### Node-Aware Scripts (`08 Two-node/` and `09 ZFS clone support/`)
+### Node-Aware Scripts
 
-Scripts that interact with the storage/compute hosts add `node-lib.sh` to the
-standard header:
+Scripts that interact with the storage/compute hosts (in `bin/`) add
+`node-lib.sh` (in `lib/`) to the standard header:
 
 ```bash
 source ~/bashinit
@@ -157,7 +157,7 @@ Snapshots with label `clone` or bucket `c` are skipped entirely in all phases.
 ### Python ZFS Repository
 
 All direct `zfs`/`zpool` subprocess calls from the GTK/Python GUI layer are
-isolated in `07 GTK + Python/zfs_repository.py` via the `ZfsRepository` class.
+isolated in `python/zfs_repository.py` via the `ZfsRepository` class.
 GUI pages and action handlers receive the repository from `app.ctx.zfs_repository`
 (or fall back to `get_default_repository()`). This keeps subprocess mocking
 straightforward: Python tests patch `subprocess.run` and the repository methods
@@ -165,7 +165,7 @@ pass the mocked calls through.
 
 ### Session Log Utilities
 
-Per-run session log helpers live in `07 GTK + Python/session_log.py`.
+Per-run session log helpers live in `python/session_log.py`.
 `BackupRunner` (GUI) and `profile_runner.py` (headless/cron) both use these
 stateless functions to create log files, append raw subprocess output, write
 trailers, and enforce the session-log size cap.
@@ -221,14 +221,12 @@ skipped.
 ## Key Directories
 
 - Root directory: Active utilities and scripts
-- `06 Docs/` - Documentation manuals (source)
-- `07 GTK + Python/` - GTK/Python GUI
-- `08 Two-node/` - Two-node / iSCSI utilities
-- `09 ZFS clone support/` - VM clone lifecycle scripts
-- `10 Installers/` - Single-node and two-node installers
-- `Cache-warm/` - ZFS ARC cache warming helpers
+- `bin/` - Executable scripts
+- `lib/` - Sourced shell libraries
+- `python/` - GTK/Python GUI source
+- `docs/` - Documentation manuals (source)
+- `share/` - Static resources, templates, and sample configurations
 - `tests/` - Bash and Python test suites
-- `Watchall/` - Monitoring helpers
 
 ## Pool Names Referenced
 
@@ -281,7 +279,7 @@ The `bashinit` script provides these functions:
 - `die "message"` - Logs a FATAL message and terminates the process via `bashfatal`
 - `warn "message"` - Logs a WARN message
 - `calledbybash` - Returns 0 if script was executed directly (not sourced)
-- `find_zfsutility_script <name>` - Searches the repo or deployed layout for a sibling script or library and prints its absolute path. Used to locate `node-lib.sh` and `rootcheck` from scripts in `08 Two-node/` and `09 ZFS clone support/` without hard-coding paths. The absolute deployment directories can be overridden with `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`.
+- `find_zfsutility_script <name>` - Searches the repo or deployed layout for a sibling script or library and prints its absolute path. Used to locate `node-lib.sh`, `rootcheck`, and other siblings from scripts in `bin/` without hard-coding paths. The absolute deployment directories can be overridden with `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`.
 
 **Deployment**: `deploy-version` places software under
 `/usr/local/lib/zfsutilities/versions/<version>/` without touching active
@@ -337,7 +335,7 @@ a warning if the versions differ or the peer is unreachable. The check runs in a
 background thread so GUI startup is not delayed.
 
 Path resolution for the Python layer is centralized in
-`07 GTK + Python/path_utils.py`, which mirrors the bash `$mydir` /
+`python/path_utils.py`, which mirrors the bash `$mydir` /
 `find_zfsutility_script` / `remote_zfsutilities_bin` behavior.  The module
 honors `ZFSUTILITIES_VERSION_BASE`, `ZFSUTILITIES_REMOTE_BIN`, and
 `ZFSUTILITIES_REMOTE_VERSION` environment overrides for non-standard
@@ -594,7 +592,7 @@ This project uses **bash** (not sh). Follow these conventions:
 
 ### Python
 
-The GTK GUI code in `07 GTK + Python/` follows standard Python conventions:
+The GTK GUI code in `python/` follows standard Python conventions:
 
 - **PEP 8**: 4 spaces, 100-character line limit.
 - **Naming**: `lowercase_with_underscores` for variables/functions, `CapWords` for classes, `UPPERCASE_WITH_UNDERSCORES` for constants.
@@ -645,8 +643,8 @@ log_msg("DEBUG: variable =", value)
 
 ## Recent Session Notes (2026-07-16)
 
-- Removed the obsolete `08 Two-node/install-scripts` script. It was already
-  marked deprecated and superseded by `10 Installers/install-two-node`, but it
+- Removed the obsolete `bin/install-scripts` script. It was already
+  marked deprecated and superseded by `bin/install-two-node`, but it
   was still being deployed by `deploy-version` and referenced by
   `two-node-lib.sh`. Updated those references to point to the current installer.
 
@@ -677,7 +675,7 @@ log_msg("DEBUG: variable =", value)
 - Hardened `safe-iscsi-save`: after a successful save it regenerates
   `expected-backstores.txt` from the current targetcli backstore list so the
   manifest stays accurate when LUNs are moved or added.
-- Updated `08 Two-node/install-scripts` to deploy `repair-iscsi-luns` on the
+- Updated `bin/install-scripts` to deploy `repair-iscsi-luns` on the
   storage host.
 
 ## Recent Session Notes (2026-07-03)
@@ -710,7 +708,7 @@ log_msg("DEBUG: variable =", value)
 
 ## Recent Session Notes (2026-06-29)
 
-- Phase 4 file-locking: Added `07 GTK + Python/file_locking.py` to serialize
+- Phase 4 file-locking: Added `python/file_locking.py` to serialize
   access to shared JSON/state files (`/root/.config/zfsutilities.json`,
   `zfsutilities-history.json`, `scrub_state.json`, and the session-log index).
   Python modules use `fcntl.flock` context managers; the bash `zfsconfig`
@@ -731,9 +729,9 @@ log_msg("DEBUG: variable =", value)
   `tests/python/test_profile_integration.py`, which runs concurrent profiles in
   separate subprocesses and verifies that disjoint datasets run in parallel,
   same-dataset conflicts fail safely, and backup+prune operations serialize.
-  Created `06 Docs/docs/user-guide/profiles.md` to explain profiles, scheduling,
+  Created `docs/docs/user-guide/profiles.md` to explain profiles, scheduling,
   concurrent execution, and conflict resolution. Updated
-  `06 Docs/docs/developer-guide/concurrency-collisions.md` to mark the
+  `docs/docs/developer-guide/concurrency-collisions.md` to mark the
   Phase 1/5 gaps (two prunes on the same pool, two restores to the same
   destination, scrub path coordination, and headless profile overlap) as
   resolved.

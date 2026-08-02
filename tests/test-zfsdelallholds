@@ -7,7 +7,7 @@ setup_test_env
 old_mydir="$mydir"
 
 # Source the real helper; it depends only on bashinit (mocked above) and zfs.
-source "$old_mydir/zfsdelallholds"
+source "$old_mydir/bin/zfsdelallholds"
 
 test_no_patterns_releases_all_holds() {
     echo "=== No patterns: releases all holds ==="

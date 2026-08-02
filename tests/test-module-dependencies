@@ -184,5 +184,26 @@ PYEOF
 
 test_module_dependencies
 
+test_no_legacy_directory_literals() {
+    test_start "No stale legacy directory names in source or tests"
+    local bad=() term
+    for term in '08 Two-node' '09 ZFS clone support' '07 GTK + Python' '06 Docs'; do
+        # Search source and test trees only; documentation updates are Phase 5.
+        while IFS= read -r match; do
+            bad+=("$match")
+        done < <(grep -R --include='*.sh' --include='*.py' \
+            -n "$term" \
+            "$old_mydir/bin" "$old_mydir/lib" "$old_mydir/python" \
+            "$old_mydir/tests" "$old_mydir/share" 2>/dev/null || true)
+    done
+    if [[ ${#bad[@]} -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Found legacy directory references:\n${bad[*]}"
+    fi
+}
+
+test_no_legacy_directory_literals
+
 test_summary
 teardown_test_env

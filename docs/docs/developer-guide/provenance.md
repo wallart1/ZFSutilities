@@ -35,9 +35,8 @@ Code reads when operating on this codebase:
 
 | File                     | Purpose                                              |
 | ------------------------ | ---------------------------------------------------- |
-| `CLAUDE.md`              | Top-level project context and conventions            |
-| `AGENTS.md`              | Guidance for AI coding assistants                    |
-| `08 Two-node/CLAUDE.md`  | Two-node infrastructure background                   |
+| `CLAUDE.md` | Top-level project context and conventions |
+| `AGENTS.md` | Guidance for AI coding assistants         |
 
 These files are shipped with the project so that anyone running Claude Code
 against the repository gets the same working context the maintainer uses.

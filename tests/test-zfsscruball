@@ -51,7 +51,7 @@ test_scrub_runs_selected_pool() {
     export STATEFILE
     : > "$STATEFILE"
 
-    source "$old_mydir/zfsscruball"
+    source "$old_mydir/bin/zfsscruball"
 
     poolarray=(testpool)
     parallel=2
@@ -85,7 +85,7 @@ test_resume_skips_completed_pools() {
     _mock_zpool_status="  scan: none requested"
     export _mock_zpool_list _mock_zpool_status
 
-    source "$old_mydir/zfsscruball"
+    source "$old_mydir/bin/zfsscruball"
 
     do_resume
 
@@ -109,7 +109,7 @@ test_pause_scrubs_in_progress() {
     _mock_zpool_status="  scan: scrub in progress since Sun May 10 00:00:00 2026"
     export _mock_zpool_list _mock_zpool_status
 
-    source "$old_mydir/zfsscruball"
+    source "$old_mydir/bin/zfsscruball"
 
     local output
     output=$(do_pause 2>&1)

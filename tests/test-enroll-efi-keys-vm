@@ -8,11 +8,11 @@ setup_test_env
 # Extract helper functions from enroll-efi-keys-vm.
 # ------------------------------------------------------------------
 old_mydir="$mydir"
-func_text=$(sed -n '/^parse_efidisk_line() {/,/^}$/p' "$old_mydir/08 Two-node/enroll-efi-keys-vm")
+func_text=$(sed -n '/^parse_efidisk_line() {/,/^}$/p' "$old_mydir/bin/enroll-efi-keys-vm")
 func_text+=$'\n'
-func_text+=$(sed -n '/^parse_iscsi_by_path() {/,/^}$/p' "$old_mydir/08 Two-node/enroll-efi-keys-vm")
+func_text+=$(sed -n '/^parse_iscsi_by_path() {/,/^}$/p' "$old_mydir/bin/enroll-efi-keys-vm")
 func_text+=$'\n'
-func_text+=$(sed -n '/^update_efidisk_config() {/,/^}$/p' "$old_mydir/08 Two-node/enroll-efi-keys-vm")
+func_text+=$(sed -n '/^update_efidisk_config() {/,/^}$/p' "$old_mydir/bin/enroll-efi-keys-vm")
 eval "$func_text"
 
 # ------------------------------------------------------------------

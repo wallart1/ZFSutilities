@@ -1496,10 +1496,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#10-installersinstall-single-node" class="md-nav__link">
+  <a href="#bininstall-single-node" class="md-nav__link">
     <span class="md-ellipsis">
       
-        10 Installers/install-single-node
+        bin/install-single-node
       
     </span>
   </a>
@@ -1507,10 +1507,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#10-installersinstall-two-node" class="md-nav__link">
+  <a href="#bininstall-two-node" class="md-nav__link">
     <span class="md-ellipsis">
       
-        10 Installers/install-two-node
+        bin/install-two-node
       
     </span>
   </a>
@@ -2079,7 +2079,7 @@
 
 
   
-    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/developer-guide/two-node-config.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/docs/docs/developer-guide/two-node-config.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2100,7 +2100,7 @@
 <code>NODE_MODE</code> variable controls which code paths are active.</p>
 <h2 id="config-file-etczfsutilities-nodeconf">Config File: <code>/etc/zfsutilities-node.conf</code><a class="headerlink" href="#config-file-etczfsutilities-nodeconf" title="Permanent link">&para;</a></h2>
 <p>A POSIX-shell sourceable file, installed by the interactive installers in
-<code>10 Installers/</code>. Site admins can edit this file directly.</p>
+<code>bin/</code>. Site admins can edit this file directly.</p>
 <h3 id="single-node-example">Single-node example<a class="headerlink" href="#single-node-example" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># /etc/zfsutilities-node.conf</span>
 <span class="nv">NODE_MODE</span><span class="o">=</span><span class="s2">&quot;single-node&quot;</span>
@@ -2138,11 +2138,11 @@ rename the target.</p>
 </code></pre></div>
 <p>If no groups are specified, <code>deploy-version</code> deploys to all defined groups plus the local host.</p>
 <p><strong>Legacy fallback:</strong> If <code>/etc/zfsutilities-deploy.conf</code> does not exist, <code>deploy-version</code> falls back to the node configuration (<code>/etc/zfsutilities-node.conf</code> or <code>/etc/two-node.conf</code>) and deploys to <code>STORAGE_HOST</code> and <code>COMPUTE_HOST</code> when <code>NODE_MODE="two-node"</code>.</p>
-<p><strong>Installation:</strong> <code>install-two-node</code> generates this file from <code>10 Installers/deploy.conf.template</code>, substituting the hostnames you enter during setup. The installer <strong>never overwrites</strong> an existing file, so manual edits are safe across re-runs.</p>
+<p><strong>Installation:</strong> <code>install-two-node</code> generates this file from <code>share/installer/deploy.conf.template</code>, substituting the hostnames you enter during setup. The installer <strong>never overwrites</strong> an existing file, so manual edits are safe across re-runs.</p>
 <h2 id="helper-library-node-libsh">Helper Library: <code>node-lib.sh</code><a class="headerlink" href="#helper-library-node-libsh" title="Permanent link">&para;</a></h2>
 <p>Installed to <code>/usr/local/lib/node-lib.sh</code> on all hosts (also reachable via
 <code>find_zfsutility_script node-lib.sh</code> when running from the repo).</p>
-<p>All scripts in <code>08 Two-node/</code> and <code>09 ZFS clone support/</code> use this header:</p>
+<p>All scripts in <code>bin/</code> use this header:</p>
 <div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span>~/bashinit
 bashinit
 <span class="nv">NODE_LIB</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">NODE_LIB</span><span class="k">:-$(</span>find_zfsutility_script<span class="w"> </span>node-lib.sh<span class="k">)</span><span class="si">}</span><span class="s2">&quot;</span>
@@ -2227,7 +2227,7 @@ ZFSutilities project tree (not from the versioned installation PATH), they sourc
 the config directly instead of using the library. Running from the repo-root is supported only in a development environment.</p>
 <div class="highlight"><pre><span></span><code><span class="nv">NODE_CONF</span><span class="o">=</span><span class="s2">&quot;/etc/zfsutilities-node.conf&quot;</span>
 <span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span>!<span class="w"> </span>-r<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$NODE_CONF</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
-<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;✗ Missing </span><span class="nv">$NODE_CONF</span><span class="s2"> — install via: 10 Installers/install-single-node&quot;</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span>
+<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;✗ Missing </span><span class="nv">$NODE_CONF</span><span class="s2"> — install via: bin/install-single-node&quot;</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span>
 <span class="w">    </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
 <span class="k">fi</span>
 <span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$NODE_CONF</span><span class="s2">&quot;</span>
@@ -2249,7 +2249,7 @@ config must be present on every host that runs the script:</p>
 <tbody>
 <tr>
 <td>Storage host</td>
-<td><code>10 Installers/install-single-node</code> or <code>install-two-node</code></td>
+<td><code>bin/install-single-node</code> or <code>bin/install-two-node</code></td>
 </tr>
 <tr>
 <td>Compute host</td>
@@ -2262,7 +2262,7 @@ config must be present on every host that runs the script:</p>
 </tbody>
 </table>
 <h2 id="installers">Installers<a class="headerlink" href="#installers" title="Permanent link">&para;</a></h2>
-<h3 id="10-installersinstall-single-node"><code>10 Installers/install-single-node</code><a class="headerlink" href="#10-installersinstall-single-node" title="Permanent link">&para;</a></h3>
+<h3 id="bininstall-single-node"><code>bin/install-single-node</code><a class="headerlink" href="#bininstall-single-node" title="Permanent link">&para;</a></h3>
 <p>Interactive installer for single-node mode:</p>
 <ol>
 <li>Installs MkDocs (for documentation editing)</li>
@@ -2272,7 +2272,7 @@ config must be present on every host that runs the script:</p>
 <li>Deploys VM disk management and clone scripts to the versioned installation</li>
 <li>Does NOT install iSCSI-only scripts or systemd drop-ins</li>
 </ol>
-<h3 id="10-installersinstall-two-node"><code>10 Installers/install-two-node</code><a class="headerlink" href="#10-installersinstall-two-node" title="Permanent link">&para;</a></h3>
+<h3 id="bininstall-two-node"><code>bin/install-two-node</code><a class="headerlink" href="#bininstall-two-node" title="Permanent link">&para;</a></h3>
 <p>Interactive installer for two-node mode:</p>
 <ol>
 <li>Installs MkDocs (for documentation editing)</li>
@@ -2481,7 +2481,7 @@ LUNs. See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for recove
 <li><strong><a href="../../commands-and-modules/commands/#zfsdailybackup">zfsdailybackup</a> override flags</strong> (<code>pull_tweety</code>, <code>pull_stewie</code>) retain
   their literal-hostname names because they are part of the user-facing
   override interface (<code>./zfsdailybackup "pull_tweety='N'"</code>). This script is intended to be lightly modified to meet your specific needs.</li>
-<li><strong>iSCSI target discovery at runtime.</strong> The <code>09 ZFS clone support/</code> scripts
+<li><strong>iSCSI target discovery at runtime.</strong> The VM clone scripts in <code>bin/</code>
   query <code>targetcli</code> to find the current target for a given LUN rather than
   building the IQN from config. This survives any IQN rename.</li>
 </ul>
@@ -2520,7 +2520,7 @@ LUNs. See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for recove
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.72.1
+      ZFS Utilities v0.73.0
     </div>
   
   
@@ -2545,7 +2545,7 @@ LUNs. See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for recove
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

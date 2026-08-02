@@ -5,7 +5,7 @@ import sys
 import unittest
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
-PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
+PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
@@ -19,19 +19,19 @@ class TestAppContext(unittest.TestCase):
     def test_fields_are_stored(self):
         ctx = AppContext(
             config={"pools": []},
-            script_dir="/repo/07 GTK + Python",
+            script_dir="/repo/python",
             parent_dir="/repo",
             version="0.45.4",
         )
         self.assertEqual(ctx.config["pools"], [])
-        self.assertEqual(ctx.script_dir, "/repo/07 GTK + Python")
+        self.assertEqual(ctx.script_dir, "/repo/python")
         self.assertEqual(ctx.parent_dir, "/repo")
         self.assertEqual(ctx.version, "0.45.4")
 
     def test_is_new_install_defaults_to_false(self):
         ctx = AppContext(
             config={"pools": []},
-            script_dir="/repo/07 GTK + Python",
+            script_dir="/repo/python",
             parent_dir="/repo",
             version="0.45.4",
         )
@@ -40,7 +40,7 @@ class TestAppContext(unittest.TestCase):
     def test_is_new_install_can_be_true(self):
         ctx = AppContext(
             config={"pools": []},
-            script_dir="/repo/07 GTK + Python",
+            script_dir="/repo/python",
             parent_dir="/repo",
             version="0.45.4",
             is_new_install=True,
@@ -50,7 +50,7 @@ class TestAppContext(unittest.TestCase):
     def test_default_repository_is_created(self):
         ctx = AppContext(
             config={"pools": []},
-            script_dir="/repo/07 GTK + Python",
+            script_dir="/repo/python",
             parent_dir="/repo",
             version="0.45.4",
         )
@@ -61,7 +61,7 @@ class TestAppContext(unittest.TestCase):
         repo = ZfsRepository(sudo=False)
         ctx = AppContext(
             config={"pools": []},
-            script_dir="/repo/07 GTK + Python",
+            script_dir="/repo/python",
             parent_dir="/repo",
             version="0.45.4",
             zfs_repository=repo,

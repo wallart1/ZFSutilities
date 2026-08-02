@@ -5,11 +5,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
 old_mydir="$mydir"
-mock_mydir=$(mktemp -d)
+mock_base=$(mktemp -d)
+mock_mydir="$mock_base/bin"
+mkdir -p "$mock_mydir"
 mydir="$mock_mydir"
 
 # Copy real helpers that zfscheckagainst sources.
-cp "$old_mydir/bashdebug" "$mock_mydir/bashdebug"
+cp "$old_mydir/bin/bashdebug" "$mock_mydir/bashdebug"
 
 # Stub zfsconfig so we control offsite candidates and checkagainst entries.
 cat > "$mock_mydir/zfsconfig" << 'EOF'
@@ -41,7 +43,7 @@ getcommonsnap() {
 EOF
 
 # Load the module under test.
-source "$old_mydir/zfscheckagainst"
+source "$old_mydir/bin/zfscheckagainst"
 
 # ------------------------------------------------------------------------------
 # Mock zfs/zpool commands.
@@ -362,7 +364,8 @@ test_legacy_conf_fallback() {
     test_start "Empty JSON checkagainst falls back to legacy conf"
     reset_mocks
     _zfscheckagainst_checkagainst_lines=()
-    cat > "$mock_mydir/zfscheckagainst.conf" <<'EOF'
+    mkdir -p "$mock_base/share/config"
+    cat > "$mock_base/share/config/zfscheckagainst.conf" <<'EOF'
 # Legacy fallback config
 poolA/data 0 fivebays offsite
 EOF
@@ -370,7 +373,7 @@ EOF
     set_existing_datasets fivebays/poolA/data
     local rc=0
     checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
-    rm -f "$mock_mydir/zfscheckagainst.conf"
+    rm -f "$mock_base/share/config/zfscheckagainst.conf"
     assert_rc 0 "$rc"
 }
 
@@ -489,7 +492,7 @@ test_dataset_offsite_placeholder_no_candidates
 test_dataset_and_counterpart_offsite_placeholder
 test_counterpart_offsite_not_at_start
 
-rm -rf "$mock_mydir"
+rm -rf "$mock_base"
 
 test_summary
 teardown_test_env

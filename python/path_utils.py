@@ -36,10 +36,10 @@ def get_script_dir(depth=1):
 
 
 # Relative path from a repo/deployment root to the built docs index.
-_DOCS_INDEX = os.path.join("06 Docs", "site", "index.html")
+_DOCS_INDEX = os.path.join("docs", "site", "index.html")
 
 # Relative path from a repo/deployment root to the Python source directory.
-_PYTHON_DIR = "07 GTK + Python"
+_PYTHON_DIR = "python"
 
 
 def _repo_candidate_dirs(script_dir=None):
@@ -49,10 +49,10 @@ def _repo_candidate_dirs(script_dir=None):
     return [
         script_dir,
         os.path.join(script_dir, ".."),
-        os.path.join(script_dir, "08 Two-node"),
-        os.path.join(script_dir, "..", "08 Two-node"),
-        os.path.join(script_dir, "09 ZFS clone support"),
-        os.path.join(script_dir, "..", "09 ZFS clone support"),
+        os.path.join(script_dir, "..", "lib"),
+        os.path.join(script_dir, "..", "bin"),
+        os.path.join(script_dir, "..", "share"),
+        os.path.join(script_dir, "..", "python"),
     ]
 
 
@@ -91,7 +91,7 @@ def is_deployed_layout(script_dir=None):
 def _version_base(script_dir=None):
     """Return the version-root directory for the current layout.
 
-    In the repo this is the parent of ``07 GTK + Python/``.  In a deployed
+    In the repo this is the parent of ``python/``.  In a deployed
     layout it is ``_DEPLOYMENT_BASE/current``.
     """
     if script_dir is None:

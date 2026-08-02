@@ -265,7 +265,7 @@ profile while the first is still running.
 
 Python/GUI mutators now participate in the lock manager:
 
-* New `07 GTK + Python/zfs_lock_manager.py` reads and writes the same JSON
+* New `python/zfs_lock_manager.py` reads and writes the same JSON
   lock files as `zfslockmanager`, so Python operations interoperate with bash
   locks.
 * Direct Python mutators acquire `w` locks:
@@ -307,7 +307,7 @@ user documentation explains the new behavior.
     corrupting data.
   - Backup + prune: the prune step is blocked by the backup's dataset lock and
     exits safely.
-* `06 Docs/docs/user-guide/profiles.md` documents what profiles are, how they
+* `docs/docs/user-guide/profiles.md` documents what profiles are, how they
   run concurrently, and how conflicts are resolved.
 * The severity summary table above has been refreshed to mark Phase 5
   (headless profile overlap) and remaining Phase 1 gaps (two prunes on the same
@@ -333,10 +333,10 @@ snapshot.
 - `zfsdelsnap` — example of parent-dataset `w` locking.
 - `zfscleanup`, `zfsretain`, `zfsdelfs`, `zfsscruball`, `zfscheckagainst` —
   lock-protected by Phase 1.
-- `zfssnapbuild` and `07 GTK + Python/feature_config.py` — snapshot-name
+- `zfssnapbuild` and `python/feature_config.py` — snapshot-name
   generation, now coordinated by Phase 3.
-- `07 GTK + Python/zfs_lock_manager.py` — Python lock client.
-- `07 GTK + Python/profile_runner.py`, `backup_runner.py`, `scrub_manager.py`,
+- `python/zfs_lock_manager.py` — Python lock client.
+- `python/profile_runner.py`, `backup_runner.py`, `scrub_manager.py`,
   `dataset_actions.py`, `retention_actions.py` — Python dispatch paths.
 - `tests/test-zfslockmanager` — covers the lock manager itself.
 - `tests/test-zfssnapbuild` — Phase 3 bash coverage.

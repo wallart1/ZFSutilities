@@ -41,16 +41,13 @@ function bashinit {
 # Locate a sibling script or library when running from the repo or from a
 # deployed bin/ directory.  Candidate directories are checked in order; the
 # first existing regular file wins.
-#   1. $mydir/<name>
-#   2. $mydir/../<name>                      (repo subdir -> root)
-#   3. $mydir/08 Two-node/<name>             (repo root -> two-node)
-#   4. $mydir/../08 Two-node/<name>          (repo clone-support -> two-node)
-#   5. $mydir/09 ZFS clone support/<name>    (repo root -> clone-support)
-#   6. $mydir/../09 ZFS clone support/<name> (repo two-node -> clone-support)
-#   7. $mydir/../lib/<name>                  (deployed bin/ -> lib/)
-#   8. /usr/local/lib/zfsutilities/bin/<name>  (active PATH bin/)
-#   9. /usr/local/lib/zfsutilities/current/bin/<name> (current version bin/)
-#  10. /usr/local/lib/<name>                   (system-wide library symlink)
+#   1. $mydir/<name>                         (same directory, e.g. bin/ -> bin/)
+#   2. $mydir/../lib/<name>                  (bin/ -> lib/)
+#   3. $mydir/../python/<name>               (bin/ -> python/)
+#   4. $mydir/../share/<name>                (bin/ -> share/)
+#   5. $bin_dir/<name>                       (deployed active PATH bin/)
+#   6. $current_bin_dir/<name>               (deployed current version bin/)
+#   7. $system_lib_dir/<name>                (system-wide library symlink)
 #
 # The absolute deployment directories can be overridden via environment
 # variables for testing or non-standard layouts:
@@ -70,12 +67,9 @@ function find_zfsutility_script {
     local candidate
     for candidate in \
         "$mydir/$name" \
-        "$mydir/../$name" \
-        "$mydir/08 Two-node/$name" \
-        "$mydir/../08 Two-node/$name" \
-        "$mydir/09 ZFS clone support/$name" \
-        "$mydir/../09 ZFS clone support/$name" \
         "$mydir/../lib/$name" \
+        "$mydir/../python/$name" \
+        "$mydir/../share/$name" \
         "$bin_dir/$name" \
         "$current_bin_dir/$name" \
         "$system_lib_dir/$name"; do
@@ -99,10 +93,11 @@ fi
 function log_msg {
     local caller_file="${BASH_SOURCE[1]}"
     local caller_line="${BASH_LINENO[0]}"
+    local prefix
     if [[ -n "$caller_file" ]]; then
-        local prefix="$(realpath "$caller_file"):$caller_line:"
+        prefix="$(realpath "$caller_file"):$caller_line:"
     else
-        local prefix="zfsutilities:"
+        prefix="zfsutilities:"
     fi
     local full="${prefix} $*"
     # Colorize stderr output when connected to a terminal.

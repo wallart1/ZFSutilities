@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import MagicMock, call, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
-PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
+PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
@@ -17,7 +17,7 @@ from test_support import mock_gtk
 _MISSING_RUNNER = object()
 
 
-def _make_show_big_stuff_app(runner=_MISSING_RUNNER, parent_dir="/repo"):
+def _make_show_big_stuff_app(runner=_MISSING_RUNNER, parent_dir="/repo/bin"):
     """Return a minimal app mock for testing Show Big Stuff."""
     app = MagicMock()
     app.parent_dir = parent_dir
@@ -53,7 +53,7 @@ class TestShowBigStuff(unittest.TestCase):
 
     def test_builds_bash_step_for_selected_pool(self):
         da = self._import_under_mock()
-        app = _make_show_big_stuff_app(parent_dir="/repo")
+        app = _make_show_big_stuff_app(parent_dir="/repo/bin")
         app.datasets_view = MagicMock()
 
         with patch.object(
@@ -74,7 +74,7 @@ class TestShowBigStuff(unittest.TestCase):
         self.assertEqual(step.command[1], "-c")
         self.assertIn('"$mydir/zfsshowbigstuff"', step.command[2])
         self.assertIn("tank", step.command[2])
-        self.assertIn('mydir="/repo"', step.command[2])
+        self.assertIn('mydir="/repo/bin"', step.command[2])
 
     def test_starts_runner(self):
         da = self._import_under_mock()
@@ -120,7 +120,7 @@ class TestShowBigStuff(unittest.TestCase):
         runner.start.assert_not_called()
 
 
-def _make_app(runner=_MISSING_RUNNER, parent_dir="/repo"):
+def _make_app(runner=_MISSING_RUNNER, parent_dir="/repo/bin"):
     """Return a minimal app mock with a dataset runner and repository."""
     app = MagicMock()
     app.parent_dir = parent_dir

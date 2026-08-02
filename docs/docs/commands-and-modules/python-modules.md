@@ -4,7 +4,7 @@ These modules make up the GTK GUI and command-orchestration layer of ZFS
 Utilities. They read and write the shared JSON config, build `bash` commands,
 run them through `subprocess`, and present the results in the GTK interface.
 
-Most modules are in `07 GTK + Python/`. They are grouped below by role:
+Most modules are in `python/`. They are grouped below by role:
 
 - [Config and data](#config-and-data)
 - [ZFS repository and info](#zfs-repository-and-info)
@@ -1444,7 +1444,7 @@ HTTP server and renders it in a WebKit window.
 
 | Function | Purpose |
 | -------- | ------- |
-| `resolve_docs_path()` | Locate `06 Docs/site/index.html` or deployed equivalent |
+| `resolve_docs_path()` | Locate `docs/site/index.html` or deployed equivalent |
 | `main()` | Launch the viewer |
 
 **Called modules / imported helpers:**

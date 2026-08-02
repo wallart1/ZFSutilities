@@ -1983,7 +1983,7 @@
 
 
   
-    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/developer-guide/concurrency-collisions.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/docs/docs/developer-guide/concurrency-collisions.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2422,7 +2422,7 @@ profile while the first is still running.</li>
 <h2 id="recently-resolved-phase-2">Recently resolved (Phase 2)<a class="headerlink" href="#recently-resolved-phase-2" title="Permanent link">&para;</a></h2>
 <p>Python/GUI mutators now participate in the lock manager:</p>
 <ul>
-<li>New <code>07 GTK + Python/zfs_lock_manager.py</code> reads and writes the same JSON
+<li>New <code>python/zfs_lock_manager.py</code> reads and writes the same JSON
   lock files as <code>zfslockmanager</code>, so Python operations interoperate with bash
   locks.</li>
 <li>Direct Python mutators acquire <code>w</code> locks:</li>
@@ -2462,7 +2462,7 @@ user documentation explains the new behavior.</p>
     corrupting data.</li>
 <li>Backup + prune: the prune step is blocked by the backup's dataset lock and
     exits safely.</li>
-<li><code>06 Docs/docs/user-guide/profiles.md</code> documents what profiles are, how they
+<li><code>docs/docs/user-guide/profiles.md</code> documents what profiles are, how they
   run concurrently, and how conflicts are resolved.</li>
 <li>The severity summary table above has been refreshed to mark Phase 5
   (headless profile overlap) and remaining Phase 1 gaps (two prunes on the same
@@ -2487,10 +2487,10 @@ snapshot.</p>
 <li><code>zfsdelsnap</code> — example of parent-dataset <code>w</code> locking.</li>
 <li><code>zfscleanup</code>, <code>zfsretain</code>, <code>zfsdelfs</code>, <code>zfsscruball</code>, <code>zfscheckagainst</code> —
   lock-protected by Phase 1.</li>
-<li><code>zfssnapbuild</code> and <code>07 GTK + Python/feature_config.py</code> — snapshot-name
+<li><code>zfssnapbuild</code> and <code>python/feature_config.py</code> — snapshot-name
   generation, now coordinated by Phase 3.</li>
-<li><code>07 GTK + Python/zfs_lock_manager.py</code> — Python lock client.</li>
-<li><code>07 GTK + Python/profile_runner.py</code>, <code>backup_runner.py</code>, <code>scrub_manager.py</code>,
+<li><code>python/zfs_lock_manager.py</code> — Python lock client.</li>
+<li><code>python/profile_runner.py</code>, <code>backup_runner.py</code>, <code>scrub_manager.py</code>,
   <code>dataset_actions.py</code>, <code>retention_actions.py</code> — Python dispatch paths.</li>
 <li><code>tests/test-zfslockmanager</code> — covers the lock manager itself.</li>
 <li><code>tests/test-zfssnapbuild</code> — Phase 3 bash coverage.</li>
@@ -2535,7 +2535,7 @@ snapshot.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.72.1
+      ZFS Utilities v0.73.0
     </div>
   
   
@@ -2560,7 +2560,7 @@ snapshot.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

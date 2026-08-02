@@ -1,3 +1,4 @@
+#!/usr/bin/bash
 # /usr/local/lib/node-lib.sh
 #
 # Helper library for scripts that may run in single-node or two-node mode.
@@ -59,7 +60,7 @@ if [[ ! -r "$NODE_CONF" ]]; then
         NODE_CONF="/etc/two-node.conf"
     else
         log_msg "FATAL: Missing $NODE_CONF"
-        log_msg "FATAL:   Install via: 10 Installers/install-single-node or install-two-node"
+        log_msg "FATAL:   Install via: bin/install-single-node or install-two-node"
         exit 1
     fi
 fi
@@ -161,9 +162,9 @@ remote_zfsutility_script() {
 # ------------------------------------------------------------------
 # Clone helpers
 # ------------------------------------------------------------------
-# These are used by scripts in 09 ZFS clone support/ (and clone-vm in
-# 08 Two-node/).  They live here because those scripts already source
-# node-lib.sh for single-node / two-node configuration.
+# These are used by scripts in bin/ that manage VM clones.  They live here
+# because those scripts already source node-lib.sh for single-node / two-node
+# configuration.
 
 # Generate a Proxmox-compatible random MAC address.
 gen_mac() {

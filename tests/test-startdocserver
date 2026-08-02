@@ -3,7 +3,7 @@
 
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
 
-source "$mydir/startdocserver"
+source "$mydir/bin/startdocserver"
 
 # Override set -euo pipefail from startdocserver so test failures don't abort early
 set +euo pipefail
@@ -141,10 +141,10 @@ test_is_server_serving_expected_dir_match() {
     reset_mocks
     local tmpdir
     tmpdir=$(mktemp -d)
-    mkdir -p "$tmpdir/06 Docs"
-    _mock_server_cwd="$tmpdir/06 Docs"
+    mkdir -p "$tmpdir/docs"
+    _mock_server_cwd="$tmpdir/docs"
     test_start "_is_server_serving_expected_dir returns true on exact match"
-    if _is_server_serving_expected_dir "1234" "$tmpdir/06 Docs"; then
+    if _is_server_serving_expected_dir "1234" "$tmpdir/docs"; then
         test_pass
     else
         test_fail "Expected true for matching CWD"
@@ -157,11 +157,11 @@ test_is_server_serving_expected_dir_mismatch() {
     local tmpdir_old tmpdir_new
     tmpdir_old=$(mktemp -d)
     tmpdir_new=$(mktemp -d)
-    mkdir -p "$tmpdir_old/06 Docs"
-    mkdir -p "$tmpdir_new/06 Docs"
-    _mock_server_cwd="$tmpdir_old/06 Docs"
+    mkdir -p "$tmpdir_old/docs"
+    mkdir -p "$tmpdir_new/docs"
+    _mock_server_cwd="$tmpdir_old/docs"
     test_start "_is_server_serving_expected_dir returns false on mismatch"
-    if ! _is_server_serving_expected_dir "1234" "$tmpdir_new/06 Docs"; then
+    if ! _is_server_serving_expected_dir "1234" "$tmpdir_new/docs"; then
         test_pass
     else
         test_fail "Expected false for mismatched CWD"
@@ -173,7 +173,7 @@ test_is_server_serving_expected_dir_empty() {
     reset_mocks
     _mock_server_cwd=""
     test_start "_is_server_serving_expected_dir returns false when CWD unreadable"
-    if ! _is_server_serving_expected_dir "1234" "/some/path/06 Docs"; then
+    if ! _is_server_serving_expected_dir "1234" "/some/path/docs"; then
         test_pass
     else
         test_fail "Expected false for empty CWD"
@@ -184,7 +184,7 @@ test_main_restarts_stale_server() {
     reset_mocks
     _mock_curl_http_code="200"
     _mock_lsof_output="99999"
-    _mock_server_cwd="/old/path/06 Docs"
+    _mock_server_cwd="/old/path/docs"
     test_start "main restarts server when serving from wrong directory"
     main
     if [[ "$_stop_server_called" == "99999" && "$_start_server_called" == "yes" ]]; then

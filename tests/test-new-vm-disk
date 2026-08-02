@@ -8,7 +8,7 @@ setup_test_env
 # Extract helper functions from new-vm-disk.
 # ------------------------------------------------------------------
 old_mydir="$mydir"
-func_text=$(sed -n '/^build_efidisk_line() {/,/^}$/p' "$old_mydir/08 Two-node/new-vm-disk")
+func_text=$(sed -n '/^build_efidisk_line() {/,/^}$/p' "$old_mydir/bin/new-vm-disk")
 eval "$func_text"
 
 # ------------------------------------------------------------------

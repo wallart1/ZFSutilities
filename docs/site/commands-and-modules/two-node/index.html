@@ -2099,7 +2099,7 @@
 
 
   
-    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/commands-and-modules/two-node.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/docs/docs/commands-and-modules/two-node.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2111,7 +2111,7 @@
 <p>These scripts manage the two-node Proxmox/ZFS setup: a <strong>compute node</strong> (running VMs) and a dedicated <strong>storage node</strong> (hosting the ZFS pools and exporting VM disks via iSCSI). They are deployed via the versioned installation to <code>/usr/local/lib/zfsutilities/bin/</code> on one or both nodes and are not part of the core ZFS Utilities backup system.</p>
 <p>Scripts marked <strong>both</strong> run on either node and delegate automatically via SSH as appropriate. Scripts marked <strong>storage node</strong> or <strong>compute node</strong> are node-specific.</p>
 <p>Every script that touches VM disks or iSCSI configuration begins by sourcing
-<code>/usr/local/lib/node-lib.sh</code> (repo: <code>08 Two-node/node-lib.sh</code>). That library
+<code>/usr/local/lib/node-lib.sh</code> (repo: <code>lib/node-lib.sh</code>). That library
 reads <code>/etc/zfsutilities-node.conf</code> (falling back to <code>/etc/two-node.conf</code>) and
 populates the node-configuration global variables below. These variables apply to
 every entry below — they are documented once here rather than repeated in every
@@ -2431,7 +2431,7 @@ activating it. Run from the repository root.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>10 Installers/desktop-launcher-lib.sh</code></td>
+<td><code>lib/desktop-launcher-lib.sh</code></td>
 <td>Desktop shortcut helpers</td>
 </tr>
 </tbody>
@@ -2467,12 +2467,12 @@ activating it. Run from the repository root.</p>
 <ol>
 <li>Parse arguments; read <code>./VERSION</code> if no version is supplied.</li>
 <li>Load <code>/etc/zfsutilities-deploy.conf</code> groups, or fall back to the node config for remote hosts.</li>
-<li>Create the version directory (<code>versions/&lt;version&gt;/bin</code>, <code>lib</code>).</li>
-<li>Symlink two-node, clone, installer, and versioning scripts into <code>bin/</code>.</li>
-<li>Copy root-level scripts that are executable or have a shebang, with named exclusions.</li>
-<li>Copy project subdirectories (<code>06 Docs</code>, <code>07 GTK + Python</code>, <code>08 Two-node</code>, etc.) via <code>rsync</code>.</li>
-<li>Rebuild the static MkDocs site.</li>
-<li>Validate that critical root-level scripts are present in the deployed <code>bin/</code> directory.</li>
+<li>Create the version directory (<code>versions/&lt;version&gt;/bin</code>, <code>lib</code>, <code>python</code>, <code>docs</code>, <code>share</code>).</li>
+<li>Copy <code>bin/</code>, <code>lib/</code>, <code>python/</code>, <code>docs/</code>, and <code>share/</code> from the repository into the version directory via <code>rsync</code>.</li>
+<li>Create launcher symlinks <code>zfsutilities-gui</code> → <code>../python/zfsutilities_gui.py</code> and <code>zfsutilities-docs</code> → <code>../python/docs_viewer.py</code> in the versioned <code>bin/</code> directory.</li>
+<li>Copy the <code>VERSION</code> file into the version directory.</li>
+<li>Rebuild the static MkDocs site in the versioned <code>docs/</code> directory.</li>
+<li>Validate that critical scripts (<code>zfs-diagnose-busy</code>, <code>zfsdelsnap</code>, <code>zfscleanup</code>, <code>zfsretain</code>, <code>zfs-send-receive</code>) are present in the deployed <code>bin/</code> directory.</li>
 <li><code>rsync</code> the version directory to each remote host in the selected groups.</li>
 </ol>
 <p><strong>Return codes / side effects:</strong></p>
@@ -2511,17 +2511,17 @@ production wiring (<code>current</code>, <code>PATH</code>, <code>/root/bashinit
 </code></pre></div>
 <p>Each host in the selected group(s) receives the version. The group names do not have any special meaning to ZFSutilities. The hosts must be reachable via <code>ssh root@&lt;hostname&gt;</code>(password prompting  works if running from a terminal).</p>
 <p><code>deploy-version</code> creates a self-contained version directory at <code>/usr/local/lib/zfsutilities/versions/&lt;version&gt;/</code>.
-Each version carries its own <code>bin/</code> (executable scripts) and <code>lib/</code> (helper libraries)
-so that multiple versions can coexist on disk. Because every version is complete, rollback is
-just <code>switch-version</code> repointing <code>current</code> and refreshing the production wiring — no files need to be copied or restored.</p>
+Each version carries its own <code>bin/</code> (executable scripts), <code>lib/</code> (helper libraries),
+<code>python/</code> (GUI and Python helpers), <code>docs/</code> (built documentation), and <code>share/</code>
+(templates and sample configs) so that multiple versions can coexist on disk.
+Because every version is complete, rollback is just <code>switch-version</code> repointing
+<code>current</code> and refreshing the production wiring — no files need to be copied or restored.</p>
 <p><code>deploy-version</code> does <strong>not</strong> touch active production wiring. It does not update the <code>current</code>
 symlink, <code>PATH</code> configuration, <code>/root/bashinit</code>, library symlinks, or desktop shortcuts. It is safe to run at any time.</p>
-<p>Files in the repository root are copied if they are <strong>executable OR have a shebang</strong> (<code>#!</code>),
-so a script missing the executable bit in the repository is still deployed.
-Retention policy files (<code>zfsretainpol-*</code>) and other executable data files are
-also copied. Repository root exclusions: <code>*.md</code>, <code>.gitignore</code>, <code>installed-programs</code>, <code>PROMPT*</code>,
-<code>VERSION</code>.</p>
-<p>After copying files, <code>deploy-version</code> validates that critical root-level scripts
+<p>The repository directories <code>bin/</code>, <code>lib/</code>, <code>python/</code>, <code>docs/</code>, and <code>share/</code> are copied
+wholesale into the version directory. The <code>VERSION</code> file is copied separately. Exclusions
+are limited to build artifacts such as <code>__pycache__/</code> and <code>*.pyc</code>.</p>
+<p>After copying files, <code>deploy-version</code> validates that critical scripts
 (<code>zfs-diagnose-busy</code>, <code>zfsdelsnap</code>, <code>zfscleanup</code>, <code>zfsretain</code>, <code>zfs-send-receive</code>)
 are present in the versioned <code>bin/</code> directory. If any are missing, a warning is
 printed so the operator knows the deployment is incomplete.</p>
@@ -2534,13 +2534,13 @@ directory so the built site carries the correct version stamp.</p>
 <p><code>deploy-version</code> creates two launcher symlinks in the versioned <code>bin/</code>
 directory:</p>
 <ul>
-<li><code>zfsutilities-gui</code> → <code>../07 GTK + Python/zfsutilities_gui.py</code></li>
-<li><code>zfsutilities-docs</code> → <code>../07 GTK + Python/docs_viewer.py</code></li>
+<li><code>zfsutilities-gui</code> → <code>../python/zfsutilities_gui.py</code></li>
+<li><code>zfsutilities-docs</code> → <code>../python/docs_viewer.py</code></li>
 </ul>
 <p>These let you launch the GUI and standalone documentation viewer by name after
 activating the version.</p>
 <p><code>deploy-version</code> also generates <code>/etc/zfsutilities-deploy.conf</code> at install time
-(from <code>10 Installers/deploy.conf.template</code>) so the production hostnames are
+(from <code>share/installer/deploy.conf.template</code>) so the production hostnames are
 available for future deployments.</p>
 <p>See <a href="../../installation/">Installation</a> for the full workflow.</p>
 <hr />
@@ -4346,7 +4346,7 @@ on the compute node.</p>
 <td>Verify root privileges</td>
 </tr>
 <tr>
-<td><code>10 Installers/desktop-launcher-lib.sh</code></td>
+<td><code>lib/desktop-launcher-lib.sh</code></td>
 <td>Desktop shortcut helpers</td>
 </tr>
 </tbody>
@@ -4837,7 +4837,7 @@ to cut dependencies before retiring the source VM.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.72.1
+      ZFS Utilities v0.73.0
     </div>
   
   
@@ -4862,7 +4862,7 @@ to cut dependencies before retiring the source VM.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

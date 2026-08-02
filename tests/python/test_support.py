@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 # Ensure the Python source directory is on the path.
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
-PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
+PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
@@ -26,8 +26,8 @@ import file_locking
 # Documentation helpers
 # ---------------------------------------------------------------------------
 
-DOCS_DIR = os.path.join(REPO_ROOT, "06 Docs", "docs")
-MKDOCS_YML = os.path.join(REPO_ROOT, "06 Docs", "mkdocs.yml")
+DOCS_DIR = os.path.join(REPO_ROOT, "docs", "docs")
+MKDOCS_YML = os.path.join(REPO_ROOT, "docs", "mkdocs.yml")
 HELP_TOPICS_PATH = os.path.join(PYTHON_SRC, "help_topics.json")
 
 

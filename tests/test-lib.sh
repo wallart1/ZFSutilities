@@ -9,10 +9,10 @@
 mydir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export mydir
 
-source ~/bashinit
+source "$mydir/bin/bashinit"
 bashinit
 
-source "$mydir/rootcheck"
+source "$mydir/bin/rootcheck"
 rootcheck() { true; }   # Tests do not require root.
 
 # Redirect log_msg output to a per-test log file so tests stay quiet without

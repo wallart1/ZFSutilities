@@ -101,7 +101,7 @@ function checkagainst {
         fss+=("$_line")
     done < <(zfsconfig_get_checkagainst)
     if [[ ${#fss[@]} -eq 0 ]]; then
-        local _conf="$mydir/zfscheckagainst.conf"
+        local _conf="$mydir/../share/config/zfscheckagainst.conf"
         if [[ -f "$_conf" ]]; then
             while IFS= read -r _line; do
                 [[ "$_line" =~ ^[[:space:]]*# ]] && continue
@@ -225,7 +225,7 @@ function checkagainst {
                     # If this row was expanded from an <offsite> source-root
                     # placeholder, skip the meaningless self-check (e.g.
                     # z22tb/temp should not be checked against z22tb/temp).
-                    if [[ ${_ca_from_offsite_ds[$i]} == "Y" && $_candidate_pool == $_source_pool ]]; then
+                    if [[ ${_ca_from_offsite_ds[$i]} == "Y" && $_candidate_pool == "$_source_pool" ]]; then
                         continue
                     fi
 

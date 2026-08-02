@@ -5,8 +5,8 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
 setup_test_env
 
-UNINSTALL_SOME_VERSIONS_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../uninstall-some-versions"
-UNINSTALL_VERSION_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../uninstall-version"
+UNINSTALL_SOME_VERSIONS_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/uninstall-some-versions"
+UNINSTALL_VERSION_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/uninstall-version"
 [[ -f "$UNINSTALL_SOME_VERSIONS_SCRIPT" ]] || die "Missing: $UNINSTALL_SOME_VERSIONS_SCRIPT"
 [[ -f "$UNINSTALL_VERSION_SCRIPT" ]] || die "Missing: $UNINSTALL_VERSION_SCRIPT"
 
@@ -30,7 +30,7 @@ _setup_bulk_uninstall_env() {
     printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$_tmpdir/rootcheck"
     chmod +x "$_tmpdir/rootcheck"
     # Provide a minimal bashinit so subshells can source it from $HOME.
-    printf '#!/usr/bin/bash\nfunction bashinit {\n    mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")")\n}\nfunction log_msg { :; }\nfunction die { log_msg "FATAL: $*"; source "$mydir/bashfatal" "${1:-8}"; }\n' > "$HOME/bashinit"
+    printf '#!/usr/bin/bash\nfunction bashinit {\n    mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")")\n}\nfunction log_msg { :; }\nfunction die { log_msg "FATAL: $*"; source "$mydir/bin/bashfatal" "${1:-8}"; }\n' > "$HOME/bashinit"
     printf 'exit "${1:-8}"\n' > "$_tmpdir/bashfatal"
 
     printf -v "$_varname" '%s' "$_tmpdir"

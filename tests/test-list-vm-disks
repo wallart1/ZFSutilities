@@ -134,9 +134,9 @@ ssh() {
 # ------------------------------------------------------------------------------
 
 export NODE_CONF="$node_conf_two"
-export NODE_LIB="$old_mydir/08 Two-node/node-lib.sh"
+export NODE_LIB="$old_mydir/lib/node-lib.sh"
 _test_hostname="tweety"
-source "$old_mydir/08 Two-node/list-vm-disks"
+source "$old_mydir/bin/list-vm-disks"
 
 # ------------------------------------------------------------------------------
 # Reset helpers
@@ -349,7 +349,7 @@ EOF
     _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
 
     # Re-source node-lib.sh so is_single_node reflects the new config.
-    source "$mydir/08 Two-node/node-lib.sh"
+    source "$mydir/lib/node-lib.sh"
 
     local output
     output=$(run_single_node 2>&1)
@@ -363,7 +363,7 @@ EOF
 
     # Restore two-node config for remaining tests.
     export NODE_CONF="$node_conf_two"
-    source "$mydir/08 Two-node/node-lib.sh"
+    source "$mydir/lib/node-lib.sh"
 
     if [[ $ok -eq 1 ]]; then
         test_pass
@@ -452,14 +452,14 @@ EOF
         "threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c"
 
     # Re-source node-lib.sh so is_single_node reflects the new config.
-    source "$mydir/08 Two-node/node-lib.sh"
+    source "$mydir/lib/node-lib.sh"
 
     local output
     output=$(run_single_node 2>&1)
 
     # Restore two-node config for remaining tests.
     export NODE_CONF="$node_conf_two"
-    source "$mydir/08 Two-node/node-lib.sh"
+    source "$mydir/lib/node-lib.sh"
 
     if [[ "$output" == *"[clone of threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c]"* ]]; then
         test_pass

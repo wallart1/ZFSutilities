@@ -21,7 +21,8 @@ _run_safe_iscsi_save() {
         -e "s|/etc/rtslib-fb-target/saveconfig-boot\.json|${savefile}.boot|g" \
         -e "s|/etc/rtslib-fb-target/expected-backstores\.txt|$manifest|g" \
         -e "s|/etc/iscsi-encrypted-luns\.conf||g" \
-        "$mydir/08 Two-node/safe-iscsi-save" > "$script_copy"
+        -e "s|source ~/bashinit|source \"$mydir/bin/bashinit\"|g" \
+        "$mydir/bin/safe-iscsi-save" > "$script_copy"
 
     # Temporary single-node config so node-lib.sh does not require a two-node conf.
     local node_conf="$tmpdir/node.conf"
@@ -55,6 +56,7 @@ targetcli() {
     esac
 }
 generate_boot_config() { true; }
+rootcheck() { true; }
 source "$script_copy"
 [[ "\$SAVECONFIG_CALLED" == "yes" ]] && echo "SAVECONFIG_CALLED"
 RUNNEREOF

@@ -58,7 +58,7 @@ test_all_success_returns_zero() {
             }
             export -f zfs
             autoproceed='Y'
-            source "'"$old_mydir"'/zfsdelallsnaps"
+            source "'"$old_mydir"'/bin/zfsdelallsnaps"
             delallsnaps "tank/fs"
         '
     ) || rc=$?
@@ -97,7 +97,7 @@ test_any_failure_returns_one() {
             }
             export -f zfs
             autoproceed='Y'
-            source "'"$old_mydir"'/zfsdelallsnaps"
+            source "'"$old_mydir"'/bin/zfsdelallsnaps"
             delallsnaps "tank/fs"
         '
     ) || rc=$?
@@ -130,7 +130,7 @@ test_no_snapshots_returns_zero() {
             }
             export -f zfs
             autoproceed='Y'
-            source "'"$old_mydir"'/zfsdelallsnaps"
+            source "'"$old_mydir"'/bin/zfsdelallsnaps"
             delallsnaps "tank/fs"
         '
     ) || rc=$?
@@ -164,7 +164,7 @@ test_filtered_no_match_returns_zero() {
             }
             export -f zfs
             autoproceed='Y'
-            source "'"$old_mydir"'/zfsdelallsnaps"
+            source "'"$old_mydir"'/bin/zfsdelallsnaps"
             delallsnaps "tank/fs" "nomatch"
         '
     ) || rc=$?
@@ -210,7 +210,7 @@ test_releaseholds_tags_default() {
             autoproceed='"'"'Y'"'"'
             releaseholds='"'"'Y'"'"'
             releaseholds_tags=()
-            source "'"$old_mydir"'/zfsdelallsnaps"
+            source "'"$old_mydir"'/bin/zfsdelallsnaps"
             delallsnaps "tank/fs" "" "releaseholds"
         '
     ) || rc=$?

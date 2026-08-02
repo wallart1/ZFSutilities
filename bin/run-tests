@@ -17,7 +17,7 @@
 set -uo pipefail
 
 MYDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UNIFIED_RUNNER="$MYDIR/tests/run-tests"
+UNIFIED_RUNNER="$MYDIR/../tests/run-tests"
 
 if [[ ! -x "$UNIFIED_RUNNER" ]]; then
     echo "Unified test runner not found: $UNIFIED_RUNNER" >&2

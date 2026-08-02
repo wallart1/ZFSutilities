@@ -58,7 +58,7 @@ run_unarchive() {
         # redirect the deployed node-lib path to the repository copy so tests
         # work without deployment.
         export UNARCHIVE_VM_TEST_NO_ROOT=1
-        export NODE_LIB="$mydir/08 Two-node/node-lib.sh"
+        export NODE_LIB="$mydir/lib/node-lib.sh"
 
         # Mock zfs state.
         local arc_dataset="${archive_base}/threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0"
@@ -83,7 +83,7 @@ ${arc_dataset}"
         fi
 
         set -- "$vmid" "$archive_base" "$@"
-        source "$mydir/09 ZFS clone support/unarchive-vm"
+        source "$mydir/bin/unarchive-vm"
     ) <<< "$stdin_input" 2>&1
 }
 

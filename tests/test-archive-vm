@@ -80,8 +80,8 @@ run_archive() {
         setup_node_config "$mode"
 
         export ARCHIVE_VM_TEST_NO_ROOT=1
-        export NODE_LIB="$mydir/08 Two-node/node-lib.sh"
-        export ZFSLOCK_MANAGER="$mydir/zfslockmanager"
+        export NODE_LIB="$mydir/lib/node-lib.sh"
+        export ZFSLOCK_MANAGER="$mydir/bin/zfslockmanager"
         export ZFSLOCK_DIR="$_mock_zfs_state_dir/lock"
         mkdir -p "$ZFSLOCK_DIR"
 
@@ -200,7 +200,7 @@ run_archive() {
         # own SSH here-doc bodies are read from the file, leaving the
         # subshell's stdin free for the interactive prompts.
         local script_file="$_mock_zfs_state_dir/archive-vm"
-        script_text=$(cat "$mydir/09 ZFS clone support/archive-vm")
+        script_text=$(cat "$mydir/bin/archive-vm")
         script_text=$(echo "$script_text" | sed '/^ask_yn() {/,/^}$/d')
         printf '%s\n' "$script_text" > "$script_file"
 
@@ -487,11 +487,11 @@ test_two_node_prompt_mentions_storage_host() {
 
     setup_node_config "two-node"
     NODE_CONF="$_mock_zfs_state_dir/node.conf"
-    source "$mydir/08 Two-node/node-lib.sh"
+    source "$mydir/lib/node-lib.sh"
 
     # Load only the prompt builder so we don't run archive-vm's main body.
     eval "$(sed -n '/^build_archive_prompt() {/,/^}/p' \
-        "$mydir/09 ZFS clone support/archive-vm")"
+        "$mydir/bin/archive-vm")"
 
     local prompt
     prompt=$(build_archive_prompt "")

@@ -77,7 +77,7 @@ test_silent_on_findmnt_failure
 # Desktop launcher helpers (from desktop-launcher-lib.sh)
 # ------------------------------------------------------------------
 
-DESKTOP_LAUNCHER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../10 Installers/desktop-launcher-lib.sh"
+DESKTOP_LAUNCHER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/desktop-launcher-lib.sh"
 [[ -f "$DESKTOP_LAUNCHER_LIB" ]] || die "Missing: $DESKTOP_LAUNCHER_LIB"
 source "$DESKTOP_LAUNCHER_LIB"
 
@@ -267,7 +267,7 @@ test_remove_desktop_symlinks_removes_links
 # Partial uninstall detection (from installer-lib.sh)
 # ------------------------------------------------------------------
 
-INSTALLER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../10 Installers/installer-lib.sh"
+INSTALLER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/installer-lib.sh"
 [[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
 source "$INSTALLER_LIB"
 

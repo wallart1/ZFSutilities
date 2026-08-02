@@ -9,7 +9,7 @@ setup_test_env
 # so the function is testable without killing the test runner.
 # ------------------------------------------------------------------
 old_mydir="$mydir"
-func_text=$(sed -n '/^check_running_vms() {/,/^}$/p' "$old_mydir/08 Two-node/restart-iscsi-services")
+func_text=$(sed -n '/^check_running_vms() {/,/^}$/p' "$old_mydir/bin/restart-iscsi-services")
 func_text="${func_text//exit 1/return 1}"
 eval "$func_text"
 

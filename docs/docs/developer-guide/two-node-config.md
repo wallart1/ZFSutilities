@@ -15,7 +15,7 @@ Both modes use the same scripts and the same config file format. The
 ## Config File: `/etc/zfsutilities-node.conf`
 
 A POSIX-shell sourceable file, installed by the interactive installers in
-`10 Installers/`. Site admins can edit this file directly.
+`bin/`. Site admins can edit this file directly.
 
 ### Single-node example
 
@@ -72,14 +72,14 @@ If no groups are specified, `deploy-version` deploys to all defined groups plus 
 
 **Legacy fallback:** If `/etc/zfsutilities-deploy.conf` does not exist, `deploy-version` falls back to the node configuration (`/etc/zfsutilities-node.conf` or `/etc/two-node.conf`) and deploys to `STORAGE_HOST` and `COMPUTE_HOST` when `NODE_MODE="two-node"`.
 
-**Installation:** `install-two-node` generates this file from `10 Installers/deploy.conf.template`, substituting the hostnames you enter during setup. The installer **never overwrites** an existing file, so manual edits are safe across re-runs.
+**Installation:** `install-two-node` generates this file from `share/installer/deploy.conf.template`, substituting the hostnames you enter during setup. The installer **never overwrites** an existing file, so manual edits are safe across re-runs.
 
 ## Helper Library: `node-lib.sh`
 
 Installed to `/usr/local/lib/node-lib.sh` on all hosts (also reachable via
 `find_zfsutility_script node-lib.sh` when running from the repo).
 
-All scripts in `08 Two-node/` and `09 ZFS clone support/` use this header:
+All scripts in `bin/` use this header:
 
 ```bash
 source ~/bashinit
@@ -192,7 +192,7 @@ the config directly instead of using the library. Running from the repo-root is 
 ```bash
 NODE_CONF="/etc/zfsutilities-node.conf"
 if [[ ! -r "$NODE_CONF" ]]; then
-    echo "✗ Missing $NODE_CONF — install via: 10 Installers/install-single-node" >&2
+    echo "✗ Missing $NODE_CONF — install via: bin/install-single-node" >&2
     exit 1
 fi
 source "$NODE_CONF"
@@ -209,13 +209,13 @@ config must be present on every host that runs the script:
 
 | Host              | How the config arrives                                                                                                               |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Storage host      | `10 Installers/install-single-node` or `install-two-node`                                                                            |
+| Storage host      | `bin/install-single-node` or `bin/install-two-node`                                                                            |
 | Compute host      | `install-two-node` SSHes in and installs the config                                                                                  |
 | Other rsync hosts | [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup)'s `push_rsync_scripts()` `scp`s the config alongside the script |
 
 ## Installers
 
-### `10 Installers/install-single-node`
+### `bin/install-single-node`
 
 Interactive installer for single-node mode:
 
@@ -226,7 +226,7 @@ Interactive installer for single-node mode:
 5. Deploys VM disk management and clone scripts to the versioned installation
 6. Does NOT install iSCSI-only scripts or systemd drop-ins
 
-### `10 Installers/install-two-node`
+### `bin/install-two-node`
 
 Interactive installer for two-node mode:
 
@@ -337,6 +337,6 @@ LUNs. See [ZFS Key Handling](../installation/zfs-keys.md) for recovery.
 - **[zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup) override flags** (`pull_tweety`, `pull_stewie`) retain
   their literal-hostname names because they are part of the user-facing
   override interface (`./zfsdailybackup "pull_tweety='N'"`). This script is intended to be lightly modified to meet your specific needs.
-- **iSCSI target discovery at runtime.** The `09 ZFS clone support/` scripts
+- **iSCSI target discovery at runtime.** The VM clone scripts in `bin/`
   query `targetcli` to find the current target for a given LUN rather than
   building the IQN from config. This survives any IQN rename.

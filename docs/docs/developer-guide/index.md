@@ -19,12 +19,13 @@ relevant to developers working on ZFS Utilities.
 
 | Directory               | Contents                            |
 | ----------------------- | ----------------------------------- |
-| `/` (root)              | Bash scripts                        |
-| `06 Docs/`              | This documentation                  |
-| `07 GTK + Python/`      | GTK GUI frontend                    |
-| `08 Two-node/`          | Two-node infrastructure scripts     |
-| `09 ZFS clone support/` | VM clone provisioning scripts       |
-| `10 Installers/`        | Single-node and two-node installers |
+| `/` (root)  | Project root (`bin/`, `lib/`, `python/`, `docs/`, `share/`, `tests/`) |
+| `bin/`      | Executable bash scripts                                             |
+| `lib/`      | Sourced shell libraries                                             |
+| `python/`   | GTK GUI frontend and Python helpers                                 |
+| `docs/`     | This documentation                                                  |
+| `share/`    | Static resources, templates, and sample configurations              |
+| `tests/`    | Bash and Python test suites                                         |
 
 ## Key Dependencies
 

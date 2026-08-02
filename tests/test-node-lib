@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-# test-node-lib — Unit tests for 08 Two-node/node-lib.sh helpers.
+# test-node-lib — Unit tests for lib/node-lib.sh helpers.
 
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
 setup_test_env
@@ -20,60 +20,64 @@ export NODE_CONF="$node_conf"
 
 # Source the library under test.  test-lib.sh has already set $mydir to the repo
 # root, so node-lib.sh's guarded initializer must preserve it.
-source "$mydir/08 Two-node/node-lib.sh"
+source "$mydir/lib/node-lib.sh"
 
 # Reload find_zfsutility_script from the working tree so tests exercise the
 # current implementation (including deployment-directory overrides). Preserve
 # test-lib.sh's redirected log_msg afterwards.
 _test_log_msg_copy=$(declare -f log_msg)
-source "$mydir/bashinit"
+unset -f find_zfsutility_script
+source "$mydir/bin/bashinit"
 eval "$_test_log_msg_copy"
 
 # ------------------------------------------------------------------------------
 # find_zfsutility_script
 # ------------------------------------------------------------------------------
 
-test_find_script_same_directory() {
-    test_start "find_zfsutility_script locates a script in the same directory"
+test_find_script_lib_directory() {
+    test_start "find_zfsutility_script locates a library in lib/"
     local result
-    result=$(find_zfsutility_script "node-lib.sh")
-    assert_equals "$mydir/08 Two-node/node-lib.sh" "$result"
+    # Simulate a caller in bin/ looking for a library in lib/.
+    result=$(mydir="$mydir/bin" find_zfsutility_script "node-lib.sh")
+    assert_equals "$mydir/lib/node-lib.sh" "$result"
 }
 
-test_find_script_parent_directory() {
-    test_start "find_zfsutility_script locates a script in the parent directory"
+test_find_script_python_from_bin_directory() {
+    test_start "find_zfsutility_script locates a script in python/ from bin/"
     local result
-    # Simulate a caller in 08 Two-node looking for a root-level script.
-    result=$(mydir="$mydir/08 Two-node" find_zfsutility_script "bashinit")
-    assert_equals "$mydir/bashinit" "$result"
+    # Simulate a caller in bin/ looking for a script in python/.
+    result=$(mydir="$mydir/bin" find_zfsutility_script "profile_runner.py")
+    assert_equals "$mydir/python/profile_runner.py" "$result"
 }
 
-test_find_script_two_node_directory() {
-    test_start "find_zfsutility_script locates a script in 08 Two-node"
+test_find_script_bin_directory() {
+    test_start "find_zfsutility_script locates a script in bin/"
     local result
-    result=$(find_zfsutility_script "rescan-storage")
-    assert_equals "$mydir/08 Two-node/rescan-storage" "$result"
+    # Simulate a caller in bin/ looking for a sibling script.
+    result=$(mydir="$mydir/bin" find_zfsutility_script "rescan-storage")
+    assert_equals "$mydir/bin/rescan-storage" "$result"
 }
 
-test_find_script_clone_support_directory() {
-    test_start "find_zfsutility_script locates a script in 09 ZFS clone support"
+test_find_script_bin_directory_clone_script() {
+    test_start "find_zfsutility_script locates a clone-support script in bin/"
     local result
-    result=$(find_zfsutility_script "archive-vm")
-    assert_equals "$mydir/09 ZFS clone support/archive-vm" "$result"
+    # Simulate a caller in bin/ looking for a sibling script.
+    result=$(mydir="$mydir/bin" find_zfsutility_script "archive-vm")
+    assert_equals "$mydir/bin/archive-vm" "$result"
 }
 
-test_find_script_across_subdirectories() {
-    test_start "find_zfsutility_script locates clone-support script from two-node dir"
+test_find_script_lib_from_python_directory() {
+    test_start "find_zfsutility_script locates lib/ script from python/ dir"
     local result
-    result=$(mydir="$mydir/08 Two-node" find_zfsutility_script "archive-vm")
-    assert_equals "$mydir/09 ZFS clone support/archive-vm" "$result"
+    result=$(mydir="$mydir/python" find_zfsutility_script "node-lib.sh")
+    assert_equals "$mydir/lib/node-lib.sh" "$result"
 }
 
-test_find_script_from_clone_support_directory() {
-    test_start "find_zfsutility_script locates rescan-storage from clone-support dir"
+test_find_script_from_bin_directory() {
+    test_start "find_zfsutility_script locates lib/ script from bin/ dir"
     local result expected
-    expected="$mydir/08 Two-node/rescan-storage"
-    result=$(mydir="$mydir/09 ZFS clone support" find_zfsutility_script "rescan-storage")
+    expected="$mydir/lib/node-lib.sh"
+    result=$(mydir="$mydir/bin" find_zfsutility_script "node-lib.sh")
     assert_equals "$expected" "$result"
 }
 
@@ -199,7 +203,7 @@ test_two_node_config_loading() {
     test_start "node-lib.sh loads a temporary two-node config"
     local output
     output=$(
-        NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"
+        NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh"
         echo "STORAGE_HOST=$STORAGE_HOST"
         echo "COMPUTE_HOST=$COMPUTE_HOST"
         echo "NODE_MODE=$NODE_MODE"
@@ -214,7 +218,7 @@ test_single_node_config_loading() {
     local output this_host
     this_host=$(hostname -s)
     output=$(
-        NODE_CONF="$node_conf" source "$mydir/08 Two-node/node-lib.sh"
+        NODE_CONF="$node_conf" source "$mydir/lib/node-lib.sh"
         echo "STORAGE_HOST=$STORAGE_HOST"
         echo "COMPUTE_HOST=$COMPUTE_HOST"
     )
@@ -229,7 +233,7 @@ test_single_node_config_loading() {
 test_pool_to_target_known() {
     test_start "pool_to_target returns full IQN for a known pool"
     local result
-    result=$(NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"; pool_to_target "threeamigos")
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh"; pool_to_target "threeamigos")
     assert_equals "iqn.2025-01.com.zfsutilities:threeamigos" "$result"
 }
 
@@ -237,7 +241,7 @@ test_pool_to_target_unknown() {
     test_start "pool_to_target fails for an unknown pool"
     clear_test_log_file
     local result rc
-    result=$(NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"; pool_to_target "unknownpool" 2>/dev/null)
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh"; pool_to_target "unknownpool" 2>/dev/null)
     rc=$?
     assert_rc 1 "$rc"
     assert_equals "" "$result"
@@ -253,21 +257,21 @@ test_pool_to_target_unknown() {
 test_pool_list_two_node() {
     test_start "pool_list emits configured pool names in two-node mode"
     local result
-    result=$(NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"; pool_list | sort)
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh"; pool_list | sort)
     assert_equals "fivebays"$'\n'"threeamigos" "$result"
 }
 
 test_pool_list_single_node() {
     test_start "pool_list emits nothing in single-node mode"
     local result
-    result=$(NODE_CONF="$node_conf" source "$mydir/08 Two-node/node-lib.sh"; pool_list)
+    result=$(NODE_CONF="$node_conf" source "$mydir/lib/node-lib.sh"; pool_list)
     assert_equals "" "$result"
 }
 
 test_is_known_pool_known() {
     test_start "is_known_pool returns success for a known pool"
     local rc
-    (NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"; is_known_pool "threeamigos")
+    (NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh"; is_known_pool "threeamigos")
     rc=$?
     assert_rc 0 "$rc"
 }
@@ -275,7 +279,7 @@ test_is_known_pool_known() {
 test_is_known_pool_unknown() {
     test_start "is_known_pool returns failure for an unknown pool"
     local rc
-    (NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/node-lib.sh"; is_known_pool "unknownpool")
+    (NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh"; is_known_pool "unknownpool")
     rc=$?
     assert_rc 1 "$rc"
 }
@@ -283,7 +287,7 @@ test_is_known_pool_unknown() {
 test_is_known_pool_single_node() {
     test_start "is_known_pool returns failure in single-node mode"
     local rc
-    (NODE_CONF="$node_conf" source "$mydir/08 Two-node/node-lib.sh"; is_known_pool "threeamigos")
+    (NODE_CONF="$node_conf" source "$mydir/lib/node-lib.sh"; is_known_pool "threeamigos")
     rc=$?
     assert_rc 1 "$rc"
 }
@@ -347,7 +351,7 @@ test_two_node_lib_wrapper_sources_node_lib() {
     test_start "two-node-lib.sh wrapper exposes node-lib.sh pool helpers"
     local output
     output=$(
-        NODE_CONF="$two_node_conf" source "$mydir/08 Two-node/two-node-lib.sh"
+        NODE_CONF="$two_node_conf" source "$mydir/lib/two-node-lib.sh"
         echo "target=$(pool_to_target threeamigos)"
         echo "known=$(is_known_pool threeamigos && echo yes || echo no)"
     )
@@ -366,7 +370,7 @@ test_find_script_returns_absolute_path() {
     mkdir -p "$script_dir"
     touch "$script_dir/relative-script"
     rel_dir=$(realpath --relative-to="$mydir" "$tmp_dir")
-    result=$(cd "$mydir"; mydir="$rel_dir/absolute" find_zfsutility_script "relative-script")
+    result=$(cd "$mydir" || exit; mydir="$rel_dir/absolute" find_zfsutility_script "relative-script")
     expected="$tmp_dir/absolute/relative-script"
     assert_equals "$expected" "$result"
 }
@@ -433,12 +437,12 @@ test_find_script_active_path_bin
 test_find_script_current_version_bin
 test_find_script_system_lib_dir
 
-test_find_script_same_directory
-test_find_script_parent_directory
-test_find_script_two_node_directory
-test_find_script_clone_support_directory
-test_find_script_across_subdirectories
-test_find_script_from_clone_support_directory
+test_find_script_lib_directory
+test_find_script_python_from_bin_directory
+test_find_script_bin_directory
+test_find_script_bin_directory_clone_script
+test_find_script_lib_from_python_directory
+test_find_script_from_bin_directory
 test_find_script_missing
 
 test_remote_zfsutilities_bin_success

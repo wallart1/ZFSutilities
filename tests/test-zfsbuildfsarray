@@ -4,7 +4,7 @@
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
 setup_test_env
 
-source "$mydir/zfsbuildfsarray"
+source "$mydir/bin/zfsbuildfsarray"
 
 # =============================================================================
 # Tests

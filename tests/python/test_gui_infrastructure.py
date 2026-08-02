@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, patch
 
 from test_support import REPO_ROOT, capture_logs, mock_gtk
 
-GUI_PY_PATH = os.path.join(REPO_ROOT, "07 GTK + Python", "zfsutilities_gui.py")
-GTK_GUI_HTML_PATH = os.path.join(REPO_ROOT, "06 Docs", "site", "user-guide", "gtk-gui", "index.html")
+GUI_PY_PATH = os.path.join(REPO_ROOT, "python", "zfsutilities_gui.py")
+GTK_GUI_HTML_PATH = os.path.join(REPO_ROOT, "docs", "site", "user-guide", "gtk-gui", "index.html")
 
 
 def extract_page_anchors_from_source(filepath):
@@ -94,7 +94,7 @@ class TestDocsViewerNavigation(unittest.TestCase):
         from unittest.mock import MagicMock
 
         import docs_viewer
-        script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
+        script_dir = os.path.join(REPO_ROOT, "python")
         win = docs_viewer.DocsViewerWindow(script_dir)
         # Replace the shared webview mock with a fresh one so call counts
         # are isolated between tests.
@@ -184,7 +184,7 @@ class TestDocsViewerNavigation(unittest.TestCase):
             import docs_viewer
             importlib.reload(docs_viewer)
             gtk_mock.Image.new_from_icon_name.reset_mock()
-            script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
+            script_dir = os.path.join(REPO_ROOT, "python")
             win = docs_viewer.DocsViewerWindow(script_dir)
             try:
                 calls = gtk_mock.Image.new_from_icon_name.call_args_list
@@ -382,7 +382,7 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
 
     def _make_window(self, gtk_mock, config=None):
         import docs_viewer
-        script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
+        script_dir = os.path.join(REPO_ROOT, "python")
         return docs_viewer.DocsViewerWindow(script_dir, config=config)
 
     def test_loads_default_state_when_no_config(self):
@@ -608,16 +608,16 @@ class TestGtkMocking(unittest.TestCase):
     def test_docs_viewer_window_instantiates(self):
         with mock_gtk():
             import docs_viewer
-            script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
+            script_dir = os.path.join(REPO_ROOT, "python")
             win = docs_viewer.DocsViewerWindow(script_dir)
             self.assertIsNotNone(win)
 
     def test_docs_path_resolution(self):
         with mock_gtk():
             import path_utils
-            script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
+            script_dir = os.path.join(REPO_ROOT, "python")
             path = path_utils.get_docs_path(script_dir)
-            expected = os.path.join(REPO_ROOT, "06 Docs", "site", "index.html")
+            expected = os.path.join(REPO_ROOT, "docs", "site", "index.html")
             self.assertEqual(path, expected)
             self.assertTrue(os.path.isfile(path))
 
@@ -685,7 +685,7 @@ class TestDocsServer(unittest.TestCase):
     def test_viewer_uses_http_uris(self):
         with mock_gtk():
             import docs_viewer
-            script_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
+            script_dir = os.path.join(REPO_ROOT, "python")
             win = docs_viewer.DocsViewerWindow(script_dir)
             try:
                 self.assertTrue(hasattr(win, "_docs_server"))
@@ -2421,7 +2421,7 @@ class TestPageTitleLabels(unittest.TestCase):
 
     def test_no_title_label_is_selectable(self):
         """Every big-bold page title must be non-selectable."""
-        pages_dir = os.path.join(REPO_ROOT, "07 GTK + Python")
+        pages_dir = os.path.join(REPO_ROOT, "python")
         offenders = []
 
         for fname in os.listdir(pages_dir):

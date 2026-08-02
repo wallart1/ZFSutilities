@@ -2401,7 +2401,7 @@
 
 
   
-    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/commands-and-modules/commands.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/docs/docs/commands-and-modules/commands.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2648,7 +2648,7 @@ version; use <a href="#switch-version"><code>switch-version</code></a> for that.
 </thead>
 <tbody>
 <tr>
-<td><code>10 Installers/desktop-launcher-lib.sh</code></td>
+<td><code>lib/desktop-launcher-lib.sh</code></td>
 <td>Desktop shortcut helpers</td>
 </tr>
 </tbody>
@@ -2684,10 +2684,9 @@ version; use <a href="#switch-version"><code>switch-version</code></a> for that.
 <ol>
 <li>Parse arguments; read <code>./VERSION</code> if no version is supplied.</li>
 <li>Load <code>/etc/zfsutilities-deploy.conf</code> groups, or fall back to the node config for remote hosts.</li>
-<li>Build the version directory, copy root-level scripts, and symlink two-node,
-   clone, installer, and versioning scripts.</li>
-<li>Copy project subdirectories (<code>06 Docs</code>, <code>07 GTK + Python</code>, etc.) and rebuild
-   static docs.</li>
+<li>Build the version directory and copy <code>bin/</code>, <code>lib/</code>, <code>python/</code>, <code>docs/</code>,
+   and <code>share/</code> from the repository.</li>
+<li>Rebuild the static docs.</li>
 <li>Verify that critical scripts are present in the deployed <code>bin/</code> directory.</li>
 <li><code>rsync</code> the version directory to each remote host in the selected groups.</li>
 </ol>
@@ -3100,7 +3099,7 @@ live-reload site; MkDocs is required.</p>
 <td>Server stdout/stderr</td>
 </tr>
 <tr>
-<td><code>06 Docs/site/</code></td>
+<td><code>docs/site/</code></td>
 <td>Built static documentation site</td>
 </tr>
 <tr>
@@ -3111,7 +3110,7 @@ live-reload site; MkDocs is required.</p>
 </table>
 <p><strong>Internal flow:</strong></p>
 <ol>
-<li>Locate the docs directory relative to the script (<code>06 Docs</code> or <code>../06 Docs</code>).</li>
+<li>Locate the docs directory relative to the script (<code>docs</code> or <code>../docs</code>).</li>
 <li>Probe <code>localhost:8000</code> to see if a server is already running.</li>
 <li>If the running server serves the wrong directory, stop it.</li>
 <li>Start <code>mkdocs serve --livereload</code>.</li>
@@ -3221,7 +3220,7 @@ sudoers, <code>/root/bashinit</code>, library links, and desktop shortcuts.</p>
 <td>Verify root privileges</td>
 </tr>
 <tr>
-<td><code>10 Installers/desktop-launcher-lib.sh</code></td>
+<td><code>lib/desktop-launcher-lib.sh</code></td>
 <td>Desktop shortcut helpers</td>
 </tr>
 </tbody>
@@ -3538,7 +3537,7 @@ given subtree. Refreshes every 30 seconds.</p>
 </tbody>
 </table>
 <p><strong>Globals:</strong> none.</p>
-<p>Uses <code>Watchall/watchall</code> with <code>zpool list</code> and <code>zfs list</code> output.</p>
+<p>Uses <code>bin/watchall</code> with <code>zpool list</code> and <code>zfs list</code> output.</p>
 <p><strong>Called modules:</strong></p>
 <table>
 <thead>
@@ -3549,7 +3548,7 @@ given subtree. Refreshes every 30 seconds.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>Watchall/watchall</code></td>
+<td><code>bin/watchall</code></td>
 <td>Periodically display pool/dataset status</td>
 </tr>
 </tbody>
@@ -6784,7 +6783,7 @@ number.</p>
 <hr />
 <h3 id="zfsstatus"><code>zfsstatus</code><a class="headerlink" href="#zfsstatus" title="Permanent link">&para;</a></h3>
 <p>Auto-refreshing ZFS status display (pool list + pool status). Refreshes
-every 60 seconds. Implemented as a one-liner that calls <code>Watchall/watchall</code>.</p>
+every 60 seconds. Implemented as a one-liner that calls <code>bin/watchall</code>.</p>
 <div class="highlight"><pre><span></span><code>zfsstatus
 </code></pre></div>
 <p><strong>Arguments:</strong> none.</p>
@@ -6799,7 +6798,7 @@ every 60 seconds. Implemented as a one-liner that calls <code>Watchall/watchall<
 </thead>
 <tbody>
 <tr>
-<td><code>Watchall/watchall</code></td>
+<td><code>bin/watchall</code></td>
 <td>Auto-refresh pool list and status</td>
 </tr>
 </tbody>
@@ -7304,7 +7303,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.72.1
+      ZFS Utilities v0.73.0
     </div>
   
   
@@ -7329,7 +7328,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

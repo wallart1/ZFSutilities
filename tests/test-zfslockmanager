@@ -20,7 +20,7 @@ fi
 # Load the real lock manager (overrides the test-lib stubs).
 # ---------------------------------------------------------------------------
 
-source "$mydir/zfslockmanager"
+source "$mydir/bin/zfslockmanager"
 
 # Redirect lock directory to a temp location so we do not interfere with
 # production locks.
@@ -51,7 +51,7 @@ _bg_lock_start() {
 #!/usr/bin/bash
 source ~/bashinit
 bashinit
-source "$mydir/zfslockmanager"
+source "$mydir/bin/zfslockmanager"
 export ZFSLOCK_DIR="$ZFSLOCK_DIR"
 export ZFSLOCK_LOCKS_DIR="$ZFSLOCK_LOCKS_DIR"
 export ZFSLOCK_PIDS_DIR="$ZFSLOCK_PIDS_DIR"

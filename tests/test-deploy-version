@@ -1,255 +1,136 @@
 #!/usr/bin/bash
-# test-deploy-version — Verify root-level script selection logic.
+# test-deploy-version — Verify directory deployment logic.
+#
+# deploy-version now copies whole directories (bin/, lib/, python/, docs/,
+# share/) into the versioned deployment instead of selecting root-level files.
+# These tests replicate that behaviour and validate the post-deployment checks.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
 setup_test_env
 
-# Replicate the selection logic from deploy-version (lines 266–284)
-_test_copy_logic() {
+# ------------------------------------------------------------------
+# Replicate the directory copy logic from deploy-version deploy_to_host
+# ------------------------------------------------------------------
+_test_rsync_copy() {
     local src_dir="$1"
     local dest_dir="$2"
     mkdir -p "$dest_dir"
-
-    for script in "$src_dir/"*; do
-        [[ -f "$script" ]] || continue
-        local name
-        name=$(basename "$script")
-        [[ "$name" == *.md ]] && continue
-        [[ "$name" == .gitignore ]] && continue
-        [[ "$name" == installed-programs ]] && continue
-        [[ "$name" == PROMPT* ]] && continue
-        [[ "$name" == VERSION ]] && continue
-        if [[ "$name" == zfsretainpol-* && "$name" != zfsretainpol-default ]]; then
-            continue
-        fi
-        if [[ -x "$script" ]]; then
-            install -m 0755 "$script" "$dest_dir/"
-            continue
-        fi
-        if head -c2 "$script" | grep -q '^#!'; then
-            install -m 0755 "$script" "$dest_dir/"
-        fi
-    done
+    rsync -a --delete \
+        --exclude='__pycache__/' \
+        --exclude='*.pyc' \
+        --exclude='.nfs*' \
+        "$src_dir/" "$dest_dir/"
 }
 
-test_executable_script_copied() {
-    test_start "Executable script is copied"
-    local tmpdir=$(mktemp -d)
-    echo '#!/bin/bash' > "$tmpdir/myscript"
-    chmod +x "$tmpdir/myscript"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ -f "$destdir/myscript" && -x "$destdir/myscript" ]]; then
+test_bin_directory_copied() {
+    test_start "bin/ directory is copied into versioned deployment"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/bin"
+    echo '#!/bin/bash' > "$tmpdir/bin/myscript"
+    chmod +x "$tmpdir/bin/myscript"
+    mkdir -p "$tmpdir/versions/v1/bin"
+    _test_rsync_copy "$tmpdir/bin" "$tmpdir/versions/v1/bin"
+    if [[ -f "$tmpdir/versions/v1/bin/myscript" ]]; then
         test_pass
     else
-        test_fail "myscript was not copied or not executable"
+        test_fail "bin/myscript was not copied into versioned deployment"
     fi
-    rm -rf "$tmpdir" "$destdir"
+    rm -rf "$tmpdir"
 }
 
-test_shebang_non_executable_copied() {
-    test_start "Shebang file without exec bit is copied"
-    local tmpdir=$(mktemp -d)
-    echo '#!/bin/bash' > "$tmpdir/noxscript"
-    chmod -x "$tmpdir/noxscript"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ -f "$destdir/noxscript" && -x "$destdir/noxscript" ]]; then
+test_lib_directory_copied() {
+    test_start "lib/ directory is copied into versioned deployment"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/lib"
+    echo '#!/bin/bash' > "$tmpdir/lib/node-lib.sh"
+    mkdir -p "$tmpdir/versions/v1/lib"
+    _test_rsync_copy "$tmpdir/lib" "$tmpdir/versions/v1/lib"
+    if [[ -f "$tmpdir/versions/v1/lib/node-lib.sh" ]]; then
         test_pass
     else
-        test_fail "noxscript was not copied or not made executable"
+        test_fail "lib/node-lib.sh was not copied into versioned deployment"
     fi
-    rm -rf "$tmpdir" "$destdir"
+    rm -rf "$tmpdir"
 }
 
-test_plain_file_skipped() {
-    test_start "Plain file without shebang or exec is skipped"
-    local tmpdir=$(mktemp -d)
-    echo 'just data' > "$tmpdir/plainfile"
-    chmod -x "$tmpdir/plainfile"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ ! -f "$destdir/plainfile" ]]; then
+test_python_directory_copied() {
+    test_start "python/ directory is copied into versioned deployment"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/python"
+    echo 'print("gui")' > "$tmpdir/python/zfsutilities_gui.py"
+    mkdir -p "$tmpdir/versions/v1/python"
+    _test_rsync_copy "$tmpdir/python" "$tmpdir/versions/v1/python"
+    if [[ -f "$tmpdir/versions/v1/python/zfsutilities_gui.py" ]]; then
         test_pass
     else
-        test_fail "plainfile should have been skipped"
+        test_fail "python/zfsutilities_gui.py was not copied into versioned deployment"
     fi
-    rm -rf "$tmpdir" "$destdir"
+    rm -rf "$tmpdir"
 }
 
-test_md_file_skipped() {
-    test_start ".md file is skipped"
-    local tmpdir=$(mktemp -d)
-    echo '# Title' > "$tmpdir/README.md"
-    chmod +x "$tmpdir/README.md"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ ! -f "$destdir/README.md" ]]; then
+test_docs_directory_copied() {
+    test_start "docs/ directory is copied into versioned deployment"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/docs"
+    echo 'site_name: Test' > "$tmpdir/docs/mkdocs.yml"
+    mkdir -p "$tmpdir/versions/v1/docs"
+    _test_rsync_copy "$tmpdir/docs" "$tmpdir/versions/v1/docs"
+    if [[ -f "$tmpdir/versions/v1/docs/mkdocs.yml" ]]; then
         test_pass
     else
-        test_fail "README.md should have been skipped"
+        test_fail "docs/mkdocs.yml was not copied into versioned deployment"
     fi
-    rm -rf "$tmpdir" "$destdir"
+    rm -rf "$tmpdir"
 }
 
-test_gitignore_skipped() {
-    test_start ".gitignore is skipped"
-    local tmpdir=$(mktemp -d)
-    echo '*.pyc' > "$tmpdir/.gitignore"
-    chmod +x "$tmpdir/.gitignore"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ ! -f "$destdir/.gitignore" ]]; then
+test_share_directory_copied() {
+    test_start "share/ directory is copied into versioned deployment"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/share/retention"
+    echo "bktname[0]='d'" > "$tmpdir/share/retention/zfsretainpol-fivebays"
+    mkdir -p "$tmpdir/versions/v1/share"
+    _test_rsync_copy "$tmpdir/share" "$tmpdir/versions/v1/share"
+    if [[ -f "$tmpdir/versions/v1/share/retention/zfsretainpol-fivebays" ]]; then
         test_pass
     else
-        test_fail ".gitignore should have been skipped"
+        test_fail "share/retention/zfsretainpol-fivebays was not copied into versioned deployment"
     fi
-    rm -rf "$tmpdir" "$destdir"
+    rm -rf "$tmpdir"
 }
 
-test_PROMPT_files_skipped() {
-    test_start "PROMPT files are skipped"
-    local tmpdir=$(mktemp -d)
-    echo 'prompt text' > "$tmpdir/PROMPT2"
-    chmod +x "$tmpdir/PROMPT2"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ ! -f "$destdir/PROMPT2" ]]; then
+test_rsync_deletes_stale_files() {
+    test_start "rsync --delete removes stale files from destination"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/bin"
+    echo '#!/bin/bash' > "$tmpdir/bin/newscript"
+    chmod +x "$tmpdir/bin/newscript"
+    mkdir -p "$tmpdir/versions/v1/bin"
+    echo 'stale' > "$tmpdir/versions/v1/bin/oldscript"
+    _test_rsync_copy "$tmpdir/bin" "$tmpdir/versions/v1/bin"
+    if [[ -f "$tmpdir/versions/v1/bin/newscript" && ! -f "$tmpdir/versions/v1/bin/oldscript" ]]; then
         test_pass
     else
-        test_fail "PROMPT2 should have been skipped"
+        test_fail "rsync did not remove stale file or copy new file correctly"
     fi
-    rm -rf "$tmpdir" "$destdir"
+    rm -rf "$tmpdir"
 }
 
-test_VERSION_skipped() {
-    test_start "VERSION file is skipped"
-    local tmpdir=$(mktemp -d)
-    echo '1.0.0' > "$tmpdir/VERSION"
-    chmod +x "$tmpdir/VERSION"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ ! -f "$destdir/VERSION" ]]; then
-        test_pass
-    else
-        test_fail "VERSION should have been skipped"
-    fi
-    rm -rf "$tmpdir" "$destdir"
-}
-
-test_installed_programs_skipped() {
-    test_start "installed-programs is skipped"
-    local tmpdir=$(mktemp -d)
-    echo 'pkg list' > "$tmpdir/installed-programs"
-    chmod +x "$tmpdir/installed-programs"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ ! -f "$destdir/installed-programs" ]]; then
-        test_pass
-    else
-        test_fail "installed-programs should have been skipped"
-    fi
-    rm -rf "$tmpdir" "$destdir"
-}
-
-test_directories_skipped() {
-    test_start "Directories are skipped"
-    local tmpdir=$(mktemp -d)
-    mkdir "$tmpdir/subdir"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ ! -e "$destdir/subdir" ]]; then
-        test_pass
-    else
-        test_fail "subdir should have been skipped"
-    fi
-    rm -rf "$tmpdir" "$destdir"
-}
-
-test_data_file_executable_copied() {
-    test_start "Executable data file (no shebang) is copied"
-    local tmpdir=$(mktemp -d)
-    echo "bktname[0]='d'" > "$tmpdir/mydatafile"
-    chmod +x "$tmpdir/mydatafile"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ -f "$destdir/mydatafile" ]]; then
-        test_pass
-    else
-        test_fail "mydatafile should have been copied"
-    fi
-    rm -rf "$tmpdir" "$destdir"
-}
-
-test_zfsretainpol_default_copied() {
-    test_start "zfsretainpol-default is copied"
-    local tmpdir=$(mktemp -d)
-    echo "bktname[0]='d'; bktretain[0]=3; minage[0]=0" > "$tmpdir/zfsretainpol-default"
-    chmod +x "$tmpdir/zfsretainpol-default"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ -f "$destdir/zfsretainpol-default" ]]; then
-        test_pass
-    else
-        test_fail "zfsretainpol-default should have been copied"
-    fi
-    rm -rf "$tmpdir" "$destdir"
-}
-
-test_zfsretainpol_pool_skipped() {
-    test_start "Pool-specific zfsretainpol-* files are skipped"
-    local tmpdir=$(mktemp -d)
-    echo "bktname[0]='d'; bktretain[0]=5; minage[0]=0" > "$tmpdir/zfsretainpol-fivebays"
-    chmod +x "$tmpdir/zfsretainpol-fivebays"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ ! -f "$destdir/zfsretainpol-fivebays" ]]; then
-        test_pass
-    else
-        test_fail "zfsretainpol-fivebays should have been skipped"
-    fi
-    rm -rf "$tmpdir" "$destdir"
-}
-
-test_multiple_mixed_files() {
-    test_start "Mixed directory copies correct files"
-    local tmpdir=$(mktemp -d)
-    echo '#!/bin/bash' > "$tmpdir/script-exec" && chmod +x "$tmpdir/script-exec"
-    echo '#!/bin/bash' > "$tmpdir/script-nox" && chmod -x "$tmpdir/script-nox"
-    echo 'plain' > "$tmpdir/plain" && chmod -x "$tmpdir/plain"
-    echo '# doc' > "$tmpdir/doc.md" && chmod +x "$tmpdir/doc.md"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    local ok=1
-    [[ -f "$destdir/script-exec" ]] || ok=0
-    [[ -f "$destdir/script-nox" ]] || ok=0
-    [[ ! -f "$destdir/plain" ]] || ok=0
-    [[ ! -f "$destdir/doc.md" ]] || ok=0
-    if [[ $ok -eq 1 ]]; then
-        test_pass
-    else
-        test_fail "Unexpected files in destination"
-    fi
-    rm -rf "$tmpdir" "$destdir"
-}
-
-test_executable_script_copied
-test_shebang_non_executable_copied
-test_plain_file_skipped
-test_md_file_skipped
-test_gitignore_skipped
-test_PROMPT_files_skipped
-test_VERSION_skipped
-test_installed_programs_skipped
-test_directories_skipped
-test_data_file_executable_copied
-test_zfsretainpol_default_copied
-test_zfsretainpol_pool_skipped
-test_multiple_mixed_files
+test_bin_directory_copied
+test_lib_directory_copied
+test_python_directory_copied
+test_docs_directory_copied
+test_share_directory_copied
+test_rsync_deletes_stale_files
 
 # ------------------------------------------------------------------
-# Replicate the validation logic from deploy-version (lines 228–244)
+# Replicate the validation logic from deploy-version validate_critical_scripts
 # ------------------------------------------------------------------
 _test_validate_logic() {
     local version_dir="$1"
@@ -268,7 +149,8 @@ _test_validate_logic() {
 
 test_validate_all_present() {
     test_start "Validation passes when all critical scripts present"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/bin"
     for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive rootcheck; do
         touch "$tmpdir/bin/$script"
@@ -285,7 +167,8 @@ test_validate_all_present() {
 
 test_validate_missing_scripts_warns() {
     test_start "Validation warns when critical scripts are missing"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/bin"
     # Only create two of the required scripts
     touch "$tmpdir/bin/zfsdelsnap"
@@ -303,24 +186,10 @@ test_validate_missing_scripts_warns() {
 test_validate_all_present
 test_validate_missing_scripts_warns
 
-test_rootcheck_copied() {
-    test_start "rootcheck is copied as a root-level script"
-    local tmpdir=$(mktemp -d)
-    printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$tmpdir/rootcheck"
-    chmod +x "$tmpdir/rootcheck"
-    local destdir=$(mktemp -d)
-    _test_copy_logic "$tmpdir" "$destdir"
-    if [[ -f "$destdir/rootcheck" && -x "$destdir/rootcheck" ]]; then
-        test_pass
-    else
-        test_fail "rootcheck was not copied or not made executable"
-    fi
-    rm -rf "$tmpdir" "$destdir"
-}
-
 test_rootcheck_validation_warns() {
     test_start "Validation warns when rootcheck is missing"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/bin"
     for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive; do
         touch "$tmpdir/bin/$script"
@@ -335,48 +204,36 @@ test_rootcheck_validation_warns() {
     rm -rf "$tmpdir"
 }
 
-test_rootcheck_copied
 test_rootcheck_validation_warns
 
 # ------------------------------------------------------------------
-# Two-node script symlinks (from deploy-version deploy_to_host)
+# Bin copy logic: scripts now live in bin/ and are copied into the
+# versioned deployment (no more per-directory symlinks).
 # ------------------------------------------------------------------
-_test_two_node_symlink_logic() {
+_test_bin_copy_logic() {
     local version_dir="$1"
-    local two_node_scripts=(
-        new-vm-disk remove-vm-disk list-vm-disks resize-vm-disk
-        rescan-storage show-lun-map clone-vm move-vm-disk
-        safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns
-        iscsi-restore-luns repair-iscsi-luns
-        unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys
-        enroll-efi-keys-vm attach-vm-disk detach-vm-disk
-    )
     mkdir -p "$version_dir/bin"
-    mkdir -p "$version_dir/08 Two-node"
 
-    for script in "${two_node_scripts[@]}"; do
-        echo '#!/bin/bash' > "$version_dir/08 Two-node/$script"
-        chmod +x "$version_dir/08 Two-node/$script"
-        rm -f "$version_dir/bin/$script"
-        ln -sfn "../08 Two-node/$script" "$version_dir/bin/$script"
+    # Simulate the new deploy_to_host copy of everything in bin/
+    for script in "$version_dir/../bin/"*; do
+        [[ -f "$script" ]] || continue
+        cp -a "$script" "$version_dir/bin/"
     done
 }
 
-test_enroll_efi_keys_vm_symlinked() {
-    test_start "deploy-version symlinks enroll-efi-keys-vm into bin"
+test_enroll_efi_keys_vm_copied() {
+    test_start "deploy-version copies enroll-efi-keys-vm into bin"
     local tmpdir=$(mktemp -d)
-    _test_two_node_symlink_logic "$tmpdir"
+    mkdir -p "$tmpdir/bin"
+    echo '#!/bin/bash' > "$tmpdir/bin/enroll-efi-keys-vm"
+    chmod +x "$tmpdir/bin/enroll-efi-keys-vm"
+    mkdir -p "$tmpdir/versions/v1/bin"
+    cp -a "$tmpdir/bin/enroll-efi-keys-vm" "$tmpdir/versions/v1/bin/"
 
     local ok=1
-    if [[ ! -L "$tmpdir/bin/enroll-efi-keys-vm" ]]; then
+    if [[ ! -f "$tmpdir/versions/v1/bin/enroll-efi-keys-vm" ]]; then
         ok=0
-        echo "    enroll-efi-keys-vm symlink missing"
-    fi
-    local target
-    target=$(readlink "$tmpdir/bin/enroll-efi-keys-vm" 2>/dev/null || true)
-    if [[ "$target" != "../08 Two-node/enroll-efi-keys-vm" ]]; then
-        ok=0
-        echo "    enroll-efi-keys-vm target wrong: $target"
+        echo "    enroll-efi-keys-vm not copied into version bin"
     fi
 
     rm -rf "$tmpdir"
@@ -384,108 +241,106 @@ test_enroll_efi_keys_vm_symlinked() {
     if [[ $ok -eq 1 ]]; then
         test_pass
     else
-        test_fail "enroll-efi-keys-vm was not symlinked correctly"
+        test_fail "enroll-efi-keys-vm was not copied correctly"
     fi
 }
 
-test_enroll_efi_keys_vm_in_deploy_list() {
-    test_start "deploy-version TWO_NODE_SCRIPTS includes enroll-efi-keys-vm"
-    local deploy_script
-    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+test_enroll_efi_keys_vm_in_bin() {
+    test_start "deploy-version source bin includes enroll-efi-keys-vm"
+    local repo_bin
+    repo_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin"
 
-    if grep -qE '\benroll-efi-keys-vm\b' "$deploy_script"; then
+    if [[ -f "$repo_bin/enroll-efi-keys-vm" ]]; then
         test_pass
     else
-        test_fail "enroll-efi-keys-vm not found in deploy-version TWO_NODE_SCRIPTS"
+        test_fail "enroll-efi-keys-vm not found in repo bin/"
     fi
 }
 
-test_enroll_efi_keys_vm_symlinked
-test_enroll_efi_keys_vm_in_deploy_list
+test_enroll_efi_keys_vm_copied
+test_enroll_efi_keys_vm_in_bin
 
-test_repair_iscsi_luns_in_deploy_list() {
-    test_start "deploy-version TWO_NODE_SCRIPTS includes repair-iscsi-luns"
-    local deploy_script
-    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+test_repair_iscsi_luns_in_bin() {
+    test_start "deploy-version source bin includes repair-iscsi-luns"
+    local repo_bin
+    repo_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin"
 
-    if grep -qE '\brepair-iscsi-luns\b' "$deploy_script"; then
+    if [[ -f "$repo_bin/repair-iscsi-luns" ]]; then
         test_pass
     else
-        test_fail "repair-iscsi-luns not found in deploy-version TWO_NODE_SCRIPTS"
+        test_fail "repair-iscsi-luns not found in repo bin/"
     fi
 }
 
-test_iscsi_restore_luns_in_deploy_list() {
-    test_start "deploy-version TWO_NODE_SCRIPTS includes iscsi-restore-luns"
-    local deploy_script
-    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+test_iscsi_restore_luns_in_bin() {
+    test_start "deploy-version source bin includes iscsi-restore-luns"
+    local repo_bin
+    repo_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin"
 
-    if grep -qE '\biscsi-restore-luns\b' "$deploy_script"; then
+    if [[ -f "$repo_bin/iscsi-restore-luns" ]]; then
         test_pass
     else
-        test_fail "iscsi-restore-luns not found in deploy-version TWO_NODE_SCRIPTS"
+        test_fail "iscsi-restore-luns not found in repo bin/"
     fi
 }
 
-test_repair_iscsi_luns_in_deploy_list
-test_iscsi_restore_luns_in_deploy_list
+test_repair_iscsi_luns_in_bin
+test_iscsi_restore_luns_in_bin
 
-test_attach_vm_disk_in_deploy_list() {
-    test_start "deploy-version TWO_NODE_SCRIPTS includes attach-vm-disk"
-    local deploy_script
-    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+test_attach_vm_disk_in_bin() {
+    test_start "deploy-version source bin includes attach-vm-disk"
+    local repo_bin
+    repo_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin"
 
-    if grep -qE '\battach-vm-disk\b' "$deploy_script"; then
+    if [[ -f "$repo_bin/attach-vm-disk" ]]; then
         test_pass
     else
-        test_fail "attach-vm-disk not found in deploy-version TWO_NODE_SCRIPTS"
+        test_fail "attach-vm-disk not found in repo bin/"
     fi
 }
 
-test_detach_vm_disk_in_deploy_list() {
-    test_start "deploy-version TWO_NODE_SCRIPTS includes detach-vm-disk"
-    local deploy_script
-    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+test_detach_vm_disk_in_bin() {
+    test_start "deploy-version source bin includes detach-vm-disk"
+    local repo_bin
+    repo_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin"
 
-    if grep -qE '\bdetach-vm-disk\b' "$deploy_script"; then
+    if [[ -f "$repo_bin/detach-vm-disk" ]]; then
         test_pass
     else
-        test_fail "detach-vm-disk not found in deploy-version TWO_NODE_SCRIPTS"
+        test_fail "detach-vm-disk not found in repo bin/"
     fi
 }
 
-test_attach_vm_disk_in_deploy_list
-test_detach_vm_disk_in_deploy_list
+test_attach_vm_disk_in_bin
+test_detach_vm_disk_in_bin
 
-test_uninstall_some_versions_in_deploy_list() {
-    test_start "deploy-version VERSIONING_SCRIPTS includes uninstall-some-versions"
-    local deploy_script
-    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+test_uninstall_some_versions_in_bin() {
+    test_start "deploy-version source bin includes uninstall-some-versions"
+    local repo_bin
+    repo_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin"
 
-    if grep -qE '\buninstall-some-versions\b' "$deploy_script"; then
+    if [[ -f "$repo_bin/uninstall-some-versions" ]]; then
         test_pass
     else
-        test_fail "uninstall-some-versions not found in deploy-version VERSIONING_SCRIPTS"
+        test_fail "uninstall-some-versions not found in repo bin/"
     fi
 }
 
-test_uninstall_some_versions_in_deploy_list
+test_uninstall_some_versions_in_bin
 
-test_attach_vm_disk_symlinked() {
-    test_start "deploy-version symlinks attach-vm-disk into bin"
+test_attach_vm_disk_copied() {
+    test_start "deploy-version copies attach-vm-disk into bin"
     local tmpdir=$(mktemp -d)
-    _test_two_node_symlink_logic "$tmpdir"
+    mkdir -p "$tmpdir/bin"
+    echo '#!/bin/bash' > "$tmpdir/bin/attach-vm-disk"
+    chmod +x "$tmpdir/bin/attach-vm-disk"
+    mkdir -p "$tmpdir/versions/v1/bin"
+    cp -a "$tmpdir/bin/attach-vm-disk" "$tmpdir/versions/v1/bin/"
 
     local ok=1
-    if [[ ! -L "$tmpdir/bin/attach-vm-disk" ]]; then
+    if [[ ! -f "$tmpdir/versions/v1/bin/attach-vm-disk" ]]; then
         ok=0
-        echo "    attach-vm-disk symlink missing"
-    fi
-    local target
-    target=$(readlink "$tmpdir/bin/attach-vm-disk" 2>/dev/null || true)
-    if [[ "$target" != "../08 Two-node/attach-vm-disk" ]]; then
-        ok=0
-        echo "    attach-vm-disk target wrong: $target"
+        echo "    attach-vm-disk not copied into version bin"
     fi
 
     rm -rf "$tmpdir"
@@ -493,25 +348,23 @@ test_attach_vm_disk_symlinked() {
     if [[ $ok -eq 1 ]]; then
         test_pass
     else
-        test_fail "attach-vm-disk was not symlinked correctly"
+        test_fail "attach-vm-disk was not copied correctly"
     fi
 }
 
-test_detach_vm_disk_symlinked() {
-    test_start "deploy-version symlinks detach-vm-disk into bin"
+test_detach_vm_disk_copied() {
+    test_start "deploy-version copies detach-vm-disk into bin"
     local tmpdir=$(mktemp -d)
-    _test_two_node_symlink_logic "$tmpdir"
+    mkdir -p "$tmpdir/bin"
+    echo '#!/bin/bash' > "$tmpdir/bin/detach-vm-disk"
+    chmod +x "$tmpdir/bin/detach-vm-disk"
+    mkdir -p "$tmpdir/versions/v1/bin"
+    cp -a "$tmpdir/bin/detach-vm-disk" "$tmpdir/versions/v1/bin/"
 
     local ok=1
-    if [[ ! -L "$tmpdir/bin/detach-vm-disk" ]]; then
+    if [[ ! -f "$tmpdir/versions/v1/bin/detach-vm-disk" ]]; then
         ok=0
-        echo "    detach-vm-disk symlink missing"
-    fi
-    local target
-    target=$(readlink "$tmpdir/bin/detach-vm-disk" 2>/dev/null || true)
-    if [[ "$target" != "../08 Two-node/detach-vm-disk" ]]; then
-        ok=0
-        echo "    detach-vm-disk target wrong: $target"
+        echo "    detach-vm-disk not copied into version bin"
     fi
 
     rm -rf "$tmpdir"
@@ -519,12 +372,12 @@ test_detach_vm_disk_symlinked() {
     if [[ $ok -eq 1 ]]; then
         test_pass
     else
-        test_fail "detach-vm-disk was not symlinked correctly"
+        test_fail "detach-vm-disk was not copied correctly"
     fi
 }
 
-test_attach_vm_disk_symlinked
-test_detach_vm_disk_symlinked
+test_attach_vm_disk_copied
+test_detach_vm_disk_copied
 
 # ------------------------------------------------------------------
 # Launcher symlinks (from deploy-version deploy_to_host)
@@ -534,10 +387,10 @@ _test_symlink_logic() {
     mkdir -p "$version_dir/bin"
 
     rm -f "$version_dir/bin/zfsutilities-gui"
-    ln -sfn "../07 GTK + Python/zfsutilities_gui.py" "$version_dir/bin/zfsutilities-gui"
+    ln -sfn "../python/zfsutilities_gui.py" "$version_dir/bin/zfsutilities-gui"
 
     rm -f "$version_dir/bin/zfsutilities-docs"
-    ln -sfn "../07 GTK + Python/docs_viewer.py" "$version_dir/bin/zfsutilities-docs"
+    ln -sfn "../python/docs_viewer.py" "$version_dir/bin/zfsutilities-docs"
 }
 
 test_launcher_symlinks_created() {
@@ -557,11 +410,11 @@ test_launcher_symlinks_created() {
         ok=0
         echo "    zfsutilities-docs symlink missing"
     fi
-    if [[ "$gui_target" != "../07 GTK + Python/zfsutilities_gui.py" ]]; then
+    if [[ "$gui_target" != "../python/zfsutilities_gui.py" ]]; then
         ok=0
         echo "    zfsutilities-gui target wrong: $gui_target"
     fi
-    if [[ "$docs_target" != "../07 GTK + Python/docs_viewer.py" ]]; then
+    if [[ "$docs_target" != "../python/docs_viewer.py" ]]; then
         ok=0
         echo "    zfsutilities-docs target wrong: $docs_target"
     fi
@@ -588,11 +441,11 @@ test_launcher_symlinks_replace_existing() {
     gui_target=$(readlink "$tmpdir/bin/zfsutilities-gui" 2>/dev/null || true)
     docs_target=$(readlink "$tmpdir/bin/zfsutilities-docs" 2>/dev/null || true)
 
-    if [[ "$gui_target" != "../07 GTK + Python/zfsutilities_gui.py" ]]; then
+    if [[ "$gui_target" != "../python/zfsutilities_gui.py" ]]; then
         ok=0
         echo "    zfsutilities-gui target wrong: $gui_target"
     fi
-    if [[ "$docs_target" != "../07 GTK + Python/docs_viewer.py" ]]; then
+    if [[ "$docs_target" != "../python/docs_viewer.py" ]]; then
         ok=0
         echo "    zfsutilities-docs target wrong: $docs_target"
     fi
@@ -615,7 +468,7 @@ test_launcher_symlinks_replace_existing
 test_deploy_version_does_not_wire() {
     test_start "deploy-version does not create production wiring"
     local deploy_script
-    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../deploy-version"
+    deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/deploy-version"
 
     local fail_reason=""
     if grep -qE "setup_bashinit_symlink|setup_path_config|cleanup_old_symlinks" "$deploy_script"; then

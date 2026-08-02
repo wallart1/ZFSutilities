@@ -7,7 +7,7 @@ setup_test_env
 export SNAPNAME_LOCK="/tmp/zfs_snapname_lock_test_$$"
 export SNAPNAME_RESERVED="/tmp/zfs_snapname_reserved_test_$$"
 
-source "$mydir/zfssnapbuild"
+source "$mydir/bin/zfssnapbuild"
 
 # Override snapfile path so tests do not collide with root-owned files.
 TEST_SNAPFILE="/tmp/zfsnextsnap_test_$$"

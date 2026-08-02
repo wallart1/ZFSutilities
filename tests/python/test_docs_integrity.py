@@ -183,7 +183,7 @@ class TestDocsDirectoryStructure(unittest.TestCase):
 class TestPythonModulesReference(unittest.TestCase):
 
     def test_all_documented_python_modules_exist(self):
-        """Every module listed in python-modules.md must exist in 07 GTK + Python/."""
+        """Every module listed in python-modules.md must exist in python/."""
         ref_path = os.path.join(
             DOCS_DIR, "commands-and-modules", "python-modules.md"
         )

@@ -32,7 +32,7 @@ class TestFindScript(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.script_dir = os.path.join(self.tmpdir, "07 GTK + Python")
+        self.script_dir = os.path.join(self.tmpdir, "python")
         os.makedirs(self.script_dir)
         self.addCleanup(self._cleanup)
 
@@ -50,7 +50,7 @@ class TestFindScript(unittest.TestCase):
 
     def test_find_script_in_same_directory(self):
         """Script in the same directory is found first."""
-        expected = self._touch("07 GTK + Python", "profile_runner.py")
+        expected = self._touch("python", "profile_runner.py")
         result = path_utils.find_script(
             "profile_runner.py", script_dir=self.script_dir
         )
@@ -64,26 +64,26 @@ class TestFindScript(unittest.TestCase):
         )
         self.assertEqual(result, os.path.realpath(expected))
 
-    def test_find_script_in_two_node_directory(self):
-        """Script in 08 Two-node is found from repo root."""
-        expected = self._touch("08 Two-node", "rescan-storage")
+    def test_find_script_in_bin_directory(self):
+        """Script in bin/ is found from repo root."""
+        expected = self._touch("bin", "rescan-storage")
         result = path_utils.find_script(
             "rescan-storage", script_dir=self.script_dir
         )
         self.assertEqual(result, os.path.realpath(expected))
 
-    def test_find_script_in_clone_support_directory(self):
-        """Script in 09 ZFS clone support is found from repo root."""
-        expected = self._touch("09 ZFS clone support", "archive-vm")
+    def test_find_script_in_bin_directory_clone_script(self):
+        """Clone-support script in bin/ is found from repo root."""
+        expected = self._touch("bin", "archive-vm")
         result = path_utils.find_script("archive-vm", script_dir=self.script_dir)
         self.assertEqual(result, os.path.realpath(expected))
 
-    def test_find_script_across_subdirectories(self):
-        """Script in 09 ZFS clone support is found from 08 Two-node."""
-        two_node_dir = os.path.join(self.tmpdir, "08 Two-node")
-        os.makedirs(two_node_dir)
-        expected = self._touch("09 ZFS clone support", "archive-vm")
-        result = path_utils.find_script("archive-vm", script_dir=two_node_dir)
+    def test_find_script_across_directories(self):
+        """Script in bin/ is found from lib/."""
+        lib_dir = os.path.join(self.tmpdir, "lib")
+        os.makedirs(lib_dir)
+        expected = self._touch("bin", "archive-vm")
+        result = path_utils.find_script("archive-vm", script_dir=lib_dir)
         self.assertEqual(result, os.path.realpath(expected))
 
     def test_find_script_missing_returns_none(self):
@@ -95,7 +95,7 @@ class TestFindScript(unittest.TestCase):
 
     def test_resolve_local_bin_uses_find_script(self):
         """resolve_local_bin delegates to find_script."""
-        expected = self._touch("07 GTK + Python", "profile_runner.py")
+        expected = self._touch("python", "profile_runner.py")
         result = path_utils.resolve_local_bin(
             "profile_runner.py", script_dir=self.script_dir
         )
@@ -115,10 +115,10 @@ class TestDeployedLayout(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.deployed_script_dir = os.path.join(
-            self.tmpdir, "versions", "v1.0.0", "07 GTK + Python"
+            self.tmpdir, "versions", "v1.0.0", "python"
         )
         os.makedirs(self.deployed_script_dir)
-        self.repo_script_dir = os.path.join(self.tmpdir, "07 GTK + Python")
+        self.repo_script_dir = os.path.join(self.tmpdir, "python")
         os.makedirs(self.repo_script_dir)
         self.addCleanup(self._cleanup)
 
@@ -142,7 +142,7 @@ class TestDeployedLayout(unittest.TestCase):
         with patch.object(path_utils, "_DEPLOYMENT_BASE", self.tmpdir):
             result = path_utils.get_profile_runner_path(self.deployed_script_dir)
             expected = os.path.join(
-                self.tmpdir, "current", "07 GTK + Python", "profile_runner.py"
+                self.tmpdir, "current", "python", "profile_runner.py"
             )
             self.assertEqual(result, expected)
 
@@ -158,7 +158,7 @@ class TestGetVersion(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.repo_dir = os.path.join(self.tmpdir, "07 GTK + Python")
+        self.repo_dir = os.path.join(self.tmpdir, "python")
         os.makedirs(self.repo_dir)
         self.addCleanup(self._cleanup)
 
@@ -198,7 +198,7 @@ class TestGetDocsPath(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.repo_dir = os.path.join(self.tmpdir, "07 GTK + Python")
+        self.repo_dir = os.path.join(self.tmpdir, "python")
         os.makedirs(self.repo_dir)
         self.addCleanup(self._cleanup)
 
@@ -209,7 +209,7 @@ class TestGetDocsPath(unittest.TestCase):
 
     def test_get_docs_path_repo(self):
         """Docs path is found in repo layout."""
-        docs_path = os.path.join(self.tmpdir, "06 Docs", "site", "index.html")
+        docs_path = os.path.join(self.tmpdir, "docs", "site", "index.html")
         os.makedirs(os.path.dirname(docs_path))
         with open(docs_path, "w") as f:
             f.write("<html></html>\n")
@@ -219,7 +219,7 @@ class TestGetDocsPath(unittest.TestCase):
     def test_get_docs_path_deployed(self):
         """Docs path is found in deployed layout."""
         docs_path = os.path.join(
-            self.tmpdir, "current", "06 Docs", "site", "index.html"
+            self.tmpdir, "current", "docs", "site", "index.html"
         )
         os.makedirs(os.path.dirname(docs_path))
         with open(docs_path, "w") as f:
@@ -322,7 +322,7 @@ class TestEnvironmentOverrides(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.deployed_script_dir = os.path.join(
-            self.tmpdir, "versions", "v9.9.9", "07 GTK + Python"
+            self.tmpdir, "versions", "v9.9.9", "python"
         )
         os.makedirs(self.deployed_script_dir)
         self.addCleanup(self._cleanup)
@@ -347,7 +347,7 @@ class TestEnvironmentOverrides(unittest.TestCase):
         version_path = os.path.join(current_dir, "VERSION")
         with open(version_path, "w") as f:
             f.write("v9.9.9\n")
-        docs_path = os.path.join(current_dir, "06 Docs", "site", "index.html")
+        docs_path = os.path.join(current_dir, "docs", "site", "index.html")
         os.makedirs(os.path.dirname(docs_path))
         with open(docs_path, "w") as f:
             f.write("<html></html>\n")
@@ -360,7 +360,7 @@ class TestEnvironmentOverrides(unittest.TestCase):
         self.assertEqual(
             path_utils.get_profile_runner_path(self.deployed_script_dir),
             os.path.join(
-                self.tmpdir, "current", "07 GTK + Python", "profile_runner.py"
+                self.tmpdir, "current", "python", "profile_runner.py"
             ),
         )
 

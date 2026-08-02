@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
-PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
+PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 

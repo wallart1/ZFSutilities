@@ -5,7 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
 setup_test_env
 
-SWITCH_VERSION="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../switch-version"
+SWITCH_VERSION="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/switch-version"
 [[ -f "$SWITCH_VERSION" ]] || die "Missing: $SWITCH_VERSION"
 
 # Source the real switch-version for direct function tests.  rootcheck is
@@ -458,9 +458,9 @@ test_switch_version_tolerates_missing_desktop_lib() {
 
     # Create an isolated copy of switch-version without the launcher library.
     mkdir -p "$tmpdir/bin"
-    cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../switch-version" \
+    cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/switch-version" \
         "$tmpdir/bin/switch-version"
-    cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bashinit" \
+    cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/bashinit" \
         "$tmpdir/bashinit"
     printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$tmpdir/bin/rootcheck"
     chmod +x "$tmpdir/bin/rootcheck"

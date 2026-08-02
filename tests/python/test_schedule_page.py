@@ -11,7 +11,7 @@ from test_support import REPO_ROOT, capture_logs, mock_gtk, temp_config_dir
 
 SAMPLE_NEXT_RUN = datetime(2025, 6, 15, 10, 0, tzinfo=timezone(-timedelta(hours=4)))
 
-GUI_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
+GUI_SRC = os.path.join(REPO_ROOT, "python")
 if GUI_SRC not in sys.path:
     sys.path.insert(0, GUI_SRC)
 
@@ -52,7 +52,7 @@ class TestRegenerateCronPath(unittest.TestCase):
             with open(cron_manager.CRON_FILE) as f:
                 content = f.read()
             self.assertIn(
-                "/usr/local/lib/zfsutilities/current/07 GTK + Python/profile_runner.py",
+                "/usr/local/lib/zfsutilities/current/python/profile_runner.py",
                 content,
             )
 

@@ -5,8 +5,8 @@ The documentation is built with [MkDocs](https://www.mkdocs.org/) using the
 
 ## Automatic Installation
 
-Both installers — `10 Installers/install-single-node` and
-`10 Installers/install-two-node` — install MkDocs and the Material theme as
+Both installers — `bin/install-single-node` and
+`bin/install-two-node` — install MkDocs and the Material theme as
 one of their first steps. After the installer runs, start the server
 manually:
 
@@ -22,8 +22,8 @@ http://<host>:8000
 
 ## Configuration
 
-`mkdocs.yml` lives in `06 Docs/` (not the project root). The content is in
-`06 Docs/docs/`. MkDocs requires the `docs_dir` to be a child of the config
+`mkdocs.yml` lives in `docs/` (not the project root). The content is in
+`docs/docs/`. MkDocs requires the `docs_dir` to be a child of the config
 file's directory — it cannot be the same directory.
 
 ## Version Tracking
@@ -58,7 +58,7 @@ that the current docs originate from. This is handled automatically:
 
 !!! note "Running from a repo checkout"
     If you are working directly from a repository checkout rather than a
-    deployed version, run `./startdocserver` from the project root instead.
+    deployed version, run `./bin/startdocserver` from the project root instead.
     An optional path argument is accepted for compatibility but ignored.
 
 !!! tip "Force a fresh start"
@@ -92,16 +92,16 @@ with an error.
 To start the server directly without the helper script:
 
 ```bash
-cd "<project_directory>/06 Docs" && python3 -m mkdocs serve -a 0.0.0.0:8000
+cd "<project_directory>/docs" && python3 -m mkdocs serve -a 0.0.0.0:8000
 ```
 
 To build a static site:
 
 ```bash
-cd "<project_directory>/06 Docs" && python3 -m mkdocs build
+cd "<project_directory>/docs" && python3 -m mkdocs build
 ```
 
-Output goes to `06 Docs/site/` (not distributed).
+Output goes to `docs/site/` (not distributed).
 
 ### Clean builds
 
@@ -110,7 +110,7 @@ want to guarantee a completely clean build, delete the `site/` directory first
 or use the `--clean` flag:
 
 ```bash
-cd "<project_directory>/06 Docs" && python3 -m mkdocs build --clean
+cd "<project_directory>/docs" && python3 -m mkdocs build --clean
 ```
 
 ## Edit-in-MarkText Integration
@@ -158,7 +158,7 @@ xdg-mime default openmd.desktop x-scheme-handler/openmd
 
 ### How the URL is constructed
 
-A MkDocs hook (`06 Docs/hooks/edit_links.py`) sets `page.edit_url` for each
+A MkDocs hook (`docs/hooks/edit_links.py`) sets `page.edit_url` for each
 page:
 
 ```python

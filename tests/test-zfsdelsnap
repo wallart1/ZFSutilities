@@ -38,7 +38,7 @@ EOF
     local output rc=0
     output=$(
         mydir="$tmpdir"
-        bash -c "source '$old_mydir/zfsdelsnap'; delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
+        bash -c "source '$old_mydir/bin/zfsdelsnap'; delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
     ) || rc=$?
 
     if [[ "$output" == *"FATAL: Required helper $tmpdir/zfs-diagnose-busy is missing."* ]]; then
@@ -97,7 +97,7 @@ EOF
     local output rc=0
     output=$(
         mydir="$tmpdir"
-        bash -c "source '$old_mydir/zfsdelsnap'; delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
+        bash -c "source '$old_mydir/bin/zfsdelsnap'; delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
     ) || rc=$?
 
     unset -f zfs
@@ -159,7 +159,7 @@ EOF
                     command zfs "$@"
                 fi
             }
-            source "'"$old_mydir"'/zfsdelsnap"
+            source "'"$old_mydir"'/bin/zfsdelsnap"
             delsnap "pool@snap" "0" "N"
         ' 2>&1
     ) || rc=$?
@@ -218,7 +218,7 @@ EOF
                     command zfs "$@"
                 fi
             }
-            source "'"$old_mydir"'/zfsdelsnap"
+            source "'"$old_mydir"'/bin/zfsdelsnap"
             delsnap "pool@snap" "0" "N"
         ' 2>&1
     ) || rc=$?
@@ -246,10 +246,10 @@ test_checkagainst_sources_cleanly() {
     tmpdir=$(mktemp -d)
 
     # Copy the real helper modules that zfscheckagainst sources.
-    cp "$old_mydir/zfscheckagainst" "$tmpdir/zfscheckagainst"
-    cp "$old_mydir/zfscommsnap" "$tmpdir/zfscommsnap"
-    cp "$old_mydir/bashdebug" "$tmpdir/bashdebug"
-    cp "$old_mydir/zfsconfig" "$tmpdir/zfsconfig"
+    cp "$old_mydir/bin/zfscheckagainst" "$tmpdir/zfscheckagainst"
+    cp "$old_mydir/bin/zfscommsnap" "$tmpdir/zfscommsnap"
+    cp "$old_mydir/bin/bashdebug" "$tmpdir/bashdebug"
+    cp "$old_mydir/bin/zfsconfig" "$tmpdir/zfsconfig"
 
     local output rc=0
     output=$(
@@ -296,7 +296,7 @@ test_user_hold_blocks_deletion() {
 checkagainst() { true; }
 remove_leading_qualifiers() { echo "$2"; }
 EOF
-    cp "$old_mydir/zfsdelallholds" "$tmpdir/zfsdelallholds"
+    cp "$old_mydir/bin/zfsdelallholds" "$tmpdir/zfsdelallholds"
     cat > "$tmpdir/zfslockmanager" << 'EOF'
 zfslock_init() { true; }
 zfslock_wait_or_resolve() { return 0; }
@@ -363,7 +363,7 @@ EOF
                 esac
                 return 0
             }
-            source "'"$old_mydir"'/zfsdelsnap"
+            source "'"$old_mydir"'/bin/zfsdelsnap"
             releaseholds_tags=('offsite-*')
             delsnap "pool@snap" "0" "releaseholds" "nocheckagainst"
         ' 2>&1

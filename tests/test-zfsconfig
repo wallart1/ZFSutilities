@@ -4,7 +4,7 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
-source "$mydir/zfsconfig"
+source "$mydir/bin/zfsconfig"
 
 ZFSCONFIG_PATH=$(mktemp)
 export ZFSCONFIG_PATH

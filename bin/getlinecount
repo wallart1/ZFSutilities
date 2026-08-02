@@ -9,12 +9,11 @@ bashinit
 
 dirs=( \
     "$mydir" \
-    "$mydir/07 GTK + Python" \
-    "$mydir/08 Two-node" \
-    "$mydir/09 ZFS clone support" \
-    "$mydir/10 Installers" \
-    "$mydir/Cache-warm" \
-    "$mydir/Watchall" \
+    "$mydir/../python" \
+    "$mydir/../lib" \
+    "$mydir/../share" \
+    "$mydir/../docs" \
+    "$mydir/../tests" \
      )
 
 grandtotal_files=0

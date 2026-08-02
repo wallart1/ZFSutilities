@@ -5,7 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
 setup_test_env
 
-INSTALLER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../10 Installers/installer-lib.sh"
+INSTALLER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/installer-lib.sh"
 [[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
 source "$INSTALLER_LIB"
 

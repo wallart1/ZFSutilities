@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from test_support import REPO_ROOT, mock_gtk
 
-PYTHON_SRC = os.path.join(REPO_ROOT, "07 GTK + Python")
+PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 
 
 class TestDocsViewerMain(unittest.TestCase):

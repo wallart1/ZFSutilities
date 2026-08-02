@@ -199,7 +199,7 @@ This also removes:
 - `/root/.config/zfsutilities-history.json`
 - `/root/.cache/zfsutilities/`
 - `/var/log/zfsutilities/` (session logs, cron log, rsync-backup log)
-- Cache-warm scripts, service, and logs
+- Scripts, service, and logs from `share/cache-warm/`
 - `/etc/iscsi-encrypted-luns.conf`
 - `/root/.luks-key` (with an explicit confirmation prompt)
 
@@ -283,8 +283,8 @@ and activated via symlink:
 | `/usr/local/lib/zfsutilities/versions/<version>/`     | Full project (docs, GUI, subdirs)       |
 | `/usr/local/lib/zfsutilities/current`                 | Symlink → active version                |
 | `/usr/local/lib/zfsutilities/bin`                     | Symlink → `current/bin/` (in `PATH`)    |
-| `/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui` | Symlink → `../07 GTK + Python/zfsutilities_gui.py` |
-| `/usr/local/lib/zfsutilities/current/bin/zfsutilities-docs` | Symlink → `../07 GTK + Python/docs_viewer.py` |
+| `/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui` | Symlink → `../python/zfsutilities_gui.py` |
+| `/usr/local/lib/zfsutilities/current/bin/zfsutilities-docs` | Symlink → `../python/docs_viewer.py` |
 | `/usr/local/lib/node-lib.sh`                          | Symlink → `.../current/lib/node-lib.sh` |
 | `/usr/local/lib/rootcheck`                            | Symlink → `.../current/bin/rootcheck`   |
 
@@ -350,8 +350,8 @@ You can run these launchers directly, add them to a panel or start menu, or
 invoke the underlying Python scripts from a checkout during development:
 
 ```bash
-sudo python3 '/path/to/zfsutilities-dev/07 GTK + Python/zfsutilities_gui.py'
-sudo python3 '/path/to/zfsutilities-dev/07 GTK + Python/docs_viewer.py'
+sudo python3 '/path/to/zfsutilities-dev/python/zfsutilities_gui.py'
+sudo python3 '/path/to/zfsutilities-dev/python/docs_viewer.py'
 ``` 
 
 ## Next Steps

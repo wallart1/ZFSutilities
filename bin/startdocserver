@@ -12,13 +12,15 @@ bashinit
 
 set -euo pipefail
 
-# Find docs directory: in repo root ($mydir/06 Docs) or deployed bin/ ($mydir/../06 Docs)
-if [[ -d "$mydir/06 Docs" ]]; then
-    docs_dir="$mydir/06 Docs"
-elif [[ -d "$mydir/../06 Docs" ]]; then
-    docs_dir="$mydir/../06 Docs"
+# Find docs directory relative to the script location.  In the repo $mydir may
+# be the repo root (when sourced by tests) or bin/ (when executed directly);
+# docs/ is a sibling of both.
+if [[ -d "$mydir/docs" ]]; then
+    docs_dir="$mydir/docs"
+elif [[ -d "$mydir/../docs" ]]; then
+    docs_dir="$mydir/../docs"
 else
-    log_msg "FATAL: Could not find 06 Docs directory."
+    log_msg "FATAL: Could not find docs directory."
     exit 1
 fi
 url_base="http://localhost:8000"

@@ -2084,7 +2084,7 @@
 
 
   
-    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/06%20Docs/docs/installation/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="openmd:///NFS1/dan(NFS1)/zfsutilities-pub/docs/docs/installation/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2259,7 +2259,7 @@ choices, and asks what you want to remove.</p>
 <li><code>/root/.config/zfsutilities-history.json</code></li>
 <li><code>/root/.cache/zfsutilities/</code></li>
 <li><code>/var/log/zfsutilities/</code> (session logs, cron log, rsync-backup log)</li>
-<li>Cache-warm scripts, service, and logs</li>
+<li>Scripts, service, and logs from <code>share/cache-warm/</code></li>
 <li><code>/etc/iscsi-encrypted-luns.conf</code></li>
 <li><code>/root/.luks-key</code> (with an explicit confirmation prompt)</li>
 </ul>
@@ -2346,11 +2346,11 @@ and activated via symlink:</p>
 </tr>
 <tr>
 <td><code>/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui</code></td>
-<td>Symlink → <code>../07 GTK + Python/zfsutilities_gui.py</code></td>
+<td>Symlink → <code>../python/zfsutilities_gui.py</code></td>
 </tr>
 <tr>
 <td><code>/usr/local/lib/zfsutilities/current/bin/zfsutilities-docs</code></td>
-<td>Symlink → <code>../07 GTK + Python/docs_viewer.py</code></td>
+<td>Symlink → <code>../python/docs_viewer.py</code></td>
 </tr>
 <tr>
 <td><code>/usr/local/lib/node-lib.sh</code></td>
@@ -2447,8 +2447,8 @@ zfsutilities-docs
 </ul>
 <p>You can run these launchers directly, add them to a panel or start menu, or
 invoke the underlying Python scripts from a checkout during development:</p>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39;/path/to/zfsutilities-dev/07 GTK + Python/zfsutilities_gui.py&#39;</span>
-sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39;/path/to/zfsutilities-dev/07 GTK + Python/docs_viewer.py&#39;</span>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39;/path/to/zfsutilities-dev/python/zfsutilities_gui.py&#39;</span>
+sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39;/path/to/zfsutilities-dev/python/docs_viewer.py&#39;</span>
 </code></pre></div>
 <h2 id="next-steps">Next Steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
 <p>After installation:</p>
@@ -2497,7 +2497,7 @@ sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.72.1
+      ZFS Utilities v0.73.0
     </div>
   
   
@@ -2522,7 +2522,7 @@ sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.72.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.0"}</script>
     
     
       <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>

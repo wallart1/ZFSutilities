@@ -37,18 +37,17 @@ if ! declare -f rootcheck &>/dev/null; then
 fi
 rootcheck
 
-# Source desktop launcher helpers.  In the repo root the library lives at
-# "10 Installers/..."; in the deployed layout it is at "../10 Installers/...".
+# Source desktop launcher helpers.  In the flat layout the library lives at
+# "../lib/desktop-launcher-lib.sh" relative to bin/.
 _DESKTOP_LAUNCHER_LIB=""
-if [[ -f "$MYDIR/10 Installers/desktop-launcher-lib.sh" ]]; then
-    _DESKTOP_LAUNCHER_LIB="$MYDIR/10 Installers/desktop-launcher-lib.sh"
-elif [[ -f "$MYDIR/../10 Installers/desktop-launcher-lib.sh" ]]; then
-    _DESKTOP_LAUNCHER_LIB="$MYDIR/../10 Installers/desktop-launcher-lib.sh"
+if [[ -f "$MYDIR/../lib/desktop-launcher-lib.sh" ]]; then
+    _DESKTOP_LAUNCHER_LIB="$MYDIR/../lib/desktop-launcher-lib.sh"
+elif [[ -f "$MYDIR/lib/desktop-launcher-lib.sh" ]]; then
+    _DESKTOP_LAUNCHER_LIB="$MYDIR/lib/desktop-launcher-lib.sh"
 fi
 
 if [[ -n "$_DESKTOP_LAUNCHER_LIB" ]]; then
-    # The real path contains a space ("10 Installers/...") and cannot be
-    # expressed in a ShellCheck source= directive, so use /dev/null.
+    # The library path is resolved above; use /dev/null for ShellCheck.
     # shellcheck source=/dev/null
     source "$_DESKTOP_LAUNCHER_LIB"
 else
