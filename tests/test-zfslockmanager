@@ -133,7 +133,8 @@ test_multi_lock_acquisition() {
 
     test_start "Conflict on one requested dataset returns 1"
     _bg_lock_start "test/multi/conflict" "w" "background lock" 3600
-    local bg_rc=$(_bg_lock_wait_rc)
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
     if [[ "$bg_rc" -ne 0 ]]; then
         _bg_lock_kill
         test_fail "Background lock could not be acquired (rc=$bg_rc)"
@@ -192,9 +193,10 @@ test_basic_acquire_release() {
     local lock1="$ZFSLOCK_ID"
 
     test_start "Lock file contains correct data"
-    local lock_dataset=$(_zfslock_read_field "$lock1" "dataset")
-    local lock_type=$(_zfslock_read_field "$lock1" "type")
-    local lock_pid=$(_zfslock_read_field "$lock1" "pid")
+    local lock_dataset lock_type lock_pid
+    lock_dataset=$(_zfslock_read_field "$lock1" "dataset")
+    lock_type=$(_zfslock_read_field "$lock1" "type")
+    lock_pid=$(_zfslock_read_field "$lock1" "pid")
     if [[ "$lock_dataset" == "test/dataset" && "$lock_type" == "w" && "$lock_pid" == "$$" ]]; then
         test_pass
     else
@@ -256,7 +258,8 @@ test_same_dataset_conflicts() {
 
     test_start "Read conflicts with existing Write"
     _bg_lock_start "test/data" "r" "trying read"
-    local bg_rc=$(_bg_lock_wait_rc)
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
     _bg_lock_kill
     [[ "$bg_rc" -ne 0 ]] && test_pass || test_fail "Read should conflict with write"
 
@@ -309,7 +312,8 @@ test_hierarchy_conflicts() {
     local parent_lock="$ZFSLOCK_ID"
     test_start "Destroy on parent blocks write on child"
     _bg_lock_start "pool/parent/child" "w" "write child"
-    local bg_rc=$(_bg_lock_wait_rc)
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
     _bg_lock_kill
     [[ "$bg_rc" -ne 0 ]] && test_pass || test_fail "Parent destroy should block child write"
     zfslock_release "$parent_lock"
@@ -500,7 +504,8 @@ test_noninteractive_abort() {
     cleanup_test_locks
 
     _bg_lock_start "test/noninteractive" "w" "holder" 3600
-    local bg_rc=$(_bg_lock_wait_rc)
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
     if [[ "$bg_rc" -ne 0 ]]; then
         _bg_lock_kill
         test_start "Headless mode aborts immediately without prompting"
@@ -567,7 +572,8 @@ test_conflict_message() {
     cleanup_test_locks
 
     _bg_lock_start "test/message" "w" "holder" 3600
-    local bg_rc=$(_bg_lock_wait_rc)
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
     if [[ "$bg_rc" -ne 0 ]]; then
         _bg_lock_kill
         test_start "CONFLICT banner explains dataset is in use"

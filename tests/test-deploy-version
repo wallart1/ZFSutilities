@@ -223,7 +223,8 @@ _test_bin_copy_logic() {
 
 test_enroll_efi_keys_vm_copied() {
     test_start "deploy-version copies enroll-efi-keys-vm into bin"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/bin"
     echo '#!/bin/bash' > "$tmpdir/bin/enroll-efi-keys-vm"
     chmod +x "$tmpdir/bin/enroll-efi-keys-vm"
@@ -330,7 +331,8 @@ test_uninstall_some_versions_in_bin
 
 test_attach_vm_disk_copied() {
     test_start "deploy-version copies attach-vm-disk into bin"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/bin"
     echo '#!/bin/bash' > "$tmpdir/bin/attach-vm-disk"
     chmod +x "$tmpdir/bin/attach-vm-disk"
@@ -354,7 +356,8 @@ test_attach_vm_disk_copied() {
 
 test_detach_vm_disk_copied() {
     test_start "deploy-version copies detach-vm-disk into bin"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/bin"
     echo '#!/bin/bash' > "$tmpdir/bin/detach-vm-disk"
     chmod +x "$tmpdir/bin/detach-vm-disk"
@@ -395,7 +398,8 @@ _test_symlink_logic() {
 
 test_launcher_symlinks_created() {
     test_start "deploy-version creates GUI and docs launcher symlinks"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     _test_symlink_logic "$tmpdir"
 
     local gui_target docs_target ok=1
@@ -430,7 +434,8 @@ test_launcher_symlinks_created() {
 
 test_launcher_symlinks_replace_existing() {
     test_start "deploy-version replaces existing launcher symlinks"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     mkdir -p "$tmpdir/bin"
     ln -s "old-target" "$tmpdir/bin/zfsutilities-gui"
     ln -s "old-target" "$tmpdir/bin/zfsutilities-docs"

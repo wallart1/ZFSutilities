@@ -37,6 +37,16 @@
 - Updated `tests/test-module-dependencies` to guard against stale legacy
   directory literals.
 
+### Fixed
+
+- **Shellcheck clean-up** — Fixed all ShellCheck SC2155 warnings by separating
+  `local` declarations from command substitutions in modified test files
+  (`test-deploy-version`, `test-installer-retention`, `test-zfs-diagnose-busy`,
+  `test-zfslockmanager`). Replaced the confusing nested quoting that triggered
+  SC1078 in `tests/test-zfsdelsnap` with `env` variable passing. Removed
+  unused/dead variables from `bin/install-single-node` and
+  `bin/install-two-node`.
+
 ### Documentation
 
 - Updated all developer-guide, installation, commands-and-modules, and

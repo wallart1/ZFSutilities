@@ -147,7 +147,7 @@ EOF
     local output rc=0
     output=$(
         mydir="$tmpdir"
-        bash -c '
+        env old_mydir="$old_mydir" bash -c '
             zfs() {
                 if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" ]]; then
                     return 0
@@ -159,7 +159,7 @@ EOF
                     command zfs "$@"
                 fi
             }
-            source "'"$old_mydir"'/bin/zfsdelsnap"
+            source "$old_mydir/bin/zfsdelsnap"
             delsnap "pool@snap" "0" "N"
         ' 2>&1
     ) || rc=$?
@@ -206,7 +206,7 @@ EOF
     local output rc=0
     output=$(
         mydir="$tmpdir"
-        bash -c '
+        env old_mydir="$old_mydir" bash -c '
             zfs() {
                 if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" ]]; then
                     return 0
@@ -218,7 +218,7 @@ EOF
                     command zfs "$@"
                 fi
             }
-            source "'"$old_mydir"'/bin/zfsdelsnap"
+            source "$old_mydir/bin/zfsdelsnap"
             delsnap "pool@snap" "0" "N"
         ' 2>&1
     ) || rc=$?
@@ -314,8 +314,7 @@ EOF
 
     local output rc=0
     output=$(
-        bash -c '
-            mydir="'"$tmpdir"'"
+        env mydir="$tmpdir" old_mydir="$old_mydir" bash -c '
             declare -A _mock_zfs_holds=()
             mock_zfs_holds() {
                 _mock_zfs_holds["$1"]="${*:2}"
@@ -363,7 +362,7 @@ EOF
                 esac
                 return 0
             }
-            source "'"$old_mydir"'/bin/zfsdelsnap"
+            source "$old_mydir/bin/zfsdelsnap"
             releaseholds_tags=('offsite-*')
             delsnap "pool@snap" "0" "releaseholds" "nocheckagainst"
         ' 2>&1

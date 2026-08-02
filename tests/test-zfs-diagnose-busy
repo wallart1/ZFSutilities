@@ -222,7 +222,8 @@ test_diagnose_clone_dependents_snapshot() {
     _mock_zfs_get_values["pool/fs@snap1:receive_resume_token"]="-"
     start_capture
     diagnose_dataset_busy "pool/fs@snap1"
-    local out=$(stop_capture)
+    local out
+    out=$(stop_capture)
     if [[ "$out" == *"clone dependents"* ]]; then
         test_pass
     else
@@ -238,7 +239,8 @@ test_diagnose_holds() {
     _mock_zfs_get_values["pool/fs@snap1:receive_resume_token"]="-"
     start_capture
     diagnose_dataset_busy "pool/fs@snap1"
-    local out=$(stop_capture)
+    local out
+    out=$(stop_capture)
     if [[ "$out" == *"has holds"* && "$out" == *"offsite"* ]]; then
         test_pass
     else
@@ -255,7 +257,8 @@ test_diagnose_mounted_open_files() {
     _mock_fuser_out="/mnt/pool/fs: 1234 5678"
     start_capture
     diagnose_dataset_busy "pool/fs"
-    local out=$(stop_capture)
+    local out
+    out=$(stop_capture)
     if [[ "$out" == *"mounted at /mnt/pool/fs"* && "$out" == *"Open processes"* ]]; then
         test_pass
     else
@@ -270,7 +273,8 @@ test_diagnose_resume_token() {
     _mock_zfs_get_values["pool/fs:receive_resume_token"]="1-8e3b9c1e2-100"
     start_capture
     diagnose_dataset_busy "pool/fs"
-    local out=$(stop_capture)
+    local out
+    out=$(stop_capture)
     if [[ "$out" == *"resume token"* ]]; then
         test_pass
     else
@@ -288,7 +292,8 @@ test_diagnose_iscsi_lun() {
     _mock_targetcli_luns="  | o- lun0  [block/vm-105-disk-0]"
     start_capture
     diagnose_dataset_busy "pool/proxmox/vm-105-disk-0"
-    local out=$(stop_capture)
+    local out
+    out=$(stop_capture)
     if [[ "$out" == *"iSCSI LUN"* ]]; then
         test_pass
     else
@@ -304,7 +309,8 @@ test_diagnose_running_vm() {
     _mock_qm_status="running"
     start_capture
     diagnose_dataset_busy "pool/proxmox/vm-105-disk-0"
-    local out=$(stop_capture)
+    local out
+    out=$(stop_capture)
     if [[ "$out" == *"VM 105 is RUNNING"* ]]; then
         test_pass
     else
@@ -321,7 +327,8 @@ test_diagnose_nfs_share() {
     _mock_zfs_get_values["pool/fs:sharesmb"]="off"
     start_capture
     diagnose_dataset_busy "pool/fs"
-    local out=$(stop_capture)
+    local out
+    out=$(stop_capture)
     if [[ "$out" == *"shared via NFS"* ]]; then
         test_pass
     else
@@ -336,7 +343,8 @@ test_diagnose_fallback() {
     _mock_zfs_get_values["pool/fs:receive_resume_token"]="-"
     start_capture
     diagnose_dataset_busy "pool/fs"
-    local out=$(stop_capture)
+    local out
+    out=$(stop_capture)
     if [[ "$out" == *"No specific cause identified"* ]]; then
         test_pass
     else

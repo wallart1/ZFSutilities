@@ -23,22 +23,9 @@ bashinit
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-DOCS_DIR="$REPO_DIR/docs"
 TWO_NODE_DIR="$REPO_DIR/share/two-node"
 
 NODE_CONF="/etc/zfsutilities-node.conf"
-NODE_LIB_SRC="$REPO_DIR/lib/node-lib.sh"
-NODE_LIB_DST="/usr/local/lib/node-lib.sh"
-
-# Scripts installed on BOTH hosts
-BOTH_SCRIPTS="new-vm-disk remove-vm-disk detach-vm-disk attach-vm-disk list-vm-disks resize-vm-disk rescan-storage show-lun-map clone-vm move-vm-disk enroll-efi-keys-vm"
-
-# Scripts installed on the storage host ONLY
-STORAGE_ONLY_SCRIPTS="safe-iscsi-save restart-iscsi-services iscsi-add-encrypted-luns unlock-zfs-keys unlock-zfs-keys-auto lock-zfs-keys"
-
-ALL_SCRIPTS="$BOTH_SCRIPTS $STORAGE_ONLY_SCRIPTS"
-
-CLONE_SCRIPTS="zfsclone-vm promote-vm-clone archive-vm unarchive-vm remove-vm"
 
 INSTALLER_LIB="$SCRIPT_DIR/installer-lib.sh"
 [[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"

@@ -20,7 +20,8 @@ _get_retention_keys() {
 
 test_new_install_creates_default_only() {
     test_start "New install creates default-only retention policy"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     export ZFSCONFIG_PATH="$tmpdir/zfsutilities.json"
     _ensure_retention_profiles
     local keys
@@ -36,7 +37,8 @@ test_new_install_creates_default_only() {
 
 test_existing_config_preserves_user_profiles() {
     test_start "Existing user profiles are preserved"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     export ZFSCONFIG_PATH="$tmpdir/zfsutilities.json"
     python3 -c "
 import json
@@ -61,7 +63,8 @@ with open('$ZFSCONFIG_PATH', 'w') as f:
 
 test_existing_config_missing_default_adds_default() {
     test_start "Existing config missing default retention gets default added"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
     export ZFSCONFIG_PATH="$tmpdir/zfsutilities.json"
     python3 -c "
 import json
