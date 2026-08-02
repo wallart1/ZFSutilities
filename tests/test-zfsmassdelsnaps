@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
 # test-zfsmassdelsnaps — Unit tests for snapshot mass delete.
 
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"

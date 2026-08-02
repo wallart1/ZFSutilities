@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
 # test-repair-iscsi-luns — Unit tests for the iSCSI LUN repair script.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"

@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
 # test-zfs-send-receive-dryrun — Tests dry-run behaviour and helper logic in
 # zfs-send-receive.  Inner functions become available only after send-receive
 # has been executed once, so the first test bootstraps the function and the

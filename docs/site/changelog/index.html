@@ -6259,8 +6259,12 @@
   (<code>test-deploy-version</code>, <code>test-installer-retention</code>, <code>test-zfs-diagnose-busy</code>,
   <code>test-zfslockmanager</code>). Replaced the confusing nested quoting that triggered
   SC1078 in <code>tests/test-zfsdelsnap</code> with <code>env</code> variable passing. Removed
-  unused/dead variables from <code>bin/install-single-node</code> and
-  <code>bin/install-two-node</code>.</li>
+  unused/dead variables from <code>bin/install-single-node</code>,
+  <code>bin/install-two-node</code>, and <code>lib/installer-lib.sh</code>. Added file-level
+  ShellCheck disable directives to test files and node-aware scripts so that
+  project-specific false positives (globals set by <code>bashinit</code>, test-framework
+  variables, and dynamic <code>source</code> calls via <code>find_zfsutility_script</code>) are
+  inhibited rather than left as noise.</li>
 </ul>
 <h3 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">&para;</a></h3>
 <ul>

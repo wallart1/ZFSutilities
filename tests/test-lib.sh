@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# shellcheck disable=SC2034,SC2221,SC2222
 # test-lib.sh — Shared utilities and mock infrastructure for ZFS Utilities tests.
 # Source this file at the top of every test-* script.
 

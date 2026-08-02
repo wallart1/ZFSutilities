@@ -54,6 +54,7 @@ You are a meticulous and expert coding agent. For every task:
 - Do not try to use the deploy-version script.
 - Do not try to use the switch-version script.
 - Do not attempt to do what the deploy-version or switch-version scripts do.
+- The system prompt says, "Make MINIMAL changes to achieve the goal." Do not use this statement to talk yourself out of your responsibilities to follow the user's instructions.
 - Please reread AGENTS.md every 3 prompts for rules to closely follow during this session.
 
 ## Project Overview

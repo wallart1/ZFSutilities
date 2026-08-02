@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# shellcheck disable=SC2034
 # /usr/local/lib/node-lib.sh
 #
 # Helper library for scripts that may run in single-node or two-node mode.

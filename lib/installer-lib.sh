@@ -63,7 +63,6 @@ explain_doc_server() {
 # Returns 0 on success, non-zero on failure.
 apt_install() {
     local packages=("$@")
-    local stamp="/var/cache/apt/archives/lock"
 
     echo ""
     echo "  Updating package lists..."
@@ -137,7 +136,7 @@ install_doc_server() {
 # Populates the associative array INSTALLER_FAILURES[name]=package.
 parse_check_prerequisites_failures() {
     local output="$1"
-    local line category name package message
+    local line name package
 
     # Clear any existing entries
     INSTALLER_FAILURES=()
@@ -145,10 +144,10 @@ parse_check_prerequisites_failures() {
     while IFS= read -r line; do
         [[ -n "$line" ]] || continue
         # Format: category|name|package|message
-        category="${line%%|*}"; line="${line#*|}"
+        line="${line#*|}"      # skip category
         name="${line%%|*}"; line="${line#*|}"
         package="${line%%|*}"; line="${line#*|}"
-        message="$line"
+        # message is the remainder; we only need name→package
         INSTALLER_FAILURES["$name"]="$package"
     done <<< "$output"
 }

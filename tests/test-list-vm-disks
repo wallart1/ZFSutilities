@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
 # test-list-vm-disks — Unit tests for list-vm-disks
 
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"

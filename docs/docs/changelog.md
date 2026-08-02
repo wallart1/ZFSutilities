@@ -44,8 +44,12 @@
   (`test-deploy-version`, `test-installer-retention`, `test-zfs-diagnose-busy`,
   `test-zfslockmanager`). Replaced the confusing nested quoting that triggered
   SC1078 in `tests/test-zfsdelsnap` with `env` variable passing. Removed
-  unused/dead variables from `bin/install-single-node` and
-  `bin/install-two-node`.
+  unused/dead variables from `bin/install-single-node`,
+  `bin/install-two-node`, and `lib/installer-lib.sh`. Added file-level
+  ShellCheck disable directives to test files and node-aware scripts so that
+  project-specific false positives (globals set by `bashinit`, test-framework
+  variables, and dynamic `source` calls via `find_zfsutility_script`) are
+  inhibited rather than left as noise.
 
 ### Documentation
 
