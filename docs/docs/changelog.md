@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.73.1
+
+*Released 2026-08-02*
+
+### Fixed
+
+- **`deploy-version` repo-root detection** — Fixed `MYDIR` resolution so the
+  script correctly identifies the repository root when invoked as
+  `./bin/deploy-version`. The previous calculation resolved to `bin/`, causing
+  the repo-root guard to fail and preventing deployment.
+- **`git-release` repo-root detection** — Applied the same parent-directory
+  fix so `REPO_ROOT` resolves to the repository root instead of `bin/`.
+  Corrected the usage example from `./release` to `./bin/git-release`.
+
+### Documentation
+
+- Updated all source documentation examples that referenced `./deploy-version`
+  or `./git-release` to use the correct `./bin/` paths
+  (`installation/index.md`, `commands-and-modules/two-node.md`,
+  `commands-and-modules/commands.md`, and
+  `developer-guide/two-node-config.md`).
+
 ## 0.73.0
 
 *Released 2026-08-02*

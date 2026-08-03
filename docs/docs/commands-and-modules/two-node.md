@@ -187,7 +187,7 @@ Deploys the current repository state as a new versioned installation without
 activating it. Run from the repository root.
 
 ```bash
-sudo ./deploy-version [version] [group ...]
+sudo ./bin/deploy-version [version] [group ...]
 ```
 
 **Arguments:**

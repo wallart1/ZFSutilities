@@ -18,7 +18,7 @@ bashinit
 source "$mydir/rootcheck"
 rootcheck
 
-MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)
 
 # ------------------------------------------------------------------
 # Argument parsing
@@ -35,9 +35,9 @@ usage() {
     echo "           groups are deployed."
     echo ""
     echo "Examples:"
-    echo "  sudo ./deploy-version                  # deploy current VERSION to all groups"
-    echo "  sudo ./deploy-version 1.2.0            # deploy specific version to all groups"
-    echo "  sudo ./deploy-version 1.2.0 production # deploy only 'production' group"
+    echo "  sudo ./bin/deploy-version                  # deploy current VERSION to all groups"
+    echo "  sudo ./bin/deploy-version 1.2.0            # deploy specific version to all groups"
+    echo "  sudo ./bin/deploy-version 1.2.0 production # deploy only 'production' group"
     echo ""
     if [[ -f /etc/zfsutilities-deploy.conf ]]; then
         echo "Available groups from /etc/zfsutilities-deploy.conf:"
@@ -64,7 +64,7 @@ usage() {
 if [[ ! -d "$MYDIR/bin" || ! -d "$MYDIR/lib" ]]; then
     die "deploy-version must be run from the repository root.\n" \
         "  Wrong:  sudo deploy-version  (runs from deployed PATH)\n" \
-        "  Right:  cd /path/to/zfsutilities-dev && sudo ./deploy-version"
+        "  Right:  cd /path/to/zfsutilities-dev && sudo ./bin/deploy-version"
 fi
 
 # ------------------------------------------------------------------

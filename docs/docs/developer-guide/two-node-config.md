@@ -65,7 +65,7 @@ DEPLOY_GROUP_staging="staging-host"
 Each `DEPLOY_GROUP_<name>` variable is a space-separated list of host short names. Pass the group name(s) to `deploy-version` to deploy only to those hosts:
 
 ```bash
-sudo ./deploy-version 1.2.0 production
+sudo ./bin/deploy-version 1.2.0 production
 ```
 
 If no groups are specified, `deploy-version` deploys to all defined groups plus the local host.

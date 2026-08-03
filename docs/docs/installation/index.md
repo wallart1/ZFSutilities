@@ -135,7 +135,7 @@ install new versions without touching the running system:
 
 ```bash
 cd /path/to/zfsutilities-dev
-sudo ./deploy-version
+sudo ./bin/deploy-version
 sudo switch-version 0.34.0
 ```
 

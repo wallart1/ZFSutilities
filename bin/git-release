@@ -8,13 +8,13 @@
 set -e
 
 usage() {
-    echo "Usage: ./release <version> <commit-message>"
+    echo "Usage: ./bin/git-release <version> <commit-message>"
     echo ""
     echo "  version         New version string (e.g. 0.1.4)"
     echo "  commit-message  Message for the git commit and tag"
     echo ""
     echo "Example:"
-    echo '  ./release 0.1.4 "Fix bashinit mydir handling"'
+    echo '  ./bin/git-release 0.1.4 "Fix bashinit mydir handling"'
     exit 1
 }
 
@@ -24,7 +24,7 @@ VERSION="$1"
 shift
 MSG="$*"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # Validate we're in a git repo

@@ -34,4 +34,4 @@ pythoncodingpolicy
 .nfs*
 
 # Allow README/docs screenshots
-!06 Docs/images/*.png
+!docs/images/*.png

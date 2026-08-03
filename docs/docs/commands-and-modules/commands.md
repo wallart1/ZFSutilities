@@ -174,7 +174,7 @@ Deploys the current repository state as a new versioned installation under
 version; use [`switch-version`](#switch-version) for that.
 
 ```bash
-sudo ./deploy-version [version] [group ...]
+sudo ./bin/deploy-version [version] [group ...]
 ```
 
 **Arguments:**
@@ -252,7 +252,7 @@ Bumps `VERSION`, commits all staged changes, and creates a git tag. Must be
 run from a git repository.
 
 ```bash
-./git-release <version> <commit-message>
+./bin/git-release <version> <commit-message>
 ```
 
 **Arguments:**
