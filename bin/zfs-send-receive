@@ -391,63 +391,67 @@ function send-receive {
             [[ $dryrun = 'N' ]] && ! zfs snapshot "$fs""$nextsnap" && { log_msg "FATAL: Unable to create the required snapshot $fs$nextsnap."; zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8; }
         fi
 
-        if ! zfs list "$destfs""$restorefs" > /dev/null 2>&1; then
-            [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: Would create destination dataset $destfs$restorefs"
-            [[ $dryrun = 'N' ]] && zfs create -pu "$destfs""$restorefs" > /dev/null
-        fi
-        resumetoken=$(zfs get -H receive_resume_token -o value "$destfs""$restorefs")
-        if [[ $resumetoken != '-' ]]; then
-            log_msg "INFO: Found resume token for $destfs$restorefs. Preparing to resume transfer."
-            if ! resumedata=$(zfs send -nP -t $resumetoken 2>&1); then
-                if [[ $resumedata == *"no longer exists"* || $resumedata == *"@--head--"* || $resumedata == *"Invalid argument"* || $resumedata == *"does not match"* || $resumedata == *"destination has been modified"* ]]; then
-                    log_msg "WARN: Resume token is invalid or stale. Aborting resume token."
-                    log_msg "WARN: $resumedata"
-                    abort_resume_token "$destfs$restorefs"
-                    continue
-                else
-                    log_msg "WARN: Resume token validation failed with unexpected error:\n\t$resumedata"
-                    if [[ $autoproceed = 'Y' ]]; then
-                        log_msg "WARN: autoproceed=Y — aborting resume token and retrying..."
+        if zfs list "$destfs""$restorefs" > /dev/null 2>&1; then
+            resumetoken=$(zfs get -H receive_resume_token -o value \
+                "$destfs""$restorefs" 2>/dev/null)
+            if [[ -n "$resumetoken" && "$resumetoken" != '-' ]]; then
+                log_msg "INFO: Found resume token for $destfs$restorefs." \
+                    "Preparing to resume transfer."
+                if ! resumedata=$(zfs send -nP -t "$resumetoken" 2>&1); then
+                    if [[ $resumedata == *"no longer exists"* || $resumedata == *"@--head--"* || $resumedata == *"Invalid argument"* || $resumedata == *"does not match"* || $resumedata == *"destination has been modified"* ]]; then
+                        log_msg "WARN: Resume token is invalid or stale. Aborting resume token."
+                        log_msg "WARN: $resumedata"
                         abort_resume_token "$destfs$restorefs"
                         continue
-                    elif ! [[ -t 0 ]]; then
-                        log_msg "WARN: Non-interactive mode — skipping $fs (resume token error for $destfs$restorefs)"
-                        zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue
                     else
-                        log_msg "INFO: Options:\n\t[A] Abort resume token and retry (may trigger full copy)\n\t[S] Skip this dataset\n\t[Q] Quit"
-                        local choice
-                        local eof_count=0
-                        while true; do
-                            read -p "Choice [A/S/Q]: " choice
-                            if [[ -z "$choice" ]]; then
-                                ((eof_count++))
-                                if [[ $eof_count -ge 3 ]]; then
-                                    log_msg "WARN: No interactive input — skipping $fs (resume token error)"
-                                    zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue 2
+                        log_msg "WARN: Resume token validation failed with unexpected error:\n\t$resumedata"
+                        if [[ $autoproceed = 'Y' ]]; then
+                            log_msg "WARN: autoproceed=Y — aborting resume token and retrying..."
+                            abort_resume_token "$destfs$restorefs"
+                            continue
+                        elif ! [[ -t 0 ]]; then
+                            log_msg "WARN: Non-interactive mode — skipping $fs (resume token error for $destfs$restorefs)"
+                            zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue
+                        else
+                            log_msg "INFO: Options:\n\t[A] Abort resume token and retry (may trigger full copy)\n\t[S] Skip this dataset\n\t[Q] Quit"
+                            local choice
+                            local eof_count=0
+                            while true; do
+                                read -p "Choice [A/S/Q]: " choice
+                                if [[ -z "$choice" ]]; then
+                                    ((eof_count++))
+                                    if [[ $eof_count -ge 3 ]]; then
+                                        log_msg "WARN: No interactive input — skipping $fs (resume token error)"
+                                        zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue 2
+                                    fi
+                                    continue
                                 fi
-                                continue
-                            fi
-                            [[ "${choice^^}" = 'A' ]] && { log_msg "INFO: Aborting resume token..."; abort_resume_token "$destfs$restorefs"; continue 2; }
-                            [[ "${choice^^}" = 'S' ]] && { log_msg "INFO: Skipping $fs."; zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue 2; }
-                            [[ "${choice^^}" = 'Q' ]] && { zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8; }
-                            echo "Please enter A, S, or Q."
-                        done
+                                [[ "${choice^^}" = 'A' ]] && { log_msg "INFO: Aborting resume token..."; abort_resume_token "$destfs$restorefs"; continue 2; }
+                                [[ "${choice^^}" = 'S' ]] && { log_msg "INFO: Skipping $fs."; zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue 2; }
+                                [[ "${choice^^}" = 'Q' ]] && { zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8; }
+                                echo "Please enter A, S, or Q."
+                            done
+                        fi
                     fi
+                else
+                    log_msg "VERB: resumedata=$resumedata"
+                    # awk '/^size/ {print $2}'  —  Extract remaining byte count from resume token info.
+                    datatosend=$(echo "$resumedata" | awk '/^size/ {print $2}')
+                    log_msg "VERB: datatosend=$datatosend"
+                    log_msg "INFO: Remaining data to transfer: $(echo $datatosend | numfmt --to=iec-i)."
+                    [[ $datatosend -gt $pvthreshold ]] && pvcommand='Y' || { log_msg "INFO: Small transfer."; pvcommand='N'; }
+                    sendoptions="-t $resumetoken"
+                    receiveoptions=""
+                    log_msg "INFO: zfs send $sendoptions"
+                    log_msg "INFO: zfs receive $receiveoptions $destfs$restorefs"
+                    do_transfer "$sendoptions" "$receiveoptions" "$pvcommand" "$datatosend" "resume transfer for $destfs$restorefs"
+                    zfslock_release "$lock_source"; zfslock_release "$lock_dest"; ((i--)); continue
                 fi
-            else
-                log_msg "VERB: resumedata=$resumedata"
-                # awk '/^size/ {print $2}'  —  Extract remaining byte count from resume token info.
-                datatosend=$(echo "$resumedata" | awk '/^size/ {print $2}')
-                log_msg "VERB: datatosend=$datatosend"
-                log_msg "INFO: Remaining data to transfer: $(echo $datatosend | numfmt --to=iec-i)."
-                [[ $datatosend -gt $pvthreshold ]] && pvcommand='Y' || { log_msg "INFO: Small transfer."; pvcommand='N'; }
-                sendoptions="-t $resumetoken"
-                receiveoptions=""
-                log_msg "INFO: zfs send $sendoptions"
-                log_msg "INFO: zfs receive $receiveoptions $destfs$restorefs"
-                do_transfer "$sendoptions" "$receiveoptions" "$pvcommand" "$datatosend" "resume transfer for $destfs$restorefs"
-                zfslock_release "$lock_source"; zfslock_release "$lock_dest"; ((i--)); continue
             fi
+        else
+            [[ $dryrun != 'N' ]] && log_msg \
+                "INFO: Dry-run: Would create destination dataset $destfs$restorefs"
+            [[ $dryrun = 'N' ]] && zfs create -pu "$destfs""$restorefs" > /dev/null
         fi
 
         if zfs list "$destfs""$restorefs""$nextsnap" > /dev/null 2>&1 && [[ $force != "Y" ]]; then
@@ -517,7 +521,7 @@ function send-receive {
         fi
 
         if [[ $incremental = '' || $force = "Y" ]]; then
-            if zfs list -t filesystem,volume "$destfs""$restorefs" > /dev/null; then
+            if zfs list -t filesystem,volume "$destfs""$restorefs" > /dev/null 2>&1; then
                 if ! check_running_vms_or_skip "$destfs$restorefs"; then zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue; fi
                 if ! prepare_destination_for_full_copy "$destfs$restorefs" "$fs"; then
                     log_msg "FATAL: Failed to prepare destination $destfs$restorefs for full copy."

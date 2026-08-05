@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.74.2
+
+*Released 2026-08-05*
+
+### Fixed
+
+- **`zfs-send-receive` resume-token loop on non-existent destination** — When
+  restoring to a destination dataset that does not yet exist, the script no
+  longer checks for or validates a `receive_resume_token`. Previously, the
+  validation would fail and the retry path could loop indefinitely because the
+  destination had not been created yet.
+
+### Changed
+
+- **`zfs-send-receive` stderr suppression** — `zfs get receive_resume_token`
+  and the destination-existence check for full-copy preparation now redirect
+  stderr to `/dev/null`, avoiding spurious error output during dry-run and
+  non-existent-destination flows.
+
+### Tests
+
+- Added `test_dryrun_nonexistent_destination_no_resume_loop` to
+  `tests/test-zfs-send-receive-dryrun`.
+- Updated test-suite counts in `AGENTS.md` and
+  `docs/docs/developer-guide/testing.md`.
+
 ## 0.74.1
 
 *Released 2026-08-05*

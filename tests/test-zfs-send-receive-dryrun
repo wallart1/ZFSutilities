@@ -983,6 +983,61 @@ test_clone_dataset_message_verb() {
 }
 
 # ---------------------------------------------------------------------------
+# Test dry-run restore to a non-existent destination does not loop on resume
+# ---------------------------------------------------------------------------
+
+test_dryrun_nonexistent_destination_no_resume_loop() {
+    test_start "Dry-run restore to non-existent destination skips resume-token loop"
+
+    reset_mocks
+    set_msg_level INFO
+
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_send_size="1000000"
+
+    # Destination dataset intentionally absent from _mock_zfs_datasets.
+    # Use sourcefsremovequalifiers=0 so the restore path is predictable and
+    # does not depend on the test harness's read() override, which would
+    # otherwise interfere with remove_leading_qualifiers.
+    nextsnap="@snap1"
+
+    clear_log
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=0; doincrementals='N'" || true
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+
+    if [[ "$log" != *"Dry-run: Would create destination dataset pool/dest/pool/src/data"* ]]; then
+        test_fail "Missing expected destination-creation log line; log='$log'"
+        return
+    fi
+    if [[ "$log" != *"Dry-run: Would send"* ]]; then
+        test_fail "Missing expected send log line; log='$log'"
+        return
+    fi
+    if [[ "$log" == *"Found resume token"* ]]; then
+        local _msg="Should not look for a resume token on a non-existent destination;"
+        _msg+=" log='$log'"
+        test_fail "$_msg"
+        return
+    fi
+    if [[ "$log" == *"Resume token validation failed"* ]]; then
+        local _msg2="Should not attempt to validate a resume token on a non-existent destination;"
+        _msg2+=" log='$log'"
+        test_fail "$_msg2"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
 # Test END trailer respects ZFSUTILITIES_LOG_INHERIT
 # ---------------------------------------------------------------------------
 
@@ -1201,6 +1256,7 @@ test_handle_commsnap_rc4_new_dest
 test_dryrun_size_estimate_info_not_warn
 test_full_copy_resumable_verb
 test_clone_dataset_message_verb
+test_dryrun_nonexistent_destination_no_resume_loop
 test_handle_commsnap_rc16
 test_handle_commsnap_rc16_autoproceed_warns
 test_handle_commsnap_rc16_scope_mismatch
