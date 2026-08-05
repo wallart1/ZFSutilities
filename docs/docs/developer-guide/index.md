@@ -31,9 +31,9 @@ relevant to developers working on ZFS Utilities.
 
 ### Core runtime
 
-- `bashinit` — session logging and `$mydir` setup. For development, copy to
-  home: `cp bashinit ~`. `/root/bashinit` is auto-managed as a symlink by
-  `deploy-version` and `switch-version`.
+- `bashinit` — session logging and `$mydir` setup. For development, symlink
+  from the repo: `ln -sfn /path/to/repo/bin/bashinit ~`. `/root/bashinit`
+  is auto-managed as a symlink by `deploy-version` and `switch-version`.
 - `pv` — progress visualization for large transfers (`sudo apt install pv`)
 - `zfsutils-linux` — ZFS userspace utilities (`sudo apt install zfsutils-linux`)
 - `rsync` — file synchronization (`sudo apt install rsync`)

@@ -84,13 +84,15 @@ snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1
 if [[ -z "$snap" ]]; then
     zfslock_init
     if ! zfslock_acquire "$zvol" "w" "archive-vm auto-snapshot"; then
-        log_msg "FATAL: Could not acquire write lock on ${zvol} for snapshot creation"
+        log_msg "Could not acquire write lock on ${zvol} for snapshot creation"
+        echo "__ARCHIVE_VM_ERROR__"
         exit 1
     fi
     snap_name="@retire-$(date -Iminutes)-d"
     if ! zfs snapshot "${zvol}${snap_name}"; then
         zfslock_release "$ZFSLOCK_ID"
-        log_msg "FATAL: Failed to create snapshot ${zvol}${snap_name}"
+        log_msg "Failed to create snapshot ${zvol}${snap_name}"
+        echo "__ARCHIVE_VM_ERROR__"
         exit 1
     fi
     zfslock_release "$ZFSLOCK_ID"
@@ -100,7 +102,7 @@ fi
 echo "$snap"
 SSHEOF
         )
-        if [[ -z "$snap" || "$snap" == FATAL:* ]]; then
+        if [[ -z "$snap" || "$snap" == __ARCHIVE_VM_ERROR__ ]]; then
             { log_msg "FATAL: Failed to determine snapshot for ${zvol} on ${STORAGE_HOST}"; exit 1; }
         fi
     fi
@@ -380,6 +382,11 @@ fi
 # Archive each zvol
 for zvol in $zvols; do
     snap=$(ensure_retire_snapshot "$zvol")
+    # ensure_retire_snapshot logs the specific failure before exiting its
+    # subshell; an empty result means the failure has already been reported.
+    if [[ -z "$snap" || "$snap" == __ARCHIVE_VM_ERROR__ ]]; then
+        exit 1
+    fi
     snap_name="@${snap##*@}"
     archive_dataset="${ARCHIVE_BASE}/${zvol}"
 
@@ -435,7 +442,7 @@ parent=$(dirname "$archive_dataset")
 zfs create -p "$parent" 2>/dev/null || true
 
 if ! zfs send -cw "${zvol}${snap_name}" | zfs receive -o volblocksize=1M "$archive_dataset"; then
-    echo "FATAL: Failed to archive ${zvol}" >&2
+    echo "Failed to archive ${zvol}" >&2
     exit 1
 fi
 

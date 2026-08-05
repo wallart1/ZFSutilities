@@ -411,7 +411,7 @@ def on_offsite_run(app, ctx):
 
     offsite_pool = do_detect_offsite_pool(app)
     if offsite_pool is None:
-        log_msg("FATAL: No offsite pool online. Cannot proceed.")
+        log_msg("WARN: No offsite pool online.")
         return
 
     while True:

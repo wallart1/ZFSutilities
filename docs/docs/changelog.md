@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.74.1
+
+*Released 2026-08-05*
+
+### Changed
+
+- **Logging hygiene** — Several recoverable or warning conditions that were
+  logged as `FATAL` are now logged as `WARN`, leaving `FATAL` for true aborts:
+  - `find_zfsutility_script` when a sibling script cannot be found.
+  - `pool_to_target` for unknown pools or single-node iSCSI lookups.
+  - `zfs-send-receive` dataset/snapshot deletion failures and unhandled
+    `zfscommsnap` return codes.
+  - Python offsite profile, profile runner, and schedule-page errors.
+- **`bashinit` / `lib/paths.sh` loading** — `bashinit` now locates and sources
+  `lib/paths.sh` even when `$mydir` is not preset, such as when bash is invoked
+  from the Python GUI via `bash -c`.
+- **`archive-vm` error handling** — Remote storage-host snapshot failures are
+  now reported with an explicit `__ARCHIVE_VM_ERROR__` sentinel instead of
+  relying on a `FATAL:` prefix in stdout. The archive loop also aborts cleanly
+  when snapshot determination fails, instead of continuing with an empty
+  snapshot name.
+- **Development setup instructions** — `AGENTS.md` and the developer guide now
+  recommend symlinking `~/bashinit` from the repo (`ln -sfn`) rather than
+  copying it, matching the production symlink model.
+
+### Fixed
+
+- **`archive-vm` abort on snapshot failure** — Fixed a bug where a failure to
+  determine or create a retire snapshot did not stop the archive loop because
+  the failure was detected inside a command-substitution subshell.
+- **`tests/test-archive-vm` helper** — `run_archive` now returns the actual
+  exit code of the archived script instead of the exit code of the trailing
+  `cat` commands.
+
+### Tests
+
+- Added `tests/test-node-lib` case verifying `bashinit` loads `lib/paths.sh`
+  when `$mydir` is unset.
+- Added `tests/test-archive-vm` case verifying a storage-host snapshot error
+  aborts the archive with a `FATAL` message.
+- Added `tests/python/test_backup_runner.py` case verifying
+  `_check_process` returns `False` immediately when the runner is stopped.
+- Updated existing tests to expect `WARN` instead of `FATAL` for the downgraded
+  log messages.
+
 ## 0.74.0
 
 *Released 2026-08-05*

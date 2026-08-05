@@ -259,7 +259,7 @@ def _run_command(step, session_log_file=None):
                 log_msg(f"WARN: Step exited with rc={returncode}")
             return returncode
         except (OSError, ValueError, subprocess.SubprocessError) as e:
-            log_msg(f"FATAL: Error running step: {e}")
+            log_msg(f"WARN: Error running step: {e}")
             return 1
     finally:
         if step.post_callback is not None:
@@ -274,7 +274,7 @@ def _run_step_list(steps, session_log_file=None):
     for step in steps:
         rc = _run_command(step, session_log_file=session_log_file)
         if rc == 9:
-            log_msg("FATAL: Operation aborted due to lock conflict in headless mode.")
+            log_msg("WARN: Operation aborted due to lock conflict in headless mode.")
             return rc
         if rc != 0:
             if step.fatal:
@@ -459,7 +459,7 @@ def run_offsite_profile(profile, config, parent_dir, session_log_file=None):
     candidates = get_offsite_candidate_names(config)
     offsite_pool = detect_offsite_pool(candidates)
     if offsite_pool is None:
-        log_msg("FATAL: No offsite pool online. Cannot proceed.")
+        log_msg("WARN: No offsite pool online.")
         return 1
     log_msg(f"INFO: Offsite pool: {offsite_pool}")
     steps = []
@@ -497,7 +497,7 @@ def run_restore_profile(profile, config, parent_dir, session_log_file=None):
     do_part1 = cfg.get("do_part1", True)
     do_part2 = cfg.get("do_part2", True)
     if not source or not dest:
-        log_msg("FATAL: Source and destination must be specified")
+        log_msg("WARN: Source and destination must be specified")
         return 1
     removequalifiers, destfs = compute_restore_params(source, dest)
     restore_step = build_restore_command(
@@ -676,7 +676,7 @@ def main():
             }
             runner = runners.get(tab_type)
             if runner is None:
-                log_msg(f"FATAL: Unknown tab type: {tab_type}")
+                log_msg(f"WARN: Unknown tab type: {tab_type}")
                 rc = 1
             else:
                 rc = runner(profile, config, parent_dir, _session_log_file)

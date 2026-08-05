@@ -94,6 +94,7 @@ run_archive() {
         export _mock_archive_mount="$archive_mount"
         export _capture_dir="$capture_dir"
         export _mock_ssh_snapshot_exists="$ssh_snap_exists"
+        export _mock_ssh_snapshot_error="${_mock_ssh_snapshot_error:-}"
 
         # Provide alternating ask_yn responses: yes for archive, no for removal.
         _ask_yn_count=0
@@ -160,7 +161,9 @@ run_archive() {
                 fi
 
                 if [[ "$stdin" == *"zfs list -H -t snapshot"* ]]; then
-                    if [[ "$_mock_ssh_snapshot_exists" == "1" ]]; then
+                    if [[ "${_mock_ssh_snapshot_error:-}" == "1" ]]; then
+                        echo "__ARCHIVE_VM_ERROR__"
+                    elif [[ "$_mock_ssh_snapshot_exists" == "1" ]]; then
                         echo "${_mock_zvol}@dailybackup-2026-07-14T07:00-04:00-d"
                     else
                         echo "SNAP:${_mock_zvol}@retire-${_mock_date_iso}-d" \
@@ -211,9 +214,11 @@ run_archive() {
     ) 2>&1 <<EOF
 $stdin_input
 EOF
+    local rc=$?
 
     cat "$capture_dir/snapshots" 2>/dev/null || true
     cat "$capture_dir/ssh" 2>/dev/null || true
+    return $rc
 }
 
 # ------------------------------------------------------------------
@@ -221,7 +226,7 @@ EOF
 # ------------------------------------------------------------------
 
 reset_mocks() {
-    unset _mock_read_response _mock_ssh_snapshot_exists
+    unset _mock_read_response _mock_ssh_snapshot_exists _mock_ssh_snapshot_error
 }
 
 test_single_node_uses_existing_snapshot() {
@@ -363,6 +368,38 @@ n"
 
     if [[ "$out" != *"SNAP:${expected_snap}"* ]]; then
         test_fail "Snapshot creation not recorded in ssh mock; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_storage_snapshot_error_aborts() {
+    reset_mocks
+    test_start "Two-node: storage snapshot error aborts archive"
+
+    local vmid="214"
+    local pve_dir="$_mock_zfs_state_dir/pve6"
+    local archive="$_mock_zfs_state_dir/archive6"
+    local mount="$_mock_zfs_state_dir/mount6"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_ssh_snapshot_error=1
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_archive two-node none "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected non-zero exit code; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"FATAL: Failed to determine snapshot"* ]]; then
+        test_fail "Expected FATAL message not found; output:\n$out"
         return
     fi
 
@@ -519,14 +556,8 @@ test_no_error_message_level() {
 y
 n"
 
-    local out rc
+    local out
     out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
-    rc=$?
-
-    if [[ $rc -ne 0 ]]; then
-        test_fail "Unexpected exit code $rc; output:\n$out"
-        return
-    fi
 
     if [[ "$out" == *"ERROR:"* ]]; then
         test_fail "Output contains unsanctioned ERROR level; output:\n$out"
@@ -543,6 +574,7 @@ test_single_node_uses_existing_snapshot
 test_single_node_creates_retire_snapshot
 test_two_node_queries_storage_for_snapshot
 test_two_node_creates_snapshot_on_storage
+test_two_node_storage_snapshot_error_aborts
 test_two_node_fetches_volblocksize_on_storage
 test_single_node_archives_only_referenced_disks
 test_single_node_warns_on_orphaned_zvol

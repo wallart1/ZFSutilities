@@ -171,7 +171,7 @@ function send-receive {
             fi
             local saved_fsarray=("${fsarray[@]}")
             if ! delfs "$dest"; then
-                log_msg "FATAL: Dataset deletion failed."; return 1
+                log_msg "WARN: Dataset deletion failed."; return 1
             fi
             fsarray=("${saved_fsarray[@]}")
         else
@@ -185,7 +185,7 @@ function send-receive {
             releaseholds_tags=('offsite-*')
             if ! delallsnaps "$dest" '' 'releaseholds'; then
                 releaseholds_tags=("${_save_releaseholds_tags[@]}")
-                log_msg "FATAL: Snapshot deletion failed for $dest."; return 1
+                log_msg "WARN: Snapshot deletion failed for $dest."; return 1
             fi
             releaseholds_tags=("${_save_releaseholds_tags[@]}")
             receive_F_option='F'
@@ -295,7 +295,7 @@ function send-receive {
             fi
         elif [[ $rc = 32 ]]; then true
         else
-            log_msg "FATAL: Unhandled return code=$rc from zfscommsnap"
+            log_msg "WARN: Unhandled return code=$rc from zfscommsnap"
             return 2
         fi
         return 0
@@ -462,7 +462,12 @@ function send-receive {
         _hcrc=$?
         if [[ $_hcrc -ne 0 ]]; then
             zfslock_release "$lock_source"; zfslock_release "$lock_dest"
-            [[ $_hcrc -eq 1 ]] && continue || exit 8
+            if [[ $_hcrc -eq 1 ]]; then
+                continue
+            else
+                log_msg "FATAL: Failed to determine common snapshot for $fs."
+                exit 8
+            fi
         fi
 
         if zfs list "$destfs""$restorefs""$nextsnap" > /dev/null 2>&1 && [[ $force != "Y" ]]; then
@@ -514,7 +519,12 @@ function send-receive {
         if [[ $incremental = '' || $force = "Y" ]]; then
             if zfs list -t filesystem,volume "$destfs""$restorefs" > /dev/null; then
                 if ! check_running_vms_or_skip "$destfs$restorefs"; then zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue; fi
-                if ! prepare_destination_for_full_copy "$destfs$restorefs" "$fs"; then zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8; fi
+                if ! prepare_destination_for_full_copy "$destfs$restorefs" "$fs"; then
+                    log_msg "FATAL: Failed to prepare destination $destfs$restorefs for full copy."
+                    zfslock_release "$lock_source"
+                    zfslock_release "$lock_dest"
+                    exit 8
+                fi
             fi
         fi
 

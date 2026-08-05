@@ -58,7 +58,7 @@ function bashinit {
 #   ZFSUTILITIES_BIN_DIR         (default: /usr/local/lib/zfsutilities/bin)
 #   ZFSUTILITIES_CURRENT_BIN_DIR (default: /usr/local/lib/zfsutilities/current/bin)
 #   ZFSUTILITIES_SYSTEM_LIB_DIR  (default: /usr/local/lib)
-# Prints the resolved path and returns 0 on success, otherwise logs a FATAL
+# Prints the resolved path and returns 0 on success, otherwise logs a WARN
 # message and returns 1.
 # Guarded so that test mocks can take precedence when scripts re-source
 # bashinit during a test run.
@@ -85,7 +85,7 @@ function find_zfsutility_script {
             return 0
         fi
     done
-    log_msg "FATAL: Could not find sibling script: $name"
+    log_msg "WARN: Could not find sibling script: $name"
     return 1
 }
 fi
@@ -183,7 +183,19 @@ function warn {
 # Load the centralized path layout so every script that sources bashinit
 # inherits the FHS-aligned directories and legacy-path aliases.
 # PATHS_LIB can be set explicitly by tests that need a different layout.
-PATHS_LIB="${PATHS_LIB:-$(find_zfsutility_script paths.sh)}"
+if [[ -z "${PATHS_LIB}" ]]; then
+    if [[ -n "${mydir}" ]]; then
+        PATHS_LIB=$(find_zfsutility_script paths.sh)
+    elif [[ -n "${BASH_SOURCE[0]}" ]]; then
+        # $mydir is not preset (e.g. bash -c from the Python GUI).  Derive a
+        # directory from this sourced file so lib/paths.sh can be found in
+        # deployed layouts where /root/bashinit is a symlink to
+        # /usr/local/lib/zfsutilities/current/bin/bashinit.
+        _bashinit_dir=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+        PATHS_LIB=$(mydir="$_bashinit_dir" find_zfsutility_script paths.sh)
+        unset _bashinit_dir
+    fi
+fi
 if [[ -n "$PATHS_LIB" ]]; then
     # shellcheck source=/dev/null
     source "$PATHS_LIB"

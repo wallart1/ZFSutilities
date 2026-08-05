@@ -584,6 +584,8 @@ class BackupRunner:
     def _check_process(self):
         if self.process is None:
             return False
+        if not self.running:
+            return False
         self._maybe_truncate_session_log()
         try:
             rc = self.process.poll()
@@ -641,7 +643,7 @@ class BackupRunner:
                             self._on_complete(cancelled=True)
                         return False
                     if step.fatal:
-                        self._log(f"FATAL: Aborting {self.label.lower()} because pre-backup command failed")
+                        self._log(f"FATAL: Aborting {self.label.lower()} because step failed")
                         self._cleanup_io()
                         self.set_stdin_enabled(False)
                         if self._finally_step and not self._finally_ran:

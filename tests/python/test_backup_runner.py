@@ -357,7 +357,7 @@ class TestAbortHandling(unittest.TestCase):
             runner._check_process()
 
         mock_log.assert_any_call(
-            "FATAL: Aborting backup because pre-backup command failed"
+            "FATAL: Aborting backup because step failed"
         )
 
 
@@ -828,6 +828,17 @@ class TestRunnerRobustness(unittest.TestCase):
         fake.stderr.fileno.return_value = 4
         fake.stderr.closed = True
         return fake
+
+    def test_check_process_returns_false_when_not_running(self):
+        """_check_process returns False immediately if the runner is stopped."""
+        runner = self._runner()
+        runner.running = False
+        runner.process = self._fake_process(rc=0)
+
+        result = runner._check_process()
+
+        self.assertFalse(result)
+        runner.process.poll.assert_not_called()
 
     @patch("backup_runner.add_history_entry")
     def test_check_process_exception_finishes_runner(self, _mock_add):

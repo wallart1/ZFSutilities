@@ -1986,9 +1986,9 @@ updating:</p>
 <code>switch-version</code> as a symlink pointing to <code>current/bin/bashinit</code>. You do not
 need to copy it manually. Running <code>deploy-version</code> (or <code>switch-version</code>) will
 update the symlink to track the active version automatically.</p>
-<p><strong><code>~/bashinit</code></strong> — Copy here only for <strong>local development</strong> when running scripts
+<p><strong><code>~/bashinit</code></strong> — Symlink here only for <strong>local development</strong> when running scripts
 from the repository without <code>sudo</code>:</p>
-<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>bashinit<span class="w"> </span>~
+<div class="highlight"><pre><span></span><code>ln<span class="w"> </span>-sfn<span class="w"> </span>/path/to/repo/bin/bashinit<span class="w"> </span>~
 </code></pre></div>
 <p>Never overwrite <code>/root/bashinit</code> with a regular file — doing so breaks the
 symlink tracking and prevents version switching from working correctly.</p>
@@ -2027,7 +2027,7 @@ symlink tracking and prevents version switching from working correctly.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.0
+      ZFS Utilities v0.74.1
     </div>
   
   
@@ -2052,7 +2052,7 @@ symlink tracking and prevents version switching from working correctly.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

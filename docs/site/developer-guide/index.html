@@ -1932,9 +1932,9 @@ relevant to developers working on ZFS Utilities.</p>
 <h2 id="key-dependencies">Key Dependencies<a class="headerlink" href="#key-dependencies" title="Permanent link">&para;</a></h2>
 <h3 id="core-runtime">Core runtime<a class="headerlink" href="#core-runtime" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>bashinit</code> — session logging and <code>$mydir</code> setup. For development, copy to
-  home: <code>cp bashinit ~</code>. <code>/root/bashinit</code> is auto-managed as a symlink by
-  <code>deploy-version</code> and <code>switch-version</code>.</li>
+<li><code>bashinit</code> — session logging and <code>$mydir</code> setup. For development, symlink
+  from the repo: <code>ln -sfn /path/to/repo/bin/bashinit ~</code>. <code>/root/bashinit</code>
+  is auto-managed as a symlink by <code>deploy-version</code> and <code>switch-version</code>.</li>
 <li><code>pv</code> — progress visualization for large transfers (<code>sudo apt install pv</code>)</li>
 <li><code>zfsutils-linux</code> — ZFS userspace utilities (<code>sudo apt install zfsutils-linux</code>)</li>
 <li><code>rsync</code> — file synchronization (<code>sudo apt install rsync</code>)</li>
@@ -1997,7 +1997,7 @@ new suites and use the mock infrastructure.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.0
+      ZFS Utilities v0.74.1
     </div>
   
   
@@ -2022,7 +2022,7 @@ new suites and use the mock infrastructure.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.1"}</script>
     
     
       <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>

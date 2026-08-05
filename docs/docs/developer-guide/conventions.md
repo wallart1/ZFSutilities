@@ -189,11 +189,11 @@ updating:
 need to copy it manually. Running `deploy-version` (or `switch-version`) will
 update the symlink to track the active version automatically.
 
-**`~/bashinit`** — Copy here only for **local development** when running scripts
+**`~/bashinit`** — Symlink here only for **local development** when running scripts
 from the repository without `sudo`:
 
 ```bash
-cp bashinit ~
+ln -sfn /path/to/repo/bin/bashinit ~
 ```
 
 Never overwrite `/root/bashinit` with a regular file — doing so breaks the

@@ -116,12 +116,12 @@ fi
 pool_to_target() {
     local pool="$1"
     if is_single_node; then
-        log_msg "FATAL: pool_to_target: iSCSI not available in single-node mode"
+        log_msg "WARN: pool_to_target: iSCSI not available in single-node mode"
         return 1
     fi
     local short="${POOL_TARGET[$pool]:-}"
     if [[ -z "$short" ]]; then
-        log_msg "FATAL: Unknown pool: $pool (not in POOL_TARGET in $NODE_CONF)"
+        log_msg "WARN: Unknown pool: $pool (not in POOL_TARGET in $NODE_CONF)"
         return 1
     fi
     echo "${IQN_PREFIX}:${short}"

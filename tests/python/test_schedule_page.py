@@ -1043,14 +1043,14 @@ class TestRunNow(unittest.TestCase):
         process.terminate.assert_called_once()
         self.assertNotIn("p1", app._running_profiles)
         app.update_action_buttons.assert_called_with("schedule")
-        fatal_calls = [
+        warn_calls = [
             c for c in mock_log.call_args_list
-            if c[0] and c[0][0].startswith("FATAL:")
+            if c[0] and c[0][0].startswith("WARN:")
         ]
-        self.assertEqual(len(fatal_calls), 1)
+        self.assertEqual(len(warn_calls), 1)
         self.assertIn(
             "expected at most 4 positional arguments",
-            fatal_calls[0][0][0],
+            warn_calls[0][0][0],
         )
 
     @patch("schedule_page.set_button_markup_red")

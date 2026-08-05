@@ -91,10 +91,10 @@ test_find_script_missing() {
     assert_equals "" "$result"
     local log
     log=$(get_test_log_file)
-    if grep -q "FATAL: Could not find sibling script: definitely-missing-script" "$log"; then
+    if grep -q "WARN: Could not find sibling script: definitely-missing-script" "$log"; then
         test_pass
     else
-        test_fail "Expected FATAL log message not found"
+        test_fail "Expected WARN log message not found"
     fi
 }
 
@@ -247,10 +247,10 @@ test_pool_to_target_unknown() {
     assert_equals "" "$result"
     local log
     log=$(get_test_log_file)
-    if grep -q "FATAL: Unknown pool: unknownpool" "$log"; then
+    if grep -q "WARN: Unknown pool: unknownpool" "$log"; then
         test_pass
     else
-        test_fail "Expected FATAL log message not found"
+        test_fail "Expected WARN log message not found"
     fi
 }
 
@@ -416,6 +416,18 @@ test_find_script_system_lib_dir() {
     assert_equals "$system_lib_dir/system-script" "$result"
 }
 
+test_bashinit_loads_paths_without_mydir() {
+    test_start "bashinit loads lib/paths.sh when mydir is unset"
+    local bashinit_path result
+    bashinit_path="$mydir/bin/bashinit"
+    result=$(
+        unset mydir PATHS_LIB
+        source "$bashinit_path"
+        echo "${ZFSUTILITIES_CONFIG_DIR:-}"
+    )
+    assert_equals "/etc/zfsutilities" "$result"
+}
+
 # ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
@@ -444,6 +456,7 @@ test_find_script_bin_directory_clone_script
 test_find_script_lib_from_python_directory
 test_find_script_from_bin_directory
 test_find_script_missing
+test_bashinit_loads_paths_without_mydir
 
 test_remote_zfsutilities_bin_success
 test_remote_zfsutilities_bin_failure

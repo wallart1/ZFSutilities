@@ -293,10 +293,10 @@ production. `switch-version` creates and updates production wiring, including
 and desktop shortcuts. When `switch-version` changes the active version, `/root/bashinit`
 tracks automatically — no manual copying needed.
 
-For development (running scripts from the repo without `sudo`), keep a local copy:
+For development (running scripts from the repo without `sudo`), use a symlink:
 
 ```bash
-cp bashinit ~
+ln -sfn /path/to/repo/bin/bashinit ~
 ```
 
 ## zfsscruball Pause/Resume

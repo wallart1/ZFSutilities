@@ -782,7 +782,7 @@ def _run_profile_now(app, profile_name):
             (app, profile_name, process),
         )
     except (OSError, ValueError, TypeError) as exc:
-        log_msg(f"FATAL: Could not watch profile {profile_name} output: {exc}")
+        log_msg(f"WARN: Could not watch profile {profile_name} output: {exc}")
         try:
             process.terminate()
         except (OSError, ProcessLookupError):
