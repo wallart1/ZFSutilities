@@ -53,7 +53,7 @@ Low-level config I/O and small, cross-cutting configuration helpers.
 
 | Structure | Reference |
 | --------- | --------- |
-| JSON config (`/root/.config/zfsutilities.json`) | [JSON config][ds-json] |
+| JSON config (`/var/lib/zfsutilities/config.json`) | [JSON config][ds-json] |
 | Session log directory | [Session log index][ds-log] |
 
 ---
@@ -143,6 +143,80 @@ single source of truth for the JSON config format version.
 | Structure | Reference |
 | --------- | --------- |
 | `config_version` field | [config_version][ds-config-migrations] |
+
+---
+
+### `paths.py`
+
+Centralized path resolution for the Python layer. Mirrors the FHS-aligned
+layout defined in `lib/paths.sh` and provides legacy-path helpers for migration
+code.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `get_system_config_dir()` | System/admin configuration directory |
+| `get_config_dir()` | Runtime configuration directory |
+| `get_state_dir()` | Persistent runtime-state directory |
+| `get_log_dir()` | Log directory |
+| `get_run_dir()` | Transient runtime-state directory |
+| `get_lock_dir()` | Advisory-lock directory |
+| `get_config_path()` | Main JSON config file path |
+| `get_profiles_dir()` | Profile directory (created on demand) |
+| `get_history_path()` | Backup-history JSON file path |
+| `get_scrub_state_path()` | Scrub-manager state file path |
+| `get_snapfile_path(label)` | Saved next-snapshot file path |
+| `get_offsite_snapfile_path()` | Saved offsite next-snapshot file path |
+| `get_run_snapfile_prefix()` | Transient next-snapshot file prefix |
+| `get_pid_file_path()` | GUI PID file path |
+| `get_session_log_dir()` | Per-session log directory |
+| `get_log_index_path()` | Session-log index file path |
+| `get_cron_file_path()` | Cron drop-in file path |
+| `get_profile_lock_dir()` | Per-profile advisory-lock directory |
+| `get_legacy_*()` | Legacy `/root/.config/` path helpers |
+| `get_legacy_system_config_paths()` | Mapping of new system-config paths to legacy paths |
+
+**Called modules / imported helpers:** none.
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| All paths listed above | [Path layout](../index.md#path-layout-and-migration) |
+
+---
+
+### `migration.py`
+
+One-time migration of ZFS Utilities state files to the FHS-aligned layout. The
+migration is automatic, idempotent, and rollback-compatible: after moving a file
+or directory from its legacy location, a symlink is left at the old path so
+older deployed versions can still find their data.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `run_migration()` | Run the one-time migration if it has not already run |
+| `migrate_state_files()` | Migrate Python-layer state files and directories |
+| `migrate_system_config_files()` | Migrate system administrator config files |
+| `_migrate_item(new_path, old_path, create_symlink)` | Move one item and leave a rollback symlink |
+| `get_migration_sentinel_path()` | Path to the migration sentinel file |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose |
+| ------ | ------- |
+| `paths` | New and legacy path resolution |
+| `logging_config` | `log_msg` for warnings and status |
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| Migration sentinel (`${STATE_DIR}/.migration_complete`) | [Path layout](../index.md#path-layout-and-migration) |
+| State/config files under `/var/lib/zfsutilities/` and `/etc/zfsutilities/` | [JSON config][ds-json], [Session log index][ds-log], [Snapshot name persistence][ds-snapfile] |
 
 ---
 
@@ -508,7 +582,7 @@ Append-only history store for backup/offsite/restore/prune runs.
 
 | Function | Purpose |
 | -------- | ------- |
-| `load_history()` / `save_history()` | Read/write `/root/.config/zfsutilities-history.json` |
+| `load_history()` / `save_history()` | Read/write `/var/lib/zfsutilities/history.json` |
 | `add_history_entry(entry)` | Append a new entry and prune old ones |
 | `prune_history(history, days)` | Remove entries older than `days` |
 | `get_success_rate(history, days)` | Compute success percentage for recent entries |
@@ -1475,16 +1549,16 @@ One-time parser for legacy `zfsretainpol-<pool>` bash files.
 - Retention policy arrays in
   [Retention policy arrays][ds-retention].
 
-[ds-json]: ../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson
+[ds-json]: ../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson
 [ds-log]: ../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson
-[ds-history]: ../developer-guide/data-structures.md#backup-history-rootconfigzfsutilities-historyjson
+[ds-history]: ../developer-guide/data-structures.md#backup-history-varlibzfsutilitieshistoryjson
 [ds-bashstep]: ../developer-guide/data-structures.md#bashstep-command_builderspy
 [ds-appctx]: ../developer-guide/data-structures.md#appcontext-app_contextpy
 [ds-zfsrepo]: ../developer-guide/data-structures.md#zfsrepository-dataclasses-zfs_repositorypy
 [ds-scrub]: ../developer-guide/data-structures.md#scrub-state-scrub_managerpy
 [ds-snapfile]: ../developer-guide/data-structures.md#snapshot-name-persistence
 [ds-fss]: ../developer-guide/data-structures.md#fss-table-in-memory-rows-from-zfscheckagainst-json
-[ds-node]: ../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf
+[ds-node]: ../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf
 [ds-profiles]: ../user-guide/profiles.md
 [ds-backup]: ../developer-guide/data-structures.md#backup-object
 [ds-config-migrations]: ../developer-guide/data-structures.md#config-migrations

@@ -10,15 +10,9 @@ import os
 import time
 from contextlib import contextmanager
 
+from paths import get_lock_dir
 
-def _default_lock_dir():
-    """Return root-owned lock dir for root, user-writable dir otherwise."""
-    if os.geteuid() == 0:
-        return "/run/lock/zfs"
-    return os.path.expanduser("~/.cache/zfsutilities")
-
-
-_DEFAULT_LOCK_DIR = _default_lock_dir()
+_DEFAULT_LOCK_DIR = os.environ.get("ZFSUTILITIES_LOCK_DIR", get_lock_dir())
 
 CONFIG_LOCK_PATH = os.environ.get(
     "ZFSUTILITIES_CONFIG_LOCK_PATH",

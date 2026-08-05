@@ -12,7 +12,7 @@ ZFSutilities supports two deployment modes:
 Both modes use the same scripts and the same config file format. The
 `NODE_MODE` variable controls which code paths are active.
 
-## Config File: `/etc/zfsutilities-node.conf`
+## Config File: `/etc/zfsutilities/node.conf`
 
 A POSIX-shell sourceable file, installed by the interactive installers in
 `bin/`. Site admins can edit this file directly.
@@ -20,7 +20,7 @@ A POSIX-shell sourceable file, installed by the interactive installers in
 ### Single-node example
 
 ```bash
-# /etc/zfsutilities-node.conf
+# /etc/zfsutilities/node.conf
 NODE_MODE="single-node"
 THIS_HOST="myhost"
 ```
@@ -28,7 +28,7 @@ THIS_HOST="myhost"
 ### Two-node example
 
 ```bash
-# /etc/zfsutilities-node.conf
+# /etc/zfsutilities/node.conf
 NODE_MODE="two-node"
 
 STORAGE_HOST="stewie"
@@ -48,7 +48,7 @@ The `IQN_PREFIX` value contains the literal host string because it is part of
 the standards-based iSCSI target's persistent name — renaming the host does **not**
 rename the target.
 
-## Config File: `/etc/zfsutilities-deploy.conf`
+## Config File: `/etc/zfsutilities/deploy.conf`
 
 A separate, optional configuration file used by [`deploy-version`](../commands-and-modules/two-node.md#deploy-version-repo-root) to determine which remote hosts receive a deployment.
 
@@ -57,7 +57,7 @@ A separate, optional configuration file used by [`deploy-version`](../commands-a
 **Format:**
 
 ```bash
-# /etc/zfsutilities-deploy.conf
+# /etc/zfsutilities/deploy.conf
 DEPLOY_GROUP_production="stewie tweety"
 DEPLOY_GROUP_staging="staging-host"
 ```
@@ -70,7 +70,7 @@ sudo ./bin/deploy-version 1.2.0 production
 
 If no groups are specified, `deploy-version` deploys to all defined groups plus the local host.
 
-**Legacy fallback:** If `/etc/zfsutilities-deploy.conf` does not exist, `deploy-version` falls back to the node configuration (`/etc/zfsutilities-node.conf` or `/etc/two-node.conf`) and deploys to `STORAGE_HOST` and `COMPUTE_HOST` when `NODE_MODE="two-node"`.
+**Legacy fallback:** If `/etc/zfsutilities/deploy.conf` does not exist, `deploy-version` falls back to the node configuration (`/etc/zfsutilities/node.conf`, `/etc/zfsutilities/two-node.conf`, or the legacy `/etc/zfsutilities-node.conf` / `/etc/two-node.conf`) and deploys to `STORAGE_HOST` and `COMPUTE_HOST` when `NODE_MODE="two-node"`.
 
 **Installation:** `install-two-node` generates this file from `share/installer/deploy.conf.template`, substituting the hostnames you enter during setup. The installer **never overwrites** an existing file, so manual edits are safe across re-runs.
 
@@ -92,7 +92,7 @@ rootcheck
 
 The library:
 
-1. Sources `/etc/zfsutilities-node.conf`
+1. Sources `/etc/zfsutilities/node.conf` (falling back to `/etc/zfsutilities/two-node.conf`, then legacy `/etc/zfsutilities-node.conf` / `/etc/two-node.conf`)
 2. In single-node mode: sets `STORAGE_HOST=COMPUTE_HOST=$THIS_HOST`,
    leaves iSCSI variables empty
 3. Provides helper functions:
@@ -190,7 +190,7 @@ ZFSutilities project tree (not from the versioned installation PATH), they sourc
 the config directly instead of using the library. Running from the repo-root is supported only in a development environment.
 
 ```bash
-NODE_CONF="/etc/zfsutilities-node.conf"
+NODE_CONF="/etc/zfsutilities/node.conf"
 if [[ ! -r "$NODE_CONF" ]]; then
     echo "✗ Missing $NODE_CONF — install via: bin/install-single-node" >&2
     exit 1
@@ -221,7 +221,7 @@ Interactive installer for single-node mode:
 
 1. Installs MkDocs (for documentation editing)
 2. Prompts for hostname (default: `$(hostname -s)`)
-3. Generates `/etc/zfsutilities-node.conf`
+3. Generates `/etc/zfsutilities/node.conf`
 4. Installs `node-lib.sh` and compatibility symlink locally
 5. Deploys VM disk management and clone scripts to the versioned installation
 6. Does NOT install iSCSI-only scripts or systemd drop-ins
@@ -233,7 +233,7 @@ Interactive installer for two-node mode:
 1. Installs MkDocs (for documentation editing)
 2. Prompts for storage host, compute host, storage IP, IQN prefix,
    and pool-to-target mappings (auto-detects online pools)
-3. Generates `/etc/zfsutilities-node.conf`
+3. Generates `/etc/zfsutilities/node.conf`
 4. Installs scripts on both hosts via SSH
 5. Installs systemd drop-ins, `zfs-keys-unlock.service`, and the encrypted
    LUNs config

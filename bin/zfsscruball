@@ -14,7 +14,7 @@
 # $parallel     (Optional) Number of scrubs to run in parallel. Default is 2.
 
 source ~/bashinit
-STATEFILE="/tmp/zfsscruball.state"
+STATEFILE="${STATEFILE:-${ZFSUTILITIES_SCRUBALL_STATEFILE:-/run/zfsutilities/zfsscruball.state}}"
 
 function scruball {
     # bashinit / rootcheck are delayed until the entry function because this
@@ -137,6 +137,7 @@ function do_resume {
 
 function do_start {
     # Clear state file for new run
+    mkdir -p "$(dirname "$STATEFILE")"
     > "$STATEFILE"
 
     # Build pool list if not provided

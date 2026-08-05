@@ -16,6 +16,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 
 - [`backup-installed-programs`](#backup-installed-programs)
 - [`check-prerequisites`](#check-prerequisites)
+- [`cleanup-zfsutilities-legacy`](#cleanup-zfsutilities-legacy)
 - [`datesubtract`](#datesubtract)
 - [`deploy-version`](#deploy-version)
 - [`getlinecount`](#getlinecount)
@@ -135,6 +136,57 @@ Checks the following categories: core ZFS utilities (`bash`, `zfs`, `zpool`,
 
 ---
 
+### `cleanup-zfsutilities-legacy`
+
+Remove backward-compatibility symlinks left by the FHS-aligned migration, and
+optionally uninstall old deployed versions that do not understand the new path
+layout.
+
+```bash
+sudo cleanup-zfsutilities-legacy [OPTIONS]
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `--symlinks-only` | Remove only legacy symlinks (default) |
+| `--remove-versions V...` | Uninstall the specified deployed versions |
+| `--remove-older-than V` | Uninstall all deployed versions older than *V* |
+| `--all-orphaned` | Uninstall every deployed version except the active one |
+| `--yes`, `-y` | Skip interactive confirmations |
+| `--dry-run` | Print actions without executing them |
+| `--help`, `-h` | Show help and exit |
+
+**Globals:**
+
+| Variable | Role | Reference |
+| -------- | ---- | --------- |
+| `ZFSUTILITIES_VERSION_BASE` | Base directory for deployed versions | [Infrastructure](../developer-guide/global-variables.md#infrastructure) |
+| `ZFSUTILITIES_*` path overrides | Override default FHS-aligned paths in tests/non-standard installs | [Path layout](../index.md#path-layout-and-migration) |
+
+The currently active version is never removed. Legacy paths are removed only if
+they are symlinks; regular files or directories are left in place with a
+warning.
+
+**Called modules:**
+
+| Module | Purpose |
+| ------ | ------- |
+| `lib/paths.sh` | FHS-aligned path variables and migration helper |
+| `bashinit` / `rootcheck` | Standard initialization and root check |
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Success (or cancellation) |
+| `1` | A fatal error occurred |
+
+---
+
 ### `datesubtract`
 
 Calculates the number of days, months, and years between two dates.
@@ -182,7 +234,7 @@ sudo ./bin/deploy-version [version] [group ...]
 | Argument | Default | Description |
 | -------- | ------- | ----------- |
 | `version` | contents of `./VERSION` | Version string to deploy |
-| `group` | all groups in deploy.conf | Deployment group names from `/etc/zfsutilities-deploy.conf` |
+| `group` | all groups in deploy.conf | Deployment group names from `/etc/zfsutilities/deploy.conf` |
 
 **Globals:**
 
@@ -200,14 +252,14 @@ sudo ./bin/deploy-version [version] [group ...]
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| `/etc/zfsutilities-deploy.conf` | Deployment group definitions | — |
-| Node config | Legacy remote host list | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf) |
+| `/etc/zfsutilities/deploy.conf` | Deployment group definitions | — |
+| Node config | Legacy remote host list | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | `/usr/local/lib/zfsutilities/versions/<version>/` | Deployed version directory | — |
 
 **Internal flow:**
 
 1. Parse arguments; read `./VERSION` if no version is supplied.
-2. Load `/etc/zfsutilities-deploy.conf` groups, or fall back to the node config for remote hosts.
+2. Load `/etc/zfsutilities/deploy.conf` groups, or fall back to the node config for remote hosts.
 3. Build the version directory and copy `bin/`, `lib/`, `python/`, `docs/`,
    and `share/` from the repository.
 4. Rebuild the static docs.
@@ -810,7 +862,7 @@ Calls [`zfsretain`](modules.md#zfsretain) for each pool.
 | --------- | ---- | --------- |
 | `$zfspoolarray` | Pool names to process | [$zfspoolarray](../developer-guide/data-structures.md#zfspoolarray) |
 | `$fsarray` / `$fsarraylen` | Datasets within each pool | [$fsarray](../developer-guide/data-structures.md#fsarray-fsarraylen) |
-| JSON config `pools` | Source for `poolarray()` | [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson) |
+| JSON config `pools` | Source for `poolarray()` | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
 
 **Internal flow:**
 
@@ -999,9 +1051,9 @@ sudo zfsdailybackup "dryrun='Y'"
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | `$nextsnap` | Shared snapshot name used for both send steps | [$nextsnap](../developer-guide/global-variables.md#zfs-sendreceive) |
-| `/tmp/zfsnextsnap_*` | Persisted snapshot name, reused if run again | [snapfile](../developer-guide/data-structures.md#snapshot-name-persistence) |
-| JSON config `backup` | Source of override values from the GUI | [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson) |
-| Node config | Gates two-node rsync pulls | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf) |
+| `/run/zfsutilities/nextsnap_*` | Persisted snapshot name, reused if run again | [snapfile](../developer-guide/data-structures.md#snapshot-name-persistence) |
+| JSON config `backup` | Source of override values from the GUI | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
+| Node config | Gates two-node rsync pulls | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 
 **Internal flow:**
 
@@ -1130,7 +1182,7 @@ For VM-disk zvols in two-node mode it automatically tears down the matching
 iSCSI LUN/backstore before `zfs destroy` and records the teardown so that
 `zfs-send-receive` can rebuild the LUN afterwards. During teardown it removes
 the backstore from `/etc/rtslib-fb-target/expected-backstores.txt` and, if the
-zvol is encrypted, from `/etc/iscsi-encrypted-luns.conf`. The `zfs-send-receive`
+zvol is encrypted, from `/etc/zfsutilities/iscsi-encrypted-luns.conf`. The `zfs-send-receive`
 rebuild path re-adds those entries after the replacement `zfs receive` so the
 manifests remain consistent.
 
@@ -1159,7 +1211,7 @@ report the specific cause — holds, open files, iSCSI LUNs, running VMs, etc.
 | --------- | ---- | --------- |
 | `$fsarray` / `$fsarraylen` | Datasets selected for deletion | [$fsarray](../developer-guide/data-structures.md#fsarray-fsarraylen) |
 | `ISCSI_TEARDOWN` | Records iSCSI LUNs torn down so `zfs-send-receive` can rebuild them | [ISCSI_TEARDOWN](../developer-guide/data-structures.md#iscsi_teardown-associative-array) |
-| Node config | Determines single-node vs two-node iSCSI behavior | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf) |
+| Node config | Determines single-node vs two-node iSCSI behavior | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 
 **Internal flow:**
 
@@ -2055,7 +2107,7 @@ sudo zfsscruball [start|pause|resume]
 
 **Globals:** none.
 
-State is tracked in `/tmp/zfsscruball.state` during a run.
+State is tracked in `/run/zfsutilities/zfsscruball.state` during a run.
 
 **Called modules:**
 
@@ -2068,7 +2120,7 @@ State is tracked in `/tmp/zfsscruball.state` during a run.
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| `/tmp/zfsscruball.state` | Tracks completed pools during resume | [scrub state file](../developer-guide/data-structures.md#zfsscruball-state-file) |
+| `/run/zfsutilities/zfsscruball.state` | Tracks completed pools during resume | [scrub state file](../developer-guide/data-structures.md#zfsscruball-state-file) |
 
 **Internal flow:**
 
@@ -2195,7 +2247,7 @@ sudo zfssendoffsite "dryrun='Y'"
 | --------- | ---- | --------- |
 | `$nextsnap` | Shared `@offsite` snapshot name | [$nextsnap](../developer-guide/global-variables.md#zfs-sendreceive) |
 | `$fsarray` / `$fsarraylen` | Datasets copied in each step, used by `applyholds` | [$fsarray](../developer-guide/data-structures.md#fsarray-fsarraylen) |
-| `/tmp/zfsnextsnap_*` | Persisted snapshot name for reruns | [snapfile](../developer-guide/data-structures.md#snapshot-name-persistence) |
+| `/run/zfsutilities/nextsnap_*` | Persisted snapshot name for reruns | [snapfile](../developer-guide/data-structures.md#snapshot-name-persistence) |
 
 **Internal flow:**
 
@@ -2269,7 +2321,7 @@ sudo zfsoffsiteretain "dryrun='Y'"
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | `$offsite_pools` | Online pools discovered to contain `@offsite` snapshots | — |
-| JSON config `retention` | Per-pool `s` bucket policy used by `zfscleanup` | [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson) |
+| JSON config `retention` | Per-pool `s` bucket policy used by `zfscleanup` | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
 
 **Internal flow:**
 
@@ -2648,8 +2700,8 @@ sudo archive-vm <vmid>
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| Node config | Determines single-node vs two-node paths | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf) |
-| JSON config `archive_path` | Default archive base | [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson) |
+| Node config | Determines single-node vs two-node paths | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| JSON config `archive_path` | Default archive base | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
 | `/etc/pve/qemu-server/<vmid>.conf` | Proxmox VM config archived and optionally removed | — |
 
 **Internal flow:**
@@ -2725,10 +2777,10 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| Node config | Determines two-node iSCSI behavior | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf) |
-| JSON config `archive_path` | Default archive base | [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson) |
+| Node config | Determines two-node iSCSI behavior | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| JSON config `archive_path` | Default archive base | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
 | `/etc/rtslib-fb-target/expected-backstores.txt` | Updated with restored backstores | [expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
-| `/etc/iscsi-encrypted-luns.conf` | Updated for restored encrypted LUNs | [encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Updated for restored encrypted LUNs | [encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 
 **Internal flow:**
 
@@ -2796,7 +2848,7 @@ sudo remove-vm <vmid>
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| Node config | Determines single-node vs two-node paths | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf) |
+| Node config | Determines single-node vs two-node paths | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | `/etc/pve/qemu-server/<vmid>.conf` | Removed if present | — |
 
 **Return codes:**

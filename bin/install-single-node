@@ -10,7 +10,7 @@
 #   1. Checks prerequisites interactively and offers to install missing items
 #   2. Installs the documentation server (MkDocs)
 #   3. Prompts for the minimum required information
-#   4. Generates /etc/zfsutilities-node.conf
+#   4. Generates /etc/zfsutilities/node.conf
 #   5. Deploys scripts as a versioned installation and sets up PATH
 #
 # Can also upgrade an existing two-node installation to single-node mode.
@@ -25,11 +25,13 @@ bashinit
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-NODE_CONF="/etc/zfsutilities-node.conf"
+NODE_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/node.conf"
 
 INSTALLER_LIB="$SCRIPT_DIR/installer-lib.sh"
 [[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
 source "$INSTALLER_LIB"
+
+ensure_zfsutilities_dirs
 
 _check_zfs_root() {
     local root_fs_type
@@ -116,10 +118,15 @@ if [[ -f "$NODE_CONF" ]]; then
         read -rp "Switch to single-node mode? (y/N): " switch
         [[ "$switch" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
     fi
-elif [[ -f /etc/two-node.conf ]]; then
-    echo "⚠ Legacy /etc/two-node.conf found (no /etc/zfsutilities-node.conf)."
-    echo "  This will create a new single-node config."
-    echo "  The old /etc/two-node.conf will be left in place as a backup."
+elif [[ -f "${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}" ]]; then
+    echo "⚠ Legacy ${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf} found."
+    echo "  This will create a new single-node config at $NODE_CONF."
+    echo "  The old file will be left in place; the runtime will fall back to it if needed."
+    echo ""
+elif [[ -f "${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}" ]]; then
+    echo "⚠ Legacy ${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf} found (no $NODE_CONF)."
+    echo "  This will create a new single-node config at $NODE_CONF."
+    echo "  The old file will be left in place as a backup."
     echo ""
 fi
 
@@ -138,7 +145,7 @@ if [[ "${SKIP_CONFIG:-}" != "true" ]]; then
     echo "Generating configuration..."
 
     # Build the config file from template
-    sed "s/@@THIS_HOST@@/${THIS_HOST}/g" "$SCRIPT_DIR/node.conf.template" > "$NODE_CONF"
+    sed "s/@@THIS_HOST@@/${THIS_HOST}/g" "$REPO_DIR/share/installer/node.conf.template" > "$NODE_CONF"
     chmod 0644 "$NODE_CONF"
 
     echo ""

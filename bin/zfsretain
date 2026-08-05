@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 # Apply retension policies (aka "prune")
 #
-# Policies live in the shared JSON config at /root/.config/zfsutilities.json
+# Policies live in the shared JSON config at /var/lib/zfsutilities/config.json
 # under the `retention` key, accessed via `zfsconfig_get_retention <pool>`.
 # If a pool has no entry, the 'default' entry is used. If the JSON config has
 # no retention data at all, the helper falls back to reading legacy

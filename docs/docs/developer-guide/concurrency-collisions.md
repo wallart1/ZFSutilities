@@ -39,11 +39,11 @@ Everything else runs without coordination.
 
 | Job type | Entry points | Datasets / pools | Snapshots | Config / state files | Other shared resources |
 |----------|--------------|------------------|-----------|----------------------|------------------------|
-| **Backup** | `zfsdailybackup`, GUI Backup, profiles | Source + dest pools (e.g. `threeamigos/proxmox`, `NVME1` → `fivebays`) | Creates `@dailybackup-*` | Reads backup steps, pools | `/tmp/zfsnextsnap_*`, session log, rsync endpoints |
-| **Offsite** | `zfssendoffsite`, GUI Offsite, profiles | Source pools → offsite pool | Creates `@offsite-*`, applies holds | Reads offsite pool list | `/tmp/zfsnextsnap_*`, session log |
+| **Backup** | `zfsdailybackup`, GUI Backup, profiles | Source + dest pools (e.g. `threeamigos/proxmox`, `NVME1` → `fivebays`) | Creates `@dailybackup-*` | Reads backup steps, pools | `/run/zfsutilities/nextsnap_*`, session log, rsync endpoints |
+| **Offsite** | `zfssendoffsite`, GUI Offsite, profiles | Source pools → offsite pool | Creates `@offsite-*`, applies holds | Reads offsite pool list | `/run/zfsutilities/nextsnap_*`, session log |
 | **Restore** | `zfsrestore`/`zfsfullcopy`, GUI Restore, profiles | Source backup pool → dest pool | Copies/rolls back snapshots | Restore params | iSCSI LUNs if restoring zvols |
 | **Prune** | `zfscleanup`/`zfsretain`, GUI Retention, profiles | All configured/online pools | **Destroys** snapshots | Retention policies | Calls `delsnap` |
-| **Scrub** | `zfsscruball`, GUI Pools, profiles, systemd timers | One or more pools | — | `scrub_state.json` | `/tmp/zfsscruball.state` |
+| **Scrub** | `zfsscruball`, GUI Pools, profiles, systemd timers | One or more pools | — | `scrub_state.json` | `/run/zfsutilities/zfsscruball.state` |
 | **Dataset destroy** | GUI Datasets → Delete | Selected subtree | Destroys all snapshots | — | iSCSI manifest, encrypted-LUN config |
 | **Snapshot delete** | GUI Datasets → Delete selected snapshots | Selected snapshots | Destroys snapshots | — | Holds must be released first |
 | **Checkagainst** | `zfscheckagainst`, GUI Checkagainst | Counterpart pools/datasets | Reads snapshot GUIDs | `checkagainst` table | — |
@@ -100,11 +100,11 @@ Snapshot names are generated from the current minute. Both bash and Python
 generators now serialize name generation with a brief global lock and record the
 issued name in a one-minute reservation file (`/run/lock/zfs/.snapname.reserved`).
 
-* Bash callers use `zfssnapbuild`, which writes `/tmp/zfsnextsnap_<caller>`.
+* Bash callers use `zfssnapbuild`, which writes `/run/zfsutilities/nextsnap_<caller>`.
 * Python callers use `feature_config.generate_snapshot_name()` and
   `generate_offsite_snapshot_name()`, which write
-  `/root/.config/zfsutilities_nextsnap` and
-  `/root/.config/zfsutilities_offsite_nextsnap`.
+  `/var/lib/zfsutilities/nextsnap` and
+  `/var/lib/zfsutilities/nextsnap_offsite`.
 
 The lock prevents two jobs from generating a name at the exact same instant. Two
 jobs that run sequentially within the same minute still receive the same name,
@@ -122,10 +122,10 @@ interoperate.
 
 | File | Writers | Readers | Lock file |
 |------|---------|---------|-----------|
-| `/root/.config/zfsutilities.json` | GUI (`save_config`), `zfsconfig` bash helper | Bash scripts via `zfsconfig`, `profile_runner.py` at startup | `/run/lock/zfs/.config.lock` |
-| `/root/.config/zfsutilities-history.json` | `BackupRunner._finish()`, `profile_runner.py` | Logs tab, dashboard | `/run/lock/zfs/.history.lock` |
+| `/var/lib/zfsutilities/config.json` | GUI (`save_config`), `zfsconfig` bash helper | Bash scripts via `zfsconfig`, `profile_runner.py` at startup | `/run/lock/zfs/.config.lock` |
+| `/var/lib/zfsutilities/history.json` | `BackupRunner._finish()`, `profile_runner.py` | Logs tab, dashboard | `/run/lock/zfs/.history.lock` |
 | `/var/log/zfsutilities/sessions/.log_index.json` | `BackupRunner`, `profile_runner.py`, Logs tab | Logs tab | `/run/lock/zfs/.log_index.lock` |
-| `/root/.config/zfsutilities/scrub_state.json` | `ScrubQueue` | `ScrubQueue` on restart | `/run/lock/zfs/.scrub_state.lock` |
+| `/var/lib/zfsutilities/scrub_state.json` | `ScrubQueue` | `ScrubQueue` on restart | `/run/lock/zfs/.scrub_state.lock` |
 
 The following files are still not lock-protected because they are outside the
 scope of this phase:
@@ -133,7 +133,7 @@ scope of this phase:
 | File | Writers | Readers | Risk |
 |------|---------|---------|------|
 | `/etc/rtslib-fb-target/expected-backstores.txt` | `zfsdelfs`, `new-vm-disk`, `remove-vm-disk`, two-node scripts | Two-node target rebuild | Concurrent modifications can leave an inconsistent manifest. |
-| `/etc/iscsi-encrypted-luns.conf` | Same as above | Same as above | Encrypted LUN entries can be duplicated or lost. |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Same as above | Same as above | Encrypted LUN entries can be duplicated or lost. |
 | `/var/log/zfsutilities/rsync-backup.log` | rsync pull/push steps | Users | `BackupRunner` truncates this file once per day (when its mtime is from a previous day); concurrent runners append and may interleave output. |
 
 ### 6. Scrub jobs managed by multiple uncoordinated paths

@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.74.0
+
+*Released 2026-08-05*
+
+### Added
+
+- **FHS-aligned runtime path layout** — ZFS Utilities now stores its files in
+  conventional system directories:
+  - `/etc/zfsutilities/` — system/admin configuration (`node.conf`,
+    `deploy.conf`, `iscsi-encrypted-luns.conf`, `two-node.conf`)
+  - `/var/lib/zfsutilities/` — persistent runtime state (`config.json`,
+    `history.json`, `profiles/`, `scrub_state.json`, `nextsnap`,
+    `nextsnap_offsite`)
+  - `/var/log/zfsutilities/` — logs and session files
+  - `/run/zfsutilities/` — transient runtime state
+  - `/run/lock/zfs/` — advisory locks
+- **`lib/paths.sh`** — Centralized bash path layout. Defines all base and
+  derived path variables, legacy-path aliases, and the one-time state migration
+  helper `migrate_zfsutilities_state()`.
+- **`python/paths.py`** — Python equivalent of `lib/paths.sh`; provides
+  FHS-aligned path helpers and legacy-path helpers for migration code.
+- **`python/migration.py`** — One-time, idempotent, rollback-compatible
+  migration of state files and system config files from their legacy locations
+  to the new layout. Leaves symlinks at the old paths so older deployed versions
+  can still operate.
+- **`bin/cleanup-zfsutilities-legacy`** — New utility to remove the
+  backward-compatibility symlinks left by the FHS migration and optionally
+  uninstall old deployed versions that do not understand the new layout.
+
+### Changed
+
+- **`bashinit`** — Automatically sources `lib/paths.sh` and invokes
+  `migrate_zfsutilities_state()` when running as root. Search paths in
+  `find_zfsutility_script` now include `lib/`, `python/`, and `share/` at the
+  repo level.
+- **`bin/zfsconfig`**, **`bin/uninstall-zfsutilities`**, **`bin/install-single-node`**,
+  **`bin/install-two-node`**, **`lib/node-lib.sh`**, **`lib/iscsi-lib.sh`**, and
+  other scripts — Updated to use the centralized path variables from
+  `lib/paths.sh` with legacy fallbacks.
+- **Session logs** — Default session-log directory moved from
+  `/var/log/zfsutilities/sessions` (still the default value) to be derived from
+  `ZFSUTILITIES_SESSION_LOG_DIR` in `lib/paths.sh`.
+
+### Tests
+
+- Added `tests/test-paths` and `tests/python/test_paths.py` for the new path
+  modules.
+- Added `tests/test-migration` and `tests/python/test_migration.py` for the
+  migration helpers.
+- Added `tests/test-cleanup-zfsutilities-legacy` for the legacy cleanup script.
+- Updated `tests/test-zfsconfig` with path-resolution coverage.
+- Updated `tests/test-uninstall-zfsutilities`, `tests/test-zfsdailybackup`,
+  `tests/test-zfsscruball`, `tests/test-zfssnapbuild`, and `tests/test-lib.sh`
+  for the new path layout.
+- Updated Python tests to use the new path helpers via `test_support.py`.
+
+### Documentation
+
+- Updated `docs/docs/index.md` with the new path layout and migration notes.
+- Added `cleanup-zfsutilities-legacy` to `commands-and-modules/commands.md`.
+- Added `paths.sh` to `commands-and-modules/modules.md` and updated the
+  `bashinit` entry.
+- Added `paths.py` and `migration.py` to
+  `commands-and-modules/python-modules.md`.
+- Updated installation, two-node, and developer-guide source files to reference
+  the new `/etc/zfsutilities/` paths while documenting legacy fallbacks.
+- Updated `AGENTS.md` path references and retention-policy notes.
+
 ## 0.73.1
 
 *Released 2026-08-02*

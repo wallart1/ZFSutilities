@@ -779,10 +779,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#node-configuration-etczfsutilities-nodeconf" class="md-nav__link">
+  <a href="#node-configuration-etczfsutilitiesnodeconf" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Node Configuration (/etc/zfsutilities-node.conf)
+        Node Configuration (/etc/zfsutilities/node.conf)
       
     </span>
   </a>
@@ -790,10 +790,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#runtime-configuration-rootconfigzfsutilitiesjson" class="md-nav__link">
+  <a href="#runtime-configuration-varlibzfsutilitiesconfigjson" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Runtime Configuration (/root/.config/zfsutilities.json)
+        Runtime Configuration (/var/lib/zfsutilities/config.json)
       
     </span>
   </a>
@@ -2163,7 +2163,7 @@ direction is not working.</p>
 <li>Explain any missing prerequisites and offer to install them automatically</li>
 <li>Install the documentation server (MkDocs) and explain what it provides</li>
 <li>Prompt for your hostname (default: current hostname)</li>
-<li>Generate the installation configuration file <code>/etc/zfsutilities-node.conf</code></li>
+<li>Generate the installation configuration file <code>/etc/zfsutilities/node.conf</code> (legacy <code>/etc/zfsutilities-node.conf</code> also works)</li>
 <li>Deploy scripts as a <strong>versioned installation</strong> to <code>/usr/local/lib/zfsutilities/versions/&lt;version&gt;/</code></li>
 <li>Activate the version and wire it into active production:</li>
 <li>Configure <code>PATH</code> in <code>/etc/profile.d</code> and <code>/etc/sudoers.d</code></li>
@@ -2183,7 +2183,7 @@ direction is not working.</p>
 <li>Install the documentation server (MkDocs)</li>
 <li>Prompt for storage host, compute host, storage network IP, iSCSI IQN
    prefix, and pool-to-target mappings</li>
-<li>Generate the installation configuration file <code>/etc/zfsutilities-node.conf</code></li>
+<li>Generate the installation configuration file <code>/etc/zfsutilities/node.conf</code> (legacy <code>/etc/zfsutilities-node.conf</code> also works)</li>
 <li><strong>Create iSCSI targets</strong> on the storage host automatically (idempotent —
    skips targets that already exist)</li>
 </ol>
@@ -2254,13 +2254,12 @@ choices, and asks what you want to remove.</p>
 </code></pre></div>
 <p>This also removes:</p>
 <ul>
-<li><code>/etc/zfsutilities-node.conf</code>, <code>/etc/two-node.conf</code>, and <code>/etc/zfsutilities-deploy.conf</code></li>
-<li><code>/root/.config/zfsutilities.json</code> and <code>/root/.config/zfsutilities/</code></li>
-<li><code>/root/.config/zfsutilities-history.json</code></li>
+<li><code>/etc/zfsutilities/node.conf</code>, <code>/etc/zfsutilities/two-node.conf</code>, and <code>/etc/zfsutilities/deploy.conf</code></li>
+<li><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></li>
+<li><code>/var/lib/zfsutilities/config.json</code>, <code>/var/lib/zfsutilities/history.json</code>, <code>/var/lib/zfsutilities/profiles/</code>, <code>/var/lib/zfsutilities/scrub_state.json</code>, <code>/var/lib/zfsutilities/nextsnap</code>, and <code>/var/lib/zfsutilities/nextsnap_offsite</code></li>
 <li><code>/root/.cache/zfsutilities/</code></li>
 <li><code>/var/log/zfsutilities/</code> (session logs, cron log, rsync-backup log)</li>
 <li>Scripts, service, and logs from <code>share/cache-warm/</code></li>
-<li><code>/etc/iscsi-encrypted-luns.conf</code></li>
 <li><code>/root/.luks-key</code> (with an explicit confirmation prompt)</li>
 </ul>
 <h3 id="two-node-deployments">Two-node deployments<a class="headerlink" href="#two-node-deployments" title="Permanent link">&para;</a></h3>
@@ -2268,7 +2267,7 @@ choices, and asks what you want to remove.</p>
 add <code>--all-nodes</code>:</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>uninstall-zfsutilities<span class="w"> </span>--purge<span class="w"> </span>--all-nodes
 </code></pre></div>
-<p>The script reads <code>/etc/zfsutilities-node.conf</code>, determines the peer host, and
+<p>The script reads <code>/etc/zfsutilities/node.conf</code> (falling back to the legacy <code>/etc/zfsutilities-node.conf</code>), determines the peer host, and
 runs the same uninstall command on it via SSH. If the peer is unreachable, the
 local uninstall continues and a warning is printed so you can rerun with
 <code>--all-nodes</code> later.</p>
@@ -2297,13 +2296,14 @@ rerun it safely. The install scripts (<code>install-single-node</code> and
 <p>ZFSutilities uses two configuration files with different purposes.
 The node configuration is not versioned; the runtime configuration
 contains an internal schema version. Both files persist across version switches.</p>
-<h3 id="node-configuration-etczfsutilities-nodeconf">Node Configuration (<code>/etc/zfsutilities-node.conf</code>)<a class="headerlink" href="#node-configuration-etczfsutilities-nodeconf" title="Permanent link">&para;</a></h3>
+<h3 id="node-configuration-etczfsutilitiesnodeconf">Node Configuration (<code>/etc/zfsutilities/node.conf</code>)<a class="headerlink" href="#node-configuration-etczfsutilitiesnodeconf" title="Permanent link">&para;</a></h3>
 <p>System-wide settings generated by the installer. Contains node mode
 (<code>single-node</code> or <code>two-node</code>), hostnames, storage-network IP, iSCSI IQN
-prefix, and pool-to-target mappings.
+prefix, and pool-to-target mappings. The legacy path <code>/etc/zfsutilities-node.conf</code>
+is still recognized as a fallback.
 See <a href="../developer-guide/two-node-config/">Two-Node Configuration</a> for
 the full reference.</p>
-<h3 id="runtime-configuration-rootconfigzfsutilitiesjson">Runtime Configuration (<code>/root/.config/zfsutilities.json</code>)<a class="headerlink" href="#runtime-configuration-rootconfigzfsutilitiesjson" title="Permanent link">&para;</a></h3>
+<h3 id="runtime-configuration-varlibzfsutilitiesconfigjson">Runtime Configuration (<code>/var/lib/zfsutilities/config.json</code>)<a class="headerlink" href="#runtime-configuration-varlibzfsutilitiesconfigjson" title="Permanent link">&para;</a></h3>
 <p>A shared JSON config read by both the GTK GUI and the bash scripts.
 Contains the pool registry, retention policies, backup/offsite/restore
 steps, checkagainst mappings, and GUI settings. It is created and
@@ -2372,7 +2372,7 @@ and activated via symlink:</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/etc/zfsutilities-node.conf</code></td>
+<td><code>/etc/zfsutilities/node.conf</code></td>
 <td>Node configuration</td>
 </tr>
 <tr>
@@ -2395,7 +2395,7 @@ and activated via symlink:</p>
 <td>systemd drop-ins for boot config</td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Encrypted LUN registry (if applicable)</td>
 </tr>
 <tr>
@@ -2416,7 +2416,7 @@ configure unattended boot.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/etc/zfsutilities-node.conf</code></td>
+<td><code>/etc/zfsutilities/node.conf</code></td>
 <td>Node configuration (copy)</td>
 </tr>
 </tbody>
@@ -2497,7 +2497,7 @@ sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.73.1
+      ZFS Utilities v0.74.0
     </div>
   
   
@@ -2522,7 +2522,7 @@ sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
     
     
       <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>

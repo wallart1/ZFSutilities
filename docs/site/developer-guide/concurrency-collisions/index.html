@@ -2060,7 +2060,7 @@ output in its own session log so concurrent runs do not cross-write.</p>
 <td>Source + dest pools (e.g. <code>threeamigos/proxmox</code>, <code>NVME1</code> → <code>fivebays</code>)</td>
 <td>Creates <code>@dailybackup-*</code></td>
 <td>Reads backup steps, pools</td>
-<td><code>/tmp/zfsnextsnap_*</code>, session log, rsync endpoints</td>
+<td><code>/run/zfsutilities/nextsnap_*</code>, session log, rsync endpoints</td>
 </tr>
 <tr>
 <td><strong>Offsite</strong></td>
@@ -2068,7 +2068,7 @@ output in its own session log so concurrent runs do not cross-write.</p>
 <td>Source pools → offsite pool</td>
 <td>Creates <code>@offsite-*</code>, applies holds</td>
 <td>Reads offsite pool list</td>
-<td><code>/tmp/zfsnextsnap_*</code>, session log</td>
+<td><code>/run/zfsutilities/nextsnap_*</code>, session log</td>
 </tr>
 <tr>
 <td><strong>Restore</strong></td>
@@ -2092,7 +2092,7 @@ output in its own session log so concurrent runs do not cross-write.</p>
 <td>One or more pools</td>
 <td>—</td>
 <td><code>scrub_state.json</code></td>
-<td><code>/tmp/zfsscruball.state</code></td>
+<td><code>/run/zfsutilities/zfsscruball.state</code></td>
 </tr>
 <tr>
 <td><strong>Dataset destroy</strong></td>
@@ -2160,11 +2160,11 @@ restore or backup targeting the same destination.</p>
 generators now serialize name generation with a brief global lock and record the
 issued name in a one-minute reservation file (<code>/run/lock/zfs/.snapname.reserved</code>).</p>
 <ul>
-<li>Bash callers use <code>zfssnapbuild</code>, which writes <code>/tmp/zfsnextsnap_&lt;caller&gt;</code>.</li>
+<li>Bash callers use <code>zfssnapbuild</code>, which writes <code>/run/zfsutilities/nextsnap_&lt;caller&gt;</code>.</li>
 <li>Python callers use <code>feature_config.generate_snapshot_name()</code> and
   <code>generate_offsite_snapshot_name()</code>, which write
-  <code>/root/.config/zfsutilities_nextsnap</code> and
-  <code>/root/.config/zfsutilities_offsite_nextsnap</code>.</li>
+  <code>/var/lib/zfsutilities/nextsnap</code> and
+  <code>/var/lib/zfsutilities/nextsnap_offsite</code>.</li>
 </ul>
 <p>The lock prevents two jobs from generating a name at the exact same instant. Two
 jobs that run sequentially within the same minute still receive the same name,
@@ -2187,13 +2187,13 @@ interoperate.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/root/.config/zfsutilities.json</code></td>
+<td><code>/var/lib/zfsutilities/config.json</code></td>
 <td>GUI (<code>save_config</code>), <code>zfsconfig</code> bash helper</td>
 <td>Bash scripts via <code>zfsconfig</code>, <code>profile_runner.py</code> at startup</td>
 <td><code>/run/lock/zfs/.config.lock</code></td>
 </tr>
 <tr>
-<td><code>/root/.config/zfsutilities-history.json</code></td>
+<td><code>/var/lib/zfsutilities/history.json</code></td>
 <td><code>BackupRunner._finish()</code>, <code>profile_runner.py</code></td>
 <td>Logs tab, dashboard</td>
 <td><code>/run/lock/zfs/.history.lock</code></td>
@@ -2205,7 +2205,7 @@ interoperate.</p>
 <td><code>/run/lock/zfs/.log_index.lock</code></td>
 </tr>
 <tr>
-<td><code>/root/.config/zfsutilities/scrub_state.json</code></td>
+<td><code>/var/lib/zfsutilities/scrub_state.json</code></td>
 <td><code>ScrubQueue</code></td>
 <td><code>ScrubQueue</code> on restart</td>
 <td><code>/run/lock/zfs/.scrub_state.lock</code></td>
@@ -2231,7 +2231,7 @@ scope of this phase:</p>
 <td>Concurrent modifications can leave an inconsistent manifest.</td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Same as above</td>
 <td>Same as above</td>
 <td>Encrypted LUN entries can be duplicated or lost.</td>
@@ -2535,7 +2535,7 @@ snapshot.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.73.1
+      ZFS Utilities v0.74.0
     </div>
   
   
@@ -2560,7 +2560,7 @@ snapshot.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

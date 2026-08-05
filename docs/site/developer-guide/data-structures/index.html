@@ -1495,10 +1495,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#node-configuration-file-etczfsutilities-nodeconf" class="md-nav__link">
+  <a href="#node-configuration-file-etczfsutilitiesnodeconf" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Node configuration file (/etc/zfsutilities-node.conf)
+        Node configuration file (/etc/zfsutilities/node.conf)
       
     </span>
   </a>
@@ -1506,15 +1506,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#json-config-rootconfigzfsutilitiesjson" class="md-nav__link">
+  <a href="#json-config-varlibzfsutilitiesconfigjson" class="md-nav__link">
     <span class="md-ellipsis">
       
-        JSON config (/root/.config/zfsutilities.json)
+        JSON config (/var/lib/zfsutilities/config.json)
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="JSON config (/root/.config/zfsutilities.json)">
+    <nav class="md-nav" aria-label="JSON config (/var/lib/zfsutilities/config.json)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1661,10 +1661,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#backup-history-rootconfigzfsutilities-historyjson" class="md-nav__link">
+  <a href="#backup-history-varlibzfsutilitieshistoryjson" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Backup history (/root/.config/zfsutilities-history.json)
+        Backup history (/var/lib/zfsutilities/history.json)
       
     </span>
   </a>
@@ -2120,9 +2120,9 @@ configured in the JSON config's <code>pools</code> key. This is a registry — i
 reflect import state; use <code>zpool list</code> output for that.</p>
 <h2 id="snapshot-name-persistence">Snapshot name persistence<a class="headerlink" href="#snapshot-name-persistence" title="Permanent link">&para;</a></h2>
 <p><a href="../../commands-and-modules/modules/#zfssnapbuild"><code>zfssnapbuild</code></a> writes the generated
-snapshot name to a per-caller file in <code>/tmp</code> so that the same name can be reused
-if the calling script is rerun. This keeps incremental replication chains stable
-across multiple invocations.</p>
+snapshot name to a per-caller file under <code>/run/zfsutilities/</code> so that the same
+name can be reused if the calling script is rerun. This keeps incremental
+replication chains stable across multiple invocations.</p>
 <table>
 <thead>
 <tr>
@@ -2134,7 +2134,7 @@ across multiple invocations.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/tmp/zfsnextsnap_&lt;caller&gt;</code></td>
+<td><code>/run/zfsutilities/nextsnap_&lt;caller&gt;</code></td>
 <td><code>zfssnapbuild</code></td>
 <td><code>zfs-send-receive</code>, <code>zfssendoffsite</code>, <code>zfssend</code>, <code>zfsdailybackup</code></td>
 <td>Reuse the same snapshot name on rerun</td>
@@ -2193,7 +2193,7 @@ in the JSON config and ignored by the bash consumer:</p>
 <p>See <a href="../../commands-and-modules/modules/#the-fss-table"><code>zfscheckagainst</code> → The fss table</a>
 for the matching algorithm and a worked example.</p>
 <h3 id="on-disk-nested-schema">On-disk nested schema<a class="headerlink" href="#on-disk-nested-schema" title="Permanent link">&para;</a></h3>
-<p>In <code>/root/.config/zfsutilities.json</code> the <code>checkagainst</code> key is a nested
+<p>In <code>/var/lib/zfsutilities/config.json</code> the <code>checkagainst</code> key is a nested
 object rather than a flat list:</p>
 <div class="highlight"><pre><span></span><code><span class="nt">&quot;checkagainst&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;backup_derived_active&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
@@ -2316,7 +2316,7 @@ this stays empty.</p>
 <code>zfs receive</code> completes, which re-adds the LUN at the original LUN number so
 that by-path device symlinks on the compute node remain stable.</p>
 <h2 id="pool_target-associative-array"><code>POOL_TARGET</code> (associative array)<a class="headerlink" href="#pool_target-associative-array" title="Permanent link">&para;</a></h2>
-<p>Set in <code>/etc/zfsutilities-node.conf</code> on two-node systems. Maps ZFS pool
+<p>Set in <code>/etc/zfsutilities/node.conf</code> on two-node systems. Maps ZFS pool
 names to iSCSI target short names.</p>
 <div class="highlight"><pre><span></span><code><span class="nb">declare</span><span class="w"> </span>-A<span class="w"> </span><span class="nv">POOL_TARGET</span><span class="o">=(</span>
 <span class="w">    </span><span class="o">[</span>threeamigos<span class="o">]=</span><span class="s2">&quot;threeamigos&quot;</span>
@@ -2340,10 +2340,10 @@ names to iSCSI target short names.</p>
 <p>Read by <code>node-lib.sh</code> via <code>pool_to_target</code>, <code>pool_list</code>, and <code>is_known_pool</code>.
 Only pools listed here are managed by two-node iSCSI scripts. In single-node
 mode, this array is empty and the helpers are no-ops.</p>
-<h2 id="node-configuration-file-etczfsutilities-nodeconf">Node configuration file (<code>/etc/zfsutilities-node.conf</code>)<a class="headerlink" href="#node-configuration-file-etczfsutilities-nodeconf" title="Permanent link">&para;</a></h2>
-<p>Sourceable bash. Read by <code>node-lib.sh</code> and by repo-root scripts with a legacy
-fallback to <code>/etc/two-node.conf</code>. See <a href="../two-node-config/">Node Configuration</a>
-for the full field list.</p>
+<h2 id="node-configuration-file-etczfsutilitiesnodeconf">Node configuration file (<code>/etc/zfsutilities/node.conf</code>)<a class="headerlink" href="#node-configuration-file-etczfsutilitiesnodeconf" title="Permanent link">&para;</a></h2>
+<p>Sourceable bash. Read by <code>node-lib.sh</code> and by repo-root scripts, falling back to
+<code>/etc/zfsutilities/two-node.conf</code> and then the legacy <code>/etc/zfsutilities-node.conf</code>.
+See <a href="../two-node-config/">Node Configuration</a> for the full field list.</p>
 <table>
 <thead>
 <tr>
@@ -2390,7 +2390,7 @@ for the full field list.</p>
 </tr>
 </tbody>
 </table>
-<h2 id="json-config-rootconfigzfsutilitiesjson">JSON config (<code>/root/.config/zfsutilities.json</code>)<a class="headerlink" href="#json-config-rootconfigzfsutilitiesjson" title="Permanent link">&para;</a></h2>
+<h2 id="json-config-varlibzfsutilitiesconfigjson">JSON config (<code>/var/lib/zfsutilities/config.json</code>)<a class="headerlink" href="#json-config-varlibzfsutilitiesconfigjson" title="Permanent link">&para;</a></h2>
 <p>Shared by the GTK Python layer (<code>config_core.py</code> / <code>feature_config.py</code>) and
 the bash scripts (<a href="../../commands-and-modules/modules/#zfsconfig"><code>zfsconfig</code></a>).
 Top-level keys:</p>
@@ -2836,10 +2836,10 @@ manifest from the current targetcli backstore list, and
 successful save so the manifest stays authoritative when LUNs are moved or
 added.</p>
 <h2 id="iscsi-encrypted-luns-config">iSCSI encrypted-LUNs config<a class="headerlink" href="#iscsi-encrypted-luns-config" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>/etc/iscsi-encrypted-luns.conf
+<div class="highlight"><pre><span></span><code>/etc/zfsutilities/iscsi-encrypted-luns.conf
 </code></pre></div>
 <p>Lists backstore names whose backing zvols are encrypted. Format:</p>
-<div class="highlight"><pre><span></span><code># /etc/iscsi-encrypted-luns.conf
+<div class="highlight"><pre><span></span><code># /etc/zfsutilities/iscsi-encrypted-luns.conf
 # Format: backstore_name:device_path:target_short_name
 vm-101-disk-1:/dev/zvol/threeamigos/proxmox/vm-101-disk-1:threeamigos
 vm-202-disk-5:/dev/zvol/threeamigos/proxmox/vm-202-disk-5:threeamigos
@@ -2929,7 +2929,7 @@ is saved.</p>
 from this file instead of the full config. This prevents <code>targetctl restore</code>
 from failing when encrypted zvol device nodes don't exist yet because
 keys haven't been loaded.</p>
-<h2 id="backup-history-rootconfigzfsutilities-historyjson">Backup history (<code>/root/.config/zfsutilities-history.json</code>)<a class="headerlink" href="#backup-history-rootconfigzfsutilities-historyjson" title="Permanent link">&para;</a></h2>
+<h2 id="backup-history-varlibzfsutilitieshistoryjson">Backup history (<code>/var/lib/zfsutilities/history.json</code>)<a class="headerlink" href="#backup-history-varlibzfsutilitieshistoryjson" title="Permanent link">&para;</a></h2>
 <p>A separate JSON file (not part of the main config) that stores per-run metrics
 for every backup, offsite, restore, and prune operation. It is append-only:
 new entries are inserted at the front, and old entries are pruned automatically
@@ -2987,7 +2987,7 @@ based on <code>history_retention_days</code>.</p>
 <p><a href="../../commands-and-modules/commands/#zfsscruball"><code>zfsscruball</code></a> uses a temporary
 state file to remember which pools have already finished when resuming a paused
 or interrupted scrub run.</p>
-<div class="highlight"><pre><span></span><code>/tmp/zfsscruball.state
+<div class="highlight"><pre><span></span><code>/run/zfsutilities/zfsscruball.state
 </code></pre></div>
 <p><strong>Format:</strong> one finished pool name per line.</p>
 <p><strong>Lifecycle:</strong></p>
@@ -3041,7 +3041,7 @@ characters in dataset names are URL-encoded (<code>%2F</code> for <code>/</code>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.73.1
+      ZFS Utilities v0.74.0
     </div>
   
   
@@ -3066,7 +3066,7 @@ characters in dataset names are URL-encoded (<code>%2F</code> for <code>/</code>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

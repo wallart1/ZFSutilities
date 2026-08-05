@@ -506,7 +506,7 @@ def on_offsite_save(app, ctx):
         save_offsite_config(ctx.config, offsite_data)
         if hasattr(app, '_offsite_tracker'):
             app._offsite_tracker.mark_clean()
-        log_msg("INFO: Offsite config saved to /root/.config/zfsutilities.json")
+        log_msg("INFO: Offsite config saved to /var/lib/zfsutilities/config.json")
     except OSError as e:
         log_msg(f"WARN: Error saving config: {e}")
 

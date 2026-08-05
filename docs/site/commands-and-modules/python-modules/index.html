@@ -1680,6 +1680,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#pathspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        paths.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#migrationpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        migration.py
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2462,8 +2484,8 @@ run them through <code>subprocess</code>, and present the results in the GTK int
 </thead>
 <tbody>
 <tr>
-<td>JSON config (<code>/root/.config/zfsutilities.json</code>)</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td>JSON config (<code>/var/lib/zfsutilities/config.json</code>)</td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td>Session log directory</td>
@@ -2584,7 +2606,7 @@ the GUI tabs and the bash scripts.</p>
 <tbody>
 <tr>
 <td>JSON config feature sections</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">backup/offsite/restore/pools/retention/checkagainst/scrub</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">backup/offsite/restore/pools/retention/checkagainst/scrub</a></td>
 </tr>
 <tr>
 <td>Snapshot name persistence and one-minute reservation</td>
@@ -2631,7 +2653,7 @@ from <code>backup_config</code>; newer code imports directly from the specialise
 <tbody>
 <tr>
 <td>Same as <code>config_core</code> and <code>feature_config</code></td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 </tbody>
 </table>
@@ -2675,6 +2697,193 @@ single source of truth for the JSON config format version.</p>
 <tr>
 <td><code>config_version</code> field</td>
 <td><a href="../../developer-guide/data-structures/#config-migrations">config_version</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="pathspy"><code>paths.py</code><a class="headerlink" href="#pathspy" title="Permanent link">&para;</a></h3>
+<p>Centralized path resolution for the Python layer. Mirrors the FHS-aligned
+layout defined in <code>lib/paths.sh</code> and provides legacy-path helpers for migration
+code.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_system_config_dir()</code></td>
+<td>System/admin configuration directory</td>
+</tr>
+<tr>
+<td><code>get_config_dir()</code></td>
+<td>Runtime configuration directory</td>
+</tr>
+<tr>
+<td><code>get_state_dir()</code></td>
+<td>Persistent runtime-state directory</td>
+</tr>
+<tr>
+<td><code>get_log_dir()</code></td>
+<td>Log directory</td>
+</tr>
+<tr>
+<td><code>get_run_dir()</code></td>
+<td>Transient runtime-state directory</td>
+</tr>
+<tr>
+<td><code>get_lock_dir()</code></td>
+<td>Advisory-lock directory</td>
+</tr>
+<tr>
+<td><code>get_config_path()</code></td>
+<td>Main JSON config file path</td>
+</tr>
+<tr>
+<td><code>get_profiles_dir()</code></td>
+<td>Profile directory (created on demand)</td>
+</tr>
+<tr>
+<td><code>get_history_path()</code></td>
+<td>Backup-history JSON file path</td>
+</tr>
+<tr>
+<td><code>get_scrub_state_path()</code></td>
+<td>Scrub-manager state file path</td>
+</tr>
+<tr>
+<td><code>get_snapfile_path(label)</code></td>
+<td>Saved next-snapshot file path</td>
+</tr>
+<tr>
+<td><code>get_offsite_snapfile_path()</code></td>
+<td>Saved offsite next-snapshot file path</td>
+</tr>
+<tr>
+<td><code>get_run_snapfile_prefix()</code></td>
+<td>Transient next-snapshot file prefix</td>
+</tr>
+<tr>
+<td><code>get_pid_file_path()</code></td>
+<td>GUI PID file path</td>
+</tr>
+<tr>
+<td><code>get_session_log_dir()</code></td>
+<td>Per-session log directory</td>
+</tr>
+<tr>
+<td><code>get_log_index_path()</code></td>
+<td>Session-log index file path</td>
+</tr>
+<tr>
+<td><code>get_cron_file_path()</code></td>
+<td>Cron drop-in file path</td>
+</tr>
+<tr>
+<td><code>get_profile_lock_dir()</code></td>
+<td>Per-profile advisory-lock directory</td>
+</tr>
+<tr>
+<td><code>get_legacy_*()</code></td>
+<td>Legacy <code>/root/.config/</code> path helpers</td>
+</tr>
+<tr>
+<td><code>get_legacy_system_config_paths()</code></td>
+<td>Mapping of new system-config paths to legacy paths</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong> none.</p>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>All paths listed above</td>
+<td><a href="../../#path-layout-and-migration">Path layout</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="migrationpy"><code>migration.py</code><a class="headerlink" href="#migrationpy" title="Permanent link">&para;</a></h3>
+<p>One-time migration of ZFS Utilities state files to the FHS-aligned layout. The
+migration is automatic, idempotent, and rollback-compatible: after moving a file
+or directory from its legacy location, a symlink is left at the old path so
+older deployed versions can still find their data.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_migration()</code></td>
+<td>Run the one-time migration if it has not already run</td>
+</tr>
+<tr>
+<td><code>migrate_state_files()</code></td>
+<td>Migrate Python-layer state files and directories</td>
+</tr>
+<tr>
+<td><code>migrate_system_config_files()</code></td>
+<td>Migrate system administrator config files</td>
+</tr>
+<tr>
+<td><code>_migrate_item(new_path, old_path, create_symlink)</code></td>
+<td>Move one item and leave a rollback symlink</td>
+</tr>
+<tr>
+<td><code>get_migration_sentinel_path()</code></td>
+<td>Path to the migration sentinel file</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>paths</code></td>
+<td>New and legacy path resolution</td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code> for warnings and status</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Migration sentinel (<code>${STATE_DIR}/.migration_complete</code>)</td>
+<td><a href="../../#path-layout-and-migration">Path layout</a></td>
+</tr>
+<tr>
+<td>State/config files under <code>/var/lib/zfsutilities/</code> and <code>/etc/zfsutilities/</code></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a>, <a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a>, <a href="../../developer-guide/data-structures/#snapshot-name-persistence">Snapshot name persistence</a></td>
 </tr>
 </tbody>
 </table>
@@ -3065,7 +3274,7 @@ progress parsing, cancellation, and final history/log-index entries.</p>
 </tr>
 <tr>
 <td>Backup history</td>
-<td><a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a></td>
+<td><a href="../../developer-guide/data-structures/#backup-history-varlibzfsutilitieshistoryjson">Backup history</a></td>
 </tr>
 </tbody>
 </table>
@@ -3125,7 +3334,7 @@ progress parsing, cancellation, and final history/log-index entries.</p>
 </tr>
 <tr>
 <td>Offsite candidate pool list (JSON config <code>pools</code>)</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 </tbody>
 </table>
@@ -3327,7 +3536,7 @@ as the GUI runners but writes its own session logs and history entries.</p>
 </tr>
 <tr>
 <td>JSON config</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td>Session log files / index</td>
@@ -3335,7 +3544,7 @@ as the GUI runners but writes its own session logs and history entries.</p>
 </tr>
 <tr>
 <td>Backup history</td>
-<td><a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a></td>
+<td><a href="../../developer-guide/data-structures/#backup-history-varlibzfsutilitieshistoryjson">Backup history</a></td>
 </tr>
 <tr>
 <td>Scrub state / <code>ScrubQueue</code></td>
@@ -3384,7 +3593,7 @@ snap different subsets, which would force the daily backup to roll back
 <tbody>
 <tr>
 <td>Backup/offsite config dicts</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td>Profile dicts</td>
@@ -3455,7 +3664,7 @@ progress callbacks.</p>
 <tbody>
 <tr>
 <td><code>load_history()</code> / <code>save_history()</code></td>
-<td>Read/write <code>/root/.config/zfsutilities-history.json</code></td>
+<td>Read/write <code>/var/lib/zfsutilities/history.json</code></td>
 </tr>
 <tr>
 <td><code>add_history_entry(entry)</code></td>
@@ -3499,7 +3708,7 @@ progress callbacks.</p>
 <tbody>
 <tr>
 <td>Backup history</td>
-<td><a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a></td>
+<td><a href="../../developer-guide/data-structures/#backup-history-varlibzfsutilitieshistoryjson">Backup history</a></td>
 </tr>
 </tbody>
 </table>
@@ -3795,7 +4004,7 @@ detection, and snapshot-name generation.</p>
 <tbody>
 <tr>
 <td><code>offsite</code> config object</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td><code>BashStep</code></td>
@@ -3880,7 +4089,7 @@ detection, and snapshot-name generation.</p>
 <tbody>
 <tr>
 <td><code>restore</code> config object</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td><code>BashStep</code></td>
@@ -3957,7 +4166,7 @@ list.</p>
 <tbody>
 <tr>
 <td><code>retention</code> config object</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 </tbody>
 </table>
@@ -4182,7 +4391,7 @@ background thread by default so the GTK main loop stays responsive.</p>
 </tr>
 <tr>
 <td>Backup history</td>
-<td><a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a></td>
+<td><a href="../../developer-guide/data-structures/#backup-history-varlibzfsutilitieshistoryjson">Backup history</a></td>
 </tr>
 <tr>
 <td>Session log index</td>
@@ -4190,7 +4399,7 @@ background thread by default so the GTK main loop stays responsive.</p>
 </tr>
 <tr>
 <td>Node configuration</td>
-<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilities-nodeconf">Node configuration</a></td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilitiesnodeconf">Node configuration</a></td>
 </tr>
 </tbody>
 </table>
@@ -4271,7 +4480,7 @@ candidate flags, and scrub state table.</p>
 <tbody>
 <tr>
 <td><code>pools</code> config object</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td>Scrub state / <code>ScrubQueue</code></td>
@@ -4444,7 +4653,7 @@ message level, and display the success-rate summary.</p>
 </tr>
 <tr>
 <td>Backup history</td>
-<td><a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a></td>
+<td><a href="../../developer-guide/data-structures/#backup-history-varlibzfsutilitieshistoryjson">Backup history</a></td>
 </tr>
 </tbody>
 </table>
@@ -4990,7 +5199,7 @@ registry entries, and scrub queue operations.</p>
 <tbody>
 <tr>
 <td><code>pools</code> config object</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td>Scrub state / <code>ScrubQueue</code></td>
@@ -5079,7 +5288,7 @@ buckets, run prune, and dirty-state tracking.</p>
 <tbody>
 <tr>
 <td><code>retention</code> config object</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td><code>BashStep</code></td>
@@ -5325,7 +5534,7 @@ Python and bash code.</p>
 <tbody>
 <tr>
 <td>JSON config / history / log index / scrub state</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a>, <a href="../../developer-guide/data-structures/#backup-history-rootconfigzfsutilities-historyjson">Backup history</a>, <a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a>, <a href="../../developer-guide/data-structures/#scrub-state-scrub_managerpy">Scrub state</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a>, <a href="../../developer-guide/data-structures/#backup-history-varlibzfsutilitieshistoryjson">Backup history</a>, <a href="../../developer-guide/data-structures/#session-log-index-varlogzfsutilitiessessionslog_indexjson">Session log index</a>, <a href="../../developer-guide/data-structures/#scrub-state-scrub_managerpy">Scrub state</a></td>
 </tr>
 </tbody>
 </table>
@@ -5621,7 +5830,7 @@ info panel, dry-run toggle, and startup checks.</p>
 </tr>
 <tr>
 <td>JSON config</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 </tbody>
 </table>
@@ -5747,7 +5956,7 @@ HTTP server and renders it in a WebKit window.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.73.1
+      ZFS Utilities v0.74.0
     </div>
   
   
@@ -5772,7 +5981,7 @@ HTTP server and renders it in a WebKit window.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

@@ -1,0 +1,561 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-cleanup-zfsutilities-legacy — Verify the legacy cleanup script.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+CLEANUP_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/cleanup-zfsutilities-legacy"
+[[ -f "$CLEANUP_SCRIPT" ]] || die "Missing: $CLEANUP_SCRIPT"
+
+# Source the real cleanup script for direct function tests. rootcheck is
+# already mocked by test-lib.sh, so the root check is bypassed.
+source "$CLEANUP_SCRIPT"
+
+# Re-establish test-lib overrides after sourcing the script (the script re-
+# sources bashinit, which would otherwise replace them).
+log_msg() {
+    local caller_file="${BASH_SOURCE[1]}"
+    local caller_line="${BASH_LINENO[0]}"
+    local prefix
+    if [[ -n "$caller_file" ]]; then
+        prefix="$(realpath "$caller_file"):$caller_line:"
+    else
+        prefix="zfsutilities:"
+    fi
+    local _ts
+    _ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${_ts}  ${prefix} $*" >> "${_TEST_LOG_FILE}" 2>/dev/null || true
+}
+
+ask_yn() {
+    return "$_mock_ask_yn_rc"
+}
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+_setup_cleanup_env() {
+    local _varname="$1"
+    local _tmpdir
+    _tmpdir=$(mktemp -d)
+
+    export ZFSUTILITIES_VERSION_BASE="$_tmpdir/usr/local/lib/zfsutilities"
+    export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$_tmpdir/etc/zfsutilities"
+    export ZFSUTILITIES_STATE_DIR="$_tmpdir/var/lib/zfsutilities"
+    export ZFSUTILITIES_LEGACY_CONFIG_PATH="$_tmpdir/root/.config/zfsutilities.json"
+    export ZFSUTILITIES_LEGACY_HISTORY_PATH="$_tmpdir/root/.config/zfsutilities-history.json"
+    export ZFSUTILITIES_LEGACY_PROFILES_DIR="$_tmpdir/root/.config/profiles"
+    export ZFSUTILITIES_LEGACY_NEXTSNAP_FILE="$_tmpdir/root/.config/zfsutilities_nextsnap"
+    export ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE="$_tmpdir/root/.config/zfsutilities_offsite_nextsnap"
+    export ZFSUTILITIES_LEGACY_NODE_CONF="$_tmpdir/etc/zfsutilities-node.conf"
+    export ZFSUTILITIES_LEGACY_DEPLOY_CONF="$_tmpdir/etc/zfsutilities-deploy.conf"
+    export ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF="$_tmpdir/etc/iscsi-encrypted-luns.conf"
+    export ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$_tmpdir/etc/two-node.conf"
+    export ZFSUTILITIES_LEGACY_CONFIG_DIR="$_tmpdir/root/.config/zfsutilities"
+
+    mkdir -p "$ZFSUTILITIES_VERSION_BASE/versions" \
+        "$ZFSUTILITIES_SYSTEM_CONFIG_DIR" \
+        "$ZFSUTILITIES_STATE_DIR" \
+        "$_tmpdir/root/.config" \
+        "$_tmpdir/etc"
+
+    printf -v "$_varname" '%s' "$_tmpdir"
+}
+
+_teardown_cleanup_env() {
+    local tmpdir="$1"
+    unset ZFSUTILITIES_VERSION_BASE
+    unset ZFSUTILITIES_SYSTEM_CONFIG_DIR
+    unset ZFSUTILITIES_STATE_DIR
+    unset ZFSUTILITIES_LEGACY_CONFIG_PATH
+    unset ZFSUTILITIES_LEGACY_HISTORY_PATH
+    unset ZFSUTILITIES_LEGACY_PROFILES_DIR
+    unset ZFSUTILITIES_LEGACY_NEXTSNAP_FILE
+    unset ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE
+    unset ZFSUTILITIES_LEGACY_NODE_CONF
+    unset ZFSUTILITIES_LEGACY_DEPLOY_CONF
+    unset ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF
+    unset ZFSUTILITIES_LEGACY_TWO_NODE_CONF
+    unset ZFSUTILITIES_LEGACY_CONFIG_DIR
+    rm -rf "$tmpdir"
+}
+
+# Build a minimal fake deployed version.
+_make_fake_version() {
+    local version_base="$1"
+    local version="$2"
+    local is_new_layout="${3:-false}"
+    mkdir -p "$version_base/versions/$version/bin"
+    mkdir -p "$version_base/versions/$version/lib"
+    printf '#!/usr/bin/bash\nexit 0\n' > "$version_base/versions/$version/bin/switch-version"
+    chmod +x "$version_base/versions/$version/bin/switch-version"
+    # Create a fake uninstall-version that removes the version directory passed
+    # as its final argument, matching the contract of the real helper.
+    cat > "$version_base/versions/$version/bin/uninstall-version" <<EOF
+#!/usr/bin/bash
+version="\${!#}"
+rm -rf "$version_base/versions/\$version"
+EOF
+    chmod +x "$version_base/versions/$version/bin/uninstall-version"
+
+    if [[ "$is_new_layout" == "true" ]]; then
+        touch "$version_base/versions/$version/lib/paths.sh"
+        # shellcheck disable=SC2016
+        printf '#!/usr/bin/bash\nbashinit() { mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")"); }\nZFSUTILITIES_STATE_DIR=/var/lib/zfsutilities\n' > "$version_base/versions/$version/bin/bashinit"
+        chmod +x "$version_base/versions/$version/bin/bashinit"
+    else
+        # shellcheck disable=SC2016
+        printf '#!/usr/bin/bash\nbashinit() { mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")"); }\n' > "$version_base/versions/$version/bin/bashinit"
+        chmod +x "$version_base/versions/$version/bin/bashinit"
+    fi
+}
+
+_create_legacy_symlinks() {
+    local tmpdir="$1"
+    ln -sfn "$tmpdir/var/lib/zfsutilities/config.json" "$tmpdir/root/.config/zfsutilities.json"
+    ln -sfn "$tmpdir/var/lib/zfsutilities/history.json" "$tmpdir/root/.config/zfsutilities-history.json"
+    ln -sfn "$tmpdir/var/lib/zfsutilities/profiles" "$tmpdir/root/.config/profiles"
+    ln -sfn "$tmpdir/var/lib/zfsutilities/nextsnap" "$tmpdir/root/.config/zfsutilities_nextsnap"
+    ln -sfn "$tmpdir/var/lib/zfsutilities/nextsnap_offsite" "$tmpdir/root/.config/zfsutilities_offsite_nextsnap"
+    ln -sfn "$tmpdir/etc/zfsutilities/node.conf" "$tmpdir/etc/zfsutilities-node.conf"
+    ln -sfn "$tmpdir/etc/zfsutilities/deploy.conf" "$tmpdir/etc/zfsutilities-deploy.conf"
+    ln -sfn "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf" "$tmpdir/etc/iscsi-encrypted-luns.conf"
+    ln -sfn "$tmpdir/etc/zfsutilities/two-node.conf" "$tmpdir/etc/two-node.conf"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+test_default_prompts_and_removes_symlinks() {
+    test_start "default mode prompts and removes legacy symlinks on confirmation"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+    mock_ask_yn 0
+
+    touch "$tmpdir/var/lib/zfsutilities/config.json"
+    touch "$tmpdir/var/lib/zfsutilities/history.json"
+    mkdir -p "$tmpdir/var/lib/zfsutilities/profiles"
+    touch "$tmpdir/var/lib/zfsutilities/nextsnap"
+    touch "$tmpdir/var/lib/zfsutilities/nextsnap_offsite"
+    touch "$tmpdir/etc/zfsutilities/node.conf"
+    touch "$tmpdir/etc/zfsutilities/deploy.conf"
+    touch "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
+    touch "$tmpdir/etc/zfsutilities/two-node.conf"
+    _create_legacy_symlinks "$tmpdir"
+
+    main --yes >/dev/null 2>&1
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -L "$tmpdir/root/.config/zfsutilities.json" ]]; then
+        failed=1
+        echo "    config symlink still present"
+    fi
+    if [[ -L "$tmpdir/etc/zfsutilities-node.conf" ]]; then
+        failed=1
+        echo "    node.conf symlink still present"
+    fi
+    if [[ ! -f "$tmpdir/var/lib/zfsutilities/config.json" ]]; then
+        failed=1
+        echo "    target config file was removed"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "default symlink removal failed"
+    fi
+}
+
+test_yes_skips_prompt() {
+    test_start "--yes skips prompt and removes symlinks"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+    mock_ask_yn 1
+
+    touch "$tmpdir/var/lib/zfsutilities/config.json"
+    _create_legacy_symlinks "$tmpdir"
+
+    main --yes >/dev/null 2>&1
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -L "$tmpdir/root/.config/zfsutilities.json" ]]; then
+        failed=1
+        echo "    config symlink still present"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "--yes symlink removal failed"
+    fi
+}
+
+test_dry_run_makes_no_changes() {
+    test_start "--dry-run prints actions but makes no changes"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+
+    touch "$tmpdir/var/lib/zfsutilities/config.json"
+    _create_legacy_symlinks "$tmpdir"
+
+    local output rc
+    output=$(main --dry-run --yes 2>&1)
+    rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ "$output" != *"[DRY-RUN] rm -f"* ]]; then
+        failed=1
+        echo "    expected dry-run rm output missing"
+    fi
+    if [[ ! -L "$tmpdir/root/.config/zfsutilities.json" ]]; then
+        failed=1
+        echo "    symlink was removed during dry run"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "dry-run behavior failed"
+    fi
+}
+
+test_skips_non_symlinks() {
+    test_start "warns and skips regular files or directories at legacy paths"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+
+    touch "$tmpdir/root/.config/zfsutilities.json"
+    mkdir -p "$tmpdir/root/.config/profiles"
+
+    main --yes >/dev/null 2>&1
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ ! -f "$tmpdir/root/.config/zfsutilities.json" ]]; then
+        failed=1
+        echo "    regular file was incorrectly removed"
+    fi
+    if [[ ! -d "$tmpdir/root/.config/profiles" ]]; then
+        failed=1
+        echo "    directory was incorrectly removed"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "non-symlink protection failed"
+    fi
+}
+
+test_removes_empty_config_dir() {
+    test_start "removes empty /root/.config/zfsutilities after symlink cleanup"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+
+    mkdir -p "$tmpdir/root/.config/zfsutilities"
+    ln -sfn "$tmpdir/var/lib/zfsutilities/config.json" "$tmpdir/root/.config/zfsutilities.json"
+
+    main --yes >/dev/null 2>&1
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$tmpdir/root/.config/zfsutilities" ]]; then
+        failed=1
+        echo "    empty config dir still present"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "empty config dir removal failed"
+    fi
+}
+
+test_leaves_non_empty_config_dir() {
+    test_start "leaves non-empty /root/.config/zfsutilities with a warning"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+
+    mkdir -p "$tmpdir/root/.config/zfsutilities"
+    ln -sfn "$tmpdir/var/lib/zfsutilities/config.json" "$tmpdir/root/.config/zfsutilities.json"
+    touch "$tmpdir/root/.config/zfsutilities/unexpected.file"
+
+    main --yes >/dev/null 2>&1
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ ! -d "$tmpdir/root/.config/zfsutilities" ]]; then
+        failed=1
+        echo "    non-empty config dir was removed"
+    fi
+    if [[ ! -f "$tmpdir/root/.config/zfsutilities/unexpected.file" ]]; then
+        failed=1
+        echo "    unexpected file inside config dir was removed"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "non-empty config dir protection failed"
+    fi
+}
+
+test_version_supports_new_layout() {
+    test_start "_version_supports_new_layout detects new-layout versions"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0" "false"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "2.0.0" "true"
+
+    local failed=0
+    if _version_supports_new_layout "$tmpdir/usr/local/lib/zfsutilities/versions/1.0.0"; then
+        failed=1
+        echo "    old version incorrectly reported as new-layout"
+    fi
+    if ! _version_supports_new_layout "$tmpdir/usr/local/lib/zfsutilities/versions/2.0.0"; then
+        failed=1
+        echo "    new version incorrectly reported as old-layout"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "new-layout detection failed"
+    fi
+}
+
+test_remove_versions_refuses_active() {
+    test_start "--remove-versions refuses to remove the active version"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0" "false"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "2.0.0" "false"
+    ln -sfn "versions/2.0.0" "$ZFSUTILITIES_VERSION_BASE/current"
+
+    main --remove-versions 2.0.0 --yes >/dev/null 2>&1
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ ! -d "$tmpdir/usr/local/lib/zfsutilities/versions/2.0.0" ]]; then
+        failed=1
+        echo "    active version was removed"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "active version protection failed"
+    fi
+}
+
+test_remove_versions_removes_non_active() {
+    test_start "--remove-versions removes listed non-active versions"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0" "false"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "2.0.0" "false"
+    ln -sfn "versions/2.0.0" "$ZFSUTILITIES_VERSION_BASE/current"
+
+    main --remove-versions 1.0.0 --yes >/dev/null 2>&1
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$tmpdir/usr/local/lib/zfsutilities/versions/1.0.0" ]]; then
+        failed=1
+        echo "    listed version was not removed"
+    fi
+    if [[ ! -d "$tmpdir/usr/local/lib/zfsutilities/versions/2.0.0" ]]; then
+        failed=1
+        echo "    active version was removed"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "non-active version removal failed"
+    fi
+}
+
+test_remove_older_than() {
+    test_start "--remove-older-than removes only versions older than reference"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0" "false"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.5.0" "false"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "2.0.0" "false"
+    ln -sfn "versions/2.0.0" "$ZFSUTILITIES_VERSION_BASE/current"
+
+    main --remove-older-than 1.5.0 --yes >/dev/null 2>&1
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$tmpdir/usr/local/lib/zfsutilities/versions/1.0.0" ]]; then
+        failed=1
+        echo "    older version 1.0.0 was not removed"
+    fi
+    if [[ ! -d "$tmpdir/usr/local/lib/zfsutilities/versions/1.5.0" ]]; then
+        failed=1
+        echo "    boundary version 1.5.0 was incorrectly removed"
+    fi
+    if [[ ! -d "$tmpdir/usr/local/lib/zfsutilities/versions/2.0.0" ]]; then
+        failed=1
+        echo "    active version 2.0.0 was removed"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "remove-older-than failed"
+    fi
+}
+
+test_all_orphaned_removes_except_active() {
+    test_start "--all-orphaned removes every version except the active one"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.0.0" "false"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "1.5.0" "false"
+    _make_fake_version "$ZFSUTILITIES_VERSION_BASE" "2.0.0" "false"
+    ln -sfn "versions/2.0.0" "$ZFSUTILITIES_VERSION_BASE/current"
+
+    main --all-orphaned --yes >/dev/null 2>&1
+    local rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -d "$tmpdir/usr/local/lib/zfsutilities/versions/1.0.0" ]]; then
+        failed=1
+        echo "    orphaned version 1.0.0 was not removed"
+    fi
+    if [[ -d "$tmpdir/usr/local/lib/zfsutilities/versions/1.5.0" ]]; then
+        failed=1
+        echo "    orphaned version 1.5.0 was not removed"
+    fi
+    if [[ ! -d "$tmpdir/usr/local/lib/zfsutilities/versions/2.0.0" ]]; then
+        failed=1
+        echo "    active version was removed"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "all-orphaned removal failed"
+    fi
+}
+
+test_help_flag() {
+    test_start "--help prints usage"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+
+    local output rc
+    output=$(main --help 2>&1)
+    rc=$?
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ "$output" != *"Usage:"* ]]; then
+        failed=1
+        echo "    usage text missing"
+    fi
+
+    _teardown_cleanup_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "help output incorrect"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------
+test_default_prompts_and_removes_symlinks
+test_yes_skips_prompt
+test_dry_run_makes_no_changes
+test_skips_non_symlinks
+test_removes_empty_config_dir
+test_leaves_non_empty_config_dir
+test_version_supports_new_layout
+test_remove_versions_refuses_active
+test_remove_versions_removes_non_active
+test_remove_older_than
+test_all_orphaned_removes_except_active
+test_help_flag
+
+test_summary
+teardown_test_env

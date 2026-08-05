@@ -1,0 +1,121 @@
+#!/usr/bin/bash
+# shellcheck disable=SC2034
+# Tests for lib/paths.sh and bashinit path wiring.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+test_paths_defaults() {
+    test_start "Default path variables are set"
+    assert_equals "/etc/zfsutilities" "$ZFSUTILITIES_CONFIG_DIR"
+    assert_equals "/var/lib/zfsutilities" "$ZFSUTILITIES_STATE_DIR"
+    assert_equals "/var/log/zfsutilities" "$ZFSUTILITIES_LOG_DIR"
+    assert_equals "/run/zfsutilities" "$ZFSUTILITIES_RUN_DIR"
+    assert_equals "/run/lock/zfs" "$ZFSUTILITIES_LOCK_DIR"
+    assert_equals "/etc/zfsutilities" "$ZFSUTILITIES_SYSTEM_CONFIG_DIR"
+}
+
+test_paths_composed_defaults() {
+    test_start "Composed path variables use the default base directories"
+    assert_equals "/var/lib/zfsutilities/config.json" "$ZFSUTILITIES_CONFIG_PATH"
+    assert_equals "/var/lib/zfsutilities/history.json" "$ZFSUTILITIES_HISTORY_PATH"
+    assert_equals "/var/lib/zfsutilities/profiles" "$ZFSUTILITIES_PROFILES_DIR"
+    assert_equals "/var/lib/zfsutilities/scrub_state.json" "$ZFSUTILITIES_SCRUB_STATE_PATH"
+    assert_equals "/var/lib/zfsutilities/nextsnap" "$ZFSUTILITIES_NEXTSNAP_FILE"
+    assert_equals "/var/lib/zfsutilities/nextsnap_offsite" "$ZFSUTILITIES_OFFSITE_NEXTSNAP_FILE"
+    assert_equals "/run/zfsutilities/nextsnap_" "$ZFSUTILITIES_RUN_NEXTSNAP_PREFIX"
+    assert_equals "/run/zfsutilities/zfsscruball.state" "$ZFSUTILITIES_SCRUBALL_STATEFILE"
+    assert_equals "/run/zfsutilities/main.pid" "$ZFSUTILITIES_PID_FILE"
+    assert_equals "/var/log/zfsutilities/sessions" "$ZFSUTILITIES_SESSION_LOG_DIR"
+    assert_equals "/etc/cron.d/zfsutilities" "$ZFSUTILITIES_CRON_FILE"
+    assert_equals "/run/lock/zfs/profiles" "$ZFSUTILITIES_PROFILE_LOCK_DIR"
+}
+
+test_paths_legacy_defaults() {
+    test_start "Legacy path variables point to the old locations"
+    assert_equals "/root/.config/zfsutilities.json" "$ZFSUTILITIES_LEGACY_CONFIG_PATH"
+    assert_equals "/root/.config/zfsutilities-history.json" "$ZFSUTILITIES_LEGACY_HISTORY_PATH"
+    assert_equals "/root/.config/profiles" "$ZFSUTILITIES_LEGACY_PROFILES_DIR"
+    assert_equals "/root/.config/zfsutilities/scrub_state.json" "$ZFSUTILITIES_LEGACY_SCRUB_STATE_PATH"
+    assert_equals "/root/.config/zfsutilities_nextsnap" "$ZFSUTILITIES_LEGACY_NEXTSNAP_FILE"
+    assert_equals "/root/.config/zfsutilities_offsite_nextsnap" "$ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE"
+    assert_equals "/etc/zfsutilities-node.conf" "$ZFSUTILITIES_LEGACY_NODE_CONF"
+    assert_equals "/etc/zfsutilities-deploy.conf" "$ZFSUTILITIES_LEGACY_DEPLOY_CONF"
+    assert_equals "/etc/iscsi-encrypted-luns.conf" "$ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF"
+    assert_equals "/etc/two-node.conf" "$ZFSUTILITIES_LEGACY_TWO_NODE_CONF"
+}
+
+test_paths_env_override() {
+    test_start "Environment overrides are respected"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    (
+        export ZFSUTILITIES_STATE_DIR="$tmpdir/state"
+        export ZFSUTILITIES_LOG_DIR="$tmpdir/log"
+        export ZFSUTILITIES_RUN_DIR="$tmpdir/run"
+        export ZFSUTILITIES_LOCK_DIR="$tmpdir/lock"
+        export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$tmpdir/etc"
+        # Clear derived variables so re-sourcing recomposes them from the new
+        # base directories.
+        unset ZFSUTILITIES_CONFIG_PATH ZFSUTILITIES_HISTORY_PATH \
+            ZFSUTILITIES_PROFILES_DIR ZFSUTILITIES_SCRUB_STATE_PATH \
+            ZFSUTILITIES_NEXTSNAP_FILE ZFSUTILITIES_OFFSITE_NEXTSNAP_FILE \
+            ZFSUTILITIES_RUN_NEXTSNAP_PREFIX ZFSUTILITIES_SCRUBALL_STATEFILE \
+            ZFSUTILITIES_PID_FILE ZFSUTILITIES_SESSION_LOG_DIR \
+            ZFSUTILITIES_PROFILE_LOCK_DIR
+        # Re-source the library to pick up the new environment.
+        # shellcheck source=../lib/paths.sh
+        source "$mydir/lib/paths.sh"
+        assert_equals "$tmpdir/state/config.json" "$ZFSUTILITIES_CONFIG_PATH"
+        assert_equals "$tmpdir/log/sessions" "$ZFSUTILITIES_SESSION_LOG_DIR"
+        assert_equals "$tmpdir/run/main.pid" "$ZFSUTILITIES_PID_FILE"
+        assert_equals "$tmpdir/lock/profiles" "$ZFSUTILITIES_PROFILE_LOCK_DIR"
+        assert_equals "$tmpdir/etc/node.conf" "${ZFSUTILITIES_LEGACY_NODE_CONF//\/etc\/zfsutilities-node.conf/$tmpdir/etc/node.conf}"
+    )
+    rm -rf "$tmpdir"
+}
+
+test_paths_sourcing_is_silent() {
+    test_start "Sourcing paths.sh produces no stdout or stderr"
+    local output
+    output=$(source "$mydir/lib/paths.sh" 2>&1)
+    assert_equals "" "$output"
+}
+
+test_paths_loaded_by_bashinit() {
+    test_start "bashinit loads the path library automatically"
+    # test-lib.sh already sourced bashinit and called bashinit, so the
+    # variables must already be present.
+    assert_contains "$ZFSUTILITIES_CONFIG_PATH" "config.json"
+    assert_contains "$ZFSUTILITIES_SESSION_LOG_DIR" "sessions"
+}
+
+test_paths_bashinit_respects_log_dir_override() {
+    test_start "bashinit respects ZFSUTILITIES_LOG_DIR override"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local session_dir
+    session_dir=$(
+        cd "$tmpdir"
+        export ZFSUTILITIES_LOG_DIR="$tmpdir/custom-log"
+        # Unset derived variables so paths.sh recomposes them.
+        unset ZFSUTILITIES_SESSION_LOG_DIR
+        source "$mydir/lib/paths.sh" 2>/dev/null
+        source "$mydir/bin/bashinit" 2>/dev/null
+        bashinit 2>/dev/null
+        echo "$ZFSUTILITIES_SESSION_LOG_DIR"
+    )
+    rm -rf "$tmpdir"
+    assert_contains "$session_dir" "custom-log/sessions"
+}
+
+test_paths_defaults
+test_paths_composed_defaults
+test_paths_legacy_defaults
+test_paths_env_override
+test_paths_sourcing_is_silent
+test_paths_loaded_by_bashinit
+
+test_summary
+teardown_test_env

@@ -460,6 +460,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#path-layout-and-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Path Layout and Migration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#quick-navigation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1833,6 +1844,56 @@ operations across multiple ZFS pools.</p>
 </tr>
 </tbody>
 </table>
+<h2 id="path-layout-and-migration">Path Layout and Migration<a class="headerlink" href="#path-layout-and-migration" title="Permanent link">&para;</a></h2>
+<p>ZFS Utilities stores its files in the following FHS-aligned locations:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Directory</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>System / admin config</td>
+<td><code>/etc/zfsutilities/</code></td>
+<td><code>node.conf</code>, <code>deploy.conf</code>, <code>iscsi-encrypted-luns.conf</code>, legacy <code>two-node.conf</code></td>
+</tr>
+<tr>
+<td>Runtime state / data</td>
+<td><code>/var/lib/zfsutilities/</code></td>
+<td><code>config.json</code>, <code>history.json</code>, <code>profiles/</code>, <code>scrub_state.json</code>, <code>nextsnap</code>, <code>nextsnap_offsite</code></td>
+</tr>
+<tr>
+<td>Logs</td>
+<td><code>/var/log/zfsutilities/</code></td>
+<td><code>sessions/</code>, <code>cron.log</code>, <code>rsync-pull.log</code>, etc.</td>
+</tr>
+<tr>
+<td>Transient runtime state</td>
+<td><code>/run/zfsutilities/</code></td>
+<td><code>nextsnap_&lt;caller&gt;</code>, <code>zfsscruball.state</code>, <code>main.pid</code></td>
+</tr>
+<tr>
+<td>Advisory locks</td>
+<td><code>/run/lock/zfs/</code></td>
+<td><code>.config.lock</code>, <code>.history.lock</code>, <code>.snapname.lock</code>, dataset locks, profile locks</td>
+</tr>
+</tbody>
+</table>
+<p>If you are upgrading from an older release that stored files under
+<code>/root/.config/</code> or directly under <code>/etc/</code>, the first run after upgrade
+automatically moves your data to the new locations. A backward-compatibility
+symlink is left at each old path so older deployed versions can still find their
+configuration and state if you switch back to them.</p>
+<p>When you are confident you no longer need rollback compatibility, run
+<code>cleanup-zfsutilities-legacy</code> to remove the legacy symlinks and, optionally,
+uninstall the old deployed versions that do not understand the new layout:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>cleanup-zfsutilities-legacy
+</code></pre></div>
+<p>See <code>cleanup-zfsutilities-legacy --help</code> for options such as <code>--remove-older-than</code>
+and <code>--dry-run</code>.</p>
 <h2 id="quick-navigation">Quick Navigation<a class="headerlink" href="#quick-navigation" title="Permanent link">&para;</a></h2>
 <p><strong>Common tasks:</strong></p>
 <ul>
@@ -1908,7 +1969,7 @@ operations across multiple ZFS pools.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.73.1
+      ZFS Utilities v0.74.0
     </div>
   
   
@@ -1933,7 +1994,7 @@ operations across multiple ZFS pools.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
     
     
       <script src="assets/javascripts/bundle.79ae519e.min.js"></script>

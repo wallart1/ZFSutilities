@@ -106,7 +106,7 @@ The script:
 3. Mounts the decrypted filesystem at `/mnt/ZFSkeys`.
 4. Lists the available key files and asks which one to use.
 5. Creates the zvol with `keylocation=file:///mnt/ZFSkeys/<keyname>`.
-6. Records the zvol in `/etc/iscsi-encrypted-luns.conf`.
+6. Records the zvol in `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
 7. Secures the keys (unmounts and closes the LUKS volume).
 
 ## Boot-time behaviour

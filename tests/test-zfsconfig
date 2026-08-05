@@ -248,6 +248,43 @@ test_get_checkagainst_backward_compatible_flat_list() {
 }
 
 # ------------------------------------------------------------------------------
+# Path resolution
+# ------------------------------------------------------------------------------
+
+test_default_config_path() {
+    test_start "Default config path uses the FHS-aligned location"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local result
+    result=$(
+        unset ZFSCONFIG_PATH
+        export ZFSUTILITIES_CONFIG_PATH="$tmpdir/config.json"
+        export ZFSUTILITIES_LEGACY_CONFIG_PATH="$tmpdir/legacy.json"
+        source "$mydir/bin/zfsconfig" >/dev/null 2>&1
+        echo "$ZFSCONFIG_PATH"
+    )
+    rm -rf "$tmpdir"
+    assert_equals "$tmpdir/config.json" "$result"
+}
+
+test_legacy_fallback_when_new_missing() {
+    test_start "Legacy config path is used when the new path does not exist"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    touch "$tmpdir/legacy.json"
+    local result
+    result=$(
+        unset ZFSCONFIG_PATH
+        export ZFSUTILITIES_CONFIG_PATH="$tmpdir/config.json"
+        export ZFSUTILITIES_LEGACY_CONFIG_PATH="$tmpdir/legacy.json"
+        source "$mydir/bin/zfsconfig" >/dev/null 2>&1
+        echo "$ZFSCONFIG_PATH"
+    )
+    rm -rf "$tmpdir"
+    assert_equals "$tmpdir/legacy.json" "$result"
+}
+
+# ------------------------------------------------------------------------------
 # Locking
 # ------------------------------------------------------------------------------
 
@@ -283,6 +320,8 @@ test_get_checkagainst_defaults_counterpart_to_dash
 test_get_checkagainst_merges_nested_sections
 test_get_checkagainst_active_flags_disable_sections
 test_get_checkagainst_backward_compatible_flat_list
+test_default_config_path
+test_legacy_fallback_when_new_missing
 test_get_pools_uses_shared_lock
 
 rm -f "$ZFSCONFIG_PATH"

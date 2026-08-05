@@ -17,7 +17,7 @@ rootcheck
 
 MY_HOST=$(hostname -s)
 PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
-JSON_CONFIG="${JSON_CONFIG:-/root/.config/zfsutilities.json}"
+JSON_CONFIG="${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
 
 ZFSLOCK_MANAGER="${ZFSLOCK_MANAGER:-$(find_zfsutility_script zfslockmanager)}"
 source "$ZFSLOCK_MANAGER"

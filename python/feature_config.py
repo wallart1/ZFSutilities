@@ -10,6 +10,13 @@ from datetime import datetime
 from config_core import BACKUP_DEFAULTS, _deep_copy, save_config
 from file_locking import scrub_state_lock_read, scrub_state_lock_write
 from logging_config import log_msg
+from migration import run_migration
+from paths import (
+    get_lock_dir,
+    get_offsite_snapfile_path,
+    get_scrub_state_path,
+    get_snapfile_path,
+)
 
 
 def get_backup_config(config):
@@ -559,7 +566,7 @@ def save_scrub_manager_config(config, scrub_data):
     save_config(config)
 
 
-SCRUB_STATE_PATH = "/root/.config/zfsutilities/scrub_state.json"
+SCRUB_STATE_PATH = get_scrub_state_path()
 
 
 def load_scrub_state():
@@ -568,6 +575,7 @@ def load_scrub_state():
     Returns a dict with empty-list defaults for the bucket keys. If the file
     is missing, unreadable, or malformed, the defaults are returned.
     """
+    run_migration()
     defaults = {
         "pending": [],
         "active": [],
@@ -603,14 +611,15 @@ def save_scrub_state(state):
         log_msg(f"WARN: Could not save scrub state: {e}")
 
 
-SNAPFILE = "/root/.config/zfsutilities_nextsnap"
-OFFSITE_SNAPFILE = "/root/.config/zfsutilities_offsite_nextsnap"
-SNAPNAME_LOCK = "/run/lock/zfs/.snapname.lock"
-SNAPNAME_RESERVED = "/run/lock/zfs/.snapname.reserved"
+SNAPFILE = get_snapfile_path()
+OFFSITE_SNAPFILE = get_offsite_snapfile_path()
+SNAPNAME_LOCK = os.path.join(get_lock_dir(), ".snapname.lock")
+SNAPNAME_RESERVED = os.path.join(get_lock_dir(), ".snapname.reserved")
 SNAPNAME_RESERVE_SECONDS = 60
 
 
 def _read_snapfile(path):
+    run_migration()
     try:
         if os.path.exists(path):
             with open(path) as f:
@@ -623,6 +632,7 @@ def _read_snapfile(path):
 
 
 def _write_snapfile(path, name):
+    run_migration()
     try:
         with open(path, 'w') as f:
             f.write(name)
@@ -631,6 +641,7 @@ def _write_snapfile(path, name):
 
 
 def _remove_snapfile(path):
+    run_migration()
     try:
         os.remove(path)
     except OSError:

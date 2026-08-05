@@ -1,9 +1,9 @@
-# /etc/zfsutilities-deploy.conf
+# /etc/zfsutilities/deploy.conf
 #
 # Deployment groups for deploy-version.
 # Each group is a space-separated list of remote hostnames.
 #
-# This file is separate from /etc/zfsutilities-node.conf because the
+# This file is separate from /etc/zfsutilities/node.conf because the
 # local node configuration (e.g. a single-node test system) may differ
 # from the production deployment targets.
 #

@@ -75,19 +75,30 @@ load_uninstall_config() {
     ISCSI_LIB_LINK="${ZFSUTILITIES_ISCSI_LIB_LINK:-/usr/local/lib/iscsi-lib.sh}"
     ROOTCHECK_LINK="${ZFSUTILITIES_ROOTCHECK_LINK:-/usr/local/lib/rootcheck}"
     LOCAL_BIN_DIR="${ZFSUTILITIES_LOCAL_BIN_DIR:-/usr/local/bin}"
-    NODE_CONF="${ZFSUTILITIES_NODE_CONF:-/etc/zfsutilities-node.conf}"
-    LEGACY_NODE_CONF="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/two-node.conf}"
-    DEPLOY_CONF="${ZFSUTILITIES_DEPLOY_CONF:-/etc/zfsutilities-deploy.conf}"
-    CONFIG_PATH="${ZFSUTILITIES_CONFIG_PATH:-/root/.config/zfsutilities.json}"
-    CONFIG_DIR="${ZFSUTILITIES_CONFIG_DIR:-/root/.config/zfsutilities}"
-    HISTORY_PATH="${ZFSUTILITIES_HISTORY_PATH:-/root/.config/zfsutilities-history.json}"
+    SYSTEM_CONFIG_DIR="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}"
+    STATE_DIR="${ZFSUTILITIES_STATE_DIR:-/var/lib/zfsutilities}"
+    NODE_CONF="${ZFSUTILITIES_NODE_CONF:-${SYSTEM_CONFIG_DIR}/node.conf}"
+    LEGACY_NODE_CONF="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
+    LEGACY_TWO_NODE_CONF="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
+    DEPLOY_CONF="${ZFSUTILITIES_DEPLOY_CONF:-${SYSTEM_CONFIG_DIR}/deploy.conf}"
+    LEGACY_DEPLOY_CONF="${ZFSUTILITIES_LEGACY_DEPLOY_CONF:-/etc/zfsutilities-deploy.conf}"
+    CONFIG_PATH="${ZFSUTILITIES_CONFIG_PATH:-${STATE_DIR}/config.json}"
+    CONFIG_DIR="${ZFSUTILITIES_CONFIG_DIR:-${STATE_DIR}}"
+    LEGACY_CONFIG_PATH="${ZFSUTILITIES_LEGACY_CONFIG_PATH}"
+    LEGACY_CONFIG_DIR="${ZFSUTILITIES_LEGACY_CONFIG_DIR}"
+    HISTORY_PATH="${ZFSUTILITIES_HISTORY_PATH:-${STATE_DIR}/history.json}"
+    LEGACY_HISTORY_PATH="${ZFSUTILITIES_LEGACY_HISTORY_PATH}"
+    LEGACY_PROFILES_DIR="${ZFSUTILITIES_LEGACY_PROFILES_DIR}"
+    LEGACY_NEXTSNAP_FILE="${ZFSUTILITIES_LEGACY_NEXTSNAP_FILE}"
+    LEGACY_OFFSITE_NEXTSNAP_FILE="${ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE}"
     CACHE_DIR="${ZFSUTILITIES_CACHE_DIR:-/root/.cache/zfsutilities}"
     LOG_DIR="${ZFSUTILITIES_LOG_DIR:-/var/log/zfsutilities}"
     CRON_FILE="${ZFSUTILITIES_CRON_FILE:-/etc/cron.d/zfsutilities}"
     PROFILE_LOCK_DIR="${ZFSUTILITIES_PROFILE_LOCK_DIR:-/run/lock/zfs/profiles}"
     ZFSLOCK_DIR="${ZFSUTILITIES_ZFSLOCK_DIR:-/run/lock/zfs}"
     SYSTEMD_DIR="${ZFSUTILITIES_SYSTEMD_DIR:-/etc/systemd/system}"
-    ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_ISCSI_ENCRYPTED_CONF:-/etc/iscsi-encrypted-luns.conf}"
+    ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_ISCSI_ENCRYPTED_CONF:-${SYSTEM_CONFIG_DIR}/iscsi-encrypted-luns.conf}"
+    LEGACY_ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF:-/etc/iscsi-encrypted-luns.conf}"
     LUKS_KEYFILE="${ZFSUTILITIES_LUKS_KEYFILE:-/root/.luks-key}"
     PVE_ISCSI_PLUGIN="${ZFSUTILITIES_PVE_ISCSI_PLUGIN:-/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm}"
     CACHE_WARM_LOG_GLOB="${ZFSUTILITIES_CACHE_WARM_LOG_GLOB:-/var/log/zfs-cache-warm*.log}"
@@ -257,6 +268,10 @@ detect_node_mode() {
         # shellcheck source=/dev/null
         source "$LEGACY_NODE_CONF"
         NODE_MODE="two-node"
+    elif [[ -f "$LEGACY_TWO_NODE_CONF" ]]; then
+        # shellcheck source=/dev/null
+        source "$LEGACY_TWO_NODE_CONF"
+        NODE_MODE="two-node"
     fi
 
     NODE_MODE="${NODE_MODE:-single-node}"
@@ -412,8 +427,11 @@ confirm_uninstall() {
         echo "  - $SYSTEMD_DIR/rtslib-fb-targetctl.service.d/"
         echo "  - $SYSTEMD_DIR/zfs-keys-unlock.service"
         echo "  - $SYSTEMD_DIR/zfs-cache-warm.service"
+        echo "  - $SYSTEM_CONFIG_DIR/"
+        echo "  - $STATE_DIR/"
         echo "  - $NODE_CONF"
         echo "  - $LEGACY_NODE_CONF"
+        echo "  - $LEGACY_TWO_NODE_CONF"
         echo "  - $DEPLOY_CONF"
         echo "  - $CONFIG_PATH"
         echo "  - $CONFIG_DIR"
@@ -440,7 +458,8 @@ confirm_uninstall() {
         echo "  - Desktop shortcuts for the GUI and documentation viewer"
         echo ""
         echo "The following will be preserved:"
-        echo "  - Configuration files in /root/.config and /etc/zfsutilities-*"
+        echo "  - Configuration files in /etc/zfsutilities/, /var/lib/zfsutilities/,"
+        echo "    and legacy /root/.config/ and /etc/zfsutilities-* paths"
         echo "  - Log files in /var/log/zfsutilities"
         echo "  - History files"
     fi
@@ -472,6 +491,9 @@ uninstall_software() {
 
     # Stop/disable services before removing their units.
     systemctl_cmd stop zfs-cache-warm.service
+    systemctl_cmd disable zfs-cache-warm.service
+    systemctl_cmd stop zfs-keys-unlock.service
+    systemctl_cmd disable zfs-keys-unlock.service
     systemctl_cmd disable zfs-cache-warm.service
     systemctl_cmd stop zfs-keys-unlock.service
     systemctl_cmd disable zfs-keys-unlock.service
@@ -527,15 +549,33 @@ uninstall_purge() {
     echo ""
     echo "=== Removing configuration, logs, and other remnants ==="
 
+    remove_dir "$SYSTEM_CONFIG_DIR"
+    remove_dir "$STATE_DIR"
     remove_file "$NODE_CONF"
     remove_file "$LEGACY_NODE_CONF"
+    remove_file "$LEGACY_TWO_NODE_CONF"
     remove_file "$DEPLOY_CONF"
+    remove_file "$LEGACY_DEPLOY_CONF"
     remove_file "$CONFIG_PATH"
     remove_dir "$CONFIG_DIR"
+    remove_file "$LEGACY_CONFIG_PATH"
+    remove_symlink "$LEGACY_CONFIG_PATH"
+    remove_dir "$LEGACY_CONFIG_DIR"
     remove_file "$HISTORY_PATH"
+    remove_file "$LEGACY_HISTORY_PATH"
+    remove_symlink "$LEGACY_HISTORY_PATH"
+    remove_dir "$LEGACY_PROFILES_DIR"
+    remove_symlink "$LEGACY_PROFILES_DIR"
+    remove_file "$LEGACY_NEXTSNAP_FILE"
+    remove_file "$LEGACY_OFFSITE_NEXTSNAP_FILE"
     remove_dir "$CACHE_DIR"
     remove_dir "$LOG_DIR"
     remove_file "$ISCSI_ENCRYPTED_CONF"
+    remove_file "$LEGACY_ISCSI_ENCRYPTED_CONF"
+    remove_symlink "$LEGACY_NODE_CONF"
+    remove_symlink "$LEGACY_DEPLOY_CONF"
+    remove_symlink "$LEGACY_ISCSI_ENCRYPTED_CONF"
+    remove_symlink "$LEGACY_TWO_NODE_CONF"
 
     # Cache-warm utility.
     remove_file "$LOCAL_BIN_DIR/warm-cache.sh"

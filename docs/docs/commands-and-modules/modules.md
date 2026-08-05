@@ -13,6 +13,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`bashfatal`](#bashfatal)
 - [`bashreturn`](#bashreturn)
 - [`bashsetx`](#bashsetx)
+- [`paths.sh`](#pathssh)
 - [`rootcheck`](#rootcheck)
 - [`zfsconfig`](#zfsconfig)
 - [`zfsbuildfsarray`](#zfsbuildfsarray)
@@ -79,7 +80,11 @@ rootcheck
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | [Session log files](../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson) | One log file per directly-executed script; reused by child sourced modules via `$ZFSUTILITIES_LOG_INHERIT` |
 
-**Called modules:** none. `bashinit` is the lowest-level helper; it does not source other project modules.
+**Called modules:**
+
+| Module | Purpose |
+| ------ | ------- |
+| `lib/paths.sh` | FHS-aligned path variables and one-time state migration (sourced automatically at the end of bashinit) |
 
 **Internal flow:**
 
@@ -194,6 +199,69 @@ Sends trace output to stderr via `BASH_XTRACEFD=2`.
 
 ---
 
+### `paths.sh`
+
+Centralized FHS-aligned path layout for bash scripts. Defines all runtime,
+state, log, lock, and legacy path variables, plus the one-time state-file
+migration helper.
+
+```bash
+# Normally inherited automatically after sourcing bashinit.
+source "$(find_zfsutility_script paths.sh)"
+```
+
+**Functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `migrate_zfsutilities_state` | One-time migration of legacy state/config files to the new layout |
+| `_zfsutilities_migration_disabled` | Returns true when migration is disabled via environment |
+| `_zfsutilities_migration_sentinel` | Path to the migration sentinel file |
+| `_zfsutilities_backup_path` | Unique timestamped backup path for conflicting legacy files |
+| `_migrate_path_item` | Move a legacy file/dir to its new location and leave a rollback symlink |
+
+**Globals / environment:**
+
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `ZFSUTILITIES_CONFIG_DIR` | `/etc/zfsutilities` | System/admin configuration directory |
+| `ZFSUTILITIES_STATE_DIR` | `/var/lib/zfsutilities` | Persistent runtime-state directory |
+| `ZFSUTILITIES_LOG_DIR` | `/var/log/zfsutilities` | Log directory |
+| `ZFSUTILITIES_RUN_DIR` | `/run/zfsutilities` | Transient runtime-state directory |
+| `ZFSUTILITIES_LOCK_DIR` | `/run/lock/zfs` | Advisory-lock directory |
+| `ZFSUTILITIES_SYSTEM_CONFIG_DIR` | `/etc/zfsutilities` | System administrator config directory |
+| `ZFSUTILITIES_CONFIG_PATH` | `${STATE_DIR}/config.json` | Main JSON config file |
+| `ZFSUTILITIES_HISTORY_PATH` | `${STATE_DIR}/history.json` | Backup-history JSON file |
+| `ZFSUTILITIES_PROFILES_DIR` | `${STATE_DIR}/profiles` | Profile JSON files |
+| `ZFSUTILITIES_SCRUB_STATE_PATH` | `${STATE_DIR}/scrub_state.json` | Scrub-manager state file |
+| `ZFSUTILITIES_NEXTSNAP_FILE` | `${STATE_DIR}/nextsnap` | Saved next-snapshot file |
+| `ZFSUTILITIES_OFFSITE_NEXTSNAP_FILE` | `${STATE_DIR}/nextsnap_offsite` | Saved offsite next-snapshot file |
+| `ZFSUTILITIES_RUN_NEXTSNAP_PREFIX` | `${RUN_DIR}/nextsnap_` | Transient next-snapshot prefix |
+| `ZFSUTILITIES_SCRUBALL_STATEFILE` | `${RUN_DIR}/zfsscruball.state` | `zfsscruball` pause/resume state |
+| `ZFSUTILITIES_PID_FILE` | `${RUN_DIR}/main.pid` | GUI PID file |
+| `ZFSUTILITIES_SESSION_LOG_DIR` | `${LOG_DIR}/sessions` | Per-session log directory |
+| `ZFSUTILITIES_CRON_FILE` | `/etc/cron.d/zfsutilities` | Cron drop-in file |
+| `ZFSUTILITIES_PROFILE_LOCK_DIR` | `${LOCK_DIR}/profiles` | Per-profile advisory locks |
+
+All variables can be overridden via environment variables for tests and
+non-standard installs.
+
+**Called modules:**
+
+| Module | Purpose |
+| ------ | ------- |
+| `bashinit` | `log_msg`, `find_zfsutility_script` |
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| Migration sentinel (`${STATE_DIR}/.migration_complete`) | [Path layout](../index.md#path-layout-and-migration) |
+
+**Return codes:** none (sourced module).
+
+---
+
 ### `rootcheck`
 
 Verifies the script is running as root. Sources at the top of any script that
@@ -226,7 +294,7 @@ Exits with a clear message if not running as root.
 ### `zfsconfig`
 
 Sourceable helper that reads from and writes to the shared JSON config at
-`/root/.config/zfsutilities.json`. This is the bash-side counterpart to the
+`/var/lib/zfsutilities/config.json`. This is the bash-side counterpart to the
 GUI's Python config modules (`config_core.py` and `feature_config.py`); they
 share the same file.
 
@@ -274,7 +342,7 @@ zfsconfig_invalidate
 
 | Variable                | Role                                                             | Reference                                                               |
 | ----------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `$ZFSCONFIG_PATH`       | Override config path (default `/root/.config/zfsutilities.json`) | [Infrastructure](../developer-guide/global-variables.md#infrastructure) |
+| `$ZFSCONFIG_PATH`       | Override config path (default `/var/lib/zfsutilities/config.json`) | [Infrastructure](../developer-guide/global-variables.md#infrastructure) |
 | `$ZFSCONFIG_LEGACY_DIR` | Directory searched for legacy `zfsretainpol-*` files             | [Infrastructure](../developer-guide/global-variables.md#infrastructure) |
 
 **Data structures produced:**
@@ -283,7 +351,7 @@ zfsconfig_invalidate
 | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `$zfspoolarray`                                                                             | [Data Structures](../developer-guide/data-structures.md#zfspoolarray)                                     |
 | Retention arrays (`$bktname`, `$bktretain`, `$minage`)                                      | [Data Structures](../developer-guide/data-structures.md#retention-policy-arrays-bktname-bktretain-minage) |
-| [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson) | All reads/writes target this file                                                                         |
+| [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) | All reads/writes target this file                                                                         |
 
 **Called modules:** none. `zfsconfig` uses inline `python3` heredocs rather than
 sourcing other project modules.
@@ -386,7 +454,7 @@ checkagainst <snapshot>
 | Structure                                                                                             | Reference                                |
 | ----------------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | [fss table](../developer-guide/data-structures.md#fss-table-in-memory-rows-from-zfscheckagainst-json) | Rules for mapping snapshot → counterpart |
-| [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson)           | `checkagainst` and `pools` keys            |
+| [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson)           | `checkagainst` and `pools` keys            |
 
 #### The fss table
 
@@ -1076,7 +1144,7 @@ retain <pool> [label]
 | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | [Retention arrays](../developer-guide/data-structures.md#retention-policy-arrays-bktname-bktretain-minage) | `$bktname` / `$bktretain` / `$minage` filled via `zfsconfig_get_retention` |
 | [`snaparray` / `bktsnaparray`](../developer-guide/data-structures.md#snaparray-bktsnaparray-zfsretain)     | Working arrays built per-run                                               |
-| [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson)                | `retention` key read; falls back to legacy `zfsretainpol-<pool>` files     |
+| [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson)                | `retention` key read; falls back to legacy `zfsretainpol-<pool>` files     |
 
 Delegates each deletion to [`zfsdelsnap`](#zfsdelsnap), which runs
 [`zfscheckagainst`](#zfscheckagainst) as a safety check before every delete.
@@ -1297,7 +1365,7 @@ Format: `@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>`
 **Internal flow / algorithm:**
 
 1. Derive a per-caller snapfile path from `BASH_SOURCE[1]`. The file is named
-   `/tmp/zfsnextsnap_<sanitized_caller>`.
+   `/run/zfsutilities/nextsnap_<sanitized_caller>`.
 2. If the snapfile exists and contains a snapshot name, prompt the user to
    reuse it. Reusing keeps incremental chains stable across interrupted runs.
 3. If reuse is declined, delete the snapfile and generate a new name.
@@ -1321,7 +1389,7 @@ Format: `@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>`
 
 | Structure | Reference |
 | --------- | --------- |
-| [Snapshot name persistence](../developer-guide/data-structures.md#snapshot-name-persistence) | `/tmp/zfsnextsnap_<caller>` files |
+| [Snapshot name persistence](../developer-guide/data-structures.md#snapshot-name-persistence) | `/run/zfsutilities/nextsnap_<caller>` files |
 
 **Return codes:**
 

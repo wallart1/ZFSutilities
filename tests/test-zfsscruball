@@ -40,6 +40,18 @@ export -f zpool ionice
 # Tests
 # ---------------------------------------------------------------------------
 
+test_default_statefile_path() {
+    echo "=== Default state file path ==="
+    test_start "Default STATEFILE uses /run/zfsutilities/zfsscruball.state"
+    local default_statefile
+    default_statefile=$(
+        unset STATEFILE
+        source "$old_mydir/bin/zfsscruball" 2>/dev/null
+        echo "$STATEFILE"
+    )
+    assert_equals "/run/zfsutilities/zfsscruball.state" "$default_statefile"
+}
+
 test_scrub_runs_selected_pool() {
     echo "=== Scrub runs on selected pool ==="
     local state_dir

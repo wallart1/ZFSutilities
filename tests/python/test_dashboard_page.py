@@ -22,6 +22,7 @@ from test_support import (
     capture_logs,
     mock_gtk,
     mock_subprocess,
+    temp_config_dir,
 )
 
 
@@ -1499,20 +1500,22 @@ class TestRefreshIntervalChanged(unittest.TestCase):
     """Dashboard refresh interval spinner persists and restarts the timer."""
 
     def test_saves_new_interval_to_config(self):
-        app = MagicMock()
-        app.config = {"dashboard": {"low_space_threshold": 80, "refresh_seconds": 30}}
-        spin = MagicMock()
-        spin.get_value.return_value = 45
-        dp._on_refresh_interval_changed(spin, app)
-        self.assertEqual(app.config["dashboard"]["refresh_seconds"], 45)
+        with temp_config_dir():
+            app = MagicMock()
+            app.config = {"dashboard": {"low_space_threshold": 80, "refresh_seconds": 30}}
+            spin = MagicMock()
+            spin.get_value.return_value = 45
+            dp._on_refresh_interval_changed(spin, app)
+            self.assertEqual(app.config["dashboard"]["refresh_seconds"], 45)
 
     def test_restarts_dashboard_timer(self):
-        app = MagicMock()
-        app.config = {"dashboard": {"low_space_threshold": 80, "refresh_seconds": 30}}
-        spin = MagicMock()
-        spin.get_value.return_value = 45
-        dp._on_refresh_interval_changed(spin, app)
-        app._start_stop_dashboard_timer.assert_called_once_with("dashboard")
+        with temp_config_dir():
+            app = MagicMock()
+            app.config = {"dashboard": {"low_space_threshold": 80, "refresh_seconds": 30}}
+            spin = MagicMock()
+            spin.get_value.return_value = 45
+            dp._on_refresh_interval_changed(spin, app)
+            app._start_stop_dashboard_timer.assert_called_once_with("dashboard")
 
     def test_no_restart_when_value_unchanged(self):
         app = MagicMock()

@@ -10,8 +10,9 @@ from datetime import datetime, timedelta
 
 from backup_config import log_msg
 from config_core import SESSION_LOG_DIR
+from paths import get_cron_file_path, get_profile_lock_dir
 
-CRON_FILE = "/etc/cron.d/zfsutilities"
+CRON_FILE = get_cron_file_path()
 
 # Dedicated cron output log. Cron stderr/stdout are redirected here so that
 # failures before the runner creates its own session log are still visible.
@@ -19,7 +20,7 @@ CRON_LOG_FILE = os.path.join(os.path.dirname(SESSION_LOG_DIR), "cron.log")
 
 # Directory for per-profile advisory locks. Override for testing.
 PROFILE_LOCK_DIR = os.environ.get(
-    "ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles"
+    "ZFSUTILITIES_PROFILE_LOCK_DIR", get_profile_lock_dir()
 )
 
 _HEADER = (

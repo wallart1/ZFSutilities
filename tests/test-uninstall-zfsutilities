@@ -37,12 +37,19 @@ _setup_uninstall_env() {
     export ZFSUTILITIES_ISCSI_LIB_LINK="$_tmpdir/usr/local/lib/iscsi-lib.sh"
     export ZFSUTILITIES_ROOTCHECK_LINK="$_tmpdir/usr/local/lib/rootcheck"
     export ZFSUTILITIES_LOCAL_BIN_DIR="$_tmpdir/usr/local/bin"
-    export ZFSUTILITIES_NODE_CONF="$_tmpdir/etc/zfsutilities-node.conf"
-    export ZFSUTILITIES_LEGACY_NODE_CONF="$_tmpdir/etc/two-node.conf"
-    export ZFSUTILITIES_DEPLOY_CONF="$_tmpdir/etc/zfsutilities-deploy.conf"
-    export ZFSUTILITIES_CONFIG_PATH="$_tmpdir/root/.config/zfsutilities.json"
-    export ZFSUTILITIES_CONFIG_DIR="$_tmpdir/root/.config/zfsutilities"
-    export ZFSUTILITIES_HISTORY_PATH="$_tmpdir/root/.config/zfsutilities-history.json"
+    export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$_tmpdir/etc/zfsutilities"
+    export ZFSUTILITIES_STATE_DIR="$_tmpdir/var/lib/zfsutilities"
+    export ZFSUTILITIES_NODE_CONF="$_tmpdir/etc/zfsutilities/node.conf"
+    export ZFSUTILITIES_LEGACY_NODE_CONF="$_tmpdir/etc/zfsutilities-node.conf"
+    export ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$_tmpdir/etc/two-node.conf"
+    export ZFSUTILITIES_DEPLOY_CONF="$_tmpdir/etc/zfsutilities/deploy.conf"
+    export ZFSUTILITIES_LEGACY_DEPLOY_CONF="$_tmpdir/etc/zfsutilities-deploy.conf"
+    export ZFSUTILITIES_CONFIG_PATH="$_tmpdir/var/lib/zfsutilities/config.json"
+    export ZFSUTILITIES_CONFIG_DIR="$_tmpdir/var/lib/zfsutilities"
+    export ZFSUTILITIES_LEGACY_CONFIG_PATH="$_tmpdir/root/.config/zfsutilities.json"
+    export ZFSUTILITIES_LEGACY_CONFIG_DIR="$_tmpdir/root/.config/zfsutilities"
+    export ZFSUTILITIES_HISTORY_PATH="$_tmpdir/var/lib/zfsutilities/history.json"
+    export ZFSUTILITIES_LEGACY_HISTORY_PATH="$_tmpdir/root/.config/zfsutilities-history.json"
     export ZFSUTILITIES_CACHE_DIR="$_tmpdir/root/.cache/zfsutilities"
     export ZFSUTILITIES_LOG_DIR="$_tmpdir/var/log/zfsutilities"
     export ZFSUTILITIES_CRON_FILE="$_tmpdir/etc/cron.d/zfsutilities"
@@ -55,9 +62,11 @@ _setup_uninstall_env() {
     export ZFSUTILITIES_CACHE_WARM_LOG_GLOB="$_tmpdir/var/log/zfs-cache-warm*.log"
 
     mkdir -p "$_tmpdir/root" "$_tmpdir/etc/profile.d" "$_tmpdir/etc/sudoers.d" \
-        "$_tmpdir/etc/cron.d" "$_tmpdir/usr/local/lib" "$_tmpdir/usr/local/bin" \
+        "$_tmpdir/etc/zfsutilities" "$_tmpdir/etc/cron.d" \
+        "$_tmpdir/usr/local/lib" "$_tmpdir/usr/local/bin" \
         "$_tmpdir/etc/systemd/system" \
         "$_tmpdir/run/lock/zfs/profiles" "$_tmpdir/run/lock/zfs" \
+        "$_tmpdir/var/lib/zfsutilities" "$_tmpdir/var/lib/zfsutilities/profiles" \
         "$_tmpdir/root/.config/zfsutilities" "$_tmpdir/root/.cache/zfsutilities" \
         "$_tmpdir/var/log/zfsutilities"
 
@@ -76,12 +85,19 @@ _teardown_uninstall_env() {
     unset ZFSUTILITIES_ISCSI_LIB_LINK
     unset ZFSUTILITIES_ROOTCHECK_LINK
     unset ZFSUTILITIES_LOCAL_BIN_DIR
+    unset ZFSUTILITIES_SYSTEM_CONFIG_DIR
+    unset ZFSUTILITIES_STATE_DIR
     unset ZFSUTILITIES_NODE_CONF
     unset ZFSUTILITIES_LEGACY_NODE_CONF
+    unset ZFSUTILITIES_LEGACY_TWO_NODE_CONF
     unset ZFSUTILITIES_DEPLOY_CONF
+    unset ZFSUTILITIES_LEGACY_DEPLOY_CONF
     unset ZFSUTILITIES_CONFIG_PATH
     unset ZFSUTILITIES_CONFIG_DIR
+    unset ZFSUTILITIES_LEGACY_CONFIG_PATH
+    unset ZFSUTILITIES_LEGACY_CONFIG_DIR
     unset ZFSUTILITIES_HISTORY_PATH
+    unset ZFSUTILITIES_LEGACY_HISTORY_PATH
     unset ZFSUTILITIES_CACHE_DIR
     unset ZFSUTILITIES_LOG_DIR
     unset ZFSUTILITIES_CRON_FILE
@@ -146,7 +162,7 @@ test_default_uninstall_removes_software_preserves_config() {
     touch "$tmpdir/etc/cron.d/zfsutilities"
     touch "$tmpdir/etc/systemd/system/zfs-keys-unlock.service"
     mkdir -p "$tmpdir/etc/systemd/system/rtslib-fb-targetctl.service.d"
-    touch "$tmpdir/root/.config/zfsutilities.json"
+    touch "$tmpdir/var/lib/zfsutilities/config.json"
     touch "$tmpdir/var/log/zfsutilities/session.log"
 
     export SUDO_USER="testuser"
@@ -177,7 +193,7 @@ test_default_uninstall_removes_software_preserves_config() {
         failed=1
         echo "    /root/bashinit symlink still present"
     fi
-    if [[ ! -f "$tmpdir/root/.config/zfsutilities.json" ]]; then
+    if [[ ! -f "$tmpdir/var/lib/zfsutilities/config.json" ]]; then
         failed=1
         echo "    config file was incorrectly removed"
     fi
@@ -256,6 +272,12 @@ test_purge_removes_config_logs_cachewarm() {
     _make_fake_version "$tmpdir/usr/local/lib/zfsutilities" "1.0.0"
     ln -sfn "versions/1.0.0" "$tmpdir/usr/local/lib/zfsutilities/current"
 
+    touch "$tmpdir/etc/zfsutilities/node.conf"
+    touch "$tmpdir/etc/zfsutilities/deploy.conf"
+    touch "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
+    touch "$tmpdir/var/lib/zfsutilities/config.json"
+    touch "$tmpdir/var/lib/zfsutilities/scrub_state.json"
+    touch "$tmpdir/var/lib/zfsutilities/history.json"
     touch "$tmpdir/etc/zfsutilities-node.conf"
     touch "$tmpdir/etc/two-node.conf"
     touch "$tmpdir/etc/zfsutilities-deploy.conf"
@@ -265,7 +287,6 @@ test_purge_removes_config_logs_cachewarm() {
     touch "$tmpdir/root/.cache/zfsutilities/lock"
     touch "$tmpdir/var/log/zfsutilities/session.log"
     touch "$tmpdir/var/log/zfsutilities/cron.log"
-    touch "$tmpdir/etc/iscsi-encrypted-luns.conf"
     touch "$tmpdir/root/.luks-key"
     touch "$tmpdir/usr/local/bin/warm-cache.sh"
     touch "$tmpdir/usr/local/bin/identify-hot-vms.sh"
@@ -296,6 +317,14 @@ test_purge_removes_config_logs_cachewarm() {
         echo "    Expected rc=0, got $rc"
     fi
     for path in \
+        "$tmpdir/etc/zfsutilities" \
+        "$tmpdir/etc/zfsutilities/node.conf" \
+        "$tmpdir/etc/zfsutilities/deploy.conf" \
+        "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf" \
+        "$tmpdir/var/lib/zfsutilities" \
+        "$tmpdir/var/lib/zfsutilities/config.json" \
+        "$tmpdir/var/lib/zfsutilities/scrub_state.json" \
+        "$tmpdir/var/lib/zfsutilities/history.json" \
         "$tmpdir/etc/zfsutilities-node.conf" \
         "$tmpdir/etc/two-node.conf" \
         "$tmpdir/etc/zfsutilities-deploy.conf" \
@@ -334,7 +363,7 @@ test_dry_run_makes_no_changes() {
 
     _make_fake_version "$tmpdir/usr/local/lib/zfsutilities" "1.0.0"
     ln -sfn "versions/1.0.0" "$tmpdir/usr/local/lib/zfsutilities/current"
-    touch "$tmpdir/root/.config/zfsutilities.json"
+    touch "$tmpdir/var/lib/zfsutilities/config.json"
     touch "$tmpdir/var/log/zfsutilities/session.log"
 
     export SUDO_USER="testuser"
@@ -361,7 +390,7 @@ test_dry_run_makes_no_changes() {
         failed=1
         echo "    version base was removed during dry run"
     fi
-    if [[ ! -f "$tmpdir/root/.config/zfsutilities.json" ]]; then
+    if [[ ! -f "$tmpdir/var/lib/zfsutilities/config.json" ]]; then
         failed=1
         echo "    config was removed during dry run"
     fi
@@ -545,7 +574,7 @@ test_restartability_partial_uninstall() {
     touch "$tmpdir/etc/profile.d/zfsutilities.sh"
     touch "$tmpdir/etc/sudoers.d/zfsutilities"
     touch "$tmpdir/etc/cron.d/zfsutilities"
-    touch "$tmpdir/root/.config/zfsutilities.json"
+    touch "$tmpdir/var/lib/zfsutilities/config.json"
     touch "$tmpdir/var/log/zfsutilities/session.log"
 
     export SUDO_USER="testuser"
@@ -571,7 +600,7 @@ test_restartability_partial_uninstall() {
         failed=1
         echo "    profile file still present after first run"
     fi
-    if [[ ! -f "$tmpdir/root/.config/zfsutilities.json" ]]; then
+    if [[ ! -f "$tmpdir/var/lib/zfsutilities/config.json" ]]; then
         failed=1
         echo "    config removed in default mode"
     fi
@@ -584,7 +613,7 @@ test_restartability_partial_uninstall() {
             failed=1
             echo "    second run returned rc=$rc"
         fi
-        if [[ -f "$tmpdir/root/.config/zfsutilities.json" ]]; then
+        if [[ -f "$tmpdir/var/lib/zfsutilities/config.json" ]]; then
             failed=1
             echo "    config still present after purge"
         fi

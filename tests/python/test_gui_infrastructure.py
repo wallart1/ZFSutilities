@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+import paths
 from test_support import REPO_ROOT, capture_logs, mock_gtk
 
 GUI_PY_PATH = os.path.join(REPO_ROOT, "python", "zfsutilities_gui.py")
@@ -515,8 +516,8 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
                         saved["ui_state"]["docs_viewer"]["theme"], "slate"
                     )
                 finally:
-                    backup_config.CONFIG_PATH = "/root/.config/zfsutilities.json"
-                    config_core.CONFIG_PATH = "/root/.config/zfsutilities.json"
+                    backup_config.CONFIG_PATH = paths.get_config_path()
+                    config_core.CONFIG_PATH = paths.get_config_path()
 
     def test_save_persists_docs_viewer_state(self):
         with mock_gtk() as gtk_mock:
@@ -548,7 +549,7 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
                     self.assertEqual(dv["y"], 20)
                     self.assertFalse(dv["maximized"])
                 finally:
-                    backup_config.CONFIG_PATH = "/root/.config/zfsutilities.json"
+                    backup_config.CONFIG_PATH = paths.get_config_path()
 
 
 class TestGtkMocking(unittest.TestCase):
@@ -2146,8 +2147,8 @@ class TestMinimizeWidth(unittest.TestCase):
                         window.config["ui_state"]["treeview_columns"], {"x": [100]}
                     )
                 finally:
-                    backup_config.CONFIG_PATH = "/root/.config/zfsutilities.json"
-                    config_core.CONFIG_PATH = "/root/.config/zfsutilities.json"
+                    backup_config.CONFIG_PATH = paths.get_config_path()
+                    config_core.CONFIG_PATH = paths.get_config_path()
 
     def test_confirm_and_minimize_width_ok_resets_and_shrinks(self):
         """OK response resets columns, clears saved widths, and resizes."""
@@ -2192,8 +2193,8 @@ class TestMinimizeWidth(unittest.TestCase):
                         any("Reset 7 column" in m for m in logs)
                     )
                 finally:
-                    backup_config.CONFIG_PATH = "/root/.config/zfsutilities.json"
-                    config_core.CONFIG_PATH = "/root/.config/zfsutilities.json"
+                    backup_config.CONFIG_PATH = paths.get_config_path()
+                    config_core.CONFIG_PATH = paths.get_config_path()
 
 
 @contextlib.contextmanager

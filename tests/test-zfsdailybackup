@@ -7,7 +7,7 @@ setup_test_env
 
 # zfsdailybackup / zfssnapbuild stores its nextsnap file under the caller script
 # name.  Ensure stale files are gone so zfssnapbuild does not prompt.
-rm -f /tmp/zfsnextsnap_zfsdailybackup /tmp/zfsnextsnap_zfssnapbuild
+rm -f /run/zfsutilities/nextsnap_zfsdailybackup /run/zfsutilities/nextsnap_zfssnapbuild
 
 # Disable everything except the Rocky remote pull step.
 readonly DISABLE_ALL_BUT_ROCKY="pull_tweety='N'; pull_stewie='N'; backup_threeamigos_proxmox='N'; backup_NVME1='N'; prune='N'"
@@ -102,6 +102,6 @@ test_remote_pull_ssh_failure_continues
 test_local_pull_failure_continues
 test_dry_run_pull_does_not_execute
 
-rm -f /tmp/zfsnextsnap_zfsdailybackup /tmp/zfsnextsnap_zfssnapbuild
+rm -f /run/zfsutilities/nextsnap_zfsdailybackup /run/zfsutilities/nextsnap_zfssnapbuild
 teardown_test_env
 test_summary

@@ -1,6 +1,6 @@
 """
 Retention Policies page — read and write the shared JSON config
-(/root/.config/zfsutilities.json, under the `retention` key).
+(/var/lib/zfsutilities/config.json, under the `retention` key).
 """
 
 import copy

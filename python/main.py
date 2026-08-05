@@ -18,8 +18,9 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from backup_config import log_msg
 from gi.repository import Gdk, Gio, Gtk
+from paths import get_pid_file_path
 
-PID_FILE = "/run/zfsutilities/main.pid"
+PID_FILE = get_pid_file_path()
 
 
 class ZFSUtilitiesApp(Gtk.Application):

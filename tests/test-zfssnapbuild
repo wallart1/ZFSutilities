@@ -10,8 +10,21 @@ export SNAPNAME_RESERVED="/tmp/zfs_snapname_reserved_test_$$"
 
 source "$mydir/bin/zfssnapbuild"
 
+# Verify the default path before applying the test override.
+test_default_snapfile_path() {
+    test_start "Default snapfile path uses /run/zfsutilities/nextsnap_"
+    local default_path
+    default_path=$(buildsnapfilename)
+    assert_contains "$default_path" "/run/zfsutilities/nextsnap_"
+}
+
+test_default_snapfile_path
+
 # Override snapfile path so tests do not collide with root-owned files.
-TEST_SNAPFILE="/tmp/zfsnextsnap_test_$$"
+TEST_RUN_DIR="/tmp/zfsutilities_run_$$"
+mkdir -p "$TEST_RUN_DIR"
+export ZFSUTILITIES_RUN_NEXTSNAP_PREFIX="${TEST_RUN_DIR}/nextsnap_"
+TEST_SNAPFILE="${ZFSUTILITIES_RUN_NEXTSNAP_PREFIX}test_$$"
 buildsnapfilename() { echo "$TEST_SNAPFILE"; }
 
 # =============================================================================
@@ -178,6 +191,7 @@ main() {
     test_reservation_file_is_line_based
     test_lock_file_is_created
     rm -f "$TEST_SNAPFILE" "$SNAPNAME_LOCK" "$SNAPNAME_RESERVED"
+    rm -rf "$TEST_RUN_DIR"
     teardown_test_env
     test_summary
 }

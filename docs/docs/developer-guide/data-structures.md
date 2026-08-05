@@ -30,13 +30,13 @@ reflect import state; use `zpool list` output for that.
 ## Snapshot name persistence
 
 [`zfssnapbuild`](../commands-and-modules/modules.md#zfssnapbuild) writes the generated
-snapshot name to a per-caller file in `/tmp` so that the same name can be reused
-if the calling script is rerun. This keeps incremental replication chains stable
-across multiple invocations.
+snapshot name to a per-caller file under `/run/zfsutilities/` so that the same
+name can be reused if the calling script is rerun. This keeps incremental
+replication chains stable across multiple invocations.
 
 | File pattern | Writer | Consumers | Purpose |
 | ------------ | ------ | --------- | ------- |
-| `/tmp/zfsnextsnap_<caller>` | `zfssnapbuild` | `zfs-send-receive`, `zfssendoffsite`, `zfssend`, `zfsdailybackup` | Reuse the same snapshot name on rerun |
+| `/run/zfsutilities/nextsnap_<caller>` | `zfssnapbuild` | `zfs-send-receive`, `zfssendoffsite`, `zfssend`, `zfsdailybackup` | Reuse the same snapshot name on rerun |
 
 `removesnapfile` (called by orchestrators such as `zfsdailybackup`) deletes the
 snapfile at the end of a successful run. In dry-run mode the snapfile is left in
@@ -73,7 +73,7 @@ for the matching algorithm and a worked example.
 
 ### On-disk nested schema
 
-In `/root/.config/zfsutilities.json` the `checkagainst` key is a nested
+In `/var/lib/zfsutilities/config.json` the `checkagainst` key is a nested
 object rather than a flat list:
 
 ```json
@@ -180,7 +180,7 @@ that by-path device symlinks on the compute node remain stable.
 
 ## `POOL_TARGET` (associative array)
 
-Set in `/etc/zfsutilities-node.conf` on two-node systems. Maps ZFS pool
+Set in `/etc/zfsutilities/node.conf` on two-node systems. Maps ZFS pool
 names to iSCSI target short names.
 
 ```bash
@@ -198,11 +198,11 @@ Read by `node-lib.sh` via `pool_to_target`, `pool_list`, and `is_known_pool`.
 Only pools listed here are managed by two-node iSCSI scripts. In single-node
 mode, this array is empty and the helpers are no-ops.
 
-## Node configuration file (`/etc/zfsutilities-node.conf`)
+## Node configuration file (`/etc/zfsutilities/node.conf`)
 
-Sourceable bash. Read by `node-lib.sh` and by repo-root scripts with a legacy
-fallback to `/etc/two-node.conf`. See [Node Configuration](two-node-config.md)
-for the full field list.
+Sourceable bash. Read by `node-lib.sh` and by repo-root scripts, falling back to
+`/etc/zfsutilities/two-node.conf` and then the legacy `/etc/zfsutilities-node.conf`.
+See [Node Configuration](two-node-config.md) for the full field list.
 
 | Variable       | Mode        | Purpose                                  |
 | -------------- | ----------- | ---------------------------------------- |
@@ -214,7 +214,7 @@ for the full field list.
 | `IQN_PREFIX`   | two-node    | IQN prefix for iSCSI targets             |
 | `POOL_TARGET`  | two-node    | Pool → target short-name map (see above) |
 
-## JSON config (`/root/.config/zfsutilities.json`)
+## JSON config (`/var/lib/zfsutilities/config.json`)
 
 Shared by the GTK Python layer (`config_core.py` / `feature_config.py`) and
 the bash scripts ([`zfsconfig`](../commands-and-modules/modules.md#zfsconfig)).
@@ -447,13 +447,13 @@ added.
 ## iSCSI encrypted-LUNs config
 
 ```
-/etc/iscsi-encrypted-luns.conf
+/etc/zfsutilities/iscsi-encrypted-luns.conf
 ```
 
 Lists backstore names whose backing zvols are encrypted. Format:
 
 ```
-# /etc/iscsi-encrypted-luns.conf
+# /etc/zfsutilities/iscsi-encrypted-luns.conf
 # Format: backstore_name:device_path:target_short_name
 vm-101-disk-1:/dev/zvol/threeamigos/proxmox/vm-101-disk-1:threeamigos
 vm-202-disk-5:/dev/zvol/threeamigos/proxmox/vm-202-disk-5:threeamigos
@@ -520,7 +520,7 @@ from this file instead of the full config. This prevents `targetctl restore`
 from failing when encrypted zvol device nodes don't exist yet because
 keys haven't been loaded.
 
-## Backup history (`/root/.config/zfsutilities-history.json`)
+## Backup history (`/var/lib/zfsutilities/history.json`)
 
 A separate JSON file (not part of the main config) that stores per-run metrics
 for every backup, offsite, restore, and prune operation. It is append-only:
@@ -553,7 +553,7 @@ state file to remember which pools have already finished when resuming a paused
 or interrupted scrub run.
 
 ```
-/tmp/zfsscruball.state
+/run/zfsutilities/zfsscruball.state
 ```
 
 **Format:** one finished pool name per line.

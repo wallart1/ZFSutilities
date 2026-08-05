@@ -26,7 +26,13 @@ declare -A ISCSI_TEARDOWN
 
 # iSCSI manifest paths used by teardown/rebuild helpers.
 : "${ISCSI_MANIFEST:=/etc/rtslib-fb-target/expected-backstores.txt}"
-: "${ISCSI_ENCRYPTED_CONF:=/etc/iscsi-encrypted-luns.conf}"
+: "${ISCSI_ENCRYPTED_CONF:=${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf}"
+
+# Legacy fallback: if the new path does not exist and the legacy path does, use
+# the legacy path so existing installs keep working before the Step 5 migration.
+if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+fi
 
 # Check if a VM is running for a given VMID.
 # Returns: 0=stopped/not found, 1=running, 2=can't determine (SSH failed)

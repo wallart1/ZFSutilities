@@ -12,7 +12,7 @@ installing user's home directory. You can also launch the script directly or
 add `/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui` to a panel or
 start-menu launcher.
 
-All settings are persisted to `/root/.config/zfsutilities.json`, the same
+All settings are persisted to `/var/lib/zfsutilities/config.json`, the same
 shared config read by the bash scripts. See
 [Architecture — JSON config](../developer-guide/architecture.md) for details.
 

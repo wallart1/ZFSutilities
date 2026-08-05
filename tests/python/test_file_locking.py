@@ -10,12 +10,10 @@ import file_locking as fl
 
 
 class TestLockPathDefaults(unittest.TestCase):
-    """Default lock paths are root-owned for root, user-writable otherwise."""
+    """Default lock paths live under the centralized lock directory."""
 
     def _expected_default_dir(self):
-        if os.geteuid() == 0:
-            return "/run/lock/zfs"
-        return os.path.expanduser("~/.cache/zfsutilities")
+        return "/run/lock/zfs"
 
     def test_config_lock_path_default(self):
         expected = os.path.join(self._expected_default_dir(), ".config.lock")

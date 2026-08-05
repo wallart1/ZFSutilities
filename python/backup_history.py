@@ -11,8 +11,10 @@ import tempfile
 from datetime import datetime, timezone
 
 from file_locking import history_lock_read, history_lock_write
+from migration import run_migration
+from paths import get_history_path
 
-HISTORY_PATH = "/root/.config/zfsutilities-history.json"
+HISTORY_PATH = get_history_path()
 
 # Regex: ^(\d+(?:\.\d+)?)\s*([kKMGTPE]?(?:i?B)?)$
 # Purpose: Parse a human-readable byte size string into a numeric value.
@@ -111,6 +113,7 @@ def load_history():
 
     Returns an empty list if the file does not exist or is unreadable.
     """
+    run_migration()
     try:
         with history_lock_read():
             return _load_history_unlocked()

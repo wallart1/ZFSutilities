@@ -79,8 +79,9 @@ reading a policy via `zfsconfig_get_retention`:
 
 ## Node Configuration
 
-Sourced from `/etc/zfsutilities-node.conf` by `node-lib.sh` and the
-repo-root scripts.
+Sourced from `/etc/zfsutilities/node.conf` (falling back to
+`/etc/zfsutilities/two-node.conf`, then legacy `/etc/zfsutilities-node.conf` /
+`/etc/two-node.conf`) by `node-lib.sh` and the repo-root scripts.
 
 | Variable       | Purpose                                                                                                                                           |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -97,5 +98,5 @@ repo-root scripts.
 | Variable                | Set by     | Purpose                                                                                                      |
 | ----------------------- | ---------- | ------------------------------------------------------------------------------------------------------------ |
 | `$mydir`                | `bashinit` | Directory of the currently-running script. Every script uses `source $mydir/<helper>` to locate its siblings |
-| `$ZFSCONFIG_PATH`       | caller env | Override the JSON config path (`/root/.config/zfsutilities.json` by default). Useful for testing             |
+| `$ZFSCONFIG_PATH`       | caller env | Override the JSON config path (`/var/lib/zfsutilities/config.json` by default). Useful for testing             |
 | `$ZFSCONFIG_LEGACY_DIR` | caller env | Directory searched for legacy `zfsretainpol-*` files when the JSON config has no retention data              |

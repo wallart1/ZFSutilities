@@ -10,6 +10,9 @@
 mydir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export mydir
 
+# Disable the automatic Step-5 migration so tests do not touch production paths.
+export ZFSUTILITIES_DISABLE_MIGRATION=1
+
 source "$mydir/bin/bashinit"
 bashinit
 
@@ -153,15 +156,18 @@ assert_array_len() {
 # =============================================================================
 
 setup_test_env() {
-    # Clean up any stale snapfiles from prior test runs belonging to us.
-    rm -f "/tmp/zfsnextsnap_$(basename "$0" | tr -c 'A-Za-z0-9_' '_')"
+    # Clean up any stale per-caller snapfiles from prior test runs belonging to us.
+    # Tests set ZFSUTILITIES_RUN_NEXTSNAP_PREFIX or fall back to the new run dir.
+    local prefix="${ZFSUTILITIES_RUN_NEXTSNAP_PREFIX:-/run/zfsutilities/nextsnap_}"
+    rm -f "${prefix}$(basename "$0" | tr -c 'A-Za-z0-9_' '_')"
 }
 
 teardown_test_env() {
     # Propagate test_summary's return code so a failing suite still exits
     # non-zero when teardown is the last command in the test script.
     local rc=${_TEST_SUMMARY_RC:-0}
-    rm -f "/tmp/zfsnextsnap_$(basename "$0" | tr -c 'A-Za-z0-9_' '_')"
+    local prefix="${ZFSUTILITIES_RUN_NEXTSNAP_PREFIX:-/run/zfsutilities/nextsnap_}"
+    rm -f "${prefix}$(basename "$0" | tr -c 'A-Za-z0-9_' '_')"
     return $rc
 }
 

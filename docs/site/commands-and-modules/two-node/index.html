@@ -2112,7 +2112,7 @@
 <p>Scripts marked <strong>both</strong> run on either node and delegate automatically via SSH as appropriate. Scripts marked <strong>storage node</strong> or <strong>compute node</strong> are node-specific.</p>
 <p>Every script that touches VM disks or iSCSI configuration begins by sourcing
 <code>/usr/local/lib/node-lib.sh</code> (repo: <code>lib/node-lib.sh</code>). That library
-reads <code>/etc/zfsutilities-node.conf</code> (falling back to <code>/etc/two-node.conf</code>) and
+reads <code>/etc/zfsutilities/node.conf</code> (falling back to <code>/etc/zfsutilities/two-node.conf</code>, legacy <code>/etc/zfsutilities-node.conf</code> and <code>/etc/two-node.conf</code> also work) and
 populates the node-configuration global variables below. These variables apply to
 every entry below — they are documented once here rather than repeated in every
 entry:</p>
@@ -2447,14 +2447,14 @@ activating it. Run from the repository root.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/etc/zfsutilities-deploy.conf</code></td>
+<td><code>/etc/zfsutilities/deploy.conf</code></td>
 <td>Deployment group definitions</td>
 <td>—</td>
 </tr>
 <tr>
 <td>Node config</td>
 <td>Legacy remote host list</td>
-<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilities-nodeconf">Node config</a></td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilitiesnodeconf">Node config</a></td>
 </tr>
 <tr>
 <td><code>/usr/local/lib/zfsutilities/versions/&lt;version&gt;/</code></td>
@@ -2466,7 +2466,7 @@ activating it. Run from the repository root.</p>
 <p><strong>Internal flow / algorithm:</strong></p>
 <ol>
 <li>Parse arguments; read <code>./VERSION</code> if no version is supplied.</li>
-<li>Load <code>/etc/zfsutilities-deploy.conf</code> groups, or fall back to the node config for remote hosts.</li>
+<li>Load <code>/etc/zfsutilities/deploy.conf</code> groups, or fall back to the node config for remote hosts.</li>
 <li>Create the version directory (<code>versions/&lt;version&gt;/bin</code>, <code>lib</code>, <code>python</code>, <code>docs</code>, <code>share</code>).</li>
 <li>Copy <code>bin/</code>, <code>lib/</code>, <code>python/</code>, <code>docs/</code>, and <code>share/</code> from the repository into the version directory via <code>rsync</code>.</li>
 <li>Create launcher symlinks <code>zfsutilities-gui</code> → <code>../python/zfsutilities_gui.py</code> and <code>zfsutilities-docs</code> → <code>../python/docs_viewer.py</code> in the versioned <code>bin/</code> directory.</li>
@@ -2502,10 +2502,10 @@ production wiring (<code>current</code>, <code>PATH</code>, <code>/root/bashinit
 <p><strong>Local host</strong> — always deployed directly</p>
 </li>
 <li>
-<p><strong>Remote hosts</strong> — defined by <code>/etc/zfsutilities-deploy.conf</code> via named groups:</p>
+<p><strong>Remote hosts</strong> — defined by <code>/etc/zfsutilities/deploy.conf</code> via named groups:</p>
 </li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="c1"># /etc/zfsutilities-deploy.conf</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># /etc/zfsutilities/deploy.conf</span>
 <span class="nv">DEPLOY_GROUP_production</span><span class="o">=</span><span class="s2">&quot;stewie tweety&quot;</span>
 <span class="nv">DEPLOY_GROUP_staging</span><span class="o">=</span><span class="s2">&quot;staging-host&quot;</span>
 </code></pre></div>
@@ -2539,7 +2539,7 @@ directory:</p>
 </ul>
 <p>These let you launch the GUI and standalone documentation viewer by name after
 activating the version.</p>
-<p><code>deploy-version</code> also generates <code>/etc/zfsutilities-deploy.conf</code> at install time
+<p><code>deploy-version</code> also generates <code>/etc/zfsutilities/deploy.conf</code> at install time
 (from <code>share/installer/deploy.conf.template</code>) so the production hostnames are
 available for future deployments.</p>
 <p>See <a href="../../installation/">Installation</a> for the full workflow.</p>
@@ -2577,7 +2577,7 @@ at service startup.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Authoritative list of encrypted backstores to add</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -2591,7 +2591,7 @@ at service startup.</p>
 <p><strong>Internal flow / algorithm:</strong></p>
 <ol>
 <li>Exit silently in single-node mode.</li>
-<li>For each entry in <code>/etc/iscsi-encrypted-luns.conf</code>:</li>
+<li>For each entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>:</li>
 <li>Skip if the device node is not present (keys not loaded).</li>
 <li>Skip if the backstore already exists.</li>
 <li>Look up the original LUN index from <code>saveconfig.json</code> to preserve stable
@@ -3374,7 +3374,7 @@ compute-node <code>by-path</code> symlinks remain stable.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Source removed, destination added if encrypted</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -3481,7 +3481,7 @@ the disk line to the VM config on the compute node.</p>
 </tr>
 <tr>
 <td><code>--encrypted</code></td>
-<td>Optional. Create as an encrypted zvol; records the backstore in <code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Optional. Create as an encrypted zvol; records the backstore in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 </tr>
 </tbody>
 </table>
@@ -3529,7 +3529,7 @@ the disk line to the VM config on the compute node.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Entry added with <code>--encrypted</code></td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -3603,11 +3603,11 @@ manifests; appends disk lines to the VM config.</p>
 <tbody>
 <tr>
 <td><code>encryption</code></td>
-<td><code>aes-256-gcm</code> by default; auto-detected from an existing entry in <code>/etc/iscsi-encrypted-luns.conf</code> if available</td>
+<td><code>aes-256-gcm</code> by default; auto-detected from an existing entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code> if available</td>
 </tr>
 <tr>
 <td><code>keyformat</code></td>
-<td><code>raw</code> by default; auto-detected from an existing entry in <code>/etc/iscsi-encrypted-luns.conf</code> if available</td>
+<td><code>raw</code> by default; auto-detected from an existing entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code> if available</td>
 </tr>
 <tr>
 <td><code>keylocation</code></td>
@@ -3738,7 +3738,7 @@ for the full workflow.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Entry removed if present</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -3846,14 +3846,14 @@ each restored zvol and rewrites the Proxmox config disk lines with new LUN numbe
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Encrypted restored LUNs added</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
 <tr>
 <td>JSON config <code>archive_path</code></td>
 <td>Default archive base</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td><code>.original_volblocksize</code> sidecars</td>
@@ -4063,7 +4063,7 @@ keys are currently loaded.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Lists encrypted backstores to restore</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -4082,7 +4082,7 @@ keys are currently loaded.</p>
 <li>Start <code>rtslib-fb-targetctl</code>. The systemd drop-in restores
    <code>saveconfig-boot.json</code> (encrypted backstores excluded), then runs
    <code>iscsi-add-encrypted-luns</code> to add encrypted LUNs whose devices are available.</li>
-<li>Display encrypted LUN status from <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
+<li>Display encrypted LUN status from <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>.</li>
 <li>Save the config via <code>safe-iscsi-save</code>.</li>
 </ol>
 <p><strong>Return codes / side effects:</strong></p>
@@ -4132,7 +4132,7 @@ preventing a degraded state from overwriting a good config.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Backstores to exclude from boot config</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -4555,7 +4555,7 @@ attempts to load keys from there.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Lists encrypted datasets to load keys for</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -4582,7 +4582,7 @@ attempts to load keys from there.</p>
    <code>PARTLABEL=ZFSkeys</code> (or use the supplied device).</li>
 <li>Unlock the LUKS container (using <code>/root/.luks-key</code> if present).</li>
 <li>Mount the key filesystem at <code>/mnt/ZFSkeys</code>.</li>
-<li>For each entry in <code>/etc/iscsi-encrypted-luns.conf</code>, derive the dataset name
+<li>For each entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>, derive the dataset name
    and load its ZFS key if <code>keystatus</code> is <code>unavailable</code>.</li>
 <li>Secure the keys with <code>lock-zfs-keys</code> (unmount and close LUKS).</li>
 <li>Add missing encrypted LUNs with <code>iscsi-add-encrypted-luns</code>.</li>
@@ -4645,7 +4645,7 @@ script exits cleanly so iSCSI can start without the encrypted LUNs.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Lists encrypted datasets to load keys for</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -4837,7 +4837,7 @@ to cut dependencies before retiring the source VM.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.73.1
+      ZFS Utilities v0.74.0
     </div>
   
   
@@ -4862,7 +4862,7 @@ to cut dependencies before retiring the source VM.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

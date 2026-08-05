@@ -10,6 +10,7 @@ from feature_config import (
     get_checkagainst,
     merge_checkagainst_entries,
 )
+from test_support import temp_config_dir
 
 
 class TestComputeDestinationRoot(unittest.TestCase):
@@ -280,13 +281,14 @@ class TestGetCheckagainst(unittest.TestCase):
 class TestAddCheckagainstEntry(unittest.TestCase):
 
     def test_adds_new_row(self):
-        config = {"checkagainst": {"user_entries": []}}
-        added = add_checkagainst_entry(
-            config,
-            {"source_root": "tank/a", "dest_root": "backup/a", "label": "offsite"},
-        )
-        self.assertTrue(added)
-        self.assertEqual(len(config["checkagainst"]["user_entries"]), 1)
+        with temp_config_dir():
+            config = {"checkagainst": {"user_entries": []}}
+            added = add_checkagainst_entry(
+                config,
+                {"source_root": "tank/a", "dest_root": "backup/a", "label": "offsite"},
+            )
+            self.assertTrue(added)
+            self.assertEqual(len(config["checkagainst"]["user_entries"]), 1)
 
     def test_skips_duplicate(self):
         config = {"checkagainst": {"user_entries": [

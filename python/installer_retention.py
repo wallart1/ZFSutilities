@@ -81,7 +81,7 @@ def main(argv=None):
     )
     parser.add_argument(
         "--config-path",
-        help="Path to zfsutilities.json (default: /root/.config/zfsutilities.json)",
+        help="Path to zfsutilities.json (default: /var/lib/zfsutilities/config.json)",
     )
     parser.add_argument(
         "--new-install",

@@ -16,7 +16,8 @@ function buildsnapfilename {
     local caller="${BASH_SOURCE[1]}"        # Who called?
     local caller_sanitized
     caller_sanitized=$(basename "$caller" | tr -c 'A-Za-z0-9_' '_')  # Sanitize for valid filename
-    echo "/tmp/zfsnextsnap_$caller_sanitized"
+    local prefix="${ZFSUTILITIES_RUN_NEXTSNAP_PREFIX:-/run/zfsutilities/nextsnap_}"
+    echo "${prefix}${caller_sanitized}"
 }
 
 # Update the reservation file with the just-generated name. The file is
@@ -46,7 +47,7 @@ zfssnapbuild() {
     # First, look to see if a nextsnap was saved from a prior incomplete run of the caller.
     # This implies that a job was not completed, and we probably want to reuse the previous
     # $nextsnap.
-    # The snapshot name is stored in a file: /tmp/zfsnextsnap_<caller>
+    # The snapshot name is stored in a file under /run/zfsutilities/nextsnap_<caller>.
     # If the user chooses not to use the $snapfile, it is deleted here.
     # Otherwise, the caller is responsible for deleting the $snapfile upon successful completion.
     snapfile=$(buildsnapfilename)
@@ -98,6 +99,7 @@ zfssnapbuild() {
     _snapname_update_reservation "$nextsnap"
     flock -u "$lock_fd"
     exec {lock_fd}>&-
+    mkdir -p "$(dirname "$snapfile")"
     echo "$nextsnap" > "$snapfile"      # Save snapshot name for possible later reuse.
     echo "$nextsnap"
 }

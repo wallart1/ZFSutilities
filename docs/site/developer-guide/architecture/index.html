@@ -2221,7 +2221,7 @@ variable yourself before invoking the script:</p>
 <h3 id="session-log-size-cap">Session log size cap<a class="headerlink" href="#session-log-size-cap" title="Permanent link">&para;</a></h3>
 <p>To prevent a runaway subprocess from filling disk, the Python runners enforce a
 configurable size cap on the session log file they own. The maximum is stored in
-<code>/root/.config/zfsutilities.json</code> under <code>session_log_max_bytes</code> and defaults to
+<code>/var/lib/zfsutilities/config.json</code> under <code>session_log_max_bytes</code> and defaults to
 <strong>10 MB</strong>. When a log grows beyond the configured maximum, it is rewritten as:</p>
 <ul>
 <li>the first <strong>64 KB</strong> (opening context),</li>
@@ -2386,7 +2386,7 @@ dataset. Maintains a lookup table (<code>fss</code> table, configured by the GUI
 verification: scans other <code>@offsite</code> snapshots on the same source dataset for a
 hold named <code>offsite-&lt;counterpart_pool&gt;</code>. If another snapshot has the hold, the
 counterpart received it too — a second common snapshot is confirmed and deletion is safe. If no other snapshot has the hold, deletion is blocked until the pool comes online. Non-offsite labels always block when offline (no holds to check).</p>
-<p>The fss table lives in the shared JSON config at <code>/root/.config/zfsutilities.json</code>
+<p>The fss table lives in the shared JSON config at <code>/var/lib/zfsutilities/config.json</code>
 under the <a href="../../commands-and-modules/modules/#zfscheckagainst">zfscheckagainst</a> key, accessed from bash via <code>zfsconfig_get_checkagainst</code>
 (see <a href="../../commands-and-modules/modules/#zfsconfig"><code>zfsconfig</code></a>) and from the GUI via <code>feature_config.get_checkagainst</code>. Each row stores a
 <code>source_root</code>, <code>dest_root</code>, <code>label</code>, and optional <code>comment</code>. The counterpart
@@ -2476,7 +2476,7 @@ the bucket is the last field split on <code>-</code>.</p>
 </table>
 <h2 id="retention-policies">Retention Policies<a class="headerlink" href="#retention-policies" title="Permanent link">&para;</a></h2>
 <p>Per-pool retention policies live in the shared JSON config at
-<code>/root/.config/zfsutilities.json</code> under the <code>retention</code> key, alongside the pool
+<code>/var/lib/zfsutilities/config.json</code> under the <code>retention</code> key, alongside the pool
 list, checkagainst table, and
 GUI tab state. Each pool has a list of bucket dicts:</p>
 <div class="highlight"><pre><span></span><code><span class="nt">&quot;retention&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -2717,13 +2717,13 @@ incrementally.</p>
 │  ZFSCONFIG_PATH, ZFSCONFIG_LEGACY_DIR       │
 ├─────────────────────────────────────────────┤
 │  JSON config                                │
-│  /root/.config/zfsutilities.json            │
+│  /var/lib/zfsutilities/config.json            │
 │  • pools, retention, checkagainst           │
 │  • backup/offsite/restore GUI tab state     │
 │  • config_version (schema migrations)       │
 ├─────────────────────────────────────────────┤
 │  Node configuration                         │
-│  /etc/zfsutilities-node.conf                │
+│  /etc/zfsutilities/node.conf                │
 │  • NODE_MODE, STORAGE_HOST, COMPUTE_HOST    │
 │  • POOL_TARGET (iSCSI map)                  │
 ├─────────────────────────────────────────────┤
@@ -2806,7 +2806,7 @@ incrementally.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.73.1
+      ZFS Utilities v0.74.0
     </div>
   
   
@@ -2831,7 +2831,7 @@ incrementally.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

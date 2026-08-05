@@ -4,9 +4,6 @@
 # Note: This script must be sourced from another script. Running it independently
 #       is not supported.
 
-# Directory where per-session log files are stored.
-ZFSUTILITIES_LOG_DIR="/var/log/zfsutilities/sessions"
-
 function bashinit {
     # Get the directory that we were invoked from.
     # Only set mydir if it is not already set and BASH_SOURCE[1] is available.
@@ -28,12 +25,19 @@ function bashinit {
         script_name="${script_name//[^A-Za-z0-9_-]/}"
         local ts
         ts=$(date +%Y-%m-%d_%H-%M-%S)
-        local logfile="${ZFSUTILITIES_LOG_DIR}/${ts}_cli_${script_name}.log"
-        if mkdir -p "${ZFSUTILITIES_LOG_DIR}" 2>/dev/null; then
+        local session_log_dir="${ZFSUTILITIES_SESSION_LOG_DIR}"
+        local logfile="${session_log_dir}/${ts}_cli_${script_name}.log"
+        if mkdir -p "${session_log_dir}" 2>/dev/null; then
             # Touch the file so it exists even if no messages are written
             touch "${logfile}" 2>/dev/null || true
             export ZFSUTILITIES_LOG_FILE="${logfile}"
         fi
+    fi
+
+    # One-time migration of legacy state/config files to the FHS-aligned layout.
+    # Guarded by root check and ZFSUTILITIES_DISABLE_MIGRATION in the helper.
+    if declare -f migrate_zfsutilities_state >/dev/null 2>&1; then
+        migrate_zfsutilities_state
     fi
 }
 
@@ -67,6 +71,9 @@ function find_zfsutility_script {
     local candidate
     for candidate in \
         "$mydir/$name" \
+        "$mydir/lib/$name" \
+        "$mydir/python/$name" \
+        "$mydir/share/$name" \
         "$mydir/../lib/$name" \
         "$mydir/../python/$name" \
         "$mydir/../share/$name" \
@@ -172,3 +179,12 @@ function die {
 function warn {
     log_msg "WARN: $*"
 }
+
+# Load the centralized path layout so every script that sources bashinit
+# inherits the FHS-aligned directories and legacy-path aliases.
+# PATHS_LIB can be set explicitly by tests that need a different layout.
+PATHS_LIB="${PATHS_LIB:-$(find_zfsutility_script paths.sh)}"
+if [[ -n "$PATHS_LIB" ]]; then
+    # shellcheck source=/dev/null
+    source "$PATHS_LIB"
+fi

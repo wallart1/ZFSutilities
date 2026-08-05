@@ -6,7 +6,7 @@ Scripts marked **both** run on either node and delegate automatically via SSH as
 
 Every script that touches VM disks or iSCSI configuration begins by sourcing
 `/usr/local/lib/node-lib.sh` (repo: `lib/node-lib.sh`). That library
-reads `/etc/zfsutilities-node.conf` (falling back to `/etc/two-node.conf`) and
+reads `/etc/zfsutilities/node.conf` (falling back to `/etc/zfsutilities/two-node.conf`, legacy `/etc/zfsutilities-node.conf` and `/etc/two-node.conf` also work) and
 populates the node-configuration global variables below. These variables apply to
 every entry below — they are documented once here rather than repeated in every
 entry:
@@ -213,14 +213,14 @@ sudo ./bin/deploy-version [version] [group ...]
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| `/etc/zfsutilities-deploy.conf` | Deployment group definitions | — |
-| Node config | Legacy remote host list | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilities-nodeconf) |
+| `/etc/zfsutilities/deploy.conf` | Deployment group definitions | — |
+| Node config | Legacy remote host list | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | `/usr/local/lib/zfsutilities/versions/<version>/` | Deployed version directory | — |
 
 **Internal flow / algorithm:**
 
 1. Parse arguments; read `./VERSION` if no version is supplied.
-2. Load `/etc/zfsutilities-deploy.conf` groups, or fall back to the node config for remote hosts.
+2. Load `/etc/zfsutilities/deploy.conf` groups, or fall back to the node config for remote hosts.
 3. Create the version directory (`versions/<version>/bin`, `lib`, `python`, `docs`, `share`).
 4. Copy `bin/`, `lib/`, `python/`, `docs/`, and `share/` from the repository into the version directory via `rsync`.
 5. Create launcher symlinks `zfsutilities-gui` → `../python/zfsutilities_gui.py` and `zfsutilities-docs` → `../python/docs_viewer.py` in the versioned `bin/` directory.
@@ -243,10 +243,10 @@ production wiring (`current`, `PATH`, `/root/bashinit`, etc.).
 
 - **Local host** — always deployed directly
 
-- **Remote hosts** — defined by `/etc/zfsutilities-deploy.conf` via named groups:
+- **Remote hosts** — defined by `/etc/zfsutilities/deploy.conf` via named groups:
   
   ```bash
-  # /etc/zfsutilities-deploy.conf
+  # /etc/zfsutilities/deploy.conf
   DEPLOY_GROUP_production="stewie tweety"
   DEPLOY_GROUP_staging="staging-host"
   ```
@@ -289,7 +289,7 @@ directory:
 These let you launch the GUI and standalone documentation viewer by name after
 activating the version.
 
-`deploy-version` also generates `/etc/zfsutilities-deploy.conf` at install time
+`deploy-version` also generates `/etc/zfsutilities/deploy.conf` at install time
 (from `share/installer/deploy.conf.template`) so the production hostnames are
 available for future deployments.
 
@@ -318,13 +318,13 @@ at service startup.
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| `/etc/iscsi-encrypted-luns.conf` | Authoritative list of encrypted backstores to add | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Authoritative list of encrypted backstores to add | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 | `/etc/rtslib-fb-target/saveconfig.json` | Used to look up original LUN indexes | [iSCSI boot-safe config](../developer-guide/data-structures.md#iscsi-boot-safe-config) |
 
 **Internal flow / algorithm:**
 
 1. Exit silently in single-node mode.
-2. For each entry in `/etc/iscsi-encrypted-luns.conf`:
+2. For each entry in `/etc/zfsutilities/iscsi-encrypted-luns.conf`:
    - Skip if the device node is not present (keys not loaded).
    - Skip if the backstore already exists.
    - Look up the original LUN index from `saveconfig.json` to preserve stable
@@ -803,7 +803,7 @@ sudo move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
 | --------- | ---- | --------- |
 | Source/dest VM configs | Read source; rewrite destination | — |
 | `/etc/rtslib-fb-target/expected-backstores.txt` | Source removed, destination added | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
-| `/etc/iscsi-encrypted-luns.conf` | Source removed, destination added if encrypted | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Source removed, destination added if encrypted | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 | `/tmp/move-vm-disk-<src>-<dst>-<ts>.state` | Recovery state file | — |
 
 **Internal flow / algorithm:**
@@ -878,7 +878,7 @@ sudo new-vm-disk <pool> <vmid> <disk-num> <size> [--encrypted]
 | `vmid`        | Proxmox VM ID                                                                                                          |
 | `disk-num`    | Disk number (appended to zvol name: `vm-<vmid>-disk-<N>`)                                                              |
 | `size`        | Zvol size (e.g., `50G`, `4M` for EFI, or `EFI` as a shorthand for a 4 MiB EFI zvol with Secure Boot enrollment prompt) |
-| `--encrypted` | Optional. Create as an encrypted zvol; records the backstore in `/etc/iscsi-encrypted-luns.conf`                       |
+| `--encrypted` | Optional. Create as an encrypted zvol; records the backstore in `/etc/zfsutilities/iscsi-encrypted-luns.conf`                       |
 
 **Globals:** node-config globals only.
 
@@ -896,7 +896,7 @@ sudo new-vm-disk <pool> <vmid> <disk-num> <size> [--encrypted]
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | `/etc/rtslib-fb-target/expected-backstores.txt` | Backstore added | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
-| `/etc/iscsi-encrypted-luns.conf` | Entry added with `--encrypted` | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Entry added with `--encrypted` | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 | `/etc/pve/qemu-server/<vmid>.conf` | Disk or EFI lines appended | — |
 
 **Internal flow / algorithm:**
@@ -945,8 +945,8 @@ With `--encrypted`, the following additional ZFS properties are set:
 
 | Property      | Value                                                                                              |
 | ------------- | -------------------------------------------------------------------------------------------------- |
-| `encryption`  | `aes-256-gcm` by default; auto-detected from an existing entry in `/etc/iscsi-encrypted-luns.conf` if available |
-| `keyformat`   | `raw` by default; auto-detected from an existing entry in `/etc/iscsi-encrypted-luns.conf` if available |
+| `encryption`  | `aes-256-gcm` by default; auto-detected from an existing entry in `/etc/zfsutilities/iscsi-encrypted-luns.conf` if available |
+| `keyformat`   | `raw` by default; auto-detected from an existing entry in `/etc/zfsutilities/iscsi-encrypted-luns.conf` if available |
 | `keylocation` | `file:///mnt/ZFSkeys/<keyname>` (the script checks the file exists but never reads its contents)   |
 
 ---
@@ -1026,7 +1026,7 @@ sudo remove-vm-disk <pool> <vmid> <disk-num>
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | `/etc/rtslib-fb-target/expected-backstores.txt` | Entry removed | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
-| `/etc/iscsi-encrypted-luns.conf` | Entry removed if present | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Entry removed if present | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 
 **Internal flow / algorithm:**
 
@@ -1087,8 +1087,8 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | `/etc/rtslib-fb-target/expected-backstores.txt` | Restored backstores added | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
-| `/etc/iscsi-encrypted-luns.conf` | Encrypted restored LUNs added | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
-| JSON config `archive_path` | Default archive base | [JSON config](../developer-guide/data-structures.md#json-config-rootconfigzfsutilitiesjson) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Encrypted restored LUNs added | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| JSON config `archive_path` | Default archive base | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
 | `.original_volblocksize` sidecars | Restore original `volblocksize` | — |
 | `.disk_info` sidecars | Map disk keys to restored zvols/LUNs | — |
 
@@ -1233,7 +1233,7 @@ sudo restart-iscsi-services
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| `/etc/iscsi-encrypted-luns.conf` | Lists encrypted backstores to restore | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Lists encrypted backstores to restore | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 | `/etc/rtslib-fb-target/saveconfig-boot.json` | Boot-safe config restored by the service | [iSCSI boot-safe config](../developer-guide/data-structures.md#iscsi-boot-safe-config) |
 
 **Internal flow / algorithm:**
@@ -1244,7 +1244,7 @@ sudo restart-iscsi-services
 3. Start `rtslib-fb-targetctl`. The systemd drop-in restores
    `saveconfig-boot.json` (encrypted backstores excluded), then runs
    `iscsi-add-encrypted-luns` to add encrypted LUNs whose devices are available.
-4. Display encrypted LUN status from `/etc/iscsi-encrypted-luns.conf`.
+4. Display encrypted LUN status from `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
 5. Save the config via `safe-iscsi-save`.
 
 **Return codes / side effects:**
@@ -1280,7 +1280,7 @@ sudo safe-iscsi-save
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | `/etc/rtslib-fb-target/expected-backstores.txt` | Authoritative expected backstore list | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
-| `/etc/iscsi-encrypted-luns.conf` | Backstores to exclude from boot config | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Backstores to exclude from boot config | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 | `/etc/rtslib-fb-target/saveconfig.json` | Full targetcli config (read and overwritten) | [iSCSI boot-safe config](../developer-guide/data-structures.md#iscsi-boot-safe-config) |
 | `/etc/rtslib-fb-target/saveconfig-boot.json` | Boot-safe copy with encrypted backstores stripped | [iSCSI boot-safe config](../developer-guide/data-structures.md#iscsi-boot-safe-config) |
 
@@ -1519,7 +1519,7 @@ sudo unlock-zfs-keys [device]
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| `/etc/iscsi-encrypted-luns.conf` | Lists encrypted datasets to load keys for | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Lists encrypted datasets to load keys for | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 | `/mnt/ZFSkeys` | Mount point for the LUKS-encrypted USB | — |
 | `/dev/mapper/keys` | LUKS mapper for the key USB | — |
 | `/root/.luks-key` | Optional unattended unlock keyfile | — |
@@ -1530,7 +1530,7 @@ sudo unlock-zfs-keys [device]
    `PARTLABEL=ZFSkeys` (or use the supplied device).
 2. Unlock the LUKS container (using `/root/.luks-key` if present).
 3. Mount the key filesystem at `/mnt/ZFSkeys`.
-4. For each entry in `/etc/iscsi-encrypted-luns.conf`, derive the dataset name
+4. For each entry in `/etc/zfsutilities/iscsi-encrypted-luns.conf`, derive the dataset name
    and load its ZFS key if `keystatus` is `unavailable`.
 5. Secure the keys with `lock-zfs-keys` (unmount and close LUKS).
 6. Add missing encrypted LUNs with `iscsi-add-encrypted-luns`.
@@ -1573,7 +1573,7 @@ script exits cleanly so iSCSI can start without the encrypted LUNs.
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| `/etc/iscsi-encrypted-luns.conf` | Lists encrypted datasets to load keys for | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Lists encrypted datasets to load keys for | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 | `/root/.luks-key` | Unattended LUKS unlock keyfile | — |
 
 **Internal flow / algorithm:**

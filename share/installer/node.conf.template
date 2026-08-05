@@ -1,7 +1,8 @@
-# /etc/zfsutilities-node.conf
+# /etc/zfsutilities/node.conf
 #
 # Single source of truth for node configuration. Sourced by
-# /usr/local/lib/node-lib.sh and by repo-root scripts that need host identity.
+# /usr/local/lib/node-lib.sh (and the /usr/local/lib/zfsutilities/current/bin
+# scripts) and by repo-root scripts that need host identity.
 #
 # NODE_MODE controls whether the system operates as a standalone node
 # (single-node) or as part of a storage+compute pair (two-node with iSCSI).

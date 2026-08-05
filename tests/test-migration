@@ -1,0 +1,177 @@
+#!/usr/bin/bash
+# shellcheck disable=SC2034
+# Tests for the Step-5 one-time migration helper in lib/paths.sh.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+# Run migration with temporary directories and the disable flag cleared.
+run_migration() {
+    (
+        export ZFSUTILITIES_DISABLE_MIGRATION=""
+        export ZFSUTILITIES_MIGRATION_ALLOW_NONROOT=1
+        export ZFSUTILITIES_STATE_DIR="$1"
+        export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$2"
+        export ZFSUTILITIES_LEGACY_CONFIG_HOME="$3"
+        export ZFSUTILITIES_LEGACY_NODE_CONF="$4"
+        export ZFSUTILITIES_LEGACY_DEPLOY_CONF="$5"
+        export ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF="$6"
+        export ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$7"
+        # Unset derived variables so paths.sh recomposes them from the overrides.
+        unset ZFSUTILITIES_CONFIG_PATH ZFSUTILITIES_HISTORY_PATH \
+            ZFSUTILITIES_PROFILES_DIR ZFSUTILITIES_SCRUB_STATE_PATH \
+            ZFSUTILITIES_NEXTSNAP_FILE ZFSUTILITIES_OFFSITE_NEXTSNAP_FILE \
+            ZFSUTILITIES_LEGACY_CONFIG_PATH ZFSUTILITIES_LEGACY_HISTORY_PATH \
+            ZFSUTILITIES_LEGACY_PROFILES_DIR ZFSUTILITIES_LEGACY_SCRUB_STATE_PATH \
+            ZFSUTILITIES_LEGACY_NEXTSNAP_FILE ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE
+        source "$mydir/lib/paths.sh"
+        migrate_zfsutilities_state
+    )
+}
+
+test_migrate_config_file() {
+    test_start "Config file is migrated and legacy symlink created"
+    local tmpdir state_dir etc_dir old_home
+    tmpdir=$(mktemp -d)
+    state_dir="$tmpdir/state"
+    etc_dir="$tmpdir/etc"
+    old_home="$tmpdir/root"
+    mkdir -p "$old_home/.config"
+    echo '{}' > "$old_home/.config/zfsutilities.json"
+
+    run_migration "$state_dir" "$etc_dir" "$old_home/.config" \
+        "$tmpdir/etc-node.conf" "$tmpdir/etc-deploy.conf" \
+        "$tmpdir/etc-iscsi.conf" "$tmpdir/etc-two-node.conf"
+
+    assert_equals "true" "$([[ -L $old_home/.config/zfsutilities.json ]] && echo true || echo false)"
+    assert_equals "true" "$([[ -f $state_dir/config.json ]] && echo true || echo false)"
+    rm -rf "$tmpdir"
+}
+
+test_migrate_history_file() {
+    test_start "History file is migrated and legacy symlink created"
+    local tmpdir state_dir etc_dir old_home
+    tmpdir=$(mktemp -d)
+    state_dir="$tmpdir/state"
+    etc_dir="$tmpdir/etc"
+    old_home="$tmpdir/root"
+    mkdir -p "$old_home/.config"
+    echo '[]' > "$old_home/.config/zfsutilities-history.json"
+
+    run_migration "$state_dir" "$etc_dir" "$old_home/.config" \
+        "$tmpdir/etc-node.conf" "$tmpdir/etc-deploy.conf" \
+        "$tmpdir/etc-iscsi.conf" "$tmpdir/etc-two-node.conf"
+
+    assert_equals "true" "$([[ -L $old_home/.config/zfsutilities-history.json ]] && echo true || echo false)"
+    assert_equals "true" "$([[ -f $state_dir/history.json ]] && echo true || echo false)"
+    rm -rf "$tmpdir"
+}
+
+test_migrate_profiles_directory() {
+    test_start "Profiles directory is migrated and legacy symlink created"
+    local tmpdir state_dir etc_dir old_home
+    tmpdir=$(mktemp -d)
+    state_dir="$tmpdir/state"
+    etc_dir="$tmpdir/etc"
+    old_home="$tmpdir/root"
+    mkdir -p "$old_home/.config/profiles"
+    echo '{}' > "$old_home/.config/profiles/daily.json"
+
+    run_migration "$state_dir" "$etc_dir" "$old_home/.config" \
+        "$tmpdir/etc-node.conf" "$tmpdir/etc-deploy.conf" \
+        "$tmpdir/etc-iscsi.conf" "$tmpdir/etc-two-node.conf"
+
+    assert_equals "true" "$([[ -L $old_home/.config/profiles ]] && echo true || echo false)"
+    assert_equals "true" "$([[ -d $state_dir/profiles ]] && echo true || echo false)"
+    assert_equals "true" "$([[ -f $state_dir/profiles/daily.json ]] && echo true || echo false)"
+    rm -rf "$tmpdir"
+}
+
+test_migrate_system_config_files() {
+    test_start "System config files are migrated and legacy symlinks created"
+    local tmpdir state_dir etc_dir old_home
+    tmpdir=$(mktemp -d)
+    state_dir="$tmpdir/state"
+    etc_dir="$tmpdir/etc"
+    old_home="$tmpdir/root"
+    echo 'NODE_MODE=single-node' > "$tmpdir/etc-node.conf"
+    echo 'DEPLOY=test' > "$tmpdir/etc-deploy.conf"
+    echo 'lun1:/dev/zvol' > "$tmpdir/etc-iscsi.conf"
+    echo 'STORAGE_HOST=a' > "$tmpdir/etc-two-node.conf"
+
+    run_migration "$state_dir" "$etc_dir" "$old_home" \
+        "$tmpdir/etc-node.conf" "$tmpdir/etc-deploy.conf" \
+        "$tmpdir/etc-iscsi.conf" "$tmpdir/etc-two-node.conf"
+
+    assert_equals "true" "$([[ -L $tmpdir/etc-node.conf ]] && echo true || echo false)"
+    assert_equals "true" "$([[ -f $etc_dir/node.conf ]] && echo true || echo false)"
+    assert_equals "true" "$([[ -f $etc_dir/deploy.conf ]] && echo true || echo false)"
+    assert_equals "true" "$([[ -f $etc_dir/iscsi-encrypted-luns.conf ]] && echo true || echo false)"
+    assert_equals "true" "$([[ -f $etc_dir/two-node.conf ]] && echo true || echo false)"
+    rm -rf "$tmpdir"
+}
+
+test_sentinel_prevents_rerun() {
+    test_start "Migration sentinel prevents re-run"
+    local tmpdir state_dir etc_dir old_home
+    tmpdir=$(mktemp -d)
+    state_dir="$tmpdir/state"
+    etc_dir="$tmpdir/etc"
+    old_home="$tmpdir/root"
+    mkdir -p "$old_home/.config"
+    echo '{}' > "$old_home/.config/zfsutilities.json"
+
+    run_migration "$state_dir" "$etc_dir" "$old_home/.config" \
+        "$tmpdir/etc-node.conf" "$tmpdir/etc-deploy.conf" \
+        "$tmpdir/etc-iscsi.conf" "$tmpdir/etc-two-node.conf"
+
+    # Remove the symlink and recreate the legacy file.
+    rm -f "$old_home/.config/zfsutilities.json"
+    echo 'second' > "$old_home/.config/zfsutilities.json"
+
+    run_migration "$state_dir" "$etc_dir" "$old_home/.config" \
+        "$tmpdir/etc-node.conf" "$tmpdir/etc-deploy.conf" \
+        "$tmpdir/etc-iscsi.conf" "$tmpdir/etc-two-node.conf"
+
+    # Sentinel should prevent a second migration.
+    assert_equals "true" "$([[ -f $old_home/.config/zfsutilities.json ]] && echo true || echo false)"
+    assert_equals "false" "$([[ -L $old_home/.config/zfsutilities.json ]] && echo true || echo false)"
+    rm -rf "$tmpdir"
+}
+
+test_disabled_by_environment() {
+    test_start "ZFSUTILITIES_DISABLE_MIGRATION prevents migration"
+    local tmpdir state_dir etc_dir old_home
+    tmpdir=$(mktemp -d)
+    state_dir="$tmpdir/state"
+    etc_dir="$tmpdir/etc"
+    old_home="$tmpdir/root"
+    mkdir -p "$old_home/.config"
+    echo '{}' > "$old_home/.config/zfsutilities.json"
+
+    (
+        export ZFSUTILITIES_DISABLE_MIGRATION=1
+        export ZFSUTILITIES_MIGRATION_ALLOW_NONROOT=1
+        export ZFSUTILITIES_STATE_DIR="$state_dir"
+        export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$etc_dir"
+        export ZFSUTILITIES_LEGACY_CONFIG_HOME="$old_home/.config"
+        unset ZFSUTILITIES_CONFIG_PATH
+        source "$mydir/lib/paths.sh"
+        migrate_zfsutilities_state
+    )
+
+    assert_equals "true" "$([[ -f $old_home/.config/zfsutilities.json ]] && echo true || echo false)"
+    assert_equals "false" "$([[ -e $state_dir/config.json ]] && echo true || echo false)"
+    rm -rf "$tmpdir"
+}
+
+test_migrate_config_file
+test_migrate_history_file
+test_migrate_profiles_directory
+test_migrate_system_config_files
+test_sentinel_prevents_rerun
+test_disabled_by_environment
+
+test_summary
+teardown_test_env

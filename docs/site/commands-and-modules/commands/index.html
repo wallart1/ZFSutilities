@@ -1603,6 +1603,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cleanup-zfsutilities-legacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cleanup-zfsutilities-legacy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#datesubtract" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2425,6 +2436,7 @@ arrays and on-disk tables are on <a href="../../developer-guide/data-structures/
 <ul>
 <li><a href="#backup-installed-programs"><code>backup-installed-programs</code></a></li>
 <li><a href="#check-prerequisites"><code>check-prerequisites</code></a></li>
+<li><a href="#cleanup-zfsutilities-legacy"><code>cleanup-zfsutilities-legacy</code></a></li>
 <li><a href="#datesubtract"><code>datesubtract</code></a></li>
 <li><a href="#deploy-version"><code>deploy-version</code></a></li>
 <li><a href="#getlinecount"><code>getlinecount</code></a></li>
@@ -2550,6 +2562,116 @@ On failure, removes the partial output file.</p>
 </tbody>
 </table>
 <hr />
+<h3 id="cleanup-zfsutilities-legacy"><code>cleanup-zfsutilities-legacy</code><a class="headerlink" href="#cleanup-zfsutilities-legacy" title="Permanent link">&para;</a></h3>
+<p>Remove backward-compatibility symlinks left by the FHS-aligned migration, and
+optionally uninstall old deployed versions that do not understand the new path
+layout.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>cleanup-zfsutilities-legacy<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--symlinks-only</code></td>
+<td>Remove only legacy symlinks (default)</td>
+</tr>
+<tr>
+<td><code>--remove-versions V...</code></td>
+<td>Uninstall the specified deployed versions</td>
+</tr>
+<tr>
+<td><code>--remove-older-than V</code></td>
+<td>Uninstall all deployed versions older than <em>V</em></td>
+</tr>
+<tr>
+<td><code>--all-orphaned</code></td>
+<td>Uninstall every deployed version except the active one</td>
+</tr>
+<tr>
+<td><code>--yes</code>, <code>-y</code></td>
+<td>Skip interactive confirmations</td>
+</tr>
+<tr>
+<td><code>--dry-run</code></td>
+<td>Print actions without executing them</td>
+</tr>
+<tr>
+<td><code>--help</code>, <code>-h</code></td>
+<td>Show help and exit</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZFSUTILITIES_VERSION_BASE</code></td>
+<td>Base directory for deployed versions</td>
+<td><a href="../../developer-guide/global-variables/#infrastructure">Infrastructure</a></td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_*</code> path overrides</td>
+<td>Override default FHS-aligned paths in tests/non-standard installs</td>
+<td><a href="../../#path-layout-and-migration">Path layout</a></td>
+</tr>
+</tbody>
+</table>
+<p>The currently active version is never removed. Legacy paths are removed only if
+they are symlinks; regular files or directories are left in place with a
+warning.</p>
+<p><strong>Called modules:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lib/paths.sh</code></td>
+<td>FHS-aligned path variables and migration helper</td>
+</tr>
+<tr>
+<td><code>bashinit</code> / <code>rootcheck</code></td>
+<td>Standard initialization and root check</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong> none.</p>
+<p><strong>Return codes:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Success (or cancellation)</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>A fatal error occurred</td>
+</tr>
+</tbody>
+</table>
+<hr />
 <h3 id="datesubtract"><code>datesubtract</code><a class="headerlink" href="#datesubtract" title="Permanent link">&para;</a></h3>
 <p>Calculates the number of days, months, and years between two dates.</p>
 <div class="highlight"><pre><span></span><code>datesubtract<span class="w"> </span><span class="s2">&quot;2025-01-01&quot;</span><span class="w"> </span><span class="s2">&quot;2026-01-01&quot;</span>
@@ -2617,7 +2739,7 @@ version; use <a href="#switch-version"><code>switch-version</code></a> for that.
 <tr>
 <td><code>group</code></td>
 <td>all groups in deploy.conf</td>
-<td>Deployment group names from <code>/etc/zfsutilities-deploy.conf</code></td>
+<td>Deployment group names from <code>/etc/zfsutilities/deploy.conf</code></td>
 </tr>
 </tbody>
 </table>
@@ -2664,14 +2786,14 @@ version; use <a href="#switch-version"><code>switch-version</code></a> for that.
 </thead>
 <tbody>
 <tr>
-<td><code>/etc/zfsutilities-deploy.conf</code></td>
+<td><code>/etc/zfsutilities/deploy.conf</code></td>
 <td>Deployment group definitions</td>
 <td>—</td>
 </tr>
 <tr>
 <td>Node config</td>
 <td>Legacy remote host list</td>
-<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilities-nodeconf">Node config</a></td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilitiesnodeconf">Node config</a></td>
 </tr>
 <tr>
 <td><code>/usr/local/lib/zfsutilities/versions/&lt;version&gt;/</code></td>
@@ -2683,7 +2805,7 @@ version; use <a href="#switch-version"><code>switch-version</code></a> for that.
 <p><strong>Internal flow:</strong></p>
 <ol>
 <li>Parse arguments; read <code>./VERSION</code> if no version is supplied.</li>
-<li>Load <code>/etc/zfsutilities-deploy.conf</code> groups, or fall back to the node config for remote hosts.</li>
+<li>Load <code>/etc/zfsutilities/deploy.conf</code> groups, or fall back to the node config for remote hosts.</li>
 <li>Build the version directory and copy <code>bin/</code>, <code>lib/</code>, <code>python/</code>, <code>docs/</code>,
    and <code>share/</code> from the repository.</li>
 <li>Rebuild the static docs.</li>
@@ -3818,7 +3940,7 @@ config, or — when no pools are configured — to all online pools.</p>
 <tr>
 <td>JSON config <code>pools</code></td>
 <td>Source for <code>poolarray()</code></td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 </tbody>
 </table>
@@ -4170,19 +4292,19 @@ sudo<span class="w"> </span>zfsdailybackup<span class="w"> </span><span class="s
 <td><a href="../../developer-guide/global-variables/#zfs-sendreceive">$nextsnap</a></td>
 </tr>
 <tr>
-<td><code>/tmp/zfsnextsnap_*</code></td>
+<td><code>/run/zfsutilities/nextsnap_*</code></td>
 <td>Persisted snapshot name, reused if run again</td>
 <td><a href="../../developer-guide/data-structures/#snapshot-name-persistence">snapfile</a></td>
 </tr>
 <tr>
 <td>JSON config <code>backup</code></td>
 <td>Source of override values from the GUI</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td>Node config</td>
 <td>Gates two-node rsync pulls</td>
-<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilities-nodeconf">Node config</a></td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilitiesnodeconf">Node config</a></td>
 </tr>
 </tbody>
 </table>
@@ -4434,7 +4556,7 @@ For VM-disk zvols in two-node mode it automatically tears down the matching
 iSCSI LUN/backstore before <code>zfs destroy</code> and records the teardown so that
 <code>zfs-send-receive</code> can rebuild the LUN afterwards. During teardown it removes
 the backstore from <code>/etc/rtslib-fb-target/expected-backstores.txt</code> and, if the
-zvol is encrypted, from <code>/etc/iscsi-encrypted-luns.conf</code>. The <code>zfs-send-receive</code>
+zvol is encrypted, from <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>. The <code>zfs-send-receive</code>
 rebuild path re-adds those entries after the replacement <code>zfs receive</code> so the
 manifests remain consistent.</p>
 <p><strong>Clone dependency check:</strong> If any dataset in the deletion list has ZFS clone
@@ -4495,7 +4617,7 @@ report the specific cause — holds, open files, iSCSI LUNs, running VMs, etc.</
 <tr>
 <td>Node config</td>
 <td>Determines single-node vs two-node iSCSI behavior</td>
-<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilities-nodeconf">Node config</a></td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilitiesnodeconf">Node config</a></td>
 </tr>
 </tbody>
 </table>
@@ -6012,7 +6134,7 @@ reports that the token is stale (and clears it with <code>zfs receive -A</code>)
 </tbody>
 </table>
 <p><strong>Globals:</strong> none.</p>
-<p>State is tracked in <code>/tmp/zfsscruball.state</code> during a run.</p>
+<p>State is tracked in <code>/run/zfsutilities/zfsscruball.state</code> during a run.</p>
 <p><strong>Called modules:</strong></p>
 <table>
 <thead>
@@ -6043,7 +6165,7 @@ reports that the token is stale (and clears it with <code>zfs receive -A</code>)
 </thead>
 <tbody>
 <tr>
-<td><code>/tmp/zfsscruball.state</code></td>
+<td><code>/run/zfsutilities/zfsscruball.state</code></td>
 <td>Tracks completed pools during resume</td>
 <td><a href="../../developer-guide/data-structures/#zfsscruball-state-file">scrub state file</a></td>
 </tr>
@@ -6341,7 +6463,7 @@ prevent accidental deletion.</p>
 <td><a href="../../developer-guide/data-structures/#fsarray-fsarraylen">$fsarray</a></td>
 </tr>
 <tr>
-<td><code>/tmp/zfsnextsnap_*</code></td>
+<td><code>/run/zfsutilities/nextsnap_*</code></td>
 <td>Persisted snapshot name for reruns</td>
 <td><a href="../../developer-guide/data-structures/#snapshot-name-persistence">snapfile</a></td>
 </tr>
@@ -6479,7 +6601,7 @@ deletion is safe. Retention counts come from each pool's retention policy
 <tr>
 <td>JSON config <code>retention</code></td>
 <td>Per-pool <code>s</code> bucket policy used by <code>zfscleanup</code></td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 </tbody>
 </table>
@@ -6990,12 +7112,12 @@ and optionally removes the VM.</p>
 <tr>
 <td>Node config</td>
 <td>Determines single-node vs two-node paths</td>
-<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilities-nodeconf">Node config</a></td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilitiesnodeconf">Node config</a></td>
 </tr>
 <tr>
 <td>JSON config <code>archive_path</code></td>
 <td>Default archive base</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td><code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code></td>
@@ -7118,12 +7240,12 @@ config with updated disk lines.</p>
 <tr>
 <td>Node config</td>
 <td>Determines two-node iSCSI behavior</td>
-<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilities-nodeconf">Node config</a></td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilitiesnodeconf">Node config</a></td>
 </tr>
 <tr>
 <td>JSON config <code>archive_path</code></td>
 <td>Default archive base</td>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 </tr>
 <tr>
 <td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
@@ -7131,7 +7253,7 @@ config with updated disk lines.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 <td>Updated for restored encrypted LUNs</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">encrypted-LUNs config</a></td>
 </tr>
@@ -7240,7 +7362,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
 <tr>
 <td>Node config</td>
 <td>Determines single-node vs two-node paths</td>
-<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilities-nodeconf">Node config</a></td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilitiesnodeconf">Node config</a></td>
 </tr>
 <tr>
 <td><code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code></td>
@@ -7303,7 +7425,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.73.1
+      ZFS Utilities v0.74.0
     </div>
   
   
@@ -7328,7 +7450,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

@@ -53,12 +53,24 @@ if [[ $(type -t log_msg 2>/dev/null) != "function" ]]; then
     }
 fi
 
-: "${NODE_CONF:=/etc/zfsutilities-node.conf}"
+# Load centralized paths if not already inherited from bashinit.
+if [[ -z "${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-}" ]]; then
+    PATHS_LIB="${PATHS_LIB:-$(find_zfsutility_script paths.sh)}"
+    if [[ -n "$PATHS_LIB" ]]; then
+        # shellcheck source=/dev/null
+        source "$PATHS_LIB"
+    fi
+fi
 
-# Backward compatibility: fall back to /etc/two-node.conf if new conf doesn't exist
+: "${NODE_CONF:=${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/node.conf}"
+
+# Backward compatibility: fall back to legacy /etc/zfsutilities-node.conf and
+# /etc/two-node.conf if the new conf doesn't exist.
 if [[ ! -r "$NODE_CONF" ]]; then
-    if [[ -r /etc/two-node.conf ]]; then
-        NODE_CONF="/etc/two-node.conf"
+    if [[ -r "${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}" ]]; then
+        NODE_CONF="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
+    elif [[ -r "${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}" ]]; then
+        NODE_CONF="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
     else
         log_msg "FATAL: Missing $NODE_CONF"
         log_msg "FATAL:   Install via: bin/install-single-node or install-two-node"
@@ -175,7 +187,12 @@ gen_mac() {
 
 # Read the archive_path value from the JSON config file.
 get_json_archive_path() {
-    local config_file="${JSON_CONFIG:-/root/.config/zfsutilities.json}"
+    local config_file="${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
+    # Legacy fallback: use the old path if the new one has not been migrated yet.
+    local legacy_config="${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
+    if [[ ! -e "$config_file" && -f "$legacy_config" ]]; then
+        config_file="$legacy_config"
+    fi
     python3 -c "
 import json
 try:

@@ -3,7 +3,7 @@
 # zfsconfig — JSON config helper for bash scripts
 #
 # Source this file to get functions that read/write the JSON config file used
-# by the GUI (/root/.config/zfsutilities.json). Implemented with python3 so
+# by the GUI (/var/lib/zfsutilities/config.json). Implemented with python3 so
 # there is no dependency on jq.
 #
 # Functions:
@@ -17,15 +17,32 @@
 #   poolarray                        # Compatibility shim: fills $zfspoolarray from pools
 #
 # Environment:
-#   ZFSCONFIG_PATH  override config path (default: /root/.config/zfsutilities.json)
+#   ZFSCONFIG_PATH  override config path (default: /var/lib/zfsutilities/config.json)
 #   ZFSLOCK_DIR     override lock directory (default: /run/lock/zfs)
 #
 # Cached in the shell for speed: _ZFSCONFIG_POOLS_CACHE,
 # _ZFSCONFIG_OFFSITE_CACHE, _ZFSCONFIG_CA_CACHE.
 # Unset them to force a re-read, or call zfsconfig_invalidate.
 
-ZFSCONFIG_PATH="${ZFSCONFIG_PATH:-/root/.config/zfsutilities.json}"
-ZFSLOCK_DIR="${ZFSLOCK_DIR:-/run/lock/zfs}"
+# The path library is normally inherited from bashinit; source it directly if
+# this file is loaded in a context where the variables are not yet defined.
+if [[ -z "${ZFSUTILITIES_CONFIG_PATH:-}" ]]; then
+    PATHS_LIB="${PATHS_LIB:-$(find_zfsutility_script paths.sh)}"
+    if [[ -n "$PATHS_LIB" ]]; then
+        # shellcheck source=/dev/null
+        source "$PATHS_LIB"
+    fi
+fi
+
+ZFSCONFIG_PATH="${ZFSCONFIG_PATH:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
+ZFSLOCK_DIR="${ZFSLOCK_DIR:-${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfs}}"
+
+# Legacy fallback: if the new path does not exist and the old path does, use
+# the old path so existing installs keep working before the Step 5 migration.
+if [[ ! -e "$ZFSCONFIG_PATH" && -f "${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}" ]]; then
+    log_msg "WARN: zfsconfig: config not found at $ZFSCONFIG_PATH; using legacy path ${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
+    ZFSCONFIG_PATH="${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
+fi
 
 _zfsconfig_ensure() {
     if [[ ! -f "$ZFSCONFIG_PATH" ]]; then

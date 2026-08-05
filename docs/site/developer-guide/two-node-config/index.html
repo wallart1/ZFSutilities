@@ -1323,15 +1323,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#config-file-etczfsutilities-nodeconf" class="md-nav__link">
+  <a href="#config-file-etczfsutilitiesnodeconf" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Config File: /etc/zfsutilities-node.conf
+        Config File: /etc/zfsutilities/node.conf
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Config File: /etc/zfsutilities-node.conf">
+    <nav class="md-nav" aria-label="Config File: /etc/zfsutilities/node.conf">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1362,10 +1362,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#config-file-etczfsutilities-deployconf" class="md-nav__link">
+  <a href="#config-file-etczfsutilitiesdeployconf" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Config File: /etc/zfsutilities-deploy.conf
+        Config File: /etc/zfsutilities/deploy.conf
       
     </span>
   </a>
@@ -2098,16 +2098,16 @@
 </ul>
 <p>Both modes use the same scripts and the same config file format. The
 <code>NODE_MODE</code> variable controls which code paths are active.</p>
-<h2 id="config-file-etczfsutilities-nodeconf">Config File: <code>/etc/zfsutilities-node.conf</code><a class="headerlink" href="#config-file-etczfsutilities-nodeconf" title="Permanent link">&para;</a></h2>
+<h2 id="config-file-etczfsutilitiesnodeconf">Config File: <code>/etc/zfsutilities/node.conf</code><a class="headerlink" href="#config-file-etczfsutilitiesnodeconf" title="Permanent link">&para;</a></h2>
 <p>A POSIX-shell sourceable file, installed by the interactive installers in
 <code>bin/</code>. Site admins can edit this file directly.</p>
 <h3 id="single-node-example">Single-node example<a class="headerlink" href="#single-node-example" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="c1"># /etc/zfsutilities-node.conf</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># /etc/zfsutilities/node.conf</span>
 <span class="nv">NODE_MODE</span><span class="o">=</span><span class="s2">&quot;single-node&quot;</span>
 <span class="nv">THIS_HOST</span><span class="o">=</span><span class="s2">&quot;myhost&quot;</span>
 </code></pre></div>
 <h3 id="two-node-example">Two-node example<a class="headerlink" href="#two-node-example" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="c1"># /etc/zfsutilities-node.conf</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># /etc/zfsutilities/node.conf</span>
 <span class="nv">NODE_MODE</span><span class="o">=</span><span class="s2">&quot;two-node&quot;</span>
 
 <span class="nv">STORAGE_HOST</span><span class="o">=</span><span class="s2">&quot;stewie&quot;</span>
@@ -2125,11 +2125,11 @@
 <p>The <code>IQN_PREFIX</code> value contains the literal host string because it is part of
 the standards-based iSCSI target's persistent name — renaming the host does <strong>not</strong>
 rename the target.</p>
-<h2 id="config-file-etczfsutilities-deployconf">Config File: <code>/etc/zfsutilities-deploy.conf</code><a class="headerlink" href="#config-file-etczfsutilities-deployconf" title="Permanent link">&para;</a></h2>
+<h2 id="config-file-etczfsutilitiesdeployconf">Config File: <code>/etc/zfsutilities/deploy.conf</code><a class="headerlink" href="#config-file-etczfsutilitiesdeployconf" title="Permanent link">&para;</a></h2>
 <p>A separate, optional configuration file used by <a href="../../commands-and-modules/two-node/#deploy-version-repo-root"><code>deploy-version</code></a> to determine which remote hosts receive a deployment.</p>
 <p><strong>Why it exists:</strong> The local node's configuration (e.g. a single-node test system or a developer workstation) may differ from the production deployment targets. Keeping deployment groups in their own file lets you deploy to <code>stewie</code> and <code>tweety</code> from a laptop that is neither.</p>
 <p><strong>Format:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="c1"># /etc/zfsutilities-deploy.conf</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># /etc/zfsutilities/deploy.conf</span>
 <span class="nv">DEPLOY_GROUP_production</span><span class="o">=</span><span class="s2">&quot;stewie tweety&quot;</span>
 <span class="nv">DEPLOY_GROUP_staging</span><span class="o">=</span><span class="s2">&quot;staging-host&quot;</span>
 </code></pre></div>
@@ -2137,7 +2137,7 @@ rename the target.</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>./bin/deploy-version<span class="w"> </span><span class="m">1</span>.2.0<span class="w"> </span>production
 </code></pre></div>
 <p>If no groups are specified, <code>deploy-version</code> deploys to all defined groups plus the local host.</p>
-<p><strong>Legacy fallback:</strong> If <code>/etc/zfsutilities-deploy.conf</code> does not exist, <code>deploy-version</code> falls back to the node configuration (<code>/etc/zfsutilities-node.conf</code> or <code>/etc/two-node.conf</code>) and deploys to <code>STORAGE_HOST</code> and <code>COMPUTE_HOST</code> when <code>NODE_MODE="two-node"</code>.</p>
+<p><strong>Legacy fallback:</strong> If <code>/etc/zfsutilities/deploy.conf</code> does not exist, <code>deploy-version</code> falls back to the node configuration (<code>/etc/zfsutilities/node.conf</code>, <code>/etc/zfsutilities/two-node.conf</code>, or the legacy <code>/etc/zfsutilities-node.conf</code> / <code>/etc/two-node.conf</code>) and deploys to <code>STORAGE_HOST</code> and <code>COMPUTE_HOST</code> when <code>NODE_MODE="two-node"</code>.</p>
 <p><strong>Installation:</strong> <code>install-two-node</code> generates this file from <code>share/installer/deploy.conf.template</code>, substituting the hostnames you enter during setup. The installer <strong>never overwrites</strong> an existing file, so manual edits are safe across re-runs.</p>
 <h2 id="helper-library-node-libsh">Helper Library: <code>node-lib.sh</code><a class="headerlink" href="#helper-library-node-libsh" title="Permanent link">&para;</a></h2>
 <p>Installed to <code>/usr/local/lib/node-lib.sh</code> on all hosts (also reachable via
@@ -2152,7 +2152,7 @@ rootcheck
 </code></pre></div>
 <p>The library:</p>
 <ol>
-<li>Sources <code>/etc/zfsutilities-node.conf</code></li>
+<li>Sources <code>/etc/zfsutilities/node.conf</code> (falling back to <code>/etc/zfsutilities/two-node.conf</code>, then legacy <code>/etc/zfsutilities-node.conf</code> / <code>/etc/two-node.conf</code>)</li>
 <li>In single-node mode: sets <code>STORAGE_HOST=COMPUTE_HOST=$THIS_HOST</code>,
    leaves iSCSI variables empty</li>
 <li>Provides helper functions:</li>
@@ -2225,7 +2225,7 @@ mode:</p>
 <p>If <a href="../../commands-and-modules/commands/#zfsdelfs">zfsdelfs</a>, <a href="../../commands-and-modules/commands/#zfsdailybackup">zfsdailybackup</a>, and <code>rsync-dailybackup</code> run from the
 ZFSutilities project tree (not from the versioned installation PATH), they source
 the config directly instead of using the library. Running from the repo-root is supported only in a development environment.</p>
-<div class="highlight"><pre><span></span><code><span class="nv">NODE_CONF</span><span class="o">=</span><span class="s2">&quot;/etc/zfsutilities-node.conf&quot;</span>
+<div class="highlight"><pre><span></span><code><span class="nv">NODE_CONF</span><span class="o">=</span><span class="s2">&quot;/etc/zfsutilities/node.conf&quot;</span>
 <span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span>!<span class="w"> </span>-r<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$NODE_CONF</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
 <span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;✗ Missing </span><span class="nv">$NODE_CONF</span><span class="s2"> — install via: bin/install-single-node&quot;</span><span class="w"> </span>&gt;<span class="p">&amp;</span><span class="m">2</span>
 <span class="w">    </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
@@ -2267,7 +2267,7 @@ config must be present on every host that runs the script:</p>
 <ol>
 <li>Installs MkDocs (for documentation editing)</li>
 <li>Prompts for hostname (default: <code>$(hostname -s)</code>)</li>
-<li>Generates <code>/etc/zfsutilities-node.conf</code></li>
+<li>Generates <code>/etc/zfsutilities/node.conf</code></li>
 <li>Installs <code>node-lib.sh</code> and compatibility symlink locally</li>
 <li>Deploys VM disk management and clone scripts to the versioned installation</li>
 <li>Does NOT install iSCSI-only scripts or systemd drop-ins</li>
@@ -2278,7 +2278,7 @@ config must be present on every host that runs the script:</p>
 <li>Installs MkDocs (for documentation editing)</li>
 <li>Prompts for storage host, compute host, storage IP, IQN prefix,
    and pool-to-target mappings (auto-detects online pools)</li>
-<li>Generates <code>/etc/zfsutilities-node.conf</code></li>
+<li>Generates <code>/etc/zfsutilities/node.conf</code></li>
 <li>Installs scripts on both hosts via SSH</li>
 <li>Installs systemd drop-ins, <code>zfs-keys-unlock.service</code>, and the encrypted
    LUNs config</li>
@@ -2520,7 +2520,7 @@ LUNs. See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for recove
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.73.1
+      ZFS Utilities v0.74.0
     </div>
   
   
@@ -2545,7 +2545,7 @@ LUNs. See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for recove
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

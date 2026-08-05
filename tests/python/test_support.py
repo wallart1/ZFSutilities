@@ -10,6 +10,9 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+# Disable the automatic Step-5 migration so tests do not touch production paths.
+os.environ.setdefault("ZFSUTILITIES_DISABLE_MIGRATION", "1")
+
 # Ensure the Python source directory is on the path.
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
@@ -21,6 +24,7 @@ import config_core
 import cron_manager
 import feature_config
 import file_locking
+import log_index
 
 # ---------------------------------------------------------------------------
 # Documentation helpers
@@ -28,13 +32,6 @@ import file_locking
 
 DOCS_DIR = os.path.join(REPO_ROOT, "docs", "docs")
 MKDOCS_YML = os.path.join(REPO_ROOT, "docs", "mkdocs.yml")
-HELP_TOPICS_PATH = os.path.join(PYTHON_SRC, "help_topics.json")
-
-
-def load_help_topics():
-    """Load and return the help_topics.json dict."""
-    with open(HELP_TOPICS_PATH) as f:
-        return json.load(f)
 
 
 def try_load_mkdocs_yml():
@@ -171,10 +168,54 @@ STARTDOCSERVER_PATH = os.path.join(REPO_ROOT, "startdocserver")
 
 @contextlib.contextmanager
 def temp_config_dir():
-    """Override config and cron file paths to a temporary directory."""
+    """Override config, state, log, and lock paths to a temporary directory.
+
+    Uses the centralized path helpers in ``paths.py`` via environment
+    overrides. Constants that were already computed at import time are
+    patched so existing module bindings see the temporary locations.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
+        state_dir = os.path.join(tmpdir, "state")
+        log_dir = os.path.join(tmpdir, "logs")
+        lock_dir = os.path.join(tmpdir, "locks")
+        profile_lock_dir = os.path.join(tmpdir, "profiles", "locks")
+        os.makedirs(state_dir, exist_ok=True)
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(lock_dir, exist_ok=True)
+        os.makedirs(profile_lock_dir, exist_ok=True)
+
+        env_vars = {
+            "ZFSUTILITIES_STATE_DIR": state_dir,
+            "ZFSUTILITIES_LOG_DIR": log_dir,
+            "ZFSUTILITIES_LOCK_DIR": lock_dir,
+            "ZFSUTILITIES_CRON_FILE": os.path.join(tmpdir, "zfsutilities.cron"),
+            "ZFSUTILITIES_PROFILE_LOCK_DIR": profile_lock_dir,
+        }
+        orig_env = {k: os.environ.get(k) for k in env_vars}
+        for k, v in env_vars.items():
+            os.environ[k] = v
+
+        # Import paths after setting overrides so the computed defaults use
+        # the temporary directories.
+        import paths
+
+        # Compute concrete temporary paths through the centralized helpers.
+        config_path = paths.get_config_path()
+        snapfile = paths.get_snapfile_path()
+        offsite_snapfile = paths.get_offsite_snapfile_path()
+        snapname_lock = os.path.join(lock_dir, ".snapname.lock")
+        snapname_reserved = os.path.join(lock_dir, ".snapname.reserved")
+
+        # Patch already-imported modules whose constants were bound at import
+        # time. Modules imported inside this context pick up the env overrides
+        # automatically.
         orig_config_path = backup_config.CONFIG_PATH
         orig_core_config_path = config_core.CONFIG_PATH
+        orig_session_log_dir = backup_config.SESSION_LOG_DIR
+        orig_core_session_log_dir = config_core.SESSION_LOG_DIR
+        import session_log as _session_log_module
+        orig_session_log_session_log_dir = _session_log_module.SESSION_LOG_DIR
+        orig_log_index_session_log_dir = log_index.SESSION_LOG_DIR
         orig_cron_file = cron_manager.CRON_FILE
         orig_cron_profile_lock_dir = cron_manager.PROFILE_LOCK_DIR
         orig_snapfile = backup_config.SNAPFILE
@@ -191,17 +232,16 @@ def temp_config_dir():
         orig_scrub_state_lock = file_locking.SCRUB_STATE_LOCK_PATH
         import profile_runner
         orig_profile_lock_dir = profile_runner.PROFILE_LOCK_DIR
-        profiles_dir = os.path.join(tmpdir, "profiles")
-        os.makedirs(profiles_dir, exist_ok=True)
-        config_path = os.path.join(tmpdir, "zfsutilities.json")
+
+        session_log_dir = paths.get_session_log_dir()
         backup_config.CONFIG_PATH = config_path
         config_core.CONFIG_PATH = config_path
-        cron_manager.CRON_FILE = os.path.join(tmpdir, "zfsutilities.cron")
-        cron_manager.PROFILE_LOCK_DIR = os.path.join(tmpdir, "profiles", "locks")
-        snapfile = os.path.join(tmpdir, "zfsnextsnap")
-        offsite_snapfile = os.path.join(tmpdir, "zfsnextsnap_offsite")
-        snapname_lock = os.path.join(tmpdir, "snapname.lock")
-        snapname_reserved = os.path.join(tmpdir, "snapname.reserved")
+        backup_config.SESSION_LOG_DIR = session_log_dir
+        config_core.SESSION_LOG_DIR = session_log_dir
+        _session_log_module.SESSION_LOG_DIR = session_log_dir
+        log_index.SESSION_LOG_DIR = session_log_dir
+        cron_manager.CRON_FILE = paths.get_cron_file_path()
+        cron_manager.PROFILE_LOCK_DIR = paths.get_profile_lock_dir()
         backup_config.SNAPFILE = snapfile
         feature_config.SNAPFILE = snapfile
         backup_config.OFFSITE_SNAPFILE = offsite_snapfile
@@ -210,16 +250,21 @@ def temp_config_dir():
         feature_config.SNAPNAME_LOCK = snapname_lock
         backup_config.SNAPNAME_RESERVED = snapname_reserved
         feature_config.SNAPNAME_RESERVED = snapname_reserved
-        file_locking.CONFIG_LOCK_PATH = os.path.join(tmpdir, ".config.lock")
-        file_locking.HISTORY_LOCK_PATH = os.path.join(tmpdir, ".history.lock")
-        file_locking.LOG_INDEX_LOCK_PATH = os.path.join(tmpdir, ".log_index.lock")
-        file_locking.SCRUB_STATE_LOCK_PATH = os.path.join(tmpdir, ".scrub_state.lock")
-        profile_runner.PROFILE_LOCK_DIR = os.path.join(tmpdir, "profiles", "locks")
+        file_locking.CONFIG_LOCK_PATH = os.path.join(lock_dir, ".config.lock")
+        file_locking.HISTORY_LOCK_PATH = os.path.join(lock_dir, ".history.lock")
+        file_locking.LOG_INDEX_LOCK_PATH = os.path.join(lock_dir, ".log_index.lock")
+        file_locking.SCRUB_STATE_LOCK_PATH = os.path.join(lock_dir, ".scrub_state.lock")
+        profile_runner.PROFILE_LOCK_DIR = paths.get_profile_lock_dir()
+
         try:
             yield tmpdir
         finally:
             backup_config.CONFIG_PATH = orig_config_path
             config_core.CONFIG_PATH = orig_core_config_path
+            backup_config.SESSION_LOG_DIR = orig_session_log_dir
+            config_core.SESSION_LOG_DIR = orig_core_session_log_dir
+            _session_log_module.SESSION_LOG_DIR = orig_session_log_session_log_dir
+            log_index.SESSION_LOG_DIR = orig_log_index_session_log_dir
             cron_manager.CRON_FILE = orig_cron_file
             cron_manager.PROFILE_LOCK_DIR = orig_cron_profile_lock_dir
             backup_config.SNAPFILE = orig_snapfile
@@ -235,6 +280,11 @@ def temp_config_dir():
             file_locking.LOG_INDEX_LOCK_PATH = orig_log_index_lock
             file_locking.SCRUB_STATE_LOCK_PATH = orig_scrub_state_lock
             profile_runner.PROFILE_LOCK_DIR = orig_profile_lock_dir
+            for k, v in orig_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 @contextlib.contextmanager

@@ -76,7 +76,7 @@ export ZFSUTILITIES_LOG_FILE="/var/log/zfsutilities/sessions/manual.log"
 
 To prevent a runaway subprocess from filling disk, the Python runners enforce a
 configurable size cap on the session log file they own. The maximum is stored in
-`/root/.config/zfsutilities.json` under `session_log_max_bytes` and defaults to
+`/var/lib/zfsutilities/config.json` under `session_log_max_bytes` and defaults to
 **10 MB**. When a log grows beyond the configured maximum, it is rewritten as:
 
 - the first **64 KB** (opening context),
@@ -189,7 +189,7 @@ verification: scans other `@offsite` snapshots on the same source dataset for a
 hold named `offsite-<counterpart_pool>`. If another snapshot has the hold, the
 counterpart received it too — a second common snapshot is confirmed and deletion is safe. If no other snapshot has the hold, deletion is blocked until the pool comes online. Non-offsite labels always block when offline (no holds to check).
 
-The fss table lives in the shared JSON config at `/root/.config/zfsutilities.json`
+The fss table lives in the shared JSON config at `/var/lib/zfsutilities/config.json`
 under the [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) key, accessed from bash via `zfsconfig_get_checkagainst`
 (see [`zfsconfig`](../commands-and-modules/modules.md#zfsconfig)) and from the GUI via `feature_config.get_checkagainst`. Each row stores a
 `source_root`, `dest_root`, `label`, and optional `comment`. The counterpart
@@ -251,7 +251,7 @@ The date and time are determined when 'zfssnapbuild' is executed. A snapshot's i
 ## Retention Policies
 
 Per-pool retention policies live in the shared JSON config at
-`/root/.config/zfsutilities.json` under the `retention` key, alongside the pool
+`/var/lib/zfsutilities/config.json` under the `retention` key, alongside the pool
 list, checkagainst table, and
 GUI tab state. Each pool has a list of bucket dicts:
 
@@ -503,13 +503,13 @@ ZFS Utilities reads configuration from several layers. Higher layers override or
 │  ZFSCONFIG_PATH, ZFSCONFIG_LEGACY_DIR       │
 ├─────────────────────────────────────────────┤
 │  JSON config                                │
-│  /root/.config/zfsutilities.json            │
+│  /var/lib/zfsutilities/config.json            │
 │  • pools, retention, checkagainst           │
 │  • backup/offsite/restore GUI tab state     │
 │  • config_version (schema migrations)       │
 ├─────────────────────────────────────────────┤
 │  Node configuration                         │
-│  /etc/zfsutilities-node.conf                │
+│  /etc/zfsutilities/node.conf                │
 │  • NODE_MODE, STORAGE_HOST, COMPUTE_HOST    │
 │  • POOL_TARGET (iSCSI map)                  │
 ├─────────────────────────────────────────────┤

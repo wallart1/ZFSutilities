@@ -291,7 +291,7 @@ run_interactive_prerequisites() {
         return 1
     fi
 
-    if ! apt_install $packages; then
+    if ! apt_install "$packages"; then
         echo ""
         echo "✗ Automatic installation failed. Please install the items manually and re-run."
         return 1
@@ -433,6 +433,19 @@ check_partial_uninstall() {
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/desktop-launcher-lib.sh"
 
 # ------------------------------------------------------------------
+# Runtime directory creation
+# ------------------------------------------------------------------
+
+# Create the FHS-aligned directories used by ZFSutilities.
+# Called by the installers after sourcing this library.
+ensure_zfsutilities_dirs() {
+    install -d -m 0755 \
+        "${ZFSUTILITIES_SYSTEM_CONFIG_DIR}" \
+        "${ZFSUTILITIES_STATE_DIR}" \
+        "${ZFSUTILITIES_RUN_DIR}"
+}
+
+# ------------------------------------------------------------------
 # Retention profile initialization
 # ------------------------------------------------------------------
 
@@ -440,11 +453,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/desktop-launcher-lib.sh"
 # On a new install this also removes any pool-specific policies so only
 # `default` remains. Existing user-entered profiles are preserved.
 ensure_retention_profiles() {
-    local config_path="${ZFSCONFIG_PATH:-/root/.config/zfsutilities.json}"
+    local config_path="${ZFSCONFIG_PATH:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
     local new_install="false"
     if [[ ! -f "$config_path" ]]; then
         new_install="true"
     fi
+
+    install -d -m 0755 "$(dirname "$config_path")"
 
     local lib_dir
     lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

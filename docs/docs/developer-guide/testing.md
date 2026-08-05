@@ -297,7 +297,7 @@ correctly.
 ### Python
 
 * **Config isolation** — Always wrap config-mutating tests in
-`temp_config_dir()` so they do not touch the real `/root/.config/zfsutilities.json`.
+`temp_config_dir()` so they do not touch the real `/var/lib/zfsutilities/config.json`.
 * **GTK mocking** — Use `mock_gtk()` as a context manager when importing any
 module that touches `gi.repository.Gtk`. The mock provides enough structure
 for `Window` subclasses to instantiate without a display.

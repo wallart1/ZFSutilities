@@ -631,7 +631,7 @@ def on_backup_save(app, ctx):
         save_backup_config(ctx.config, backup_data)
         if hasattr(app, '_backup_tracker'):
             app._backup_tracker.mark_clean()
-        log_msg("INFO: Backup config saved to /root/.config/zfsutilities.json")
+        log_msg("INFO: Backup config saved to /var/lib/zfsutilities/config.json")
     except OSError as e:
         log_msg(f"WARN: Error saving config: {e}")
 

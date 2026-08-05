@@ -180,7 +180,8 @@ Buckets: `d` (daily), `w` (weekly), `m` (monthly), `s` (offsite), `c` (clone ori
 ### Retention Policies
 
 Live per-pool retention policies are stored in the shared JSON config at
-`/root/.config/zfsutilities.json` under the `retention` key. Each pool has a
+`/var/lib/zfsutilities/config.json` (legacy fallback `/root/.config/zfsutilities.json`)
+under the `retention` key. Each pool has a
 list of bucket dicts:
 
 ```json
@@ -200,10 +201,12 @@ are imported once into the JSON config and then ignored. On a new install, only
 so the Retention tab starts with a single default policy. The installers
 (`install-single-node` and `install-two-node`) initialize the JSON config
 retention section with only the `default` policy when the config does not yet
-exist, leaving any existing user-entered per-pool policies untouched. The
-`deploy-version` script only ships `zfsretainpol-default` to the deployed `bin/`
-directory; pool-specific sample policy files are excluded so they cannot be
-re-imported later. Use the GUI Retention tab or `backup_config.get_retention` /
+exist, leaving any existing user-entered per-pool policies untouched. Only
+`share/retention/zfsretainpol-default` is kept under version control; pool-specific
+sample policy files are not shipped so they cannot be re-imported later.
+`deploy-version` copies the entire `share/` tree into the deployed version, so any
+pool-specific files accidentally added to `share/retention/` would also be
+deployed. Use the GUI Retention tab or `backup_config.get_retention` /
 `save_retention` to add or edit per-pool policies. The Prune list only shows
 online pools that have an explicit retention policy; pools without a policy are
 not pruned. When `zfscleanup` is run without a specific pool argument, it
@@ -304,7 +307,7 @@ cp bashinit ~
 - `./zfsscruball pause` - Pause all running scrubs
 - `./zfsscruball resume` - Resume paused scrubs, continue with remaining, skip completed
 
-State is tracked in `/tmp/zfsscruball.state` during a run.
+State is tracked in `/run/zfsutilities/zfsscruball.state` during a run.
 
 ## Versioned Deployment
 
@@ -330,7 +333,8 @@ Both VMs must be stopped before switching versions if storage scripts are in use
 
 In a two-node configuration, the GUI checks the peer node's deployed version at
 startup (`zfsutilities_gui.py` → `dashboard_page.py`). It resolves the peer host
-from `/etc/zfsutilities-node.conf` (fallback `/etc/two-node.conf`), reads the
+from `/etc/zfsutilities/node.conf` (fallback `/etc/zfsutilities/two-node.conf`,
+legacy `/etc/zfsutilities-node.conf` also works), reads the
 peer's `/usr/local/lib/zfsutilities/current/VERSION` via SSH as `root`, and logs
 a warning if the versions differ or the peer is unreachable. The check runs in a
 background thread so GUI startup is not delayed.
@@ -710,8 +714,9 @@ log_msg("DEBUG: variable =", value)
 ## Recent Session Notes (2026-06-29)
 
 - Phase 4 file-locking: Added `python/file_locking.py` to serialize
-  access to shared JSON/state files (`/root/.config/zfsutilities.json`,
-  `zfsutilities-history.json`, `scrub_state.json`, and the session-log index).
+  access to shared JSON/state files (`/var/lib/zfsutilities/config.json`,
+  `/var/lib/zfsutilities/history.json`, `/var/lib/zfsutilities/scrub_state.json`,
+  and the session-log index).
   Python modules use `fcntl.flock` context managers; the bash `zfsconfig`
   helper uses the system `flock` command on the same lock files. Lock paths are
   overridable via environment variables for testing. `add_history_entry()` now
@@ -765,5 +770,5 @@ log_msg("DEBUG: variable =", value)
 - `zfsretain`: Phase 2 now deletes the oldest snapshots first when a bucket overflows; empty snapshots (`written=0`) are still logged as `(empty)` but no longer receive deletion preference. Most recent snapshot in each bucket is always protected as incremental base
 - `zfsgetsnapage`: New utility — returns snapshot age in days
 - iSCSI boot-config fix: `saveconfig-boot.json` strips encrypted backstores for safe boot
-- Encrypted zvol lifecycle: `/etc/iscsi-encrypted-luns.conf` is single source of truth; `new-vm-disk --encrypted` and `remove-vm-disk` maintain it
+- Encrypted zvol lifecycle: `/etc/zfsutilities/iscsi-encrypted-luns.conf` is single source of truth; `new-vm-disk --encrypted` and `remove-vm-disk` maintain it
 - Python `log_msg()`: All Python scripts now use priority-filtered logging via `backup_config.log_msg()`, mirroring the bash `log_msg()` behavior with `file:line:` prefixes and GUI sink support

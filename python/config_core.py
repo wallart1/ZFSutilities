@@ -7,11 +7,11 @@ from datetime import datetime, timezone
 from config_migrations import CONFIG_VERSION, run_migrations
 from file_locking import config_lock_read, config_lock_write
 from logging_config import MSG_LEVELS, log_msg
+from migration import run_migration
+from paths import get_config_path, get_session_log_dir
+from paths import get_profiles_dir as _paths_get_profiles_dir
 
-CONFIG_PATH = os.environ.get(
-    "ZFSUTILITIES_CONFIG_PATH",
-    os.path.expanduser("~/.config/zfsutilities.json"),
-)
+CONFIG_PATH = os.environ.get("ZFSUTILITIES_CONFIG_PATH", get_config_path())
 
 
 BACKUP_DEFAULTS = {
@@ -55,9 +55,7 @@ DASHBOARD_DEFAULTS = {
 
 def get_profiles_dir():
     """Return the directory where profile JSON files are stored."""
-    profiles_dir = os.path.join(os.path.dirname(CONFIG_PATH), "profiles")
-    os.makedirs(profiles_dir, exist_ok=True)
-    return profiles_dir
+    return _paths_get_profiles_dir()
 
 
 def _deep_copy(obj):
@@ -66,6 +64,7 @@ def _deep_copy(obj):
 
 def load_config():
     """Load JSON config from CONFIG_PATH. Returns defaults on any error."""
+    run_migration()
     config = None
     if os.path.exists(CONFIG_PATH):
         try:
@@ -187,7 +186,7 @@ DEFAULT_HISTORY_RETENTION_DAYS = 90
 DEFAULT_SESSION_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 DEFAULT_SESSION_LOG_TAIL_BYTES = 1 * 1024 * 1024   # 1 MB
 DEFAULT_SESSION_LOG_START_BYTES = 64 * 1024        # 64 KB
-SESSION_LOG_DIR = "/var/log/zfsutilities/sessions"
+SESSION_LOG_DIR = get_session_log_dir()
 
 
 def get_log_retention_days(config):

@@ -142,7 +142,7 @@ fi
 # Clean up the saved nextsnap file would normally be done at this point,  however ...
 # The $snapfile will be retained because this job is commonly rerun.
 # If you want a new $nextsnap, decline reuse of the prior one when prompted at run-time.
-# rm -f /tmp/zfsnextsnap_zfssendoffsite
+# rm -f /run/zfsutilities/nextsnap_zfssendoffsite
 
 # To prune old offsite backups, run the following command:
 # sudo zfscleanup '<poolname>' '' 'offsite'

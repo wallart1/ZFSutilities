@@ -1664,6 +1664,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#pathssh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        paths.sh
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#rootcheck" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2097,6 +2108,7 @@ arrays and on-disk tables are on <a href="../../developer-guide/data-structures/
 <li><a href="#bashfatal"><code>bashfatal</code></a></li>
 <li><a href="#bashreturn"><code>bashreturn</code></a></li>
 <li><a href="#bashsetx"><code>bashsetx</code></a></li>
+<li><a href="#pathssh"><code>paths.sh</code></a></li>
 <li><a href="#rootcheck"><code>rootcheck</code></a></li>
 <li><a href="#zfsconfig"><code>zfsconfig</code></a></li>
 <li><a href="#zfsbuildfsarray"><code>zfsbuildfsarray</code></a></li>
@@ -2236,7 +2248,21 @@ rootcheck
 </tr>
 </tbody>
 </table>
-<p><strong>Called modules:</strong> none. <code>bashinit</code> is the lowest-level helper; it does not source other project modules.</p>
+<p><strong>Called modules:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lib/paths.sh</code></td>
+<td>FHS-aligned path variables and one-time state migration (sourced automatically at the end of bashinit)</td>
+</tr>
+</tbody>
+</table>
 <p><strong>Internal flow:</strong></p>
 <ol>
 <li><code>bashinit</code> derives <code>$mydir</code> from <code>BASH_SOURCE[1]</code> only when it is not already set.</li>
@@ -2346,6 +2372,180 @@ Sends trace output to stderr via <code>BASH_XTRACEFD=2</code>.</p>
 <p><strong>Data structures consumed / produced:</strong> none.</p>
 <p><strong>Return codes:</strong> <code>0</code> on success.</p>
 <hr />
+<h3 id="pathssh"><code>paths.sh</code><a class="headerlink" href="#pathssh" title="Permanent link">&para;</a></h3>
+<p>Centralized FHS-aligned path layout for bash scripts. Defines all runtime,
+state, log, lock, and legacy path variables, plus the one-time state-file
+migration helper.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Normally inherited automatically after sourcing bashinit.</span>
+<span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>paths.sh<span class="k">)</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p><strong>Functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>migrate_zfsutilities_state</code></td>
+<td>One-time migration of legacy state/config files to the new layout</td>
+</tr>
+<tr>
+<td><code>_zfsutilities_migration_disabled</code></td>
+<td>Returns true when migration is disabled via environment</td>
+</tr>
+<tr>
+<td><code>_zfsutilities_migration_sentinel</code></td>
+<td>Path to the migration sentinel file</td>
+</tr>
+<tr>
+<td><code>_zfsutilities_backup_path</code></td>
+<td>Unique timestamped backup path for conflicting legacy files</td>
+</tr>
+<tr>
+<td><code>_migrate_path_item</code></td>
+<td>Move a legacy file/dir to its new location and leave a rollback symlink</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals / environment:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZFSUTILITIES_CONFIG_DIR</code></td>
+<td><code>/etc/zfsutilities</code></td>
+<td>System/admin configuration directory</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_STATE_DIR</code></td>
+<td><code>/var/lib/zfsutilities</code></td>
+<td>Persistent runtime-state directory</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_LOG_DIR</code></td>
+<td><code>/var/log/zfsutilities</code></td>
+<td>Log directory</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_RUN_DIR</code></td>
+<td><code>/run/zfsutilities</code></td>
+<td>Transient runtime-state directory</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_LOCK_DIR</code></td>
+<td><code>/run/lock/zfs</code></td>
+<td>Advisory-lock directory</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_SYSTEM_CONFIG_DIR</code></td>
+<td><code>/etc/zfsutilities</code></td>
+<td>System administrator config directory</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_CONFIG_PATH</code></td>
+<td><code>${STATE_DIR}/config.json</code></td>
+<td>Main JSON config file</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_HISTORY_PATH</code></td>
+<td><code>${STATE_DIR}/history.json</code></td>
+<td>Backup-history JSON file</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_PROFILES_DIR</code></td>
+<td><code>${STATE_DIR}/profiles</code></td>
+<td>Profile JSON files</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_SCRUB_STATE_PATH</code></td>
+<td><code>${STATE_DIR}/scrub_state.json</code></td>
+<td>Scrub-manager state file</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_NEXTSNAP_FILE</code></td>
+<td><code>${STATE_DIR}/nextsnap</code></td>
+<td>Saved next-snapshot file</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_OFFSITE_NEXTSNAP_FILE</code></td>
+<td><code>${STATE_DIR}/nextsnap_offsite</code></td>
+<td>Saved offsite next-snapshot file</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_RUN_NEXTSNAP_PREFIX</code></td>
+<td><code>${RUN_DIR}/nextsnap_</code></td>
+<td>Transient next-snapshot prefix</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_SCRUBALL_STATEFILE</code></td>
+<td><code>${RUN_DIR}/zfsscruball.state</code></td>
+<td><code>zfsscruball</code> pause/resume state</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_PID_FILE</code></td>
+<td><code>${RUN_DIR}/main.pid</code></td>
+<td>GUI PID file</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_SESSION_LOG_DIR</code></td>
+<td><code>${LOG_DIR}/sessions</code></td>
+<td>Per-session log directory</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_CRON_FILE</code></td>
+<td><code>/etc/cron.d/zfsutilities</code></td>
+<td>Cron drop-in file</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_PROFILE_LOCK_DIR</code></td>
+<td><code>${LOCK_DIR}/profiles</code></td>
+<td>Per-profile advisory locks</td>
+</tr>
+</tbody>
+</table>
+<p>All variables can be overridden via environment variables for tests and
+non-standard installs.</p>
+<p><strong>Called modules:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>bashinit</code></td>
+<td><code>log_msg</code>, <code>find_zfsutility_script</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Migration sentinel (<code>${STATE_DIR}/.migration_complete</code>)</td>
+<td><a href="../../#path-layout-and-migration">Path layout</a></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Return codes:</strong> none (sourced module).</p>
+<hr />
 <h3 id="rootcheck"><code>rootcheck</code><a class="headerlink" href="#rootcheck" title="Permanent link">&para;</a></h3>
 <p>Verifies the script is running as root. Sources at the top of any script that
 requires root privileges.</p>
@@ -2379,7 +2579,7 @@ rootcheck
 <hr />
 <h3 id="zfsconfig"><code>zfsconfig</code><a class="headerlink" href="#zfsconfig" title="Permanent link">&para;</a></h3>
 <p>Sourceable helper that reads from and writes to the shared JSON config at
-<code>/root/.config/zfsutilities.json</code>. This is the bash-side counterpart to the
+<code>/var/lib/zfsutilities/config.json</code>. This is the bash-side counterpart to the
 GUI's Python config modules (<code>config_core.py</code> and <code>feature_config.py</code>); they
 share the same file.</p>
 <p>No <code>jq</code> dependency — the helper uses inline <code>python3</code> heredocs so it works
@@ -2462,7 +2662,7 @@ zfsconfig_invalidate
 <tbody>
 <tr>
 <td><code>$ZFSCONFIG_PATH</code></td>
-<td>Override config path (default <code>/root/.config/zfsutilities.json</code>)</td>
+<td>Override config path (default <code>/var/lib/zfsutilities/config.json</code>)</td>
 <td><a href="../../developer-guide/global-variables/#infrastructure">Infrastructure</a></td>
 </tr>
 <tr>
@@ -2490,7 +2690,7 @@ zfsconfig_invalidate
 <td><a href="../../developer-guide/data-structures/#retention-policy-arrays-bktname-bktretain-minage">Data Structures</a></td>
 </tr>
 <tr>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 <td>All reads/writes target this file</td>
 </tr>
 </tbody>
@@ -2704,7 +2904,7 @@ checkagainst<span class="w"> </span>&lt;snapshot&gt;
 <td>Rules for mapping snapshot → counterpart</td>
 </tr>
 <tr>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 <td><code>checkagainst</code> and <code>pools</code> keys</td>
 </tr>
 </tbody>
@@ -3908,7 +4108,7 @@ retain<span class="w"> </span>&lt;pool&gt;<span class="w"> </span><span class="o
 <td>Working arrays built per-run</td>
 </tr>
 <tr>
-<td><a href="../../developer-guide/data-structures/#json-config-rootconfigzfsutilitiesjson">JSON config</a></td>
+<td><a href="../../developer-guide/data-structures/#json-config-varlibzfsutilitiesconfigjson">JSON config</a></td>
 <td><code>retention</code> key read; falls back to legacy <code>zfsretainpol-&lt;pool&gt;</code> files</td>
 </tr>
 </tbody>
@@ -4390,7 +4590,7 @@ steps.</p>
 <p><strong>Internal flow / algorithm:</strong></p>
 <ol>
 <li>Derive a per-caller snapfile path from <code>BASH_SOURCE[1]</code>. The file is named
-   <code>/tmp/zfsnextsnap_&lt;sanitized_caller&gt;</code>.</li>
+   <code>/run/zfsutilities/nextsnap_&lt;sanitized_caller&gt;</code>.</li>
 <li>If the snapfile exists and contains a snapshot name, prompt the user to
    reuse it. Reusing keeps incremental chains stable across interrupted runs.</li>
 <li>If reuse is declined, delete the snapfile and generate a new name.</li>
@@ -4420,7 +4620,7 @@ steps.</p>
 <tbody>
 <tr>
 <td><a href="../../developer-guide/data-structures/#snapshot-name-persistence">Snapshot name persistence</a></td>
-<td><code>/tmp/zfsnextsnap_&lt;caller&gt;</code> files</td>
+<td><code>/run/zfsutilities/nextsnap_&lt;caller&gt;</code> files</td>
 </tr>
 </tbody>
 </table>
@@ -4474,7 +4674,7 @@ steps.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.73.1
+      ZFS Utilities v0.74.0
     </div>
   
   
@@ -4499,7 +4699,7 @@ steps.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.73.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
