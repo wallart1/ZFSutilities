@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.74.3
+
+*Released 2026-08-05*
+
+### Fixed
+
+- **`zfs-send-receive` calls the correct dataset-deletion helper** — When
+  `prepare_destination_for_full_copy` needs to destroy an existing destination
+  for a full copy/restore, it now invokes `zfsdelfs` via
+  `find_zfsutility_script` instead of the undefined `delfs` command. This
+  restores the destructive full-copy path that failed with
+  `delfs: command not found` in 0.74.2.
+
 ## 0.74.2
 
 *Released 2026-08-05*

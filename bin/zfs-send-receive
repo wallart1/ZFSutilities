@@ -26,6 +26,12 @@ function send-receive {
         source "$mydir/bashfatal"
     fi
     source "$iscsi_lib"
+    local zfsdelfs_path
+    zfsdelfs_path=$(find_zfsutility_script zfsdelfs)
+    if [[ -z "$zfsdelfs_path" ]]; then
+        log_msg "FATAL: Could not locate zfsdelfs"
+        source "$mydir/bashfatal"
+    fi
     source $mydir/zfsoverrides
     source $mydir/zfslockmanager
     source $mydir/zfscheckrunningvms
@@ -170,7 +176,7 @@ function send-receive {
                 read -p "Press enter to continue."
             fi
             local saved_fsarray=("${fsarray[@]}")
-            if ! delfs "$dest"; then
+            if ! autoproceed="$autoproceed" "$zfsdelfs_path" "$dest"; then
                 log_msg "WARN: Dataset deletion failed."; return 1
             fi
             fsarray=("${saved_fsarray[@]}")
