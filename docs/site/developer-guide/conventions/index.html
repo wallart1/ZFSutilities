@@ -1851,15 +1851,24 @@
 <h1 id="conventions">Conventions<a class="headerlink" href="#conventions" title="Permanent link">&para;</a></h1>
 <h2 id="script-initialization-order">Script Initialization Order<a class="headerlink" href="#script-initialization-order" title="Permanent link">&para;</a></h2>
 <p>Every script must follow this pattern at the top level (before functions):</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span>~/bashinit
+<div class="highlight"><pre><span></span><code><span class="nv">_local_bashinit</span><span class="o">=</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>realpath<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="k">)</span>/bashinit
+<span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$_local_bashinit</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$_local_bashinit</span><span class="s2">&quot;</span>
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">source</span><span class="w"> </span>~/bashinit
+<span class="k">fi</span>
 bashinit
+<span class="nb">unset</span><span class="w"> </span>_local_bashinit
 
 source_helper<span class="w"> </span>rootcheck
 rootcheck
 </code></pre></div>
 <p><code>bashinit</code> must come first because it sets <code>$mydir</code> and provides <code>source_helper</code>.
-All subsequent helper loading should use <code>source_helper &lt;name&gt;</code> (or
-<code>find_zfsutility_script</code> directly when an argument is needed).</p>
+Prefer the <code>bashinit</code> next to this script so the current checkout or deployed
+version bootstraps itself; fall back to <code>~/bashinit</code> for test layouts that only
+provide a fake <code>bashinit</code> in <code>$HOME</code>. All subsequent helper loading should use
+<code>source_helper &lt;name&gt;</code> (or <code>find_zfsutility_script</code> directly when an argument is
+needed).</p>
 <h3 id="node-aware-scripts">Node-aware scripts<a class="headerlink" href="#node-aware-scripts" title="Permanent link">&para;</a></h3>
 <p>Scripts in <code>bin/</code> that interact with the
 storage or compute hosts add <code>node-lib.sh</code> to the standard header:</p>
@@ -1880,8 +1889,15 @@ remote side resolves its own active deployed version.</p>
 <h2 id="dual-mode-script-pattern">Dual-Mode Script Pattern<a class="headerlink" href="#dual-mode-script-pattern" title="Permanent link">&para;</a></h2>
 <p>Scripts should work both when run directly from the shell and when sourced by
 other scripts. The standard pattern:</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span>~/bashinit
+<div class="highlight"><pre><span></span><code><span class="nv">_local_bashinit</span><span class="o">=</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>realpath<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="k">)</span>/bashinit
+<span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$_local_bashinit</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$_local_bashinit</span><span class="s2">&quot;</span>
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">source</span><span class="w"> </span>~/bashinit
+<span class="k">fi</span>
 bashinit
+<span class="nb">unset</span><span class="w"> </span>_local_bashinit
+
 source_helper<span class="w"> </span>somemodule
 
 <span class="k">function</span><span class="w"> </span>myfunc<span class="w"> </span><span class="o">{</span>

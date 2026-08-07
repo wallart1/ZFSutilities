@@ -19,8 +19,16 @@ function checkagainst {
 # 7     This is the last remaining common snapshot — deletion blocked.
 # 8     Fatal error. Script was terminated. See message in stdout.
 
-    source ~/bashinit
+    local _local_bashinit
+    _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+    if [[ -f "$_local_bashinit" ]]; then
+        source "$_local_bashinit"
+    else
+        source ~/bashinit
+    fi
     bashinit
+    unset _local_bashinit
+
     source_helper zfscommsnap
     source_helper bashdebug
     if [[ "$1" == '*NVME1*' ]]; then bashdebugon; else bashdebugoff; fi

@@ -1,7 +1,14 @@
 #!/usr/bin/bash
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 function cleanup {
     # Perform retention policies on given or all pools.
 
@@ -24,8 +31,16 @@ function cleanup {
     #               script continues to the next snapshot. 'N' means treat it as fatal.
     #               Defaults to 'Y' when called via zfsretain; 'N' for direct delsnap calls.
 
-    source ~/bashinit
+    local _local_bashinit
+    _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+    if [[ -f "$_local_bashinit" ]]; then
+        source "$_local_bashinit"
+    else
+        source ~/bashinit
+    fi
     bashinit
+    unset _local_bashinit
+
     source_helper rootcheck
     rootcheck
     source_helper zfsconfig

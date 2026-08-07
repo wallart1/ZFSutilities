@@ -12,8 +12,15 @@
 #
 # Install to: /usr/local/lib/zfsutilities/bin/restart-iscsi-services on the storage host
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 source "$(find_zfsutility_script rootcheck)"

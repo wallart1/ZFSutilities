@@ -7,8 +7,15 @@
 #
 # WARNING: Stop the VM and detach the disk in Proxmox BEFORE running this script.
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 source "$(find_zfsutility_script rootcheck)"

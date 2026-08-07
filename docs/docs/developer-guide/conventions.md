@@ -5,16 +5,25 @@
 Every script must follow this pattern at the top level (before functions):
 
 ```bash
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
 
 source_helper rootcheck
 rootcheck
 ```
 
 `bashinit` must come first because it sets `$mydir` and provides `source_helper`.
-All subsequent helper loading should use `source_helper <name>` (or
-`find_zfsutility_script` directly when an argument is needed).
+Prefer the `bashinit` next to this script so the current checkout or deployed
+version bootstraps itself; fall back to `~/bashinit` for test layouts that only
+provide a fake `bashinit` in `$HOME`. All subsequent helper loading should use
+`source_helper <name>` (or `find_zfsutility_script` directly when an argument is
+needed).
 
 ### Node-aware scripts
 
@@ -44,8 +53,15 @@ Scripts should work both when run directly from the shell and when sourced by
 other scripts. The standard pattern:
 
 ```bash
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 source_helper somemodule
 
 function myfunc {

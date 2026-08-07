@@ -8,8 +8,15 @@
 # - The snapshot name's label field is set to "offsite", and the bucket field is set to "s".
 # - Only the offsite snapshot is copied. Other intermediate snapshots are ignored.
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 source_helper rootcheck
 rootcheck
 source_helper zfshold

@@ -11,8 +11,15 @@
 # Install to: /usr/local/lib/zfsutilities/bin/move-vm-disk on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 source "$(find_zfsutility_script rootcheck)"
@@ -176,8 +183,15 @@ check_dst_zvol_free() {
 # All output is echoed back to the compute host for state capture.
 storage_move_script() {
     cat <<'SSHEOF'
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 set -e
 SRCZVOL="$1"; DSTZVOL="$2"
 SRCBACKSTORE="$3"; DSTBACKSTORE="$4"
@@ -333,8 +347,15 @@ rollback() {
         ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
             "$SRCZVOL" "$DSTZVOL" "$SRCBACKSTORE" "$DSTBACKSTORE" "$TARGET" "$SRCLUN" "$ENCRYPTED" \
             << 'SSHEOF'
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 set -e
 SRCZVOL="$1"; DSTZVOL="$2"
 SRCBACKSTORE="$3"; DSTBACKSTORE="$4"

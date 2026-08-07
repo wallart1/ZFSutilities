@@ -29,8 +29,15 @@ MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
 # by bashinit when it is sourced below.
 # shellcheck disable=SC2034
 PATHS_LIB="$MYDIR/../lib/paths.sh"
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 
 # Use the project's rootcheck helper if it is not already loaded (tests mock
 # this function to run as non-root).

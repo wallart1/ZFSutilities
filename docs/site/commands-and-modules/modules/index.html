@@ -2131,10 +2131,16 @@ arrays and on-disk tables are on <a href="../../developer-guide/data-structures/
 <hr />
 <h3 id="bashinit"><code>bashinit</code><a class="headerlink" href="#bashinit" title="Permanent link">&para;</a></h3>
 <p>Initialization and logging helper sourced by nearly every bash script and
-module in the project. It is normally loaded as <code>source ~/bashinit</code> followed by
-a call to <code>bashinit()</code>.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span>~/bashinit
+module in the project. Scripts prefer the <code>bashinit</code> next to them and fall back
+to <code>~/bashinit</code> when only a fake <code>bashinit</code> is provided in <code>$HOME</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">_local_bashinit</span><span class="o">=</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>realpath<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="k">)</span>/bashinit
+<span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$_local_bashinit</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$_local_bashinit</span><span class="s2">&quot;</span>
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">source</span><span class="w"> </span>~/bashinit
+<span class="k">fi</span>
 bashinit
+<span class="nb">unset</span><span class="w"> </span>_local_bashinit
 
 source_helper<span class="w"> </span>rootcheck
 rootcheck

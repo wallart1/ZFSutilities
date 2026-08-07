@@ -2,8 +2,15 @@
 # Return the age of a ZFS snapshot in days.
 # $1 = snapshot name (e.g. threeamigos/proxmox/vm-101-disk-0@dailybackup-2026-03-10T02:00-06:00-d)
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 
 function getsnapage {
     source_helper rootcheck

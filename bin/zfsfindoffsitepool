@@ -2,8 +2,15 @@
 # shellcheck disable=SC1090,SC2034,SC2154
 # Find an online offsite pool.
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 source "$(find_zfsutility_script rootcheck)"
 source "$(find_zfsutility_script zfsconfig)"
 

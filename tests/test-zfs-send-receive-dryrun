@@ -12,20 +12,26 @@ builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 # Prevent re-sourcing bashinit / rootcheck / zfslockmanager / bashsetx / iscsi-lib
 # inside send-receive from overwriting our mocks, enabling xtrace, or requiring
 # a real node configuration.
+# zfs-send-receive sources helpers with $mydir-relative paths; in the new layout
+# $mydir must be the bin/ directory.
+repo_root="$mydir"
+mydir="$mydir/bin"
+
+# Prevent re-sourcing bashinit / rootcheck / zfslockmanager / bashsetx / iscsi-lib
+# inside send-receive from overwriting our mocks, enabling xtrace, or requiring
+# a real node configuration.
 source() {
     local expanded="${1/#\~/$HOME}"
     [[ "$expanded" == "$HOME/bashinit" ]] && return 0
+    # With the local-bashinit bootstrap, zfs-send-receive sources bashinit from
+    # its own directory. Skip that as well so test mocks remain in place.
+    [[ "$expanded" == "$repo_root/bin/bashinit" ]] && return 0
     [[ "$expanded" == *"rootcheck" ]] && return 0
     [[ "$expanded" == *"zfslockmanager" ]] && return 0
     [[ "$expanded" == *"bashsetx" ]] && return 0
     [[ "$expanded" == *"iscsi-lib.sh" ]] && return 0
     builtin source "$@"
 }
-
-# zfs-send-receive sources helpers with $mydir-relative paths; in the new layout
-# $mydir must be the bin/ directory.
-repo_root="$mydir"
-mydir="$mydir/bin"
 
 # iscsi-lib.sh is skipped above; provide the one function send-receive calls.
 iscsi_rebuild_torn_down() { :; }

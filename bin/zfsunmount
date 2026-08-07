@@ -1,8 +1,15 @@
 #!/usr/bin/bash
 # $1    The subtree to work with
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 
 zfs list -Hrt filesystem -o name "$1" | xargs -rt -n1 zfs unmount
 

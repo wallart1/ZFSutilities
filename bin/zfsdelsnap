@@ -11,12 +11,27 @@
 #       the snapshot to be skipped rather than destroyed.
 # $4    (Optional) 'nocheckagainst' means bypass counterpart snap checking.
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 
 function delsnap {
-    source ~/bashinit
+    local _local_bashinit
+    _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+    if [[ -f "$_local_bashinit" ]]; then
+        source "$_local_bashinit"
+    else
+        source ~/bashinit
+    fi
     bashinit
+    unset _local_bashinit
+
     source_helper zfscheckagainst
     source_helper zfsdelallholds
     source_helper zfslockmanager

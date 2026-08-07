@@ -3,8 +3,16 @@
 # adjust parameters from the command line without having to modify the script.
 
 overrides() {
-    source ~/bashinit
+    local _local_bashinit
+    _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+    if [[ -f "$_local_bashinit" ]]; then
+        source "$_local_bashinit"
+    else
+        source ~/bashinit
+    fi
     bashinit
+    unset _local_bashinit
+
     if [[ $# -gt 0 ]]; then     # Check if any arguments were passed
         local overrides="$*"    # "$*" joins all arguments into a single string
         log_msg "INFO: Running with overrides: $overrides"

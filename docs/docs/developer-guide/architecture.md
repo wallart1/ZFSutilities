@@ -5,13 +5,23 @@
 All bash scripts follow this initialization pattern:
 
 ```bash
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
 
 source_helper rootcheck
 rootcheck
 ```
 
+- Scripts prefer the `bashinit` next to them so a repository checkout or
+  deployed version bootstraps itself with matching helpers; the fallback to
+  `~/bashinit` supports test layouts that provide only a fake `bashinit` in
+  `$HOME`.
 - `bashinit` sets `$mydir` to the calling script's directory and provides `source_helper`, which resolves siblings via `find_zfsutility_script`
 - [rootcheck](../commands-and-modules/modules.md#rootcheck) verifies the script is running as root
 - Function scripts are **sourced**, not executed — their functions persist in the

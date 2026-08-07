@@ -38,12 +38,18 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 ### `bashinit`
 
 Initialization and logging helper sourced by nearly every bash script and
-module in the project. It is normally loaded as `source ~/bashinit` followed by
-a call to `bashinit()`.
+module in the project. Scripts prefer the `bashinit` next to them and fall back
+to `~/bashinit` when only a fake `bashinit` is provided in `$HOME`.
 
 ```bash
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
 
 source_helper rootcheck
 rootcheck

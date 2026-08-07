@@ -1,6 +1,13 @@
 #!/usr/bin/bash
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 source_helper bashsetx
 setx
 "$mydir/watchall" -n 30 -m 500 "zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health $1; zfs list -rt all -o name,creation,type,used,avail,refer $1"

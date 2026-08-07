@@ -6515,8 +6515,16 @@
   and sources sibling scripts/libraries via <code>find_zfsutility_script</code> is now
   defined once in <code>bin/bashinit</code> instead of being duplicated in every script.
   All scripts that previously defined their own local <code>source_helper()</code> now use
-  the shared implementation.  Test mocks that provide a fake <code>bashinit</code> for
-  subshells have been updated to include <code>source_helper</code>.</p>
+  the shared implementation.</p>
+</li>
+<li>
+<p><strong>Scripts bootstrap themselves with their own <code>bashinit</code></strong> — Every bash script
+  now sources the <code>bashinit</code> in its own directory first, falling back to
+  <code>~/bashinit</code> only when a local copy is not present. This lets a repository
+  checkout or newly deployed version run before it has been activated via
+  <code>switch-version</code>, and it eliminates version skew between a script and its
+  <code>bashinit</code> helpers. Test mocks that provide a fake <code>bashinit</code> in <code>$HOME</code>
+  continue to work through the fallback path.</p>
 </li>
 <li>
 <p><strong>Documentation reflects the current sourcing pattern</strong> — Developer and

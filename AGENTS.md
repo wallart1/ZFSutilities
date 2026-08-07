@@ -82,8 +82,14 @@ checkout for development.
 All scripts follow this initialization pattern:
 
 ```bash
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
 
 source_helper rootcheck
 rootcheck
@@ -92,6 +98,11 @@ rootcheck
 `source_helper <name>` is provided by `bashinit`.  It resolves the named
 sibling script or library through `find_zfsutility_script` and sources it,
 logging a fatal message and exiting if the helper cannot be found.
+
+Scripts prefer the `bashinit` in their own directory so a checkout or
+deployed version always bootstraps itself with its matching helpers. The
+fallback to `~/bashinit` preserves test layouts that only provide a fake
+`bashinit` in `$HOME`.
 
 - `bashinit` is wired as a symlink at `/root/bashinit` →
   `/usr/local/lib/zfsutilities/current/bin/bashinit` by `switch-version` (tracks
@@ -105,8 +116,15 @@ Scripts that interact with the storage/compute hosts (in `bin/`) add
 `node-lib.sh` (in `lib/`) to the standard header:
 
 ```bash
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 source "$(find_zfsutility_script rootcheck)"
@@ -565,8 +583,14 @@ This project uses **bash** (not sh). Follow these conventions:
 - Start scripts with the standard initialization:
 
   ```bash
-  source ~/bashinit
+  _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+  if [[ -f "$_local_bashinit" ]]; then
+      source "$_local_bashinit"
+  else
+      source ~/bashinit
+  fi
   bashinit
+  unset _local_bashinit
 
   source_helper rootcheck
   rootcheck

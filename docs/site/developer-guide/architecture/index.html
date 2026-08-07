@@ -2134,13 +2134,23 @@
 <h1 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h1>
 <h2 id="script-sourcing-pattern">Script Sourcing Pattern<a class="headerlink" href="#script-sourcing-pattern" title="Permanent link">&para;</a></h2>
 <p>All bash scripts follow this initialization pattern:</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span>~/bashinit
+<div class="highlight"><pre><span></span><code><span class="nv">_local_bashinit</span><span class="o">=</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>realpath<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="k">)</span>/bashinit
+<span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$_local_bashinit</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$_local_bashinit</span><span class="s2">&quot;</span>
+<span class="k">else</span>
+<span class="w">    </span><span class="nb">source</span><span class="w"> </span>~/bashinit
+<span class="k">fi</span>
 bashinit
+<span class="nb">unset</span><span class="w"> </span>_local_bashinit
 
 source_helper<span class="w"> </span>rootcheck
 rootcheck
 </code></pre></div>
 <ul>
+<li>Scripts prefer the <code>bashinit</code> next to them so a repository checkout or
+  deployed version bootstraps itself with matching helpers; the fallback to
+  <code>~/bashinit</code> supports test layouts that provide only a fake <code>bashinit</code> in
+  <code>$HOME</code>.</li>
 <li><code>bashinit</code> sets <code>$mydir</code> to the calling script's directory and provides <code>source_helper</code>, which resolves siblings via <code>find_zfsutility_script</code></li>
 <li><a href="../../commands-and-modules/modules/#rootcheck">rootcheck</a> verifies the script is running as root</li>
 <li>Function scripts are <strong>sourced</strong>, not executed — their functions persist in the

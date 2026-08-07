@@ -9,8 +9,16 @@
 # list of hold tags that were NOT released (empty if none remain).
 
 function delallholds {
-    source ~/bashinit
+    local _local_bashinit
+    _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+    if [[ -f "$_local_bashinit" ]]; then
+        source "$_local_bashinit"
+    else
+        source ~/bashinit
+    fi
     bashinit
+    unset _local_bashinit
+
 
     local zfsdelallholds_snap="$1"
     shift

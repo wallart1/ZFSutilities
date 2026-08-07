@@ -4,8 +4,15 @@
 #           DS      Replace "DS" with dataset name within $1.
 # $2    The head of the dataset tree.
 # $3    Dataset type(s) to process; 'filesystem,volume,snapshot' or any subset. Required
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 log_msg "FATAL: WIP!"
 exit 8
 

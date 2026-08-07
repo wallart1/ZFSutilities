@@ -14,8 +14,15 @@
 #  $archivename     The name of the archive file that will be created.
 #  $proxmoxconfig   Fully-qualified Linux file containing the Proxmox VM configuration.
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 #set -x
 source_helper bashsetx
 source_helper zfsbuildfsarray

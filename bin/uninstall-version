@@ -3,8 +3,15 @@
 # Removes a deployed version directory. Refuses to remove the active version.
 # Use -y or --yes to skip the confirmation prompt.
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 
 set -euo pipefail
 

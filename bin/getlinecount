@@ -5,8 +5,15 @@
 #
 # Edit the dirs array below to point to the locations you want to measure.
 
-source ~/bashinit
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
 bashinit
+unset _local_bashinit
+
 
 dirs=( \
     "$mydir" \
