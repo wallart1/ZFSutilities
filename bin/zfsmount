@@ -5,7 +5,7 @@
 
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+source_helper rootcheck
 
 if [[ $1 != 'mount' ]] && [[ $1 != 'unmount' ]]; then
     log_msg 'FATAL: $1 must be either "mount" or "unmount"'

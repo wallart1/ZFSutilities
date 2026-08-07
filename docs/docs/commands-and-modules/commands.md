@@ -57,7 +57,6 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsoffsiteretain`](#zfsoffsiteretain)
 - [`zfsreadthru`](#zfsreadthru)
 - [`zfsrecurse`](#zfsrecurse)
-- [`zfsresizevol`](#zfsresizevol)
 - [`zfsrestore`](#zfsrestore)
 - [`zfsrestoresendstream`](#zfsrestoresendstream)
 - [`zfsresume`](#zfsresume)
@@ -889,7 +888,7 @@ automatically by `zfsdelsnap`, `zfsdelfs`, `remove-vm-disk`, `archive-vm`, and
 `clone-vm` whenever `zfs destroy` fails with a "dataset is busy" error.
 
 ```bash
-source $mydir/zfs-diagnose-busy
+source_helper zfs-diagnose-busy
 diagnose_dataset_busy <dataset_or_snapshot> [stderr_from_failed_destroy]
 ```
 
@@ -2028,28 +2027,6 @@ file). Configured by editing variables inside the script.
 
 ---
 
-### `zfsresizevol`
-
-Resizes a ZFS volume. **Work in progress — exits immediately with an error
-message if run.**
-
-**Called modules:** none.
-
-**Data structures consumed / produced:** none — script is a stub.
-
-
-**Internal flow:**
-
-Exits immediately with an error message. The intended implementation would resize a ZFS volume after validating the new size.
-
-**Return codes:**
-
-| Code | Meaning |
-| ---- | ------- |
-| `0` | Completed successfully. |
-| non-zero | Invalid input or command failure. |
-
----
 
 ### `zfsresume`
 

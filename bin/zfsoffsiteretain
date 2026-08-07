@@ -15,10 +15,10 @@
 
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+source_helper rootcheck
 rootcheck
-source $mydir/zfscleanup
-source $mydir/zfsoverrides
+source_helper zfscleanup
+source_helper zfsoverrides
 
 if [[ $autoproceed = '' ]]; then autoproceed='Y'; fi
 if [[ $releaseholds = '' ]]; then releaseholds='Y'; fi

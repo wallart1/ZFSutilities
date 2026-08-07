@@ -10,31 +10,31 @@ function send-receive {
     local _sr_start_seconds=$SECONDS
 
     source ~/bashinit; bashinit
-    source $mydir/rootcheck; rootcheck
-    source $mydir/bashsetx
-    source $mydir/zfssnapbuild
-    source $mydir/zfsbuildfsarray
-    source $mydir/zfsremoveleadingqualifiers
-    source $mydir/zfscommsnap
-    source $mydir/zfsdelallsnaps
-    source $mydir/zfsdelallholds
-    source $mydir/zfsholds
+    source_helper rootcheck; rootcheck
+    source_helper bashsetx
+    source_helper zfssnapbuild
+    source_helper zfsbuildfsarray
+    source_helper zfsremoveleadingqualifiers
+    source_helper zfscommsnap
+    source_helper zfsdelallsnaps
+    source_helper zfsdelallholds
+    source_helper zfsholds
     local iscsi_lib
     iscsi_lib=$(find_zfsutility_script iscsi-lib.sh)
     if [[ -z "$iscsi_lib" ]]; then
         log_msg "FATAL: Could not locate iscsi-lib.sh"
-        source "$mydir/bashfatal"
+        source "$(find_zfsutility_script bashfatal)"
     fi
     source "$iscsi_lib"
     local zfsdelfs_path
     zfsdelfs_path=$(find_zfsutility_script zfsdelfs)
     if [[ -z "$zfsdelfs_path" ]]; then
         log_msg "FATAL: Could not locate zfsdelfs"
-        source "$mydir/bashfatal"
+        source "$(find_zfsutility_script bashfatal)"
     fi
-    source $mydir/zfsoverrides
-    source $mydir/zfslockmanager
-    source $mydir/zfscheckrunningvms
+    source_helper zfsoverrides
+    source_helper zfslockmanager
+    source_helper zfscheckrunningvms
 
     # Dry-run helper inlined from former log_dryrun() function
     # Usage: [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: <message>"

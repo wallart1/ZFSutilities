@@ -167,11 +167,29 @@ function ask_yn {
     done
 }
 
+# Source a sibling script or library through find_zfsutility_script.
+# Defined here so every script that sources bashinit shares one implementation
+# instead of duplicating the same helper.
+# Usage: source_helper <name>
+if ! declare -f source_helper >/dev/null 2>&1; then
+function source_helper {
+    local name="$1" path
+    path=$(find_zfsutility_script "$name")
+    if [[ -z "$path" ]]; then
+        log_msg "FATAL: Could not locate $name"
+        local fatal_path
+        fatal_path=$(find_zfsutility_script bashfatal) && source "$fatal_path" 8
+        exit 8
+    fi
+    source "$path"
+}
+fi
+
 # Print a fatal message and terminate the process.
 # Usage: die "error message"
 function die {
     log_msg "FATAL: $*"
-    source "$mydir/bashfatal" 1
+    source "$(find_zfsutility_script bashfatal)" 1
 }
 
 # Log a warning message.

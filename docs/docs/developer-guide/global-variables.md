@@ -97,6 +97,6 @@ Sourced from `/etc/zfsutilities/node.conf` (falling back to
 
 | Variable                | Set by     | Purpose                                                                                                      |
 | ----------------------- | ---------- | ------------------------------------------------------------------------------------------------------------ |
-| `$mydir`                | `bashinit` | Directory of the currently-running script. Every script uses `source $mydir/<helper>` to locate its siblings |
+| `$mydir`                | `bashinit` | Directory of the currently-running script. Used by `find_zfsutility_script` and `source_helper` to locate sibling scripts and libraries |
 | `$ZFSCONFIG_PATH`       | caller env | Override the JSON config path (`/var/lib/zfsutilities/config.json` by default). Useful for testing             |
 | `$ZFSCONFIG_LEGACY_DIR` | caller env | Directory searched for legacy `zfsretainpol-*` files when the JSON config has no retention data              |

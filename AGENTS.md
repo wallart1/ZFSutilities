@@ -39,6 +39,7 @@ You are a meticulous and expert coding agent. For every task:
 11. If you run across pre-existing errors or bugs that are unrelated to the immediate task, identify them with a clear messages so that I can put them on my TODO list.
 12. When I give you a plan file to execute, as in "Please execute the plan file ...," that means that I just want you to execute the plan. No not modify the plan. Do not enter plan mode. Just execute the plan.
 13. You may see uncommitted changed files that you did not change. Do not be alarmed by this. They are either the user's manual changes or were changed by Kimi in an earlier session. These changes will be included when I instruct you to perform a commit.
+14. Avoid ad hoc workarounds. Make the existing architecture work and use it.
 
 ## Hard Rules
 
@@ -83,9 +84,14 @@ All scripts follow this initialization pattern:
 ```bash
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+
+source_helper rootcheck
 rootcheck
 ```
+
+`source_helper <name>` is provided by `bashinit`.  It resolves the named
+sibling script or library through `find_zfsutility_script` and sources it,
+logging a fatal message and exiting if the helper cannot be found.
 
 - `bashinit` is wired as a symlink at `/root/bashinit` →
   `/usr/local/lib/zfsutilities/current/bin/bashinit` by `switch-version` (tracks
@@ -228,7 +234,8 @@ skipped.
 - `bin/` - Executable scripts
 - `lib/` - Sourced shell libraries
 - `python/` - GTK/Python GUI source
-- `docs/` - Documentation manuals (source)
+- `docs/docs/` - Documentation source (MkDocs)
+- `docs/site/` - Generated documentation site
 - `share/` - Static resources, templates, and sample configurations
 - `tests/` - Bash and Python test suites
 
@@ -560,9 +567,14 @@ This project uses **bash** (not sh). Follow these conventions:
   ```bash
   source ~/bashinit
   bashinit
-  source $mydir/rootcheck
+
+  source_helper rootcheck
   rootcheck
   ```
+
+- Use `source_helper <name>` (provided by `bashinit`) to load sibling helpers
+  (e.g. `rootcheck`, `zfslockmanager`) via `find_zfsutility_script`, rather than
+  `source $mydir/<name>`.
 
 - Never use bare `exit` or `return`. For fatal errors, source `bashfatal` at the
   point of exit. For non-fatal returns in dual-mode scripts, source `bashreturn`.

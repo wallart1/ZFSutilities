@@ -2032,17 +2032,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#zfsresizevol" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        zfsresizevol
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#zfsresume" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2477,7 +2466,6 @@ arrays and on-disk tables are on <a href="../../developer-guide/data-structures/
 <li><a href="#zfsoffsiteretain"><code>zfsoffsiteretain</code></a></li>
 <li><a href="#zfsreadthru"><code>zfsreadthru</code></a></li>
 <li><a href="#zfsrecurse"><code>zfsrecurse</code></a></li>
-<li><a href="#zfsresizevol"><code>zfsresizevol</code></a></li>
 <li><a href="#zfsrestore"><code>zfsrestore</code></a></li>
 <li><a href="#zfsrestoresendstream"><code>zfsrestoresendstream</code></a></li>
 <li><a href="#zfsresume"><code>zfsresume</code></a></li>
@@ -3977,7 +3965,7 @@ config, or — when no pools are configured — to all online pools.</p>
 <p>Diagnoses why a ZFS dataset or snapshot cannot be destroyed. Called
 automatically by <code>zfsdelsnap</code>, <code>zfsdelfs</code>, <code>remove-vm-disk</code>, <code>archive-vm</code>, and
 <code>clone-vm</code> whenever <code>zfs destroy</code> fails with a "dataset is busy" error.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfs-diagnose-busy
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfs-diagnose-busy
 diagnose_dataset_busy<span class="w"> </span>&lt;dataset_or_snapshot&gt;<span class="w"> </span><span class="o">[</span>stderr_from_failed_destroy<span class="o">]</span>
 </code></pre></div>
 <p><strong>Checks performed (in order):</strong></p>
@@ -6033,33 +6021,6 @@ file). Configured by editing variables inside the script.</p>
 </tbody>
 </table>
 <hr />
-<h3 id="zfsresizevol"><code>zfsresizevol</code><a class="headerlink" href="#zfsresizevol" title="Permanent link">&para;</a></h3>
-<p>Resizes a ZFS volume. <strong>Work in progress — exits immediately with an error
-message if run.</strong></p>
-<p><strong>Called modules:</strong> none.</p>
-<p><strong>Data structures consumed / produced:</strong> none — script is a stub.</p>
-<p><strong>Internal flow:</strong></p>
-<p>Exits immediately with an error message. The intended implementation would resize a ZFS volume after validating the new size.</p>
-<p><strong>Return codes:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Code</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>0</code></td>
-<td>Completed successfully.</td>
-</tr>
-<tr>
-<td>non-zero</td>
-<td>Invalid input or command failure.</td>
-</tr>
-</tbody>
-</table>
-<hr />
 <h3 id="zfsresume"><code>zfsresume</code><a class="headerlink" href="#zfsresume" title="Permanent link">&para;</a></h3>
 <p>Resumes an interrupted ZFS receive that has a <code>receive_resume_token</code>.</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>zfsresume<span class="w"> </span>&lt;destination-dataset&gt;
@@ -7425,7 +7386,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.3
+      ZFS Utilities v0.74.4
     </div>
   
   
@@ -7450,7 +7411,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.3"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.4"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

@@ -78,7 +78,10 @@ zvol="$1"
 
 log_msg() { echo "$*" >&2; }
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
-source "$mydir/zfslockmanager"
+source "$mydir/bashinit"
+bashinit
+
+source_helper zfslockmanager
 
 snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1)
 if [[ -z "$snap" ]]; then

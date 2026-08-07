@@ -11,9 +11,9 @@
 
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+source_helper rootcheck
 rootcheck
-source $mydir/zfslockmanager
+source_helper zfslockmanager
 
 # ==============================================================================
 # Command Implementations

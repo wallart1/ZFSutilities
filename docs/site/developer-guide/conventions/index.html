@@ -1853,11 +1853,13 @@
 <p>Every script must follow this pattern at the top level (before functions):</p>
 <div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span>~/bashinit
 bashinit
-<span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/rootcheck
+
+source_helper<span class="w"> </span>rootcheck
 rootcheck
 </code></pre></div>
-<p><code>bashinit</code> must come first because it sets <code>$mydir</code>. All subsequent <code>source</code>
-calls use <code>$mydir</code> to find sibling scripts.</p>
+<p><code>bashinit</code> must come first because it sets <code>$mydir</code> and provides <code>source_helper</code>.
+All subsequent helper loading should use <code>source_helper &lt;name&gt;</code> (or
+<code>find_zfsutility_script</code> directly when an argument is needed).</p>
 <h3 id="node-aware-scripts">Node-aware scripts<a class="headerlink" href="#node-aware-scripts" title="Permanent link">&para;</a></h3>
 <p>Scripts in <code>bin/</code> that interact with the
 storage or compute hosts add <code>node-lib.sh</code> to the standard header:</p>
@@ -1880,7 +1882,7 @@ remote side resolves its own active deployed version.</p>
 other scripts. The standard pattern:</p>
 <div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span>~/bashinit
 bashinit
-<span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/somemodule
+source_helper<span class="w"> </span>somemodule
 
 <span class="k">function</span><span class="w"> </span>myfunc<span class="w"> </span><span class="o">{</span>
 <span class="w">    </span>...
@@ -1898,10 +1900,10 @@ bashinit
 <p><strong>Never use bare <code>exit</code> or <code>return</code></strong>. Always source <a href="../../commands-and-modules/modules/#bashfatal">bashfatal</a> or
 <a href="../../commands-and-modules/modules/#bashreturn">bashreturn</a>:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Fatal error — always exits regardless of context</span>
-<span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/bashfatal
+<span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>bashfatal<span class="k">)</span><span class="s2">&quot;</span>
 
 <span class="c1"># Non-fatal — returns in sourced context, exits in direct context</span>
-<span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/bashreturn<span class="w"> </span>&lt;code&gt;
+<span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>bashreturn<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>&lt;code&gt;
 </code></pre></div>
 <p>These must be sourced <strong>at the point of execution</strong>, not at the top of the
 file. They handle the <code>sourced vs. executed</code> context transparently.</p>
@@ -2027,7 +2029,7 @@ symlink tracking and prevents version switching from working correctly.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.3
+      ZFS Utilities v0.74.4
     </div>
   
   
@@ -2052,7 +2054,7 @@ symlink tracking and prevents version switching from working correctly.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.3"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.4"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

@@ -10,13 +10,13 @@
 
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+source_helper rootcheck
 rootcheck
-source $mydir/zfshold
-source $mydir/zfs-send-receive
-source $mydir/zfssnapbuild
-source $mydir/zfsoverrides
-source $mydir/zfsfindoffsitepool
+source_helper zfshold
+source_helper zfs-send-receive
+source_helper zfssnapbuild
+source_helper zfsoverrides
+source_helper zfsfindoffsitepool
 
 # ========================= Functions =========================
 

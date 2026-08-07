@@ -99,6 +99,35 @@ test_find_script_missing() {
 }
 
 # ------------------------------------------------------------------------------
+# source_helper
+# ------------------------------------------------------------------------------
+
+test_source_helper_sources_existing_script() {
+    test_start "source_helper sources an existing sibling script"
+    local tmp_bin result
+    tmp_bin=$(mktemp -d)
+    printf '#!/usr/bin/bash\nTEST_HELPER_WAS_SOURCED=Y\n' > "$tmp_bin/test-helper-script"
+    chmod +x "$tmp_bin/test-helper-script"
+    result=$(
+        mydir="$tmp_bin"
+        source_helper "test-helper-script"
+        echo "${TEST_HELPER_WAS_SOURCED:-N}"
+    )
+    rm -rf "$tmp_bin"
+    assert_equals "Y" "$result"
+}
+
+test_source_helper_exits_for_missing_script() {
+    test_start "source_helper exits when sibling script cannot be found"
+    local rc=0
+    (
+        mydir="/nonexistent-directory-$$"
+        source_helper "definitely-missing-script" 2>/dev/null
+    ) || rc=$?
+    assert_rc 8 "$rc"
+}
+
+# ------------------------------------------------------------------------------
 # remote_zfsutilities_bin / remote_zfsutility_script
 # ------------------------------------------------------------------------------
 
@@ -456,6 +485,8 @@ test_find_script_bin_directory_clone_script
 test_find_script_lib_from_python_directory
 test_find_script_from_bin_directory
 test_find_script_missing
+test_source_helper_sources_existing_script
+test_source_helper_exits_for_missing_script
 test_bashinit_loads_paths_without_mydir
 
 test_remote_zfsutilities_bin_success

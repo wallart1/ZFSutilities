@@ -2,7 +2,7 @@
 
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+source_helper rootcheck
 rootcheck
 
 log_msg "INFO: Will attempt to load keys for the following datasets:"

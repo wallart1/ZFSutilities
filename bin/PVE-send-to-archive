@@ -17,10 +17,9 @@
 source ~/bashinit
 bashinit
 #set -x
-extrasourcedir="${mydir}"  # or set to the absolute path of this repo
-source $extrasourcedir/bashsetx
-source $extrasourcedir/zfsbuildfsarray
-source $extrasourcedir/zfscommsnap
+source_helper bashsetx
+source_helper zfsbuildfsarray
+source_helper zfscommsnap
 
 autoproceed='N'
 subtrees=('threeamigos/proxmox')
@@ -37,7 +36,7 @@ for sourcefs in "${subtrees[@]}"; do
         commsnap_mostrecent="Y"
         if ! snap=$(getcommonsnap $fs); then
             log_msg "FATAL: Could not get name of most recent snapshot for $fs."
-            source $mydir/bashreturn 8
+            source "$(find_zfsutility_script bashreturn)" 8
         fi
         log_msg "INFO: About to send $fs$snap to $destinationdir/$archivename/$fs.zfssendstream"
         if [[ $autoproceed != 'Y' ]]; then
@@ -47,7 +46,7 @@ for sourcefs in "${subtrees[@]}"; do
         if ! [ -x "$destinationdir/$archivename/$(dirname $fs)" ]; then
             if ! mkdir -p "$destinationdir/$archivename/$(dirname $fs)"; then
                 log_msg "FATAL: Directory creation for $destinationdir/$archivename failed."
-                source $mydir/bashreturn 8
+                source "$(find_zfsutility_script bashreturn)" 8
             fi
         fi    
 
@@ -57,7 +56,7 @@ for sourcefs in "${subtrees[@]}"; do
             | cat - > $destinationdir/$archivename/$fs.zfssendstream); then
             log_msg "FATAL: Failed to send $fs$snap to" \
                 "$destinationdir/$archivename/$fs.zfssendstream."
-            source $mydir/bashreturn 8
+            source "$(find_zfsutility_script bashreturn)" 8
         fi
     done
 done
@@ -66,12 +65,12 @@ done
 if ! mkdir -p $(dirname $destinationdir/$archivename$proxmoxconfig); then
     log_msg "FATAL: Could not create the VM config archive directory" \
         "$destinationdir/$archivename$proxmoxconfig."
-    source $mydir/bashreturn 8
+    source "$(find_zfsutility_script bashreturn)" 8
 fi
 if ! cp $proxmoxconfig $destinationdir/$archivename$proxmoxconfig; then
     log_msg "FATAL: Failed to copy $proxmoxconfig to" \
         "$destinationdir/$archivename$proxmoxconfig."
-    source $mydir/bashreturn 8
+    source "$(find_zfsutility_script bashreturn)" 8
 fi
 
 log_msg "INFO: Archive of \n$(printf '%s\n' ${fsarray[@]}) \n$proxmoxconfig \n ... completed."

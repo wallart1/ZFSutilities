@@ -4,9 +4,9 @@
 function restoresendstream {
     source ~/bashinit
     bashinit
-    source $mydir/rootcheck
+    source_helper rootcheck
     rootcheck
-    source $mydir/bashsetx
+    source_helper bashsetx
     
     # Source path example:
     #   /temp/archive/proxmox/tari-vm-205/threeamigos/proxmox/vm-205-disk-0.zfssendstream
@@ -29,7 +29,7 @@ function restoresendstream {
     # Check if any files matched
     if [[ ! -e "${files[0]}" ]]; then
         log_msg "FATAL: No matching files found."
-        source $mydir/bashreturn 8
+        source "$(find_zfsutility_script bashreturn)" 8
     fi
 
 #    # List the files
@@ -57,7 +57,7 @@ function restoresendstream {
         fi
         if ! (cat $file | pv | zfs receive -v $fulldestfs); then
             log_msg 'FATAL: Unable to restore file.'
-            source $mydir/bashreturn 8
+            source "$(find_zfsutility_script bashreturn)" 8
         fi
     done
 }

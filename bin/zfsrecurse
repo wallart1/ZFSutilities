@@ -9,8 +9,8 @@ bashinit
 log_msg "FATAL: WIP!"
 exit 8
 
-source $mydir/rootcheck
-source $mydir/zfsbuildfsarray
+source_helper rootcheck
+source_helper zfsbuildfsarray
 rootcheck
 
 autoproceed='N'

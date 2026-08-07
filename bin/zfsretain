@@ -11,9 +11,9 @@
 function retain {
     source ~/bashinit
     bashinit
-    source $mydir/zfsconfig
-    source $mydir/zfsdelsnap
-    source $mydir/zfslockmanager
+    source_helper zfsconfig
+    source_helper zfsdelsnap
+    source_helper zfslockmanager
 
     if [[ "$skipbusy" = '' ]]; then skipbusy='Y'; fi
 

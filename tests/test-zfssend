@@ -1,0 +1,53 @@
+#!/usr/bin/bash
+# test-zfssend — Unit tests for the zfssend wrapper.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_send_function_is_defined() {
+    test_start "zfssend defines a send function after sourcing"
+    local _mock_bin
+    _mock_bin=$(mktemp -d)
+
+    # Stub helpers so zfssend can source without touching real ZFS.
+    cat > "$_mock_bin/rootcheck" <<'EOF'
+rootcheck() { true; }
+EOF
+    cat > "$_mock_bin/zfssnapbuild" <<'EOF'
+zfssnapbuild() { echo "@test-snap"; }
+EOF
+    cat > "$_mock_bin/zfs-send-receive" <<'EOF'
+send-receive() { :; }
+EOF
+    cat > "$_mock_bin/zfsoverrides" <<'EOF'
+overrides() { :; }
+EOF
+
+    cp "$mydir/bin/zfssend" "$_mock_bin/zfssend"
+
+    local result
+    result=$(
+        mydir="$_mock_bin"
+        source "$_mock_bin/zfssend"
+        if declare -f send >/dev/null 2>&1; then
+            echo "defined"
+        else
+            echo "missing"
+        fi
+    )
+    rm -rf "$_mock_bin"
+    assert_equals "defined" "$result"
+}
+
+# ------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------
+
+test_send_function_is_defined
+
+teardown_test_env
+test_summary

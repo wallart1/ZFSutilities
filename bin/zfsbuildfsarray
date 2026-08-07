@@ -102,7 +102,7 @@ function buildfsarray {
         local poolarray
         readarray -t poolarray < <(zpool list -Ho name)
         echo "${poolarray[@]}"
-        source $mydir/bashreturn 0
+        source "$(find_zfsutility_script bashreturn)" 0
     fi
 
     # If any includes are specified, and the fs name does not contain one of them,

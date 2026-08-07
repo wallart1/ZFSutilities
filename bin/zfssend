@@ -4,12 +4,12 @@
 source ~/bashinit
 bashinit
 
-send function {
-    source $mydir/rootcheck
+function send {
+    source_helper rootcheck
     rootcheck
-    source $mydir/zfssnapbuild
-    source $mydir/zfs-send-receive
-    source $mydir/zfsoverrides
+    source_helper zfssnapbuild
+    source_helper zfs-send-receive
+    source_helper zfsoverrides
 
     autoproceed='N'         # "Y" = Don't ask user to approve key steps before executing them.
 

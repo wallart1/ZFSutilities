@@ -18,7 +18,7 @@ bashinit
 
 set -euo pipefail
 
-source "$mydir/rootcheck"
+source_helper rootcheck
 rootcheck
 
 usage() {

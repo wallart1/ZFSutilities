@@ -11,12 +11,12 @@
 
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+source_helper rootcheck
 rootcheck
-source $mydir/zfsbuildfsarray
-source $mydir/zfsoverrides
+source_helper zfsbuildfsarray
+source_helper zfsoverrides
 export BASH_XTRACEFD=2
-source $mydir/bashsetx
+source_helper bashsetx
 
 if [[ $1 != '' ]]; then
     sourcefs=$1
@@ -116,5 +116,4 @@ if ! sudo zfs send -wc -I $firstsnap $lastsnap\
     | cat > /dev/null; then
         exit 8
 fi
-
 

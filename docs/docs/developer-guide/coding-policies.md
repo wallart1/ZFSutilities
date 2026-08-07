@@ -128,7 +128,7 @@ This initializes basic runtime variables and sources commonly-used functions.
   Instead, use:
 
     ```bash
-    source $mydir/bashreturn [return code]
+    source "$(find_zfsutility_script bashreturn)" [return code]
     ```
 
     at the point where the script exits (not as a preparatory step at the

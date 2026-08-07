@@ -44,7 +44,8 @@ a call to `bashinit()`.
 ```bash
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+
+source_helper rootcheck
 rootcheck
 ```
 
@@ -60,6 +61,7 @@ rootcheck
 | `die`                   | Logs a `FATAL` message and terminates the process                                       |
 | `warn`                  | Logs a `WARN` message                                                                   |
 | `find_zfsutility_script`| Locates a sibling script/library across repo or deployed layouts; respects `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`; prints absolute path |
+| `source_helper`         | Resolves a sibling script/library via `find_zfsutility_script` and sources it, exiting if it cannot be found |
 
 **Globals / environment:**
 
@@ -105,7 +107,7 @@ file, line number, and call stack. Also installs an ERR trap for post-failure
 interactive debugging.
 
 ```bash
-source $mydir/bashdebug
+source_helper bashdebug
 bashdebugon    # enable
 bashdebugoff   # disable
 ```
@@ -129,8 +131,8 @@ Sources at the point of a fatal error to terminate the script unconditionally.
 Always calls `exit` regardless of whether the script was sourced or executed.
 
 ```bash
-source $mydir/bashfatal        # exits with code 8
-source $mydir/bashfatal 4      # exits with specified code
+source "$(find_zfsutility_script bashfatal)"     # exits with code 8
+source "$(find_zfsutility_script bashfatal)" 4   # exits with specified code
 ```
 
 | Argument | Default | Description |
@@ -153,8 +155,8 @@ Sources at the point of a non-fatal early exit. Uses `return` if the script
 was sourced, `exit` if executed directly.
 
 ```bash
-source $mydir/bashreturn       # returns/exits with code 0
-source $mydir/bashreturn 4     # returns/exits with specified code
+source "$(find_zfsutility_script bashreturn)"    # returns/exits with code 0
+source "$(find_zfsutility_script bashreturn)" 4  # returns/exits with specified code
 ```
 
 | Argument | Default | Description      |
@@ -176,7 +178,7 @@ Must be sourced at the point of execution, not at the top of the file.
 Provides the `setx` function for temporarily enabling `set -x` tracing.
 
 ```bash
-source $mydir/bashsetx
+source_helper bashsetx
 setx       # enable tracing with custom PS4
 ```
 
@@ -268,7 +270,7 @@ Verifies the script is running as root. Sources at the top of any script that
 requires root privileges.
 
 ```bash
-source $mydir/rootcheck
+source_helper rootcheck
 rootcheck
 ```
 
@@ -305,7 +307,7 @@ within one bash process, so repeated calls don't re-spawn Python. Call
 changed externally.
 
 ```bash
-source $mydir/zfsconfig
+source_helper zfsconfig
 
 # Pool list
 poolarray                                   # fills $zfspoolarray from JSON
@@ -364,7 +366,7 @@ Builds a filtered list of ZFS datasets into `$fsarray`. The primary filtering
 mechanism used throughout the codebase.
 
 ```bash
-source $mydir/zfsbuildfsarray
+source_helper zfsbuildfsarray
 buildfsarray <root-dataset>
 # $fsarray now contains matching datasets
 ```
@@ -428,7 +430,7 @@ snapshot shared with a counterpart dataset. The counterpart is derived from
 the **fss table**.
 
 ```bash
-source $mydir/zfscheckagainst
+source_helper zfscheckagainst
 checkagainst <snapshot>
 ```
 
@@ -579,7 +581,7 @@ Checks whether any running Proxmox VMs have disks on a given ZFS dataset.
 Prevents accidental restores over live VMs.
 
 ```bash
-source $mydir/zfscheckrunningvms
+source_helper zfscheckrunningvms
 checkrunningvms <dataset>
 ```
 
@@ -617,7 +619,7 @@ disks on the target pool (avoids false positives from name-matching alone).
 Diagnoses why a ZFS dataset or snapshot cannot be destroyed.
 
 ```bash
-source $mydir/zfs-diagnose-busy
+source_helper zfs-diagnose-busy
 diagnose_dataset_busy <dataset_or_snapshot> [stderr_text]
 ```
 
@@ -665,7 +667,7 @@ Finds the most recent (or oldest) common snapshot between a source and
 destination dataset.
 
 ```bash
-source $mydir/zfscommsnap
+source_helper zfscommsnap
 getcommonsnap <source> <destination> [OLDEST]
 ```
 
@@ -717,7 +719,7 @@ only holds matching at least one pattern are released. Unmatched holds are
 reported in `$ZFS_DELALLHOLDS_REMAINING_TAGS`.
 
 ```bash
-source $mydir/zfsdelallholds
+source_helper zfsdelallholds
 delallholds <snapshot> [hold-tag-pattern...]
 ```
 
@@ -791,7 +793,7 @@ sudo ./zfsdelallholdssubtree <dataset> [hold-tag]
 Deletes a single snapshot after running `zfscheckagainst` as a safety check.
 
 ```bash
-source $mydir/zfsdelsnap
+source_helper zfsdelsnap
 delsnap <snapshot> [minage] [releaseholds]
 ```
 
@@ -856,7 +858,7 @@ whether to warn/continue (when `$skipbusy='Y'`) or exit fatally.
 Finds the first online offsite pool from the pool registry.
 
 ```bash
-source $mydir/zfsfindoffsitepool
+source_helper zfsfindoffsitepool
 pool=$(findoffsitepool)
 ```
 
@@ -889,7 +891,7 @@ Applies a named hold to a snapshot (or all snapshots matching a suffix across
 a subtree).
 
 ```bash
-source $mydir/zfshold
+source_helper zfshold
 zfshold <hold-tag> <dataset> <snapshot-suffix>
 ```
 
@@ -924,7 +926,7 @@ Core dataset lock management. Provides acquire, release, and conflict-checking
 functions. Used by `zfs-send-receive`, `zfsdelsnap`, and others.
 
 ```bash
-source $mydir/zfslockmanager
+source_helper zfslockmanager
 zfslock_init
 zfslock_acquire <dataset> <type> [description]   # 0=ok, 1=conflict, 2=error
 zfslock_acquire_multiple <type> <dataset> ...    # acquire several locks safely
@@ -1011,7 +1013,7 @@ Applies runtime parameter overrides passed as a semicolon-separated string of
 bash assignments.
 
 ```bash
-source $mydir/zfsoverrides
+source_helper zfsoverrides
 overrides "$1"
 ```
 
@@ -1057,7 +1059,7 @@ Strips the first N path components from a ZFS dataset name. The pool name
 counts as the first qualifier.
 
 ```bash
-source $mydir/zfsremoveleadingqualifiers
+source_helper zfsremoveleadingqualifiers
 result=$(remove_leading_qualifiers <n> <dataset>)
 ```
 
@@ -1115,7 +1117,7 @@ Applies retention policies to a pool or dataset in three phases:
     Snapshots with label `clone` or bucket `c` are **never touched** by retention. They are skipped in all phases because clone-origin snapshots cannot be deleted while dependent clones exist.
 
 ```bash
-source $mydir/zfsretain
+source_helper zfsretain
 retain <pool> [label]
 ```
 
@@ -1201,7 +1203,7 @@ or selected, so concurrent jobs cannot insert a newer snapshot after the
 common snapshot has been chosen.
 
 ```bash
-source $mydir/zfs-send-receive
+source_helper zfs-send-receive
 # Set parameters, then:
 send-receive
 ```
@@ -1346,7 +1348,7 @@ steps.
 Generates a snapshot name in the standard format.
 
 ```bash
-source $mydir/zfssnapbuild
+source_helper zfssnapbuild
 nextsnap=$(zfssnapbuild)
 # Returns e.g. "@dailybackup-2026-02-24T02:00-05:00-d"
 ```

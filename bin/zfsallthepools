@@ -6,7 +6,7 @@
 # scripts which still `source zfsallthepools` continue to work.
 #
 # New scripts should source zfsconfig directly:
-#   source $mydir/zfsconfig
+#   source_helper zfsconfig
 #   poolarray    # fills $zfspoolarray
 
 source "$(dirname "${BASH_SOURCE[0]}")/zfsconfig"

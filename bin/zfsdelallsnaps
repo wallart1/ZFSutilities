@@ -16,10 +16,10 @@ bashinit
 
 function delallsnaps {
 
-    source "$mydir/rootcheck"
+    source_helper rootcheck
     rootcheck
-    source $mydir/zfsdelsnap
-    source $mydir/zfsoverrides
+    source_helper zfsdelsnap
+    source_helper zfsoverrides
     
     local snap
     local save_autoproceed=$autoproceed

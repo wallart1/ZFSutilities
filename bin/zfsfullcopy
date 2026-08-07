@@ -14,8 +14,8 @@
 # kept even though no in-tree caller currently exists, so external tools and
 # documented two-step restore workflows can continue to source it.
 
-# $restorefs                    (Required.) The dataset to be restored. May be not fully-qualified.
-# $sourcefsremovequalifiers     (Optional.) Number of leading qualifiers to remove from $restorefs.
+# $restoresourcefs             (Required.) The dataset to be restored. May be not fully-qualified.
+# $sourcefsremovequalifiers     (Optional.) Number of leading qualifiers to remove from $restoresourcefs.
 #                                           Default: "0".
 # $destfs                       (Required.) The prefix of the destination dataset.
 # $nextsnap                     (Optional.) Name of snapshot. If specified, will be used as name of
@@ -24,12 +24,11 @@
 
 # $1                            (Optional.) Overrides for Part 1.
 
-
 function zfsfullcopy {
     source ~/bashinit
     bashinit
-    source $mydir/zfs-send-receive
-    source $mydir/zfsoverrides
+    source_helper zfs-send-receive
+    source_helper zfsoverrides
 
     local autoproceed='Y'
     if [[ $1 != '' ]]; then local overrides=$1; else local overrides=''; fi
@@ -56,19 +55,19 @@ function zfsfullcopy {
         local nextsnap=$nextsnapsave    # Just in case it gets clobbered.
         local commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
 
-        if [[ overrides != '' ]]; then overrides "$overrides"; fi
+        if [[ $overrides != '' ]]; then overrides "$overrides"; fi
         
-        if [[ $restoresourcefs='' ]]; then              # Dataset to be source of restore.
+        if [[ $restoresourcefs == '' ]]; then           # Dataset to be source of restore.
             log_msg 'FATAL: $restoresourcefs was not specified.'
-            source $mydir/bashdie 8
+            source "$(find_zfsutility_script bashfatal)" 8
         fi
-        if [[ $sourcefsremovequalifiers='' ]]; then
-            local $sourcefsremovequalifiers='0'
+        if [[ $sourcefsremovequalifiers == '' ]]; then
+            local sourcefsremovequalifiers='0'
         fi                          # '0' = Keep the full sourcefs name in the destfs name.
-        if [[ $destfs='' ]]; then   # Add the dest pool name and '/' at the beginning of the
+        if [[ $destfs == '' ]]; then # Add the dest pool name and '/' at the beginning of the
                                     # sourcefs name, giving the destination filesystem.
             log_msg 'FATAL: $destfs was not specified.'
-            source $mydir/bashdie 8
+            source "$(find_zfsutility_script bashfatal)" 8
         fi
 
         send-receive $restoresourcefs

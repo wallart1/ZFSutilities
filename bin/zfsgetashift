@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+source_helper rootcheck
 rootcheck
 
 # Display the real ashift value

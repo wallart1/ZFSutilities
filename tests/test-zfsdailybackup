@@ -5,6 +5,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
 setup_test_env
 
+# zfsdailybackup sources rsync-dailybackup, which is site-specific and not
+# shipped. Provide a minimal stub via ZFSUTILITIES_BIN_DIR so the script can
+# load without finding the production deployment copy.
+RSYNC_HELPER_DIR=$(mktemp -d)
+printf '#!/usr/bin/bash\nfunction rsync-dailybackup { :; }\n' > "$RSYNC_HELPER_DIR/rsync-dailybackup"
+chmod +x "$RSYNC_HELPER_DIR/rsync-dailybackup"
+
 # zfsdailybackup / zfssnapbuild stores its nextsnap file under the caller script
 # name.  Ensure stale files are gone so zfssnapbuild does not prompt.
 rm -f /run/zfsutilities/nextsnap_zfsdailybackup /run/zfsutilities/nextsnap_zfssnapbuild
@@ -47,6 +54,7 @@ _run_dailybackup() {
             esac
         done
         mydir="$mydir/bin"
+        ZFSUTILITIES_BIN_DIR="$RSYNC_HELPER_DIR"
         source "$mydir/zfsdailybackup" "$overrides"
     } 2>&1)
     echo "$output"
@@ -75,6 +83,7 @@ test_local_pull_failure_continues() {
         msg_level="INFO"
         _mock_interactive
         mydir="$mydir/bin"
+        ZFSUTILITIES_BIN_DIR="$RSYNC_HELPER_DIR"
         source "$mydir/zfsdailybackup" "$DISABLE_ALL_STEPS"
         backup-installed-programs() { return 5; }
         rsync-dailybackup() { return 6; }
@@ -103,5 +112,6 @@ test_local_pull_failure_continues
 test_dry_run_pull_does_not_execute
 
 rm -f /run/zfsutilities/nextsnap_zfsdailybackup /run/zfsutilities/nextsnap_zfssnapbuild
+rm -rf "$RSYNC_HELPER_DIR"
 teardown_test_env
 test_summary

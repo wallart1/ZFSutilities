@@ -62,10 +62,11 @@ for mod in modules:
                 func_to_module[func] = mod
 
 # Regex that matches a source line for any known module (handles $mydir,
-# $extrasourcedir, ./, absolute paths, etc.).
+# $extrasourcedir, ./, absolute paths, and source_helper calls).
 module_names_alt = '|'.join(re.escape(m) for m in modules)
 source_re = re.compile(
-    r'source\s+["\']?\S*?/(' + module_names_alt + r')["\']?(?=\s|;|\)|$)'
+    r'(?:source\s+["\']?\S*?/|source_helper\s+)('
+    + module_names_alt + r')["\']?(?=\s|;|\)|$)'
 )
 
 

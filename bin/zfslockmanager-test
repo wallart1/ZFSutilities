@@ -13,7 +13,7 @@
 
 source ~/bashinit
 bashinit
-source $mydir/zfslockmanager
+source_helper zfslockmanager
 
 # Test counters
 TESTS_RUN=0
@@ -212,7 +212,8 @@ test_concurrent_access() {
     (
         source ~/bashinit
         bashinit
-        source $mydir/zfslockmanager
+
+        source_helper zfslockmanager
         zfslock_init
         zfslock_acquire "test/concurrent" "w" "background lock"
         sleep 5

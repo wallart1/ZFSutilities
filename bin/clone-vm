@@ -274,6 +274,7 @@ for key in "${disk_keys[@]}"; do
     new_lun=$(ssh root@"$STORAGE_HOST" bash -s "$target" "$SRCVMID" "$DSTVMID" "$old_lun" "$pool" << 'SSHEOF'
 source ~/bashinit
 bashinit
+
 set -e
 TARGET="$1"
 SRC_VMID="$2"
@@ -313,11 +314,11 @@ zfs list -H "$src_zvol" >/dev/null 2>&1 \
 zfs snapshot "$snap"
 zfs send "$snap" | zfs receive -o compression=lz4 -o refreservation=none "$dst_zvol"
 if ! zfs destroy "${dst_zvol}@clone-to-${DST_VMID}" 2>/dev/null; then
-    source "$mydir/zfs-diagnose-busy"
+    source_helper zfs-diagnose-busy
     diagnose_dataset_busy "${dst_zvol}@clone-to-${DST_VMID}"
 fi
 if ! zfs destroy "$snap" 2>/dev/null; then
-    source "$mydir/zfs-diagnose-busy"
+    source_helper zfs-diagnose-busy
     diagnose_dataset_busy "$snap"
 fi
 echo "✓ Zvol cloned" >&2

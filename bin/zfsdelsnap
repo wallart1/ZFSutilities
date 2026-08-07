@@ -17,20 +17,20 @@ bashinit
 function delsnap {
     source ~/bashinit
     bashinit
-    source $mydir/zfscheckagainst
-    source $mydir/zfsdelallholds
-    source $mydir/zfslockmanager
-    if [[ ! -f "$mydir/zfs-diagnose-busy" ]]; then
-        log_msg "FATAL: Required helper $mydir/zfs-diagnose-busy is missing."
-        source $mydir/bashfatal 8
+    source_helper zfscheckagainst
+    source_helper zfsdelallholds
+    source_helper zfslockmanager
+    if [[ -z "$(find_zfsutility_script zfs-diagnose-busy)" ]]; then
+        log_msg "FATAL: Required helper zfs-diagnose-busy could not be located."
+        source "$(find_zfsutility_script bashfatal)" 8
     fi
-    source $mydir/zfs-diagnose-busy
+    source_helper zfs-diagnose-busy
 
     if [[ "$1" != '' ]]; then
         snaptoremove=$1
     else
         log_msg "FATAL: A snapshot to be removed must be given."
-        source $mydir/bashfatal 8
+        source "$(find_zfsutility_script bashfatal)" 8
     fi
 
     # Extract parent dataset from snapshot name (everything before @)
@@ -55,7 +55,7 @@ function delsnap {
     else
         log_msg "FATAL: A minimum age (in days) must be specified. Use 0 to skip age check."
         zfslock_release "$delsnap_lock"
-        source $mydir/bashfatal 8
+        source "$(find_zfsutility_script bashfatal)" 8
     fi
 
     if [[ $3 = 'releaseholds' ]]; then
@@ -72,7 +72,7 @@ function delsnap {
     if ! zfs list -t snapshot "$snaptoremove" >/dev/null; then
         log_msg "FATAL: Snapshot $snaptoremove does not exist."
         zfslock_release "$delsnap_lock"
-        source $mydir/bashfatal 8
+        source "$(find_zfsutility_script bashfatal)" 8
     fi
 
     # Check minimum age if minage > 0
@@ -145,7 +145,7 @@ function delsnap {
         else
             log_msg "FATAL: Unable to remove snapshot $snaptoremove. rc=$rc."
             zfslock_release "$delsnap_lock"
-            source $mydir/bashfatal 8
+            source "$(find_zfsutility_script bashfatal)" 8
         fi
     fi
 

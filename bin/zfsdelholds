@@ -6,7 +6,7 @@
 
 source ~/bashinit
 bashinit
-source $mydir/zfsdelallholds
+source_helper zfsdelallholds
 
 function delholds {
     local zfsdelholds_subtree zfsdelholds_match zfsdelholds_depth
@@ -16,7 +16,7 @@ function delholds {
 
     if [[ $1 = "" ]]; then
         log_msg "FATAL: A subtree must be specified."
-        source $mydir/bashfatal
+        source "$(find_zfsutility_script bashfatal)"
     else
         zfsdelholds_subtree=$1
     fi

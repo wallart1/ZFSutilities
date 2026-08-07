@@ -8,7 +8,7 @@
 
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+source_helper rootcheck
 rootcheck
 
 function cleanupbadoffsiteholds {
@@ -19,12 +19,12 @@ function cleanupbadoffsiteholds {
     if [[ -z $pool ]]; then
         log_msg "FATAL: Pool name required."
         log_msg "FATAL: Usage: $0 <pool> [dryrun]"
-        source $mydir/bashreturn 1
+        source "$(find_zfsutility_script bashreturn)" 1
     fi
 
     if ! zpool list "$pool" >/dev/null 2>&1; then
         log_msg "FATAL: Pool '$pool' not found."
-        source $mydir/bashreturn 1
+        source "$(find_zfsutility_script bashreturn)" 1
     fi
 
     log_msg "INFO: Scanning $pool for self-referencing offsite holds..."

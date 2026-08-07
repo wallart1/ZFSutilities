@@ -21,10 +21,10 @@ function scruball {
     # file is also sourced as a library by the test suite.
     bashinit
     export STATEFILE        # Make state file path available to subshells.
-    source $mydir/rootcheck
+    source_helper rootcheck
     rootcheck
-    source $mydir/zfsoverrides
-    source $mydir/zfsfindoffsitepool
+    source_helper zfsoverrides
+    source_helper zfsfindoffsitepool
 
     local parallel='2'  # Number of scrubs to do in parallel. As one finishes, another is started.
     local mode='start'

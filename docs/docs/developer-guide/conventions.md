@@ -7,12 +7,14 @@ Every script must follow this pattern at the top level (before functions):
 ```bash
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+
+source_helper rootcheck
 rootcheck
 ```
 
-`bashinit` must come first because it sets `$mydir`. All subsequent `source`
-calls use `$mydir` to find sibling scripts.
+`bashinit` must come first because it sets `$mydir` and provides `source_helper`.
+All subsequent helper loading should use `source_helper <name>` (or
+`find_zfsutility_script` directly when an argument is needed).
 
 ### Node-aware scripts
 
@@ -44,7 +46,7 @@ other scripts. The standard pattern:
 ```bash
 source ~/bashinit
 bashinit
-source $mydir/somemodule
+source_helper somemodule
 
 function myfunc {
     ...
@@ -65,10 +67,10 @@ if calledbybash; then myfunc "$@"; fi
 
 ```bash
 # Fatal error — always exits regardless of context
-source $mydir/bashfatal
+source "$(find_zfsutility_script bashfatal)"
 
 # Non-fatal — returns in sourced context, exits in direct context
-source $mydir/bashreturn <code>
+source "$(find_zfsutility_script bashreturn)" <code>
 ```
 
 These must be sourced **at the point of execution**, not at the top of the

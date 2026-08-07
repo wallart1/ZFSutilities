@@ -4,9 +4,9 @@
 # $2    Hold tag to release. If not specified, all holds will be released.
 
 source ~/bashinit
-source $mydir/rootcheck
-source $mydir/zfsbuildfsarray
-source $mydir/zfsdelallholds
+source_helper rootcheck
+source_helper zfsbuildfsarray
+source_helper zfsdelallholds
 bashinit
 rootcheck
 

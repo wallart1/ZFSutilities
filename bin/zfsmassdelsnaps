@@ -30,11 +30,11 @@ bashinit
 : "${ZFSUTILITIES_LOG_FILE:=}"
 
 function mass_delete_snapshots {
-    source "$mydir/rootcheck"
+    source_helper rootcheck
     rootcheck
-    source "$mydir/zfsbuildfsarray"
-    source "$mydir/zfsdelsnap"
-    source "$mydir/zfscleanup"
+    source_helper zfsbuildfsarray
+    source_helper zfsdelsnap
+    source_helper zfscleanup
 
     local pools=("$@")
     if [[ ${#pools[@]} -eq 0 ]]; then

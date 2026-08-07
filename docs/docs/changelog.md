@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.74.4
+
+*Released 2026-08-07*
+
+### Changed
+
+- **`source_helper` is now provided by `bashinit`** — The helper that resolves
+  and sources sibling scripts/libraries via `find_zfsutility_script` is now
+  defined once in `bin/bashinit` instead of being duplicated in every script.
+  All scripts that previously defined their own local `source_helper()` now use
+  the shared implementation.  Test mocks that provide a fake `bashinit` for
+  subshells have been updated to include `source_helper`.
+
+- **Documentation reflects the current sourcing pattern** — Developer and
+  command-reference docs now show `source_helper <name>` (or
+  `source "$(find_zfsutility_script <name>)"` when an argument is required)
+  instead of the older `source $mydir/<name>` examples.
+
+### Removed
+
+- **`zfsresizevol`** — Removed the unfinished `bin/zfsresizevol` stub and its
+  documentation entry. The script only logged `FATAL: WIP!` and exited.
+
+### Fixed
+
+- **`zfssend` function definition** — Corrected `send function {` to
+  `function send {`, which had prevented the script from being parsed.
+
+- **`zfsfullcopy` input validation** — Fixed several broken constructs in the
+  restore helper:
+  - `if [[ overrides != '' ]]` now reads `$overrides` so overrides are only
+    applied when an argument is actually provided.
+  - `local $sourcefsremovequalifiers='0'` no longer has the erroneous `$`.
+  - Comparisons for `$restoresourcefs`, `$sourcefsremovequalifiers`, and
+    `$destfs` use `==` consistently.
+  - Missing-helper fatal exits use `find_zfsutility_script bashfatal`.
+
+### Tests
+
+- Added `tests/test-zfsfullcopy` covering overrides handling, default
+  `sourcefsremovequalifiers`, and missing required arguments.
+- Added `tests/test-zfssend` verifying the `send` function is defined after
+  sourcing.
+- Added `source_helper` tests to `tests/test-node-lib`.
+- Updated `tests/test-uninstall-version` and
+  `tests/test-uninstall-some-versions` to provide `source_helper` in their
+  fake `bashinit` stubs.
+
 ## 0.74.3
 
 *Released 2026-08-05*

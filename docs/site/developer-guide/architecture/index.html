@@ -2136,11 +2136,12 @@
 <p>All bash scripts follow this initialization pattern:</p>
 <div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span>~/bashinit
 bashinit
-<span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/rootcheck
+
+source_helper<span class="w"> </span>rootcheck
 rootcheck
 </code></pre></div>
 <ul>
-<li><code>bashinit</code> sets <code>$mydir</code> to the calling script's directory</li>
+<li><code>bashinit</code> sets <code>$mydir</code> to the calling script's directory and provides <code>source_helper</code>, which resolves siblings via <code>find_zfsutility_script</code></li>
 <li><a href="../../commands-and-modules/modules/#rootcheck">rootcheck</a> verifies the script is running as root</li>
 <li>Function scripts are <strong>sourced</strong>, not executed — their functions persist in the
   calling shell's environment</li>
@@ -2806,7 +2807,7 @@ incrementally.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.3
+      ZFS Utilities v0.74.4
     </div>
   
   
@@ -2831,7 +2832,7 @@ incrementally.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.3"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.4"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

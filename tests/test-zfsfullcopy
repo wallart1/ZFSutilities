@@ -1,0 +1,132 @@
+#!/usr/bin/bash
+# test-zfsfullcopy — Unit tests for the zfsfullcopy restore helper.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+
+_run_zfsfullcopy() {
+    local _state_dir="$1"
+    shift
+    local _mock_bin="$_state_dir/mockbin"
+    mkdir -p "$_mock_bin"
+
+    # Copy the script under test into the mock bin directory so helper
+    # resolution (via $mydir) finds our stubs instead of the real ones.
+    cp "$mydir/bin/zfsfullcopy" "$_mock_bin/zfsfullcopy"
+
+    cat > "$_mock_bin/zfs-send-receive" <<'EOF'
+send-receive() {
+    echo "send-receive called with: $*" >> "$ZFSFULLCOPY_STATE/send-receive.calls"
+    echo "sourcefsremovequalifiers=$sourcefsremovequalifiers" >> "$ZFSFULLCOPY_STATE/send-receive.calls"
+}
+EOF
+    cat > "$_mock_bin/zfsoverrides" <<'EOF'
+overrides() {
+    echo "overrides called with: $*" >> "$ZFSFULLCOPY_STATE/overrides.calls"
+}
+EOF
+    cat > "$_mock_bin/zfssnapbuild" <<'EOF'
+zfssnapbuild() {
+    echo "@test-snap"
+}
+EOF
+    cat > "$_mock_bin/bashfatal" <<'EOF'
+exit "${1:-8}"
+EOF
+
+    (
+        ZFSFULLCOPY_STATE="$_state_dir"
+        mydir="$_mock_bin"
+        # shellcheck source=/dev/null
+        source "$_mock_bin/zfsfullcopy"
+        zfsfullcopy "$@"
+    ) >"$_state_dir/out" 2>"$_state_dir/err"
+    echo $? > "$_state_dir/rc"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_fullcopy_applies_overrides() {
+    test_start "zfsfullcopy applies overrides when provided"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/fullcopy_overrides"
+    mkdir -p "$_state_dir"
+    restoresourcefs="pool/src" destfs="pool/dest" _run_zfsfullcopy "$_state_dir" "someoverride=1"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+    if [[ -f "$_state_dir/overrides.calls" ]]; then
+        assert_contains "$(cat "$_state_dir/overrides.calls")" "overrides called with: someoverride=1"
+    else
+        test_fail "overrides was not called"
+    fi
+}
+
+test_fullcopy_skips_overrides_when_empty() {
+    test_start "zfsfullcopy does not call overrides when argument is empty"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/fullcopy_no_overrides"
+    mkdir -p "$_state_dir"
+    restoresourcefs="pool/src" destfs="pool/dest" _run_zfsfullcopy "$_state_dir" ""
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+    if [[ -f "$_state_dir/overrides.calls" ]]; then
+        test_fail "overrides should not have been called"
+    else
+        test_pass
+    fi
+}
+
+test_fullcopy_defaults_remove_qualifiers() {
+    test_start "zfsfullcopy defaults sourcefsremovequalifiers to 0"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/fullcopy_default_qualifiers"
+    mkdir -p "$_state_dir"
+    restoresourcefs="pool/src" destfs="pool/dest" _run_zfsfullcopy "$_state_dir"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_state_dir/send-receive.calls")" "sourcefsremovequalifiers=0"
+}
+
+test_fullcopy_requires_restoresourcefs() {
+    test_start "zfsfullcopy is fatal when restoresourcefs is missing"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/fullcopy_missing_source"
+    mkdir -p "$_state_dir"
+    destfs="pool/dest" _run_zfsfullcopy "$_state_dir"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 8 "$rc"
+}
+
+test_fullcopy_requires_destfs() {
+    test_start "zfsfullcopy is fatal when destfs is missing"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/fullcopy_missing_dest"
+    mkdir -p "$_state_dir"
+    restoresourcefs="pool/src" _run_zfsfullcopy "$_state_dir"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 8 "$rc"
+}
+
+# ------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------
+
+test_fullcopy_applies_overrides
+test_fullcopy_skips_overrides_when_empty
+test_fullcopy_defaults_remove_qualifiers
+test_fullcopy_requires_restoresourcefs
+test_fullcopy_requires_destfs
+
+teardown_test_env
+test_summary

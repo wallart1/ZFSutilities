@@ -2064,7 +2064,7 @@ command3
 <li>
 <p><strong>Never exit a script or function directly</strong> with either <code>return</code> or <code>exit</code>.
   Instead, use:</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/bashreturn<span class="w"> </span><span class="o">[</span><span class="k">return</span><span class="w"> </span>code<span class="o">]</span>
+<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>bashreturn<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">[</span><span class="k">return</span><span class="w"> </span>code<span class="o">]</span>
 </code></pre></div>
 <p>at the point where the script exits (not as a preparatory step at the
 beginning of the script).</p>
@@ -2253,7 +2253,7 @@ for callbacks, cleanup, and worker threads).</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.3
+      ZFS Utilities v0.74.4
     </div>
   
   
@@ -2278,7 +2278,7 @@ for callbacks, cleanup, and worker threads).</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.3"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.4"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

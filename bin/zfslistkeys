@@ -2,7 +2,7 @@
 
 source ~/bashinit
 bashinit
-source $mydir/bashdebug
+source_helper bashdebug
 bashdebugon
 
 if [[ $1 != '' ]]; then

@@ -15,9 +15,9 @@
 
 source ~/bashinit
 bashinit
-source $mydir/zfssnapbuild
-source $mydir/zfs-send-receive
-source $mydir/zfsoverrides
+source_helper zfssnapbuild
+source_helper zfs-send-receive
+source_helper zfsoverrides
 
 autoproceed='N'
 

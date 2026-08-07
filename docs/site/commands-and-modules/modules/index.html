@@ -2135,7 +2135,8 @@ module in the project. It is normally loaded as <code>source ~/bashinit</code> f
 a call to <code>bashinit()</code>.</p>
 <div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span>~/bashinit
 bashinit
-<span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/rootcheck
+
+source_helper<span class="w"> </span>rootcheck
 rootcheck
 </code></pre></div>
 <p><strong>Functions:</strong></p>
@@ -2178,6 +2179,10 @@ rootcheck
 <tr>
 <td><code>find_zfsutility_script</code></td>
 <td>Locates a sibling script/library across repo or deployed layouts; respects <code>ZFSUTILITIES_BIN_DIR</code>, <code>ZFSUTILITIES_CURRENT_BIN_DIR</code>, and <code>ZFSUTILITIES_SYSTEM_LIB_DIR</code>; prints absolute path</td>
+</tr>
+<tr>
+<td><code>source_helper</code></td>
+<td>Resolves a sibling script/library via <code>find_zfsutility_script</code> and sources it, exiting if it cannot be found</td>
 </tr>
 </tbody>
 </table>
@@ -2278,7 +2283,7 @@ rootcheck
 single-step debugging with a pre-execution prompt showing the command, source
 file, line number, and call stack. Also installs an ERR trap for post-failure
 interactive debugging.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/bashdebug
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>bashdebug
 bashdebugon<span class="w">    </span><span class="c1"># enable</span>
 bashdebugoff<span class="w">   </span><span class="c1"># disable</span>
 </code></pre></div>
@@ -2292,8 +2297,8 @@ underlying command's status).</p>
 <h3 id="bashfatal"><code>bashfatal</code><a class="headerlink" href="#bashfatal" title="Permanent link">&para;</a></h3>
 <p>Sources at the point of a fatal error to terminate the script unconditionally.
 Always calls <code>exit</code> regardless of whether the script was sourced or executed.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/bashfatal<span class="w">        </span><span class="c1"># exits with code 8</span>
-<span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/bashfatal<span class="w"> </span><span class="m">4</span><span class="w">      </span><span class="c1"># exits with specified code</span>
+<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>bashfatal<span class="k">)</span><span class="s2">&quot;</span><span class="w">     </span><span class="c1"># exits with code 8</span>
+<span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>bashfatal<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="m">4</span><span class="w">   </span><span class="c1"># exits with specified code</span>
 </code></pre></div>
 <table>
 <thead>
@@ -2319,8 +2324,8 @@ Always calls <code>exit</code> regardless of whether the script was sourced or e
 <h3 id="bashreturn"><code>bashreturn</code><a class="headerlink" href="#bashreturn" title="Permanent link">&para;</a></h3>
 <p>Sources at the point of a non-fatal early exit. Uses <code>return</code> if the script
 was sourced, <code>exit</code> if executed directly.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/bashreturn<span class="w">       </span><span class="c1"># returns/exits with code 0</span>
-<span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/bashreturn<span class="w"> </span><span class="m">4</span><span class="w">     </span><span class="c1"># returns/exits with specified code</span>
+<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>bashreturn<span class="k">)</span><span class="s2">&quot;</span><span class="w">    </span><span class="c1"># returns/exits with code 0</span>
+<span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>bashreturn<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="m">4</span><span class="w">  </span><span class="c1"># returns/exits with specified code</span>
 </code></pre></div>
 <table>
 <thead>
@@ -2345,7 +2350,7 @@ was sourced, <code>exit</code> if executed directly.</p>
 <hr />
 <h3 id="bashsetx"><code>bashsetx</code><a class="headerlink" href="#bashsetx" title="Permanent link">&para;</a></h3>
 <p>Provides the <code>setx</code> function for temporarily enabling <code>set -x</code> tracing.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/bashsetx
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>bashsetx
 setx<span class="w">       </span><span class="c1"># enable tracing with custom PS4</span>
 </code></pre></div>
 <p>Sets <code>PS4</code> to <code>&gt;${BASH_SOURCE}:${LINENO}--&gt;</code> for informative trace output.
@@ -2549,7 +2554,7 @@ non-standard installs.</p>
 <h3 id="rootcheck"><code>rootcheck</code><a class="headerlink" href="#rootcheck" title="Permanent link">&para;</a></h3>
 <p>Verifies the script is running as root. Sources at the top of any script that
 requires root privileges.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/rootcheck
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>rootcheck
 rootcheck
 </code></pre></div>
 <p><strong>Arguments:</strong> none.</p>
@@ -2587,7 +2592,7 @@ anywhere Python 3 is available. Results are cached in environment variables
 within one bash process, so repeated calls don't re-spawn Python. Call
 <code>zfsconfig_invalidate</code> to force a re-read if the config file has been
 changed externally.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfsconfig
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfsconfig
 
 <span class="c1"># Pool list</span>
 poolarray<span class="w">                                   </span><span class="c1"># fills $zfspoolarray from JSON</span>
@@ -2701,7 +2706,7 @@ sourcing other project modules.</p>
 <h3 id="zfsbuildfsarray"><code>zfsbuildfsarray</code><a class="headerlink" href="#zfsbuildfsarray" title="Permanent link">&para;</a></h3>
 <p>Builds a filtered list of ZFS datasets into <code>$fsarray</code>. The primary filtering
 mechanism used throughout the codebase.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfsbuildfsarray
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfsbuildfsarray
 buildfsarray<span class="w"> </span>&lt;root-dataset&gt;
 <span class="c1"># $fsarray now contains matching datasets</span>
 </code></pre></div>
@@ -2844,7 +2849,7 @@ buildfsarray<span class="w"> </span>&lt;root-dataset&gt;
 <p>Verifies a snapshot is safe to delete by confirming it is not the last common
 snapshot shared with a counterpart dataset. The counterpart is derived from
 the <strong>fss table</strong>.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfscheckagainst
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfscheckagainst
 checkagainst<span class="w"> </span>&lt;snapshot&gt;
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
@@ -3060,7 +3065,7 @@ is offline (no holds to check).</p>
 <h3 id="zfscheckrunningvms"><code>zfscheckrunningvms</code><a class="headerlink" href="#zfscheckrunningvms" title="Permanent link">&para;</a></h3>
 <p>Checks whether any running Proxmox VMs have disks on a given ZFS dataset.
 Prevents accidental restores over live VMs.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfscheckrunningvms
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfscheckrunningvms
 checkrunningvms<span class="w"> </span>&lt;dataset&gt;
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
@@ -3125,7 +3130,7 @@ disks on the target pool (avoids false positives from name-matching alone).</p>
 <hr />
 <h3 id="zfs-diagnose-busy"><code>zfs-diagnose-busy</code><a class="headerlink" href="#zfs-diagnose-busy" title="Permanent link">&para;</a></h3>
 <p>Diagnoses why a ZFS dataset or snapshot cannot be destroyed.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfs-diagnose-busy
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfs-diagnose-busy
 diagnose_dataset_busy<span class="w"> </span>&lt;dataset_or_snapshot&gt;<span class="w"> </span><span class="o">[</span>stderr_text<span class="o">]</span>
 </code></pre></div>
 <p><strong>Checks performed:</strong></p>
@@ -3198,7 +3203,7 @@ and suggests <code>fuser</code> / <code>lsof</code> commands.</p>
 <h3 id="zfscommsnap"><code>zfscommsnap</code><a class="headerlink" href="#zfscommsnap" title="Permanent link">&para;</a></h3>
 <p>Finds the most recent (or oldest) common snapshot between a source and
 destination dataset.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfscommsnap
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfscommsnap
 getcommonsnap<span class="w"> </span>&lt;source&gt;<span class="w"> </span>&lt;destination&gt;<span class="w"> </span><span class="o">[</span>OLDEST<span class="o">]</span>
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
@@ -3310,7 +3315,7 @@ Returns non-zero if no common snapshot exists.</p>
 supplied, all holds are released. When one or more patterns are supplied,
 only holds matching at least one pattern are released. Unmatched holds are
 reported in <code>$ZFS_DELALLHOLDS_REMAINING_TAGS</code>.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfsdelallholds
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfsdelallholds
 delallholds<span class="w"> </span>&lt;snapshot&gt;<span class="w"> </span><span class="o">[</span>hold-tag-pattern...<span class="o">]</span>
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
@@ -3459,7 +3464,7 @@ delallholds<span class="w"> </span>&lt;snapshot&gt;<span class="w"> </span><span
 <hr />
 <h3 id="zfsdelsnap"><code>zfsdelsnap</code><a class="headerlink" href="#zfsdelsnap" title="Permanent link">&para;</a></h3>
 <p>Deletes a single snapshot after running <code>zfscheckagainst</code> as a safety check.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfsdelsnap
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfsdelsnap
 delsnap<span class="w"> </span>&lt;snapshot&gt;<span class="w"> </span><span class="o">[</span>minage<span class="o">]</span><span class="w"> </span><span class="o">[</span>releaseholds<span class="o">]</span>
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
@@ -3611,7 +3616,7 @@ whether to warn/continue (when <code>$skipbusy='Y'</code>) or exit fatally.</p>
 <hr />
 <h3 id="zfsfindoffsitepool"><code>zfsfindoffsitepool</code><a class="headerlink" href="#zfsfindoffsitepool" title="Permanent link">&para;</a></h3>
 <p>Finds the first online offsite pool from the pool registry.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfsfindoffsitepool
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfsfindoffsitepool
 <span class="nv">pool</span><span class="o">=</span><span class="k">$(</span>findoffsitepool<span class="k">)</span>
 </code></pre></div>
 <p><strong>Arguments:</strong> none.</p>
@@ -3653,7 +3658,7 @@ whether to warn/continue (when <code>$skipbusy='Y'</code>) or exit fatally.</p>
 <h3 id="zfshold"><code>zfshold</code><a class="headerlink" href="#zfshold" title="Permanent link">&para;</a></h3>
 <p>Applies a named hold to a snapshot (or all snapshots matching a suffix across
 a subtree).</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfshold
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfshold
 zfshold<span class="w"> </span>&lt;hold-tag&gt;<span class="w"> </span>&lt;dataset&gt;<span class="w"> </span>&lt;snapshot-suffix&gt;
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
@@ -3706,7 +3711,7 @@ zfshold<span class="w"> </span>&lt;hold-tag&gt;<span class="w"> </span>&lt;datas
 <h3 id="zfslockmanager"><code>zfslockmanager</code><a class="headerlink" href="#zfslockmanager" title="Permanent link">&para;</a></h3>
 <p>Core dataset lock management. Provides acquire, release, and conflict-checking
 functions. Used by <code>zfs-send-receive</code>, <code>zfsdelsnap</code>, and others.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfslockmanager
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfslockmanager
 zfslock_init
 zfslock_acquire<span class="w"> </span>&lt;dataset&gt;<span class="w"> </span>&lt;type&gt;<span class="w"> </span><span class="o">[</span>description<span class="o">]</span><span class="w">   </span><span class="c1"># 0=ok, 1=conflict, 2=error</span>
 zfslock_acquire_multiple<span class="w"> </span>&lt;type&gt;<span class="w"> </span>&lt;dataset&gt;<span class="w"> </span>...<span class="w">    </span><span class="c1"># acquire several locks safely</span>
@@ -3856,7 +3861,7 @@ releases it.</p>
 <h3 id="zfsoverrides"><code>zfsoverrides</code><a class="headerlink" href="#zfsoverrides" title="Permanent link">&para;</a></h3>
 <p>Applies runtime parameter overrides passed as a semicolon-separated string of
 bash assignments.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfsoverrides
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfsoverrides
 overrides<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$1</span><span class="s2">&quot;</span>
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
@@ -3910,7 +3915,7 @@ can be overridden.</p>
 <h3 id="zfsremoveleadingqualifiers"><code>zfsremoveleadingqualifiers</code><a class="headerlink" href="#zfsremoveleadingqualifiers" title="Permanent link">&para;</a></h3>
 <p>Strips the first N path components from a ZFS dataset name. The pool name
 counts as the first qualifier.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfsremoveleadingqualifiers
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfsremoveleadingqualifiers
 <span class="nv">result</span><span class="o">=</span><span class="k">$(</span>remove_leading_qualifiers<span class="w"> </span>&lt;n&gt;<span class="w"> </span>&lt;dataset&gt;<span class="k">)</span>
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
@@ -4018,7 +4023,7 @@ and by <code>zfsretain</code> with <code>$leadingqualifiestodelete</code>.</p>
 <p class="admonition-title">Clone snapshots are protected</p>
 <p>Snapshots with label <code>clone</code> or bucket <code>c</code> are <strong>never touched</strong> by retention. They are skipped in all phases because clone-origin snapshots cannot be deleted while dependent clones exist.</p>
 </div>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfsretain
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfsretain
 retain<span class="w"> </span>&lt;pool&gt;<span class="w"> </span><span class="o">[</span>label<span class="o">]</span>
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
@@ -4196,7 +4201,7 @@ resume tokens, space validation, VM checks, and dataset locking.  Locks are
 acquired on the source and destination datasets before a snapshot is created
 or selected, so concurrent jobs cannot insert a newer snapshot after the
 common snapshot has been chosen.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfs-send-receive
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfs-send-receive
 <span class="c1"># Set parameters, then:</span>
 send-receive
 </code></pre></div>
@@ -4556,7 +4561,7 @@ steps.</p>
 <hr />
 <h3 id="zfssnapbuild"><code>zfssnapbuild</code><a class="headerlink" href="#zfssnapbuild" title="Permanent link">&para;</a></h3>
 <p>Generates a snapshot name in the standard format.</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="nv">$mydir</span>/zfssnapbuild
+<div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfssnapbuild
 <span class="nv">nextsnap</span><span class="o">=</span><span class="k">$(</span>zfssnapbuild<span class="k">)</span>
 <span class="c1"># Returns e.g. &quot;@dailybackup-2026-02-24T02:00-05:00-d&quot;</span>
 </code></pre></div>
@@ -4674,7 +4679,7 @@ steps.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.3
+      ZFS Utilities v0.74.4
     </div>
   
   
@@ -4699,7 +4704,7 @@ steps.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.3"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.4"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

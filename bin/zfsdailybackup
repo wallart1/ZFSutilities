@@ -14,7 +14,7 @@
 
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+source_helper rootcheck
 rootcheck
 
 # Node configuration (single-node or two-node)
@@ -35,9 +35,9 @@ if [[ "$NODE_MODE" == "single-node" ]]; then
     COMPUTE_HOST="$STORAGE_HOST"
 fi
 
-source $mydir/zfssnapbuild
-source $mydir/zfs-send-receive
-source $mydir/zfsoverrides
+source_helper zfssnapbuild
+source_helper zfs-send-receive
+source_helper zfsoverrides
 
 SECONDS=0
 
@@ -48,9 +48,9 @@ _write_trailer() {
     fi
 }
 trap _write_trailer EXIT
-source $mydir/zfscleanup
-source $mydir/backup-installed-programs
-source $mydir/rsync-dailybackup
+source_helper zfscleanup
+source_helper backup-installed-programs
+source_helper rsync-dailybackup
 
 autoresume='Y'
 includes=()

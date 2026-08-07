@@ -39,10 +39,13 @@ EOF
     local output rc=0
     output=$(
         mydir="$tmpdir"
+        ZFSUTILITIES_BIN_DIR=/dev/null \
+        ZFSUTILITIES_CURRENT_BIN_DIR=/dev/null \
+        ZFSUTILITIES_SYSTEM_LIB_DIR=/dev/null \
         bash -c "source '$old_mydir/bin/zfsdelsnap'; delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
     ) || rc=$?
 
-    if [[ "$output" == *"FATAL: Required helper $tmpdir/zfs-diagnose-busy is missing."* ]]; then
+    if [[ "$output" == *"FATAL: Required helper zfs-diagnose-busy could not be located."* ]]; then
         test_pass
     else
         test_fail "Expected fatal message about missing helper, got: $output"

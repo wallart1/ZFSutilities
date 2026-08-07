@@ -218,22 +218,27 @@ test_teardown_skips_non_vm_disk() {
 
 run_delfs_locked() {
     local _state_dir="$1"
-    local _mock_mydir="$_state_dir/mockmods"
-    mkdir -p "$_mock_mydir"
+    local _mock_bin="$_state_dir/mockbin"
+    mkdir -p "$_mock_bin"
 
-    cat > "$_mock_mydir/zfsbuildfsarray" <<'EOF'
+    # zfsdelfs resolves helpers relative to its own directory ($_zfsdelfs_dir).
+    # Run it from a mock bin directory so the locking tests stay isolated from
+    # the real helpers.
+    cp "$mydir/bin/zfsdelfs" "$_mock_bin/zfsdelfs"
+
+    cat > "$_mock_bin/zfsbuildfsarray" <<'EOF'
 buildfsarray() { fsarray=("${_mock_delfs_fsarray[@]}"); }
 EOF
-    cat > "$_mock_mydir/zfsdelallsnaps" <<'EOF'
+    cat > "$_mock_bin/zfsdelallsnaps" <<'EOF'
 delallsnaps() { return 0; }
 EOF
-    cat > "$_mock_mydir/zfsoverrides" <<'EOF'
+    cat > "$_mock_bin/zfsoverrides" <<'EOF'
 overrides() { true; }
 EOF
-    cat > "$_mock_mydir/zfs-diagnose-busy" <<'EOF'
+    cat > "$_mock_bin/zfs-diagnose-busy" <<'EOF'
 diagnose_dataset_busy() { true; }
 EOF
-    cat > "$_mock_mydir/zfslockmanager" <<EOF
+    cat > "$_mock_bin/zfslockmanager" <<EOF
 zfslock_init() { true; }
 zfslock_wait_or_resolve() {
     echo "\$1 \$2" >> "$_state_dir/lock.log"
@@ -248,12 +253,11 @@ EOF
 NODE_MODE=single-node
 EOF
 
-    local _old_mydir="$mydir"
     (
         NODE_CONF="$_state_dir/node.conf"
-        mydir="$_mock_mydir"
+        mydir="$_mock_bin"
         # shellcheck source=/dev/null
-        source "$_old_mydir/bin/zfsdelfs"
+        source "$_mock_bin/zfsdelfs"
         autoproceed='Y'
         _mock_delfs_fsarray=(pool/data)
         mock_zfs_dataset_exists "pool/data"

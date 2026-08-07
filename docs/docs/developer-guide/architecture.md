@@ -7,11 +7,12 @@ All bash scripts follow this initialization pattern:
 ```bash
 source ~/bashinit
 bashinit
-source $mydir/rootcheck
+
+source_helper rootcheck
 rootcheck
 ```
 
-- `bashinit` sets `$mydir` to the calling script's directory
+- `bashinit` sets `$mydir` to the calling script's directory and provides `source_helper`, which resolves siblings via `find_zfsutility_script`
 - [rootcheck](../commands-and-modules/modules.md#rootcheck) verifies the script is running as root
 - Function scripts are **sourced**, not executed — their functions persist in the
   calling shell's environment

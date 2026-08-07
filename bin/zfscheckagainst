@@ -19,11 +19,10 @@ function checkagainst {
 # 7     This is the last remaining common snapshot — deletion blocked.
 # 8     Fatal error. Script was terminated. See message in stdout.
 
-
     source ~/bashinit
     bashinit
-    source $mydir/zfscommsnap
-    source $mydir/bashdebug
+    source_helper zfscommsnap
+    source_helper bashdebug
     if [[ "$1" == '*NVME1*' ]]; then bashdebugon; else bashdebugoff; fi
 
     local \
@@ -96,7 +95,7 @@ function checkagainst {
     # Load fss table from the JSON config via zfsconfig helper. Falls back
     # to the legacy zfscheckagainst.conf file if the JSON section is empty.
     local fss=()
-    source $mydir/zfsconfig
+    source_helper zfsconfig
     while IFS= read -r _line; do
         [[ -z "${_line//[[:space:]]/}" ]] && continue
         fss+=("$_line")

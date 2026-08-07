@@ -8,7 +8,7 @@ bashinit
 
 set -euo pipefail
 
-source "$mydir/rootcheck"
+source_helper rootcheck
 rootcheck
 
 MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
