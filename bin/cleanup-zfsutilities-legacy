@@ -42,7 +42,7 @@ unset _local_bashinit
 # Use the project's rootcheck helper if it is not already loaded (tests mock
 # this function to run as non-root).
 if ! declare -f rootcheck &>/dev/null; then
-    source "$MYDIR/rootcheck"
+    source_helper rootcheck
 fi
 rootcheck
 
@@ -511,6 +511,8 @@ main() {
     if [[ $old_set_o -eq 0 ]]; then
         set +o pipefail
     fi
+
+    source "$(find_zfsutility_script bashreturn)" 0
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

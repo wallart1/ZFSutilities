@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.74.5
+
+*Released 2026-08-07*
+
+### Changed
+
+- **`source_helper` uses `bashfatal`/`bashreturn` helpers** — When
+  `source_helper` cannot locate a sibling script or library, it logs a `FATAL`
+  message and invokes `bashfatal` as the primary exit path. If `bashfatal`
+  itself cannot be found, it falls back to `bashreturn` so sourced callers regain
+  control instead of killing the parent shell. The previous bare `exit 8` path
+  has been removed.
+
+- **`cleanup-zfsutilities-legacy` uses `source_helper`** — The legacy cleanup
+  script now loads `rootcheck` through `source_helper` (matching the rest of the
+  codebase) instead of `source "$MYDIR/rootcheck"`. `main()` terminates via
+  `bashreturn` rather than a bare `return`.
+
+- **`uninstall-some-versions` uses `find_zfsutility_script`** — The bulk
+  uninstall helper now locates `uninstall-version` through
+  `find_zfsutility_script` instead of hard-coding `$mydir/uninstall-version`.
+
+### Tests
+
+- Added `test_source_helper_fallback_returns_when_sourced` to
+  `tests/test-node-lib`, verifying that `source_helper` falls back to
+  `bashreturn` when `bashfatal` is missing and the caller is sourced.
+
 ## 0.74.4
 
 *Released 2026-08-07*

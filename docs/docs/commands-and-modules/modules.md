@@ -67,7 +67,7 @@ rootcheck
 | `die`                   | Logs a `FATAL` message and terminates the process                                       |
 | `warn`                  | Logs a `WARN` message                                                                   |
 | `find_zfsutility_script`| Locates a sibling script/library across repo or deployed layouts; respects `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`; prints absolute path |
-| `source_helper`         | Resolves a sibling script/library via `find_zfsutility_script` and sources it, exiting if it cannot be found |
+| `source_helper`         | Resolves a sibling script/library via `find_zfsutility_script` and sources it; logs a fatal message and exits via `bashfatal` (falling back to `bashreturn`) if it cannot be found |
 
 **Globals / environment:**
 

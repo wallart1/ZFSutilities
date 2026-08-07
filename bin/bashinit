@@ -178,8 +178,15 @@ function source_helper {
     if [[ -z "$path" ]]; then
         log_msg "FATAL: Could not locate $name"
         local fatal_path
-        fatal_path=$(find_zfsutility_script bashfatal) && source "$fatal_path" 8
-        exit 8
+        fatal_path=$(find_zfsutility_script bashfatal)
+        [[ -n "$fatal_path" ]] && source "$fatal_path" 8
+        # If bashfatal is missing, fall back to bashreturn so sourced callers
+        # regain control instead of killing the parent shell.
+        local return_path
+        return_path=$(find_zfsutility_script bashreturn)
+        [[ -n "$return_path" ]] && source "$return_path" 8
+        # Propagate the failure code if neither helper terminated the process.
+        return 8
     fi
     source "$path"
 }

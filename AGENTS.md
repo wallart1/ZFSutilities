@@ -40,6 +40,7 @@ You are a meticulous and expert coding agent. For every task:
 12. When I give you a plan file to execute, as in "Please execute the plan file ...," that means that I just want you to execute the plan. No not modify the plan. Do not enter plan mode. Just execute the plan.
 13. You may see uncommitted changed files that you did not change. Do not be alarmed by this. They are either the user's manual changes or were changed by Kimi in an earlier session. These changes will be included when I instruct you to perform a commit.
 14. Avoid ad hoc workarounds. Make the existing architecture work and use it.
+15. Do not limit or reduce the scope of a task just because it "might take a long time."
 
 ## Hard Rules
 

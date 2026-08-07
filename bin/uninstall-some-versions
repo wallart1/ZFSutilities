@@ -49,7 +49,7 @@ if [[ $# -gt 1 ]]; then
 fi
 
 listfile="${1:-./someinstalledversions}"
-uninstall="$mydir/uninstall-version"
+uninstall=$(find_zfsutility_script uninstall-version)
 
 [[ -f "$listfile" ]] || die "Version list not found: $listfile"
 [[ -x "$uninstall" ]] || die "uninstall-version not found: $uninstall"
