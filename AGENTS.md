@@ -414,7 +414,7 @@ suites with full output only when you need the per-test detail.
 | `test-zfsdelsnap`              | 7     | Snapshot deletion safety checks, hold release, and `zfscheckagainst` dependency sourcing                      |
 | `test-zfslockmanager`          | 35    | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition |
 | `test-zfsretain`               | 10    | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
-| `test-zfs-send-receive-dryrun` | 30    | Dry-run logging, space checks, resume-token helpers (including non-existent destination), clone messages, pv quiet in headless mode                |
+| `test-zfs-send-receive-dryrun` | 33    | Dry-run logging, space checks, resume-token helpers (including non-existent destination), clone messages, pv quiet in headless mode, full-copy lock hand-off |
 | `test-zfssnapbuild`            | 9     | Snapshot name generation, bucket logic, snapfile handling                                                     |
 | `test-module-dependencies`     | 1     | Static analysis: root-level bash modules source the modules whose functions they call                         |
 
