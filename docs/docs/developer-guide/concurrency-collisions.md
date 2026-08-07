@@ -20,11 +20,16 @@ process exit. The manager also detects hierarchical conflicts: a lock on
 `pool/parent` blocks conflicting locks on descendants, and locks on descendants
 block a parent `x` lock.
 
-Only two modules currently use the lock manager:
+Only three modules currently use the lock manager:
 
 * **`zfs-send-receive`** acquires a `w` lock on the source dataset **and** a `w`
   lock on the destination dataset before creating or choosing a snapshot and
-  before each transfer.
+  before each transfer. When a forced full copy must destroy the destination
+  first, it releases its destination `w` lock before calling `zfsdelfs` and
+  reacquires it afterward, so the child `x` lock does not conflict with the
+  parent's held `w` lock.
+* **`zfsdelfs`** acquires an `x` lock on the dataset being destroyed before
+  teardown and holds it until destruction is complete.
 * **`zfsdelsnap`** acquires a `w` lock on the parent dataset before deleting a
   snapshot.
 
@@ -85,14 +90,15 @@ and ignored.
 
 ### 3. Dataset destroy colliding with backup, restore, or prune
 
-`zfsdelfs` does not call `zfslockmanager`. It destroys a dataset and all its
-snapshots without acquiring an `x` lock. If a backup is sending/receiving that
-dataset, or a prune is deleting snapshots inside it, the concurrent destroy can
-fail partway through, leave partial state, or cause the other job to fail.
+`zfsdelfs` acquires an `x` lock on the target dataset before teardown. If a
+backup is sending/receiving that dataset, or a prune is deleting snapshots
+inside it, the concurrent destroy will block until the existing lock is
+released, preventing partial teardown or torn iSCSI state.
 
-This is especially risky for restores: a full-copy restore calls `delfs` on the
-destination before receiving, and `zfsdelfs` does not coordinate with another
-restore or backup targeting the same destination.
+Full-copy restores are coordinated by releasing the destination `w` lock in
+`zfs-send-receive` before invoking `zfsdelfs`, then reacquiring the `w` lock
+after the destination has been destroyed. This prevents a self-lock conflict
+while still serializing two restores targeting the same destination.
 
 ### 4. Snapshot-name collisions
 
@@ -243,8 +249,10 @@ mutate shared resources:
 dataset before enumerating its snapshots, and hold it for the duration of prune
 on that dataset. This prevents prune vs. backup/restore collisions and
 overlapping prunes.
-2. **`zfsdelfs`** should acquire an `x` lock on the dataset being destroyed
-before teardown and hold it until destruction is complete.
+2. ~~**`zfsdelfs`** should acquire an `x` lock on the dataset being destroyed
+before teardown and hold it until destruction is complete.~~ **Resolved:**
+`zfsdelfs` now acquires and holds an `x` lock for the duration of dataset
+destruction.
 3. **Snapshot-name generation** is now serialized with a brief global lock and a
    one-minute reservation file. The naming format was kept unchanged; a future
    enhancement could add a sequence suffix if guaranteed distinct same-minute

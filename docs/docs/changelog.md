@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.74.6
+
+*Released 2026-08-07*
+
+### Fixed
+
+- **`zfs-send-receive` avoids self-lock conflict during forced full copy** —
+  When `force='Y'` requires destroying the destination dataset before a full
+  copy, `zfs-send-receive` now releases its own destination `w` lock before
+  invoking `zfsdelfs` and reacquires it after preparation. This prevents a
+  self-conflict because `zfsdelfs` acquires an `x` lock on the same dataset.
+  Dry-run mode continues to skip the real destroy and therefore does not
+  release the lock.
+
+### Changed
+
+- **Concurrency documentation updated** — `docs/docs/developer-guide/concurrency-collisions.md`
+  now correctly lists `zfsdelfs` as a lock-manager participant and describes the
+  coordinated lock hand-off used by forced full copies.
+
+### Tests
+
+- Added `test_full_copy_releases_dest_lock_around_zfsdelfs`,
+  `test_full_copy_keeps_dest_lock_in_dryrun`, and
+  `test_full_copy_releases_dest_lock_zfsdelfs_failure` to
+  `tests/test-zfs-send-receive-dryrun`, covering the lock release/reacquire
+  behavior around destination preparation.
+
 ## 0.74.5
 
 *Released 2026-08-07*

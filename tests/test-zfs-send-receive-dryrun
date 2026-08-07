@@ -1239,6 +1239,207 @@ test_lock_before_snapshot_creation() {
 }
 
 # ---------------------------------------------------------------------------
+# Helpers for full-copy lock tests
+# ---------------------------------------------------------------------------
+
+_setup_full_copy_lock_test() {
+    local op_trace="$1"
+
+    reset_mocks
+    set_msg_level INFO
+
+    _mock_zfs_fs_list="srcpool/data"
+    _mock_zfs_props["srcpool/data:origin"]="-"
+    _mock_zfs_props["destpool/srcpool/data:origin"]="-"
+    _mock_zfs_props["destpool/srcpool/data:receive_resume_token"]="-"
+    _mock_zfs_props["destpool:available"]="10000000000"
+    _mock_zfs_props["srcpool/data@snap1:type"]="snapshot"
+    _mock_zfs_props["destpool/srcpool/data@snap1:type"]="snapshot"
+    _mock_zfs_datasets["destpool/srcpool/data"]=1
+    _mock_zfs_snap_lists["srcpool/data"]="srcpool/data@snap1"
+    _mock_zfs_snap_lists["destpool/srcpool/data"]="destpool/srcpool/data@snap1"
+    _mock_zfs_guid_lists["srcpool/data"]="guid1"
+    _mock_zfs_guid_lists["destpool/srcpool/data"]="guid1"
+    _mock_zfs_send_size="0"
+
+    nextsnap="@test-2025-06-15T10:00-04:00-d"
+    : > "$op_trace"
+}
+
+_create_mock_zfsdelfs() {
+    local mock_delfs="$1" op_trace="$2" exit_code="${3:-0}"
+    cat > "$mock_delfs" <<EOF
+#!/usr/bin/bash
+echo "zfsdelfs \$*" >> "$op_trace"
+exit $exit_code
+EOF
+    chmod +x "$mock_delfs"
+}
+
+_install_lock_mocks() {
+    local op_trace="$1" mock_delfs="$2"
+
+    _saved_find=$(declare -f find_zfsutility_script)
+    _saved_wait=$(declare -f zfslock_wait_or_resolve)
+    _saved_release=$(declare -f zfslock_release)
+
+    find_zfsutility_script() {
+        if [[ "$1" == "zfsdelfs" ]]; then
+            echo "$mock_delfs"
+        else
+            eval "$_saved_find"
+            find_zfsutility_script "$@"
+        fi
+    }
+
+    zfslock_wait_or_resolve() {
+        echo "wait:$1" >> "$op_trace"
+        ZFSLOCK_ID="/tmp/mock_lock_$$"
+        return 0
+    }
+    zfslock_release() {
+        echo "release:$*" >> "$op_trace"
+    }
+}
+
+_restore_lock_mocks() {
+    eval "$_saved_find"
+    eval "$_saved_wait"
+    eval "$_saved_release"
+    unset _saved_find _saved_wait _saved_release
+}
+
+# ---------------------------------------------------------------------------
+# Test full-copy path releases dest lock around zfsdelfs
+# ---------------------------------------------------------------------------
+
+test_full_copy_releases_dest_lock_around_zfsdelfs() {
+    test_start "Full copy releases and re-acquires dest lock around zfsdelfs"
+
+    local op_trace="$_mock_zfs_state_dir/full_copy_ops.trace"
+    local mock_delfs="$_mock_zfs_state_dir/mock_zfsdelfs"
+    _setup_full_copy_lock_test "$op_trace"
+    _create_mock_zfsdelfs "$mock_delfs" "$op_trace" 0
+    _install_lock_mocks "$op_trace" "$mock_delfs"
+
+    clear_log
+    capture_stderr
+    local overrides
+    overrides="dryrun='N'; autoproceed='Y'; sourcefsremovequalifiers=0; "
+    overrides+="doincrementals='N'; force='Y'"
+    send-receive "srcpool" "destpool" "$overrides" || true
+    restore_stderr
+
+    _restore_lock_mocks
+
+    local trace
+    trace=$(cat "$op_trace")
+
+    local src_lock_line dest_lock_line release_line delfs_line wait_after_line
+    src_lock_line=$(echo "$trace" | grep -n "wait:srcpool/data" | head -1 | cut -d: -f1)
+    dest_lock_line=$(echo "$trace" | grep -n "wait:destpool/srcpool/data" | head -1 | cut -d: -f1)
+    release_line=$(echo "$trace" | grep -n "release:" | head -1 | cut -d: -f1)
+    delfs_line=$(echo "$trace" | grep -n "zfsdelfs destpool/srcpool/data" | head -1 | cut -d: -f1)
+    wait_after_line=$(echo "$trace" | grep -n "wait:destpool/srcpool/data" | tail -1 | cut -d: -f1)
+
+    if [[ -n "$src_lock_line" && -n "$dest_lock_line" && -n "$release_line" && \
+          -n "$delfs_line" && -n "$wait_after_line" && \
+          "$src_lock_line" -lt "$dest_lock_line" && \
+          "$dest_lock_line" -lt "$release_line" && \
+          "$release_line" -lt "$delfs_line" && \
+          "$delfs_line" -lt "$wait_after_line" ]]; then
+        test_pass
+    else
+        test_fail "Unexpected lock operation order; trace='$trace'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test dry-run full copy keeps dest lock
+# ---------------------------------------------------------------------------
+
+test_full_copy_keeps_dest_lock_in_dryrun() {
+    test_start "Dry-run full copy keeps dest lock around prepare step"
+
+    local op_trace="$_mock_zfs_state_dir/full_copy_dryrun_ops.trace"
+    local mock_delfs="$_mock_zfs_state_dir/mock_zfsdelfs_fail"
+    _setup_full_copy_lock_test "$op_trace"
+    # If the dry-run path incorrectly invoked zfsdelfs, make it fail so the
+    # test cannot pass.
+    _create_mock_zfsdelfs "$mock_delfs" "$op_trace" 1
+    _install_lock_mocks "$op_trace" "$mock_delfs"
+
+    clear_log
+    capture_stderr
+    local overrides
+    overrides="dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=0; "
+    overrides+="doincrementals='N'; force='Y'"
+    send-receive "srcpool" "destpool" "$overrides" || true
+    restore_stderr
+
+    _restore_lock_mocks
+
+    local trace
+    trace=$(cat "$op_trace")
+
+    if [[ "$trace" != *"zfsdelfs"* ]]; then
+        test_pass
+    else
+        test_fail "Dry-run invoked zfsdelfs; trace='$trace'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test zfsdelfs failure releases only source lock
+# ---------------------------------------------------------------------------
+
+test_full_copy_releases_dest_lock_zfsdelfs_failure() {
+    test_start "Full copy releases only source lock when zfsdelfs fails"
+
+    local op_trace="$_mock_zfs_state_dir/full_copy_fail_ops.trace"
+    local mock_delfs="$_mock_zfs_state_dir/mock_zfsdelfs_fail"
+    _setup_full_copy_lock_test "$op_trace"
+    _create_mock_zfsdelfs "$mock_delfs" "$op_trace" 1
+    _install_lock_mocks "$op_trace" "$mock_delfs"
+
+    clear_log
+    capture_stderr
+    local overrides
+    overrides="dryrun='N'; autoproceed='Y'; sourcefsremovequalifiers=0; "
+    overrides+="doincrementals='N'; force='Y'"
+    local rc=0
+    # Run in a subshell because the send-receive fatal path calls exit 8,
+    # which would otherwise terminate the test shell.
+    ( send-receive "srcpool" "destpool" "$overrides" ) || rc=$?
+    restore_stderr
+
+    _restore_lock_mocks
+
+    local trace
+    trace=$(cat "$op_trace")
+
+    local src_lock_line dest_lock_line first_release_line second_release_line delfs_line
+    src_lock_line=$(echo "$trace" | grep -n "wait:srcpool/data" | head -1 | cut -d: -f1)
+    dest_lock_line=$(echo "$trace" | grep -n "wait:destpool/srcpool/data" | head -1 | cut -d: -f1)
+    first_release_line=$(echo "$trace" | grep -n "release:" | head -1 | cut -d: -f1)
+    second_release_line=$(echo "$trace" | grep -n "release:" | tail -1 | cut -d: -f1)
+    delfs_line=$(echo "$trace" | grep -n "zfsdelfs destpool/srcpool/data" | head -1 | cut -d: -f1)
+
+    if [[ "$rc" -eq 8 && \
+          -n "$src_lock_line" && -n "$dest_lock_line" && \
+          -n "$first_release_line" && -n "$second_release_line" && \
+          -n "$delfs_line" && \
+          "$src_lock_line" -lt "$dest_lock_line" && \
+          "$dest_lock_line" -lt "$first_release_line" && \
+          "$first_release_line" -lt "$delfs_line" && \
+          "$delfs_line" -lt "$second_release_line" ]]; then
+        test_pass
+    else
+        test_fail "Unexpected lock operation order or rc=$rc; trace='$trace'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1272,5 +1473,8 @@ test_trailer_suppressed_with_inherit
 test_dailybackup_trailer_written_without_inherit
 test_dailybackup_trailer_suppressed_with_inherit
 test_lock_before_snapshot_creation
+test_full_copy_releases_dest_lock_around_zfsdelfs
+test_full_copy_keeps_dest_lock_in_dryrun
+test_full_copy_releases_dest_lock_zfsdelfs_failure
 
 test_summary

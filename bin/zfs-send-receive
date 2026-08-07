@@ -538,11 +538,35 @@ function send-receive {
         if [[ $incremental = '' || $force = "Y" ]]; then
             if zfs list -t filesystem,volume "$destfs""$restorefs" > /dev/null 2>&1; then
                 if ! check_running_vms_or_skip "$destfs$restorefs"; then zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue; fi
-                if ! prepare_destination_for_full_copy "$destfs$restorefs" "$fs"; then
-                    log_msg "FATAL: Failed to prepare destination $destfs$restorefs for full copy."
-                    zfslock_release "$lock_source"
+                # zfsdelfs acquires its own lock when force/allow_destructive is
+                # set. Release our destination lock so the child does not see a
+                # self-conflict, then re-acquire it after preparation.
+                if [[ $dryrun = 'N' ]]; then
                     zfslock_release "$lock_dest"
+                fi
+                if ! prepare_destination_for_full_copy "$destfs$restorefs" "$fs"; then
+                    log_msg "FATAL: Failed to prepare destination $destfs$restorefs" \
+                        "for full copy."
+                    zfslock_release "$lock_source"
+                    [[ $dryrun = 'N' ]] || zfslock_release "$lock_dest"
                     exit 8
+                fi
+                if [[ $dryrun = 'N' ]]; then
+                    zfslock_wait_or_resolve "$destfs$restorefs" "w" \
+                        "send-receive dest: $fs -> $destfs$restorefs"
+                    lock_rc=$?
+                    if [[ $lock_rc -eq 1 ]]; then
+                        log_msg "WARN: Backup operation aborted by user due to" \
+                            "lock conflict on destination '$destfs$restorefs'."
+                        zfslock_release "$lock_source"
+                        exit "$ZFSLOCK_RC_ABORT_OPERATION"
+                    elif [[ $lock_rc -eq 2 ]]; then
+                        log_msg "INFO: Skipping dataset $fs" \
+                            "(lock conflict on destination after preparation)."
+                        zfslock_release "$lock_source"
+                        continue
+                    fi
+                    lock_dest="$ZFSLOCK_ID"
                 fi
             fi
         fi

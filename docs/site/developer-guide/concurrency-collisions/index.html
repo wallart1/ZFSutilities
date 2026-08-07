@@ -2028,11 +2028,16 @@ three lock types on ZFS datasets:</p>
 process exit. The manager also detects hierarchical conflicts: a lock on
 <code>pool/parent</code> blocks conflicting locks on descendants, and locks on descendants
 block a parent <code>x</code> lock.</p>
-<p>Only two modules currently use the lock manager:</p>
+<p>Only three modules currently use the lock manager:</p>
 <ul>
 <li><strong><code>zfs-send-receive</code></strong> acquires a <code>w</code> lock on the source dataset <strong>and</strong> a <code>w</code>
   lock on the destination dataset before creating or choosing a snapshot and
-  before each transfer.</li>
+  before each transfer. When a forced full copy must destroy the destination
+  first, it releases its destination <code>w</code> lock before calling <code>zfsdelfs</code> and
+  reacquires it afterward, so the child <code>x</code> lock does not conflict with the
+  parent's held <code>w</code> lock.</li>
+<li><strong><code>zfsdelfs</code></strong> acquires an <code>x</code> lock on the dataset being destroyed before
+  teardown and holds it until destruction is complete.</li>
 <li><strong><code>zfsdelsnap</code></strong> acquires a <code>w</code> lock on the parent dataset before deleting a
   snapshot.</li>
 </ul>
@@ -2148,13 +2153,14 @@ snapshot list and try to delete the same snapshots. One will succeed; the other
 will get "dataset does not exist" or "Dataset is busy" warnings that are logged
 and ignored.</p>
 <h3 id="3-dataset-destroy-colliding-with-backup-restore-or-prune">3. Dataset destroy colliding with backup, restore, or prune<a class="headerlink" href="#3-dataset-destroy-colliding-with-backup-restore-or-prune" title="Permanent link">&para;</a></h3>
-<p><code>zfsdelfs</code> does not call <code>zfslockmanager</code>. It destroys a dataset and all its
-snapshots without acquiring an <code>x</code> lock. If a backup is sending/receiving that
-dataset, or a prune is deleting snapshots inside it, the concurrent destroy can
-fail partway through, leave partial state, or cause the other job to fail.</p>
-<p>This is especially risky for restores: a full-copy restore calls <code>delfs</code> on the
-destination before receiving, and <code>zfsdelfs</code> does not coordinate with another
-restore or backup targeting the same destination.</p>
+<p><code>zfsdelfs</code> acquires an <code>x</code> lock on the target dataset before teardown. If a
+backup is sending/receiving that dataset, or a prune is deleting snapshots
+inside it, the concurrent destroy will block until the existing lock is
+released, preventing partial teardown or torn iSCSI state.</p>
+<p>Full-copy restores are coordinated by releasing the destination <code>w</code> lock in
+<code>zfs-send-receive</code> before invoking <code>zfsdelfs</code>, then reacquiring the <code>w</code> lock
+after the destination has been destroyed. This prevents a self-lock conflict
+while still serializing two restores targeting the same destination.</p>
 <h3 id="4-snapshot-name-collisions">4. Snapshot-name collisions<a class="headerlink" href="#4-snapshot-name-collisions" title="Permanent link">&para;</a></h3>
 <p>Snapshot names are generated from the current minute. Both bash and Python
 generators now serialize name generation with a brief global lock and record the
@@ -2401,8 +2407,10 @@ mutate shared resources:</p>
 dataset before enumerating its snapshots, and hold it for the duration of prune
 on that dataset. This prevents prune vs. backup/restore collisions and
 overlapping prunes.</li>
-<li><strong><code>zfsdelfs</code></strong> should acquire an <code>x</code> lock on the dataset being destroyed
-before teardown and hold it until destruction is complete.</li>
+<li>~~<strong><code>zfsdelfs</code></strong> should acquire an <code>x</code> lock on the dataset being destroyed
+before teardown and hold it until destruction is complete.~~ <strong>Resolved:</strong>
+<code>zfsdelfs</code> now acquires and holds an <code>x</code> lock for the duration of dataset
+destruction.</li>
 <li><strong>Snapshot-name generation</strong> is now serialized with a brief global lock and a
    one-minute reservation file. The naming format was kept unchanged; a future
    enhancement could add a sequence suffix if guaranteed distinct same-minute
@@ -2535,7 +2543,7 @@ snapshot.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.5
+      ZFS Utilities v0.74.6
     </div>
   
   
@@ -2560,7 +2568,7 @@ snapshot.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.5"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.6"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
