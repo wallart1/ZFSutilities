@@ -62,6 +62,23 @@ Offsite pools often have fewer copies due to storage constraints:
 
 - 2 offsite (`s` bucket) snapshots
 
+### Special `<offsite>` Policy
+
+If you have more than one offsite-candidate pool (for example, rotated removable
+pools such as `z22tb` and `z40tb`), you can create a single retention policy
+keyed as `<offsite>` instead of adding a separate policy for each pool. At prune
+time, the `<offsite>` entry expands to every offsite-candidate pool that is
+currently online, and each online pool is pruned using the same buckets.
+
+The `<offsite>` row appears in the GUI Retention tab's **Prune** pool list with
+its health column showing the resolved pool names (or `not online` when none are
+attached). It is also supported by scheduled retention profiles and by the
+headless `profile_runner.py`.
+
+This avoids keeping per-pool policies for removable pools that are frequently
+offline and ensures pruning still runs against whichever offsite pool happens to
+be connected.
+
 ## Snapshot Buckets
 
 | Bucket | Label   | When created                      |

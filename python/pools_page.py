@@ -12,7 +12,7 @@ import subprocess
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from feature_config import (
     get_offsite_candidate_names,
     get_pool_names,
@@ -39,11 +39,22 @@ from scrub_manager import (
 #   0 name, 1 health, 2 size, 3 alloc, 4 free, 5 freeing,
 #   6 ckpoint, 7 frag, 8 cap, 9 status_flag ("registered" / "unregistered"),
 #  10 offsite_candidate (bool), 11 errors_summary (str)
-COL_NAME, COL_HEALTH, COL_SIZE, COL_ALLOC, COL_FREE, \
-    COL_FREEING, COL_CKPOINT, COL_FRAG, COL_CAP, COL_FLAG, \
-    COL_OFFSITE, COL_ERRORS = range(12)
+(
+    COL_NAME,
+    COL_HEALTH,
+    COL_SIZE,
+    COL_ALLOC,
+    COL_FREE,
+    COL_FREEING,
+    COL_CKPOINT,
+    COL_FRAG,
+    COL_CAP,
+    COL_FLAG,
+    COL_OFFSITE,
+    COL_ERRORS,
+) = range(12)
 
-FLAG_REGISTERED   = "registered"
+FLAG_REGISTERED = "registered"
 FLAG_UNREGISTERED = "unregistered"
 
 
@@ -59,7 +70,7 @@ FLAG_UNREGISTERED = "unregistered"
 #   "1.5T"  -> match (1.5, T)
 #   "500G"  -> match (500, G)
 #   "-"     -> no match (handled separately)
-_SIZE_RE = re.compile(r'^([\d.]+)\s*([TGMKB]?)', re.IGNORECASE)
+_SIZE_RE = re.compile(r"^([\d.]+)\s*([TGMKB]?)", re.IGNORECASE)
 
 
 def _parse_size(val):
@@ -72,8 +83,12 @@ def _parse_size(val):
     num = float(m.group(1))
     suffix = m.group(2).upper()
     multipliers = {
-        'T': 1024 ** 4, 'G': 1024 ** 3, 'M': 1024 ** 2,
-        'K': 1024, 'B': 1, '': 1,
+        "T": 1024**4,
+        "G": 1024**3,
+        "M": 1024**2,
+        "K": 1024,
+        "B": 1,
+        "": 1,
     }
     return int(num * multipliers.get(suffix, 1))
 
@@ -83,7 +98,7 @@ def _parse_percent(val):
     if val == "-" or val == "":
         return -1
     try:
-        return float(str(val).rstrip('%'))
+        return float(str(val).rstrip("%"))
     except ValueError:
         return -1
 
@@ -105,6 +120,7 @@ def _percent_sort_func(model, iter1, iter2, col_idx):
 # ---------------------------------------------------------------------------
 # Page builder
 # ---------------------------------------------------------------------------
+
 
 def create_pools_page(app):
     """Build and return the full Pools tab widget."""
@@ -129,7 +145,7 @@ def create_pools_page(app):
 
     desc_label = Gtk.Label(
         label="Authoritative list of known pools, compared with live status. "
-              "Pools in red are online but not added."
+        "Pools in red are online but not added."
     )
     desc_label.set_halign(Gtk.Align.START)
     desc_label.set_line_wrap(True)
@@ -139,9 +155,7 @@ def create_pools_page(app):
     top_box.pack_start(Gtk.Separator(), False, False, 0)
 
     # Pool table
-    app.pool_store = Gtk.ListStore(
-        str, str, str, str, str, str, str, str, str, str, bool, str
-    )
+    app.pool_store = Gtk.ListStore(str, str, str, str, str, str, str, str, str, str, bool, str)
     app.pool_view = Gtk.TreeView(model=app.pool_store)
     app.pool_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.pool_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
@@ -158,12 +172,8 @@ def create_pools_page(app):
     # Offsite candidate checkbox (registered pools only)
     offsite_renderer = Gtk.CellRendererToggle()
     offsite_renderer.connect("toggled", _on_offsite_toggled, app)
-    offsite_col = Gtk.TreeViewColumn(
-        "Offsite", offsite_renderer, active=COL_OFFSITE
-    )
-    offsite_col.set_cell_data_func(
-        offsite_renderer, _pool_offsite_cell_func
-    )
+    offsite_col = Gtk.TreeViewColumn("Offsite", offsite_renderer, active=COL_OFFSITE)
+    offsite_col.set_cell_data_func(offsite_renderer, _pool_offsite_cell_func)
     configure_treeview_column(offsite_col, width=55)
     app.pool_view.append_column(offsite_col)
 
@@ -185,19 +195,19 @@ def create_pools_page(app):
 
     # Numeric columns — narrower, right-aligned headings and cells
     numeric_cols = [
-        ("Size",    COL_SIZE,    55),
-        ("Alloc",   COL_ALLOC,   55),
-        ("Free",    COL_FREE,    55),
+        ("Size", COL_SIZE, 55),
+        ("Alloc", COL_ALLOC, 55),
+        ("Free", COL_FREE, 55),
         ("Freeing", COL_FREEING, 50),
         ("Ckpoint", COL_CKPOINT, 50),
-        ("Frag",    COL_FRAG,    45),
-        ("Cap",     COL_CAP,     45),
+        ("Frag", COL_FRAG, 45),
+        ("Cap", COL_CAP, 45),
     ]
     for title, col_idx, width in numeric_cols:
         renderer = Gtk.CellRendererText()
         renderer.set_property("xalign", 1.0)
         col = Gtk.TreeViewColumn(title, renderer, text=col_idx)
-        col.set_alignment(1.0)            # right-align the header
+        col.set_alignment(1.0)  # right-align the header
         configure_treeview_column(col, width=width)
         col.set_clickable(True)
         col.connect("clicked", _on_pool_column_clicked, app, col_idx)
@@ -212,13 +222,9 @@ def create_pools_page(app):
 
     # Enable drag-and-drop reordering; disable while sorted
     app.pool_view.set_reorderable(True)
-    app.pool_store.connect(
-        "sort-column-changed", _on_pools_sort_column_changed, app
-    )
+    app.pool_store.connect("sort-column-changed", _on_pools_sort_column_changed, app)
     app.pool_view.connect("drag-end", _on_pools_drag_end, app)
-    app.pool_view.get_selection().connect(
-        "changed", _on_pool_selection_changed, app
-    )
+    app.pool_view.get_selection().connect("changed", _on_pool_selection_changed, app)
 
     scrolled = Gtk.ScrolledWindow()
     scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -320,9 +326,7 @@ def create_pools_page(app):
 
     app.enable_treeview_copy(app.scrub_view)
     app._ui_state.bind_treeview(app.scrub_view, "pools_scrub_view")
-    app.scrub_view.get_selection().connect(
-        "changed", _on_scrub_selection_changed, app
-    )
+    app.scrub_view.get_selection().connect("changed", _on_scrub_selection_changed, app)
 
     scrub_scrolled = Gtk.ScrolledWindow()
     scrub_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -348,6 +352,7 @@ def create_pools_page(app):
 # Data helpers
 # ---------------------------------------------------------------------------
 
+
 def refresh_pools_page(app):
     """Refresh the table from zpool list, preserving the known-pool order."""
     # Preserve multi-selection by pool name
@@ -362,10 +367,7 @@ def refresh_pools_page(app):
     app.pool_store.clear()
 
     try:
-        online_pools = {
-            row["name"]: row
-            for row in app.ctx.zfs_repository.list_pools_full()
-        }
+        online_pools = {row["name"]: row for row in app.ctx.zfs_repository.list_pools_full()}
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Error running zpool list: {e}")
         online_pools = {}
@@ -381,31 +383,63 @@ def refresh_pools_page(app):
         if pool_name in online_pools:
             p = online_pools[pool_name]
             errors_summary = _errors_summary_for_pool(pool_name, app)
-            app.pool_store.append([
-                pool_name, p['health'], p['size'], p['alloc'], p['free'],
-                p['freeing'], p['ckpoint'], p['frag'], p['cap'],
-                FLAG_REGISTERED, is_candidate, errors_summary,
-            ])
+            app.pool_store.append(
+                [
+                    pool_name,
+                    p["health"],
+                    p["size"],
+                    p["alloc"],
+                    p["free"],
+                    p["freeing"],
+                    p["ckpoint"],
+                    p["frag"],
+                    p["cap"],
+                    FLAG_REGISTERED,
+                    is_candidate,
+                    errors_summary,
+                ]
+            )
             online_count += 1
         else:
-            app.pool_store.append([
-                pool_name, "OFFLINE", "-", "-", "-", "-", "-", "-", "-",
-                FLAG_REGISTERED, is_candidate, "—",
-            ])
+            app.pool_store.append(
+                [
+                    pool_name,
+                    "OFFLINE",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    FLAG_REGISTERED,
+                    is_candidate,
+                    "—",
+                ]
+            )
             offline_count += 1
 
     # Unregistered pools (online but not in the registry)
     for pool_name, p in online_pools.items():
         if pool_name not in known_names:
             errors_summary = _errors_summary_for_pool(pool_name, app)
-            app.pool_store.append([
-                pool_name, p['health'], p['size'], p['alloc'], p['free'],
-                p['freeing'], p['ckpoint'], p['frag'], p['cap'],
-                FLAG_UNREGISTERED, False, errors_summary,
-            ])
-            log_msg(
-                f"WARN: Pool '{pool_name}' is online but not in the pool registry"
+            app.pool_store.append(
+                [
+                    pool_name,
+                    p["health"],
+                    p["size"],
+                    p["alloc"],
+                    p["free"],
+                    p["freeing"],
+                    p["ckpoint"],
+                    p["frag"],
+                    p["cap"],
+                    FLAG_UNREGISTERED,
+                    False,
+                    errors_summary,
+                ]
             )
+            log_msg(f"WARN: Pool '{pool_name}' is online but not in the pool registry")
 
     total = len(app.known_pools)
     app.pool_summary_label.set_text(
@@ -430,6 +464,7 @@ def refresh_pools_page(app):
 # Cell data functions
 # ---------------------------------------------------------------------------
 
+
 def _pool_offsite_cell_func(column, renderer, model, tree_iter, data=None):
     """Enable the Offsite checkbox only for registered pools."""
     flag = model.get_value(tree_iter, COL_FLAG)
@@ -441,10 +476,10 @@ def _pool_name_cell_func(column, renderer, model, tree_iter, data=None):
     flag = model.get_value(tree_iter, COL_FLAG)
     health = model.get_value(tree_iter, COL_HEALTH)
     if flag == FLAG_UNREGISTERED:
-        renderer.set_property("foreground", "#F44336")   # red
+        renderer.set_property("foreground", "#F44336")  # red
         renderer.set_property("weight", Pango.Weight.BOLD)
     elif health == "OFFLINE":
-        renderer.set_property("foreground", "#FF9800")   # orange
+        renderer.set_property("foreground", "#FF9800")  # orange
         renderer.set_property("weight", Pango.Weight.NORMAL)
     else:
         renderer.set_property("foreground", None)
@@ -503,6 +538,7 @@ def _pool_errors_cell_func(column, renderer, model, tree_iter, data=None):
 # ---------------------------------------------------------------------------
 # Sorting / DND handlers
 # ---------------------------------------------------------------------------
+
 
 def _on_pool_column_clicked(col, app, col_idx):
     """Cycle sort state: ascending → descending → unsorted."""
@@ -610,6 +646,7 @@ def _on_offsite_toggled(renderer, path, app):
 # Scrub Manager refresh + controls
 # ---------------------------------------------------------------------------
 
+
 def refresh_scrub_table(app):
     """Update the scrub table with current zpool status.
 
@@ -669,9 +706,7 @@ def refresh_scrub_table(app):
     if summary["paused"]:
         parts.append(f"{summary['paused']} paused")
     if parts:
-        app.scrub_summary_label.set_text(
-            f"Queue: {', '.join(parts)} (target: {summary['target']})"
-        )
+        app.scrub_summary_label.set_text(f"Queue: {', '.join(parts)} (target: {summary['target']})")
     else:
         app.scrub_summary_label.set_text("Queue: idle")
 
@@ -682,6 +717,7 @@ def schedule_scrub_refresh_burst(app, count=3, interval=2):
     Gives quick visual feedback after scrub actions, even when the user has
     configured a long refresh interval.
     """
+
     def _burst_tick(remaining):
         if remaining <= 0:
             return False
@@ -755,15 +791,14 @@ def get_selected_pool_names(treeview, name_col_idx=0):
 # Edit + dirty state
 # ---------------------------------------------------------------------------
 
+
 def _update_pools_dirty_indicator(app):
     app.pools_dirty = app.known_pools != app._pools_saved_state
     if app.pools_dirty:
-        app.pools_dirty_label.set_markup(
-            "<small><i>Unsaved changes</i></small>"
-        )
+        app.pools_dirty_label.set_markup("<small><i>Unsaved changes</i></small>")
     else:
         app.pools_dirty_label.set_text("")
-    btn = getattr(app, '_pools_save_btn', None)
+    btn = getattr(app, "_pools_save_btn", None)
     if btn:
         set_button_markup_red(btn, app.pools_dirty)
 
@@ -778,11 +813,13 @@ def _get_selected_pool_rows(treeview):
     rows = []
     for path in pathlist:
         tree_iter = model.get_iter(path)
-        rows.append((
-            model.get_value(tree_iter, COL_NAME),
-            model.get_value(tree_iter, COL_FLAG),
-            model.get_value(tree_iter, COL_HEALTH),
-        ))
+        rows.append(
+            (
+                model.get_value(tree_iter, COL_NAME),
+                model.get_value(tree_iter, COL_FLAG),
+                model.get_value(tree_iter, COL_HEALTH),
+            )
+        )
     return rows
 
 
@@ -815,42 +852,37 @@ def update_pools_button_sensitivity(app):
     pool_rows = _get_selected_pool_rows(app.pool_view)
 
     has_registered_online = any(
-        flag == FLAG_REGISTERED and health != "OFFLINE"
-        for _name, flag, health in pool_rows
+        flag == FLAG_REGISTERED and health != "OFFLINE" for _name, flag, health in pool_rows
     )
-    has_registered = any(
-        flag == FLAG_REGISTERED for _name, flag, _health in pool_rows
-    )
-    has_online = any(
-        health != "OFFLINE" for _name, _flag, health in pool_rows
-    )
+    has_registered = any(flag == FLAG_REGISTERED for _name, flag, _health in pool_rows)
+    has_online = any(health != "OFFLINE" for _name, _flag, health in pool_rows)
     single_pool = len(pool_rows) == 1
 
-    scrub_view = getattr(app, 'scrub_view', None)
+    scrub_view = getattr(app, "scrub_view", None)
     if scrub_view is not None:
         scrub_states = _get_selected_scrub_states(scrub_view)
     else:
         scrub_states = set()
-    has_scrub_selection = bool(scrub_states)
+    can_start_scrub = bool(scrub_states - {"scrubbing", "pending"})
     can_pause_scrub = bool(scrub_states & {"scrubbing", "pending"})
     can_resume_scrub = bool(scrub_states & {"paused"})
     can_stop_scrub = bool(scrub_states & {"scrubbing", "pending", "paused"})
 
     for attr, sensitive in [
-        ('_pools_watch_btn', has_registered_online),
-        ('_pools_details_btn', single_pool),
-        ('_pools_add_btn', True),
-        ('_pools_remove_btn', has_registered),
-        ('_pools_import_btn', True),
-        ('_pools_export_btn', has_online),
-        ('_pools_save_btn', getattr(app, 'pools_dirty', False)),
-        ('_pools_revert_btn', getattr(app, 'pools_dirty', False)),
-        ('_pools_refresh_btn', True),
-        ('_scrub_start_btn', has_scrub_selection),
-        ('_scrub_pause_btn', can_pause_scrub),
-        ('_scrub_resume_btn', can_resume_scrub),
-        ('_scrub_stop_btn', can_stop_scrub),
-        ('_pools_add_profile_btn', True),
+        ("_pools_watch_btn", has_registered_online),
+        ("_pools_details_btn", single_pool),
+        ("_pools_add_btn", True),
+        ("_pools_remove_btn", has_registered),
+        ("_pools_import_btn", True),
+        ("_pools_export_btn", has_online),
+        ("_pools_save_btn", getattr(app, "pools_dirty", False)),
+        ("_pools_revert_btn", getattr(app, "pools_dirty", False)),
+        ("_pools_refresh_btn", True),
+        ("_scrub_start_btn", can_start_scrub),
+        ("_scrub_pause_btn", can_pause_scrub),
+        ("_scrub_resume_btn", can_resume_scrub),
+        ("_scrub_stop_btn", can_stop_scrub),
+        ("_pools_add_profile_btn", True),
     ]:
         btn = getattr(app, attr, None)
         if btn:

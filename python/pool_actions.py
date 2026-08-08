@@ -4,7 +4,7 @@ Pool tab action handlers — extracted from pools_page.py.
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from backup_config import log_msg, save_pools
 from gi.repository import Gtk
 from gui_helpers import (
@@ -57,7 +57,7 @@ def on_pools_watch(app):
 
 
 def on_pools_details(app):
-    """Show zpool status output for the selected pool."""
+    """Write zpool status output for the selected pool to the GUI log."""
     selection = app.pool_view.get_selection()
     model, pathlist = selection.get_selected_rows()
     if not pathlist:
@@ -71,15 +71,10 @@ def on_pools_details(app):
         log_msg(f"WARN: Error getting status for '{pool_name}'")
         return
 
-    dialog = create_dialog(
-        f"Pool Details: {pool_name}", app,
-        [(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)],
-        size=(650, 450),
-    )
-    add_scrolled_text_view(dialog.get_content_area(), status_text)
-    dialog.show_all()
-    dialog.run()
-    dialog.destroy()
+    log_msg(f"INFO: Pool details for {pool_name}:")
+    for line in status_text.splitlines():
+        if line.strip():
+            log_msg(f"INFO: {line}")
 
 
 def on_pools_add(app):
@@ -94,9 +89,9 @@ def on_pools_add(app):
             prefill = model.get_value(tree_iter, COL_NAME)
 
     dialog = create_dialog(
-        "Add Pool", app,
-        [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
-         (Gtk.STOCK_OK, Gtk.ResponseType.OK)],
+        "Add Pool",
+        app,
+        [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL), (Gtk.STOCK_OK, Gtk.ResponseType.OK)],
         default_response=Gtk.ResponseType.OK,
     )
     content = dialog.get_content_area()
@@ -122,9 +117,7 @@ def on_pools_add(app):
         log_msg(f"WARN: Pool '{pool_name}' is already in the registry")
         return
 
-    app.known_pools.append(
-        {"name": pool_name, "offsite_candidate": False}
-    )
+    app.known_pools.append({"name": pool_name, "offsite_candidate": False})
     refresh_pools_page(app)
     log_msg(f"INFO: Added '{pool_name}' to pool registry (unsaved)")
 
@@ -137,30 +130,30 @@ def _parse_importable_pools(zpool_output):
     """
     blocks = []
     current = []
-    for line in zpool_output.split('\n'):
-        if line.strip().startswith('pool:') and current:
-            blocks.append('\n'.join(current))
+    for line in zpool_output.split("\n"):
+        if line.strip().startswith("pool:") and current:
+            blocks.append("\n".join(current))
             current = []
         current.append(line)
     if current:
-        blocks.append('\n'.join(current))
+        blocks.append("\n".join(current))
 
     pools = []
     filtered = []
     for block in blocks:
-        lines = block.split('\n')
+        lines = block.split("\n")
         name = None
         in_config = False
         is_zvol_backed = False
         for line in lines:
             stripped = line.strip()
-            if stripped.startswith('pool:'):
-                name = stripped.split(':', 1)[1].strip()
-            elif stripped == 'config:':
+            if stripped.startswith("pool:"):
+                name = stripped.split(":", 1)[1].strip()
+            elif stripped == "config:":
                 in_config = True
             elif in_config and stripped:
                 parts = stripped.split()
-                if parts and parts[0].startswith('zd'):
+                if parts and parts[0].startswith("zd"):
                     is_zvol_backed = True
         if name:
             if is_zvol_backed:
@@ -173,7 +166,8 @@ def _parse_importable_pools(zpool_output):
 def _show_pool_import_details(app, pool_name, details):
     """Show a dialog with the full zpool import details for a pool."""
     dialog = create_dialog(
-        f"Import Details: {pool_name}", app,
+        f"Import Details: {pool_name}",
+        app,
         [(Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE)],
         size=(550, 400),
     )
@@ -224,8 +218,7 @@ def on_pools_import(app):
         msg = "No pools available for import."
         if filtered:
             msg += (
-                f"\n\n({len(filtered)} pool(s) hidden because they are "
-                f"backed by zvol partitions.)"
+                f"\n\n({len(filtered)} pool(s) hidden because they are backed by zvol partitions.)"
             )
         dialog = Gtk.MessageDialog(
             transient_for=app,
@@ -239,10 +232,13 @@ def on_pools_import(app):
         return
 
     dialog = create_dialog(
-        "Import Pool", app,
-        [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
-         ("Details", Gtk.ResponseType.APPLY),
-         ("Import", Gtk.ResponseType.OK)],
+        "Import Pool",
+        app,
+        [
+            (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
+            ("Details", Gtk.ResponseType.APPLY),
+            ("Import", Gtk.ResponseType.OK),
+        ],
         default_response=Gtk.ResponseType.OK,
     )
     content = dialog.get_content_area()
@@ -271,9 +267,7 @@ def on_pools_import(app):
 
     if filtered:
         info = Gtk.Label()
-        info.set_markup(
-            f"<small><i>{len(filtered)} zvol-backed pool(s) hidden</i></small>"
-        )
+        info.set_markup(f"<small><i>{len(filtered)} zvol-backed pool(s) hidden</i></small>")
         info.set_halign(Gtk.Align.START)
         content.add(info)
 
@@ -367,9 +361,7 @@ def on_pools_remove(app):
         return
 
     for pool_name in registered:
-        app.known_pools = [
-            p for p in app.known_pools if p["name"] != pool_name
-        ]
+        app.known_pools = [p for p in app.known_pools if p["name"] != pool_name]
         log_msg(f"INFO: Removed '{pool_name}' from pool registry (unsaved)")
     refresh_pools_page(app)
 
@@ -398,7 +390,7 @@ def on_pools_revert(app):
 
 def check_pools_dirty(app):
     """Style the Save button to match the Backup tab pattern."""
-    btn = getattr(app, '_pools_save_btn', None)
+    btn = getattr(app, "_pools_save_btn", None)
     if btn:
         set_button_markup_red(btn, app.pools_dirty)
 
@@ -406,6 +398,7 @@ def check_pools_dirty(app):
 # ---------------------------------------------------------------------------
 # Scrub action handlers
 # ---------------------------------------------------------------------------
+
 
 def on_scrub_start(app):
     """Add selected pools to the scrub queue."""
@@ -415,6 +408,7 @@ def on_scrub_start(app):
         return
     app.scrub_queue.add_pending(pools)
     from pools_page import refresh_scrub_table, schedule_scrub_refresh_burst
+
     refresh_scrub_table(app)
     schedule_scrub_refresh_burst(app)
 
@@ -429,6 +423,7 @@ def on_scrub_pause(app):
     for name in pools:
         pause_scrub(name)
     from pools_page import refresh_scrub_table, schedule_scrub_refresh_burst
+
     refresh_scrub_table(app)
     schedule_scrub_refresh_burst(app)
 
@@ -449,6 +444,7 @@ def on_scrub_resume(app):
         return
     app.scrub_queue.resume_pools(to_resume)
     from pools_page import refresh_scrub_table, schedule_scrub_refresh_burst
+
     refresh_scrub_table(app)
     schedule_scrub_refresh_burst(app)
 
@@ -463,6 +459,7 @@ def on_scrub_stop(app):
         stop_scrub(name)
     app.scrub_queue.remove_pools(pools)
     from pools_page import refresh_scrub_table, schedule_scrub_refresh_burst
+
     refresh_scrub_table(app)
     schedule_scrub_refresh_burst(app)
 
@@ -471,6 +468,7 @@ def on_scrub_stop(app):
 # Selection helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_selected_rows(app):
     """Return list of (pool_name, health) for all selected rows in pool_view."""
     selection = app.pool_view.get_selection()
@@ -478,10 +476,5 @@ def _get_selected_rows(app):
     rows = []
     for path in pathlist:
         tree_iter = model.get_iter(path)
-        rows.append((model.get_value(tree_iter, COL_NAME),
-                     model.get_value(tree_iter, COL_HEALTH)))
+        rows.append((model.get_value(tree_iter, COL_NAME), model.get_value(tree_iter, COL_HEALTH)))
     return rows
-
-
-
-

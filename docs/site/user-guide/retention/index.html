@@ -1063,6 +1063,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#special-offsite-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Special &lt;offsite&gt; Policy
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1988,6 +1999,19 @@ those policies are left untouched.</p>
 <ul>
 <li>2 offsite (<code>s</code> bucket) snapshots</li>
 </ul>
+<h3 id="special-offsite-policy">Special <code>&lt;offsite&gt;</code> Policy<a class="headerlink" href="#special-offsite-policy" title="Permanent link">&para;</a></h3>
+<p>If you have more than one offsite-candidate pool (for example, rotated removable
+pools such as <code>z22tb</code> and <code>z40tb</code>), you can create a single retention policy
+keyed as <code>&lt;offsite&gt;</code> instead of adding a separate policy for each pool. At prune
+time, the <code>&lt;offsite&gt;</code> entry expands to every offsite-candidate pool that is
+currently online, and each online pool is pruned using the same buckets.</p>
+<p>The <code>&lt;offsite&gt;</code> row appears in the GUI Retention tab's <strong>Prune</strong> pool list with
+its health column showing the resolved pool names (or <code>not online</code> when none are
+attached). It is also supported by scheduled retention profiles and by the
+headless <code>profile_runner.py</code>.</p>
+<p>This avoids keeping per-pool policies for removable pools that are frequently
+offline and ensures pruning still runs against whichever offsite pool happens to
+be connected.</p>
 <h2 id="snapshot-buckets">Snapshot Buckets<a class="headerlink" href="#snapshot-buckets" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -2196,7 +2220,7 @@ sudo<span class="w"> </span>-E<span class="w"> </span>./zfsmassdelsnaps<span cla
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.75.0
+      ZFS Utilities v0.76.0
     </div>
   
   
@@ -2221,7 +2245,7 @@ sudo<span class="w"> </span>-E<span class="w"> </span>./zfsmassdelsnaps<span cla
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.75.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.76.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

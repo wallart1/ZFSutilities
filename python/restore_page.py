@@ -7,7 +7,7 @@ snapshot, then incremental copy of remaining snapshots) driven from the GUI.
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from feature_config import (
     _maybe_seed_checkagainst,
     get_pool_names,
@@ -26,13 +26,19 @@ from scrub_manager import attach_step_scrub_callbacks
 
 # Advanced variables (all plain text entries)
 RESTORE_ADVANCED_VARIABLES = [
-    "depth", "label", "includes", "excludes", "startwith", "endwith",
+    "depth",
+    "label",
+    "includes",
+    "excludes",
+    "startwith",
+    "endwith",
 ]
 
 
 # ---------------------------------------------------------------------------
 # Page builder
 # ---------------------------------------------------------------------------
+
 
 def create_restore_page(app, ctx):
     """Build and return the full Restore tab widget."""
@@ -96,9 +102,7 @@ def create_restore_page(app, ctx):
     )
     sd_grid.attach(app.restore_dest_entry, 1, 1, 1, 1)
 
-    app.restore_auto_dest_check = Gtk.CheckButton(
-        label="Auto-determine destination"
-    )
+    app.restore_auto_dest_check = Gtk.CheckButton(label="Auto-determine destination")
     app.restore_auto_dest_check.set_active(restore_cfg.get("auto_dest", False))
     app.restore_auto_dest_check.set_tooltip_text(
         "Leave Destination blank and derive it from the source by stripping "
@@ -132,9 +136,20 @@ def create_restore_page(app, ctx):
         entry.set_hexpand(True)
         entry.set_width_chars(1)
         if key in ("includes", "excludes"):
-            entry.set_tooltip_text("Space-separated list of substrings; prefix with = for exact match")
+            entry.set_tooltip_text(
+                "Space-separated list of substrings; prefix with = for exact match"
+            )
         adv_grid.attach(entry, 1, row, 1, 1)
         app.restore_var_widgets[key] = entry
+
+    app.restore_pause_scrubs = Gtk.CheckButton(
+        label="Pause scrubs on source/destination pools during each step"
+    )
+    app.restore_pause_scrubs.set_active(restore_cfg.get("pause_scrubs", False))
+    app.restore_pause_scrubs.set_tooltip_text(
+        "Pause ZFS scrubs on the source and destination pools while the restore step is running."
+    )
+    adv_grid.attach(app.restore_pause_scrubs, 0, len(RESTORE_ADVANCED_VARIABLES), 2, 1)
 
     adv_expander.add(adv_grid)
     box.pack_start(adv_expander, False, False, 0)
@@ -148,9 +163,7 @@ def create_restore_page(app, ctx):
     steps_box.set_margin_top(5)
     steps_box.set_margin_bottom(5)
 
-    app.restore_part1_check = Gtk.CheckButton(
-        label="Part 1: Full copy from oldest snapshot"
-    )
+    app.restore_part1_check = Gtk.CheckButton(label="Part 1: Full copy from oldest snapshot")
     app.restore_part1_check.set_active(restore_cfg.get("do_part1", True))
     steps_box.pack_start(app.restore_part1_check, False, False, 0)
 
@@ -159,18 +172,6 @@ def create_restore_page(app, ctx):
     )
     app.restore_part2_check.set_active(restore_cfg.get("do_part2", True))
     steps_box.pack_start(app.restore_part2_check, False, False, 0)
-
-    app.restore_pause_scrubs = Gtk.CheckButton(
-        label="Pause scrubs on source/destination pools during each step"
-    )
-    app.restore_pause_scrubs.set_active(
-        restore_cfg.get("pause_scrubs", False)
-    )
-    app.restore_pause_scrubs.set_tooltip_text(
-        "Pause ZFS scrubs on the source and destination pools while the "
-        "restore step is running."
-    )
-    steps_box.pack_start(app.restore_pause_scrubs, False, False, 0)
 
     steps_frame.add(steps_box)
     box.pack_start(steps_frame, False, False, 0)
@@ -198,26 +199,14 @@ def create_restore_page(app, ctx):
     box.pack_start(notes_frame, False, False, 0)
 
     # Connect signals for dirty tracking
-    app.restore_source_entry.connect(
-        "changed", lambda w, a=app: _on_restore_source_changed(a)
-    )
-    app.restore_dest_entry.connect(
-        "changed", lambda w, a=app: check_restore_dirty(a)
-    )
-    app.restore_auto_dest_check.connect(
-        "toggled", lambda w, a=app: _on_auto_dest_toggled(a)
-    )
+    app.restore_source_entry.connect("changed", lambda w, a=app: _on_restore_source_changed(a))
+    app.restore_dest_entry.connect("changed", lambda w, a=app: check_restore_dirty(a))
+    app.restore_auto_dest_check.connect("toggled", lambda w, a=app: _on_auto_dest_toggled(a))
     for widget in app.restore_var_widgets.values():
         widget.connect("changed", lambda w, a=app: check_restore_dirty(a))
-    app.restore_part1_check.connect(
-        "toggled", lambda w, a=app: check_restore_dirty(a)
-    )
-    app.restore_part2_check.connect(
-        "toggled", lambda w, a=app: check_restore_dirty(a)
-    )
-    app.restore_pause_scrubs.connect(
-        "toggled", lambda w, a=app: check_restore_dirty(a)
-    )
+    app.restore_part1_check.connect("toggled", lambda w, a=app: check_restore_dirty(a))
+    app.restore_part2_check.connect("toggled", lambda w, a=app: check_restore_dirty(a))
+    app.restore_pause_scrubs.connect("toggled", lambda w, a=app: check_restore_dirty(a))
 
     # Apply initial sensitivity state and auto-computed destination.
     _on_auto_dest_toggled(app)
@@ -231,6 +220,7 @@ def create_restore_page(app, ctx):
 # ---------------------------------------------------------------------------
 # Config snapshot helpers
 # ---------------------------------------------------------------------------
+
 
 def collect_restore_config(app):
     """Collect current restore UI state into a config dict."""
@@ -280,14 +270,15 @@ def load_restore_config(app, config):
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _style_restore_save_button(app, dirty):
-    btn = getattr(app, '_restore_save_button', None)
+    btn = getattr(app, "_restore_save_button", None)
     if btn is None:
         return
     if dirty:
         set_button_markup(btn, '<span foreground="red">Save Config</span>')
     else:
-        set_button_markup(btn, 'Save Config')
+        set_button_markup(btn, "Save Config")
 
 
 def refresh_restore_destination(app):
@@ -338,7 +329,7 @@ def _on_auto_dest_toggled(app):
         app._restore_manual_dest = app.restore_dest_entry.get_text()
         refresh_restore_destination(app)
     else:
-        manual = getattr(app, '_restore_manual_dest', None)
+        manual = getattr(app, "_restore_manual_dest", None)
         if manual is not None:
             app.restore_dest_entry.set_text(manual)
     app.restore_dest_entry.set_sensitive(not auto)
@@ -348,6 +339,7 @@ def _on_auto_dest_toggled(app):
 # ---------------------------------------------------------------------------
 # Action handlers
 # ---------------------------------------------------------------------------
+
 
 def on_restore_run(app, ctx):
     """Build restore command and start execution."""
@@ -362,7 +354,7 @@ def on_restore_run(app, ctx):
     if not source:
         log_msg("WARN: Source dataset must be specified")
         return
-    if '@' in source:
+    if "@" in source:
         log_msg("WARN: Specify datasets, not snapshots (no '@' allowed)")
         return
 
@@ -377,7 +369,7 @@ def on_restore_run(app, ctx):
     elif not dest:
         log_msg("WARN: Destination dataset must be specified, or enable auto-determine destination")
         return
-    elif '@' in dest:
+    elif "@" in dest:
         log_msg("WARN: Specify datasets, not snapshots (no '@' allowed)")
         return
 
@@ -424,27 +416,35 @@ def on_restore_run(app, ctx):
     app.restore_runner.prepare_session_log()
 
     advanced_vars = restore_cfg["variables"]
-    dryrun = getattr(app, '_dry_run_active', False)
+    dryrun = getattr(app, "_dry_run_active", False)
 
     if dryrun:
         log_msg("INFO: Dry run mode enabled — no changes will be made")
 
     step = build_restore_command(
-        source, removequalifiers, destfs, ctx.parent_dir,
-        advanced_vars, do_part1, do_part2,
+        source,
+        removequalifiers,
+        destfs,
+        ctx.parent_dir,
+        advanced_vars,
+        do_part1,
+        do_part2,
         dryrun=dryrun,
     )
     attach_step_scrub_callbacks(
-        step, source, dest,
-        enabled=restore_cfg.get("pause_scrubs", False), dry_run=dryrun,
+        step,
+        source,
+        dest,
+        enabled=restore_cfg.get("pause_scrubs", False),
+        dry_run=dryrun,
         log_func=app.restore_runner._runner_log,
     )
     log_msg(f"INFO: Starting restore: {source} -> {dest}")
     app.restore_runner.set_steps([step])
-    app.restore_runner.set_step_success_callback(
-        lambda md: _maybe_seed_checkagainst(app, md)
+    app.restore_runner.set_step_success_callback(lambda md: _maybe_seed_checkagainst(app, md))
+    app.restore_runner.start(
+        on_complete=lambda cancelled=False: _on_restore_complete(app, cancelled)
     )
-    app.restore_runner.start(on_complete=lambda cancelled=False: _on_restore_complete(app, cancelled))
     app.update_action_buttons("restore")
 
 
@@ -474,7 +474,7 @@ def on_restore_save(app, ctx):
 
 def on_restore_revert(app, ctx):
     """Revert restore UI to last-saved state."""
-    if not hasattr(app, '_restore_saved_state'):
+    if not hasattr(app, "_restore_saved_state"):
         log_msg("INFO: Nothing to revert")
         return
     load_restore_config(app, app._restore_saved_state)

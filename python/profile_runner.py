@@ -55,7 +55,7 @@ from feature_config import (
     remove_snapfile,
 )
 from logging_config import log_msg, session_log_context
-from offsite_runner import build_offsite_step_command, detect_offsite_pool
+from offsite_runner import build_offsite_step_command, detect_offsite_pool, detect_offsite_pools
 from profile_manager import list_profiles, load_profile
 from profile_validation import validate_profiles
 from restore_runner import build_restore_command, compute_restore_params
@@ -67,9 +67,7 @@ from scrub_manager import (
 from zfs_repository import is_dataset_encrypted
 
 # Directory for per-profile advisory locks. Override for testing.
-PROFILE_LOCK_DIR = os.environ.get(
-    "ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles"
-)
+PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles")
 
 # Regex: received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds
 # Purpose: Match the final summary line emitted by `zfs receive` on stderr,
@@ -80,7 +78,7 @@ PROFILE_LOCK_DIR = os.environ.get(
 #   "received 312B stream in 0.25 seconds (1.20K/sec)" -> match
 #   "received 1.23GiB stream in 45.67 seconds" -> match
 #   "sending tank/data@snap" -> no match
-_ZFS_RECEIVED_RE = re.compile(r'received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds')
+_ZFS_RECEIVED_RE = re.compile(r"received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds")
 
 
 def _parse_bytes_from_log(path):
@@ -321,8 +319,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
 
     if cfg.get("pull_steps_active", True):
         active_pulls = [
-            (s["source"], s["dest"])
-            for s in cfg.get("pull_steps", []) if s.get("active")
+            (s["source"], s["dest"]) for s in cfg.get("pull_steps", []) if s.get("active")
         ]
     else:
         active_pulls = []
@@ -357,12 +354,16 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
         if src_host is None and src_path.startswith("/mnt/"):
             mount_path = src_path.rstrip("/")
             if not os.path.ismount(mount_path):
-                log_msg(f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not mounted")
+                log_msg(
+                    f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not mounted"
+                )
             else:
                 try:
                     os.listdir(mount_path)
                 except OSError:
-                    log_msg(f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not accessible")
+                    log_msg(
+                        f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not accessible"
+                    )
                 else:
                     if not is_dataset_encrypted(zfs_keys_dest):
                         log_msg(
@@ -370,15 +371,15 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                             "encrypted. Set zfs_keys_dest to an encrypted dataset."
                         )
                     elif dryrun:
-                        log_msg(
-                            f"INFO: Dry-run: Would rsync {zfs_keys_path} -> "
-                            f"{zfs_keys_dest}"
-                        )
+                        log_msg(f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}")
                     else:
-                        steps.append(_build_rsync_command(
-                            zfs_keys_path, zfs_keys_dest,
-                            remote_log_path=_REMOTE_RSYNC_LOG_PATH,
-                        ))
+                        steps.append(
+                            _build_rsync_command(
+                                zfs_keys_path,
+                                zfs_keys_dest,
+                                remote_log_path=_REMOTE_RSYNC_LOG_PATH,
+                            )
+                        )
         else:
             if not is_dataset_encrypted(zfs_keys_dest):
                 log_msg(
@@ -386,35 +387,40 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                     "encrypted. Set zfs_keys_dest to an encrypted dataset."
                 )
             elif dryrun:
-                log_msg(
-                    f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}"
-                )
+                log_msg(f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}")
             else:
-                steps.append(_build_rsync_command(
-                    zfs_keys_path, zfs_keys_dest,
-                    remote_log_path=_REMOTE_RSYNC_LOG_PATH,
-                ))
+                steps.append(
+                    _build_rsync_command(
+                        zfs_keys_path,
+                        zfs_keys_dest,
+                        remote_log_path=_REMOTE_RSYNC_LOG_PATH,
+                    )
+                )
 
     pause_scrubs = cfg.get("pause_scrubs", False)
     for step in cfg.get("send_receive_steps", []):
         if step.get("active"):
             sr_step = _build_send_receive_command(
-                step["source"], step["dest"],
-                variables, parent_dir, nextsnap,
+                step["source"],
+                step["dest"],
+                variables,
+                parent_dir,
+                nextsnap,
                 dryrun=dryrun,
             )
             attach_step_scrub_callbacks(
-                sr_step, step["source"], step["dest"],
-                enabled=pause_scrubs, dry_run=dryrun,
+                sr_step,
+                step["source"],
+                step["dest"],
+                enabled=pause_scrubs,
+                dry_run=dryrun,
             )
             steps.append(sr_step)
 
     post = cfg.get("post_steps", {})
     if post.get("run_retention", False):
         pools = get_pool_names(config) or None
-        steps.append(_build_retention_command(
-            parent_dir, label, pools=pools, dryrun=dryrun
-        ))
+        steps.append(_build_retention_command(parent_dir, label, pools=pools, dryrun=dryrun))
 
     if not steps:
         log_msg("WARN: No active steps to run")
@@ -471,13 +477,21 @@ def run_offsite_profile(profile, config, parent_dir, session_log_file=None):
         source = step["source"]
         dest = step["dest"].replace("<offsite>", offsite_pool)
         offsite_step = build_offsite_step_command(
-            source, dest, variables, parent_dir, nextsnap,
-            step.get("includes", ""), step.get("excludes", ""),
+            source,
+            dest,
+            variables,
+            parent_dir,
+            nextsnap,
+            step.get("includes", ""),
+            step.get("excludes", ""),
             dryrun=dryrun,
         )
         attach_step_scrub_callbacks(
-            offsite_step, source, dest,
-            enabled=pause_scrubs, dry_run=dryrun,
+            offsite_step,
+            source,
+            dest,
+            enabled=pause_scrubs,
+            dry_run=dryrun,
         )
         steps.append(offsite_step)
 
@@ -501,13 +515,21 @@ def run_restore_profile(profile, config, parent_dir, session_log_file=None):
         return 1
     removequalifiers, destfs = compute_restore_params(source, dest)
     restore_step = build_restore_command(
-        source, removequalifiers, destfs, parent_dir,
-        cfg.get("variables", {}), do_part1, do_part2,
+        source,
+        removequalifiers,
+        destfs,
+        parent_dir,
+        cfg.get("variables", {}),
+        do_part1,
+        do_part2,
         dryrun=dryrun,
     )
     attach_step_scrub_callbacks(
-        restore_step, source, dest,
-        enabled=cfg.get("pause_scrubs", False), dry_run=dryrun,
+        restore_step,
+        source,
+        dest,
+        enabled=cfg.get("pause_scrubs", False),
+        dry_run=dryrun,
     )
     return _run_command(
         restore_step,
@@ -525,12 +547,35 @@ def run_retention_profile(profile, config, parent_dir, session_log_file=None):
     if not pools:
         log_msg("WARN: No pools selected for pruning")
         return 1
+
+    # Expand <offsite> to all online offsite-candidate pools.
+    expanded = []
+    seen = set()
+    offsite_pools = None
+    for pool in pools:
+        if pool == "<offsite>":
+            if offsite_pools is None:
+                offsite_pools = detect_offsite_pools(get_offsite_candidate_names(config))
+            for op in offsite_pools:
+                if op not in seen:
+                    expanded.append(op)
+                    seen.add(op)
+            if not offsite_pools:
+                log_msg("WARN: <offsite> selected but no offsite pool is online")
+        elif pool not in seen:
+            expanded.append(pool)
+            seen.add(pool)
+    pools = expanded
+    if not pools:
+        log_msg("WARN: No pools selected for pruning after resolving <offsite>")
+        return 1
+
     fatal_rc = 0
     for pool in pools:
         bash_cmd = (
             f'source ~/bashinit; bashinit; mydir="{parent_dir}"; '
             f'source "$mydir/zfscleanup"; '
-            f'{_dryrun_assignments(dryrun)}'
+            f"{_dryrun_assignments(dryrun)}"
             f'autoproceed="Y"; '
             f'releaseholds="Y"; '
             f'releaseholds_tags=("offsite-*"); '
@@ -595,6 +640,7 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
             idle_ticks = 0
 
         import time
+
         time.sleep(10)
 
     _scrub_log("INFO: Scrub profile complete")
@@ -619,17 +665,13 @@ def main():
     _session_log_file = None
     _session_start_time = time.time()
     _last_log_size_check = time.time()
-    _session_log_file = session_log.create_session_log_file(
-        tab_type, profile_name
-    )
+    _session_log_file = session_log.create_session_log_file(tab_type, profile_name)
 
     ctx = session_log_context(_session_log_file) if _session_log_file else nullcontext()
     with ctx:
         if profile is None:
             log_msg(f"FATAL: Profile not found: {profile_name}")
-            session_log.write_session_trailer(
-                _session_log_file, _session_start_time, rc=1
-            )
+            session_log.write_session_trailer(_session_log_file, _session_start_time, rc=1)
             sys.exit(1)
 
         lock_fd, lock_path = acquire_profile_lock(
@@ -637,12 +679,9 @@ def main():
         )
         if lock_fd is None:
             log_msg(
-                f"INFO: Profile '{profile_name}' is already running; "
-                "skipping duplicate invocation"
+                f"INFO: Profile '{profile_name}' is already running; skipping duplicate invocation"
             )
-            session_log.write_session_trailer(
-                _session_log_file, _session_start_time, rc=0
-            )
+            session_log.write_session_trailer(_session_log_file, _session_start_time, rc=0)
             sys.exit(0)
 
         try:
@@ -652,7 +691,9 @@ def main():
             script_dir = os.path.dirname(os.path.realpath(__file__))
             version_root = os.path.dirname(script_dir)
             bin_dir = os.path.join(version_root, "bin")
-            parent_dir = bin_dir if os.path.isfile(os.path.join(bin_dir, "zfsdailybackup")) else version_root
+            parent_dir = (
+                bin_dir if os.path.isfile(os.path.join(bin_dir, "zfsdailybackup")) else version_root
+            )
 
             log_msg(f"INFO: Running profile: {profile_name} (type={tab_type})")
 
@@ -662,9 +703,7 @@ def main():
                     f"INFO: Skipping profile {profile_name}: today does not match "
                     f"weekday ordinal '{weekday_field}'"
                 )
-                session_log.write_session_trailer(
-                    _session_log_file, _session_start_time, rc=0
-                )
+                session_log.write_session_trailer(_session_log_file, _session_start_time, rc=0)
                 sys.exit(0)
 
             runners = {

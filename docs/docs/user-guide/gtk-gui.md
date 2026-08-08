@@ -36,6 +36,16 @@ but it is no longer required; replacement is now the default behavior.
 For the underlying mechanism (PID file, D-Bus, window detection), see
 [Architecture — GUI ↔ Bash Integration](../developer-guide/architecture.md#gui-bash-integration-architecture).
 
+## Closing the GUI
+
+If a GUI-started task is still running when you close the main window or choose
+**File → Quit**, a confirmation dialog lists the tasks that would be aborted
+and asks whether you really want to quit. Scrubs are not listed because they
+continue independently of the GUI; scheduled or profile tasks started outside
+this GUI process are also excluded.
+
+Choosing **Cancel** keeps the window open so the tasks can finish normally.
+
 ## The Main Window
 
 When you open the ZFS Utilities GUI, the main window is titled **ZFS Utilities**.
@@ -681,11 +691,13 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
 
 - **Advanced** — Collapsible expander with
   [dataset-selection criteria](#dataset-selection-criteria)
-  (`depth`, `includes`, `excludes`, `startwith`, `endwith`) and:
+  (`depth`, `includes`, `excludes`, `startwith`, `endwith`), the snapshot
+  **label**, and:
   
-  | Option    | Purpose                                                                                                          |
-  | --------- | ---------------------------------------------------------------------------------------------------------------- |
-  | **label** | Snapshot label for matching. Only snapshots with this label are considered as source candidates for the restore. |
+  | Option                            | Purpose                                                                                  |
+  | --------------------------------- | ---------------------------------------------------------------------------------------- |
+  | **label**                         | Snapshot label for matching. Only snapshots with this label are considered as source candidates. |
+  | **Pause scrubs during each step** | Pause ZFS scrubs on the source and destination pools while the restore step is running.  |
 
 - **Restore Steps** — Two checkboxes:
   
@@ -1093,7 +1105,7 @@ candidates. The checkbox state is saved with the registry when you click
 | Button      | Behavior                                                                                                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------- |
 | **Watch**   | Opens a [Pool Watch window](#pool-watch-windows) for each selected online registered pool                  |
-| **Details** | Opens a read-only details dialog for the single selected pool                                              |
+| **Details** | Writes `zpool status` output for the single selected pool to the log panel                                 |
 | **Add**     | Adds the selected unregistered pool to the registry (or opens a dialog to type a name if none is selected) |
 | **Remove**  | Removes all selected registered pools from the registry (not from ZFS) after confirmation                  |
 | **Import**  | Imports selected offline pools directly, or opens a dialog listing importable pools if none are selected   |

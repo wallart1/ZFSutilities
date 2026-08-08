@@ -18,6 +18,7 @@ def _import_pool_actions():
     sys.modules.pop("pool_actions", None)
     with mock_gtk():
         import pool_actions
+
         return pool_actions
 
 
@@ -59,9 +60,7 @@ def _make_app_with_pool_selection(pa, known_pools, selected):
 
     model.get_iter.side_effect = get_iter
     model.get_value.side_effect = get_value
-    app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
-        model, paths
-    )
+    app.pool_view.get_selection.return_value.get_selected_rows.return_value = (model, paths)
     return app
 
 
@@ -99,7 +98,7 @@ class TestOnPoolsDetails(unittest.TestCase):
         mock_log.assert_called_once()
         self.assertIn("Select a pool", mock_log.call_args[0][0])
 
-    def test_shows_details_for_first_selected_pool(self):
+    def test_logs_details_for_first_selected_pool(self):
         pa = _import_pool_actions()
         app = _make_app_with_pool_selection(
             pa,
@@ -107,11 +106,12 @@ class TestOnPoolsDetails(unittest.TestCase):
             [{"name": "tank", "flag": "registered"}],
         )
         app.ctx.zfs_repository.pool_status.return_value = "mock status"
-        with patch.object(pa, "create_dialog") as mock_create, \
-             patch.object(pa, "add_scrolled_text_view"):
+        with patch.object(pa, "log_msg") as mock_log:
             pa.on_pools_details(app)
-        mock_create.assert_called_once()
-        self.assertIn("tank", mock_create.call_args[0][0])
+        mock_log.assert_called()
+        messages = [call[0][0] for call in mock_log.call_args_list]
+        self.assertTrue(any("Pool details for tank" in m for m in messages))
+        self.assertTrue(any("mock status" in m for m in messages))
 
 
 class TestOnPoolsAdd(unittest.TestCase):
@@ -125,8 +125,7 @@ class TestOnPoolsAdd(unittest.TestCase):
             [{"name": "unknown", "flag": "unregistered"}],
         )
         dialog_mock = _make_add_dialog("unknown")
-        with patch.object(pa, "create_dialog", dialog_mock), \
-             patch.object(pa, "refresh_pools_page"):
+        with patch.object(pa, "create_dialog", dialog_mock), patch.object(pa, "refresh_pools_page"):
             _patch_entry(pa, "unknown")
             pa.on_pools_add(app)
         self.assertIn("unknown", app.known_pools[-1].values())
@@ -136,8 +135,10 @@ class TestOnPoolsAdd(unittest.TestCase):
         app = _make_app([{"name": "tank", "offsite_candidate": False}])
         dialog_mock = _make_add_dialog("archive")
 
-        with patch.object(pa, "create_dialog", dialog_mock), \
-             patch.object(pa, "refresh_pools_page") as mock_refresh:
+        with (
+            patch.object(pa, "create_dialog", dialog_mock),
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+        ):
             _patch_entry(pa, "archive")
             pa.on_pools_add(app)
 
@@ -150,9 +151,11 @@ class TestOnPoolsAdd(unittest.TestCase):
         app = _make_app([{"name": "tank", "offsite_candidate": False}])
         dialog_mock = _make_add_dialog("tank")
 
-        with patch.object(pa, "create_dialog", dialog_mock), \
-             patch.object(pa, "refresh_pools_page") as mock_refresh, \
-             patch.object(pa, "log_msg") as mock_log:
+        with (
+            patch.object(pa, "create_dialog", dialog_mock),
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "log_msg") as mock_log,
+        ):
             _patch_entry(pa, "tank")
             pa.on_pools_add(app)
 
@@ -167,8 +170,10 @@ class TestOnPoolsAdd(unittest.TestCase):
         dialog_mock = MagicMock()
         dialog_mock.return_value.run.return_value = -6  # ResponseType.CANCEL
 
-        with patch.object(pa, "create_dialog", dialog_mock), \
-             patch.object(pa, "refresh_pools_page") as mock_refresh:
+        with (
+            patch.object(pa, "create_dialog", dialog_mock),
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+        ):
             _patch_entry(pa, "tank")
             pa.on_pools_add(app)
 
@@ -201,22 +206,20 @@ class TestOnPoolsRemove(unittest.TestCase):
             pa.COL_HEALTH: selected[paths.index(path) if False else 0][1],
         }.get(col)
 
-        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
-            model, paths
-        )
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (model, paths)
         return app, model, paths, selected
 
     def test_removes_selected_registered_pool(self):
         pa = _import_pool_actions()
-        app = _make_app([
-            {"name": "tank", "offsite_candidate": False},
-            {"name": "archive", "offsite_candidate": True},
-        ])
+        app = _make_app(
+            [
+                {"name": "tank", "offsite_candidate": False},
+                {"name": "archive", "offsite_candidate": True},
+            ]
+        )
         model = MagicMock()
         path = MagicMock()
-        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
-            model, [path]
-        )
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (model, [path])
 
         def get_iter(p):
             if p is path:
@@ -240,8 +243,7 @@ class TestOnPoolsRemove(unittest.TestCase):
         msg_dialog = MagicMock()
         msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
 
-        with patch.object(pa, "refresh_pools_page") as mock_refresh, \
-             patch.object(pa, "log_msg"):
+        with patch.object(pa, "refresh_pools_page") as mock_refresh, patch.object(pa, "log_msg"):
             pa.Gtk.MessageDialog = msg_dialog
             pa.on_pools_remove(app)
 
@@ -253,9 +255,7 @@ class TestOnPoolsRemove(unittest.TestCase):
         app = _make_app([{"name": "tank", "offsite_candidate": False}])
         model = MagicMock()
         path = MagicMock()
-        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
-            model, [path]
-        )
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (model, [path])
 
         it = MagicMock()
         model.get_iter.return_value = it
@@ -264,8 +264,10 @@ class TestOnPoolsRemove(unittest.TestCase):
             pa.COL_HEALTH: "ONLINE",
         }.get(col)
 
-        with patch.object(pa, "refresh_pools_page") as mock_refresh, \
-             patch.object(pa, "log_msg") as mock_log:
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "log_msg") as mock_log,
+        ):
             pa.on_pools_remove(app)
 
         self.assertEqual(len(app.known_pools), 1)
@@ -279,14 +281,18 @@ class TestOnPoolsSave(unittest.TestCase):
 
     def test_saves_dict_pools(self):
         pa = _import_pool_actions()
-        app = _make_app([
-            {"name": "tank", "offsite_candidate": False},
-            {"name": "z40tb", "offsite_candidate": True},
-        ])
+        app = _make_app(
+            [
+                {"name": "tank", "offsite_candidate": False},
+                {"name": "z40tb", "offsite_candidate": True},
+            ]
+        )
         app.pools_dirty = True
 
-        with patch.object(pa, "save_pools") as mock_save, \
-             patch.object(pa, "_update_pools_dirty_indicator") as mock_dirty:
+        with (
+            patch.object(pa, "save_pools") as mock_save,
+            patch.object(pa, "_update_pools_dirty_indicator") as mock_dirty,
+        ):
             pa.on_pools_save(app)
 
         mock_save.assert_called_once_with(app.config, app.known_pools)
@@ -316,8 +322,7 @@ class TestOnPoolsRevert(unittest.TestCase):
         app = _make_app(original)
         app.known_pools.append({"name": "extra", "offsite_candidate": False})
 
-        with patch.object(pa, "refresh_pools_page") as mock_refresh, \
-             patch.object(pa, "log_msg"):
+        with patch.object(pa, "refresh_pools_page") as mock_refresh, patch.object(pa, "log_msg"):
             pa.on_pools_revert(app)
 
         self.assertEqual(app.known_pools, original)
@@ -349,24 +354,25 @@ class TestOnPoolsImport(unittest.TestCase):
             return None
 
         model.get_value.side_effect = get_value
-        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
-            model, paths
-        )
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (model, paths)
         return app
 
     def test_import_offline_selected_refreshes_scrub_table(self):
         pa = _import_pool_actions()
-        app = self._make_app_with_offline_selection(pa,
+        app = self._make_app_with_offline_selection(
+            pa,
             [{"name": "tank", "offsite_candidate": False}],
             ["tank"],
         )
         msg_dialog = MagicMock()
         msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
 
-        with patch.object(pa, "refresh_pools_page") as mock_refresh, \
-             patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh, \
-             patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst, \
-             patch.object(app.ctx.zfs_repository, "import_pool", return_value=True):
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh,
+            patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst,
+            patch.object(app.ctx.zfs_repository, "import_pool", return_value=True),
+        ):
             pa.Gtk.MessageDialog = msg_dialog
             pa.on_pools_import(app)
 
@@ -400,24 +406,25 @@ class TestOnPoolsExport(unittest.TestCase):
             return None
 
         model.get_value.side_effect = get_value
-        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
-            model, paths
-        )
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (model, paths)
         return app
 
     def test_export_selected_refreshes_scrub_table(self):
         pa = _import_pool_actions()
-        app = self._make_app_with_selection(pa,
+        app = self._make_app_with_selection(
+            pa,
             [{"name": "tank", "offsite_candidate": False}],
             ["tank"],
         )
         msg_dialog = MagicMock()
         msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
 
-        with patch.object(pa, "refresh_pools_page") as mock_refresh, \
-             patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh, \
-             patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst, \
-             patch.object(app.ctx.zfs_repository, "export_pool", return_value=True):
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh,
+            patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst,
+            patch.object(app.ctx.zfs_repository, "export_pool", return_value=True),
+        ):
             pa.Gtk.MessageDialog = msg_dialog
             pa.on_pools_export(app)
 

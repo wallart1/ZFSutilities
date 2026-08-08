@@ -19,19 +19,23 @@ class TestDetectOffsitePool(unittest.TestCase):
 
     def test_returns_first_online_candidate(self):
         with mock_subprocess() as m:
-            m.add_zpool_list([
-                {"name": "tank", "health": "ONLINE"},
-                {"name": "z40tb", "health": "ONLINE"},
-                {"name": "z22tb", "health": "OFFLINE"},
-            ])
+            m.add_zpool_list(
+                [
+                    {"name": "tank", "health": "ONLINE"},
+                    {"name": "z40tb", "health": "ONLINE"},
+                    {"name": "z22tb", "health": "OFFLINE"},
+                ]
+            )
             result = offsite_runner.detect_offsite_pool(["z22tb", "z40tb"])
         self.assertEqual(result, "z40tb")
 
     def test_returns_none_when_all_offline(self):
         with mock_subprocess() as m:
-            m.add_zpool_list([
-                {"name": "z40tb", "health": "OFFLINE"},
-            ])
+            m.add_zpool_list(
+                [
+                    {"name": "z40tb", "health": "OFFLINE"},
+                ]
+            )
             result = offsite_runner.detect_offsite_pool(["z40tb"])
         self.assertIsNone(result)
 
@@ -49,6 +53,52 @@ class TestDetectOffsitePool(unittest.TestCase):
             )
             result = offsite_runner.detect_offsite_pool(["z40tb"])
         self.assertIsNone(result)
+
+
+class TestDetectOffsitePools(unittest.TestCase):
+    """detect_offsite_pools returns every online candidate pool."""
+
+    def test_returns_all_online_candidates_in_order(self):
+        with mock_subprocess() as m:
+            m.add_zpool_list(
+                [
+                    {"name": "tank", "health": "ONLINE"},
+                    {"name": "z40tb", "health": "ONLINE"},
+                    {"name": "z22tb", "health": "ONLINE"},
+                ]
+            )
+            result = offsite_runner.detect_offsite_pools(["z22tb", "z40tb"])
+        self.assertEqual(result, ["z22tb", "z40tb"])
+
+    def test_skips_offline_candidates(self):
+        with mock_subprocess() as m:
+            m.add_zpool_list(
+                [
+                    {"name": "z40tb", "health": "ONLINE"},
+                    {"name": "z22tb", "health": "OFFLINE"},
+                ]
+            )
+            result = offsite_runner.detect_offsite_pools(["z22tb", "z40tb"])
+        self.assertEqual(result, ["z40tb"])
+
+    def test_returns_empty_list_when_none_online(self):
+        with mock_subprocess() as m:
+            m.add_zpool_list(
+                [
+                    {"name": "z40tb", "health": "OFFLINE"},
+                ]
+            )
+            result = offsite_runner.detect_offsite_pools(["z40tb"])
+        self.assertEqual(result, [])
+
+    def test_returns_empty_list_on_subprocess_error(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zpool list",
+                lambda _cmd, **_kw: m._completed("", rc=1),
+            )
+            result = offsite_runner.detect_offsite_pools(["z40tb"])
+        self.assertEqual(result, [])
 
 
 class TestBuildOffsiteStepCommand(unittest.TestCase):
@@ -98,15 +148,17 @@ class TestBuildOffsiteStepCommand(unittest.TestCase):
         self.assertIn('applyholds="Y"', script)
 
     def test_custom_variables_override_defaults(self):
-        step = self._build({
-            "doincrementals": "N",
-            "dointermediates": "Y",
-            "allow_destructive": "Y",
-            "receive_F_option": "",
-            "verify_after_transfer": "N",
-            "pv_rate_limit": "100M",
-            "applyholds": "N",
-        })
+        step = self._build(
+            {
+                "doincrementals": "N",
+                "dointermediates": "Y",
+                "allow_destructive": "Y",
+                "receive_F_option": "",
+                "verify_after_transfer": "N",
+                "pv_rate_limit": "100M",
+                "applyholds": "N",
+            }
+        )
         script = step.command[2]
         self.assertIn('doincrementals="N"', script)
         self.assertIn('dointermediates="Y"', script)
@@ -137,8 +189,8 @@ class TestBuildOffsiteStepCommand(unittest.TestCase):
     def test_empty_includes_excludes_become_empty_arrays(self):
         step = self._build({})
         script = step.command[2]
-        self.assertIn('includes=(); ', script)
-        self.assertIn('excludes=(); ', script)
+        self.assertIn("includes=(); ", script)
+        self.assertIn("excludes=(); ", script)
 
     def test_hold_logic_present(self):
         step = self._build({})

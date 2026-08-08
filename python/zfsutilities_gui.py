@@ -12,7 +12,7 @@ from typing import ClassVar
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 
 # Ensure the script's own directory is on sys.path for sibling imports
@@ -31,6 +31,7 @@ from config_core import (
     save_docs_editor,
 )
 from dashboard_page import (
+    _collect_running_tasks,
     _get_host_version,
     _get_peer_host,
     _log_peer_version_result,
@@ -68,6 +69,43 @@ def _detect_parent_dir(script_dir):
     if os.path.isfile(os.path.join(bin_dir, "zfsdailybackup")):
         return bin_dir
     return version_root
+
+
+def _ppid_from_proc(pid):
+    """Return the parent PID from /proc/<pid>/stat, or None on error."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    end = data.find(b")")
+    if end == -1:
+        return None
+    parts = data[end + 1 :].split()
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
+
+
+def _is_descendant_of_current_process(pid):
+    """Return True if *pid* is this process or one of its descendants."""
+    target = os.getpid()
+    seen = set()
+    current = int(pid)
+    while current > 1:
+        if current == target:
+            return True
+        if current in seen:
+            break
+        seen.add(current)
+        ppid = _ppid_from_proc(current)
+        if ppid is None or ppid == current:
+            break
+        current = ppid
+    return False
 
 
 class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
@@ -152,6 +190,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self.connect("window-state-event", self._ui_state.on_window_state_event)
         self.vpaned.connect("notify::position", self._ui_state.on_vpaned_changed)
         self.connect("destroy", self._on_main_destroy)
+        self.connect("delete-event", self._on_delete_event)
 
     def create_sidebar_and_stack(self):
         """Create the sidebar navigation and content stack."""
@@ -279,11 +318,9 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         box.pack_start(image, False, False, 0)
         box.pack_start(label, False, False, 0)
         button.add(box)
-        button.set_tooltip_text(
-            "When enabled, operations are simulated without making changes."
-        )
+        button.set_tooltip_text("When enabled, operations are simulated without making changes.")
         # Restore previous state if set
-        if hasattr(self, '_dry_run_active') and self._dry_run_active:
+        if hasattr(self, "_dry_run_active") and self._dry_run_active:
             button.set_active(True)
         self._update_dry_run_button_style(button, label)
         button.connect("toggled", self._on_dry_run_toggled, label)
@@ -314,7 +351,8 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
     def enable_treeview_copy(self, treeview):
         """Add right-click Copy to a TreeView."""
         from gui_helpers import enable_treeview_copy as _etc
-        _etc(treeview, app=self, datasets_view=getattr(self, 'datasets_view', None))
+
+        _etc(treeview, app=self, datasets_view=getattr(self, "datasets_view", None))
 
     def _on_log_size_allocate(self, widget, allocation):
         """Scroll to bottom after every layout if auto-scroll is active."""
@@ -329,7 +367,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         if self._log_programmatic_scroll:
             return
         # "At bottom" means within 50px of the maximum scroll position
-        at_bottom = (adj.get_value() >= adj.get_upper() - adj.get_page_size() - 50)
+        at_bottom = adj.get_value() >= adj.get_upper() - adj.get_page_size() - 50
         self._log_auto_scroll = at_bottom
 
     def log_message(self, message):
@@ -339,11 +377,12 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         are visible in the panel.  The Short prefix toggle controls whether
         the source file:line location is shown.
         """
-        if not hasattr(self, 'info_text'):
+        if not hasattr(self, "info_text"):
             return
         from datetime import datetime, timezone
 
         from logging_config import parse_msg_level
+
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         level = parse_msg_level(message)
 
@@ -361,6 +400,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
     def _insert_info_line(self, timestamp, level, message):
         """Insert a single line into the info panel if it passes the filter."""
         from logging_config import viewer_should_show
+
         if not viewer_should_show(level, self._info_panel_level):
             return
         if getattr(self, "_info_panel_short_prefix", True):
@@ -396,6 +436,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
     def _render_info_panel(self):
         """Re-render the info panel from stored lines at the current level."""
         from logging_config import viewer_should_show
+
         buffer = self.info_text.get_buffer()
         vadj = self.log_scrolled.get_vadjustment()
         old_value = vadj.get_value()
@@ -417,25 +458,26 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             target = ratio * max(0, new_upper - new_page)
             vadj.set_value(min(target, new_upper - new_page))
             return False
+
         GLib.idle_add(_restore_scroll)
 
     def clear_log_status(self):
         """Reset the log warning/error indicator."""
         self._log_status_level = None
-        if hasattr(self, 'log_status_label'):
+        if hasattr(self, "log_status_label"):
             self.log_status_label.set_markup("")
-        if hasattr(self, 'log_status_event_box'):
+        if hasattr(self, "log_status_event_box"):
             self.log_status_event_box.hide()
 
     def _update_log_status(self, level):
         """Update the log status indicator if the new level is more severe."""
         severity = {"WARN": 1, "FATAL": 2}
-        current = severity.get(getattr(self, '_log_status_level', None), 0)
+        current = severity.get(getattr(self, "_log_status_level", None), 0)
         new = severity.get(level, 0)
         if new <= current:
             return
         self._log_status_level = level
-        if not hasattr(self, 'log_status_label'):
+        if not hasattr(self, "log_status_label"):
             return
         if level == "FATAL":
             self.log_status_label.set_markup(
@@ -445,7 +487,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             self.log_status_label.set_markup(
                 "<span foreground='#FF8C00' weight='bold'>⚠ Warning</span>"
             )
-        if hasattr(self, 'log_status_event_box'):
+        if hasattr(self, "log_status_event_box"):
             self.log_status_event_box.show()
 
     def _update_progress(self, fraction, text):
@@ -455,7 +497,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             fraction: 0.0-1.0, or None to hide the status label.
             text: status string for the status label.
         """
-        if not hasattr(self, 'status_label'):
+        if not hasattr(self, "status_label"):
             return
         if fraction is None:
             self.status_label.set_text("")
@@ -497,9 +539,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
         def _fetch_and_log():
             peer_version = _get_host_version(peer_host)
-            GLib.idle_add(
-                _log_peer_version_result, local_version, peer_host, peer_version
-            )
+            GLib.idle_add(_log_peer_version_result, local_version, peer_host, peer_version)
 
         threading.Thread(target=_fetch_and_log, daemon=True).start()
 
@@ -519,6 +559,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
                 do_detect_offsite_pool(self)
             elif page_name == "restore":
                 from restore_page import refresh_restore_destination
+
                 refresh_restore_destination(self)
             elif page_name == "schedule":
                 refresh_schedule_page(self)
@@ -531,11 +572,12 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
     def _start_stop_dashboard_timer(self, page_name):
         """Start the dashboard auto-refresh timer when on Dashboard, stop otherwise."""
-        if getattr(self, '_dashboard_timer', None) is not None:
+        if getattr(self, "_dashboard_timer", None) is not None:
             GLib.source_remove(self._dashboard_timer)
             self._dashboard_timer = None
         if page_name == "dashboard":
             from config_core import get_dashboard_config
+
             seconds = get_dashboard_config(self.config).get("refresh_seconds", 30)
             self._dashboard_timer = GLib.timeout_add_seconds(
                 max(1, seconds), self._on_dashboard_timer_tick
@@ -543,23 +585,23 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
     def _start_stop_scrub_timer(self, page_name):
         """Start the scrub refresh timer when on Pools, stop otherwise."""
-        if getattr(self, '_scrub_timer', None) is not None:
+        if getattr(self, "_scrub_timer", None) is not None:
             GLib.source_remove(self._scrub_timer)
             self._scrub_timer = None
         if page_name == "pools":
             # Do an immediate refresh
             from pools_page import refresh_scrub_table
+
             refresh_scrub_table(self)
-            interval = getattr(self, '_scrub_ref_spin', None)
+            interval = getattr(self, "_scrub_ref_spin", None)
             seconds = int(interval.get_value()) if interval else 10
-            self._scrub_timer = GLib.timeout_add_seconds(
-                max(1, seconds), self._on_scrub_timer_tick
-            )
+            self._scrub_timer = GLib.timeout_add_seconds(max(1, seconds), self._on_scrub_timer_tick)
 
     def _on_scrub_timer_tick(self):
         """Callback for scrub auto-refresh. Returns True to keep timer alive."""
         if self.stack.get_visible_child_name() == "pools":
             from pools_page import refresh_scrub_table
+
             refresh_scrub_table(self)
         return True
 
@@ -571,13 +613,11 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
     def _start_stop_schedule_timer(self, page_name):
         """Start the schedule auto-refresh timer when on Schedule, stop otherwise."""
-        if getattr(self, '_schedule_timer', None) is not None:
+        if getattr(self, "_schedule_timer", None) is not None:
             GLib.source_remove(self._schedule_timer)
             self._schedule_timer = None
         if page_name == "schedule":
-            self._schedule_timer = GLib.timeout_add_seconds(
-                60, self._on_schedule_timer_tick
-            )
+            self._schedule_timer = GLib.timeout_add_seconds(60, self._on_schedule_timer_tick)
 
     def _on_schedule_timer_tick(self):
         """Callback for schedule auto-refresh. Returns True to keep timer alive."""
@@ -585,27 +625,92 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             refresh_schedule_page(self)
         return True
 
+    def _collect_abortable_tasks(self):
+        """Return tasks that would be aborted if the GUI closed.
+
+        Reuses the Dashboard running-tasks collector but excludes scrubs,
+        which continue independently of the GUI, and profile/scheduled tasks
+        that were not started by this GUI instance.
+        """
+        try:
+            tasks = _collect_running_tasks(self)
+        except Exception as exc:
+            log_msg(f"WARN: Could not collect running tasks: {exc}")
+            tasks = []
+
+        abortable = []
+        for task in tasks:
+            task_type = task.get("type")
+            if task_type == "Scrub":
+                continue
+            if task_type in ("Profile", "Scheduled"):
+                status = task.get("status", "")
+                pid_token = status.split()[-1] if status else ""
+                if pid_token.isdigit() and _is_descendant_of_current_process(int(pid_token)):
+                    abortable.append(task)
+                continue
+            abortable.append(task)
+
+        if self.dataset_runner and getattr(self.dataset_runner, "running", False):
+            abortable.append(
+                {
+                    "name": self.dataset_runner.label,
+                    "type": "GUI",
+                    "status": "Running",
+                }
+            )
+        return abortable
+
+    def _confirm_terminate(self):
+        """Ask the user whether to close despite running tasks.
+
+        Returns True if the user confirms termination, False otherwise.
+        """
+        tasks = self._collect_abortable_tasks()
+        if not tasks:
+            return True
+
+        names = "\n".join(f"• {task.get('name', 'Unknown')}" for task in tasks)
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="Running tasks will be aborted if you close now.",
+        )
+        dialog.format_secondary_text(
+            f"The following tasks are still running:\n\n{names}\n\nDo you really want to quit?"
+        )
+        response = dialog.run()
+        dialog.destroy()
+        return response == Gtk.ResponseType.YES
+
+    def _on_delete_event(self, _widget, _event):
+        """Block window close if the user cancels the confirmation dialog."""
+        return not self._confirm_terminate()
+
     def _on_main_destroy(self, _widget):
         """Clean up pop-out window and log timers when main window closes."""
         if self.popout_window is not None:
             self.popout_window.destroy()
             self.popout_window = None
-        if getattr(self, '_logs_refresh_timer', None) is not None:
+        if getattr(self, "_logs_refresh_timer", None) is not None:
             GLib.source_remove(self._logs_refresh_timer)
             self._logs_refresh_timer = None
-        if getattr(self, '_logs_tail_timer', None) is not None:
+        if getattr(self, "_logs_tail_timer", None) is not None:
             GLib.source_remove(self._logs_tail_timer)
             self._logs_tail_timer = None
-        if getattr(self, '_dashboard_timer', None) is not None:
+        if getattr(self, "_dashboard_timer", None) is not None:
             GLib.source_remove(self._dashboard_timer)
             self._dashboard_timer = None
-        if getattr(self, '_schedule_timer', None) is not None:
+        if getattr(self, "_schedule_timer", None) is not None:
             GLib.source_remove(self._schedule_timer)
             self._schedule_timer = None
 
     def on_quit(self, widget):
         """Handle quit menu item."""
-        self.get_application().quit()
+        if self._confirm_terminate():
+            self.get_application().quit()
 
     def on_minimize_width(self, _widget):
         """Reset resizable columns to minimum width and shrink the window."""
@@ -640,8 +745,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         box.set_margin_bottom(10)
 
         label = Gtk.Label(
-            label="Command to open markdown files:\n"
-                  "(Leave blank to use the system default editor)"
+            label="Command to open markdown files:\n(Leave blank to use the system default editor)"
         )
         label.set_halign(Gtk.Align.START)
         box.pack_start(label, False, False, 0)
@@ -770,6 +874,8 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             log_msg(f"VERB: > {text}")
             runner.send_input(text)
 
+
 if __name__ == "__main__":
     from main import main
+
     main()

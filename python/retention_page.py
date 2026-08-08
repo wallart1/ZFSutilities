@@ -8,12 +8,13 @@ import subprocess
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from config_core import save_config
 from feature_config import (
     DEFAULT_RETENTION,
     MASS_DELETE_DEFAULTS,
     get_all_retention,
+    get_offsite_candidate_names,
     get_prune_label,
     get_prune_pools_order,
     get_retention,
@@ -36,16 +37,17 @@ from gui_helpers import (
     show_error,
 )
 from logging_config import log_msg
+from offsite_runner import detect_offsite_pools
 
 # Advanced prune dataset criteria shown in the Advanced expander
 MASS_DELETE_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
 
 # Human-readable bucket labels
 BUCKET_LABELS = {
-    'd': 'Daily',
-    'w': 'Weekly',
-    'm': 'Monthly',
-    's': 'Offsite',
+    "d": "Daily",
+    "w": "Weekly",
+    "m": "Monthly",
+    "s": "Offsite",
 }
 
 
@@ -53,7 +55,7 @@ def collect_retention_profile_config(app):
     """Collect prune-relevant settings for a retention profile."""
     label = app._ret_prune_label_entry.get_text().strip() or "dailybackup"
     pools = []
-    if hasattr(app, '_ret_prune_view'):
+    if hasattr(app, "_ret_prune_view"):
         selection = app._ret_prune_view.get_selection()
         model, paths = selection.get_selected_rows()
         for p in paths:
@@ -66,7 +68,7 @@ def load_retention_profile_config(app, config):
     label = config.get("prune_label", "dailybackup")
     app._ret_prune_label_entry.set_text(label)
     app._ret_original_prune_label = label
-    if hasattr(app, '_ret_prune_view') and hasattr(app, '_ret_prune_store'):
+    if hasattr(app, "_ret_prune_view") and hasattr(app, "_ret_prune_store"):
         selection = app._ret_prune_view.get_selection()
         selection.unselect_all()
         prune_pools = config.get("prune_pools", [])
@@ -77,48 +79,90 @@ def load_retention_profile_config(app, config):
 
 # ── Online pool helpers ───────────────────────────────────────────────────────
 
+
 def _get_online_pool_names():
     """Return a list of currently-ONLINE pool names from `zpool list`."""
     try:
         result = subprocess.run(
             ["zpool", "list", "-H", "-o", "name,health"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []
     pools = []
-    for line in result.stdout.strip().split('\n'):
+    for line in result.stdout.strip().split("\n"):
         if not line:
             continue
-        parts = line.split('\t')
-        if len(parts) >= 2 and parts[1] == 'ONLINE':
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[1] == "ONLINE":
             pools.append(parts[0])
     return pools
 
 
-def _clear_non_default_policies_on_new_install(ctx):
-    """On a fresh install, keep only the default retention policy."""
-    if not getattr(ctx, 'is_new_install', False):
+def _clear_non_default_policies_on_new_install(app, ctx):
+    """On a fresh install, ask before clearing pool-specific policies.
+
+    Pool-specific policies imported from legacy sample files are normally
+    unwanted on a fresh install, but they may also be user-created policies
+    that should not be destroyed silently.  Present a confirmation dialog
+    listing the affected pools and log the bucket details so they can be
+    recreated if needed.
+    """
+    if not getattr(ctx, "is_new_install", False):
         return
     retention = get_all_retention(ctx.config)
-    cleared = []
-    for pool in list(retention.keys()):
-        if pool != 'default':
-            del retention[pool]
-            cleared.append(pool)
-    if cleared:
-        try:
-            save_config(ctx.config)
-            log_msg(
-                f"INFO: New install — cleared pool-specific retention policies: "
-                f"{', '.join(cleared)}"
-            )
-        except OSError as e:
-            log_msg(f"WARN: Could not save cleared retention policies: {e}")
+    pools_to_clear = [p for p in retention if p != "default"]
+    if not pools_to_clear:
+        ctx.is_new_install = False
+        return
+
+    dlg = Gtk.MessageDialog(
+        transient_for=app,
+        modal=True,
+        message_type=Gtk.MessageType.QUESTION,
+        buttons=Gtk.ButtonsType.NONE,
+        text="New install — clear pool-specific retention policies?",
+    )
+    dlg.format_secondary_text(
+        "The following pool-specific policies were found. They may have been "
+        "imported from legacy sample files.\n\n"
+        f"{', '.join(pools_to_clear)}\n\n"
+        "Keep them, or clear them and keep only the 'default' policy?"
+    )
+    dlg.add_button("Keep", Gtk.ResponseType.CANCEL)
+    dlg.add_button("Clear", Gtk.ResponseType.YES)
+    dlg.set_default_response(Gtk.ResponseType.CANCEL)
+    response = dlg.run()
+    dlg.destroy()
+
+    if response != Gtk.ResponseType.YES:
+        log_msg(
+            "INFO: New install — kept pool-specific retention policies: "
+            f"{', '.join(pools_to_clear)}"
+        )
+        ctx.is_new_install = False
+        return
+
+    for pool in pools_to_clear:
+        buckets = retention.get(pool, [])
+        log_msg(f"INFO: New install — clearing retention policy for '{pool}': {buckets}")
+        del retention[pool]
+
+    try:
+        save_config(ctx.config)
+        log_msg(
+            "INFO: New install — cleared pool-specific retention policies: "
+            f"{', '.join(pools_to_clear)}"
+        )
+    except OSError as e:
+        log_msg(f"WARN: Could not save cleared retention policies: {e}")
     ctx.is_new_install = False
 
 
 # ── Page factory ───────────────────────────────────────────────────────────────
+
 
 def create_retention_page(app, ctx):
     """Build and return the Retention Policies page widget."""
@@ -126,16 +170,14 @@ def create_retention_page(app, ctx):
     if imported:
         try:
             save_config(ctx.config)
-            log_msg(
-                f"INFO: Imported legacy retention policies into JSON: {', '.join(imported)}"
-            )
+            log_msg(f"INFO: Imported legacy retention policies into JSON: {', '.join(imported)}")
         except OSError as e:
             log_msg(f"WARN: Could not save imported retention policies: {e}")
 
-    _clear_non_default_policies_on_new_install(ctx)
+    _clear_non_default_policies_on_new_install(app, ctx)
 
     retention = get_all_retention(ctx.config)
-    pool_list = ['default'] + sorted(p for p in retention if p != 'default')
+    pool_list = ["default"] + sorted(p for p in retention if p != "default")
     app._ret_pool_list = pool_list
     app._ret_pool = pool_list[0]
     app._ret_original = {}
@@ -159,7 +201,7 @@ def create_retention_page(app, ctx):
 
     desc = Gtk.Label(
         label="Configure how many snapshots to keep per bucket for the selected pool.\n"
-              "Min Age prevents deletion of snapshots younger than N days (0 = no limit)."
+        "Min Age prevents deletion of snapshots younger than N days (0 = no limit)."
     )
     desc.set_halign(Gtk.Align.START)
     desc.set_line_wrap(True)
@@ -203,9 +245,10 @@ def create_retention_page(app, ctx):
 
     r2 = Gtk.CellRendererSpin()
     r2.set_property("editable", True)
-    r2.set_property("adjustment",
-                    Gtk.Adjustment(value=1, lower=0, upper=9999,
-                                   step_increment=1, page_increment=10))
+    r2.set_property(
+        "adjustment",
+        Gtk.Adjustment(value=1, lower=0, upper=9999, step_increment=1, page_increment=10),
+    )
     r2.set_property("digits", 0)
     r2.connect("edited", _on_retain_edited, app)
     r2.connect("editing-started", _on_editing_started, tv, 2)
@@ -216,9 +259,10 @@ def create_retention_page(app, ctx):
 
     r3 = Gtk.CellRendererSpin()
     r3.set_property("editable", True)
-    r3.set_property("adjustment",
-                    Gtk.Adjustment(value=0, lower=0, upper=9999,
-                                   step_increment=1, page_increment=10))
+    r3.set_property(
+        "adjustment",
+        Gtk.Adjustment(value=0, lower=0, upper=9999, step_increment=1, page_increment=10),
+    )
     r3.set_property("digits", 0)
     r3.connect("edited", _on_minage_edited, app)
     r3.connect("editing-started", _on_editing_started, tv, 3)
@@ -253,9 +297,9 @@ def create_retention_page(app, ctx):
 
     prune_desc = Gtk.Label(
         label="Select one or more online pools that have a retention policy and click "
-              "Prune. By default each row runs `zfscleanup <pool> '' <label>`. "
-              "Check 'Ignore retention policies' in Advanced options to delete all "
-              "matching snapshots instead."
+        "Prune. By default each row runs `zfscleanup <pool> '' <label>`. "
+        "Check 'Ignore retention policies' in Advanced options to delete all "
+        "matching snapshots instead."
     )
     prune_desc.set_halign(Gtk.Align.START)
     prune_desc.set_line_wrap(True)
@@ -293,9 +337,7 @@ def create_retention_page(app, ctx):
     prune_label = get_prune_label(ctx.config)
     app._ret_prune_label_entry.set_text(prune_label)
     app._ret_prune_label_entry.set_width_chars(20)
-    app._ret_prune_label_entry.connect(
-        "changed", lambda *_a: _update_ret_status(app)
-    )
+    app._ret_prune_label_entry.connect("changed", lambda *_a: _update_ret_status(app))
     app._ret_original_prune_label = prune_label
     label_box.pack_start(app._ret_prune_label_entry, False, False, 0)
     outer.pack_start(label_box, False, False, 0)
@@ -342,8 +384,7 @@ def create_retention_page(app, ctx):
 
     mass_delete_cfg = get_retention_mass_delete_config(ctx.config)
     variables = {
-        key: mass_delete_cfg.get(key, MASS_DELETE_DEFAULTS[key])
-        for key in MASS_DELETE_DEFAULTS
+        key: mass_delete_cfg.get(key, MASS_DELETE_DEFAULTS[key]) for key in MASS_DELETE_DEFAULTS
     }
     app._ret_mass_delete_widgets = {}
     app._ret_mass_delete_original = dict(variables)
@@ -351,7 +392,11 @@ def create_retention_page(app, ctx):
     row = 0
     for key in MASS_DELETE_VARIABLES:
         add_var_row(
-            danger_grid, row, key, variables, app._ret_mass_delete_widgets,
+            danger_grid,
+            row,
+            key,
+            variables,
+            app._ret_mass_delete_widgets,
             yn_vars={"releaseholds"},
         )
         row += 1
@@ -363,7 +408,11 @@ def create_retention_page(app, ctx):
                 "user-added holds are left in place and block deletion."
             )
         add_var_row(
-            danger_grid, row, key, variables, app._ret_mass_delete_widgets,
+            danger_grid,
+            row,
+            key,
+            variables,
+            app._ret_mass_delete_widgets,
             yn_vars={"releaseholds"},
             tooltip=tooltip,
         )
@@ -385,17 +434,13 @@ def create_retention_page(app, ctx):
     ignore_check.connect(
         "toggled",
         lambda *_a: (
-            _sync_releaseholds_widget(
-                app, app._ret_ignore_retention_check.get_active()
-            ),
+            _sync_releaseholds_widget(app, app._ret_ignore_retention_check.get_active()),
             _update_ret_status(app),
         ),
     )
     _sync_releaseholds_widget(app, variables["ignore_retention_policies"])
 
-    reminder = Gtk.Label(
-        label="Results and approval request will appear in the log area."
-    )
+    reminder = Gtk.Label(label="Results and approval request will appear in the log area.")
     reminder.set_halign(Gtk.Align.START)
     reminder.set_line_wrap(True)
     advanced_box.pack_start(reminder, False, False, 0)
@@ -418,23 +463,35 @@ def refresh_prune_pools(app):
     any in-session reorder, and finally by sorted pool name for newcomers.
     The current multi-selection is preserved for pools that remain in the
     refreshed list.
+
+    A policy keyed as ``<offsite>`` is treated as a placeholder for all
+    currently-online offsite-candidate pools and is shown as a single row
+    whose health column lists the resolved pools (or "not online").
     """
-    if not hasattr(app, '_ret_prune_store') or not hasattr(app, 'ctx'):
+    if not hasattr(app, "_ret_prune_store") or not hasattr(app, "ctx"):
         return
     retention = get_all_retention(app.ctx.config)
-    policy_pools = {p for p in retention if p != 'default'}
+    policy_pools = {p for p in retention if p != "default"}
     online = set(_get_online_pool_names())
+    has_offsite_policy = "<offsite>" in policy_pools
+    offsite_pools = []
+    if has_offsite_policy:
+        offsite_pools = detect_offsite_pools(get_offsite_candidate_names(app.ctx.config))
+
+    # Concrete pools with a policy that are currently online.
     candidates = policy_pools & online
+    # The <offsite> placeholder is eligible if it has a policy, regardless of
+    # whether any offsite pool is online right now.
+    if has_offsite_policy:
+        candidates.add("<offsite>")
 
     saved_order = get_prune_pools_order(app.ctx.config)
-    current_order = [
-        row[0] for row in app._ret_prune_store if row[0] in candidates
-    ]
+    current_order = [row[0] for row in app._ret_prune_store if row[0] in candidates]
 
     # Remember the pools that are currently selected so the selection survives
     # the model clear/rebuild that happens below.
     selected_pools = set()
-    if hasattr(app, '_ret_prune_view'):
+    if hasattr(app, "_ret_prune_view"):
         selection = app._ret_prune_view.get_selection()
         if selection is not None:
             rows = selection.get_selected_rows()
@@ -463,22 +520,24 @@ def refresh_prune_pools(app):
 
     app._ret_prune_store.clear()
     for pool in new_order:
-        app._ret_prune_store.append([pool, "ONLINE"])
+        if pool == "<offsite>":
+            health = ", ".join(offsite_pools) if offsite_pools else "not online"
+        else:
+            health = "ONLINE"
+        app._ret_prune_store.append([pool, health])
 
     # Restore selection for any pools that are still present after the refresh.
-    if selected_pools and hasattr(app, '_ret_prune_view'):
+    if selected_pools and hasattr(app, "_ret_prune_view"):
         selection = app._ret_prune_view.get_selection()
         if selection is not None:
             for i, pool in enumerate(new_order):
                 if pool in selected_pools:
-                    selection.select_path(
-                        Gtk.TreePath.new_from_indices([i])
-                    )
+                    selection.select_path(Gtk.TreePath.new_from_indices([i]))
 
 
 def _on_prune_drag_end(treeview, drag_context, app):
     """Persist the new pool order after a drag-and-drop reorder."""
-    if not hasattr(app, 'ctx'):
+    if not hasattr(app, "ctx"):
         return
     order = [row[0] for row in app._ret_prune_store]
     if order == get_prune_pools_order(app.ctx.config):
@@ -491,6 +550,7 @@ def _on_prune_drag_end(treeview, drag_context, app):
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
+
 def _load_pool_into_store(app, ctx, pool, buckets=None):
     # _ret_original must always reflect the on-disk config, not any in-memory
     # pending edits, so that dirty detection works across pool switches.
@@ -499,11 +559,11 @@ def _load_pool_into_store(app, ctx, pool, buckets=None):
         buckets = original_buckets
     app._ret_store.clear()
     for bkt in buckets:
-        label = BUCKET_LABELS.get(bkt['name'], bkt['name'])
-        app._ret_store.append([bkt['name'], label, bkt['retain'], bkt['minage']])
+        label = BUCKET_LABELS.get(bkt["name"], bkt["name"])
+        app._ret_store.append([bkt["name"], label, bkt["retain"], bkt["minage"]])
     app._ret_pool = pool
     app._ret_original[pool] = copy.deepcopy(original_buckets)
-    if hasattr(app, '_ret_pool_label'):
+    if hasattr(app, "_ret_pool_label"):
         app._ret_pool_label.set_text(f"Editing retention policy for pool: {pool}")
     _update_ret_status(app)
 
@@ -511,13 +571,13 @@ def _load_pool_into_store(app, ctx, pool, buckets=None):
 def _store_to_buckets(app):
     buckets = []
     for row in app._ret_store:
-        buckets.append({'name': row[0], 'retain': row[2], 'minage': row[3]})
+        buckets.append({"name": row[0], "retain": row[2], "minage": row[3]})
     return buckets
 
 
 def _sync_releaseholds_widget(app, ignore_active):
     """Enable releaseholds only when Ignore retention policies is checked."""
-    widgets = getattr(app, '_ret_mass_delete_widgets', None)
+    widgets = getattr(app, "_ret_mass_delete_widgets", None)
     if not isinstance(widgets, dict):
         return
     rh_widget = widgets["releaseholds"]
@@ -532,8 +592,8 @@ def _sync_releaseholds_widget(app, ignore_active):
 
 def _mass_delete_is_dirty(app):
     """Return True if any mass-delete widget differs from the saved config."""
-    widgets = getattr(app, '_ret_mass_delete_widgets', None)
-    orig = getattr(app, '_ret_mass_delete_original', None)
+    widgets = getattr(app, "_ret_mass_delete_widgets", None)
+    orig = getattr(app, "_ret_mass_delete_original", None)
     if not isinstance(widgets, dict) or not isinstance(orig, dict):
         return False
     for key in MASS_DELETE_VARIABLES:
@@ -541,7 +601,7 @@ def _mass_delete_is_dirty(app):
             return True
     if widgets["snapshot_has"].get_text().strip() != orig.get("snapshot_has", ""):
         return True
-    ignore_check = getattr(app, '_ret_ignore_retention_check', None)
+    ignore_check = getattr(app, "_ret_ignore_retention_check", None)
     ignore_active = ignore_check.get_active() if ignore_check is not None else False
     if ignore_active != orig.get("ignore_retention_policies", False):
         return True
@@ -556,9 +616,8 @@ def _mass_delete_is_dirty(app):
 def _is_dirty(app):
     if app._ret_prune_label_entry.get_text().strip() != app._ret_original_prune_label:
         return True
-    verb_check = getattr(app, '_ret_verb_check', None)
-    if verb_check is not None \
-            and verb_check.get_active() != app._ret_original_verb:
+    verb_check = getattr(app, "_ret_verb_check", None)
+    if verb_check is not None and verb_check.get_active() != app._ret_original_verb:
         return True
     current = _store_to_buckets(app)
     if current != app._ret_original.get(app._ret_pool, []):
@@ -590,7 +649,7 @@ def _update_ret_status(app):
         app._ret_status_label.set_text("")
 
     # Also update Save button styling
-    btn = getattr(app, '_ret_save_button', None)
+    btn = getattr(app, "_ret_save_button", None)
     if btn:
         set_button_markup_red(btn, _is_dirty(app))
 
@@ -602,16 +661,20 @@ def _on_pool_changed(combo, app):
     ctx = app.ctx
     # Stash the current pool's in-memory bucket values so that edits survive
     # a pool switch and can be saved together later.
-    if hasattr(app, '_ret_pool') and app._ret_pool:
+    if hasattr(app, "_ret_pool") and app._ret_pool:
         app._ret_pending[app._ret_pool] = _store_to_buckets(app)
     retention = get_all_retention(ctx.config)
-    if pool != 'default' and pool not in retention:
+    if pool != "default" and pool not in retention:
         response = _ask_create_policy(app, pool)
         if response == Gtk.ResponseType.YES:
             save_retention(ctx.config, pool, DEFAULT_RETENTION)
             log_msg(f"INFO: Created new retention policy for pool: {pool}")
         else:
-            idx = app._ret_pool_list.index(app._ret_pool) if app._ret_pool in app._ret_pool_list else 0
+            idx = (
+                app._ret_pool_list.index(app._ret_pool)
+                if app._ret_pool in app._ret_pool_list
+                else 0
+            )
             combo.set_active(idx)
             return
     pending = app._ret_pending.get(pool)
@@ -621,14 +684,13 @@ def _on_pool_changed(combo, app):
 def _ask_create_policy(app, pool):
     """Ask user whether to create a missing policy entry."""
     dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
+        transient_for=app,
+        modal=True,
         message_type=Gtk.MessageType.QUESTION,
         buttons=Gtk.ButtonsType.NONE,
         text=f"No retention policy exists for pool '{pool}'.",
     )
-    dlg.format_secondary_text(
-        "Would you like to create one now with default settings?"
-    )
+    dlg.format_secondary_text("Would you like to create one now with default settings?")
     dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
     dlg.add_button("Add Now", Gtk.ResponseType.YES)
     dlg.set_default_response(Gtk.ResponseType.YES)
@@ -661,15 +723,15 @@ def _on_minage_edited(renderer, path, new_text, app):
 
 def _on_editing_started(renderer, editable, path, treeview, col_idx):
     """Connect key-press on the editable to handle Tab/Shift+Tab."""
-    editable.connect(
-        "key-press-event", handle_editing_key_press,
-        treeview, path, col_idx, [2, 3])
+    editable.connect("key-press-event", handle_editing_key_press, treeview, path, col_idx, [2, 3])
 
 
 def _on_ret_save(btn, app, ctx):
     # Commit any active cell edit so the store reflects the latest value.
-    for renderer in (getattr(app, '_ret_retain_renderer', None),
-                     getattr(app, '_ret_minage_renderer', None)):
+    for renderer in (
+        getattr(app, "_ret_retain_renderer", None),
+        getattr(app, "_ret_minage_renderer", None),
+    ):
         if renderer is not None:
             try:
                 renderer.stop_editing(False)
@@ -714,7 +776,7 @@ def _on_ret_save(btn, app, ctx):
     app._ret_original_prune_label = label
 
     # Save the verbose retention decisions toggle if it has changed.
-    verb_check = getattr(app, '_ret_verb_check', None)
+    verb_check = getattr(app, "_ret_verb_check", None)
     if verb_check is not None:
         verb_active = verb_check.get_active()
         if verb_active != app._ret_original_verb:
@@ -726,17 +788,17 @@ def _on_ret_save(btn, app, ctx):
             app._ret_original_verb = verb_active
 
     # Save mass-delete settings if they have changed.
-    widgets = getattr(app, '_ret_mass_delete_widgets', None)
+    widgets = getattr(app, "_ret_mass_delete_widgets", None)
     if isinstance(widgets, dict):
         mass_delete_data = {}
         for key in MASS_DELETE_VARIABLES:
             mass_delete_data[key] = widgets[key].get_text().strip()
         mass_delete_data["snapshot_has"] = widgets["snapshot_has"].get_text().strip()
-        mass_delete_data["releaseholds"] = \
-            "Y" if widgets["releaseholds"].get_active() == 0 else "N"
-        ignore_check = getattr(app, '_ret_ignore_retention_check', None)
-        mass_delete_data["ignore_retention_policies"] = \
+        mass_delete_data["releaseholds"] = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
+        ignore_check = getattr(app, "_ret_ignore_retention_check", None)
+        mass_delete_data["ignore_retention_policies"] = (
             ignore_check.get_active() if ignore_check is not None else False
+        )
         if mass_delete_data != app._ret_mass_delete_original:
             try:
                 save_retention_mass_delete_config(ctx.config, mass_delete_data)
@@ -749,9 +811,7 @@ def _on_ret_save(btn, app, ctx):
         if len(saved_pools) == 1:
             log_msg(f"INFO: Retention policy saved for pool: {saved_pools[0]}")
         else:
-            log_msg(
-                f"INFO: Retention policies saved for pools: {', '.join(sorted(saved_pools))}"
-            )
+            log_msg(f"INFO: Retention policies saved for pools: {', '.join(sorted(saved_pools))}")
     _update_ret_status(app)
 
 
@@ -764,23 +824,19 @@ def _on_ret_revert(btn, app, ctx):
     _load_pool_into_store(app, ctx, app._ret_pool)
 
     # Revert the verbose retention decisions toggle.
-    verb_check = getattr(app, '_ret_verb_check', None)
+    verb_check = getattr(app, "_ret_verb_check", None)
     if verb_check is not None:
         verb_check.set_active(app._ret_original_verb)
 
     # Revert mass-delete widgets to the last saved values.
-    widgets = getattr(app, '_ret_mass_delete_widgets', None)
-    orig = getattr(app, '_ret_mass_delete_original', None)
+    widgets = getattr(app, "_ret_mass_delete_widgets", None)
+    orig = getattr(app, "_ret_mass_delete_original", None)
     if isinstance(widgets, dict) and isinstance(orig, dict):
         for key in MASS_DELETE_VARIABLES:
             widgets[key].set_text(orig.get(key, ""))
         widgets["snapshot_has"].set_text(orig.get("snapshot_has", ""))
-        widgets["releaseholds"].set_active(
-            0 if orig.get("releaseholds", "N") == "Y" else 1
-        )
-        ignore_check = getattr(app, '_ret_ignore_retention_check', None)
+        widgets["releaseholds"].set_active(0 if orig.get("releaseholds", "N") == "Y" else 1)
+        ignore_check = getattr(app, "_ret_ignore_retention_check", None)
         if ignore_check is not None:
             ignore_check.set_active(orig.get("ignore_retention_policies", False))
         _sync_releaseholds_widget(app, orig.get("ignore_retention_policies", False))
-
-

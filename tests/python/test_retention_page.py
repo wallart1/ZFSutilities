@@ -125,9 +125,7 @@ class TestRetentionPagePruneLabel(unittest.TestCase):
             app.ctx = AppContext(
                 config={"retention": {"default": []}},
                 script_dir="",
-                parent_dir=os.path.dirname(
-                    os.path.dirname(os.path.abspath(__file__))
-                ),
+                parent_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 version="dev",
             )
 
@@ -144,6 +142,7 @@ class TestRetentionPagePoolLabel(unittest.TestCase):
         _clear_cached_modules("retention_page")
         with mock_gtk():
             import retention_page as rp
+
             return rp
 
     def test_load_pool_updates_label(self):
@@ -186,6 +185,7 @@ class TestRetentionPageLabelDirtyState(unittest.TestCase):
         _clear_cached_modules("retention_page")
         with mock_gtk():
             import retention_page as rp
+
             return rp
 
     def _make_app(self, rp, label="dailybackup", buckets=None):
@@ -194,14 +194,19 @@ class TestRetentionPageLabelDirtyState(unittest.TestCase):
         app._ret_original_prune_label = label
         app._ret_verb_check = None
         app._ret_original_verb = None
-        app._ret_store = _FakeStore(buckets or [
-            ["d", "Daily", 3, 0],
-            ["w", "Weekly", 2, 0],
-        ])
-        app._ret_original = {"default": [
-            {"name": "d", "retain": 3, "minage": 0},
-            {"name": "w", "retain": 2, "minage": 0},
-        ]}
+        app._ret_store = _FakeStore(
+            buckets
+            or [
+                ["d", "Daily", 3, 0],
+                ["w", "Weekly", 2, 0],
+            ]
+        )
+        app._ret_original = {
+            "default": [
+                {"name": "d", "retain": 3, "minage": 0},
+                {"name": "w", "retain": 2, "minage": 0},
+            ]
+        }
         app._ret_pool = "default"
         app._ret_status_label = _FakeLabel()
         app._ret_save_button = MagicMock()
@@ -279,10 +284,14 @@ class TestRetentionPageLabelDirtyState(unittest.TestCase):
             rp = self._fresh_module()
             app = self._make_app(rp)
             app.ctx = AppContext(
-                config={"retention": {"default": [
-                    {"name": "d", "retain": 3, "minage": 0},
-                    {"name": "w", "retain": 2, "minage": 0},
-                ]}},
+                config={
+                    "retention": {
+                        "default": [
+                            {"name": "d", "retain": 3, "minage": 0},
+                            {"name": "w", "retain": 2, "minage": 0},
+                        ]
+                    }
+                },
                 script_dir="",
                 parent_dir="",
                 version="dev",
@@ -304,6 +313,7 @@ class TestRetentionPageProfileConfig(unittest.TestCase):
         _clear_cached_modules("retention_page")
         with mock_gtk():
             import retention_page as rp
+
             return rp
 
     def test_collect_profile_config_includes_label(self):
@@ -328,9 +338,7 @@ class TestRetentionPageProfileConfig(unittest.TestCase):
             app._ret_prune_store = []
             app._ret_prune_view = MagicMock()
 
-            rp.load_retention_profile_config(
-                app, {"prune_label": "monthly", "prune_pools": []}
-            )
+            rp.load_retention_profile_config(app, {"prune_label": "monthly", "prune_pools": []})
 
             self.assertEqual(app._ret_prune_label_entry.get_text(), "monthly")
             self.assertEqual(app._ret_original_prune_label, "monthly")
@@ -343,6 +351,7 @@ class TestRetentionPageMultiPoolSave(unittest.TestCase):
         _clear_cached_modules("retention_page")
         with mock_gtk():
             import retention_page as rp
+
             return rp
 
     def _make_app(self, rp, config, current_pool="default"):
@@ -423,10 +432,9 @@ class TestRetentionPageMultiPoolSave(unittest.TestCase):
             with capture_logs() as logs, patch.object(rp, "_update_ret_status"):
                 rp._on_ret_save(None, app, app.ctx)
 
-            self.assertTrue(any(
-                "pools:" in log and "default" in log and "fivebays" in log
-                for log in logs
-            ))
+            self.assertTrue(
+                any("pools:" in log and "default" in log and "fivebays" in log for log in logs)
+            )
 
     def test_dirty_detects_pending_pool_while_current_is_clean(self):
         """The dirty flag should reflect unsaved edits in non-current pools."""
@@ -513,10 +521,7 @@ class TestRetentionPageMultiPoolSave(unittest.TestCase):
                 rp._on_ret_save(None, app, app.ctx)
 
             self.assertEqual(config["retention"]["fivebays"][0]["retain"], 77)
-            self.assertTrue(any(
-                "Retention policy saved for pool: fivebays" in log
-                for log in logs
-            ))
+            self.assertTrue(any("Retention policy saved for pool: fivebays" in log for log in logs))
 
     def test_revert_clears_pending_for_all_pools(self):
         """Revert should discard pending edits for every pool, matching Save."""
@@ -555,6 +560,7 @@ class TestRetentionPageNewInstallCleanup(unittest.TestCase):
         _clear_cached_modules("retention_page")
         with mock_gtk():
             import retention_page as rp
+
             return rp
 
     def _make_context(self, config, is_new_install):
@@ -567,7 +573,7 @@ class TestRetentionPageNewInstallCleanup(unittest.TestCase):
         )
 
     def test_new_install_clears_pool_specific_policies(self):
-        """Legacy-imported pool policies are cleared on a fresh install."""
+        """Legacy-imported pool policies are cleared when the user confirms."""
         with temp_config_dir():
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=[])
@@ -580,9 +586,7 @@ class TestRetentionPageNewInstallCleanup(unittest.TestCase):
             ctx = self._make_context(config, is_new_install=True)
 
             def _fake_import_legacy(c, _parent_dir):
-                c.setdefault("retention", {})["threeamigos"] = [
-                    dict(b) for b in default_buckets
-                ]
+                c.setdefault("retention", {})["threeamigos"] = [dict(b) for b in default_buckets]
                 c["retention"]["fivebays"] = [dict(b) for b in default_buckets]
                 return ["threeamigos", "fivebays"]
 
@@ -590,12 +594,47 @@ class TestRetentionPageNewInstallCleanup(unittest.TestCase):
             app.ctx = ctx
             app._ui_state = MagicMock()
 
-            with patch.object(rp, "import_legacy_retention", side_effect=_fake_import_legacy):
+            with (
+                patch.object(rp, "import_legacy_retention", side_effect=_fake_import_legacy),
+                patch.object(rp.Gtk, "MessageDialog") as msg_dlg,
+            ):
+                msg_dlg.return_value.run.return_value = rp.Gtk.ResponseType.YES
                 rp.create_retention_page(app, ctx)
 
             self.assertIn("default", config["retention"])
             self.assertNotIn("threeamigos", config["retention"])
             self.assertNotIn("fivebays", config["retention"])
+            self.assertFalse(ctx.is_new_install)
+
+    def test_new_install_keeps_pool_specific_policies_when_cancelled(self):
+        """Pool-specific policies are preserved when the user cancels cleanup."""
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+
+            default_buckets = [{"name": "d", "retain": 3, "minage": 0}]
+            config = {
+                "retention": {
+                    "default": default_buckets,
+                    "tank": [dict(b) for b in default_buckets],
+                }
+            }
+            ctx = self._make_context(config, is_new_install=True)
+
+            app = MagicMock()
+            app.ctx = ctx
+            app._ui_state = MagicMock()
+
+            with (
+                patch.object(rp, "import_legacy_retention", return_value=[]),
+                patch.object(rp.Gtk, "MessageDialog") as msg_dlg,
+            ):
+                msg_dlg.return_value.run.return_value = rp.Gtk.ResponseType.CANCEL
+                rp.create_retention_page(app, ctx)
+
+            self.assertIn("default", config["retention"])
+            self.assertIn("tank", config["retention"])
             self.assertFalse(ctx.is_new_install)
 
     def test_existing_install_keeps_pool_specific_policies(self):
@@ -632,6 +671,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
         _clear_cached_modules("retention_page")
         with mock_gtk():
             import retention_page as rp
+
             return rp
 
     def test_prune_list_includes_online_pools_with_policies(self):
@@ -801,9 +841,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
             app._ret_prune_store = store
 
             selection = MagicMock()
-            selection.get_selected_rows.return_value = (
-                store, [_FakeTreePath(0), _FakeTreePath(1)]
-            )
+            selection.get_selected_rows.return_value = (store, [_FakeTreePath(0), _FakeTreePath(1)])
             app._ret_prune_view = MagicMock()
             app._ret_prune_view.get_selection.return_value = selection
 
@@ -843,7 +881,8 @@ class TestRetentionPagePruneList(unittest.TestCase):
 
             selection = MagicMock()
             selection.get_selected_rows.return_value = (
-                store, [_FakeTreePath(0)]  # tank was selected
+                store,
+                [_FakeTreePath(0)],  # tank was selected
             )
             app._ret_prune_view = MagicMock()
             app._ret_prune_view.get_selection.return_value = selection
@@ -854,6 +893,67 @@ class TestRetentionPagePruneList(unittest.TestCase):
             self.assertEqual(pools, ["archive"])
             selection.select_path.assert_not_called()
 
+    def test_prune_list_expands_offsite_placeholder(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=["tank", "z22tb"])
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={
+                    "retention": {
+                        "default": [{"name": "d", "retain": 3, "minage": 0}],
+                        "<offsite>": [{"name": "s", "retain": 4, "minage": 65}],
+                        "tank": [{"name": "d", "retain": 3, "minage": 0}],
+                    },
+                    "pools": [
+                        {"name": "z22tb", "offsite_candidate": True},
+                        {"name": "z40tb", "offsite_candidate": True},
+                    ],
+                },
+                script_dir="",
+                parent_dir="",
+                version="dev",
+            )
+            app._ret_prune_store = _FakeStore()
+
+            with patch.object(rp, "detect_offsite_pools", return_value=["z22tb", "z40tb"]):
+                rp.refresh_prune_pools(app)
+
+            pools = [row[0] for row in app._ret_prune_store]
+            self.assertIn("<offsite>", pools)
+            self.assertIn("tank", pools)
+            offsite_row = next(row for row in app._ret_prune_store if row[0] == "<offsite>")
+            self.assertEqual(offsite_row[1], "z22tb, z40tb")
+
+    def test_prune_list_shows_offsite_not_online(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=["tank"])
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={
+                    "retention": {
+                        "default": [{"name": "d", "retain": 3, "minage": 0}],
+                        "<offsite>": [{"name": "s", "retain": 4, "minage": 65}],
+                    },
+                    "pools": [
+                        {"name": "z22tb", "offsite_candidate": True},
+                    ],
+                },
+                script_dir="",
+                parent_dir="",
+                version="dev",
+            )
+            app._ret_prune_store = _FakeStore()
+
+            with patch.object(rp, "detect_offsite_pools", return_value=[]):
+                rp.refresh_prune_pools(app)
+
+            offsite_row = next(row for row in app._ret_prune_store if row[0] == "<offsite>")
+            self.assertEqual(offsite_row[1], "not online")
+
 
 class TestTabNavigationWiring(unittest.TestCase):
     """Editable spin renderers are wired for Tab/Shift+Tab navigation."""
@@ -862,6 +962,7 @@ class TestTabNavigationWiring(unittest.TestCase):
         _clear_cached_modules("retention_page")
         with mock_gtk():
             import retention_page as rp
+
             return rp
 
     def test_spin_renderers_connect_editing_started(self):
@@ -887,14 +988,14 @@ class TestTabNavigationWiring(unittest.TestCase):
             app.ctx = AppContext(
                 config={"retention": {"default": []}},
                 script_dir="",
-                parent_dir=os.path.dirname(
-                    os.path.dirname(os.path.abspath(__file__))
-                ),
+                parent_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 version="dev",
             )
 
-            with patch.object(rp.Gtk, "CellRendererSpin", side_effect=_make_spin), \
-                 patch.object(rp, "import_legacy_retention", return_value=False):
+            with (
+                patch.object(rp.Gtk, "CellRendererSpin", side_effect=_make_spin),
+                patch.object(rp, "import_legacy_retention", return_value=False),
+            ):
                 rp.create_retention_page(app, app.ctx)
 
             self.assertEqual(len(renderers), 2)
@@ -902,8 +1003,11 @@ class TestTabNavigationWiring(unittest.TestCase):
                 editing_connections = [
                     c for c in renderer._connections if c[0] == "editing-started"
                 ]
-                self.assertEqual(len(editing_connections), 1,
-                                 f"Renderer {idx} should have one editing-started connection")
+                self.assertEqual(
+                    len(editing_connections),
+                    1,
+                    f"Renderer {idx} should have one editing-started connection",
+                )
                 _signal, handler, args = editing_connections[0]
                 self.assertIs(handler, rp._on_editing_started)
                 self.assertEqual(args[1], 2 + idx)
@@ -931,20 +1035,18 @@ class TestTabNavigationWiring(unittest.TestCase):
             app.ctx = AppContext(
                 config={"retention": {"default": []}},
                 script_dir="",
-                parent_dir=os.path.dirname(
-                    os.path.dirname(os.path.abspath(__file__))
-                ),
+                parent_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 version="dev",
             )
 
-            with patch.object(rp.Gtk, "CellRendererSpin", side_effect=_make_spin), \
-                 patch.object(rp, "import_legacy_retention", return_value=False):
+            with (
+                patch.object(rp.Gtk, "CellRendererSpin", side_effect=_make_spin),
+                patch.object(rp, "import_legacy_retention", return_value=False),
+            ):
                 rp.create_retention_page(app, app.ctx)
 
             renderer = renderers[0]
-            editing_connections = [
-                c for c in renderer._connections if c[0] == "editing-started"
-            ]
+            editing_connections = [c for c in renderer._connections if c[0] == "editing-started"]
             self.assertEqual(len(editing_connections), 1)
             _signal, handler, args = editing_connections[0]
             editable = MagicMock()
@@ -971,6 +1073,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
         _clear_cached_modules("retention_page")
         with mock_gtk():
             import retention_page as rp
+
             return rp
 
     def _make_app(self, rp, config):
@@ -978,9 +1081,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
         app.ctx = AppContext(
             config=config,
             script_dir="",
-            parent_dir=os.path.dirname(
-                os.path.dirname(os.path.abspath(__file__))
-            ),
+            parent_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             version="dev",
         )
         app._ret_verb_check = None
@@ -1014,9 +1115,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
 
             label = app._ret_danger_label
             markups = [c[0][0] for c in label.set_markup.call_args_list]
-            expected = (
-                "<span color='red'><b>Ignore Retention Policies - Danger Zone</b></span>"
-            )
+            expected = "<span color='red'><b>Ignore Retention Policies - Danger Zone</b></span>"
             self.assertIn(expected, markups)
 
     def test_ignore_checkbox_has_tooltip(self):
@@ -1038,16 +1137,19 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
-            app = self._make_app(rp, {
-                "retention": {"default": []},
-                "retention_mass_delete": {
-                    "includes": "proxmox",
-                    "excludes": "temp",
-                    "snapshot_has": "weekly",
-                    "releaseholds": "Y",
-                    "ignore_retention_policies": True,
+            app = self._make_app(
+                rp,
+                {
+                    "retention": {"default": []},
+                    "retention_mass_delete": {
+                        "includes": "proxmox",
+                        "excludes": "temp",
+                        "snapshot_has": "weekly",
+                        "releaseholds": "Y",
+                        "ignore_retention_policies": True,
+                    },
                 },
-            })
+            )
 
             with patch.object(rp, "import_legacy_retention", return_value=False):
                 rp.create_retention_page(app, app.ctx)
@@ -1056,9 +1158,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             self.assertEqual(app._ret_mass_delete_original["excludes"], "temp")
             self.assertEqual(app._ret_mass_delete_original["snapshot_has"], "weekly")
             self.assertEqual(app._ret_mass_delete_original["releaseholds"], "Y")
-            self.assertTrue(
-                app._ret_mass_delete_original["ignore_retention_policies"]
-            )
+            self.assertTrue(app._ret_mass_delete_original["ignore_retention_policies"])
 
     def test_mass_delete_dirty_detection(self):
         with temp_config_dir():
@@ -1068,19 +1168,21 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             app._ret_original_prune_label = "dailybackup"
             app._ret_verb_check = None
             app._ret_original_verb = None
-            app._ret_store = _FakeStore([
-                ["d", "Daily", 3, 0],
-            ])
-            app._ret_original = {"default": [
-                {"name": "d", "retain": 3, "minage": 0},
-            ]}
+            app._ret_store = _FakeStore(
+                [
+                    ["d", "Daily", 3, 0],
+                ]
+            )
+            app._ret_original = {
+                "default": [
+                    {"name": "d", "retain": 3, "minage": 0},
+                ]
+            }
             app._ret_pool = "default"
             app._ret_status_label = _FakeLabel()
             app._ret_save_button = None
             app._ret_pending = {}
-            app._ret_mass_delete_widgets = {
-                key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES
-            }
+            app._ret_mass_delete_widgets = {key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES}
             app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")
             app._ret_mass_delete_widgets["releaseholds"] = MagicMock()
             app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 1
@@ -1109,9 +1211,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             app._ret_original = {"default": []}
             app._ret_pool = "default"
             app._ret_pending = {}
-            app._ret_mass_delete_widgets = {
-                key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES
-            }
+            app._ret_mass_delete_widgets = {key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES}
             app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("old")
             app._ret_mass_delete_widgets["releaseholds"] = MagicMock()
             app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 1
@@ -1123,9 +1223,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             with patch.object(rp, "_update_ret_status"):
                 rp._on_ret_save(None, app, app.ctx)
 
-            self.assertEqual(
-                config["retention_mass_delete"]["snapshot_has"], "weekly"
-            )
+            self.assertEqual(config["retention_mass_delete"]["snapshot_has"], "weekly")
             self.assertFalse(rp._is_dirty(app))
 
     def _mass_delete_dirty_app(self, rp, ignore=False, releaseholds="N"):
@@ -1138,9 +1236,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
         app._ret_original = {"default": []}
         app._ret_pool = "default"
         app._ret_pending = {}
-        app._ret_mass_delete_widgets = {
-            key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES
-        }
+        app._ret_mass_delete_widgets = {key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES}
         app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")
         rh = MagicMock()
         rh.get_active.return_value = 0 if releaseholds == "Y" else 1
@@ -1188,12 +1284,15 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
-            app = self._make_app(rp, {
-                "retention": {"default": []},
-                "retention_mass_delete": {
-                    "ignore_retention_policies": True,
+            app = self._make_app(
+                rp,
+                {
+                    "retention": {"default": []},
+                    "retention_mass_delete": {
+                        "ignore_retention_policies": True,
+                    },
                 },
-            })
+            )
 
             with patch.object(rp, "import_legacy_retention", return_value=False):
                 rp.create_retention_page(app, app.ctx)
@@ -1209,13 +1308,16 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=[])
             rp._load_pool_into_store = MagicMock()
-            app = self._make_app(rp, {
-                "retention": {"default": []},
-                "retention_mass_delete": {
-                    "releaseholds": "Y",
-                    "ignore_retention_policies": False,
+            app = self._make_app(
+                rp,
+                {
+                    "retention": {"default": []},
+                    "retention_mass_delete": {
+                        "releaseholds": "Y",
+                        "ignore_retention_policies": False,
+                    },
                 },
-            })
+            )
 
             with patch.object(rp, "import_legacy_retention", return_value=False):
                 rp.create_retention_page(app, app.ctx)
@@ -1232,6 +1334,7 @@ class TestRetentionPageLayout(unittest.TestCase):
         _clear_cached_modules("retention_page")
         with mock_gtk():
             import retention_page as rp
+
             return rp
 
     def test_page_is_wrapped_in_scrolled_window(self):
@@ -1253,14 +1356,14 @@ class TestRetentionPageLayout(unittest.TestCase):
             app.ctx = AppContext(
                 config={"retention": {"default": []}},
                 script_dir="",
-                parent_dir=os.path.dirname(
-                    os.path.dirname(os.path.abspath(__file__))
-                ),
+                parent_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 version="dev",
             )
 
-            with patch.object(rp, "import_legacy_retention", return_value=False), \
-                 patch.object(rp.Gtk, "ScrolledWindow", side_effect=_make_scrolled):
+            with (
+                patch.object(rp, "import_legacy_retention", return_value=False),
+                patch.object(rp.Gtk, "ScrolledWindow", side_effect=_make_scrolled),
+            ):
                 page = rp.create_retention_page(app, app.ctx)
 
             self.assertIs(page, sentinels[0])
@@ -1278,6 +1381,7 @@ class TestRetentionVerbCheckbox(unittest.TestCase):
         )
         with mock_gtk():
             import retention_page as rp
+
             return rp
 
     def test_checkbox_created_and_loaded_from_config(self):
@@ -1292,14 +1396,14 @@ class TestRetentionVerbCheckbox(unittest.TestCase):
                     "retention_verb_messages": True,
                 },
                 script_dir="",
-                parent_dir=os.path.dirname(
-                    os.path.dirname(os.path.abspath(__file__))
-                ),
+                parent_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 version="dev",
             )
 
-            with patch.object(rp, "import_legacy_retention", return_value=False), \
-                 patch.object(rp, "get_retention_verb_messages", return_value=True) as mock_verb:
+            with (
+                patch.object(rp, "import_legacy_retention", return_value=False),
+                patch.object(rp, "get_retention_verb_messages", return_value=True) as mock_verb,
+            ):
                 rp.create_retention_page(app, app.ctx)
 
             self.assertIsNotNone(app._ret_verb_check)
@@ -1314,19 +1418,21 @@ class TestRetentionVerbCheckbox(unittest.TestCase):
             app._ret_verb_check = MagicMock()
             app._ret_verb_check.get_active.return_value = False
             app._ret_original_verb = False
-            app._ret_store = _FakeStore([
-                ["d", "Daily", 3, 0],
-            ])
-            app._ret_original = {"default": [
-                {"name": "d", "retain": 3, "minage": 0},
-            ]}
+            app._ret_store = _FakeStore(
+                [
+                    ["d", "Daily", 3, 0],
+                ]
+            )
+            app._ret_original = {
+                "default": [
+                    {"name": "d", "retain": 3, "minage": 0},
+                ]
+            }
             app._ret_pool = "default"
             app._ret_status_label = _FakeLabel()
             app._ret_save_button = None
             app._ret_pending = {}
-            app._ret_mass_delete_widgets = {
-                key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES
-            }
+            app._ret_mass_delete_widgets = {key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES}
             app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")
             app._ret_mass_delete_widgets["releaseholds"] = MagicMock()
             app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 1

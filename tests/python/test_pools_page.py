@@ -23,6 +23,7 @@ def _import_pools_page():
     sys.modules.pop("pools_page", None)
     with mock_gtk():
         import pools_page
+
         return pools_page
 
 
@@ -37,9 +38,7 @@ class TestRefreshPoolsPage(unittest.TestCase):
         app.pool_store = MagicMock()
         app.pool_store.__iter__ = lambda _s: iter([])
         app.pool_view = MagicMock()
-        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
-            None, []
-        )
+        app.pool_view.get_selection.return_value.get_selected_rows.return_value = (None, [])
         app.pool_summary_label = MagicMock()
         app.pools_dirty_label = MagicMock()
         app._ui_state = MagicMock()
@@ -61,9 +60,19 @@ class TestRefreshPoolsPage(unittest.TestCase):
         pp = _import_pools_page()
         app = self._make_app(
             [{"name": "z40tb", "offsite_candidate": True}],
-            [{"name": "z40tb", "health": "ONLINE", "size": "1T",
-              "alloc": "100G", "free": "900G", "freeing": "0",
-              "ckpoint": "-", "frag": "5%", "cap": "10%"}],
+            [
+                {
+                    "name": "z40tb",
+                    "health": "ONLINE",
+                    "size": "1T",
+                    "alloc": "100G",
+                    "free": "900G",
+                    "freeing": "0",
+                    "ckpoint": "-",
+                    "frag": "5%",
+                    "cap": "10%",
+                }
+            ],
         )
         captured = []
         app.pool_store.append = captured.append
@@ -79,9 +88,19 @@ class TestRefreshPoolsPage(unittest.TestCase):
         pp = _import_pools_page()
         app = self._make_app(
             [],
-            [{"name": "tank", "health": "ONLINE", "size": "1T",
-              "alloc": "100G", "free": "900G", "freeing": "0",
-              "ckpoint": "-", "frag": "5%", "cap": "10%"}],
+            [
+                {
+                    "name": "tank",
+                    "health": "ONLINE",
+                    "size": "1T",
+                    "alloc": "100G",
+                    "free": "900G",
+                    "freeing": "0",
+                    "ckpoint": "-",
+                    "frag": "5%",
+                    "cap": "10%",
+                }
+            ],
         )
         captured = []
         app.pool_store.append = captured.append
@@ -97,9 +116,19 @@ class TestRefreshPoolsPage(unittest.TestCase):
         pp = _import_pools_page()
         app = self._make_app(
             [{"name": "tank", "offsite_candidate": False}],
-            [{"name": "tank", "health": "ONLINE", "size": "1T",
-              "alloc": "100G", "free": "900G", "freeing": "0",
-              "ckpoint": "-", "frag": "5%", "cap": "10%"}],
+            [
+                {
+                    "name": "tank",
+                    "health": "ONLINE",
+                    "size": "1T",
+                    "alloc": "100G",
+                    "free": "900G",
+                    "freeing": "0",
+                    "ckpoint": "-",
+                    "frag": "5%",
+                    "cap": "10%",
+                }
+            ],
             errors_by_pool={
                 "tank": {
                     "has_errors": True,
@@ -224,8 +253,17 @@ class TestOffsiteToggle(unittest.TestCase):
         app.pool_store = MagicMock()
         app.pool_store.get_iter.return_value = True
         app.pool_store.get_value.side_effect = lambda _it, col: [
-            "tank", "ONLINE", "-", "-", "-", "-", "-", "-", "-",
-            "registered", False,
+            "tank",
+            "ONLINE",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "registered",
+            False,
         ][col]
 
         with patch.object(pp, "_update_pools_dirty_indicator") as mock_dirty:
@@ -234,9 +272,7 @@ class TestOffsiteToggle(unittest.TestCase):
         self.assertTrue(app.known_pools[0]["offsite_candidate"])
         self.assertFalse(app.known_pools[1]["offsite_candidate"])
         mock_dirty.assert_called_once_with(app)
-        app.pool_store.set_value.assert_called_once_with(
-            True, pp.COL_OFFSITE, True
-        )
+        app.pool_store.set_value.assert_called_once_with(True, pp.COL_OFFSITE, True)
 
     def test_toggle_unregistered_row_is_ignored(self):
         pp = _import_pools_page()
@@ -244,8 +280,17 @@ class TestOffsiteToggle(unittest.TestCase):
         app.pool_store = MagicMock()
         app.pool_store.get_iter.return_value = True
         app.pool_store.get_value.side_effect = lambda _it, col: [
-            "tank", "ONLINE", "-", "-", "-", "-", "-", "-", "-",
-            "unregistered", False,
+            "tank",
+            "ONLINE",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "unregistered",
+            False,
         ][col]
 
         with patch.object(pp, "_update_pools_dirty_indicator") as mock_dirty:
@@ -263,7 +308,8 @@ class TestDragEndPreservesFlags(unittest.TestCase):
         app.known_pools = list(known_pools)
         app.pool_view = MagicMock()
         app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
-            app.pool_view.get_model.return_value, []
+            app.pool_view.get_model.return_value,
+            [],
         )
 
         row_iter = iter(reversed_order)
@@ -296,7 +342,8 @@ class TestDragEndPreservesFlags(unittest.TestCase):
 
     def test_reorder_keeps_flags(self):
         pp = _import_pools_page()
-        app = self._make_drag_app(pp,
+        app = self._make_drag_app(
+            pp,
             [
                 {"name": "tank", "offsite_candidate": True},
                 {"name": "z40tb", "offsite_candidate": False},
@@ -316,7 +363,8 @@ class TestDragEndPreservesFlags(unittest.TestCase):
 
     def test_reorder_preserves_multiple_selections(self):
         pp = _import_pools_page()
-        app = self._make_drag_app(pp,
+        app = self._make_drag_app(
+            pp,
             [
                 {"name": "tank", "offsite_candidate": True},
                 {"name": "z40tb", "offsite_candidate": False},
@@ -341,11 +389,14 @@ class TestDragEndPreservesFlags(unittest.TestCase):
 
         model.get_iter.side_effect = get_iter
         app.pool_view.get_selection.return_value.get_selected_rows.return_value = (
-            model, [path_a, path_b]
+            model,
+            [path_a, path_b],
         )
 
-        with patch.object(pp, "refresh_pools_page"), \
-             patch.object(pp, "_select_pool_by_name") as mock_select:
+        with (
+            patch.object(pp, "refresh_pools_page"),
+            patch.object(pp, "_select_pool_by_name") as mock_select,
+        ):
             pp._on_pools_drag_end(app.pool_view, None, app)
 
         mock_select.assert_any_call(app.pool_view, "tank")
@@ -451,8 +502,17 @@ class TestPoolsDirtyState(unittest.TestCase):
         app.pool_store = MagicMock()
         app.pool_store.get_iter.return_value = True
         app.pool_store.get_value.side_effect = lambda _it, col: [
-            "tank", "ONLINE", "-", "-", "-", "-", "-", "-", "-",
-            "registered", False,
+            "tank",
+            "ONLINE",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "registered",
+            False,
         ][col]
 
         with patch.object(pp, "_update_pools_dirty_indicator") as mock_dirty:
@@ -460,7 +520,6 @@ class TestPoolsDirtyState(unittest.TestCase):
 
         self.assertTrue(app.known_pools[0]["offsite_candidate"])
         mock_dirty.assert_called_once_with(app)
-
 
 
 class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
@@ -497,12 +556,15 @@ class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
         for attr in self._BUTTON_ATTRS:
             setattr(app, attr, MagicMock())
 
-        app.pool_view = self._make_treeview(pool_rows or [], [
-            pp.COL_NAME, pp.COL_FLAG, pp.COL_HEALTH,
-        ])
-        app.scrub_view = self._make_treeview(
-            [[state] for state in (scrub_states or [])], [1]
+        app.pool_view = self._make_treeview(
+            pool_rows or [],
+            [
+                pp.COL_NAME,
+                pp.COL_FLAG,
+                pp.COL_HEALTH,
+            ],
         )
+        app.scrub_view = self._make_treeview([[state] for state in (scrub_states or [])], [1])
         return app
 
     def _make_treeview(self, rows, col_indices):
@@ -528,9 +590,7 @@ class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
             path = MagicMock()
             paths.append(path)
 
-        treeview.get_selection.return_value.get_selected_rows.return_value = (
-            model, paths
-        )
+        treeview.get_selection.return_value.get_selected_rows.return_value = (model, paths)
         return treeview
 
     def _sensitivities(self, app):
@@ -565,9 +625,7 @@ class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
 
     def test_registered_online_pool_enables_watch_details_remove_export(self):
         pp = _import_pools_page()
-        app = self._make_app(
-            pool_rows=[("tank", pp.FLAG_REGISTERED, "ONLINE")]
-        )
+        app = self._make_app(pool_rows=[("tank", pp.FLAG_REGISTERED, "ONLINE")])
         pp.update_pools_button_sensitivity(app)
         sens = self._sensitivities(app)
 
@@ -578,9 +636,7 @@ class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
 
     def test_unregistered_pool_enables_export_but_not_watch_remove(self):
         pp = _import_pools_page()
-        app = self._make_app(
-            pool_rows=[("tank", pp.FLAG_UNREGISTERED, "ONLINE")]
-        )
+        app = self._make_app(pool_rows=[("tank", pp.FLAG_UNREGISTERED, "ONLINE")])
         pp.update_pools_button_sensitivity(app)
         sens = self._sensitivities(app)
 
@@ -591,9 +647,7 @@ class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
 
     def test_offline_pool_disables_watch_and_export(self):
         pp = _import_pools_page()
-        app = self._make_app(
-            pool_rows=[("tank", pp.FLAG_REGISTERED, "OFFLINE")]
-        )
+        app = self._make_app(pool_rows=[("tank", pp.FLAG_REGISTERED, "OFFLINE")])
         pp.update_pools_button_sensitivity(app)
         sens = self._sensitivities(app)
 
@@ -632,7 +686,18 @@ class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
         pp.update_pools_button_sensitivity(app)
         sens = self._sensitivities(app)
 
-        self.assertTrue(sens["_scrub_start_btn"])
+        self.assertFalse(sens["_scrub_start_btn"])
+        self.assertTrue(sens["_scrub_pause_btn"])
+        self.assertFalse(sens["_scrub_resume_btn"])
+        self.assertTrue(sens["_scrub_stop_btn"])
+
+    def test_single_scrubbing_selection_disables_start(self):
+        pp = _import_pools_page()
+        app = self._make_app(scrub_states=["scrubbing"])
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertFalse(sens["_scrub_start_btn"])
         self.assertTrue(sens["_scrub_pause_btn"])
         self.assertFalse(sens["_scrub_resume_btn"])
         self.assertTrue(sens["_scrub_stop_btn"])

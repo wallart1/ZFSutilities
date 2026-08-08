@@ -12,6 +12,25 @@ import subprocess
 from command_builders import BashStep, _dryrun_assignments
 
 
+def _online_pool_names():
+    """Return the set of pool names currently reported as ONLINE."""
+    try:
+        result = subprocess.run(
+            ["zpool", "list", "-H", "-o", "name,health"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        return {
+            p[0]
+            for p in (l.split("\t") for l in result.stdout.strip().split("\n") if l)
+            if len(p) >= 2 and p[1] == "ONLINE"
+        }
+    except (subprocess.SubprocessError, OSError):
+        return set()
+
+
 def detect_offsite_pool(candidates):
     """Detect which offsite pool from candidates is currently online.
 
@@ -21,26 +40,30 @@ def detect_offsite_pool(candidates):
     Returns:
         The first matching online pool name, or None.
     """
-    try:
-        result = subprocess.run(
-            ["zpool", "list", "-H", "-o", "name,health"],
-            capture_output=True, text=True, timeout=10, check=True,
-        )
-        online = {
-            p[0] for p in (l.split("\t") for l in result.stdout.strip().split("\n") if l)
-            if len(p) >= 2 and p[1] == "ONLINE"
-        }
-        for pool in candidates:
-            if pool in online:
-                return pool
-    except (subprocess.SubprocessError, OSError):
-        pass
+    online = _online_pool_names()
+    for pool in candidates:
+        if pool in online:
+            return pool
     return None
 
 
-def build_offsite_step_command(source, dest, variables, parent_dir, nextsnap,
-                               includes_str, excludes_str,
-                               dryrun=False):
+def detect_offsite_pools(candidates):
+    """Return all offsite-candidate pools that are currently online.
+
+    Args:
+        candidates: list of pool names to look for.
+
+    Returns:
+        List of matching online pool names in the order they appear in
+        `candidates`.  Empty list if none are online or zpool cannot be run.
+    """
+    online = _online_pool_names()
+    return [pool for pool in candidates if pool in online]
+
+
+def build_offsite_step_command(
+    source, dest, variables, parent_dir, nextsnap, includes_str, excludes_str, dryrun=False
+):
     """Build bash command for an offsite send/receive step with optional holds.
 
     Each step runs send-receive and, if successful and applyholds='Y', applies
@@ -51,7 +74,7 @@ def build_offsite_step_command(source, dest, variables, parent_dir, nextsnap,
     """
     v = variables
     var_assignments = (
-        f'{_dryrun_assignments(dryrun)}'
+        f"{_dryrun_assignments(dryrun)}"
         f'sourcefs="{source}"; destfs="{dest}"; nextsnap="{nextsnap}"; '
         f'label="@offsite"; '
         f'doincrementals="{v.get("doincrementals", "Y")}"; '
@@ -84,16 +107,16 @@ def build_offsite_step_command(source, dest, variables, parent_dir, nextsnap,
     if includes:
         items = shlex.split(includes)
         arr = " ".join(f'"{i}"' for i in items)
-        var_assignments += f'includes=({arr}); '
+        var_assignments += f"includes=({arr}); "
     else:
-        var_assignments += 'includes=(); '
+        var_assignments += "includes=(); "
 
     if excludes:
         items = shlex.split(excludes)
         arr = " ".join(f'"{i}"' for i in items)
-        var_assignments += f'excludes=({arr}); '
+        var_assignments += f"excludes=({arr}); "
     else:
-        var_assignments += 'excludes=(); '
+        var_assignments += "excludes=(); "
 
     # Combined send-receive + hold application in a single bash invocation.
     # After send-receive, $fsarray contains the datasets that were copied —
@@ -102,20 +125,20 @@ def build_offsite_step_command(source, dest, variables, parent_dir, nextsnap,
         f'source ~/bashinit; bashinit; mydir="{parent_dir}"; '
         f'source "$mydir/zfshold"; '
         f'source "$mydir/zfs-send-receive"; '
-        f'{var_assignments}'
-        f'send-receive; rc=$?; '
+        f"{var_assignments}"
+        f"send-receive; rc=$?; "
         f'if [[ $rc -eq 0 && $applyholds = "Y" && $dryrun != "Y" ]]; then '
-        f'sourcefspool=${{sourcefs%%/*}}; destfspool=${{destfs%%/*}}; '
+        f"sourcefspool=${{sourcefs%%/*}}; destfspool=${{destfs%%/*}}; "
         f'log_msg "Applying holds to $sourcefspool and $destfspool snapshots."; '
         f'for fs in "${{fsarray[@]}}"; do '
         f'destpath="$destfs/$fs"; '
         f'zfshold "${{label:1}}-$destfspool" "$fs" "$nextsnap"; '
         f'zfshold "${{label:1}}-$sourcefspool" "$destpath" "$nextsnap"; '
-        f'done; '
+        f"done; "
         f'elif [[ $rc -eq 0 && $applyholds = "Y" && $dryrun = "Y" ]]; then '
         f'log_msg "Dry-run: Would apply holds to source and destination snapshots."; '
-        f'fi; '
-        f'exit $rc'
+        f"fi; "
+        f"exit $rc"
     )
 
     cmd = ["bash", "-c", bash_script]

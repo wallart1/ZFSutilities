@@ -21,6 +21,7 @@ def _mock_popen_process(stdout="", stderr="", rc=0):
     proc.wait.return_value = rc
     return proc
 
+
 import feature_config
 import log_index
 import offsite_runner
@@ -32,7 +33,6 @@ from command_builders import BashStep
 
 
 class TestComputeRestoreParams(unittest.TestCase):
-
     def test_common_prefix_removed(self):
         rq, destfs = restore_runner.compute_restore_params("tank/vm/100", "backup/vm/100")
         self.assertEqual(rq, 1)
@@ -49,12 +49,16 @@ class TestComputeRestoreParams(unittest.TestCase):
 
 
 class TestBuildOffsiteStepCommand(unittest.TestCase):
-
     def test_includes_offsite_label(self):
         variables = {"doincrementals": "Y", "dointermediates": "N", "applyholds": "Y"}
         step = offsite_runner.build_offsite_step_command(
-            "tank/src", "offsite/dst", variables, "/bin", "@offsite-2025-01-01T00:00-04:00-s",
-            "", ""
+            "tank/src",
+            "offsite/dst",
+            variables,
+            "/bin",
+            "@offsite-2025-01-01T00:00-04:00-s",
+            "",
+            "",
         )
         self.assertIsInstance(step, BashStep)
         self.assertEqual(step.command[0], "bash")
@@ -65,8 +69,7 @@ class TestBuildOffsiteStepCommand(unittest.TestCase):
     def test_includes_and_excludes(self):
         variables = {"doincrementals": "Y", "dointermediates": "N", "applyholds": "N"}
         step = offsite_runner.build_offsite_step_command(
-            "src", "dst", variables, "/bin", "@snap",
-            "foo bar", "temp"
+            "src", "dst", variables, "/bin", "@snap", "foo bar", "temp"
         )
         script = step.command[2]
         self.assertIn('includes=("foo" "bar")', script)
@@ -74,12 +77,17 @@ class TestBuildOffsiteStepCommand(unittest.TestCase):
 
 
 class TestBuildRestoreCommand(unittest.TestCase):
-
     def test_part1_only(self):
-        variables = {"depth": "", "label": "", "includes": "", "excludes": "", "startwith": "", "endwith": ""}
+        variables = {
+            "depth": "",
+            "label": "",
+            "includes": "",
+            "excludes": "",
+            "startwith": "",
+            "endwith": "",
+        }
         step = restore_runner.build_restore_command(
-            "tank/src", 0, "tank/dst", "/bin",
-            variables, do_part1=True, do_part2=False
+            "tank/src", 0, "tank/dst", "/bin", variables, do_part1=True, do_part2=False
         )
         self.assertIsInstance(step, BashStep)
         script = step.command[2]
@@ -90,8 +98,7 @@ class TestBuildRestoreCommand(unittest.TestCase):
     def test_part2_only(self):
         variables = {}
         step = restore_runner.build_restore_command(
-            "tank/src", 0, "tank/dst", "/bin",
-            variables, do_part1=False, do_part2=True
+            "tank/src", 0, "tank/dst", "/bin", variables, do_part1=False, do_part2=True
         )
         script = step.command[2]
         self.assertIn('doincrementals="Y"', script)
@@ -100,34 +107,35 @@ class TestBuildRestoreCommand(unittest.TestCase):
     def test_both_parts(self):
         variables = {}
         step = restore_runner.build_restore_command(
-            "tank/src", 0, "tank/dst", "/bin",
-            variables, do_part1=True, do_part2=True
+            "tank/src", 0, "tank/dst", "/bin", variables, do_part1=True, do_part2=True
         )
         self.assertIn("(full copy + incremental)", step.description)
 
 
 class TestDetectOffsitePool(unittest.TestCase):
-
     def test_finds_online_pool(self):
         with mock_subprocess() as m:
-            m.add_zpool_list([
-                {"name": "z40tb", "health": "ONLINE"},
-                {"name": "z22tb", "health": "OFFLINE"},
-            ])
+            m.add_zpool_list(
+                [
+                    {"name": "z40tb", "health": "ONLINE"},
+                    {"name": "z22tb", "health": "OFFLINE"},
+                ]
+            )
             pool = offsite_runner.detect_offsite_pool(["z22tb", "z40tb"])
         self.assertEqual(pool, "z40tb")
 
     def test_none_online(self):
         with mock_subprocess() as m:
-            m.add_zpool_list([
-                {"name": "z40tb", "health": "OFFLINE"},
-            ])
+            m.add_zpool_list(
+                [
+                    {"name": "z40tb", "health": "OFFLINE"},
+                ]
+            )
             pool = offsite_runner.detect_offsite_pool(["z40tb"])
         self.assertIsNone(pool)
 
 
 class TestRunBackupProfile(unittest.TestCase):
-
     def test_builds_steps_correctly(self):
         with temp_config_dir():
             profile = {
@@ -256,7 +264,8 @@ class TestRunBackupProfile(unittest.TestCase):
             self.assertEqual(rc, 0)
             # Find the subprocess.Popen call for the pull step.
             pull_calls = [
-                call for call in m.calls
+                call
+                for call in m.calls
                 if call[0] and isinstance(call[0], list) and call[0][0] == "bash"
             ]
             self.assertEqual(len(pull_calls), 1)
@@ -284,7 +293,8 @@ class TestRunBackupProfile(unittest.TestCase):
                 rc = profile_runner.run_backup_profile(profile, config, "/bin")
             self.assertEqual(rc, 0)
             pull_calls = [
-                call for call in m.calls
+                call
+                for call in m.calls
                 if call[0] and isinstance(call[0], list) and call[0][0] == "bash"
             ]
             self.assertEqual(len(pull_calls), 1)
@@ -298,6 +308,7 @@ class TestRunBackupProfile(unittest.TestCase):
         # A source like stewie:/etc/ when running on stewie is normalized to a
         # local path, but it should still get the log wrapper.
         import socket
+
         local_host = socket.gethostname().split(".")[0]
         with temp_config_dir():
             profile = {
@@ -318,7 +329,8 @@ class TestRunBackupProfile(unittest.TestCase):
                 rc = profile_runner.run_backup_profile(profile, config, "/bin")
             self.assertEqual(rc, 0)
             pull_calls = [
-                call for call in m.calls
+                call
+                for call in m.calls
                 if call[0] and isinstance(call[0], list) and call[0][0] == "bash"
             ]
             self.assertEqual(len(pull_calls), 1)
@@ -354,11 +366,13 @@ class TestRunBackupProfile(unittest.TestCase):
             bash_scripts = [
                 call[0][2]
                 for call in m.calls
-                if call[0] and isinstance(call[0], list) and call[0][0] == "bash" and len(call[0]) > 2
+                if call[0]
+                and isinstance(call[0], list)
+                and call[0][0] == "bash"
+                and len(call[0]) > 2
             ]
             self.assertFalse(any("rsync" in s for s in bash_scripts))
             self.assertTrue(any("send-receive" in s for s in bash_scripts))
-
 
     def test_retention_step_uses_config_pool_order(self):
         with temp_config_dir():
@@ -380,14 +394,16 @@ class TestRunBackupProfile(unittest.TestCase):
             bash_scripts = [
                 call[0][2]
                 for call in m.calls
-                if call[0] and isinstance(call[0], list) and call[0][0] == "bash" and len(call[0]) > 2
+                if call[0]
+                and isinstance(call[0], list)
+                and call[0][0] == "bash"
+                and len(call[0]) > 2
             ]
             self.assertEqual(len(bash_scripts), 1)
             self.assertIn("for pool in z2 z1; do", bash_scripts[0])
 
 
 class TestRunOffsiteProfile(unittest.TestCase):
-
     def test_no_pool_returns_error(self):
         with temp_config_dir():
             profile = {
@@ -428,35 +444,40 @@ class TestRunOffsiteProfile(unittest.TestCase):
                 ],
             }
             with mock_subprocess() as m:
-                m.add_zpool_list([
-                    {"name": "z40tb", "health": "ONLINE"},
-                    {"name": "z22tb", "health": "OFFLINE"},
-                ])
+                m.add_zpool_list(
+                    [
+                        {"name": "z40tb", "health": "ONLINE"},
+                        {"name": "z22tb", "health": "OFFLINE"},
+                    ]
+                )
                 with patch("profile_runner.subprocess.Popen") as mock_popen:
                     mock_popen.return_value = _mock_popen_process(rc=0)
                     with capture_logs() as logs:
-                        rc = profile_runner.run_offsite_profile(
-                            profile, config, "/bin"
-                        )
+                        rc = profile_runner.run_offsite_profile(profile, config, "/bin")
             self.assertEqual(rc, 0)
-            self.assertTrue(
-                any("Offsite pool: z40tb" in msg for msg in logs)
-            )
+            self.assertTrue(any("Offsite pool: z40tb" in msg for msg in logs))
             bash_scripts = [
                 call[0][0][2]
                 for call in mock_popen.call_args_list
                 if call[0][0] and call[0][0][0] == "bash" and len(call[0][0]) > 2
             ]
             self.assertTrue(
-                any("destfs=\"z40tb/dst\"" in s for s in bash_scripts),
+                any('destfs="z40tb/dst"' in s for s in bash_scripts),
                 "Expected destination to use the live-config candidate z40tb",
             )
 
 
 class TestRunRestoreProfile(unittest.TestCase):
-
     def test_missing_source_dest(self):
-        profile = {"config": {"source": "", "dest": "", "do_part1": True, "do_part2": True, "variables": {}}}
+        profile = {
+            "config": {
+                "source": "",
+                "dest": "",
+                "do_part1": True,
+                "do_part2": True,
+                "variables": {},
+            }
+        }
         config = {}
         with capture_logs() as logs:
             rc = profile_runner.run_restore_profile(profile, config, "/bin")
@@ -465,7 +486,6 @@ class TestRunRestoreProfile(unittest.TestCase):
 
 
 class TestRunRetentionProfile(unittest.TestCase):
-
     def test_no_pools_warns(self):
         profile = {"config": {"prune_label": "dailybackup", "prune_pools": []}}
         config = {}
@@ -484,11 +504,65 @@ class TestRunRetentionProfile(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertTrue(any("Prune tank" in msg for msg in logs))
 
+    def test_expands_offsite_to_all_online_candidates(self):
+        profile = {
+            "config": {
+                "prune_label": "dailybackup",
+                "prune_pools": ["<offsite>", "tank"],
+            }
+        }
+        config = {
+            "pools": [
+                {"name": "z22tb", "offsite_candidate": True},
+                {"name": "z40tb", "offsite_candidate": True},
+            ]
+        }
+        with mock_subprocess() as m:
+            m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
+            with patch.object(
+                profile_runner, "detect_offsite_pools", return_value=["z22tb", "z40tb"]
+            ):
+                with capture_logs():
+                    rc = profile_runner.run_retention_profile(profile, config, "/bin")
+                self.assertEqual(rc, 0)
+            # Each Popen call stores (cmd_list, kwargs); the bash script is cmd_list[2].
+            scripts = [c[0][2] for c in m.calls if len(c[0]) > 2 and isinstance(c[0][2], str)]
+        self.assertTrue(
+            any('cleanup "z22tb" "" "dailybackup"' in s for s in scripts),
+            f"z22tb cleanup not found in {scripts}",
+        )
+        self.assertTrue(
+            any('cleanup "z40tb" "" "dailybackup"' in s for s in scripts),
+            f"z40tb cleanup not found in {scripts}",
+        )
+        self.assertTrue(
+            any('cleanup "tank" "" "dailybackup"' in s for s in scripts),
+            f"tank cleanup not found in {scripts}",
+        )
+
+    def test_offsite_with_none_online_warns(self):
+        profile = {
+            "config": {
+                "prune_label": "dailybackup",
+                "prune_pools": ["<offsite>"],
+            }
+        }
+        config = {"pools": [{"name": "z22tb", "offsite_candidate": True}]}
+        with mock_subprocess() as m:
+            m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
+            with patch.object(profile_runner, "detect_offsite_pools", return_value=[]):
+                with capture_logs() as logs:
+                    rc = profile_runner.run_retention_profile(profile, config, "/bin")
+                self.assertEqual(rc, 1)
+        self.assertTrue(
+            any("No pools selected for pruning after resolving <offsite>" in msg for msg in logs)
+        )
+
 
 class TestSessionLogFile(unittest.TestCase):
-
     def test_create_and_trailer(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmpdir:
             orig_dir = session_log.SESSION_LOG_DIR
             orig_log_dir = log_index.SESSION_LOG_DIR
@@ -508,6 +582,7 @@ class TestSessionLogFile(unittest.TestCase):
 
     def test_trailer_persists_done_to_log_index(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmpdir:
             orig_dir = session_log.SESSION_LOG_DIR
             orig_log_dir = log_index.SESSION_LOG_DIR
@@ -515,9 +590,7 @@ class TestSessionLogFile(unittest.TestCase):
             log_index.SESSION_LOG_DIR = tmpdir
             try:
                 path = session_log.create_session_log_file("backup", "test")
-                session_log.write_session_trailer(
-                    path, time.time(), rc=0, bytes_transferred=5678
-                )
+                session_log.write_session_trailer(path, time.time(), rc=0, bytes_transferred=5678)
 
                 index = log_index.LogIndex.load()
                 entry = index.get(path)
@@ -532,6 +605,7 @@ class TestSessionLogFile(unittest.TestCase):
 
     def test_trailer_persists_failed_to_log_index(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmpdir:
             orig_dir = session_log.SESSION_LOG_DIR
             orig_log_dir = log_index.SESSION_LOG_DIR
@@ -552,6 +626,7 @@ class TestSessionLogFile(unittest.TestCase):
 
     def test_maybe_truncate_resets_index(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmpdir:
             orig_dir = session_log.SESSION_LOG_DIR
             orig_log_dir = log_index.SESSION_LOG_DIR
@@ -575,9 +650,9 @@ class TestSessionLogFile(unittest.TestCase):
 
 
 class TestWriteRawLine(unittest.TestCase):
-
     def test_appends_with_timestamp(self):
         import tempfile
+
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
             path = f.name
         try:
@@ -597,7 +672,6 @@ class TestWriteRawLine(unittest.TestCase):
 
 
 class TestRunScrubProfile(unittest.TestCase):
-
     def test_no_pools_warns(self):
         profile = {"config": {"pools": [], "simultaneous": 1}}
         config = {}
@@ -608,6 +682,7 @@ class TestRunScrubProfile(unittest.TestCase):
 
     def test_runs_and_polls(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmpdir:
             orig_path = feature_config.SCRUB_STATE_PATH
             feature_config.SCRUB_STATE_PATH = os.path.join(tmpdir, "scrub_state.json")
@@ -626,19 +701,14 @@ class TestRunScrubProfile(unittest.TestCase):
                     with patch.object(sm, "start_scrub", return_value=True):
                         with patch("profile_runner.time.sleep"):
                             with capture_logs() as logs:
-                                rc = profile_runner.run_scrub_profile(
-                                    profile, config, "/bin"
-                                )
+                                rc = profile_runner.run_scrub_profile(profile, config, "/bin")
                             self.assertEqual(rc, 0)
-                            self.assertTrue(
-                                any("Scrub profile started" in msg for msg in logs)
-                            )
+                            self.assertTrue(any("Scrub profile started" in msg for msg in logs))
             finally:
                 feature_config.SCRUB_STATE_PATH = orig_path
 
 
 class TestRunStepList(unittest.TestCase):
-
     def test_stops_on_abort_code_nine(self):
         """A step returning 9 (user/lock abort) halts the step list."""
         with patch("profile_runner.subprocess.Popen") as mock_popen:
@@ -647,15 +717,15 @@ class TestRunStepList(unittest.TestCase):
                 _mock_popen_process(rc=0),
             ]
             with capture_logs() as logs:
-                rc = profile_runner._run_step_list([
-                    BashStep(["false"], "Step 1", fatal=False),
-                    BashStep(["true"], "Step 2", fatal=False),
-                ])
+                rc = profile_runner._run_step_list(
+                    [
+                        BashStep(["false"], "Step 1", fatal=False),
+                        BashStep(["true"], "Step 2", fatal=False),
+                    ]
+                )
         self.assertEqual(rc, 9)
         self.assertEqual(mock_popen.call_count, 1)
-        self.assertTrue(
-            any("lock conflict" in msg.lower() for msg in logs)
-        )
+        self.assertTrue(any("lock conflict" in msg.lower() for msg in logs))
 
     def test_run_command_sets_headless_env(self):
         """profile_runner always sets ZFSUTILITIES_HEADLESS=Y for subprocesses."""
@@ -668,9 +738,7 @@ class TestRunStepList(unittest.TestCase):
     def test_run_command_streams_merged_stdout_stderr(self):
         """_run_command merges stdout/stderr and writes each line in order."""
         with patch("profile_runner.subprocess.Popen") as mock_popen:
-            mock_popen.return_value = _mock_popen_process(
-                stdout="stdout-line\nstderr-line\n", rc=0
-            )
+            mock_popen.return_value = _mock_popen_process(stdout="stdout-line\nstderr-line\n", rc=0)
             with patch("session_log.write_raw_line") as mock_write:
                 rc = profile_runner._run_command(
                     BashStep(["echo", "hello"], "Say hello"),
@@ -685,16 +753,17 @@ class TestRunStepList(unittest.TestCase):
     def test_run_command_suppresses_pv_lines_from_session_log(self):
         """pv progress lines are emitted on stderr but not written to the log."""
         pv_line = (
-            " 253MiB 0:00:05 [47.2MiB/s] "
-            "[=========>                           ] 21% ETA 0:00:18"
+            " 253MiB 0:00:05 [47.2MiB/s] [=========>                           ] 21% ETA 0:00:18"
         )
         normal_line = "INFO: Step finished"
         with patch("profile_runner.subprocess.Popen") as mock_popen:
             mock_popen.return_value = _mock_popen_process(
                 stdout=f"{pv_line}\n{normal_line}\n", rc=0
             )
-            with patch("session_log.write_raw_line") as mock_write, \
-                 patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
+            with (
+                patch("session_log.write_raw_line") as mock_write,
+                patch("sys.stderr", new_callable=io.StringIO) as mock_stderr,
+            ):
                 rc = profile_runner._run_command(
                     BashStep(["bash", "-c", "send-receive"], "zfs send/receive"),
                     session_log_file="/tmp/test.log",
@@ -736,10 +805,12 @@ class TestRunStepList(unittest.TestCase):
                 _mock_popen_process(rc=0),
             ]
             with capture_logs() as logs:
-                rc = profile_runner._run_step_list([
-                    BashStep(["rsync", "a", "b"], "rsync a -> b", fatal=False),
-                    BashStep(["true"], "Step 2", fatal=True),
-                ])
+                rc = profile_runner._run_step_list(
+                    [
+                        BashStep(["rsync", "a", "b"], "rsync a -> b", fatal=False),
+                        BashStep(["true"], "Step 2", fatal=True),
+                    ]
+                )
         self.assertEqual(rc, 255)
         self.assertEqual(mock_popen.call_count, 2)
         self.assertTrue(any("Step exited with rc=255" in msg for msg in logs))
@@ -752,17 +823,18 @@ class TestRunStepList(unittest.TestCase):
                 _mock_popen_process(rc=0),
             ]
             with capture_logs() as logs:
-                rc = profile_runner._run_step_list([
-                    BashStep(["bash", "-c", "send-receive"], "zfs send/receive", fatal=True),
-                    BashStep(["true"], "Step 2", fatal=True),
-                ])
+                rc = profile_runner._run_step_list(
+                    [
+                        BashStep(["bash", "-c", "send-receive"], "zfs send/receive", fatal=True),
+                        BashStep(["true"], "Step 2", fatal=True),
+                    ]
+                )
         self.assertEqual(rc, 1)
         self.assertEqual(mock_popen.call_count, 1)
         self.assertTrue(any("Step exited with rc=1" in msg for msg in logs))
 
 
 class TestDryRunProfiles(unittest.TestCase):
-
     def test_backup_dry_run_skips_rsync_and_scripts(self):
         with temp_config_dir():
             profile = {
@@ -787,29 +859,15 @@ class TestDryRunProfiles(unittest.TestCase):
             config = {}
             with mock_subprocess():
                 with patch("profile_runner.subprocess.Popen") as mock_popen:
-                    mock_popen.side_effect = lambda *a, **kw: _mock_popen_process(
-                        rc=0
-                    )
+                    mock_popen.side_effect = lambda *a, **kw: _mock_popen_process(rc=0)
                     with capture_logs() as logs:
-                        rc = profile_runner.run_backup_profile(
-                            profile, config, "/bin"
-                        )
+                        rc = profile_runner.run_backup_profile(profile, config, "/bin")
             self.assertEqual(rc, 0)
-            self.assertTrue(
-                any("Dry run mode enabled" in msg for msg in logs)
-            )
-            self.assertTrue(
-                any("Would rsync remote:/src -> /dst" in msg for msg in logs)
-            )
-            self.assertTrue(
-                any("Would run pre-backup command" in msg for msg in logs)
-            )
-            self.assertTrue(
-                any("Would run post-backup command" in msg for msg in logs)
-            )
-            self.assertTrue(
-                any("Skipping snapfile cleanup" in msg for msg in logs)
-            )
+            self.assertTrue(any("Dry run mode enabled" in msg for msg in logs))
+            self.assertTrue(any("Would rsync remote:/src -> /dst" in msg for msg in logs))
+            self.assertTrue(any("Would run pre-backup command" in msg for msg in logs))
+            self.assertTrue(any("Would run post-backup command" in msg for msg in logs))
+            self.assertTrue(any("Skipping snapfile cleanup" in msg for msg in logs))
             bash_scripts = [
                 call[0][0][2]
                 for call in mock_popen.call_args_list
@@ -817,11 +875,11 @@ class TestDryRunProfiles(unittest.TestCase):
             ]
             self.assertTrue(
                 any("dryrun='Y'" in s for s in bash_scripts),
-                "Expected at least one bash script with dryrun='Y'"
+                "Expected at least one bash script with dryrun='Y'",
             )
             self.assertFalse(
                 any("rsync" in s for s in bash_scripts),
-                "Did not expect any rsync commands in dry-run mode"
+                "Did not expect any rsync commands in dry-run mode",
             )
 
     def test_offsite_dry_run_passed_to_command(self):
@@ -850,21 +908,15 @@ class TestDryRunProfiles(unittest.TestCase):
                 with patch("profile_runner.subprocess.Popen") as mock_popen:
                     mock_popen.return_value = _mock_popen_process(rc=0)
                     with capture_logs() as logs:
-                        rc = profile_runner.run_offsite_profile(
-                            profile, config, "/bin"
-                        )
+                        rc = profile_runner.run_offsite_profile(profile, config, "/bin")
             self.assertEqual(rc, 0)
-            self.assertTrue(
-                any("Dry run mode enabled" in msg for msg in logs)
-            )
+            self.assertTrue(any("Dry run mode enabled" in msg for msg in logs))
             bash_scripts = [
                 call[0][0][2]
                 for call in mock_popen.call_args_list
                 if call[0][0] and call[0][0][0] == "bash" and len(call[0][0]) > 2
             ]
-            self.assertTrue(
-                any("dryrun='Y'" in s for s in bash_scripts)
-            )
+            self.assertTrue(any("dryrun='Y'" in s for s in bash_scripts))
 
     def test_restore_dry_run_passed_to_command(self):
         profile = {
@@ -883,9 +935,7 @@ class TestDryRunProfiles(unittest.TestCase):
             with capture_logs() as logs:
                 rc = profile_runner.run_restore_profile(profile, config, "/bin")
         self.assertEqual(rc, 0)
-        self.assertTrue(
-            any("Dry run mode enabled" in msg for msg in logs)
-        )
+        self.assertTrue(any("Dry run mode enabled" in msg for msg in logs))
         script = mock_popen.call_args[0][0][2]
         self.assertIn("dryrun='Y'", script)
 
@@ -903,9 +953,7 @@ class TestDryRunProfiles(unittest.TestCase):
             with capture_logs() as logs:
                 rc = profile_runner.run_retention_profile(profile, config, "/bin")
         self.assertEqual(rc, 0)
-        self.assertTrue(
-            any("Dry run mode enabled" in msg for msg in logs)
-        )
+        self.assertTrue(any("Dry run mode enabled" in msg for msg in logs))
         script = mock_popen.call_args[0][0][2]
         self.assertIn("dryrun='Y'", script)
 
@@ -923,7 +971,9 @@ class TestMainHistoryEntry(unittest.TestCase):
             profile_runner.PROFILE_LOCK_DIR = lock_dir
             try:
                 with ExitStack() as stack:
-                    stack.enter_context(patch.object(sys, "argv", ["profile_runner.py", "run", "Daily"]))
+                    stack.enter_context(
+                        patch.object(sys, "argv", ["profile_runner.py", "run", "Daily"])
+                    )
                     stack.enter_context(patch("profile_runner.load_profile", return_value=profile))
                     stack.enter_context(patch("profile_runner.load_config", return_value={}))
                     stack.enter_context(patch("profile_runner.prune_old_logs"))
@@ -951,8 +1001,7 @@ class TestMainHistoryEntry(unittest.TestCase):
     def test_main_omits_log_file_when_creation_fails(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             session_dir = os.path.join(tmpdir, "sessions")
-            with patch("session_log.create_session_log_file",
-                       return_value=None):
+            with patch("session_log.create_session_log_file", return_value=None):
                 mock_add = self._run_main(
                     session_dir,
                     patch("profile_runner.run_backup_profile", return_value=0),
@@ -976,9 +1025,7 @@ class TestMainEarlyLogging(unittest.TestCase):
                     stack.enter_context(
                         patch.object(sys, "argv", ["profile_runner.py", "run", "Daily"])
                     )
-                    stack.enter_context(
-                        patch("session_log.SESSION_LOG_DIR", session_log_dir)
-                    )
+                    stack.enter_context(patch("session_log.SESSION_LOG_DIR", session_log_dir))
                     stack.enter_context(patch("profile_runner.load_config", return_value={}))
                     stack.enter_context(patch("profile_runner.prune_old_logs"))
                     stack.enter_context(patch("profile_runner.add_history_entry"))
@@ -998,7 +1045,7 @@ class TestMainEarlyLogging(unittest.TestCase):
                     tmpdir,
                     **{
                         "profile_runner.load_profile": {"return_value": None},
-                    }
+                    },
                 )
             log_files = [n for n in os.listdir(tmpdir) if n.endswith(".log")]
             self.assertEqual(len(log_files), 1)
@@ -1025,7 +1072,7 @@ class TestMainEarlyLogging(unittest.TestCase):
                     **{
                         "profile_runner.load_profile": {"return_value": profile},
                         "profile_runner.acquire_profile_lock": {"side_effect": held_lock},
-                    }
+                    },
                 )
             log_files = [n for n in os.listdir(tmpdir) if n.endswith(".log")]
             self.assertEqual(len(log_files), 1)
@@ -1039,7 +1086,6 @@ class TestMainEarlyLogging(unittest.TestCase):
 
 
 class TestCheckWeekdayOrdinal(unittest.TestCase):
-
     def _patch_now(self, year, month, day):
         dt = datetime(year, month, day)
         mock_datetime = MagicMock()
@@ -1113,11 +1159,7 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
         return handler
 
     def _scrub_commands(self, m):
-        return [
-            list(c[0])
-            for c in m.calls
-            if c[0] and c[0][0] == "zpool" and "scrub" in c[0]
-        ]
+        return [list(c[0]) for c in m.calls if c[0] and c[0][0] == "zpool" and "scrub" in c[0]]
 
     def test_backup_profile_pauses_and_resumes_scrubs(self):
         with temp_config_dir() as tmpdir:
@@ -1146,9 +1188,7 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
             config = {}
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with mock_subprocess() as m:
-                    m.add_zpool_list(
-                        [{"name": "src"}, {"name": "dst"}]
-                    )
+                    m.add_zpool_list([{"name": "src"}, {"name": "dst"}])
                     m.set_command_handler(
                         r"^zpool (status|scrub) ",
                         self._status_handler(m, {"src": "scanning", "dst": "scanning"}),
@@ -1220,9 +1260,7 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
             }
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with mock_subprocess() as m:
-                    m.add_zpool_list(
-                        [{"name": "src"}, {"name": "offsite"}]
-                    )
+                    m.add_zpool_list([{"name": "src"}, {"name": "offsite"}])
                     m.set_command_handler(
                         r"^zpool (status|scrub) ",
                         self._status_handler(m, {"src": "scanning", "offsite": "scanning"}),
@@ -1254,9 +1292,7 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
             config = {}
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with mock_subprocess() as m:
-                    m.add_zpool_list(
-                        [{"name": "backup"}, {"name": "tank"}]
-                    )
+                    m.add_zpool_list([{"name": "backup"}, {"name": "tank"}])
                     m.set_command_handler(
                         r"^zpool (status|scrub) ",
                         self._status_handler(m, {"backup": "scanning", "tank": "scanning"}),
@@ -1296,9 +1332,7 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
             config = {}
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
                 with mock_subprocess() as m:
-                    m.add_zpool_list(
-                        [{"name": "src"}, {"name": "dst"}]
-                    )
+                    m.add_zpool_list([{"name": "src"}, {"name": "dst"}])
                     m.set_command_handler(
                         r"^zpool (status|scrub) ",
                         self._status_handler(m, {"src": "scanning", "dst": "paused"}),
@@ -1312,42 +1346,45 @@ class TestPauseScrubsInProfiles(unittest.TestCase):
             self.assertNotIn(["zpool", "scrub", "dst"], scrub_cmds)
 
 
-
 class TestLogScopeWarnings(unittest.TestCase):
     """_log_scope_warnings logs scope-alignment warnings for the profile."""
 
     def test_logs_matching_warning(self):
         profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
-        with patch.object(profile_runner, "list_profiles", return_value=[]), \
-             patch.object(
-                 profile_runner, "validate_profiles",
-                 return_value=["root-backup-daily scope mismatch"]
-             ), \
-             capture_logs() as logs:
+        with (
+            patch.object(profile_runner, "list_profiles", return_value=[]),
+            patch.object(
+                profile_runner,
+                "validate_profiles",
+                return_value=["root-backup-daily scope mismatch"],
+            ),
+            capture_logs() as logs,
+        ):
             profile_runner._log_scope_warnings(profile)
 
-        self.assertTrue(
-            any("scope mismatch" in msg and "root-backup-daily" in msg for msg in logs)
-        )
+        self.assertTrue(any("scope mismatch" in msg and "root-backup-daily" in msg for msg in logs))
 
     def test_skips_unrelated_warnings(self):
         profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
-        with patch.object(profile_runner, "list_profiles", return_value=[]), \
-             patch.object(
-                 profile_runner, "validate_profiles",
-                 return_value=["root-offsite-offsite scope mismatch"]
-             ), \
-             capture_logs() as logs:
+        with (
+            patch.object(profile_runner, "list_profiles", return_value=[]),
+            patch.object(
+                profile_runner,
+                "validate_profiles",
+                return_value=["root-offsite-offsite scope mismatch"],
+            ),
+            capture_logs() as logs,
+        ):
             profile_runner._log_scope_warnings(profile)
 
         self.assertFalse(any("scope mismatch" in msg for msg in logs))
 
     def test_list_profiles_failure_is_silent(self):
         profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
-        with patch.object(
-            profile_runner, "list_profiles", side_effect=OSError("no profile dir")
-        ), \
-             capture_logs() as logs:
+        with (
+            patch.object(profile_runner, "list_profiles", side_effect=OSError("no profile dir")),
+            capture_logs() as logs,
+        ):
             profile_runner._log_scope_warnings(profile)
 
         self.assertFalse(any("scope mismatch" in msg for msg in logs))

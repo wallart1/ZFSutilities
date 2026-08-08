@@ -839,6 +839,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#closing-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Closing the GUI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-main-window" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2855,6 +2866,13 @@ detected as stuck and terminated automatically without prompting.</p>
 but it is no longer required; replacement is now the default behavior.</p>
 <p>For the underlying mechanism (PID file, D-Bus, window detection), see
 <a href="../../developer-guide/architecture/#gui-bash-integration-architecture">Architecture — GUI ↔ Bash Integration</a>.</p>
+<h2 id="closing-the-gui">Closing the GUI<a class="headerlink" href="#closing-the-gui" title="Permanent link">&para;</a></h2>
+<p>If a GUI-started task is still running when you close the main window or choose
+<strong>File → Quit</strong>, a confirmation dialog lists the tasks that would be aborted
+and asks whether you really want to quit. Scrubs are not listed because they
+continue independently of the GUI; scheduled or profile tasks started outside
+this GUI process are also excluded.</p>
+<p>Choosing <strong>Cancel</strong> keeps the window open so the tasks can finish normally.</p>
 <h2 id="the-main-window">The Main Window<a class="headerlink" href="#the-main-window" title="Permanent link">&para;</a></h2>
 <p>When you open the ZFS Utilities GUI, the main window is titled <strong>ZFS Utilities</strong>.
 It is divided into three areas: the menu bar at the top, the working area in the
@@ -3817,7 +3835,8 @@ on the same datasets.</p>
 <ul>
 <li><strong>Advanced</strong> — Collapsible expander with
   <a href="#dataset-selection-criteria">dataset-selection criteria</a>
-  (<code>depth</code>, <code>includes</code>, <code>excludes</code>, <code>startwith</code>, <code>endwith</code>) and:</li>
+  (<code>depth</code>, <code>includes</code>, <code>excludes</code>, <code>startwith</code>, <code>endwith</code>), the snapshot
+  <strong>label</strong>, and:</li>
 </ul>
 <table>
 <thead>
@@ -3829,7 +3848,11 @@ on the same datasets.</p>
 <tbody>
 <tr>
 <td><strong>label</strong></td>
-<td>Snapshot label for matching. Only snapshots with this label are considered as source candidates for the restore.</td>
+<td>Snapshot label for matching. Only snapshots with this label are considered as source candidates.</td>
+</tr>
+<tr>
+<td><strong>Pause scrubs during each step</strong></td>
+<td>Pause ZFS scrubs on the source and destination pools while the restore step is running.</td>
 </tr>
 </tbody>
 </table>
@@ -4464,7 +4487,7 @@ candidates. The checkbox state is saved with the registry when you click
 </tr>
 <tr>
 <td><strong>Details</strong></td>
-<td>Opens a read-only details dialog for the single selected pool</td>
+<td>Writes <code>zpool status</code> output for the single selected pool to the log panel</td>
 </tr>
 <tr>
 <td><strong>Add</strong></td>
@@ -5111,7 +5134,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.75.0
+      ZFS Utilities v0.76.0
     </div>
   
   
@@ -5136,7 +5159,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.75.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.76.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

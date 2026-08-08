@@ -22,6 +22,7 @@ def _import_gui_under_mock():
     """
     with mock_gtk():
         import zfsutilities_gui as gui
+
         return gui
 
 
@@ -31,9 +32,7 @@ class TestCheckPeerVersionAsync(unittest.TestCase):
     def _make_window(self, version="1.2.3"):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
         gui = _import_gui_under_mock()
-        with patch.object(
-            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
-        ):
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window._version = version
             return window, gui
@@ -49,9 +48,7 @@ class TestCheckPeerVersionAsync(unittest.TestCase):
     @patch("zfsutilities_gui._get_host_version", return_value="1.2.3")
     @patch("zfsutilities_gui.GLib.idle_add")
     @patch("zfsutilities_gui.threading.Thread")
-    def test_two_node_spawns_daemon_thread(
-        self, mock_thread, mock_idle, _mock_host, _mock_peer
-    ):
+    def test_two_node_spawns_daemon_thread(self, mock_thread, mock_idle, _mock_host, _mock_peer):
         window, gui = self._make_window("1.2.3")
         window._check_peer_version_async()
 
@@ -69,9 +66,7 @@ class TestCheckPeerVersionAsync(unittest.TestCase):
     @patch("zfsutilities_gui._get_host_version", return_value="1.2.4")
     @patch("zfsutilities_gui.GLib.idle_add")
     @patch("zfsutilities_gui.threading.Thread")
-    def test_two_node_mismatch_passed_to_idle(
-        self, mock_thread, mock_idle, _mock_host, _mock_peer
-    ):
+    def test_two_node_mismatch_passed_to_idle(self, mock_thread, mock_idle, _mock_host, _mock_peer):
         window, gui = self._make_window("1.2.3")
         window._check_peer_version_async()
 
@@ -103,9 +98,7 @@ class TestLogMessageDisplayFilter(unittest.TestCase):
 
     def _make_window(self):
         gui = _import_gui_under_mock()
-        with patch.object(
-            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
-        ):
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             buffer_mock = MagicMock()
             buffer_mock.get_tag_table.return_value = MagicMock()
@@ -204,9 +197,7 @@ class TestDryRunToggle(unittest.TestCase):
 
     def _make_window(self):
         gui = _import_gui_under_mock()
-        with patch.object(
-            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
-        ):
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window.action_box = MagicMock()
             return window, gui
@@ -222,12 +213,8 @@ class TestDryRunToggle(unittest.TestCase):
         box.pack_start.assert_any_call(
             mock_gtk.Image.new_from_icon_name.return_value, False, False, 0
         )
-        box.pack_start.assert_any_call(
-            mock_gtk.Label.return_value, False, False, 0
-        )
-        window.action_box.pack_start.assert_called_once_with(
-            button, False, False, 0
-        )
+        box.pack_start.assert_any_call(mock_gtk.Label.return_value, False, False, 0)
+        window.action_box.pack_start.assert_called_once_with(button, False, False, 0)
 
     def test_toggling_dry_run_persists_state_and_updates_label(self):
         window, gui = self._make_window()
@@ -240,9 +227,7 @@ class TestDryRunToggle(unittest.TestCase):
         window._on_dry_run_toggled(button, label)
 
         self.assertTrue(window._dry_run_active)
-        label.set_markup.assert_called_with(
-            "<span color='red'>Dry Run</span>"
-        )
+        label.set_markup.assert_called_with("<span color='red'>Dry Run</span>")
 
 
 class TestDatasetRunnerIntegration(unittest.TestCase):
@@ -250,13 +235,14 @@ class TestDatasetRunnerIntegration(unittest.TestCase):
 
     def test_dataset_runner_created(self):
         gui = _import_gui_under_mock()
-        with patch.object(gui.ZFSUtilitiesWindow, "create_sidebar_and_stack"), \
-             patch.object(gui.ZFSUtilitiesWindow, "create_action_panel"), \
-             patch("zfsutilities_gui.create_menu_bar"), \
-             patch("zfsutilities_gui.create_info_panel"), \
-             patch("zfsutilities_gui.UIStateManager"), \
-             patch("zfsutilities_gui.RunnerFactory") as mock_factory:
-
+        with (
+            patch.object(gui.ZFSUtilitiesWindow, "create_sidebar_and_stack"),
+            patch.object(gui.ZFSUtilitiesWindow, "create_action_panel"),
+            patch("zfsutilities_gui.create_menu_bar"),
+            patch("zfsutilities_gui.create_info_panel"),
+            patch("zfsutilities_gui.UIStateManager"),
+            patch("zfsutilities_gui.RunnerFactory") as mock_factory,
+        ):
             mock_factory_instance = MagicMock()
             mock_factory.return_value = mock_factory_instance
 
@@ -275,9 +261,7 @@ class TestDatasetRunnerIntegration(unittest.TestCase):
 
     def test_input_forwarded_to_dataset_runner(self):
         gui = _import_gui_under_mock()
-        with patch.object(
-            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
-        ):
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window.backup_runner = None
             window.offsite_runner = None
@@ -300,9 +284,7 @@ class TestDashboardTimer(unittest.TestCase):
     def _make_window(self):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
         gui = _import_gui_under_mock()
-        with patch.object(
-            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
-        ):
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window._dashboard_timer = None
             window._scrub_timer = None
@@ -316,9 +298,7 @@ class TestDashboardTimer(unittest.TestCase):
         window = self._make_window()
         mock_glib.timeout_add_seconds.return_value = 42
         window._start_stop_dashboard_timer("dashboard")
-        mock_glib.timeout_add_seconds.assert_called_once_with(
-            30, window._on_dashboard_timer_tick
-        )
+        mock_glib.timeout_add_seconds.assert_called_once_with(30, window._on_dashboard_timer_tick)
         self.assertEqual(window._dashboard_timer, 42)
 
     @patch("zfsutilities_gui.GLib")
@@ -338,9 +318,7 @@ class TestDashboardTimer(unittest.TestCase):
         mock_glib.timeout_add_seconds.return_value = 42
         window._start_stop_dashboard_timer("dashboard")
         mock_glib.source_remove.assert_called_once_with(7)
-        mock_glib.timeout_add_seconds.assert_called_once_with(
-            30, window._on_dashboard_timer_tick
-        )
+        mock_glib.timeout_add_seconds.assert_called_once_with(30, window._on_dashboard_timer_tick)
         self.assertEqual(window._dashboard_timer, 42)
 
     @patch("zfsutilities_gui.GLib")
@@ -350,9 +328,7 @@ class TestDashboardTimer(unittest.TestCase):
         window.config = {"dashboard": {"refresh_seconds": 45}}
         mock_glib.timeout_add_seconds.return_value = 42
         window._start_stop_dashboard_timer("dashboard")
-        mock_glib.timeout_add_seconds.assert_called_once_with(
-            45, window._on_dashboard_timer_tick
-        )
+        mock_glib.timeout_add_seconds.assert_called_once_with(45, window._on_dashboard_timer_tick)
 
     @patch("zfsutilities_gui.GLib")
     def test_dashboard_timer_defaults_to_30_seconds(self, mock_glib):
@@ -361,9 +337,7 @@ class TestDashboardTimer(unittest.TestCase):
         window.config = {}
         mock_glib.timeout_add_seconds.return_value = 42
         window._start_stop_dashboard_timer("dashboard")
-        mock_glib.timeout_add_seconds.assert_called_once_with(
-            30, window._on_dashboard_timer_tick
-        )
+        mock_glib.timeout_add_seconds.assert_called_once_with(30, window._on_dashboard_timer_tick)
 
     @patch("zfsutilities_gui.GLib")
     def test_dashboard_timer_clamps_to_minimum_one_second(self, mock_glib):
@@ -372,9 +346,7 @@ class TestDashboardTimer(unittest.TestCase):
         window.config = {"dashboard": {"refresh_seconds": 0}}
         mock_glib.timeout_add_seconds.return_value = 42
         window._start_stop_dashboard_timer("dashboard")
-        mock_glib.timeout_add_seconds.assert_called_once_with(
-            1, window._on_dashboard_timer_tick
-        )
+        mock_glib.timeout_add_seconds.assert_called_once_with(1, window._on_dashboard_timer_tick)
 
 
 class TestScheduleTimer(unittest.TestCase):
@@ -383,9 +355,7 @@ class TestScheduleTimer(unittest.TestCase):
     def _make_window(self):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
         gui = _import_gui_under_mock()
-        with patch.object(
-            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
-        ):
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window._schedule_timer = None
             window.stack = MagicMock()
@@ -397,9 +367,7 @@ class TestScheduleTimer(unittest.TestCase):
         window = self._make_window()
         mock_glib.timeout_add_seconds.return_value = 42
         window._start_stop_schedule_timer("schedule")
-        mock_glib.timeout_add_seconds.assert_called_once_with(
-            60, window._on_schedule_timer_tick
-        )
+        mock_glib.timeout_add_seconds.assert_called_once_with(60, window._on_schedule_timer_tick)
         self.assertEqual(window._schedule_timer, 42)
 
     @patch("zfsutilities_gui.GLib")
@@ -413,9 +381,7 @@ class TestScheduleTimer(unittest.TestCase):
 
     @patch("zfsutilities_gui.GLib")
     @patch("zfsutilities_gui.refresh_schedule_page")
-    def test_schedule_timer_tick_refreshes_when_visible(
-        self, mock_refresh, mock_glib
-    ):
+    def test_schedule_timer_tick_refreshes_when_visible(self, mock_refresh, mock_glib):
         """The timer callback refreshes Schedule only while it is visible."""
         window = self._make_window()
         window.stack.get_visible_child_name.return_value = "schedule"
@@ -425,9 +391,7 @@ class TestScheduleTimer(unittest.TestCase):
 
     @patch("zfsutilities_gui.GLib")
     @patch("zfsutilities_gui.refresh_schedule_page")
-    def test_schedule_timer_tick_skips_when_hidden(
-        self, mock_refresh, mock_glib
-    ):
+    def test_schedule_timer_tick_skips_when_hidden(self, mock_refresh, mock_glib):
         """The timer callback does nothing when another tab is visible."""
         window = self._make_window()
         window.stack.get_visible_child_name.return_value = "backup"
@@ -442,9 +406,7 @@ class TestOnPageChanged(unittest.TestCase):
     def _make_window(self, config=None):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
         gui = _import_gui_under_mock()
-        with patch.object(
-            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
-        ):
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             cfg = config if config is not None else {"pools": []}
             window.config = cfg
@@ -483,9 +445,7 @@ class TestOnPageChanged(unittest.TestCase):
 
         window.on_page_changed(stack, None)
 
-        window.offsite_detected_label.set_text.assert_called_once_with(
-            "(no candidates configured)"
-        )
+        window.offsite_detected_label.set_text.assert_called_once_with("(no candidates configured)")
 
     @patch("restore_page.refresh_restore_destination")
     def test_restore_page_refreshes_destination(self, mock_refresh):
@@ -532,9 +492,7 @@ class TestUpdateActionButtonsGuard(unittest.TestCase):
     def _make_window(self, visible_page="retention"):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
         gui = _import_gui_under_mock()
-        with patch.object(
-            gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None
-        ):
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window.action_box = MagicMock()
             window.action_box.get_children.return_value = [MagicMock()]
@@ -589,6 +547,142 @@ class TestUpdateActionButtonsGuard(unittest.TestCase):
 
         window.action_box.remove.assert_called()
         window.action_box.show_all.assert_called_once()
+
+
+class TestTerminateConfirmation(unittest.TestCase):
+    """Tests for the close/quit confirmation when tasks are running."""
+
+    def _make_window(self):
+        """Create a ZFSUtilitiesWindow with __init__ bypassed.
+
+        Each test imports the module freshly so it is independent of any
+        cached mock-GTK import left by earlier tests.
+        """
+        import sys
+
+        sys.modules.pop("zfsutilities_gui", None)
+        import zfsutilities_gui as gui
+
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+            window.dataset_runner = None
+            return window, gui
+
+    def _set_dialog_response(self, gui, response):
+        """Configure the mocked MessageDialog to return *response*.
+
+        Returns the patched MessageDialog class mock; the dialog instance is
+        available as its return_value.
+        """
+        dialog_class = MagicMock()
+        gui.Gtk.MessageDialog = dialog_class
+        dialog = dialog_class.return_value
+        dialog.run.return_value = response
+        return dialog_class
+
+    def test_delete_event_no_tasks_allows_close(self):
+        """Closing with no running tasks does not show a warning."""
+        window, gui = self._make_window()
+        dialog_class = self._set_dialog_response(gui, gui.Gtk.ResponseType.YES)
+        with patch.object(gui, "_collect_running_tasks", return_value=[]):
+            result = window._on_delete_event(None, None)
+        self.assertFalse(result)
+        dialog_class.assert_not_called()
+
+    def test_delete_event_with_running_task_shows_warning(self):
+        """Closing with a running GUI runner shows the task in the dialog."""
+        window, gui = self._make_window()
+        dialog_class = self._set_dialog_response(gui, gui.Gtk.ResponseType.YES)
+        with patch.object(
+            gui,
+            "_collect_running_tasks",
+            return_value=[
+                {"name": "Backup", "type": "GUI", "status": "Running"},
+            ],
+        ):
+            result = window._on_delete_event(None, None)
+
+        dialog_class.assert_called_once()
+        dialog = dialog_class.return_value
+        secondary = dialog.format_secondary_text.call_args[0][0]
+        self.assertIn("Backup", secondary)
+        self.assertFalse(result)
+
+    def test_delete_event_no_cancels_close(self):
+        """Clicking No in the warning dialog keeps the window open."""
+        window, gui = self._make_window()
+        self._set_dialog_response(gui, gui.Gtk.ResponseType.NO)
+        with patch.object(
+            gui,
+            "_collect_running_tasks",
+            return_value=[
+                {"name": "Backup", "type": "GUI", "status": "Running"},
+            ],
+        ):
+            result = window._on_delete_event(None, None)
+
+        self.assertTrue(result)
+
+    def test_delete_event_includes_dataset_runner(self):
+        """The dataset runner is included even though Dashboard omits it."""
+        window, gui = self._make_window()
+        dialog_class = self._set_dialog_response(gui, gui.Gtk.ResponseType.YES)
+        window.dataset_runner = MagicMock()
+        window.dataset_runner.running = True
+        window.dataset_runner.label = "Dataset action"
+        with patch.object(gui, "_collect_running_tasks", return_value=[]):
+            window._on_delete_event(None, None)
+
+        dialog = dialog_class.return_value
+        secondary = dialog.format_secondary_text.call_args[0][0]
+        self.assertIn("Dataset action", secondary)
+
+    def test_collect_abortable_tasks_filters_scrubs_and_remote_profiles(self):
+        """Scrubs and non-GUI profiles are excluded from the warning list."""
+        window, gui = self._make_window()
+        window.dataset_runner = None
+        tasks_data = [
+            {"name": "Backup", "type": "GUI", "status": "Running"},
+            {"name": "Scrub: pool1", "type": "Scrub", "status": "10.0% complete"},
+            {"name": "Daily", "type": "Profile", "status": "PID 1234"},
+            {"name": "Nightly", "type": "Profile", "status": "PID 5678"},
+        ]
+        with (
+            patch.object(gui, "_collect_running_tasks", return_value=tasks_data),
+            patch.object(gui, "_is_descendant_of_current_process") as mock_descendant,
+        ):
+            mock_descendant.side_effect = lambda pid: pid == 1234
+            tasks = window._collect_abortable_tasks()
+
+        names = [t["name"] for t in tasks]
+        self.assertEqual(names, ["Backup", "Daily"])
+
+    def test_on_quit_no_tasks_quits(self):
+        """Quit menu with no running tasks invokes app.quit()."""
+        window, _gui = self._make_window()
+        app = MagicMock()
+        window.get_application = MagicMock(return_value=app)
+        with patch.object(window, "_confirm_terminate", return_value=True):
+            window.on_quit(None)
+        app.quit.assert_called_once()
+
+    def test_on_quit_canceled_does_not_quit(self):
+        """Quit menu with a canceled confirmation does not quit."""
+        window, _gui = self._make_window()
+        app = MagicMock()
+        window.get_application = MagicMock(return_value=app)
+        with patch.object(window, "_confirm_terminate", return_value=False):
+            window.on_quit(None)
+        app.quit.assert_not_called()
+
+    def test_on_quit_confirmed_quits(self):
+        """Quit menu with a confirmed warning still invokes app.quit()."""
+        window, _gui = self._make_window()
+        app = MagicMock()
+        window.get_application = MagicMock(return_value=app)
+        with patch.object(window, "_confirm_terminate", return_value=True):
+            window.on_quit(None)
+        app.quit.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.76.0
+
+*Released 2026-08-08*
+
+### Added
+
+- **`<offsite>` retention policy placeholder** — You can now create a single
+  retention policy keyed as `<offsite>` instead of adding a separate policy for
+  each offsite-candidate pool. At prune time it expands to every online
+  offsite-candidate pool, so removable pools such as `z22tb` and `z40tb` can be
+  pruned with whichever one is currently attached. The placeholder appears in
+  the GUI Retention tab's prune list, is validated when adding a policy, and is
+  supported by scheduled retention profiles and `profile_runner.py`.
+
+- **GUI close/quit confirmation** — Closing the main window or choosing
+  **File → Quit** now warns when GUI-started tasks are still running and lists
+  the tasks that would be aborted. Scrubs and tasks started by other processes
+  are excluded from the warning.
+
+### Changed
+
+- **Pool Details logs to the log panel** — The Pools tab **Details** button no
+  longer opens a modal dialog. It now writes `zpool status` output directly to
+  the GUI log panel, making the text searchable and copyable.
+
+- **Restore pause-scrubs option moved** — The **Pause scrubs on source/
+  destination pools during each step** checkbox has moved from the **Restore
+  Steps** frame to the **Advanced** expander on the Restore tab, alongside the
+  other per-step options.
+
+- **New-install retention cleanup is interactive** — When the GUI starts for the
+  first time and finds pool-specific retention policies (for example,
+  legacy-imported sample policies), it now asks whether to keep them or clear
+  them and keep only the `default` policy, instead of deleting them silently.
+
+- **Scrub Start button sensitivity** — The Pools tab **Start Scrub** button is
+  now disabled when the selected scrub entry is already `scrubbing` or
+  `pending`.
+
+### Tests
+
+- Added `tests/python/test_offsite_runner.py` coverage for the new
+  `detect_offsite_pools()` helper.
+
+- Extended `tests/python/test_profile_runner.py` coverage for `<offsite>`
+  expansion in retention profiles.
+
+- Extended `tests/python/test_retention_actions.py` coverage for pool-name
+  validation and `<offsite>` expansion in interactive pruning.
+
+- Extended `tests/python/test_retention_page.py` coverage for the interactive
+  new-install cleanup dialog and for displaying the `<offsite>` placeholder in
+  the prune list.
+
+- Extended `tests/python/test_zfsutilities_gui.py` coverage for the close/quit
+  confirmation when running tasks are present.
+
+- Updated `tests/python/test_pool_actions.py` and
+  `tests/python/test_pools_page.py` for the new pool-details logging and scrub
+  start-button behavior.
+
+### Documentation
+
+- Updated `docs/docs/user-guide/retention.md` to document the `<offsite>`
+  retention policy placeholder.
+
+- Updated `docs/docs/user-guide/gtk-gui.md` to reflect the new close/quit
+  confirmation, the pool-details log output, and the relocated Restore tab
+  pause-scrubs option.
+
+- Updated `docs/docs/user-guide/restore.md` to point to the **Advanced**
+  expander for the pause-scrubs option.
+
 ## 0.75.0
 
 *Released 2026-08-08*

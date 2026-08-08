@@ -6,7 +6,7 @@ import shlex
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 import zfs_lock_manager as zlm
 from backup_config import (
     DEFAULT_RETENTION,
@@ -16,8 +16,10 @@ from backup_config import (
     save_retention,
 )
 from command_builders import BashStep, _dryrun_assignments
+from feature_config import get_offsite_candidate_names
 from gi.repository import Gtk
 from gui_helpers import set_button_markup_red, show_error
+from offsite_runner import detect_offsite_pools
 from retention_page import (
     BUCKET_LABELS,
     _get_online_pool_names,
@@ -31,13 +33,18 @@ from retention_page import (
 def on_retention_add_policy(app, ctx):
     """Create a new retention policy for a pool, seeded from `default`."""
     retention = get_all_retention(ctx.config)
-    known = list(getattr(app, 'known_pools', []) or [])
+    known = list(getattr(app, "known_pools", []) or [])
     known_names = [p["name"] for p in known]
     online = _get_online_pool_names()
     candidates = []
     for p in known_names + online:
         if p not in retention and p not in candidates:
             candidates.append(p)
+    # The <offsite> placeholder is always available if not already present.
+    if "<offsite>" not in retention and "<offsite>" not in candidates:
+        candidates.append("<offsite>")
+
+    valid_names = set(known_names) | set(online) | {"<offsite>"}
 
     dlg = Gtk.Dialog(
         title="Add Retention Policy",
@@ -46,8 +53,10 @@ def on_retention_add_policy(app, ctx):
         destroy_with_parent=True,
     )
     dlg.add_buttons(
-        "Cancel", Gtk.ResponseType.CANCEL,
-        "Add", Gtk.ResponseType.OK,
+        "Cancel",
+        Gtk.ResponseType.CANCEL,
+        "Add",
+        Gtk.ResponseType.OK,
     )
     dlg.set_default_response(Gtk.ResponseType.OK)
 
@@ -75,9 +84,7 @@ def on_retention_add_policy(app, ctx):
     entry.set_activates_default(True)
 
     note = Gtk.Label()
-    note.set_markup(
-        "<small>Will be seeded from the current 'default' policy.</small>"
-    )
+    note.set_markup("<small>Will be seeded from the current 'default' policy.</small>")
     note.set_halign(Gtk.Align.START)
     content.add(note)
 
@@ -91,8 +98,11 @@ def on_retention_add_policy(app, ctx):
     if pool in retention:
         log_msg(f"WARN: Retention policy for '{pool}' already exists")
         return
+    if pool not in valid_names:
+        show_error(app, f"'{pool}' is not a known pool, an online pool, or '<offsite>'.")
+        return
 
-    default_buckets = retention.get('default') or DEFAULT_RETENTION
+    default_buckets = retention.get("default") or DEFAULT_RETENTION
     try:
         save_retention(ctx.config, pool, [dict(b) for b in default_buckets])
     except OSError as e:
@@ -112,12 +122,13 @@ def on_retention_add_policy(app, ctx):
 def on_retention_remove_policy(app, ctx):
     """Delete the currently-selected pool's retention policy."""
     pool = app._ret_pool
-    if pool == 'default':
+    if pool == "default":
         show_error(app, "The 'default' retention policy cannot be removed.")
         return
 
     dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
+        transient_for=app,
+        modal=True,
         message_type=Gtk.MessageType.QUESTION,
         buttons=Gtk.ButtonsType.YES_NO,
         text=f"Remove retention policy for pool '{pool}'?",
@@ -159,7 +170,7 @@ def on_retention_prune(app, ctx):
     retention counts.
     """
     app.clear_log_status()
-    if not hasattr(app, '_ret_prune_view'):
+    if not hasattr(app, "_ret_prune_view"):
         log_msg("WARN: Retention page not initialized")
         return
     selection = app._ret_prune_view.get_selection()
@@ -177,7 +188,29 @@ def on_retention_prune(app, ctx):
     # Walk the model in visual order so execution order matches the list.
     pools = [row[0] for row in model if row[0] in selected]
 
-    runner = getattr(app, 'retention_runner', None)
+    # Expand the <offsite> placeholder to all online offsite-candidate pools.
+    if "<offsite>" in selected:
+        offsite_pools = detect_offsite_pools(get_offsite_candidate_names(ctx.config))
+        if not offsite_pools:
+            log_msg("WARN: No offsite pool online; skipping <offsite> prune")
+        expanded = []
+        seen = set()
+        for pool in pools:
+            if pool == "<offsite>":
+                for op in offsite_pools:
+                    if op not in seen:
+                        expanded.append(op)
+                        seen.add(op)
+            elif pool not in seen:
+                expanded.append(pool)
+                seen.add(pool)
+        pools = expanded
+
+    if not pools:
+        log_msg("WARN: No online pools selected for pruning")
+        return
+
+    runner = getattr(app, "retention_runner", None)
     if runner is None:
         log_msg("WARN: Retention runner not available")
         return
@@ -185,19 +218,17 @@ def on_retention_prune(app, ctx):
         log_msg("WARN: A prune operation is already running")
         return
 
-    dryrun = getattr(app, '_dry_run_active', False)
+    dryrun = getattr(app, "_dry_run_active", False)
 
     if dryrun:
         log_msg("INFO: Dry run mode enabled — no changes will be made")
 
     for pool in pools:
         if not zlm.check(pool, "w"):
-            log_msg(
-                f"WARN: cannot prune {pool}: pool is locked by another operation"
-            )
+            log_msg(f"WARN: cannot prune {pool}: pool is locked by another operation")
             return
 
-    ignore_check = getattr(app, '_ret_ignore_retention_check', None)
+    ignore_check = getattr(app, "_ret_ignore_retention_check", None)
     ignore = ignore_check.get_active() if ignore_check is not None else False
 
     steps = []
@@ -210,7 +241,7 @@ def on_retention_prune(app, ctx):
         snapshot_has = widgets["snapshot_has"].get_text().strip()
         releaseholds = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
 
-        var_assignments = f'{_dryrun_assignments(dryrun)}'
+        var_assignments = f"{_dryrun_assignments(dryrun)}"
         var_assignments += 'ignore_retention_policies="Y"; '
         var_assignments += f'releaseholds="{releaseholds}"; '
         if releaseholds == "Y":
@@ -220,15 +251,15 @@ def on_retention_prune(app, ctx):
         if includes:
             items = shlex.split(includes)
             arr = " ".join(f'"{i}"' for i in items)
-            var_assignments += f'includes=({arr}); '
+            var_assignments += f"includes=({arr}); "
         else:
-            var_assignments += 'includes=(); '
+            var_assignments += "includes=(); "
         if excludes:
             items = shlex.split(excludes)
             arr = " ".join(f'"{i}"' for i in items)
-            var_assignments += f'excludes=({arr}); '
+            var_assignments += f"excludes=({arr}); "
         else:
-            var_assignments += 'excludes=(); '
+            var_assignments += "excludes=(); "
         if startwith:
             var_assignments += f'startwith="{startwith}"; '
         if endwith:
@@ -238,43 +269,47 @@ def on_retention_prune(app, ctx):
         bash_cmd = (
             f'source ~/bashinit; bashinit; mydir="{ctx.parent_dir}"; '
             f'source "$mydir/zfsmassdelsnaps"; '
-            f'{var_assignments}'
-            f'mass_delete_snapshots {pool_list}'
+            f"{var_assignments}"
+            f"mass_delete_snapshots {pool_list}"
         )
-        steps.append(BashStep(
-            ["bash", "-c", bash_cmd],
-            f"Prune {', '.join(pools)} (label={label}, ignore retention)",
-            is_rsync=False,
-            fatal=False,
-        ))
+        steps.append(
+            BashStep(
+                ["bash", "-c", bash_cmd],
+                f"Prune {', '.join(pools)} (label={label}, ignore retention)",
+                is_rsync=False,
+                fatal=False,
+            )
+        )
     else:
-        verb_check = getattr(app, '_ret_verb_check', None)
+        verb_check = getattr(app, "_ret_verb_check", None)
         retain_verb = "Y" if verb_check is not None and verb_check.get_active() else "N"
         for pool in pools:
             bash_cmd = (
                 f'source ~/bashinit; bashinit; mydir="{ctx.parent_dir}"; '
                 f'source "$mydir/zfscleanup"; '
-                f'{_dryrun_assignments(dryrun)}'
+                f"{_dryrun_assignments(dryrun)}"
                 f'autoproceed="Y"; '
                 f'releaseholds="Y"; '
                 f'releaseholds_tags=("offsite-*"); '
                 f'retain_verb="{retain_verb}"; '
                 f'cleanup "{pool}" "" "{label}"'
             )
-            steps.append(BashStep(
-                ["bash", "-c", bash_cmd],
-                f"Prune {pool} (label={label})",
-                is_rsync=False,
-                fatal=False,
-            ))
+            steps.append(
+                BashStep(
+                    ["bash", "-c", bash_cmd],
+                    f"Prune {pool} (label={label})",
+                    is_rsync=False,
+                    fatal=False,
+                )
+            )
 
     def _on_prune_complete(cancelled=False):
-        if hasattr(app, 'update_action_buttons'):
+        if hasattr(app, "update_action_buttons"):
             app.update_action_buttons("retention")
 
     runner.set_steps(steps)
     runner.start(on_complete=_on_prune_complete)
-    if hasattr(app, 'update_action_buttons'):
+    if hasattr(app, "update_action_buttons"):
         app.update_action_buttons("retention")
 
 
@@ -287,8 +322,10 @@ def on_retention_add_bucket(app, ctx):
         destroy_with_parent=True,
     )
     dlg.add_buttons(
-        Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-        Gtk.STOCK_OK, Gtk.ResponseType.OK,
+        Gtk.STOCK_CANCEL,
+        Gtk.ResponseType.CANCEL,
+        Gtk.STOCK_OK,
+        Gtk.ResponseType.OK,
     )
     dlg.set_default_response(Gtk.ResponseType.OK)
 
@@ -329,7 +366,7 @@ def on_retention_add_bucket(app, ctx):
 
 def on_retention_remove_bucket(app, ctx):
     """Remove the selected retention bucket from the current pool's policy."""
-    if not hasattr(app, '_ret_view'):
+    if not hasattr(app, "_ret_view"):
         log_msg("WARN: Select a bucket to remove")
         return
     selection = app._ret_view.get_selection()
@@ -356,14 +393,15 @@ def on_retention_revert(app, ctx):
 
 def is_retention_dirty(app):
     """Return True if there are unsaved changes."""
-    if not hasattr(app, '_ret_original'):
+    if not hasattr(app, "_ret_original"):
         return False
     from retention_page import _is_dirty
+
     return _is_dirty(app)
 
 
 def check_retention_dirty(app):
     """Compare current UI state to last-saved state; style Save button accordingly."""
-    btn = getattr(app, '_ret_save_button', None)
+    btn = getattr(app, "_ret_save_button", None)
     if btn:
         set_button_markup_red(btn, is_retention_dirty(app))

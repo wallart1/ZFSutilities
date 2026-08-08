@@ -481,34 +481,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#key-concepts" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Concepts
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Key Concepts">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#snapshot-naming" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Snapshot Naming
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1902,38 +1874,6 @@ and <code>--dry-run</code>.</p>
 <li><a href="user-guide/restore/">Restore from a snapshot</a></li>
 <li><a href="user-guide/retention/">Understand retention policies</a></li>
 </ul>
-<h2 id="key-concepts">Key Concepts<a class="headerlink" href="#key-concepts" title="Permanent link">&para;</a></h2>
-<h3 id="snapshot-naming">Snapshot Naming<a class="headerlink" href="#snapshot-naming" title="Permanent link">&para;</a></h3>
-<p>Snapshots follow the format: <code>@&lt;label&gt;-&lt;yyyy-mm-dd&gt;T&lt;hh:mm&gt;&lt;tz&gt;-&lt;bucket&gt;</code></p>
-<p>Example: <code>@dailybackup-2026-02-21T02:00-05:00-d</code></p>
-<table>
-<thead>
-<tr>
-<th>Bucket</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>d</code></td>
-<td>Daily</td>
-</tr>
-<tr>
-<td><code>w</code></td>
-<td>Weekly</td>
-</tr>
-<tr>
-<td><code>m</code></td>
-<td>Monthly</td>
-</tr>
-<tr>
-<td><code>s</code></td>
-<td>Offsite (sent to removable pool)</td>
-</tr>
-</tbody>
-</table>
-<p>Labels are used to "partition" snapshots. Only one label is operated upon during any major task. The labels "dailybackup", "offsite" and "clone" have special meanings. They are to be used only by the ZFSutilities system. </p>
-<p>Otherwise, anywhere you can enter a label, you may use any text that is valid in a ZFS snapshot name and does not contain "@" or "-". When using custom labels, the rest of the format is not used.  As custom labels are snapshot partitions, their snapshots are ignored (e.g., during pruning) unless you specify one in a major task.</p>
 
 
 
@@ -1969,7 +1909,7 @@ and <code>--dry-run</code>.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.75.0
+      ZFS Utilities v0.76.0
     </div>
   
   
@@ -1994,7 +1934,7 @@ and <code>--dry-run</code>.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.75.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.76.0"}</script>
     
     
       <script src="assets/javascripts/bundle.79ae519e.min.js"></script>

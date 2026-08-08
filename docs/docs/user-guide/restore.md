@@ -64,7 +64,7 @@ pools while the restore step is running**. This reduces I/O contention while
 large snapshot data is being read and written, and resumes scrubs automatically
 when the restore finishes.
 
-- Enable it in the Restore tab → **Restore Steps** →
+- Enable it in the Restore tab → **Advanced** →
   **Pause scrubs on source/destination pools during each step**.
 - Pools whose scrub has already finished or that are not online are skipped;
   they are not marked as user-paused.
