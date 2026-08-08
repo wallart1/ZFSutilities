@@ -19,6 +19,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`cleanup-zfsutilities-legacy`](#cleanup-zfsutilities-legacy)
 - [`datesubtract`](#datesubtract)
 - [`deploy-version`](#deploy-version)
+- [`ensure-restored-vm-iscsi`](#ensure-restored-vm-iscsi)
 - [`getlinecount`](#getlinecount)
 - [`git-release`](#git-release)
 - [`PVE-send-to-archive`](#pve-send-to-archive)
@@ -271,6 +272,56 @@ sudo ./bin/deploy-version [version] [group ...]
 | ---- | ------- |
 | `0` | Deployment completed |
 | `1` | Fatal error (wrong directory, missing version, unknown group, etc.) |
+
+---
+
+### `ensure-restored-vm-iscsi`
+
+Ensures restored Proxmox VM disk zvols are exported as iSCSI LUNs with the
+same LUN indexes they had before the restore. Two-node only; in single-node
+mode the script is a no-op.
+
+```bash
+sudo ensure-restored-vm-iscsi <zvol>...
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `<zvol>...` | One or more ZFS zvol paths backing Proxmox VM disks. Only paths whose basename matches `vm-<vmid>-disk-<num>` are processed. |
+
+**Globals / environment:**
+
+| Variable | Role | Reference |
+| -------- | ---- | --------- |
+| `PVE_CONF_DIR` | Directory containing Proxmox VM configs | — |
+| `ISCSI_MANIFEST` | Backstore manifest path on the storage host | — |
+| `ISCSI_ENCRYPTED_CONF` | Encrypted-LUN config path on the storage host | — |
+
+For each supplied zvol, the script reads the matching Proxmox VM config on the
+compute host, extracts the existing LUN number from the disk's by-path entry,
+and ensures the backstore and LUN mapping exist on the storage host. EFI disks
+are matched to the `efidisk0:` config entry by their 4 MiB size, independent of
+the zvol disk number.
+
+**Called modules:**
+
+| Module / Script | Purpose |
+| --------------- | ------- |
+| `node-lib.sh` | Two-node host/target resolution |
+| [rootcheck](modules.md#rootcheck) | Verify root privileges |
+| `safe-iscsi-save` | Persist iSCSI target configuration |
+| `rescan-storage` | Rescan iSCSI LUNs on the compute host |
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Success, or no VM disk zvols required processing |
+| `1` | Usage error (no zvol arguments supplied) |
 
 ---
 
@@ -1957,7 +2008,7 @@ to catch up to the newest.
 | [zfs-send-receive](modules.md#zfs-send-receive) | Perform full then incremental copy |
 | [zfsoverrides](modules.md#zfsoverrides) | Apply Part 1 / Part 2 overrides |
 | [zfsremoveleadingqualifiers](modules.md#zfsremoveleadingqualifiers) | Strip leading qualifiers when building destination zvol paths |
-| `ensure-restored-vm-iscsi` (two-node) | Re-export restored VM disk zvols as iSCSI LUNs after the final send-receive |
+| [`ensure-restored-vm-iscsi`](#ensure-restored-vm-iscsi) (two-node) | Re-export restored VM disk zvols as iSCSI LUNs after the final send-receive |
 
 **Data structures consumed / produced:**
 

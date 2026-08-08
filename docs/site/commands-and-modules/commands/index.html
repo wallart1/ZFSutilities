@@ -1636,6 +1636,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#ensure-restored-vm-iscsi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ensure-restored-vm-iscsi
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#getlinecount" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2428,6 +2439,7 @@ arrays and on-disk tables are on <a href="../../developer-guide/data-structures/
 <li><a href="#cleanup-zfsutilities-legacy"><code>cleanup-zfsutilities-legacy</code></a></li>
 <li><a href="#datesubtract"><code>datesubtract</code></a></li>
 <li><a href="#deploy-version"><code>deploy-version</code></a></li>
+<li><a href="#ensure-restored-vm-iscsi"><code>ensure-restored-vm-iscsi</code></a></li>
 <li><a href="#getlinecount"><code>getlinecount</code></a></li>
 <li><a href="#git-release"><code>git-release</code></a></li>
 <li><a href="#pve-send-to-archive"><code>PVE-send-to-archive</code></a></li>
@@ -2816,6 +2828,107 @@ version; use <a href="#switch-version"><code>switch-version</code></a> for that.
 <tr>
 <td><code>1</code></td>
 <td>Fatal error (wrong directory, missing version, unknown group, etc.)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="ensure-restored-vm-iscsi"><code>ensure-restored-vm-iscsi</code><a class="headerlink" href="#ensure-restored-vm-iscsi" title="Permanent link">&para;</a></h3>
+<p>Ensures restored Proxmox VM disk zvols are exported as iSCSI LUNs with the
+same LUN indexes they had before the restore. Two-node only; in single-node
+mode the script is a no-op.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>ensure-restored-vm-iscsi<span class="w"> </span>&lt;zvol&gt;...
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;zvol&gt;...</code></td>
+<td>One or more ZFS zvol paths backing Proxmox VM disks. Only paths whose basename matches <code>vm-&lt;vmid&gt;-disk-&lt;num&gt;</code> are processed.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Globals / environment:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PVE_CONF_DIR</code></td>
+<td>Directory containing Proxmox VM configs</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>ISCSI_MANIFEST</code></td>
+<td>Backstore manifest path on the storage host</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>ISCSI_ENCRYPTED_CONF</code></td>
+<td>Encrypted-LUN config path on the storage host</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>For each supplied zvol, the script reads the matching Proxmox VM config on the
+compute host, extracts the existing LUN number from the disk's by-path entry,
+and ensures the backstore and LUN mapping exist on the storage host. EFI disks
+are matched to the <code>efidisk0:</code> config entry by their 4 MiB size, independent of
+the zvol disk number.</p>
+<p><strong>Called modules:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module / Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>node-lib.sh</code></td>
+<td>Two-node host/target resolution</td>
+</tr>
+<tr>
+<td><a href="../modules/#rootcheck">rootcheck</a></td>
+<td>Verify root privileges</td>
+</tr>
+<tr>
+<td><code>safe-iscsi-save</code></td>
+<td>Persist iSCSI target configuration</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code></td>
+<td>Rescan iSCSI LUNs on the compute host</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong> none.</p>
+<p><strong>Return codes:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Success, or no VM disk zvols required processing</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Usage error (no zvol arguments supplied)</td>
 </tr>
 </tbody>
 </table>
@@ -5895,7 +6008,7 @@ to catch up to the newest.</p>
 <td>Strip leading qualifiers when building destination zvol paths</td>
 </tr>
 <tr>
-<td><code>ensure-restored-vm-iscsi</code> (two-node)</td>
+<td><a href="#ensure-restored-vm-iscsi"><code>ensure-restored-vm-iscsi</code></a> (two-node)</td>
 <td>Re-export restored VM disk zvols as iSCSI LUNs after the final send-receive</td>
 </tr>
 </tbody>
@@ -7396,7 +7509,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.9
+      ZFS Utilities v0.74.10
     </div>
   
   
@@ -7421,7 +7534,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.9"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.10"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

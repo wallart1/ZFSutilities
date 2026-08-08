@@ -4,91 +4,11 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
-# ---------------------------------------------------------------------------
-# Helpers mirroring the parsing logic in ensure-restored-vm-iscsi.
-# ---------------------------------------------------------------------------
-
-bsname_from_zvol() {
-    local zvol="$1"
-    echo "${zvol##*/}"
-}
-
-pool_from_zvol() {
-    local zvol="$1"
-    echo "${zvol%%/*}"
-}
-
-parse_vm_disk_zvol() {
-    local zvol="$1"
-    local base
-    base=$(bsname_from_zvol "$zvol")
-    if [[ "$base" =~ ^vm-([0-9]+)-disk-([0-9]+)$ ]]; then
-        echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
-        return 0
-    fi
-    return 1
-}
-
-lun_from_by_path_line() {
-    local line="$1"
-    local marker="$2"
-    local rest
-    rest="${line#*"${marker}"}"
-    if [[ "$rest" == "$line" ]]; then
-        return 0
-    fi
-    rest="${rest%%,*}"
-    rest="${rest%% *}"
-    if [[ "$rest" =~ ^[0-9]+$ ]]; then
-        echo "$rest"
-    fi
-}
-
-expected_lun_for_zvol() {
-    local zvol="$1"
-    local vmid="$2"
-    local disknum="$3"
-    local zvol_size="${4:-}"
-    local pool
-    pool=$(pool_from_zvol "$zvol")
-    local target_short="${POOL_TARGET[$pool]:-}"
-    [[ -n "$target_short" ]] || return 0
-
-    local conf="$PVE_CONF_DIR/${vmid}.conf"
-    local config
-    config=$(cat -- "$conf" 2>/dev/null || true)
-    [[ -n "$config" ]] || return 0
-
-    local is_efi=false
-    if [[ "$zvol_size" == "4M" || "$zvol_size" == "4194304" ]]; then
-        is_efi=true
-    fi
-
-    local -a candidate_keys=()
-    if [[ "$is_efi" == true ]]; then
-        candidate_keys+=("efidisk0:")
-    fi
-    candidate_keys+=("scsi${disknum}:")
-    candidate_keys+=("sata${disknum}:")
-    candidate_keys+=("ide${disknum}:")
-    candidate_keys+=("virtio${disknum}:")
-    if [[ "$disknum" == "0" && "$is_efi" != true ]]; then
-        candidate_keys+=("efidisk0:")
-    fi
-
-    local marker="ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:${target_short}-lun-"
-    local key line lun
-    for key in "${candidate_keys[@]}"; do
-        line=$(echo "$config" | grep "^${key}" | head -1 || true)
-        [[ -n "$line" ]] || continue
-        lun=$(lun_from_by_path_line "$line" "$marker")
-        if [[ -n "$lun" ]]; then
-            echo "$lun"
-            return 0
-        fi
-    done
-    return 0
-}
+# Load the real helper functions from the script (excluding the main body and
+# argument validation), then exercise run_on_storage / ensure_lun_on_storage
+# with mocked bash/ssh and zfs so no root or real storage node is needed.
+# shellcheck source=/dev/null
+source <(sed -n '72,320p' "$mydir/bin/ensure-restored-vm-iscsi")
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -340,12 +260,6 @@ test_expected_lun_for_efi_disk_byte_size
 # ---------------------------------------------------------------------------
 # Regression tests for storage-side helper execution
 # ---------------------------------------------------------------------------
-
-# Load the real helper functions from the script (excluding the main body and
-# argument validation), then exercise run_on_storage / ensure_lun_on_storage
-# with mocked bash/ssh and zfs so no root or real storage node is needed.
-# shellcheck source=/dev/null
-source <(sed -n '50,304p' "$mydir/bin/ensure-restored-vm-iscsi")
 
 _bash_calls=()
 _ssh_calls=()

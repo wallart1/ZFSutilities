@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.74.10
+
+*Released 2026-08-08*
+
+### Fixed
+
+- **`cleanup-zfsutilities-legacy` and `ensure-restored-vm-iscsi` use `bashreturn`** —
+  Both scripts replaced bare `exit` calls with the project's `bashreturn` helper so
+  they behave correctly when sourced as well as when executed directly.
+  `cleanup-zfsutilities-legacy` now returns cleanly from `--help` and from user
+  cancellations at confirmation prompts.
+
+- **`ensure-restored-vm-iscsi` skips `rootcheck` when already mocked** — The script
+  now loads `rootcheck` only if it is not already defined, matching the pattern used
+  by `cleanup-zfsutilities-legacy` and making the script safe to source in tests.
+
+### Changed
+
+- **Documentation path corrections** — `README.md` and the usage comments in
+  `bin/run-tests` now refer to `./bin/run-tests`, matching the actual repository
+  layout.
+
+- **Added dedicated `ensure-restored-vm-iscsi` command reference** —
+  `docs/docs/commands-and-modules/commands.md` now has a standalone section for
+  `ensure-restored-vm-iscsi` with arguments, environment variables, return codes,
+  and called modules; the `zfsfullcopy` section links to it.
+
+### Tests
+
+- **`test-ensure-restored-vm-iscsi` sources real helpers** — The suite no longer
+  duplicates the production parsing logic; it sources the real helper functions
+  from `bin/ensure-restored-vm-iscsi` and exercises them with mocks.
+
+- **Added cancellation test for `cleanup-zfsutilities-legacy`** —
+  `test_cancellation_returns_zero` verifies that declining a confirmation prompt
+  returns exit code 0.
+
 ## 0.74.9
 
 *Released 2026-08-07*

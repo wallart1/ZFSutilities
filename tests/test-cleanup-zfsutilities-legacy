@@ -513,6 +513,23 @@ test_all_orphaned_removes_except_active() {
     fi
 }
 
+test_cancellation_returns_zero() {
+    test_start "cancellation at confirmation returns 0"
+    local tmpdir
+    _setup_cleanup_env tmpdir
+    mock_ask_yn 1
+
+    touch "$tmpdir/var/lib/zfsutilities/config.json"
+    _create_legacy_symlinks "$tmpdir"
+
+    main >/dev/null 2>&1
+    local rc=$?
+
+    _teardown_cleanup_env "$tmpdir"
+
+    assert_rc 0 "$rc"
+}
+
 test_help_flag() {
     test_start "--help prints usage"
     local tmpdir
@@ -555,6 +572,7 @@ test_remove_versions_refuses_active
 test_remove_versions_removes_non_active
 test_remove_older_than
 test_all_orphaned_removes_except_active
+test_cancellation_returns_zero
 test_help_flag
 
 test_summary

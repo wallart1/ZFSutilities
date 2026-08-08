@@ -2,12 +2,12 @@
 # run-tests — Thin wrapper around the unified test harness at tests/run-tests.
 #
 # Usage:
-#   ./run-tests                    # Run all suites (bash + Python)
-#   ./run-tests test-zfsretain     # Run a specific bash suite
-#   ./run-tests test_backup_config # Run a specific Python suite
-#   ./run-tests -v                 # Verbose (show all output)
-#   ./run-tests -q                 # Quiet (summary only)
-#   ./run-tests --failures-only    # Only show failures
+#   ./bin/run-tests                       # Run all suites (bash + Python)
+#   ./bin/run-tests test-zfsretain        # Run a specific bash suite
+#   ./bin/run-tests test_backup_config    # Run a specific Python suite
+#   ./bin/run-tests -v                    # Verbose (show all output)
+#   ./bin/run-tests -q                    # Quiet (summary only)
+#   ./bin/run-tests --failures-only       # Only show failures
 #
 # Exit codes:
 #   0  All tests passed

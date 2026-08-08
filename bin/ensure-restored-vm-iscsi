@@ -1,15 +1,33 @@
 #!/usr/bin/bash
-# ensure-restored-vm-iscsi <zvol>...
-# Ensures restored Proxmox VM disk zvols are exported as iSCSI LUNs.
 #
-# Two-node only. In single-node mode this script is a no-op.
+# Script: ensure-restored-vm-iscsi
+# Description: Ensures restored Proxmox VM disk zvols are exported as iSCSI LUNs.
 #
-# For each supplied zvol whose basename matches vm-<vmid>-disk-<num>, the
-# script reads the matching Proxmox VM config on the compute host, extracts
-# the existing LUN number from the disk's by-path entry, and ensures the
-# backstore and LUN mapping exist on the storage host. This preserves the
-# compute host's /dev/disk/by-path symlinks so the VM can start after a
-# restore.
+#   Two-node only. In single-node mode this script is a no-op.
+#
+#   For each supplied zvol whose basename matches vm-<vmid>-disk-<num>, the
+#   script reads the matching Proxmox VM config on the compute host, extracts
+#   the existing LUN number from the disk's by-path entry, and ensures the
+#   backstore and LUN mapping exist on the storage host. This preserves the
+#   compute host's /dev/disk/by-path symlinks so the VM can start after a
+#   restore.
+#
+# Usage: ensure-restored-vm-iscsi <zvol>...
+#
+#   <zvol>    One or more ZFS zvol paths that back Proxmox VM disks. Only
+#             paths whose basename matches vm-<vmid>-disk-<num> are processed.
+#
+# Globals / environment:
+#   PVE_CONF_DIR          Directory containing Proxmox VM configs
+#                         (default: /etc/pve/qemu-server).
+#   ISCSI_MANIFEST        Backstore manifest path on the storage host
+#                         (default: /etc/rtslib-fb-target/expected-backstores.txt).
+#   ISCSI_ENCRYPTED_CONF  Encrypted-LUN config path
+#                         (default: /etc/zfsutilities/iscsi-encrypted-luns.conf).
+#
+# Returns:
+#   0 on success or when there is no work to do,
+#   1 on a usage error (missing arguments).
 
 set -euo pipefail
 
@@ -24,7 +42,9 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
-source "$(find_zfsutility_script rootcheck)"
+if ! declare -f rootcheck &>/dev/null; then
+    source "$(find_zfsutility_script rootcheck)"
+fi
 rootcheck
 
 MY_HOST=$(hostname -s)
@@ -38,14 +58,15 @@ if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; th
 fi
 
 usage() {
-    echo "Usage: ensure-restored-vm-iscsi <zvol>..."
-    echo ""
-    echo "  Ensures iSCSI backstores/LUNs exist for restored VM disk zvols."
-    echo "  The Proxmox config directory can be overridden via PVE_CONF_DIR."
-    exit 1
+    log_msg "INFO: Usage: ensure-restored-vm-iscsi <zvol>..."
+    log_msg "INFO:   Ensures iSCSI backstores/LUNs exist for restored VM disk zvols."
+    log_msg "INFO:   The Proxmox config directory can be overridden via PVE_CONF_DIR."
 }
 
-[[ $# -ge 1 ]] || usage
+if [[ $# -lt 1 ]]; then
+    usage
+    source "$(find_zfsutility_script bashreturn)" 1
+fi
 
 # ---------------------------------------------------------------------------
 # Host helpers
@@ -302,7 +323,7 @@ MANIFESTEOF
 # Main
 # ---------------------------------------------------------------------------
 
-is_single_node && exit 0
+is_single_node && source "$(find_zfsutility_script bashreturn)" 0
 
 # Validate that each argument looks like a dataset path.
 for zvol in "$@"; do
@@ -357,7 +378,7 @@ done
 
 if [[ ${#WORK_ZVOLS[@]} -eq 0 ]]; then
     log_msg "INFO: No VM disk zvols to ensure"
-    exit 0
+    source "$(find_zfsutility_script bashreturn)" 0
 fi
 
 log_msg "INFO: Ensuring iSCSI LUNs for ${#WORK_ZVOLS[@]} restored zvol(s)"
@@ -389,4 +410,4 @@ rescan_storage_path=$(find_zfsutility_script rescan-storage)
 "$rescan_storage_path"
 
 log_msg "INFO: Ensure iSCSI complete"
-exit 0
+source "$(find_zfsutility_script bashreturn)" 0

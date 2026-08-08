@@ -242,13 +242,13 @@ ZFS Utilities includes both bash and Python test suites.
 Run all tests:
 
 ```bash
-./run-tests
+./bin/run-tests
 ```
 
 Run a specific suite:
 
 ```bash
-./run-tests test-zfsretain
+./bin/run-tests test-zfsretain
 ```
 
 Run the Python tests:

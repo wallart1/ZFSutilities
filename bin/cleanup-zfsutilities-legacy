@@ -77,6 +77,7 @@ REMOVE_OLDER_THAN=""
 DO_ALL_ORPHANED="false"
 DO_YES="false"
 DO_DRY_RUN="false"
+HELP_REQUESTED="false"
 
 SYMLINKS_REMOVED=0
 VERSIONS_REMOVED=0
@@ -110,7 +111,6 @@ Examples:
   sudo cleanup-zfsutilities-legacy --remove-older-than 2.0.0 --yes
   sudo cleanup-zfsutilities-legacy --all-orphaned --yes
 EOF
-    exit 0
 }
 
 # Print a message, respecting dry-run prefix.
@@ -303,6 +303,8 @@ parse_args() {
                 ;;
             --help|-h)
                 usage
+                HELP_REQUESTED=true
+                return 0
                 ;;
             -*)
                 die "Unknown option: $1"
@@ -406,7 +408,7 @@ confirm_symlinks() {
     echo ""
     if ! ask_yn "Remove these legacy symlinks?" "N"; then
         echo "Cancelled."
-        exit 0
+        return 1
     fi
 }
 
@@ -425,7 +427,7 @@ confirm_version_list() {
     echo ""
     if ! ask_yn "Remove these versions?" "N"; then
         echo "Cancelled."
-        exit 0
+        return 1
     fi
 }
 
@@ -441,7 +443,7 @@ confirm_older_than() {
     echo ""
     if ! ask_yn "Remove these versions?" "N"; then
         echo "Cancelled."
-        exit 0
+        return 1
     fi
 }
 
@@ -455,7 +457,7 @@ confirm_all_orphaned() {
     echo ""
     if ! ask_yn "Remove all non-active versions?" "N"; then
         echo "Cancelled."
-        exit 0
+        return 1
     fi
 }
 
@@ -470,6 +472,9 @@ main() {
     set -euo pipefail
 
     parse_args "$@"
+    if [[ "$HELP_REQUESTED" == "true" ]]; then
+        source "$(find_zfsutility_script bashreturn)" 0
+    fi
     load_cleanup_config
 
     if [[ "$DO_DRY_RUN" == "true" ]]; then
@@ -477,16 +482,16 @@ main() {
     fi
 
     if [[ "$DO_SYMLINKS" == "true" ]]; then
-        confirm_symlinks
+        confirm_symlinks || source "$(find_zfsutility_script bashreturn)" 0
         cleanup_symlinks
     elif [[ "$DO_REMOVE_VERSIONS" == "true" ]]; then
-        confirm_version_list REMOVE_VERSIONS_LIST
+        confirm_version_list REMOVE_VERSIONS_LIST || source "$(find_zfsutility_script bashreturn)" 0
         cleanup_versions_explicit
     elif [[ "$DO_REMOVE_OLDER_THAN" == "true" ]]; then
-        confirm_older_than "$REMOVE_OLDER_THAN"
+        confirm_older_than "$REMOVE_OLDER_THAN" || source "$(find_zfsutility_script bashreturn)" 0
         cleanup_versions_older_than
     elif [[ "$DO_ALL_ORPHANED" == "true" ]]; then
-        confirm_all_orphaned
+        confirm_all_orphaned || source "$(find_zfsutility_script bashreturn)" 0
         cleanup_all_orphaned
     fi
 
