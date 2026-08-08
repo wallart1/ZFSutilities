@@ -1994,7 +1994,7 @@
 <tbody>
 <tr>
 <td><code>test-deploy-version</code></td>
-<td>28</td>
+<td>21</td>
 <td>Root-level script selection logic: executable files, shebang files, exclusions; validation of critical scripts; Two-node script symlinks including <code>repair-iscsi-luns</code>, <code>iscsi-restore-luns</code>, <code>attach-vm-disk</code>, and <code>detach-vm-disk</code>; GUI and docs launcher symlinks; no production wiring</td>
 </tr>
 <tr>
@@ -2006,6 +2006,11 @@
 <td><code>test-detach-vm-disk</code></td>
 <td>2</td>
 <td><code>detach-vm-disk</code> manifest handling: exact backstore removal and no-match pass-through</td>
+</tr>
+<tr>
+<td><code>test-ensure-restored-vm-iscsi</code></td>
+<td>11</td>
+<td><code>ensure-restored-vm-iscsi</code> parsing: zvol basename/pool extraction, by-path LUN extraction, and VM-config LUN lookup</td>
 </tr>
 <tr>
 <td><code>test-installer-checks</code></td>
@@ -2312,7 +2317,7 @@ mock_zfs_prop<span class="w"> </span><span class="s2">&quot;pool/src@snap1&quot;
 </tr>
 <tr>
 <td><code>test_docs_integrity</code></td>
-<td>11</td>
+<td>12</td>
 <td>MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability</td>
 </tr>
 <tr>
@@ -2362,7 +2367,7 @@ mock_zfs_prop<span class="w"> </span><span class="s2">&quot;pool/src@snap1&quot;
 </tr>
 <tr>
 <td><code>test_restore_runner</code></td>
-<td>11</td>
+<td>16</td>
 <td>Restore destination computation and zfs-send-receive parameter mapping</td>
 </tr>
 <tr>

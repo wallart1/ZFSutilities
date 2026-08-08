@@ -121,6 +121,50 @@ class TestBuildRestoreCommand(unittest.TestCase):
         )
         self.assertEqual(step.metadata["label"], "")
 
+    def test_ensure_iscsi_step_present_after_part1_only(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox/vm-215-disk-0",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+            do_part1=True,
+            do_part2=False,
+        )
+        script = " ".join(step.command)
+        self.assertIn("ensure_restored_iscsi", script)
+        self.assertIn('ensure-restored-vm-iscsi"', script)
+        self.assertIn("remove_leading_qualifiers", script)
+
+    def test_ensure_iscsi_step_present_after_part1_and_part2(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox/vm-215-disk-0",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+            do_part1=True,
+            do_part2=True,
+        )
+        script = " ".join(step.command)
+        self.assertIn("ensure_restored_iscsi", script)
+        self.assertIn('ensure-restored-vm-iscsi"', script)
+
+    def test_ensure_iscsi_step_skipped_in_dry_run(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox/vm-215-disk-0",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+            do_part1=True,
+            do_part2=False,
+            dryrun=True,
+        )
+        script = " ".join(step.command)
+        self.assertIn("ensure_restored_iscsi", script)
+        self.assertIn('[[ "${dryrun:-N}" == "Y" ]] && return 0', script)
+
 
 if __name__ == "__main__":
     unittest.main()

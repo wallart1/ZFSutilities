@@ -44,6 +44,12 @@ common snapshot followed by an incremental copy that brings the destination up
 to date. Customize and use [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore),
 which automates this two-step process.
 
+In a two-node configuration, the restore pipeline also ensures that restored
+VM disk zvols are exported as iSCSI LUNs. It reads the LUN index from the
+existing Proxmox VM config and recreates the backstore/LUN if it is missing,
+then rescans the compute host so `/dev/disk/by-path` symlinks are available
+when the VM starts.
+
 Restore operations are not globally serialized with daily or offsite backups.
 Multiple operations can run concurrently when they operate on disjoint datasets;
 per-dataset locks still prevent collisions on the same datasets.

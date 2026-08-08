@@ -462,6 +462,10 @@ flowchart LR
 
 - **Part 1** sends the oldest available snapshot as a full stream. Because `force='Y'`, the destination dataset may be destroyed and recreated. `releaseholds='Y'` ensures holds do not block the destruction.
 - **Part 2** sends every snapshot from the common base up to the newest one (`-I` mode). This restores the complete snapshot history, not just the latest state.
+- **After the final send-receive**, `ensure-restored-vm-iscsi` re-exports any restored
+  VM disk zvols that are referenced by a Proxmox VM config but no longer have an
+  iSCSI LUN. This handles restores to a missing/detached disk while preserving the
+  LUN index recorded in the VM config.
 
 If you only need the most recent state, you can run Part 1 alone; however, you will lose the ability to roll back to earlier snapshots. If you use this method, be sure to change
 
@@ -538,6 +542,12 @@ The `config_version` field in the JSON file tracks schema evolution independentl
 ## Two-Node iSCSI Teardown/Rebuild
 
 In two-node mode, ZFS volumes (zvols) are exposed as iSCSI LUNs to the compute node. When a full copy destroys and recreates a destination dataset, the iSCSI backstore and LUN must be removed before `zfs destroy` and restored after `zfs receive` so that the compute node's by-path symlinks remain stable.
+
+When a restore recreates a VM disk zvol that did not have an active iSCSI LUN (for
+example, because the disk was detached or the destination was missing), the restore
+pipeline calls `ensure-restored-vm-iscsi` to create the backstore and LUN mapping
+using the same LUN index already recorded in the Proxmox VM config, then rescans the
+compute host.
 
 ```mermaid
 sequenceDiagram

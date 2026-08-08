@@ -24,9 +24,28 @@ unset _local_bashinit
 
 source_helper zfssnapbuild
 source_helper zfs-send-receive
+source_helper zfsremoveleadingqualifiers
 source_helper zfsoverrides
 
 autoproceed='N'
+
+# Post-restore helper: ensure restored VM disk zvols are exported as iSCSI LUNs.
+ensure_restored_iscsi() {
+    [[ "${dryrun:-N}" == "Y" ]] && return 0
+    local _fs _dest
+    local -a _dests=()
+    for _fs in "${fsarray[@]}"; do
+        _dest=$(remove_leading_qualifiers "$sourcefsremovequalifiers" "$_fs")
+        [[ "$_dest" != "" && ${_dest:0:1} != "/" ]] && _dest="/$_dest"
+        _dests+=("${destfs}${_dest}")
+    done
+    if [[ ${#_dests[@]} -gt 0 ]]; then
+        log_msg "INFO: Ensuring iSCSI LUNs for restored VM disks..."
+        local _ensure
+        _ensure=$(find_zfsutility_script ensure-restored-vm-iscsi)
+        "$_ensure" "${_dests[@]}"
+    fi
+}
 
 # ========================== Global arguments ===============================
 restoresourcefs="notgiven"
@@ -63,6 +82,9 @@ if [[ $dopart1 = 'Y' ]]; then
     if [[ $1 != '' ]]; then overrides "$1"; fi
 
     send-receive $restoresourcefs
+    if [[ $dopart2 != 'Y' ]]; then
+        ensure_restored_iscsi
+    fi
 fi
 
 if [[ $dopart2 = 'Y' ]]; then
@@ -90,6 +112,7 @@ if [[ $dopart2 = 'Y' ]]; then
     fi
 
     send-receive $restoresourcefs
+    ensure_restored_iscsi
 fi
 
 echo "***  zfsrestore completed.  ***"

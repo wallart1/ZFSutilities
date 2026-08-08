@@ -1,0 +1,373 @@
+#!/usr/bin/bash
+# ensure-restored-vm-iscsi <zvol>...
+# Ensures restored Proxmox VM disk zvols are exported as iSCSI LUNs.
+#
+# Two-node only. In single-node mode this script is a no-op.
+#
+# For each supplied zvol whose basename matches vm-<vmid>-disk-<num>, the
+# script reads the matching Proxmox VM config on the compute host, extracts
+# the existing LUN number from the disk's by-path entry, and ensures the
+# backstore and LUN mapping exist on the storage host. This preserves the
+# compute host's /dev/disk/by-path symlinks so the VM can start after a
+# restore.
+
+set -euo pipefail
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+rootcheck
+
+MY_HOST=$(hostname -s)
+PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
+ISCSI_MANIFEST="${ISCSI_MANIFEST:-/etc/rtslib-fb-target/expected-backstores.txt}"
+# Encrypted-LUN config path mirrors iscsi-lib.sh behavior.
+ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}"
+ISCSI_ENCRYPTED_CONF="${ISCSI_ENCRYPTED_CONF}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+fi
+
+usage() {
+    echo "Usage: ensure-restored-vm-iscsi <zvol>..."
+    echo ""
+    echo "  Ensures iSCSI backstores/LUNs exist for restored VM disk zvols."
+    echo "  The Proxmox config directory can be overridden via PVE_CONF_DIR."
+    exit 1
+}
+
+[[ $# -ge 1 ]] || usage
+
+# ---------------------------------------------------------------------------
+# Host helpers
+# ---------------------------------------------------------------------------
+
+is_local_host() {
+    [[ "$MY_HOST" == "$1" ]]
+}
+
+# Read a file from the compute host (locally or via SSH).
+read_compute_file() {
+    local path="$1"
+    if is_local_host "$COMPUTE_HOST"; then
+        cat -- "$path" 2>/dev/null || true
+    else
+        ssh -o ConnectTimeout=10 -o BatchMode=yes root@"$COMPUTE_HOST" \
+            "cat -- $(printf '%q' "$path") 2>/dev/null || true" 2>/dev/null
+    fi
+}
+
+# Run a bash script (supplied via stdin) on the storage host.
+# Arguments after the script are passed as positional parameters.
+run_on_storage() {
+    local script="$1"
+    shift
+    if is_local_host "$STORAGE_HOST"; then
+        bash -s "$@" <<< "$script"
+    else
+        ssh -o ConnectTimeout=10 -o BatchMode=yes root@"$STORAGE_HOST" \
+            bash -s "$@" <<< "$script"
+    fi
+}
+
+# Run a single command string on the storage host.
+exec_on_storage() {
+    local cmd="$1"
+    if is_local_host "$STORAGE_HOST"; then
+        bash -c "$cmd"
+    else
+        ssh -o ConnectTimeout=10 -o BatchMode=yes root@"$STORAGE_HOST" "$cmd"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# zvol / VM config parsing
+# ---------------------------------------------------------------------------
+
+# Print the basename of a dataset path.
+bsname_from_zvol() {
+    local zvol="$1"
+    echo "${zvol##*/}"
+}
+
+# Print the pool name (first qualifier) of a dataset path.
+pool_from_zvol() {
+    local zvol="$1"
+    echo "${zvol%%/*}"
+}
+
+# Validate and parse a VM disk zvol path.
+# Outputs "<vmid> <disknum>" on success, otherwise returns 1.
+parse_vm_disk_zvol() {
+    local zvol="$1"
+    local base
+    base=$(bsname_from_zvol "$zvol")
+    if [[ "$base" =~ ^vm-([0-9]+)-disk-([0-9]+)$ ]]; then
+        echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+        return 0
+    fi
+    return 1
+}
+
+# Extract the LUN number from an iSCSI by-path disk line.
+# The line and the literal target marker are passed as arguments.
+lun_from_by_path_line() {
+    local line="$1"
+    local marker="$2"
+    local rest
+    rest="${line#*"${marker}"}"
+    if [[ "$rest" == "$line" ]]; then
+        return 0
+    fi
+    # rest now starts with the LUN number, possibly followed by options.
+    rest="${rest%%,*}"
+    rest="${rest%% *}"
+    if [[ "$rest" =~ ^[0-9]+$ ]]; then
+        echo "$rest"
+    fi
+}
+
+# Find the LUN number already referenced by the VM config for a given disk.
+# Searches the disk lines on the compute host.
+# Outputs the LUN number, or nothing if no matching line is found.
+expected_lun_for_zvol() {
+    local zvol="$1"
+    local vmid="$2"
+    local disknum="$3"
+    local pool
+    pool=$(pool_from_zvol "$zvol")
+    local target_short="${POOL_TARGET[$pool]:-}"
+    [[ -n "$target_short" ]] || return 0
+
+    local conf="$PVE_CONF_DIR/${vmid}.conf"
+    local config
+    config=$(read_compute_file "$conf")
+    [[ -n "$config" ]] || return 0
+
+    local -a candidate_keys=()
+    candidate_keys+=("scsi${disknum}:")
+    candidate_keys+=("sata${disknum}:")
+    candidate_keys+=("ide${disknum}:")
+    candidate_keys+=("virtio${disknum}:")
+    if [[ "$disknum" == "0" ]]; then
+        candidate_keys+=("efidisk0:")
+    fi
+
+    local marker="ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:${target_short}-lun-"
+    local key line lun
+    for key in "${candidate_keys[@]}"; do
+        line=$(echo "$config" | grep "^${key}" | head -1 || true)
+        [[ -n "$line" ]] || continue
+        lun=$(lun_from_by_path_line "$line" "$marker")
+        if [[ -n "$lun" ]]; then
+            echo "$lun"
+            return 0
+        fi
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Storage-side iSCSI helpers
+# ---------------------------------------------------------------------------
+
+# Ensure a single backstore + LUN mapping exists on the storage host.
+# Arguments: zvol target expected_lun encrypted(Y/N)
+ensure_lun_on_storage() {
+    local zvol="$1"
+    local target="$2"
+    local expected_lun="$3"
+    local encrypted="$4"
+
+    local bsname zvol_dev target_short
+    bsname=$(bsname_from_zvol "$zvol")
+    zvol_dev="/dev/zvol/${zvol}"
+    target_short="${target##*:}"
+
+    run_on_storage \
+        "$zvol" "$zvol_dev" "$bsname" "$target" "$expected_lun" "$encrypted" \
+        << 'STORAGEEOF'
+source ~/bashinit
+bashinit
+set -e
+ZVOL="$1"
+ZVOL_DEV="$2"
+BSNAME="$3"
+TARGET="$4"
+EXPECTED_LUN="$5"
+ENCRYPTED="$6"
+
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+
+# Verify the zvol device node is present.
+if [[ ! -e "$ZVOL_DEV" ]]; then
+    log_msg "WARN: Zvol device not found: $ZVOL_DEV"
+    exit 0
+fi
+
+# Ensure backstore exists.
+if ! targetcli /backstores/block ls 2>/dev/null | grep -q " ${BSNAME} "; then
+    targetcli /backstores/block create "$BSNAME" "$ZVOL_DEV"
+    targetcli "/backstores/block/${BSNAME}" set attribute emulate_tpu=1
+    echo "BACKSTORE_CREATED:${BSNAME}"
+else
+    echo "BACKSTORE_EXISTS:${BSNAME}"
+fi
+
+# Determine current LUN mapping for this backstore and the expected slot.
+current_lun=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
+    | grep " ${BSNAME} " \
+    | grep -oP 'lun\K[0-9]+' \
+    | head -1 || true)
+
+if [[ -n "$current_lun" ]]; then
+    if [[ "$current_lun" == "$EXPECTED_LUN" ]]; then
+        echo "LUN_OK:${BSNAME}:${EXPECTED_LUN}"
+    else
+        echo "LUN_MISMATCH:${BSNAME}:${current_lun}:${EXPECTED_LUN}"
+        exit 0
+    fi
+else
+    # Check whether the expected LUN index is free.
+    occupied=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
+        | grep -oP 'lun\K[0-9]+' \
+        | grep -x "$EXPECTED_LUN" \
+        | head -1 || true)
+    if [[ -n "$occupied" ]]; then
+        echo "LUN_OCCUPIED:${EXPECTED_LUN}"
+        exit 0
+    fi
+    targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${BSNAME}" "$EXPECTED_LUN"
+    echo "LUN_CREATED:${BSNAME}:${EXPECTED_LUN}"
+fi
+STORAGEEOF
+
+    # Update local manifest / encrypted config on the storage host.
+    run_on_storage \
+        "$bsname" "$zvol_dev" "$target_short" "$encrypted" \
+        << 'MANIFESTEOF'
+source ~/bashinit
+bashinit
+set -e
+BSNAME="$1"
+ZVOL_DEV="$2"
+TARGET_SHORT="$3"
+ENCRYPTED="$4"
+
+ISCSI_MANIFEST="${ISCSI_MANIFEST:-/etc/rtslib-fb-target/expected-backstores.txt}"
+ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}"
+ISCSI_ENCRYPTED_CONF="${ISCSI_ENCRYPTED_CONF}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+fi
+
+if [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${BSNAME}$" "$ISCSI_MANIFEST"; then
+    echo "$BSNAME" >> "$ISCSI_MANIFEST"
+fi
+
+if [[ "$ENCRYPTED" == "Y" && -f "$ISCSI_ENCRYPTED_CONF" ]] && \
+   ! grep -q "^${BSNAME}:" "$ISCSI_ENCRYPTED_CONF"; then
+    echo "${BSNAME}:${ZVOL_DEV}:${TARGET_SHORT}" >> "$ISCSI_ENCRYPTED_CONF"
+fi
+MANIFESTEOF
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+is_single_node && exit 0
+
+# Validate that each argument looks like a dataset path.
+for zvol in "$@"; do
+    if [[ -z "$zvol" || "$zvol" == -* ]]; then
+        usage
+    fi
+done
+
+# Collect work items.
+declare -a WORK_ZVOLS=()
+declare -a WORK_TARGETS=()
+declare -a WORK_LUNS=()
+declare -a WORK_ENCRYPTED=()
+
+for zvol in "$@"; do
+    parsed=$(parse_vm_disk_zvol "$zvol" || true)
+    if [[ -z "$parsed" ]]; then
+        log_msg "INFO: Skipping non-VM-disk zvol: $zvol"
+        continue
+    fi
+
+    read -r vmid disknum <<< "$parsed"
+    pool=$(pool_from_zvol "$zvol")
+    if ! is_known_pool "$pool"; then
+        log_msg "WARN: $zvol is not in a known iSCSI pool; skipping"
+        continue
+    fi
+
+    target=$(pool_to_target "$pool") || {
+        log_msg "WARN: Could not map pool $pool to iSCSI target; skipping $zvol"
+        continue
+    }
+
+    expected_lun=$(expected_lun_for_zvol "$zvol" "$vmid" "$disknum")
+    if [[ -z "$expected_lun" ]]; then
+        log_msg "WARN: No VM config entry found for $zvol (VM $vmid disk $disknum); skipping"
+        continue
+    fi
+
+    enc_value=$(zfs get -H -o value encryption "$zvol" 2>/dev/null || echo off)
+    encrypted="N"
+    [[ "$enc_value" != "off" && "$enc_value" != "-" ]] && encrypted="Y"
+
+    WORK_ZVOLS+=("$zvol")
+    WORK_TARGETS+=("$target")
+    WORK_LUNS+=("$expected_lun")
+    WORK_ENCRYPTED+=("$encrypted")
+    log_msg "INFO: Will ensure $zvol -> ${target} LUN ${expected_lun}"
+done
+
+if [[ ${#WORK_ZVOLS[@]} -eq 0 ]]; then
+    log_msg "INFO: No VM disk zvols to ensure"
+    exit 0
+fi
+
+log_msg "INFO: Ensuring iSCSI LUNs for ${#WORK_ZVOLS[@]} restored zvol(s)"
+
+for (( i=0; i<${#WORK_ZVOLS[@]}; i++ )); do
+    zvol="${WORK_ZVOLS[$i]}"
+    target="${WORK_TARGETS[$i]}"
+    lun="${WORK_LUNS[$i]}"
+    encrypted="${WORK_ENCRYPTED[$i]}"
+
+    result=$(ensure_lun_on_storage "$zvol" "$target" "$lun" "$encrypted" 2>&1 || true)
+    # shellcheck disable=SC2001
+    echo "$result" | sed 's/^/  /'
+
+    if echo "$result" | grep -q "LUN_MISMATCH:"; then
+        log_msg "WARN: $zvol already mapped to a different LUN than VM config expects"
+    elif echo "$result" | grep -q "LUN_OCCUPIED:"; then
+        log_msg "WARN: Expected LUN for $zvol is occupied by a different backstore"
+    fi
+done
+
+# Save iSCSI configuration and rescan the compute host.
+safe_iscsi_save_path=$(find_zfsutility_script safe-iscsi-save)
+log_msg "INFO: Saving iSCSI configuration..."
+exec_on_storage "$safe_iscsi_save_path"
+
+log_msg "INFO: Rescanning compute host..."
+rescan_storage_path=$(find_zfsutility_script rescan-storage)
+"$rescan_storage_path"
+
+log_msg "INFO: Ensure iSCSI complete"
+exit 0

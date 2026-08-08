@@ -2678,6 +2678,10 @@ incrementally.</p>
 <ul>
 <li><strong>Part 1</strong> sends the oldest available snapshot as a full stream. Because <code>force='Y'</code>, the destination dataset may be destroyed and recreated. <code>releaseholds='Y'</code> ensures holds do not block the destruction.</li>
 <li><strong>Part 2</strong> sends every snapshot from the common base up to the newest one (<code>-I</code> mode). This restores the complete snapshot history, not just the latest state.</li>
+<li><strong>After the final send-receive</strong>, <code>ensure-restored-vm-iscsi</code> re-exports any restored
+  VM disk zvols that are referenced by a Proxmox VM config but no longer have an
+  iSCSI LUN. This handles restores to a missing/detached disk while preserving the
+  LUN index recorded in the VM config.</li>
 </ul>
 <p>If you only need the most recent state, you can run Part 1 alone; however, you will lose the ability to roll back to earlier snapshots. If you use this method, be sure to change</p>
 <div class="highlight"><pre><span></span><code><span class="nv">commsnap_mostrecent</span><span class="o">=</span><span class="s1">&#39;OLDEST&#39;</span>
@@ -2747,6 +2751,11 @@ incrementally.</p>
 <hr />
 <h2 id="two-node-iscsi-teardownrebuild">Two-Node iSCSI Teardown/Rebuild<a class="headerlink" href="#two-node-iscsi-teardownrebuild" title="Permanent link">&para;</a></h2>
 <p>In two-node mode, ZFS volumes (zvols) are exposed as iSCSI LUNs to the compute node. When a full copy destroys and recreates a destination dataset, the iSCSI backstore and LUN must be removed before <code>zfs destroy</code> and restored after <code>zfs receive</code> so that the compute node's by-path symlinks remain stable.</p>
+<p>When a restore recreates a VM disk zvol that did not have an active iSCSI LUN (for
+example, because the disk was detached or the destination was missing), the restore
+pipeline calls <code>ensure-restored-vm-iscsi</code> to create the backstore and LUN mapping
+using the same LUN index already recorded in the Proxmox VM config, then rescans the
+compute host.</p>
 <pre class="mermaid"><code>sequenceDiagram
     participant SR as zfs-send-receive
     participant ZFSD as zfsdelfs

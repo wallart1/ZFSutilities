@@ -1,0 +1,254 @@
+#!/usr/bin/bash
+# test-ensure-restored-vm-iscsi — Unit tests for the restore iSCSI helper.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ---------------------------------------------------------------------------
+# Helpers mirroring the parsing logic in ensure-restored-vm-iscsi.
+# ---------------------------------------------------------------------------
+
+bsname_from_zvol() {
+    local zvol="$1"
+    echo "${zvol##*/}"
+}
+
+pool_from_zvol() {
+    local zvol="$1"
+    echo "${zvol%%/*}"
+}
+
+parse_vm_disk_zvol() {
+    local zvol="$1"
+    local base
+    base=$(bsname_from_zvol "$zvol")
+    if [[ "$base" =~ ^vm-([0-9]+)-disk-([0-9]+)$ ]]; then
+        echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+        return 0
+    fi
+    return 1
+}
+
+lun_from_by_path_line() {
+    local line="$1"
+    local marker="$2"
+    local rest
+    rest="${line#*"${marker}"}"
+    if [[ "$rest" == "$line" ]]; then
+        return 0
+    fi
+    rest="${rest%%,*}"
+    rest="${rest%% *}"
+    if [[ "$rest" =~ ^[0-9]+$ ]]; then
+        echo "$rest"
+    fi
+}
+
+expected_lun_for_zvol() {
+    local zvol="$1"
+    local vmid="$2"
+    local disknum="$3"
+    local pool
+    pool=$(pool_from_zvol "$zvol")
+    local target_short="${POOL_TARGET[$pool]:-}"
+    [[ -n "$target_short" ]] || return 0
+
+    local conf="$PVE_CONF_DIR/${vmid}.conf"
+    local config
+    config=$(cat -- "$conf" 2>/dev/null || true)
+    [[ -n "$config" ]] || return 0
+
+    local -a candidate_keys=()
+    candidate_keys+=("scsi${disknum}:")
+    candidate_keys+=("sata${disknum}:")
+    candidate_keys+=("ide${disknum}:")
+    candidate_keys+=("virtio${disknum}:")
+    if [[ "$disknum" == "0" ]]; then
+        candidate_keys+=("efidisk0:")
+    fi
+
+    local marker="ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:${target_short}-lun-"
+    local key line lun
+    for key in "${candidate_keys[@]}"; do
+        line=$(echo "$config" | grep "^${key}" | head -1 || true)
+        [[ -n "$line" ]] || continue
+        lun=$(lun_from_by_path_line "$line" "$marker")
+        if [[ -n "$lun" ]]; then
+            echo "$lun"
+            return 0
+        fi
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+test_parse_vm_disk_zvol_standard_path() {
+    test_start "parse standard VM disk zvol path"
+
+    local parsed vmid disknum
+    if ! parsed=$(parse_vm_disk_zvol "threeamigos/proxmox/vm-215-disk-1"); then
+        test_fail "Expected valid path to parse"
+        return
+    fi
+    read -r vmid disknum <<< "$parsed"
+    assert_equals "215" "$vmid" || return
+    assert_equals "1" "$disknum"
+}
+
+test_parse_vm_disk_zvol_nonstandard_parent() {
+    test_start "parse VM disk zvol with non-standard parent dataset"
+
+    local parsed vmid disknum
+    if ! parsed=$(parse_vm_disk_zvol "threeamigos/custom/vms/vm-215-disk-0"); then
+        test_fail "Expected valid path to parse"
+        return
+    fi
+    read -r vmid disknum <<< "$parsed"
+    assert_equals "215" "$vmid" || return
+    assert_equals "0" "$disknum"
+}
+
+test_parse_vm_disk_zvol_rejects_non_vm() {
+    test_start "reject zvol that is not a VM disk"
+
+    if parse_vm_disk_zvol "threeamigos/data/not-a-vm-disk" >/dev/null 2>&1; then
+        test_fail "Expected non-VM zvol to be rejected"
+    else
+        test_pass
+    fi
+}
+
+test_pool_from_zvol() {
+    test_start "extract pool from zvol path"
+    assert_equals "threeamigos" "$(pool_from_zvol "threeamigos/proxmox/vm-215-disk-0")"
+}
+
+test_bsname_from_zvol() {
+    test_start "extract basename from zvol path"
+    assert_equals "vm-215-disk-0" "$(bsname_from_zvol "threeamigos/proxmox/vm-215-disk-0")"
+}
+
+test_lun_from_by_path_line_scsi() {
+    test_start "extract LUN from scsi by-path line"
+
+    local line marker
+    line="scsi0: /dev/disk/by-path/ip-192.168.1.1:3260-iscsi-"
+    line+="iqn.2026-02.local:threeamigos-lun-31,format=raw,size=50G"
+    marker="ip-192.168.1.1:3260-iscsi-iqn.2026-02.local:threeamigos-lun-"
+    assert_equals "31" "$(lun_from_by_path_line "$line" "$marker")"
+}
+
+test_lun_from_by_path_line_efidisk() {
+    test_start "extract LUN from efidisk by-path line"
+
+    local line marker
+    line="efidisk0: /dev/disk/by-path/ip-192.168.1.1:3260-iscsi-"
+    line+="iqn.2026-02.local:threeamigos-lun-30,efitype=4m,size=4M"
+    marker="ip-192.168.1.1:3260-iscsi-iqn.2026-02.local:threeamigos-lun-"
+    assert_equals "30" "$(lun_from_by_path_line "$line" "$marker")"
+}
+
+test_lun_from_by_path_line_no_marker() {
+    test_start "return empty when marker is not present"
+
+    local line marker
+    line="scsi0: /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive0,format=raw,size=50G"
+    marker="ip-192.168.1.1:3260-iscsi-iqn.2026-02.local:threeamigos-lun-"
+    if [[ -n "$(lun_from_by_path_line "$line" "$marker")" ]]; then
+        test_fail "Expected empty LUN when marker is absent"
+    else
+        test_pass
+    fi
+}
+
+test_expected_lun_for_zvol_sata() {
+    test_start "derive expected LUN from sata disk line"
+
+    local tmp_dir pve_dir
+    tmp_dir=$(mktemp -d)
+    pve_dir="$tmp_dir/qemu-server"
+    mkdir -p "$pve_dir"
+    cat > "$pve_dir/100.conf" << 'EOF'
+sata2: /dev/disk/by-path/ip-192.168.1.1:3260-iscsi-iqn.2026-02.local:threeamigos-lun-7,format=raw
+EOF
+
+    PVE_CONF_DIR="$pve_dir"
+    STORAGE_IP="192.168.1.1"
+    IQN_PREFIX="iqn.2026-02.local"
+    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+
+    local lun
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-100-disk-2" "100" "2")
+    assert_equals "7" "$lun"
+
+    rm -rf "$tmp_dir"
+}
+
+test_expected_lun_for_zvol() {
+    test_start "derive expected LUN from VM config"
+
+    local tmp_dir pve_dir
+    tmp_dir=$(mktemp -d)
+    pve_dir="$tmp_dir/qemu-server"
+    mkdir -p "$pve_dir"
+    cat > "$pve_dir/215.conf" << 'EOF'
+scsi0: /dev/disk/by-path/ip-192.168.1.1:3260-iscsi-iqn.2026-02.local:threeamigos-lun-30,format=raw
+scsi1: /dev/disk/by-path/ip-192.168.1.1:3260-iscsi-iqn.2026-02.local:threeamigos-lun-31,format=raw
+EOF
+
+    PVE_CONF_DIR="$pve_dir"
+    STORAGE_IP="192.168.1.1"
+    IQN_PREFIX="iqn.2026-02.local"
+    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+
+    local lun
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-0" "215" "0")
+    assert_equals "30" "$lun" || { rm -rf "$tmp_dir"; return; }
+
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-1" "215" "1")
+    assert_equals "31" "$lun"
+
+    rm -rf "$tmp_dir"
+}
+
+test_expected_lun_missing_config() {
+    test_start "return empty when VM config is missing"
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    PVE_CONF_DIR="$tmp_dir"
+    STORAGE_IP="192.168.1.1"
+    IQN_PREFIX="iqn.2026-02.local"
+    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+
+    local lun
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-999-disk-0" "999" "0")
+    if [[ -z "$lun" ]]; then
+        test_pass
+    else
+        test_fail "Expected empty LUN, got '$lun'"
+    fi
+
+    rm -rf "$tmp_dir"
+}
+
+# ---------------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------------
+test_parse_vm_disk_zvol_standard_path
+test_parse_vm_disk_zvol_nonstandard_parent
+test_parse_vm_disk_zvol_rejects_non_vm
+test_pool_from_zvol
+test_bsname_from_zvol
+test_lun_from_by_path_line_scsi
+test_lun_from_by_path_line_efidisk
+test_lun_from_by_path_line_no_marker
+test_expected_lun_for_zvol_sata
+test_expected_lun_for_zvol
+test_expected_lun_missing_config
+
+test_summary
+teardown_test_env

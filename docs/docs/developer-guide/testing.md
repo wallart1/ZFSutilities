@@ -38,9 +38,10 @@ The `./run-tests` harness detects whether a name starts with `test_` (Python) or
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| `test-deploy-version` | 28 | Root-level script selection logic: executable files, shebang files, exclusions; validation of critical scripts; Two-node script symlinks including `repair-iscsi-luns`, `iscsi-restore-luns`, `attach-vm-disk`, and `detach-vm-disk`; GUI and docs launcher symlinks; no production wiring |
+| `test-deploy-version` | 21 | Root-level script selection logic: executable files, shebang files, exclusions; validation of critical scripts; Two-node script symlinks including `repair-iscsi-luns`, `iscsi-restore-luns`, `attach-vm-disk`, and `detach-vm-disk`; GUI and docs launcher symlinks; no production wiring |
 | `test-attach-vm-disk` | 9 | `attach-vm-disk` argument validation: zvol path parsing, VM ID format, and disk-key format |
 | `test-detach-vm-disk` | 2 | `detach-vm-disk` manifest handling: exact backstore removal and no-match pass-through |
+| `test-ensure-restored-vm-iscsi` | 11 | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, and VM-config LUN lookup |
 | `test-installer-checks` | 12 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal |
 | `test-move-vm-disk` | 8 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove |
 | `test-switch-version` | 6 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, and `--list` |
@@ -155,7 +156,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_config_migrations` | 28 | JSON config migration chain (v1 → v15), idempotency, missing-migration handling |
 | `test_cron_manager` | 34 | Cron expression formatting, next-run calculation, profile scheduling, cron file generation, weekday ordinal support |
 | `test_dashboard_page` | 167 | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, ZFS version display, async refresh loading state |
-| `test_docs_integrity` | 11 | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability |
+| `test_docs_integrity` | 12 | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability |
 | `test_docs_viewer` | 1 | Standalone documentation viewer launcher (`docs_viewer.main()`) |
 | `test_gui_infrastructure` | 88 | GTK mock setup, `gi.repository` patching, module imports without a display server, docs viewer HTTP server, zoom/navigation/state persistence, anchor scrolling, tree expansion helpers, TreeSearch freeze/thaw, clear-button status-bar reset, paned position persistence |
 | `test_legacy_retention` | 7 | Legacy `zfsretainpol-*` file parsing, malformed-line handling, JSON config import |
@@ -165,7 +166,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_page_runners` | 6 | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation |
 | `test_profile_manager` | 15 | Profile CRUD, name validation, duplicate detection, override string generation |
 | `test_profile_runner` | 56 | Step building, pool selection, rsync/ZFS command generation, error handling, dataset encryption detection, dry-run profile execution, weekday ordinal runtime guard |
-| `test_restore_runner` | 11 | Restore destination computation and zfs-send-receive parameter mapping |
+| `test_restore_runner` | 16 | Restore destination computation and zfs-send-receive parameter mapping |
 | `test_retention_page` | 22 | Retention tab: prune-label persistence, dirty detection, multi-pool Save/Revert, profile round-trip, fresh-install cleanup, prune-list filtering |
 | `test_runner_factory` | 4 | `RunnerFactory` creates `BackupRunner` instances with shared callbacks |
 | `test_schedule_page` | 52 | Schedule page path resolution for deployed vs repo layouts; dirty tracking and multi-row Save/Revert for active toggles and cron edits; dry-run flag display in profile summary; async refresh and next-run caching |

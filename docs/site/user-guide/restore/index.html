@@ -1848,6 +1848,11 @@ share blocks with its former origin. This is expected and correct behavior.</p>
 common snapshot followed by an incremental copy that brings the destination up
 to date. Customize and use <a href="../../commands-and-modules/commands/#zfsrestore"><code>zfsrestore</code></a>,
 which automates this two-step process.</p>
+<p>In a two-node configuration, the restore pipeline also ensures that restored
+VM disk zvols are exported as iSCSI LUNs. It reads the LUN index from the
+existing Proxmox VM config and recreates the backstore/LUN if it is missing,
+then rescans the compute host so <code>/dev/disk/by-path</code> symlinks are available
+when the VM starts.</p>
 <p>Restore operations are not globally serialized with daily or offsite backups.
 Multiple operations can run concurrently when they operate on disjoint datasets;
 per-dataset locks still prevent collisions on the same datasets.</p>

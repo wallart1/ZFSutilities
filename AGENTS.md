@@ -40,7 +40,7 @@ You are a meticulous and expert coding agent. For every task:
 12. When I give you a plan file to execute, as in "Please execute the plan file ...," that means that I just want you to execute the plan. No not modify the plan. Do not enter plan mode. Just execute the plan.
 13. You may see uncommitted changed files that you did not change. Do not be alarmed by this. They are either the user's manual changes or were changed by Kimi in an earlier session. These changes will be included when I instruct you to perform a commit.
 14. Avoid ad hoc workarounds. Make the existing architecture work and use it.
-15. Do not limit or reduce the scope of a task just because it "might take a long time."
+15. Do not limit or reduce the scope of a task just because it "might take a long time" or "might be tedious."
 
 ## Hard Rules
 
@@ -398,7 +398,7 @@ suites with full output only when you need the per-test detail.
 
 | Suite                          | Tests | Description                                                                                                   |
 | ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------- |
-| `test-deploy-version`          | 20    | Root-level script selection, exclusions, retention-policy file filtering, critical-script validation, and no production wiring |
+| `test-deploy-version`          | 21    | Root-level script selection, exclusions, retention-policy file filtering, critical-script validation, and no production wiring |
 | `test-installer-checks`        | 12    | Installer prerequisite checks and desktop-launcher helper functions                                           |
 | `test-installer-retention`     | 3     | Installer default retention profile initialization and preservation of existing user profiles                 |
 | `test-move-vm-disk`            | 8     | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove                                        |
@@ -412,6 +412,7 @@ suites with full output only when you need the per-test detail.
 | `test-zfs-diagnose-busy`       | 8     | Diagnostic output from `zfs-diagnose-busy` — busy dataset causes                                              |
 | `test-zfsdelfs`                | 7     | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs`                                                        |
 | `test-zfsdelsnap`              | 7     | Snapshot deletion safety checks, hold release, and `zfscheckagainst` dependency sourcing                      |
+| `test-ensure-restored-vm-iscsi` | 11    | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, and VM-config LUN lookup |
 | `test-zfslockmanager`          | 35    | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition |
 | `test-zfsretain`               | 10    | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
 | `test-zfs-send-receive-dryrun` | 33    | Dry-run logging, space checks, resume-token helpers (including non-existent destination), clone messages, pv quiet in headless mode, full-copy lock hand-off |
@@ -510,7 +511,7 @@ suites with full output only when you need the per-test detail.
 | `test_config_migrations`  | 17    | Schema migrations 1→12, idempotency, missing migration errors                                                  |
 | `test_cron_manager`       | 17    | Cron line generation, human-readable interpretation, next-run computation                                      |
 | `test_dashboard_page`     | 167   | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, async refresh loading state |
-| `test_docs_integrity`     | 11    | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability  |
+| `test_docs_integrity`     | 12    | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability  |
 | `test_gui_infrastructure` | 81    | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling            |
 | `test_installer_retention` | 5     | Installer retention profile initialization: default-only on new install and preservation of existing profiles |
 | `test_legacy_retention`   | 7     | Legacy `zfsretainpol-*` file parsing and pool scanning                                                         |
@@ -523,7 +524,7 @@ suites with full output only when you need the per-test detail.
 | `test_profile_runner`     | 43    | Backup/offsite/restore/retention profile step building                                                         |
 | `test_profile_runner_concurrency` | 7 | Per-profile advisory locks, duplicate-invocation suppression, and metadata                                  |
 | `test_profile_integration` | 3    | Concurrent profile execution: disjoint datasets, same-dataset conflict, backup+prune serialization             |
-| `test_restore_runner`     | 11    | Restore destination computation and zfs-send-receive parameter mapping                                         |
+| `test_restore_runner`     | 16    | Restore destination computation and zfs-send-receive parameter mapping                                         |
 | `test_schedule_page`      | 52    | Schedule page path resolution, dirty tracking, run-now child-watch handling, fatal-fallback logging, async refresh, and next-run caching |
 | `test_scrub_manager`      | 24    | Scrub state parsing, queue/target management, tick logic, systemd timers                                       |
 | `test_scrub_page`         | 5     | Scrub page store schema and flicker-free refresh logic                                                         |

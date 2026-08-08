@@ -154,6 +154,23 @@ def build_restore_command(source, removequalifiers, destfs, parent_dir,
     else:
         adv += 'excludes=(); '
 
+    # Post-restore helper: ensure VM disk zvols are exported as iSCSI LUNs.
+    ensure_func = (
+        'ensure_restored_iscsi() { '
+        '[[ "${dryrun:-N}" == "Y" ]] && return 0; '
+        'local _fs _dest; local -a _dests=(); '
+        'for _fs in "${fsarray[@]}"; do '
+        '_dest=$(remove_leading_qualifiers "$sourcefsremovequalifiers" "$_fs"); '
+        '[[ "$_dest" != "" && ${_dest:0:1} != "/" ]] && _dest="/$_dest"; '
+        '_dests+=("${destfs}${_dest}"); '
+        'done; '
+        'if [[ ${#_dests[@]} -gt 0 ]]; then '
+        'log_msg "INFO: Ensuring iSCSI LUNs for restored VM disks..."; '
+        '"$mydir/ensure-restored-vm-iscsi" "${_dests[@]}"; '
+        'fi; '
+        '}; '
+    )
+
     # Preamble — shared by both parts
     # Redirect stdout to stderr so echo output (dataset lists) stays in order
     # with log_msg output and all appears in the GUI log panel.
@@ -162,6 +179,8 @@ def build_restore_command(source, removequalifiers, destfs, parent_dir,
         f'source ~/bashinit; bashinit; mydir="{parent_dir}"; '
         f'source "$mydir/zfssnapbuild"; '
         f'source "$mydir/zfs-send-receive"; '
+        f'source "$mydir/zfsremoveleadingqualifiers"; '
+        f'{ensure_func}'
         f'{_dryrun_assignments(dryrun)}'
         f'sourcefs="{source}"; '
         f'sourcefsremovequalifiers={removequalifiers}; '
@@ -206,13 +225,15 @@ def build_restore_command(source, removequalifiers, destfs, parent_dir,
             )
         part2_script += (
             'send-receive "$sourcefs"; rc=$?; '
+            'if [[ $rc -ne 0 ]]; then rm -f "$fsarray_file"; exit $rc; fi; '
+            'ensure_restored_iscsi; '
             'rm -f "$fsarray_file"; '
-            'exit $rc'
+            'exit 0'
         )
         parts.append(part2_script)
     else:
-        # Part 1 only — clean up temp file
-        parts.append('rm -f "$fsarray_file"; exit 0')
+        # Part 1 only — ensure iSCSI LUNs, then clean up temp file
+        parts.append('ensure_restored_iscsi; rm -f "$fsarray_file"; exit 0')
 
     bash_script = preamble + "".join(parts)
     cmd = ["bash", "-c", bash_script]

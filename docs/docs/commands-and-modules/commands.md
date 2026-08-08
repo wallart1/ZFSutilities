@@ -1957,6 +1957,8 @@ to catch up to the newest.
 | [zfssnapbuild](modules.md#zfssnapbuild) | Inhibited (`$nextsnap='notneeded'`) |
 | [zfs-send-receive](modules.md#zfs-send-receive) | Perform full then incremental copy |
 | [zfsoverrides](modules.md#zfsoverrides) | Apply Part 1 / Part 2 overrides |
+| [zfsremoveleadingqualifiers](modules.md#zfsremoveleadingqualifiers) | Strip leading qualifiers when building destination zvol paths |
+| `ensure-restored-vm-iscsi` (two-node) | Re-export restored VM disk zvols as iSCSI LUNs after the final send-receive |
 
 **Data structures consumed / produced:**
 
@@ -1973,6 +1975,8 @@ to catch up to the newest.
 3. Re-apply `$1` and apply `$2` overrides for Part 2.
 4. **Part 2** — incremental copy with intermediates to newest snapshot (`doincrementals='Y'`, `dointermediates='Y'`).
 5. Prompt before Part 2 unless `$autoproceed='Y'`.
+6. In two-node mode, call `ensure-restored-vm-iscsi` after the final send-receive
+   to recreate missing iSCSI LUNs for restored VM disk zvols.
 
 
 **Return codes:**

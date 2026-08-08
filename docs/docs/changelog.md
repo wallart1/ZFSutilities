@@ -4,6 +4,21 @@
 
 *Released 2026-08-07*
 
+### Added
+
+- **`ensure-restored-vm-iscsi` helper** (two-node) — New `bin/ensure-restored-vm-iscsi`
+  script that re-creates iSCSI backstores and LUN mappings for restored Proxmox VM
+  disk zvols. It reads the LUN index already recorded in the Proxmox VM config on
+  the compute host, ensures the backstore and LUN exist on the storage host at that
+  same index, updates the iSCSI manifest and encrypted-LUN config, saves the target
+  configuration, and rescans the compute host. In single-node mode it is a no-op.
+
+- **Restore pipeline automatically re-exports VM disk LUNs** — Both `bin/zfsrestore`
+  and `python/restore_runner.py` now call `ensure-restored-vm-iscsi` after the final
+  send-receive step (Part 1 when Part 2 is not run, or Part 2 when it is). This
+  handles restores to a missing or detached VM disk while preserving the LUN index
+  recorded in the Proxmox VM config.
+
 ### Fixed
 
 - **`zfs-send-receive` avoids self-lock conflict during forced full copy** —
@@ -27,6 +42,16 @@
   `test_full_copy_releases_dest_lock_zfsdelfs_failure` to
   `tests/test-zfs-send-receive-dryrun`, covering the lock release/reacquire
   behavior around destination preparation.
+
+- Added `tests/test-ensure-restored-vm-iscsi` covering zvol basename/pool
+  extraction, VM disk parsing, LUN extraction from `by-path` entries, and
+  Proxmox VM-config LUN lookup.
+
+- Added `test_ensure_iscsi_step_present_after_part1_only`,
+  `test_ensure_iscsi_step_present_after_part1_and_part2`, and
+  `test_ensure_iscsi_step_skipped_in_dry_run` to
+  `tests/python/test_restore_runner.py`, verifying that the generated restore
+  command includes the iSCSI ensure step and honors dry-run mode.
 
 ## 0.74.5
 
