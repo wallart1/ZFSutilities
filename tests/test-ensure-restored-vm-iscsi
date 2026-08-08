@@ -48,6 +48,7 @@ expected_lun_for_zvol() {
     local zvol="$1"
     local vmid="$2"
     local disknum="$3"
+    local zvol_size="${4:-}"
     local pool
     pool=$(pool_from_zvol "$zvol")
     local target_short="${POOL_TARGET[$pool]:-}"
@@ -58,12 +59,20 @@ expected_lun_for_zvol() {
     config=$(cat -- "$conf" 2>/dev/null || true)
     [[ -n "$config" ]] || return 0
 
+    local is_efi=false
+    if [[ "$zvol_size" == "4M" || "$zvol_size" == "4194304" ]]; then
+        is_efi=true
+    fi
+
     local -a candidate_keys=()
+    if [[ "$is_efi" == true ]]; then
+        candidate_keys+=("efidisk0:")
+    fi
     candidate_keys+=("scsi${disknum}:")
     candidate_keys+=("sata${disknum}:")
     candidate_keys+=("ide${disknum}:")
     candidate_keys+=("virtio${disknum}:")
-    if [[ "$disknum" == "0" ]]; then
+    if [[ "$disknum" == "0" && "$is_efi" != true ]]; then
         candidate_keys+=("efidisk0:")
     fi
 
@@ -235,6 +244,81 @@ test_expected_lun_missing_config() {
     rm -rf "$tmp_dir"
 }
 
+test_expected_lun_for_efi_disk_nonzero_disknum() {
+    test_start "derive expected LUN for EFI disk with non-zero disk number"
+
+    local tmp_dir pve_dir
+    tmp_dir=$(mktemp -d)
+    pve_dir="$tmp_dir/qemu-server"
+    mkdir -p "$pve_dir"
+    cat > "$pve_dir/215.conf" << 'EOF'
+scsi0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-31,format=raw
+efidisk0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-30,efitype=4m,size=4M
+EOF
+
+    PVE_CONF_DIR="$pve_dir"
+    STORAGE_IP="1.2.3.4"
+    IQN_PREFIX="iqn.local"
+    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+
+    local lun
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-0" "215" "0" "50G")
+    assert_equals "31" "$lun" || { rm -rf "$tmp_dir"; return; }
+
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-1" "215" "1" "4M")
+    assert_equals "30" "$lun"
+
+    rm -rf "$tmp_dir"
+}
+
+test_expected_lun_for_efi_disk_disknum_zero() {
+    test_start "derive expected LUN for EFI disk at disk number 0"
+
+    local tmp_dir pve_dir
+    tmp_dir=$(mktemp -d)
+    pve_dir="$tmp_dir/qemu-server"
+    mkdir -p "$pve_dir"
+    cat > "$pve_dir/215.conf" << 'EOF'
+scsi0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-31,format=raw
+efidisk0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-30,efitype=4m,size=4M
+EOF
+
+    PVE_CONF_DIR="$pve_dir"
+    STORAGE_IP="1.2.3.4"
+    IQN_PREFIX="iqn.local"
+    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+
+    local lun
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-0" "215" "0" "4M")
+    assert_equals "30" "$lun"
+
+    rm -rf "$tmp_dir"
+}
+
+test_expected_lun_for_efi_disk_byte_size() {
+    test_start "derive expected LUN for EFI disk given size in bytes"
+
+    local tmp_dir pve_dir
+    tmp_dir=$(mktemp -d)
+    pve_dir="$tmp_dir/qemu-server"
+    mkdir -p "$pve_dir"
+    cat > "$pve_dir/215.conf" << 'EOF'
+scsi0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-31,format=raw
+efidisk0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-30,efitype=4m,size=4M
+EOF
+
+    PVE_CONF_DIR="$pve_dir"
+    STORAGE_IP="1.2.3.4"
+    IQN_PREFIX="iqn.local"
+    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+
+    local lun
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-1" "215" "1" "4194304")
+    assert_equals "30" "$lun"
+
+    rm -rf "$tmp_dir"
+}
+
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
@@ -249,6 +333,9 @@ test_lun_from_by_path_line_no_marker
 test_expected_lun_for_zvol_sata
 test_expected_lun_for_zvol
 test_expected_lun_missing_config
+test_expected_lun_for_efi_disk_nonzero_disknum
+test_expected_lun_for_efi_disk_disknum_zero
+test_expected_lun_for_efi_disk_byte_size
 
 # ---------------------------------------------------------------------------
 # Regression tests for storage-side helper execution
@@ -258,7 +345,7 @@ test_expected_lun_missing_config
 # argument validation), then exercise run_on_storage / ensure_lun_on_storage
 # with mocked bash/ssh and zfs so no root or real storage node is needed.
 # shellcheck source=/dev/null
-source <(sed -n '50,282p' "$mydir/bin/ensure-restored-vm-iscsi")
+source <(sed -n '50,304p' "$mydir/bin/ensure-restored-vm-iscsi")
 
 _bash_calls=()
 _ssh_calls=()

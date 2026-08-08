@@ -138,11 +138,17 @@ lun_from_by_path_line() {
 
 # Find the LUN number already referenced by the VM config for a given disk.
 # Searches the disk lines on the compute host.
+# Arguments:
+#   $1  zvol path
+#   $2  VM ID
+#   $3  disk number extracted from the zvol basename
+#   $4  zvol size (e.g. "4M" or "4194304"), used to identify EFI disks
 # Outputs the LUN number, or nothing if no matching line is found.
 expected_lun_for_zvol() {
     local zvol="$1"
     local vmid="$2"
     local disknum="$3"
+    local zvol_size="${4:-}"
     local pool
     pool=$(pool_from_zvol "$zvol")
     local target_short="${POOL_TARGET[$pool]:-}"
@@ -153,12 +159,23 @@ expected_lun_for_zvol() {
     config=$(read_compute_file "$conf")
     [[ -n "$config" ]] || return 0
 
+    # EFI disks are always 4 MiB in Proxmox. The backing zvol disk number is
+    # independent of the config key, so detect EFI by size and match efidisk0
+    # regardless of the zvol's disk number.
+    local is_efi=false
+    if [[ "$zvol_size" == "4M" || "$zvol_size" == "4194304" ]]; then
+        is_efi=true
+    fi
+
     local -a candidate_keys=()
+    if [[ "$is_efi" == true ]]; then
+        candidate_keys+=("efidisk0:")
+    fi
     candidate_keys+=("scsi${disknum}:")
     candidate_keys+=("sata${disknum}:")
     candidate_keys+=("ide${disknum}:")
     candidate_keys+=("virtio${disknum}:")
-    if [[ "$disknum" == "0" ]]; then
+    if [[ "$disknum" == "0" && "$is_efi" != true ]]; then
         candidate_keys+=("efidisk0:")
     fi
 
@@ -319,7 +336,9 @@ for zvol in "$@"; do
         continue
     }
 
-    expected_lun=$(expected_lun_for_zvol "$zvol" "$vmid" "$disknum")
+    zvol_size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || true)
+
+    expected_lun=$(expected_lun_for_zvol "$zvol" "$vmid" "$disknum" "$zvol_size")
     if [[ -z "$expected_lun" ]]; then
         log_msg "WARN: No VM config entry found for $zvol (VM $vmid disk $disknum); skipping"
         continue

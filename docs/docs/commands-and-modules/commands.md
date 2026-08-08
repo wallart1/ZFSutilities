@@ -1975,7 +1975,8 @@ to catch up to the newest.
 4. **Part 2** — incremental copy with intermediates to newest snapshot (`doincrementals='Y'`, `dointermediates='Y'`).
 5. Prompt before Part 2 unless `$autoproceed='Y'`.
 6. In two-node mode, call `ensure-restored-vm-iscsi` after the final send-receive
-   to recreate missing iSCSI LUNs for restored VM disk zvols.
+   to recreate missing iSCSI LUNs for restored VM disk zvols.  EFI disks are matched
+   to the `efidisk0:` entry by their 4 MiB size, independent of the zvol disk number.
 
 
 **Return codes:**

@@ -547,7 +547,9 @@ When a restore recreates a VM disk zvol that did not have an active iSCSI LUN (f
 example, because the disk was detached or the destination was missing), the restore
 pipeline calls `ensure-restored-vm-iscsi` to create the backstore and LUN mapping
 using the same LUN index already recorded in the Proxmox VM config, then rescans the
-compute host.
+compute host.  EFI disks are detected by their 4 MiB size and matched against the
+`efidisk0:` config entry regardless of the zvol's disk number, since Proxmox EFI
+zvols are not keyed to a specific disk index.
 
 ```mermaid
 sequenceDiagram

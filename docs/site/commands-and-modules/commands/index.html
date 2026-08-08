@@ -5927,7 +5927,8 @@ to catch up to the newest.</p>
 <li><strong>Part 2</strong> — incremental copy with intermediates to newest snapshot (<code>doincrementals='Y'</code>, <code>dointermediates='Y'</code>).</li>
 <li>Prompt before Part 2 unless <code>$autoproceed='Y'</code>.</li>
 <li>In two-node mode, call <code>ensure-restored-vm-iscsi</code> after the final send-receive
-   to recreate missing iSCSI LUNs for restored VM disk zvols.</li>
+   to recreate missing iSCSI LUNs for restored VM disk zvols.  EFI disks are matched
+   to the <code>efidisk0:</code> entry by their 4 MiB size, independent of the zvol disk number.</li>
 </ol>
 <p><strong>Return codes:</strong></p>
 <table>
@@ -7395,7 +7396,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.8
+      ZFS Utilities v0.74.9
     </div>
   
   
@@ -7420,7 +7421,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.8"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.9"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

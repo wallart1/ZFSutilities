@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.74.9
+
+*Released 2026-08-07*
+
+### Fixed
+
+- **`ensure-restored-vm-iscsi` detects EFI disks by size** — Proxmox EFI zvols are
+  always 4 MiB and are keyed to `efidisk0:` in the VM config, independent of the
+  zvol's disk number. `expected_lun_for_zvol()` in `bin/ensure-restored-vm-iscsi`
+  now reads the zvol `volsize` and treats `4M` or `4194304` as an EFI disk,
+  matching `efidisk0:` before falling back to the numbered disk keys. This fixes
+  restores where the EFI zvol has a non-zero disk number and would otherwise be
+  skipped or mismatched.
+
+### Tests
+
+- Added `test_expected_lun_for_efi_disk_nonzero_disknum`,
+  `test_expected_lun_for_efi_disk_disknum_zero`, and
+  `test_expected_lun_for_efi_disk_byte_size` to
+  `tests/test-ensure-restored-vm-iscsi`, covering EFI disk detection for both
+  human-readable and byte-size `volsize` values.
+
+### Changed
+
+- Updated `docs/docs/developer-guide/architecture.md`,
+  `docs/docs/commands-and-modules/commands.md`,
+  `docs/docs/developer-guide/testing.md`, and `AGENTS.md` to describe EFI disk
+  detection and the new test count.
+
 ## 0.74.8
 
 *Released 2026-08-07*
