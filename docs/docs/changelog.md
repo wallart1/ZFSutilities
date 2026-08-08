@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.75.0
+
+*Released 2026-08-08*
+
+### Added
+
+- **Pools tab Details button** — The Pools tab now has a **Details** button that
+  opens a read-only details dialog for the single selected pool.
+
+- **Dynamic button sensitivity on the Pools tab** — All Pools and Scrub Manager
+  action buttons now enable or disable automatically based on the current
+  selection. For example, **Watch** is only available for registered online
+  pools, **Details** requires exactly one selected pool, and scrub pause/resume/
+  stop buttons reflect the selected scrub states.
+
+### Changed
+
+- **Coding-policy clarification** — `AGENTS.md` and
+  `docs/docs/developer-guide/coding-policies.md` now distinguish the proper
+  use of `return` inside functions, `exit` at the top level of executed
+  scripts, `bashreturn` for dual-mode scripts, and `bashfatal`/`die` for
+  fatal termination from sourced helpers, instead of the previous blanket
+  prohibition on bare `return`/`exit`.
+
+### Documentation
+
+- Updated `docs/docs/user-guide/offsite-backup.md` to explain how daily and
+  offsite backups can run concurrently when their source scopes are aligned,
+  and how per-dataset locks prevent snapshot-history corruption.
+
+- Updated `docs/docs/user-guide/gtk-gui.md` to document the new **Details**
+  button and the dynamic sensitivity behavior of the Pools tab action buttons.
+
+### Tests
+
+- Added `tests/python/test_action_dispatch.py` coverage for the Pools page
+  button attributes and `post_setup` hook.
+
+- Added `tests/python/test_pools_page.py` coverage for
+  `update_pools_button_sensitivity()`, including selection-driven enable/disable
+  rules and scrub-state-driven scrub controls.
+
+- Added `tests/python/test_profile_validation.py` coverage confirming that
+  concurrently runnable daily and offsite profiles with aligned source scopes
+  produce no warning.
+
 ## 0.74.11
 
 *Released 2026-08-08*

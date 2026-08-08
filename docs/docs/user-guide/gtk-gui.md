@@ -1092,14 +1092,20 @@ candidates. The checkbox state is saved with the registry when you click
 
 | Button      | Behavior                                                                                                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------- |
-| **Watch**   | Opens a [Pool Watch window](#pool-watch-windows) for each selected online pool                             |
+| **Watch**   | Opens a [Pool Watch window](#pool-watch-windows) for each selected online registered pool                  |
+| **Details** | Opens a read-only details dialog for the single selected pool                                              |
 | **Add**     | Adds the selected unregistered pool to the registry (or opens a dialog to type a name if none is selected) |
 | **Remove**  | Removes all selected registered pools from the registry (not from ZFS) after confirmation                  |
 | **Import**  | Imports selected offline pools directly, or opens a dialog listing importable pools if none are selected   |
-| **Export**  | Confirms, then runs `zpool export` on all selected pools                                                   |
-| **Save**    | Saves registry changes; turns **red** while there are unsaved changes                                                          |
-| **Revert**  | Reloads registry from the last saved settings                                                                   |
+| **Export**  | Confirms, then runs `zpool export` on all selected online pools                                            |
+| **Save**    | Saves registry changes; turns **red** while there are unsaved changes                                      |
+| **Revert**  | Reloads registry from the last saved settings                                                              |
 | **Refresh** | Re-runs `zpool list` and refreshes the table                                                               |
+
+Action buttons enable or disable automatically based on the current selection.
+For example, **Watch** is only available when at least one selected pool is
+registered and online, **Details** requires exactly one selected pool, and
+**Export** requires at least one selected online pool.
 
 Right-click any cell to **Copy** the cell value or the full row
 (tab-separated).

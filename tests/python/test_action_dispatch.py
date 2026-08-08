@@ -236,6 +236,53 @@ class TestDatasetsPageSpec(unittest.TestCase):
         )
 
 
+class TestPoolsPageSpec(unittest.TestCase):
+    """Pools page buttons have attribute names and a post-setup hook."""
+
+    def test_post_setup_is_update_pools_button_sensitivity(self):
+        self.assertIs(
+            action_dispatch.PAGE_SPECS["pools"].get("post_setup"),
+            action_dispatch.update_pools_button_sensitivity,
+        )
+
+    def test_pool_registry_buttons_have_attr_names(self):
+        buttons = action_dispatch.PAGE_SPECS["pools"]["buttons"]
+        expected = [
+            ("Watch", "_pools_watch_btn"),
+            ("Details", "_pools_details_btn"),
+            ("Add", "_pools_add_btn"),
+            ("Remove", "_pools_remove_btn"),
+            ("Import", "_pools_import_btn"),
+            ("Export", "_pools_export_btn"),
+            ("Save", "_pools_save_btn"),
+            ("Revert", "_pools_revert_btn"),
+            ("Refresh", "_pools_refresh_btn"),
+        ]
+        for label, attr in expected:
+            matches = [b for b in buttons if b[0] == label]
+            self.assertEqual(len(matches), 1, f"Missing unique button: {label}")
+            self.assertEqual(matches[0][2], attr)
+
+    def test_scrub_buttons_have_attr_names(self):
+        buttons = action_dispatch.PAGE_SPECS["pools"]["buttons"]
+        expected = [
+            ("Start Scrub", "_scrub_start_btn"),
+            ("Pause Scrub", "_scrub_pause_btn"),
+            ("Resume Scrub", "_scrub_resume_btn"),
+            ("Stop Scrub", "_scrub_stop_btn"),
+        ]
+        for label, attr in expected:
+            matches = [b for b in buttons if b[0] == label]
+            self.assertEqual(len(matches), 1, f"Missing unique button: {label}")
+            self.assertEqual(matches[0][2], attr)
+
+    def test_add_profile_button_has_attr_name(self):
+        buttons = action_dispatch.PAGE_SPECS["pools"]["buttons"]
+        matches = [b for b in buttons if b[0] == "Add Profile to Schedule"]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0][2], "_pools_add_profile_btn")
+
+
 class TestSchedulePageSpec(unittest.TestCase):
     """Schedule page exposes Run Now alongside Save/Revert/Delete."""
 

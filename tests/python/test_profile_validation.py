@@ -280,6 +280,47 @@ class TestValidateProfiles(unittest.TestCase):
         self.assertIn("root-offsite-offsitebackup", warnings[0])
         self.assertIn("fivebays/NVME1", warnings[0])
 
+    def test_concurrent_aligned_backup_offsite_no_warning(self):
+        """Backup and offsite profiles that may run concurrently must have
+        aligned source scopes to avoid rollbacks.
+
+        This covers the case where a daily backup and an offsite backup overlap
+        in wall-clock time.  When the offsite job snapshots the same source
+        tree as the daily backup, the destination receives @offsite snapshots
+        that the source also has, so no rollback is required.
+        """
+        profiles = [
+            {
+                "profile_name": "daily-backup",
+                "tab_type": "backup",
+                "config": {
+                    "variables": {"label": "dailybackup"},
+                    "send_receive_steps": [
+                        {"active": True, "source": "threeamigos/proxmox",
+                         "dest": "fivebays"},
+                        {"active": True, "source": "NVME1", "dest": "fivebays"},
+                    ],
+                },
+            },
+            {
+                "profile_name": "offsite-backup",
+                "tab_type": "offsite",
+                "config": {
+                    "variables": {},
+                    "steps": [
+                        {"active": True, "source": "threeamigos",
+                         "dest": "z40tb", "includes": "proxmox",
+                         "excludes": ""},
+                        {"active": True, "source": "NVME1", "dest": "z40tb",
+                         "includes": "", "excludes": ""},
+                        {"active": True, "source": "fivebays", "dest": "z40tb",
+                         "includes": "", "excludes": ""},
+                    ],
+                },
+            },
+        ]
+        self.assertEqual(pv.validate_profiles(profiles), [])
+
 
 if __name__ == "__main__":
     unittest.main()

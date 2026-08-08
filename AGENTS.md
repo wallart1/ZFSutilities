@@ -602,12 +602,33 @@ This project uses **bash** (not sh). Follow these conventions:
   (e.g. `rootcheck`, `zfslockmanager`) via `find_zfsutility_script`, rather than
   `source $mydir/<name>`.
 
-- Never use bare `exit` or `return`. For fatal errors, source `bashfatal` at the
-  point of exit. For non-fatal returns in dual-mode scripts, source `bashreturn`.
+- Use the control-flow primitive that matches the context:
+
+  1. **Inside a function** — use `return` (with an explicit code when not 0).
+     Functions must not use `exit`, because `exit` inside a function kills the
+     whole process and is hazardous when the function is sourced and called from
+     a test or another script.
+
+  2. **Top level of a script executed directly** — use `exit`. This is safe
+     because the dual-mode guard `if calledbybash; then main "$@"; fi` prevents
+     top-level code from running when the script is sourced.
+
+  3. **Top level of a dual-mode script** (designed to be sourced or executed, or
+     lacking a `calledbybash` guard) — use
+     `source "$(find_zfsutility_script bashreturn)" <code>` so a sourcing caller
+     regains control and a direct execution exits cleanly.
+
+  4. **Fatal termination from a sourced helper/function** where returning an
+     error code is impractical — use
+     `source "$(find_zfsutility_script bashfatal)" <code>` or the `die` helper.
+     This terminates the entire process even when the caller is sourced, so
+     reserve it for truly unrecoverable errors.
+
+- `bashreturn` is not a general replacement for `return` inside functions.
+  `bashfatal` is not a general replacement for `exit` at the top level of an
+  executed script.
 
 - Use `usage()` for argument errors, showing help and exiting.
-
-- Use `bashreturn` (source it) when a script may be called either directly or sourced, and you need to return to the caller properly.
 
 - Use the dual-mode guard for scripts that define reusable functions:
 

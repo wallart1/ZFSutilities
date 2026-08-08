@@ -62,6 +62,14 @@ while the daily backup sends all of `NVME1` to `fivebays`, the destination
 daily backup must roll those `@offsite` snapshots back, which is logged as a
 "scope mismatch" warning.
 
+This is also the key to running daily and offsite backups concurrently.  When
+scopes are aligned, both jobs create `@offsite` and `@dailybackup` snapshots on
+the same source datasets, so the common snapshot found by GUID is always the
+newest snapshot on the destination and no rollback is needed.  Per-dataset
+locks in `zfs-send-receive` serialize access to shared datasets, so the two
+jobs take turns on overlapping datasets rather than corrupting snapshot
+histories.
+
 Configure the offsite source and includes to match the daily backup source, or
 narrow the daily backup to the same subtree the offsite snapshots.
 

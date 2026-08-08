@@ -2062,12 +2062,63 @@ command3
 </code></pre></div>
 </li>
 <li>
-<p><strong>Never exit a script or function directly</strong> with either <code>return</code> or <code>exit</code>.
-  Instead, use:</p>
-<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>bashreturn<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">[</span><span class="k">return</span><span class="w"> </span>code<span class="o">]</span>
+<p><strong>Use the control-flow primitive that matches the context:</strong></p>
+<ol>
+<li><strong>Inside a function</strong> — use <code>return</code> (with an explicit code when not 0).
+   Functions must not use <code>exit</code>, because <code>exit</code> inside a function kills the
+   whole process and is hazardous when the function is sourced and called
+   from a test or another script.</li>
+</ol>
+<div class="highlight"><pre><span></span><code>do_something<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span>-z<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$1</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">        </span>log_msg<span class="w"> </span><span class="s2">&quot;WARN: missing argument&quot;</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="m">1</span>
+<span class="w">    </span><span class="k">fi</span>
+<span class="w">    </span><span class="c1"># ...</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="m">0</span>
+<span class="o">}</span>
 </code></pre></div>
-<p>at the point where the script exits (not as a preparatory step at the
-beginning of the script).</p>
+<ol>
+<li><strong>Top level of a script executed directly</strong> — use <code>exit</code>. This is normal
+   Bash and is safe because the dual-mode guard
+   <code>if calledbybash; then main "$@"; fi</code> prevents top-level code from
+   running when the script is sourced.</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="k">if</span><span class="w"> </span>calledbybash<span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span>main<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$@</span><span class="s2">&quot;</span>
+<span class="k">fi</span>
+
+main<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$1</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;--help&quot;</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">        </span>usage
+<span class="w">        </span><span class="nb">exit</span><span class="w"> </span><span class="m">0</span>
+<span class="w">    </span><span class="k">fi</span>
+<span class="w">    </span><span class="c1"># ...</span>
+<span class="o">}</span>
+</code></pre></div>
+<ol>
+<li><strong>Top level of a dual-mode script</strong> (designed to be sourced or executed,
+   or lacking a <code>calledbybash</code> guard) — use <code>bashreturn</code> so a sourcing
+   caller regains control and a direct execution exits cleanly.</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$1</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">    </span>log_msg<span class="w"> </span><span class="s2">&quot;FATAL: argument required&quot;</span>
+<span class="w">    </span><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>bashreturn<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="m">8</span>
+<span class="k">fi</span>
+</code></pre></div>
+<ol>
+<li><strong>Fatal termination from a sourced helper/function</strong> where returning an
+   error code is impractical — use <code>bashfatal</code> or the <code>die</code> helper. This
+   terminates the entire process even when the caller is sourced, so reserve
+   it for truly unrecoverable errors.</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>find_zfsutility_script<span class="w"> </span>bashfatal<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="m">8</span>
+</code></pre></div>
+</li>
+<li>
+<p><code>bashreturn</code> is not a general replacement for <code>return</code> inside functions.
+  <code>bashfatal</code> is not a general replacement for <code>exit</code> at the top level of an
+  executed script.</p>
 </li>
 </ul>
 <h3 id="commenting-and-documentation">Commenting and Documentation<a class="headerlink" href="#commenting-and-documentation" title="Permanent link">&para;</a></h3>
@@ -2253,7 +2304,7 @@ for callbacks, cleanup, and worker threads).</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.11
+      ZFS Utilities v0.75.0
     </div>
   
   
@@ -2278,7 +2329,7 @@ for callbacks, cleanup, and worker threads).</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.11"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.75.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

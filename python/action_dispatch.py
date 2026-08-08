@@ -78,7 +78,7 @@ from pool_actions import (
     on_scrub_start,
     on_scrub_stop,
 )
-from pools_page import refresh_pools_page
+from pools_page import refresh_pools_page, update_pools_button_sensitivity
 from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
 from restore_page import (
     check_restore_dirty,
@@ -172,23 +172,25 @@ PAGE_SPECS = {
     },
     "pools": {
         "buttons": [
-            ("Watch", "utilities-system-monitor", None),
-            ("Add", "list-add", None),
-            ("Remove", "list-remove", None),
-            ("Import", "document-open", None),
-            ("Export", "media-eject", None),
-            ("Save", "document-save", "_pools_save_button"),
-            ("Revert", "document-revert", None),
-            ("Refresh", "view-refresh", None),
+            ("Watch", "utilities-system-monitor", "_pools_watch_btn"),
+            ("Details", "dialog-information", "_pools_details_btn"),
+            ("Add", "list-add", "_pools_add_btn"),
+            ("Remove", "list-remove", "_pools_remove_btn"),
+            ("Import", "document-open", "_pools_import_btn"),
+            ("Export", "media-eject", "_pools_export_btn"),
+            ("Save", "document-save", "_pools_save_btn"),
+            ("Revert", "document-revert", "_pools_revert_btn"),
+            ("Refresh", "view-refresh", "_pools_refresh_btn"),
             (None, None, None),  # spacer
-            ("Start Scrub", "media-playback-start", None),
-            ("Pause Scrub", "media-playback-pause", None),
-            ("Resume Scrub", "media-seek-forward", None),
-            ("Stop Scrub", "media-playback-stop", None),
-            ("Add Profile to Schedule", "list-add", None),
+            ("Start Scrub", "media-playback-start", "_scrub_start_btn"),
+            ("Pause Scrub", "media-playback-pause", "_scrub_pause_btn"),
+            ("Resume Scrub", "media-seek-forward", "_scrub_resume_btn"),
+            ("Stop Scrub", "media-playback-stop", "_scrub_stop_btn"),
+            ("Add Profile to Schedule", "list-add", "_pools_add_profile_btn"),
         ],
         "dirty_check": check_pools_dirty,
         "dirty_attr": "_pools_saved_state",
+        "post_setup": update_pools_button_sensitivity,
     },
     "datasets": {
         "buttons": [

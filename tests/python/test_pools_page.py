@@ -462,5 +462,221 @@ class TestPoolsDirtyState(unittest.TestCase):
         mock_dirty.assert_called_once_with(app)
 
 
+
+class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
+    """update_pools_button_sensitivity() enables only appropriate buttons."""
+
+    _BUTTON_ATTRS = (
+        "_pools_watch_btn",
+        "_pools_details_btn",
+        "_pools_add_btn",
+        "_pools_remove_btn",
+        "_pools_import_btn",
+        "_pools_export_btn",
+        "_pools_save_btn",
+        "_pools_revert_btn",
+        "_pools_refresh_btn",
+        "_scrub_start_btn",
+        "_scrub_pause_btn",
+        "_scrub_resume_btn",
+        "_scrub_stop_btn",
+        "_pools_add_profile_btn",
+    )
+
+    def _make_app(self, pool_rows=None, scrub_states=None, dirty=False):
+        """Return app with mocked buttons and selections.
+
+        pool_rows: list of (name, flag, health)
+        scrub_states: list of displayed status strings for selected scrub rows
+        """
+        pp = _import_pools_page()
+        app = MagicMock()
+        app.known_pools = [{"name": "tank", "offsite_candidate": False}]
+        app.pools_dirty = dirty
+
+        for attr in self._BUTTON_ATTRS:
+            setattr(app, attr, MagicMock())
+
+        app.pool_view = self._make_treeview(pool_rows or [], [
+            pp.COL_NAME, pp.COL_FLAG, pp.COL_HEALTH,
+        ])
+        app.scrub_view = self._make_treeview(
+            [[state] for state in (scrub_states or [])], [1]
+        )
+        return app
+
+    def _make_treeview(self, rows, col_indices):
+        """Build a mock TreeView whose selection returns the given rows."""
+        treeview = MagicMock()
+        model = MagicMock()
+        paths = []
+
+        def get_iter(path):
+            for candidate, p in zip(rows, paths):
+                if p is path:
+                    return candidate
+            return None
+
+        def get_value(it, col):
+            idx = col_indices.index(col)
+            return it[idx]
+
+        model.get_iter.side_effect = get_iter
+        model.get_value.side_effect = get_value
+
+        for _row in rows:
+            path = MagicMock()
+            paths.append(path)
+
+        treeview.get_selection.return_value.get_selected_rows.return_value = (
+            model, paths
+        )
+        return treeview
+
+    def _sensitivities(self, app):
+        """Return dict of attr -> last set_sensitive value."""
+        result = {}
+        for attr in self._BUTTON_ATTRS:
+            btn = getattr(app, attr)
+            calls = btn.set_sensitive.call_args_list
+            result[attr] = calls[-1][0][0] if calls else None
+        return result
+
+    def test_no_selection_disables_action_buttons(self):
+        pp = _import_pools_page()
+        app = self._make_app()
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertFalse(sens["_pools_watch_btn"])
+        self.assertFalse(sens["_pools_details_btn"])
+        self.assertTrue(sens["_pools_add_btn"])
+        self.assertFalse(sens["_pools_remove_btn"])
+        self.assertTrue(sens["_pools_import_btn"])
+        self.assertFalse(sens["_pools_export_btn"])
+        self.assertFalse(sens["_pools_save_btn"])
+        self.assertFalse(sens["_pools_revert_btn"])
+        self.assertTrue(sens["_pools_refresh_btn"])
+        self.assertFalse(sens["_scrub_start_btn"])
+        self.assertFalse(sens["_scrub_pause_btn"])
+        self.assertFalse(sens["_scrub_resume_btn"])
+        self.assertFalse(sens["_scrub_stop_btn"])
+        self.assertTrue(sens["_pools_add_profile_btn"])
+
+    def test_registered_online_pool_enables_watch_details_remove_export(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            pool_rows=[("tank", pp.FLAG_REGISTERED, "ONLINE")]
+        )
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertTrue(sens["_pools_watch_btn"])
+        self.assertTrue(sens["_pools_details_btn"])
+        self.assertTrue(sens["_pools_remove_btn"])
+        self.assertTrue(sens["_pools_export_btn"])
+
+    def test_unregistered_pool_enables_export_but_not_watch_remove(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            pool_rows=[("tank", pp.FLAG_UNREGISTERED, "ONLINE")]
+        )
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertFalse(sens["_pools_watch_btn"])
+        self.assertTrue(sens["_pools_details_btn"])
+        self.assertFalse(sens["_pools_remove_btn"])
+        self.assertTrue(sens["_pools_export_btn"])
+
+    def test_offline_pool_disables_watch_and_export(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            pool_rows=[("tank", pp.FLAG_REGISTERED, "OFFLINE")]
+        )
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertFalse(sens["_pools_watch_btn"])
+        self.assertTrue(sens["_pools_details_btn"])
+        self.assertTrue(sens["_pools_remove_btn"])
+        self.assertFalse(sens["_pools_export_btn"])
+
+    def test_multiple_selection_disables_details(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            pool_rows=[
+                ("tank", pp.FLAG_REGISTERED, "ONLINE"),
+                ("archive", pp.FLAG_REGISTERED, "ONLINE"),
+            ]
+        )
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertFalse(sens["_pools_details_btn"])
+        self.assertTrue(sens["_pools_watch_btn"])
+        self.assertTrue(sens["_pools_remove_btn"])
+
+    def test_dirty_state_enables_save_and_revert(self):
+        pp = _import_pools_page()
+        app = self._make_app(dirty=True)
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertTrue(sens["_pools_save_btn"])
+        self.assertTrue(sens["_pools_revert_btn"])
+
+    def test_scrub_state_controls_scrub_buttons(self):
+        pp = _import_pools_page()
+        app = self._make_app(scrub_states=["scrubbing", "pending"])
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertTrue(sens["_scrub_start_btn"])
+        self.assertTrue(sens["_scrub_pause_btn"])
+        self.assertFalse(sens["_scrub_resume_btn"])
+        self.assertTrue(sens["_scrub_stop_btn"])
+
+    def test_paused_scrub_enables_resume(self):
+        pp = _import_pools_page()
+        app = self._make_app(scrub_states=["paused"])
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertTrue(sens["_scrub_start_btn"])
+        self.assertFalse(sens["_scrub_pause_btn"])
+        self.assertTrue(sens["_scrub_resume_btn"])
+        self.assertTrue(sens["_scrub_stop_btn"])
+
+    def test_finished_scrub_disables_pause_resume_stop(self):
+        pp = _import_pools_page()
+        app = self._make_app(scrub_states=["finished"])
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertTrue(sens["_scrub_start_btn"])
+        self.assertFalse(sens["_scrub_pause_btn"])
+        self.assertFalse(sens["_scrub_resume_btn"])
+        self.assertFalse(sens["_scrub_stop_btn"])
+
+
+class TestSelectionChangedHandlers(unittest.TestCase):
+    """Selection-changed callbacks trigger sensitivity updates."""
+
+    def test_pool_selection_changed_updates_sensitivity(self):
+        pp = _import_pools_page()
+        app = MagicMock()
+        with patch.object(pp, "update_pools_button_sensitivity") as mock_update:
+            pp._on_pool_selection_changed(MagicMock(), app)
+        mock_update.assert_called_once_with(app)
+
+    def test_scrub_selection_changed_updates_sensitivity(self):
+        pp = _import_pools_page()
+        app = MagicMock()
+        with patch.object(pp, "update_pools_button_sensitivity") as mock_update:
+            pp._on_scrub_selection_changed(MagicMock(), app)
+        mock_update.assert_called_once_with(app)
+
+
 if __name__ == "__main__":
     unittest.main()

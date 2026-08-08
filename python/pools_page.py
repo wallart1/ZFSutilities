@@ -216,6 +216,9 @@ def create_pools_page(app):
         "sort-column-changed", _on_pools_sort_column_changed, app
     )
     app.pool_view.connect("drag-end", _on_pools_drag_end, app)
+    app.pool_view.get_selection().connect(
+        "changed", _on_pool_selection_changed, app
+    )
 
     scrolled = Gtk.ScrolledWindow()
     scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -317,6 +320,9 @@ def create_pools_page(app):
 
     app.enable_treeview_copy(app.scrub_view)
     app._ui_state.bind_treeview(app.scrub_view, "pools_scrub_view")
+    app.scrub_view.get_selection().connect(
+        "changed", _on_scrub_selection_changed, app
+    )
 
     scrub_scrolled = Gtk.ScrolledWindow()
     scrub_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -416,6 +422,8 @@ def refresh_pools_page(app):
                 path = app.pool_store.get_path(tree_iter)
                 selection.select_path(path)
             tree_iter = app.pool_store.iter_next(tree_iter)
+
+    update_pools_button_sensitivity(app)
 
 
 # ---------------------------------------------------------------------------
@@ -755,6 +763,95 @@ def _update_pools_dirty_indicator(app):
         )
     else:
         app.pools_dirty_label.set_text("")
-    btn = getattr(app, '_pools_save_button', None)
+    btn = getattr(app, '_pools_save_btn', None)
     if btn:
         set_button_markup_red(btn, app.pools_dirty)
+
+
+def _get_selected_pool_rows(treeview):
+    """Return list of (name, flag, health) for all selected rows in pool_view."""
+    try:
+        selection = treeview.get_selection()
+        model, pathlist = selection.get_selected_rows()
+    except (ValueError, TypeError):
+        return []
+    rows = []
+    for path in pathlist:
+        tree_iter = model.get_iter(path)
+        rows.append((
+            model.get_value(tree_iter, COL_NAME),
+            model.get_value(tree_iter, COL_FLAG),
+            model.get_value(tree_iter, COL_HEALTH),
+        ))
+    return rows
+
+
+def _get_selected_scrub_states(treeview):
+    """Return a set of displayed scrub states for selected scrub-table rows."""
+    try:
+        selection = treeview.get_selection()
+        model, pathlist = selection.get_selected_rows()
+    except (ValueError, TypeError):
+        return set()
+    states = set()
+    for path in pathlist:
+        tree_iter = model.get_iter(path)
+        states.add(model.get_value(tree_iter, 1))
+    return states
+
+
+def _on_pool_selection_changed(selection, app):
+    """Update action button sensitivity when the pool selection changes."""
+    update_pools_button_sensitivity(app)
+
+
+def _on_scrub_selection_changed(selection, app):
+    """Update action button sensitivity when the scrub selection changes."""
+    update_pools_button_sensitivity(app)
+
+
+def update_pools_button_sensitivity(app):
+    """Enable/disable Pools tab action buttons based on current selections."""
+    pool_rows = _get_selected_pool_rows(app.pool_view)
+
+    has_registered_online = any(
+        flag == FLAG_REGISTERED and health != "OFFLINE"
+        for _name, flag, health in pool_rows
+    )
+    has_registered = any(
+        flag == FLAG_REGISTERED for _name, flag, _health in pool_rows
+    )
+    has_online = any(
+        health != "OFFLINE" for _name, _flag, health in pool_rows
+    )
+    single_pool = len(pool_rows) == 1
+
+    scrub_view = getattr(app, 'scrub_view', None)
+    if scrub_view is not None:
+        scrub_states = _get_selected_scrub_states(scrub_view)
+    else:
+        scrub_states = set()
+    has_scrub_selection = bool(scrub_states)
+    can_pause_scrub = bool(scrub_states & {"scrubbing", "pending"})
+    can_resume_scrub = bool(scrub_states & {"paused"})
+    can_stop_scrub = bool(scrub_states & {"scrubbing", "pending", "paused"})
+
+    for attr, sensitive in [
+        ('_pools_watch_btn', has_registered_online),
+        ('_pools_details_btn', single_pool),
+        ('_pools_add_btn', True),
+        ('_pools_remove_btn', has_registered),
+        ('_pools_import_btn', True),
+        ('_pools_export_btn', has_online),
+        ('_pools_save_btn', getattr(app, 'pools_dirty', False)),
+        ('_pools_revert_btn', getattr(app, 'pools_dirty', False)),
+        ('_pools_refresh_btn', True),
+        ('_scrub_start_btn', has_scrub_selection),
+        ('_scrub_pause_btn', can_pause_scrub),
+        ('_scrub_resume_btn', can_resume_scrub),
+        ('_scrub_stop_btn', can_stop_scrub),
+        ('_pools_add_profile_btn', True),
+    ]:
+        btn = getattr(app, attr, None)
+        if btn:
+            btn.set_sensitive(sensitive)

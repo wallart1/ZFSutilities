@@ -398,7 +398,7 @@ def on_pools_revert(app):
 
 def check_pools_dirty(app):
     """Style the Save button to match the Backup tab pattern."""
-    btn = getattr(app, '_pools_save_button', None)
+    btn = getattr(app, '_pools_save_btn', None)
     if btn:
         set_button_markup_red(btn, app.pools_dirty)
 

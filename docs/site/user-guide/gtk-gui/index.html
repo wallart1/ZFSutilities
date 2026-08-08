@@ -4460,7 +4460,11 @@ candidates. The checkbox state is saved with the registry when you click
 <tbody>
 <tr>
 <td><strong>Watch</strong></td>
-<td>Opens a <a href="#pool-watch-windows">Pool Watch window</a> for each selected online pool</td>
+<td>Opens a <a href="#pool-watch-windows">Pool Watch window</a> for each selected online registered pool</td>
+</tr>
+<tr>
+<td><strong>Details</strong></td>
+<td>Opens a read-only details dialog for the single selected pool</td>
 </tr>
 <tr>
 <td><strong>Add</strong></td>
@@ -4476,7 +4480,7 @@ candidates. The checkbox state is saved with the registry when you click
 </tr>
 <tr>
 <td><strong>Export</strong></td>
-<td>Confirms, then runs <code>zpool export</code> on all selected pools</td>
+<td>Confirms, then runs <code>zpool export</code> on all selected online pools</td>
 </tr>
 <tr>
 <td><strong>Save</strong></td>
@@ -4492,6 +4496,10 @@ candidates. The checkbox state is saved with the registry when you click
 </tr>
 </tbody>
 </table>
+<p>Action buttons enable or disable automatically based on the current selection.
+For example, <strong>Watch</strong> is only available when at least one selected pool is
+registered and online, <strong>Details</strong> requires exactly one selected pool, and
+<strong>Export</strong> requires at least one selected online pool.</p>
 <p>Right-click any cell to <strong>Copy</strong> the cell value or the full row
 (tab-separated).</p>
 <h3 id="scrub-manager">Scrub Manager<a class="headerlink" href="#scrub-manager" title="Permanent link">&para;</a></h3>
@@ -5103,7 +5111,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.11
+      ZFS Utilities v0.75.0
     </div>
   
   
@@ -5128,7 +5136,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.11"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.75.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

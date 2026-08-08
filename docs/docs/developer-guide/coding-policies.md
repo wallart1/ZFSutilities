@@ -124,15 +124,66 @@ This initializes basic runtime variables and sources commonly-used functions.
     }
     ```
 
-- **Never exit a script or function directly** with either `return` or `exit`.
-  Instead, use:
+- **Use the control-flow primitive that matches the context:**
 
-    ```bash
-    source "$(find_zfsutility_script bashreturn)" [return code]
-    ```
+    1. **Inside a function** — use `return` (with an explicit code when not 0).
+       Functions must not use `exit`, because `exit` inside a function kills the
+       whole process and is hazardous when the function is sourced and called
+       from a test or another script.
 
-    at the point where the script exits (not as a preparatory step at the
-    beginning of the script).
+       ```bash
+       do_something() {
+           if [[ -z "$1" ]]; then
+               log_msg "WARN: missing argument"
+               return 1
+           fi
+           # ...
+           return 0
+       }
+       ```
+
+    2. **Top level of a script executed directly** — use `exit`. This is normal
+       Bash and is safe because the dual-mode guard
+       `if calledbybash; then main "$@"; fi` prevents top-level code from
+       running when the script is sourced.
+
+       ```bash
+       if calledbybash; then
+           main "$@"
+       fi
+
+       main() {
+           if [[ "$1" == "--help" ]]; then
+               usage
+               exit 0
+           fi
+           # ...
+       }
+       ```
+
+    3. **Top level of a dual-mode script** (designed to be sourced or executed,
+       or lacking a `calledbybash` guard) — use `bashreturn` so a sourcing
+       caller regains control and a direct execution exits cleanly.
+
+       ```bash
+       if [[ "$1" == "" ]]; then
+           log_msg "FATAL: argument required"
+           source "$(find_zfsutility_script bashreturn)" 8
+       fi
+       ```
+
+    4. **Fatal termination from a sourced helper/function** where returning an
+       error code is impractical — use `bashfatal` or the `die` helper. This
+       terminates the entire process even when the caller is sourced, so reserve
+       it for truly unrecoverable errors.
+
+       ```bash
+       source "$(find_zfsutility_script bashfatal)" 8
+       ```
+
+- `bashreturn` is not a general replacement for `return` inside functions.
+  `bashfatal` is not a general replacement for `exit` at the top level of an
+  executed script.
 
 ### Commenting and Documentation
 
