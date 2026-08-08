@@ -41,7 +41,7 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-deploy-version` | 21 | Root-level script selection logic: executable files, shebang files, exclusions; validation of critical scripts; Two-node script symlinks including `repair-iscsi-luns`, `iscsi-restore-luns`, `attach-vm-disk`, and `detach-vm-disk`; GUI and docs launcher symlinks; no production wiring |
 | `test-attach-vm-disk` | 9 | `attach-vm-disk` argument validation: zvol path parsing, VM ID format, and disk-key format |
 | `test-detach-vm-disk` | 2 | `detach-vm-disk` manifest handling: exact backstore removal and no-match pass-through |
-| `test-ensure-restored-vm-iscsi` | 11 | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, and VM-config LUN lookup |
+| `test-ensure-restored-vm-iscsi` | 14 | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, and storage-side script forwarding |
 | `test-installer-checks` | 12 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal |
 | `test-move-vm-disk` | 8 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove |
 | `test-switch-version` | 6 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, and `--list` |

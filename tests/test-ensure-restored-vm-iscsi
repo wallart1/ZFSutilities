@@ -250,5 +250,102 @@ test_expected_lun_for_zvol_sata
 test_expected_lun_for_zvol
 test_expected_lun_missing_config
 
+# ---------------------------------------------------------------------------
+# Regression tests for storage-side helper execution
+# ---------------------------------------------------------------------------
+
+# Load the real helper functions from the script (excluding the main body and
+# argument validation), then exercise run_on_storage / ensure_lun_on_storage
+# with mocked bash/ssh and zfs so no root or real storage node is needed.
+# shellcheck source=/dev/null
+source <(sed -n '50,282p' "$mydir/bin/ensure-restored-vm-iscsi")
+
+_bash_calls=()
+_ssh_calls=()
+
+bash() {
+    local script
+    script=$(cat)
+    _bash_calls+=("args=$*|script=${script}")
+    return 0
+}
+
+ssh() {
+    local script
+    script=$(cat)
+    _ssh_calls+=("args=$*|script=${script}")
+    return 0
+}
+
+test_run_on_storage_remote_forwards_heredoc() {
+    test_start "run_on_storage forwards heredoc and args to remote storage host"
+
+    MY_HOST="tweety"
+    STORAGE_HOST="stewie"
+    _ssh_calls=()
+
+    run_on_storage "alpha" "beta gamma" <<'EOF'
+printf '%s\n' "$1" "$2"
+EOF
+
+    assert_equals "1" "${#_ssh_calls[@]}" || return
+    assert_contains "${_ssh_calls[0]}" "root@stewie bash -s alpha beta gamma" || return
+    assert_contains "${_ssh_calls[0]}" "printf '%s\\n' \"\$1\" \"\$2\""
+}
+
+test_run_on_storage_local_forwards_heredoc() {
+    test_start "run_on_storage forwards heredoc and args to local storage host"
+
+    MY_HOST="stewie"
+    STORAGE_HOST="stewie"
+    _bash_calls=()
+
+    run_on_storage "one" "two three" <<'EOF'
+echo "$1" "$2"
+EOF
+
+    assert_equals "1" "${#_bash_calls[@]}" || return
+    assert_contains "${_bash_calls[0]}" "args=-s one two three" || return
+    assert_contains "${_bash_calls[0]}" 'echo "$1" "$2"'
+}
+
+test_ensure_lun_on_storage_sends_correct_storage_script() {
+    test_start "ensure_lun_on_storage forwards correct script and args"
+
+    MY_HOST="stewie"
+    STORAGE_HOST="stewie"
+    _bash_calls=()
+    _mock_zfs_props=()
+    _mock_zfs_props["threeamigos/proxmox/vm-215-disk-0:encryption"]="off"
+
+    ensure_lun_on_storage \
+        "threeamigos/proxmox/vm-215-disk-0" \
+        "iqn.2026-02.local.stewie:threeamigos" \
+        "31" \
+        "N"
+
+    assert_equals "2" "${#_bash_calls[@]}" || return
+
+    local expected_args
+    expected_args="args=-s threeamigos/proxmox/vm-215-disk-0 "
+    expected_args+="/dev/zvol/threeamigos/proxmox/vm-215-disk-0 "
+    expected_args+="vm-215-disk-0 iqn.2026-02.local.stewie:threeamigos 31 N"
+    assert_contains "${_bash_calls[0]}" "$expected_args" || return
+    assert_contains "${_bash_calls[0]}" 'ZVOL="$1"' || return
+    assert_contains "${_bash_calls[0]}" "targetcli /backstores/block create" || return
+
+    expected_args="args=-s vm-215-disk-0 "
+    expected_args+="/dev/zvol/threeamigos/proxmox/vm-215-disk-0 threeamigos N"
+    assert_contains "${_bash_calls[1]}" "$expected_args" || return
+    assert_contains "${_bash_calls[1]}" 'BSNAME="$1"'
+}
+
+# ---------------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------------
+test_run_on_storage_remote_forwards_heredoc
+test_run_on_storage_local_forwards_heredoc
+test_ensure_lun_on_storage_sends_correct_storage_script
+
 test_summary
 teardown_test_env

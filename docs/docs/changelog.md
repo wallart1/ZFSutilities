@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.74.8
+
+*Released 2026-08-07*
+
+### Fixed
+
+- **`ensure-restored-vm-iscsi` correctly forwards scripts to the storage host** —
+  `run_on_storage()` in `bin/ensure-restored-vm-iscsi` now reads the storage-side
+  script from stdin (the heredoc supplied by each caller) and passes the caller's
+  positional parameters to `bash -s`. Previously the function consumed the first
+  positional argument as the script and ignored the heredoc, so the wrong shell
+  code was executed on the storage node.
+
+### Tests
+
+- Added `test_run_on_storage_remote_forwards_heredoc`,
+  `test_run_on_storage_local_forwards_heredoc`, and
+  `test_ensure_lun_on_storage_sends_correct_storage_script` to
+  `tests/test-ensure-restored-vm-iscsi`, covering the corrected storage-side
+  script forwarding.
+
+### Changed
+
+- Updated `docs/docs/developer-guide/testing.md` and `AGENTS.md` to reflect that
+  `test-ensure-restored-vm-iscsi` now contains 14 tests and covers storage-side
+  script forwarding.
+
 ## 0.74.7
 
 *Released 2026-08-07*

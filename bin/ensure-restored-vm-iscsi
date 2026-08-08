@@ -69,8 +69,8 @@ read_compute_file() {
 # Run a bash script (supplied via stdin) on the storage host.
 # Arguments after the script are passed as positional parameters.
 run_on_storage() {
-    local script="$1"
-    shift
+    local script
+    script=$(cat)
     if is_local_host "$STORAGE_HOST"; then
         bash -s "$@" <<< "$script"
     else
