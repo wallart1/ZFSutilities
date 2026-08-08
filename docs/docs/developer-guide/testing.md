@@ -41,7 +41,7 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-deploy-version` | 21 | Root-level script selection logic: executable files, shebang files, exclusions; validation of critical scripts; Two-node script symlinks including `repair-iscsi-luns`, `iscsi-restore-luns`, `attach-vm-disk`, and `detach-vm-disk`; GUI and docs launcher symlinks; no production wiring |
 | `test-attach-vm-disk` | 9 | `attach-vm-disk` argument validation: zvol path parsing, VM ID format, and disk-key format |
 | `test-detach-vm-disk` | 2 | `detach-vm-disk` manifest handling: exact backstore removal and no-match pass-through |
-| `test-ensure-restored-vm-iscsi` | 17 | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, and storage-side script forwarding |
+| `test-ensure-restored-vm-iscsi` | 23 | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding |
 | `test-installer-checks` | 12 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal |
 | `test-move-vm-disk` | 8 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove |
 | `test-switch-version` | 6 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, and `--list` |
@@ -61,7 +61,7 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-zfsdelallsnaps` | 4 | Return-code behavior of `zfsdelallsnaps`: all-success returns `0`, any `delsnap` failure returns `1`, empty list returns `0` |
 | `test-zfslockmanager` | 33 | Lock acquire / release, same-dataset conflicts, hierarchy conflicts, stale detection, concurrent access, path encoding. **Requires root.** |
 | `test-zfsretain` | 10 | Retention policy phases: offsite monthly dedup, same-day dedup, bucket pruning with empty-snapshot preference, empty logging, retain=0 |
-| `test-zfs-send-receive-dryrun` | 30 | Dry-run logging, space-check logic, resume-token decisions (including non-existent destination), `handle_commsnap_rc` paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling |
+| `test-zfs-send-receive-dryrun` | 33 | Dry-run logging, space-check logic, resume-token decisions (including non-existent destination), `handle_commsnap_rc` paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling |
 | `test-zfssnapbuild` | 9 | Snapshot name generation, bucket logic (daily / weekly / monthly / offsite), snapfile reuse |
 | `test-logging` | 4 | `log_msg` writes all messages to the session log file and ignores `msg_level` |
 | `test-module-dependencies` | 1 | Static analysis: every root-level bash module call to a known module function is satisfied by a local definition, a sourced module, or `bashinit` |

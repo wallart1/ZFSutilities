@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.74.11
+
+*Released 2026-08-08*
+
+### Fixed
+
+- **`ensure-restored-vm-iscsi` fallback LUN assignment** — When a Proxmox VM's
+  zvol disk number does not match its config slot (common when an EFI disk
+  consumes disk-0), `expected_lun_for_zvol()` in `bin/ensure-restored-vm-iscsi`
+  now scans all non-EFI disk lines, sorts them by bus priority and index, and
+  picks the first unused LUN. Size matching is used when the zvol `volsize` is
+  known so the correct config entry is selected. LUNs already assigned during
+  the same run are tracked so two zvols cannot be mapped to the same config
+  entry.
+
+- **`lun_from_by_path_line` always returns cleanly** — The helper now ends
+  with an explicit `return 0` so malformed by-path lines do not cause an
+  unintended `set -e` exit.
+
+### Changed
+
+- **Deterministic work ordering in `ensure-restored-vm-iscsi`** — Work items
+  are now sorted by VM ID and disk number before LUN lookup so fallback
+  assignment is reproducible when multiple data disks have mismatched numbers.
+
+### Tests
+
+- Expanded `tests/test-ensure-restored-vm-iscsi` to 23 tests, adding coverage
+  for fallback LUN assignment, assigned-LUN tracking, local-host detection,
+  local config-file reading, and remote command forwarding for
+  `exec_on_storage()`.
+
+- Updated `docs/docs/developer-guide/testing.md` and `AGENTS.md` with the new
+  test count and description.
+
 ## 0.74.10
 
 *Released 2026-08-08*

@@ -412,7 +412,7 @@ tests/run-tests test-zfsretain test-zfsbuildfsarray
 | `test-zfs-diagnose-busy`       | 8     | Diagnostic output from `zfs-diagnose-busy` — busy dataset causes                                              |
 | `test-zfsdelfs`                | 7     | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs`                                                        |
 | `test-zfsdelsnap`              | 7     | Snapshot deletion safety checks, hold release, and `zfscheckagainst` dependency sourcing                      |
-| `test-ensure-restored-vm-iscsi` | 17    | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, and storage-side script forwarding |
+| `test-ensure-restored-vm-iscsi` | 23    | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding |
 | `test-zfslockmanager`          | 35    | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition |
 | `test-zfsretain`               | 10    | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
 | `test-zfs-send-receive-dryrun` | 33    | Dry-run logging, space checks, resume-token helpers (including non-existent destination), clone messages, pv quiet in headless mode, full-copy lock hand-off |

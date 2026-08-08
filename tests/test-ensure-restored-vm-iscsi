@@ -8,7 +8,7 @@ setup_test_env
 # argument validation), then exercise run_on_storage / ensure_lun_on_storage
 # with mocked bash/ssh and zfs so no root or real storage node is needed.
 # shellcheck source=/dev/null
-source <(sed -n '72,320p' "$mydir/bin/ensure-restored-vm-iscsi")
+source <(sed -n '72,396p' "$mydir/bin/ensure-restored-vm-iscsi")
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -108,6 +108,7 @@ EOF
     STORAGE_IP="192.168.1.1"
     IQN_PREFIX="iqn.2026-02.local"
     declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    unset '_assigned_config_luns'
 
     local lun
     lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-100-disk-2" "100" "2")
@@ -132,6 +133,7 @@ EOF
     STORAGE_IP="192.168.1.1"
     IQN_PREFIX="iqn.2026-02.local"
     declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    unset '_assigned_config_luns'
 
     local lun
     lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-0" "215" "0")
@@ -152,6 +154,7 @@ test_expected_lun_missing_config() {
     STORAGE_IP="192.168.1.1"
     IQN_PREFIX="iqn.2026-02.local"
     declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    unset '_assigned_config_luns'
 
     local lun
     lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-999-disk-0" "999" "0")
@@ -180,6 +183,7 @@ EOF
     STORAGE_IP="1.2.3.4"
     IQN_PREFIX="iqn.local"
     declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    unset '_assigned_config_luns'
 
     local lun
     lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-0" "215" "0" "50G")
@@ -207,6 +211,7 @@ EOF
     STORAGE_IP="1.2.3.4"
     IQN_PREFIX="iqn.local"
     declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    unset '_assigned_config_luns'
 
     local lun
     lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-0" "215" "0" "4M")
@@ -231,10 +236,101 @@ EOF
     STORAGE_IP="1.2.3.4"
     IQN_PREFIX="iqn.local"
     declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    unset '_assigned_config_luns'
 
     local lun
     lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-1" "215" "1" "4194304")
     assert_equals "30" "$lun"
+
+    rm -rf "$tmp_dir"
+}
+
+test_expected_lun_for_zvol_efi_offset_data_disk() {
+    test_start "fallback maps a non-EFI data disk when EFI consumes disk-0"
+
+    local tmp_dir pve_dir
+    tmp_dir=$(mktemp -d)
+    pve_dir="$tmp_dir/qemu-server"
+    mkdir -p "$pve_dir"
+    cat > "$pve_dir/215.conf" << 'EOF'
+efidisk0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-30,efitype=4m,size=4M
+scsi0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-31,size=50G
+EOF
+
+    PVE_CONF_DIR="$pve_dir"
+    STORAGE_IP="1.1.1.1"
+    IQN_PREFIX="iqn.local"
+    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    unset '_assigned_config_luns'
+
+    local lun
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-0" "215" "0" "4M")
+    assert_equals "30" "$lun" || { rm -rf "$tmp_dir"; return; }
+
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-1" "215" "1" "50G")
+    assert_equals "31" "$lun"
+
+    rm -rf "$tmp_dir"
+}
+
+test_expected_lun_for_zvol_efi_offset_multiple_data_disks() {
+    test_start "fallback assigns unused non-EFI LUNs to multiple data disks"
+
+    local tmp_dir pve_dir
+    tmp_dir=$(mktemp -d)
+    pve_dir="$tmp_dir/qemu-server"
+    mkdir -p "$pve_dir"
+    cat > "$pve_dir/215.conf" << 'EOF'
+efidisk0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-30,efitype=4m,size=4M
+scsi0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-31,size=50G
+scsi1: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-32,size=100G
+EOF
+
+    PVE_CONF_DIR="$pve_dir"
+    STORAGE_IP="1.1.1.1"
+    IQN_PREFIX="iqn.local"
+    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    unset '_assigned_config_luns'
+
+    local lun
+    # EFI disk consumes zvol disk-0; data disks are disk-5 and disk-6, which do
+    # not match scsi0/scsi1 indices, so the fallback path must assign them.
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-0" "215" "0" "4M")
+    assert_equals "30" "$lun" || { rm -rf "$tmp_dir"; return; }
+
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-5" "215" "5" "50G")
+    assert_equals "31" "$lun" || { rm -rf "$tmp_dir"; return; }
+
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-6" "215" "6" "100G")
+    assert_equals "32" "$lun"
+
+    rm -rf "$tmp_dir"
+}
+
+test_expected_lun_for_zvol_used_lun_tracking() {
+    test_start "fallback skips LUNs already assigned via direct index match"
+
+    local tmp_dir pve_dir
+    tmp_dir=$(mktemp -d)
+    pve_dir="$tmp_dir/qemu-server"
+    mkdir -p "$pve_dir"
+    cat > "$pve_dir/215.conf" << 'EOF'
+scsi0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-31,size=50G
+sata0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-32,size=100G
+EOF
+
+    PVE_CONF_DIR="$pve_dir"
+    STORAGE_IP="1.1.1.1"
+    IQN_PREFIX="iqn.local"
+    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    unset '_assigned_config_luns'
+
+    local lun
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-0" "215" "0" "50G")
+    assert_equals "31" "$lun" || { rm -rf "$tmp_dir"; return; }
+
+    lun=$(expected_lun_for_zvol "threeamigos/proxmox/vm-215-disk-1" "215" "1" "100G")
+    assert_equals "32" "$lun"
 
     rm -rf "$tmp_dir"
 }
@@ -256,6 +352,9 @@ test_expected_lun_missing_config
 test_expected_lun_for_efi_disk_nonzero_disknum
 test_expected_lun_for_efi_disk_disknum_zero
 test_expected_lun_for_efi_disk_byte_size
+test_expected_lun_for_zvol_efi_offset_data_disk
+test_expected_lun_for_zvol_efi_offset_multiple_data_disks
+test_expected_lun_for_zvol_used_lun_tracking
 
 # ---------------------------------------------------------------------------
 # Regression tests for storage-side helper execution
@@ -310,6 +409,54 @@ EOF
     assert_contains "${_bash_calls[0]}" 'echo "$1" "$2"'
 }
 
+test_is_local_host() {
+    test_start "is_local_host matches the local hostname exactly"
+
+    local rc
+    MY_HOST="stewie"
+    is_local_host "stewie"; rc=$?
+    assert_rc 0 "$rc" || return
+    is_local_host "tweety"; rc=$?
+    assert_rc 1 "$rc"
+}
+
+test_read_compute_file_local() {
+    test_start "read_compute_file returns local file contents"
+
+    local tmp_dir expected actual
+    tmp_dir=$(mktemp -d)
+    expected="scsi0: /dev/disk/by-path/ip-1.1.1.1:3260-lun-0"
+    printf '%s\n' "$expected" > "$tmp_dir/100.conf"
+
+    MY_HOST="stewie"
+    COMPUTE_HOST="stewie"
+    PVE_CONF_DIR="$tmp_dir"
+    actual=$(read_compute_file "$tmp_dir/100.conf")
+    assert_equals "$expected" "$actual"
+
+    rm -rf "$tmp_dir"
+}
+
+test_exec_on_storage_remote_forwards_command() {
+    test_start "exec_on_storage forwards command to remote storage host"
+
+    MY_HOST="tweety"
+    STORAGE_HOST="stewie"
+    _ssh_calls=()
+
+    local _saved_ssh
+    _saved_ssh=$(declare -f ssh)
+    ssh() {
+        _ssh_calls+=("args=$*")
+        return 0
+    }
+    exec_on_storage "targetcli ls /iscsi"
+    eval "$_saved_ssh"
+
+    assert_equals "1" "${#_ssh_calls[@]}" || return
+    assert_contains "${_ssh_calls[0]}" "root@stewie targetcli ls /iscsi"
+}
+
 test_ensure_lun_on_storage_sends_correct_storage_script() {
     test_start "ensure_lun_on_storage forwards correct script and args"
 
@@ -346,6 +493,9 @@ test_ensure_lun_on_storage_sends_correct_storage_script() {
 # ---------------------------------------------------------------------------
 test_run_on_storage_remote_forwards_heredoc
 test_run_on_storage_local_forwards_heredoc
+test_is_local_host
+test_read_compute_file_local
+test_exec_on_storage_remote_forwards_command
 test_ensure_lun_on_storage_sends_correct_storage_script
 
 test_summary
