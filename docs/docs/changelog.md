@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.74.7
+
+*Released 2026-08-07*
+
+### Fixed
+
+- **`bin/bashinit` is now safe under `set -u`** — The startup checks for
+  `mydir`, `BASH_SOURCE[1]`, and `PATHS_LIB` now use `${var:-}` expansions so
+  `bashinit` can be sourced in shells running with `set -euo pipefail` without
+  triggering "unbound variable" errors.
+
+### Changed
+
+- **Documentation now points to the correct test harness path** —
+  `AGENTS.md`, `docs/docs/developer-guide/testing.md`,
+  `docs/docs/commands-and-modules/commands.md`, and
+  `docs/docs/developer-guide/index.md` now refer to `tests/run-tests` rather
+  than the repo-root `./run-tests` wrapper that no longer exists. The invalid
+  `./run-tests -v` example was replaced with `tests/run-tests --failures-only`.
+
+### Tests
+
+- Added `test_bashinit_safe_under_set_u` to `tests/test-node-lib`, verifying
+  that `bashinit` loads `lib/paths.sh` correctly when invoked under
+  `set -euo pipefail` with `mydir` and `PATHS_LIB` unset.
+
 ## 0.74.6
 
 *Released 2026-08-07*

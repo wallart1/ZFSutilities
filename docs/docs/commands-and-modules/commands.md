@@ -389,11 +389,10 @@ Sends a single ZFS dataset to an archive file on disk using
 ### `run-tests`
 
 Discovers and executes the bash test suites in `tests/` and the Python test
-suites in `tests/python/`.  The repo-root `run-tests` is a thin wrapper that
-execs the unified harness at `tests/run-tests`.
+suites in `tests/python/`.  The unified harness is `tests/run-tests`.
 
 ```bash
-./run-tests [-q|--quiet] [--failures-only] [suite-name ...]
+tests/run-tests [-q|--quiet] [--failures-only] [suite-name ...]
 ```
 
 **Arguments:**
@@ -432,7 +431,7 @@ for bash suites when the corresponding option is used:
 
 **Internal flow:**
 
-1. The repo-root `run-tests` execs `tests/run-tests` with the supplied arguments.
+1. Invoke `tests/run-tests` with the supplied arguments.
 2. Partition arguments into bash suite names, Python suite names, and
    output-reduction flags.
 3. If no suite names are given, discover all `tests/test-*` files and run all

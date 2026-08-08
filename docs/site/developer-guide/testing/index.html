@@ -1961,25 +1961,25 @@
 <li><strong>Python suites</strong> in <code>tests/python/</code> — test Python modules (<code>backup_config.py</code>,
   <code>command_builders.py</code>, GUI helpers, etc.) with <code>unittest</code> and <code>MagicMock</code>.</li>
 </ul>
-<p>Both layers are run automatically by <code>./run-tests</code>.</p>
+<p>Both layers are run automatically by <code>tests/run-tests</code>.</p>
 <hr />
 <h2 id="running-tests">Running Tests<a class="headerlink" href="#running-tests" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="c1"># All suites (bash + Python)</span>
-./run-tests
+tests/run-tests
 
 <span class="c1"># Single bash suite</span>
-./run-tests<span class="w"> </span>test-zfsretain
+tests/run-tests<span class="w"> </span>test-zfsretain
 
 <span class="c1"># Single Python suite</span>
-./run-tests<span class="w"> </span>test_backup_config
-
-<span class="c1"># Verbose — show every assertion</span>
-./run-tests<span class="w"> </span>-v
+tests/run-tests<span class="w"> </span>test_backup_config
 
 <span class="c1"># Quiet — summary only</span>
-./run-tests<span class="w"> </span>-q
+tests/run-tests<span class="w"> </span>-q
+
+<span class="c1"># Failures only</span>
+tests/run-tests<span class="w"> </span>--failures-only
 </code></pre></div>
-<p>The <code>./run-tests</code> harness detects whether a name starts with <code>test_</code> (Python) or
+<p>The <code>tests/run-tests</code> harness detects whether a name starts with <code>test_</code> (Python) or
 <code>test-</code> (bash) and routes it to the correct runner.</p>
 <hr />
 <h2 id="bash-test-suites">Bash Test Suites<a class="headerlink" href="#bash-test-suites" title="Permanent link">&para;</a></h2>
@@ -2613,7 +2613,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.6
+      ZFS Utilities v0.74.7
     </div>
   
   
@@ -2638,7 +2638,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.6"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.7"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

@@ -8,7 +8,7 @@ function bashinit {
     # Get the directory that we were invoked from.
     # Only set mydir if it is not already set and BASH_SOURCE[1] is available.
     # This preserves mydir when called from contexts like bash -c (Python GUI).
-    if [[ -z "${mydir}" && -n "${BASH_SOURCE[1]}" ]]; then
+    if [[ -z "${mydir:-}" && -n "${BASH_SOURCE[1]:-}" ]]; then
         mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")")
     fi
 
@@ -18,7 +18,7 @@ function bashinit {
     # When a Python runner explicitly sets ZFSUTILITIES_LOG_INHERIT=Y, the
     # child bash process reuses the runner's session log instead of creating
     # its own (prevents concurrent runners from colliding on the same file).
-    if [[ "${BASH_SOURCE[1]}" = "${0}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
+    if [[ "${BASH_SOURCE[1]:-}" = "${0}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
         local script_name
         script_name=$(basename "${0}")
         # Sanitize name to alphanumeric, hyphens, underscores
@@ -208,8 +208,8 @@ function warn {
 # Load the centralized path layout so every script that sources bashinit
 # inherits the FHS-aligned directories and legacy-path aliases.
 # PATHS_LIB can be set explicitly by tests that need a different layout.
-if [[ -z "${PATHS_LIB}" ]]; then
-    if [[ -n "${mydir}" ]]; then
+if [[ -z "${PATHS_LIB:-}" ]]; then
+    if [[ -n "${mydir:-}" ]]; then
         PATHS_LIB=$(find_zfsutility_script paths.sh)
     elif [[ -n "${BASH_SOURCE[0]}" ]]; then
         # $mydir is not preset (e.g. bash -c from the Python GUI).  Derive a
@@ -221,7 +221,7 @@ if [[ -z "${PATHS_LIB}" ]]; then
         unset _bashinit_dir
     fi
 fi
-if [[ -n "$PATHS_LIB" ]]; then
+if [[ -n "${PATHS_LIB:-}" ]]; then
     # shellcheck source=/dev/null
     source "$PATHS_LIB"
 fi

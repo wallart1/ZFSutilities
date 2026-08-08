@@ -384,14 +384,14 @@ suites with full output only when you need the per-test detail.
 
 ```bash
 # Run all suites (use -q or --failures-only to keep output manageable)
-./run-tests -q
-./run-tests --failures-only
+tests/run-tests -q
+tests/run-tests --failures-only
 
 # Run a specific suite
-./run-tests test-zfsretain
+tests/run-tests test-zfsretain
 
 # Full output for a single suite or a small subset
-./run-tests test-zfsretain test-zfsbuildfsarray
+tests/run-tests test-zfsretain test-zfsbuildfsarray
 ```
 
 ### Test Suite Files
@@ -492,10 +492,10 @@ suites with full output only when you need the per-test detail.
 ./tests/run-python-tests test_backup_config test_backup_runner
 
 # Run via the unified harness (bash + Python)
-./run-tests -q
-./run-tests --failures-only
-./run-tests test_backup_config
-./run-tests test-zfsretain test_backup_config
+tests/run-tests -q
+tests/run-tests --failures-only
+tests/run-tests test_backup_config
+tests/run-tests test-zfsretain test_backup_config
 ```
 
 #### Test Suite Files

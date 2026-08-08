@@ -3024,9 +3024,8 @@ caller.</p>
 <hr />
 <h3 id="run-tests"><code>run-tests</code><a class="headerlink" href="#run-tests" title="Permanent link">&para;</a></h3>
 <p>Discovers and executes the bash test suites in <code>tests/</code> and the Python test
-suites in <code>tests/python/</code>.  The repo-root <code>run-tests</code> is a thin wrapper that
-execs the unified harness at <code>tests/run-tests</code>.</p>
-<div class="highlight"><pre><span></span><code>./run-tests<span class="w"> </span><span class="o">[</span>-q<span class="p">|</span>--quiet<span class="o">]</span><span class="w"> </span><span class="o">[</span>--failures-only<span class="o">]</span><span class="w"> </span><span class="o">[</span>suite-name<span class="w"> </span>...<span class="o">]</span>
+suites in <code>tests/python/</code>.  The unified harness is <code>tests/run-tests</code>.</p>
+<div class="highlight"><pre><span></span><code>tests/run-tests<span class="w"> </span><span class="o">[</span>-q<span class="p">|</span>--quiet<span class="o">]</span><span class="w"> </span><span class="o">[</span>--failures-only<span class="o">]</span><span class="w"> </span><span class="o">[</span>suite-name<span class="w"> </span>...<span class="o">]</span>
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
 <table>
@@ -3120,7 +3119,7 @@ for bash suites when the corresponding option is used:</p>
 </table>
 <p><strong>Internal flow:</strong></p>
 <ol>
-<li>The repo-root <code>run-tests</code> execs <code>tests/run-tests</code> with the supplied arguments.</li>
+<li>Invoke <code>tests/run-tests</code> with the supplied arguments.</li>
 <li>Partition arguments into bash suite names, Python suite names, and
    output-reduction flags.</li>
 <li>If no suite names are given, discover all <code>tests/test-*</code> files and run all
@@ -7396,7 +7395,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.74.6
+      ZFS Utilities v0.74.7
     </div>
   
   
@@ -7421,7 +7420,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.6"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.74.7"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

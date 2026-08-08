@@ -487,6 +487,20 @@ test_bashinit_loads_paths_without_mydir() {
     assert_equals "/etc/zfsutilities" "$result"
 }
 
+test_bashinit_safe_under_set_u() {
+    test_start "bashinit is safe under set -euo pipefail without mydir"
+    local bashinit_path result
+    bashinit_path="$mydir/bin/bashinit"
+    result=$(
+        set -euo pipefail
+        unset mydir PATHS_LIB
+        source "$bashinit_path"
+        bashinit
+        echo "${ZFSUTILITIES_CONFIG_DIR:-}"
+    )
+    assert_equals "/etc/zfsutilities" "$result"
+}
+
 # ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
@@ -519,6 +533,7 @@ test_source_helper_sources_existing_script
 test_source_helper_exits_for_missing_script
 test_source_helper_fallback_returns_when_sourced
 test_bashinit_loads_paths_without_mydir
+test_bashinit_safe_under_set_u
 
 test_remote_zfsutilities_bin_success
 test_remote_zfsutilities_bin_failure

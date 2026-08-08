@@ -6,7 +6,7 @@ ZFS Utilities has a two-layer test framework:
 - **Python suites** in `tests/python/` — test Python modules (`backup_config.py`,
   `command_builders.py`, GUI helpers, etc.) with `unittest` and `MagicMock`.
 
-Both layers are run automatically by `./run-tests`.
+Both layers are run automatically by `tests/run-tests`.
 
 ---
 
@@ -14,22 +14,22 @@ Both layers are run automatically by `./run-tests`.
 
 ```bash
 # All suites (bash + Python)
-./run-tests
+tests/run-tests
 
 # Single bash suite
-./run-tests test-zfsretain
+tests/run-tests test-zfsretain
 
 # Single Python suite
-./run-tests test_backup_config
-
-# Verbose — show every assertion
-./run-tests -v
+tests/run-tests test_backup_config
 
 # Quiet — summary only
-./run-tests -q
+tests/run-tests -q
+
+# Failures only
+tests/run-tests --failures-only
 ```
 
-The `./run-tests` harness detects whether a name starts with `test_` (Python) or
+The `tests/run-tests` harness detects whether a name starts with `test_` (Python) or
 `test-` (bash) and routes it to the correct runner.
 
 ---

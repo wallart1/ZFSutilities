@@ -59,6 +59,6 @@ relevant to developers working on ZFS Utilities.
 
 ## Testing
 
-The automated test framework lives in `tests/` and is run with `./run-tests`.
+The automated test framework lives in `tests/` and is run with `tests/run-tests`.
 See the [Testing](testing.md) page for the full guide, including how to write
 new suites and use the mock infrastructure.
