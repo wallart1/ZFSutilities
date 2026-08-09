@@ -91,6 +91,26 @@ class TestZfsRepositoryReads(unittest.TestCase):
         repo = self._repo("/mnt/data\n")
         self.assertEqual(repo.get_property("tank/data", "mountpoint"), "/mnt/data")
 
+    def test_get_all_properties_parses_tab_separated_output(self):
+        stdout = (
+            "type\tfilesystem\n"
+            "used\t100G\n"
+            "available\t500G\n"
+            "compression\toff\n"
+        )
+        repo = self._repo(stdout)
+        props = repo.get_all_properties("tank/data")
+        self.assertEqual(props["type"], "filesystem")
+        self.assertEqual(props["used"], "100G")
+        self.assertEqual(props["available"], "500G")
+        self.assertEqual(props["compression"], "off")
+
+    def test_get_all_properties_ignores_blank_lines(self):
+        stdout = "type\tfilesystem\n\nused\t100G\n\n"
+        repo = self._repo(stdout)
+        props = repo.get_all_properties("tank/data")
+        self.assertEqual(props, {"type": "filesystem", "used": "100G"})
+
     def test_get_clones_reads_clones_property(self):
         repo = self._repo("tank/data/clone1\n")
         self.assertEqual(repo.get_property("tank/data@snap1", "clones"), "tank/data/clone1")

@@ -4950,6 +4950,10 @@ based on what is selected.</p>
 <li><strong>Copy full name</strong> — copies the fully-qualified dataset or snapshot name
   (e.g. <code>pool/data/dataset-a@offsite-…</code>). For hold tags,
   this copies the parent snapshot name.</li>
+<li><strong>Send details to log</strong> — logs all ZFS properties of the selected pool,
+  dataset, or snapshot to the bottom panel (holds log their tag, snapshot,
+  and dataset instead of fetching properties). This is useful for diagnostics
+  and for checking property values that are not shown in the tree columns.</li>
 </ul>
 <hr />
 <h2 id="retention-tab">Retention Tab<a class="headerlink" href="#retention-tab" title="Permanent link">&para;</a></h2>
@@ -5096,6 +5100,9 @@ the selected pool. Each window:</p>
 cell and the full row (tab-separated). The Datasets view and Pool Watch
 windows additionally offer <strong>Copy full name</strong>, which copies the
 fully-qualified dataset or snapshot name.</p>
+<p>The Datasets tab also offers <strong>Send details to log</strong> on its right-click menu.
+It logs all ZFS properties of the selected pool, dataset, or snapshot (or the
+hold metadata for a selected hold tag) to the bottom log panel.</p>
 <p>The <strong>Schedule</strong> tab's Config Summary text view also has a right-click menu
 with <strong>Copy</strong> (current selection, or all text if nothing is selected) and
 <strong>Select All</strong>.</p>
@@ -5134,7 +5141,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.76.0
+      ZFS Utilities v0.77.0
     </div>
   
   
@@ -5159,7 +5166,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.76.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.77.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

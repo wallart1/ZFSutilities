@@ -8,6 +8,7 @@ Provides:
 - Helpers for the pre-installed systemd scrub timers
 """
 
+import inspect
 import os
 import re
 import subprocess
@@ -342,6 +343,22 @@ def _pool_from_dataset(dataset: str) -> str | None:
     return name or None
 
 
+def _emit(log_func, msg):
+    """Pass *msg* to *log_func* while preserving the scrub_manager caller location.
+
+    If the caller location cannot be determined, *msg* is passed through
+    without caller metadata.
+    """
+    frame = inspect.currentframe().f_back
+    try:
+        caller_file = inspect.getfile(frame)
+        caller_line = frame.f_lineno
+    except (TypeError, OSError):
+        log_func(msg)
+    else:
+        log_func(msg, caller_file=caller_file, caller_line=caller_line)
+
+
 def pause_scrubs_for_pools(pool_names: list[str], repo=None,
                            dry_run: bool = False,
                            log_func: Callable | None = None) -> list[str]:
@@ -352,7 +369,8 @@ def pause_scrubs_for_pools(pool_names: list[str], repo=None,
     and the returned list contains the pools that would have been paused.
 
     If *log_func* is provided, it is used instead of the global ``log_msg``
-    for all messages produced by this call.
+    for all messages produced by this call, but the file:line prefix in the
+    log line still points to the code in this module that issued the message.
     """
     repo = repo or get_default_repository()
     _log = log_func or log_msg
@@ -362,52 +380,54 @@ def pause_scrubs_for_pools(pool_names: list[str], repo=None,
 
     states = get_all_pool_scrub_states(repo=repo)
 
-    if not dry_run:
-        queue = ScrubQueue()
-        # Only mark pools as user-paused if they have a live scrub or are
-        # already queued to start. Finished/unknown pools have nothing to
-        # pause and should not be logged as paused.
-        to_pause_in_queue = []
-        for name in names:
-            info = states.get(name)
-            if info and info.state == ScrubState.SCANNING or name in queue.pending:
-                to_pause_in_queue.append(name)
-        if to_pause_in_queue:
-            for name in to_pause_in_queue:
-                queue.active.discard(name)
-                queue.pending.discard(name)
-                queue.paused.add(name)
-                queue.paused_by_user.add(name)
-            _log(
-                f"INFO: Pools paused: {', '.join(sorted(to_pause_in_queue))}"
-            )
-            queue._save()
-
     paused = []
     for name in names:
         info = states.get(name)
         if info is None:
-            _log(f"DEBUG: Pool '{name}' is not online; skipping scrub pause")
+            _emit(_log, f"DEBUG: Pool '{name}' is not online; skipping scrub pause")
             continue
         if info.state != ScrubState.SCANNING:
-            _log(
+            _emit(
+                _log,
                 f"DEBUG: Scrub on '{name}' is {info.state.value}; "
                 f"not pausing"
             )
             continue
         if dry_run:
-            _log(f"INFO: Dry-run: would pause scrub on '{name}'")
+            _emit(_log, f"INFO: Dry-run: would pause scrub on '{name}'")
             paused.append(name)
             continue
-        _log(f"INFO: Pausing scrub on '{name}'")
+        _emit(_log, f"VERB: Pausing scrub on '{name}'")
         try:
             if repo.pause_scrub(name, timeout=30):
-                _log(f"INFO: Scrub paused on '{name}'")
-                paused.append(name)
+                info_after = get_pool_scrub_info(name, repo=repo)
+                if info_after.state == ScrubState.PAUSED:
+                    _emit(_log, f"VERB: Scrub paused on '{name}'")
+                    paused.append(name)
+                else:
+                    raw = repo.pool_status(name, timeout=15)
+                    _emit(
+                        _log,
+                        f"WARN: Scrub on '{name}' did not pause "
+                        f"(state: {info_after.state.value}); "
+                        f"scan line: {info_after.scan_line!r}; "
+                        f"raw status:\n{raw}"
+                    )
             else:
-                _log(f"WARN: Failed to pause scrub on '{name}'")
+                _emit(_log, f"WARN: Failed to pause scrub on '{name}'")
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            _log(f"WARN: cannot pause scrub on '{name}': {exc}")
+            _emit(_log, f"WARN: cannot pause scrub on '{name}': {exc}")
+
+    if not dry_run and paused:
+        queue = ScrubQueue()
+        for name in paused:
+            queue.active.discard(name)
+            queue.pending.discard(name)
+            queue.paused.add(name)
+            queue.paused_by_user.add(name)
+        _emit(_log, f"INFO: Pools paused: {', '.join(sorted(paused))}")
+        queue._save()
+
     return paused
 
 
@@ -420,7 +440,8 @@ def resume_scrubs_for_pools(pool_names: list[str], repo=None,
     are left alone. In dry-run mode no system state is changed.
 
     If *log_func* is provided, it is used instead of the global ``log_msg``
-    for all messages produced by this call.
+    for all messages produced by this call, but the file:line prefix in the
+    log line still points to the code in this module that issued the message.
     """
     repo = repo or get_default_repository()
     _log = log_func or log_msg
@@ -428,36 +449,53 @@ def resume_scrubs_for_pools(pool_names: list[str], repo=None,
     if not names:
         return
 
-    if not dry_run:
-        queue = ScrubQueue()
-        queue.resume_pools(names)
-        for name in names:
-            queue.paused_by_user.discard(name)
-        queue._save()
-
     states = get_all_pool_scrub_states(repo=repo)
+    resumed = []
     for name in names:
         info = states.get(name)
         if info is None:
-            _log(f"DEBUG: Pool '{name}' is not online; skipping scrub resume")
+            _emit(_log, f"DEBUG: Pool '{name}' is not online; skipping scrub resume")
             continue
         if info.state != ScrubState.PAUSED:
-            _log(
+            _emit(
+                _log,
                 f"DEBUG: Scrub on '{name}' is {info.state.value}; "
                 f"not resuming"
             )
             continue
         if dry_run:
-            _log(f"INFO: Dry-run: would resume scrub on '{name}'")
+            _emit(_log, f"INFO: Dry-run: would resume scrub on '{name}'")
+            resumed.append(name)
             continue
-        _log(f"INFO: Resuming scrub on '{name}'")
+        _emit(_log, f"VERB: Resuming scrub on '{name}'")
         try:
             if repo.resume_scrub(name, timeout=30):
-                _log(f"INFO: Scrub resumed on '{name}'")
+                info_after = get_pool_scrub_info(name, repo=repo)
+                if info_after.state == ScrubState.SCANNING:
+                    _emit(_log, f"VERB: Scrub resumed on '{name}'")
+                    resumed.append(name)
+                else:
+                    raw = repo.pool_status(name, timeout=15)
+                    _emit(
+                        _log,
+                        f"WARN: Scrub on '{name}' did not resume "
+                        f"(state: {info_after.state.value}); "
+                        f"scan line: {info_after.scan_line!r}; "
+                        f"raw status:\n{raw}"
+                    )
             else:
-                _log(f"WARN: Failed to resume scrub on '{name}'")
+                _emit(_log, f"WARN: Failed to resume scrub on '{name}'")
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            _log(f"WARN: cannot resume scrub on '{name}': {exc}")
+            _emit(_log, f"WARN: cannot resume scrub on '{name}': {exc}")
+
+    if not dry_run and resumed:
+        queue = ScrubQueue()
+        for name in resumed:
+            queue.paused.discard(name)
+            queue.paused_by_user.discard(name)
+            queue.pending.discard(name)
+        _emit(_log, f"INFO: Pools resumed: {', '.join(sorted(resumed))}")
+        queue._save()
 
 
 def attach_step_scrub_callbacks(step, source: str, dest: str,
@@ -471,7 +509,8 @@ def attach_step_scrub_callbacks(step, source: str, dest: str,
     left unset.
 
     If *log_func* is provided, scrub pause/resume messages are routed through
-    it instead of the global ``log_msg``.
+    it instead of the global ``log_msg``. The file:line prefix written to the
+    log still points to the code in this module that issued each message.
     """
     if not enabled:
         return

@@ -97,6 +97,29 @@ class TestPrepareSessionLog(unittest.TestCase):
             if "ZFSUTILITIES_LOG_INHERIT" in os.environ:
                 del os.environ["ZFSUTILITIES_LOG_INHERIT"]
 
+    def test_runner_log_forwards_caller_location(self):
+        """_runner_log passes caller_file/caller_line through to log_msg."""
+        runner = self._runner()
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                with _patch_log_dirs(tmpdir):
+                    runner.prepare_session_log()
+                    own_log = runner._session_log_file
+                    runner._runner_log(
+                        "INFO: remote message",
+                        caller_file="/other/module.py",
+                        caller_line=42,
+                    )
+                    with open(own_log) as fh:
+                        content = fh.read()
+                    self.assertIn("remote message", content)
+                    self.assertIn("/other/module.py:42:", content)
+        finally:
+            if "ZFSUTILITIES_LOG_FILE" in os.environ:
+                del os.environ["ZFSUTILITIES_LOG_FILE"]
+            if "ZFSUTILITIES_LOG_INHERIT" in os.environ:
+                del os.environ["ZFSUTILITIES_LOG_INHERIT"]
+
 
 class TestReceivedByteCounting(unittest.TestCase):
     """Byte counting works from stderr, stdout, and drain_remaining."""

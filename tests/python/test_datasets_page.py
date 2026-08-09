@@ -75,7 +75,9 @@ class TestCreateDatasetsPage(unittest.TestCase):
         self.assertTrue(hasattr(app, "datasets_search"))
         self.assertTrue(hasattr(app, "datasets_summary_label"))
         self.assertIs(app.datasets_scrolled, dp.Gtk.ScrolledWindow.return_value)
-        app.enable_treeview_copy.assert_called_once_with(app.datasets_view)
+        # The Datasets tab builds its own unified context menu, so it does not
+        # use the generic copy helper.
+        app.enable_treeview_copy.assert_not_called()
         app._ui_state.bind_treeview.assert_called_once_with(app.datasets_view, "datasets_view")
 
 
@@ -412,3 +414,176 @@ class TestRefreshDatasetsPageSearch(unittest.TestCase):
              patch.object(dp, "restore_expanded_rows"):
             dp.refresh_datasets_page(app)
         app.datasets_search._run_search.assert_not_called()
+
+
+class TestDatasetsContextMenu(unittest.TestCase):
+    """Right-click context menu on the Datasets tree."""
+
+    def _make_event(self, button, x=10, y=20):
+        event = MagicMock()
+        event.button = button
+        event.x = x
+        event.y = y
+        return event
+
+    def _make_treeview(self, path_selected=False, path_info=None):
+        treeview = MagicMock()
+        selection = MagicMock()
+        selection.path_is_selected.return_value = path_selected
+        treeview.get_selection.return_value = selection
+        treeview.get_path_at_pos.return_value = path_info
+        return treeview, selection
+
+    def test_left_click_does_not_show_menu(self):
+        treeview, _selection = self._make_treeview()
+        app = MagicMock()
+        result = dp._on_datasets_button_press(treeview, self._make_event(1), app)
+        self.assertFalse(result)
+        treeview.get_path_at_pos.assert_not_called()
+
+    def test_right_click_without_row_does_not_show_menu(self):
+        treeview, _selection = self._make_treeview(path_info=None)
+        app = MagicMock()
+        result = dp._on_datasets_button_press(treeview, self._make_event(3), app)
+        self.assertFalse(result)
+
+    def test_right_click_shows_send_details_menu(self):
+        path_info = (MagicMock(), None, 0, 0)
+        treeview, selection = self._make_treeview(
+            path_selected=False, path_info=path_info
+        )
+        app = MagicMock()
+
+        with patch.object(dp, "append_treeview_copy_items") as mock_append:
+            result = dp._on_datasets_button_press(
+                treeview, self._make_event(3), app
+            )
+
+        self.assertTrue(result)
+        selection.unselect_all.assert_called_once()
+        selection.select_path.assert_called_once_with(path_info[0])
+        treeview.set_cursor.assert_called_once_with(path_info[0], None, False)
+        dp.Gtk.Menu.assert_called_once()
+        mock_append.assert_called_once_with(
+            dp.Gtk.Menu.return_value,
+            treeview,
+            path_info,
+            app=app,
+            datasets_view=treeview,
+        )
+        menu = dp.Gtk.Menu.return_value
+        menu.append.assert_any_call(dp.Gtk.SeparatorMenuItem.return_value)
+        dp.Gtk.MenuItem.assert_any_call(label="Send details to log")
+        menu.show_all.assert_called_once()
+        menu.popup_at_pointer.assert_called_once()
+
+    def test_send_details_to_log_warns_when_no_selection(self):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        with patch.object(dp, "get_tree_selection_items", return_value=[]), \
+             patch.object(dp, "log_msg") as mock_log:
+            dp._send_selection_details_to_log(app)
+        mock_log.assert_called_once_with(
+            "WARN: Select an item to send details to log"
+        )
+
+    def test_send_details_to_log_warns_on_multiple_selection(self):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        items = [
+            {"type": "dataset", "name": "tank/data"},
+            {"type": "dataset", "name": "tank/other"},
+        ]
+        with patch.object(dp, "get_tree_selection_items", return_value=items), \
+             patch.object(dp, "log_msg") as mock_log:
+            dp._send_selection_details_to_log(app)
+        mock_log.assert_called_once_with(
+            "WARN: Send details to log requires a single selection"
+        )
+
+    def test_send_details_to_log_logs_dataset_details(self):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        app.ctx.zfs_repository.get_all_properties.return_value = {
+            "type": "filesystem",
+            "available": "500G",
+            "used": "100G",
+        }
+        items = [{"type": "dataset", "name": "tank/data"}]
+
+        with patch.object(dp, "get_tree_selection_items", return_value=items), \
+             patch.object(dp, "log_msg") as mock_log:
+            dp._send_selection_details_to_log(app)
+
+        app.ctx.zfs_repository.get_all_properties.assert_called_once_with(
+            "tank/data"
+        )
+        self.assertEqual(mock_log.call_count, 1)
+        logged = mock_log.call_args[0][0]
+        self.assertIn("INFO: Details for tank/data (dataset)", logged)
+        self.assertIn("available: 500G", logged)
+        self.assertIn("type: filesystem", logged)
+        self.assertIn("used: 100G", logged)
+
+    def test_send_details_to_log_logs_pool_details(self):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        app.ctx.zfs_repository.get_all_properties.return_value = {
+            "size": "10T",
+            "health": "ONLINE",
+            "capacity": "50%",
+        }
+        items = [{"type": "pool", "name": "tank"}]
+
+        with patch.object(dp, "get_tree_selection_items", return_value=items), \
+             patch.object(dp, "log_msg") as mock_log:
+            dp._send_selection_details_to_log(app)
+
+        app.ctx.zfs_repository.get_all_properties.assert_called_once_with("tank")
+        logged = mock_log.call_args[0][0]
+        self.assertIn("INFO: Details for tank (pool)", logged)
+        self.assertIn("health: ONLINE", logged)
+        self.assertIn("size: 10T", logged)
+        self.assertIn("capacity: 50%", logged)
+
+    def test_send_details_to_log_logs_snapshot_details(self):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        app.ctx.zfs_repository.get_all_properties.return_value = {
+            "type": "snapshot",
+            "used": "0B",
+            "referenced": "50G",
+        }
+        items = [{"type": "snapshot", "name": "snap1", "dataset": "tank/data"}]
+
+        with patch.object(dp, "get_tree_selection_items", return_value=items), \
+             patch.object(dp, "log_msg") as mock_log:
+            dp._send_selection_details_to_log(app)
+
+        app.ctx.zfs_repository.get_all_properties.assert_called_once_with(
+            "tank/data@snap1"
+        )
+        logged = mock_log.call_args[0][0]
+        self.assertIn("INFO: Details for tank/data@snap1 (snapshot)", logged)
+        self.assertIn("type: snapshot", logged)
+        self.assertIn("used: 0B", logged)
+        self.assertIn("referenced: 50G", logged)
+
+    def test_send_details_to_log_logs_hold_details(self):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        items = [{
+            "type": "hold",
+            "tag": "keep",
+            "snapshot": "snap1",
+            "dataset": "tank/data",
+        }]
+
+        with patch.object(dp, "get_tree_selection_items", return_value=items), \
+             patch.object(dp, "log_msg") as mock_log:
+            dp._send_selection_details_to_log(app)
+
+        app.ctx.zfs_repository.get_all_properties.assert_not_called()
+        logged = mock_log.call_args[0][0]
+        self.assertIn("INFO: Details for hold 'keep' on tank/data@snap1 (hold)", logged)
+        self.assertIn("tag: keep", logged)

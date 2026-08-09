@@ -13,6 +13,7 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     TreeSearch,
+    append_treeview_copy_items,
     build_full_dataset_name,
     configure_treeview_column,
     dataset_name_cell_func,
@@ -131,7 +132,6 @@ def create_datasets_page(app):
             pass  # No special rendering needed for origin/clones column
         app.datasets_view.append_column(col)
 
-    app.enable_treeview_copy(app.datasets_view)
     app._ui_state.bind_treeview(app.datasets_view, "datasets_view")
 
     scrolled = Gtk.ScrolledWindow()
@@ -157,6 +157,9 @@ def create_datasets_page(app):
     app.datasets_view.connect(
         "row-collapsed", _on_ds_row_expanded_collapsed, app
     )
+
+    # Right-click context menu
+    app.datasets_view.connect("button-press-event", _on_datasets_button_press, app)
 
     # Initial load
     refresh_datasets_page(app)
@@ -400,3 +403,78 @@ def update_ds_button_sensitivity(app):
         if btn:
             btn.set_sensitive(sensitive)
 
+
+
+# ---------------------------------------------------------------------------
+# Context menu
+# ---------------------------------------------------------------------------
+
+def _on_datasets_button_press(treeview, event, app):
+    """Show a right-click context menu for the selected dataset tree item."""
+    if event.button != 3:  # Right-click only
+        return False
+
+    path_info = treeview.get_path_at_pos(int(event.x), int(event.y))
+    if path_info is None:
+        return False
+    tree_path, column, _cell_x, _cell_y = path_info
+
+    selection = treeview.get_selection()
+    if not selection.path_is_selected(tree_path):
+        selection.unselect_all()
+        selection.select_path(tree_path)
+    treeview.set_cursor(tree_path, column, False)
+
+    menu = Gtk.Menu()
+    append_treeview_copy_items(
+        menu, treeview, path_info, app=app, datasets_view=treeview
+    )
+    menu.append(Gtk.SeparatorMenuItem())
+    details_item = Gtk.MenuItem(label="Send details to log")
+    details_item.connect("activate", lambda _i: _send_selection_details_to_log(app))
+    menu.append(details_item)
+
+    menu.show_all()
+    menu.popup_at_pointer(event)
+    return True
+
+
+def _send_selection_details_to_log(app):
+    """Gather detailed metadata for the selected tree item and log it."""
+    items = get_tree_selection_items(app.datasets_view)
+    if not items:
+        log_msg("WARN: Select an item to send details to log")
+        return
+    if len(items) > 1:
+        log_msg("WARN: Send details to log requires a single selection")
+        return
+
+    item = items[0]
+    item_type = item["type"]
+    repo = app.ctx.zfs_repository
+
+    if item_type == "hold":
+        log_msg(
+            f"INFO: Details for hold '{item['tag']}' on "
+            f"{item['dataset']}@{item['snapshot']} (hold)\n"
+            f"  tag: {item['tag']}\n"
+            f"  snapshot: {item['dataset']}@{item['snapshot']}\n"
+            f"  dataset: {item['dataset']}"
+        )
+        return
+
+    if item_type == "snapshot":
+        full_name = f"{item['dataset']}@{item['name']}"
+    else:
+        full_name = item["name"]
+
+    try:
+        props = repo.get_all_properties(full_name)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log_msg(f"WARN: Error reading details for {full_name}: {e}")
+        return
+
+    lines = [f"INFO: Details for {full_name} ({item_type})"]
+    for prop in sorted(props):
+        lines.append(f"  {prop}: {props[prop]}")
+    log_msg("\n".join(lines))

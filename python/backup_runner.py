@@ -274,13 +274,22 @@ class BackupRunner:
         """Log to the GUI panel and session log file."""
         self._runner_log(msg)
 
-    def _runner_log(self, msg):
+    def _runner_log(self, msg, caller_file=None, caller_line=None):
         """Log *msg* to the GUI sink and this runner's session log.
 
         Uses the runner's own session log file so concurrent runners do not
         write Python-level messages into each other's logs.
+
+        If *caller_file* and *caller_line* are provided, they are forwarded to
+        log_msg() so the file:line prefix reflects the original message issuer
+        rather than this wrapper.
         """
-        log_msg(msg, session_log_file=self._session_log_file)
+        log_msg(
+            msg,
+            session_log_file=self._session_log_file,
+            caller_file=caller_file,
+            caller_line=caller_line,
+        )
 
     def start(self, on_complete=None):
         if self.running:

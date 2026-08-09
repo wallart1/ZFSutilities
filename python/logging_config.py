@@ -268,7 +268,7 @@ def viewer_should_show(level, min_level):
     return _MSG_PRIORITY[level] >= _MSG_PRIORITY[min_level]
 
 
-def log_msg(*parts, session_log_file=None):
+def log_msg(*parts, session_log_file=None, caller_file=None, caller_line=None):
     """Log a message with file:line prefix, GUI sink, and session log file.
 
     All messages are always emitted (to the GUI sink or stderr) and appended
@@ -278,24 +278,35 @@ def log_msg(*parts, session_log_file=None):
     If *session_log_file* is provided, it is used as the session log target
     instead of the ``ZFSUTILITIES_LOG_FILE`` environment variable. This lets
     concurrent runners keep their Python-level messages in their own logs.
+
+    If *caller_file* and *caller_line* are provided, they are used as the
+    file:line prefix instead of inspecting the immediate caller. This lets a
+    logging wrapper preserve the location of the original message issuer while
+    remaining the single writer to the log.
     """
     msg = " ".join(str(p) for p in parts)
 
-    frame = inspect.currentframe().f_back
-    try:
-        while frame is not None:
-            frame_file = inspect.getfile(frame)
-            if os.path.basename(frame_file) != "logging_config.py":
-                break
-            frame = frame.f_back
-        if frame is not None:
-            prefix = f"{os.path.realpath(inspect.getfile(frame))}:{frame.f_lineno}:"
-        else:
+    if caller_file is not None and caller_line is not None:
+        try:
+            prefix = f"{os.path.realpath(caller_file)}:{caller_line}:"
+        except (TypeError, OSError):
             prefix = "zfsutilities:"
-    except (TypeError, OSError):
-        prefix = "zfsutilities:"
-    finally:
-        del frame
+    else:
+        frame = inspect.currentframe().f_back
+        try:
+            while frame is not None:
+                frame_file = inspect.getfile(frame)
+                if os.path.basename(frame_file) != "logging_config.py":
+                    break
+                frame = frame.f_back
+            if frame is not None:
+                prefix = f"{os.path.realpath(inspect.getfile(frame))}:{frame.f_lineno}:"
+            else:
+                prefix = "zfsutilities:"
+        except (TypeError, OSError):
+            prefix = "zfsutilities:"
+        finally:
+            del frame
 
     full = f"{prefix} {msg}"
 

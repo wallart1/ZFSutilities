@@ -1410,6 +1410,10 @@ Right-click any cell for a context menu:
 - **Copy full name** — copies the fully-qualified dataset or snapshot name
   (e.g. `pool/data/dataset-a@offsite-…`). For hold tags,
   this copies the parent snapshot name.
+- **Send details to log** — logs all ZFS properties of the selected pool,
+  dataset, or snapshot to the bottom panel (holds log their tag, snapshot,
+  and dataset instead of fetching properties). This is useful for diagnostics
+  and for checking property values that are not shown in the tree columns.
 
 ---
 
@@ -1550,6 +1554,10 @@ All dataset lists in the GUI support right-click → **Copy** for the clicked
 cell and the full row (tab-separated). The Datasets view and Pool Watch
 windows additionally offer **Copy full name**, which copies the
 fully-qualified dataset or snapshot name.
+
+The Datasets tab also offers **Send details to log** on its right-click menu.
+It logs all ZFS properties of the selected pool, dataset, or snapshot (or the
+hold metadata for a selected hold tag) to the bottom log panel.
 
 The **Schedule** tab's Config Summary text view also has a right-click menu
 with **Copy** (current selection, or all text if nothing is selected) and

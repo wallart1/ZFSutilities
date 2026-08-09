@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.77.0
+
+*Released 2026-08-08*
+
+### Added
+
+- **Datasets tab context menu: Send details to log** — Right-clicking a pool,
+  dataset, snapshot, or hold tag in the Datasets tab now offers **Send details
+  to log**. Pools, datasets, and snapshots log all ZFS properties; holds log
+  their tag, snapshot, and dataset. This makes it easy to inspect property
+  values that are not shown in the tree columns.
+
+- **`ZfsRepository.get_all_properties()`** — New repository method that returns
+  a dict of all ZFS properties for a given dataset or snapshot, used by the
+  **Send details to log** feature.
+
+- **Caller-location forwarding for logging wrappers** — `log_msg()` now accepts
+  optional `caller_file` and `caller_line` keyword arguments. Wrappers such as
+  `BackupRunner._runner_log()` and `scrub_manager._emit()` use these so the
+  file:line prefix in the log points to the original message issuer rather than
+  the wrapper.
+
+### Changed
+
+- **Scrub pause/resume now verifies the resulting state** —
+  `pause_scrubs_for_pools()` and `resume_scrubs_for_pools()` no longer update
+  the on-disk queue until `zpool scrub` succeeds *and* the live scrub state is
+  confirmed to have changed. If the state does not change as expected, a
+  warning is logged with the raw `zpool status` output and the pool is not
+  recorded as paused/resumed.
+
+- **Scrub pause/resume log level adjusted** — The per-pool "Pausing scrub" and
+  "Scrub paused" / "Resuming scrub" and "Scrub resumed" messages are now
+  emitted at `VERB` level; the summary "Pools paused:" / "Pools resumed:"
+  lines remain at `INFO`.
+
+### Tests
+
+- Added `tests/python/test_datasets_page.py` coverage for the new right-click
+  context menu and the **Send details to log** helper.
+
+- Extended `tests/python/test_logging_config.py` coverage for the
+  `caller_file`/`caller_line` override.
+
+- Extended `tests/python/test_backup_runner.py` coverage to verify that
+  `_runner_log()` forwards caller location to `log_msg()`.
+
+- Extended `tests/python/test_scrub_manager.py` coverage for state-verified
+  pause/resume and for warnings when the scrub state does not change.
+
+- Extended `tests/python/test_zfs_repository.py` coverage for
+  `get_all_properties()`.
+
+### Documentation
+
+- Updated `docs/docs/user-guide/gtk-gui.md` to document the Datasets tab
+  **Send details to log** context-menu item.
+
 ## 0.76.0
 
 *Released 2026-08-08*

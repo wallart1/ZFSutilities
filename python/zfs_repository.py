@@ -309,6 +309,18 @@ class ZfsRepository:
         cmd = self._zpool("scrub", "-p", pool)
         log_msg(f"DEBUG: issuing zpool scrub command: {shlex.join(cmd)}")
         result = self._run(cmd, check=False, timeout=timeout)
+        if result.returncode != 0:
+            log_msg(f"DEBUG: zpool scrub -p {pool} failed: rc={result.returncode}")
+            if result.stderr.strip():
+                log_msg(f"DEBUG: stderr: {result.stderr.strip()}")
+            if result.stdout.strip():
+                log_msg(f"DEBUG: stdout: {result.stdout.strip()}")
+        else:
+            log_msg(f"VERB: zpool scrub -p {pool} completed")
+            if result.stderr.strip():
+                log_msg(f"VERB: stderr: {result.stderr.strip()}")
+            if result.stdout.strip():
+                log_msg(f"VERB: stdout: {result.stdout.strip()}")
         return result.returncode == 0
 
     def resume_scrub(self, pool: str, timeout: int | None = None) -> bool:
@@ -316,6 +328,18 @@ class ZfsRepository:
         cmd = self._zpool("scrub", pool)
         log_msg(f"DEBUG: issuing zpool scrub command: {shlex.join(cmd)}")
         result = self._run(cmd, check=False, timeout=timeout)
+        if result.returncode != 0:
+            log_msg(f"DEBUG: zpool scrub {pool} failed: rc={result.returncode}")
+            if result.stderr.strip():
+                log_msg(f"DEBUG: stderr: {result.stderr.strip()}")
+            if result.stdout.strip():
+                log_msg(f"DEBUG: stdout: {result.stdout.strip()}")
+        else:
+            log_msg(f"VERB: zpool scrub {pool} completed")
+            if result.stderr.strip():
+                log_msg(f"VERB: stderr: {result.stderr.strip()}")
+            if result.stdout.strip():
+                log_msg(f"VERB: stdout: {result.stdout.strip()}")
         return result.returncode == 0
 
     def stop_scrub(self, pool: str, timeout: int | None = None) -> bool:
@@ -438,6 +462,20 @@ class ZfsRepository:
             self._zfs("get", "-H", "-o", "value", prop, dataset)
         )
         return result.stdout.strip()
+
+    def get_all_properties(self, dataset: str) -> dict[str, str]:
+        """Return all ZFS properties for *dataset* as a property->value dict."""
+        result = self._run(
+            self._zfs("get", "-H", "-o", "property,value", "all", dataset)
+        )
+        props = {}
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t", 1)
+            if len(parts) == 2:
+                props[parts[0]] = parts[1]
+        return props
 
     def get_recursive_snapshot_clones(self, dataset: str) -> list[str]:
         """Return non-empty clones values for all snapshots under *dataset*."""

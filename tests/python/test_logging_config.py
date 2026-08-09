@@ -175,6 +175,25 @@ class TestLogMsg(unittest.TestCase):
             os.unlink(env_path)
             os.unlink(explicit_path)
 
+    def test_log_msg_uses_supplied_caller_location(self):
+        """caller_file/caller_line override the inspect-based prefix."""
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            path = f.name
+        try:
+            log_msg(
+                "INFO: remote message",
+                session_log_file=path,
+                caller_file="/other/module.py",
+                caller_line=42,
+            )
+            with open(path) as fh:
+                content = fh.read()
+            self.assertIn("remote message", content)
+            self.assertIn("/other/module.py:42:", content)
+            self.assertNotIn("logging_config.py", content)
+        finally:
+            os.unlink(path)
+
     def test_log_msg_returns_full_message(self):
         result = log_msg("INFO: return value")
         self.assertIsNotNone(result)

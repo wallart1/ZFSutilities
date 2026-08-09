@@ -2008,9 +2008,11 @@ class UIStateManager:
             self._do_save()
 
 
-def enable_treeview_copy(treeview, app=None, datasets_view=None):
-    """Add right-click Copy menu to a TreeView.
+def append_treeview_copy_items(menu, treeview, path_info, app=None,
+                               datasets_view=None):
+    """Append Copy / Copy full name / Copy row items to *menu*.
 
+    *path_info* is the tuple returned by ``treeview.get_path_at_pos``.
     If *datasets_view* is provided and matches *treeview*, additional
     "Copy full name" items are offered for dataset/snapshot rows.
     """
@@ -2023,6 +2025,48 @@ def enable_treeview_copy(treeview, app=None, datasets_view=None):
         clipboard.set_text(text, -1)
         log_msg(f"INFO: Copied: {text}")
 
+    path, column = path_info[0], path_info[1]
+    model = treeview.get_model()
+    tree_iter = model.get_iter(path)
+
+    col_idx = treeview.get_columns().index(column)
+    cell_value = model.get_value(tree_iter, col_idx)
+    item_cell = Gtk.MenuItem(label=f"Copy: {cell_value}")
+    item_cell.connect("activate", lambda _w, t=cell_value: _copy_cb(t))
+    menu.append(item_cell)
+
+    if treeview is datasets_view and isinstance(model, Gtk.TreeStore):
+        ds_type = model.get_value(tree_iter, 2)
+        if ds_type == "hold":
+            parent_iter = model.iter_parent(tree_iter)
+            if parent_iter:
+                full_name = build_full_dataset_name(model, parent_iter)
+                item_full = Gtk.MenuItem(label=f"Copy snapshot: {full_name}")
+                item_full.connect("activate", lambda _w, t=full_name: _copy_cb(t))
+                menu.append(item_full)
+        else:
+            full_name = build_full_dataset_name(model, tree_iter)
+            if full_name != cell_value:
+                item_full = Gtk.MenuItem(label=f"Copy full name: {full_name}")
+                item_full.connect("activate", lambda _w, t=full_name: _copy_cb(t))
+                menu.append(item_full)
+
+    n_cols = model.get_n_columns()
+    if treeview is datasets_view:
+        n_cols = min(n_cols, 7)
+    row_values = [model.get_value(tree_iter, i) for i in range(n_cols)]
+    row_text = "\t".join(str(v) for v in row_values)
+    item_row = Gtk.MenuItem(label="Copy row")
+    item_row.connect("activate", lambda _w, t=row_text: _copy_cb(t))
+    menu.append(item_row)
+
+
+def enable_treeview_copy(treeview, app=None, datasets_view=None):
+    """Add right-click Copy menu to a TreeView.
+
+    If *datasets_view* is provided and matches *treeview*, additional
+    "Copy full name" items are offered for dataset/snapshot rows.
+    """
     def _on_button_press(tv, event):
         if event.button != 3:
             return False
@@ -2031,41 +2075,10 @@ def enable_treeview_copy(treeview, app=None, datasets_view=None):
             return False
         path, column = path_info[0], path_info[1]
         tv.set_cursor(path, column, False)
-        model = tv.get_model()
-        tree_iter = model.get_iter(path)
         menu = Gtk.Menu()
-
-        col_idx = tv.get_columns().index(column)
-        cell_value = model.get_value(tree_iter, col_idx)
-        item_cell = Gtk.MenuItem(label=f"Copy: {cell_value}")
-        item_cell.connect("activate", lambda _w, t=cell_value: _copy_cb(t))
-        menu.append(item_cell)
-
-        if tv is datasets_view and isinstance(model, Gtk.TreeStore):
-            ds_type = model.get_value(tree_iter, 2)
-            if ds_type == "hold":
-                parent_iter = model.iter_parent(tree_iter)
-                if parent_iter:
-                    full_name = build_full_dataset_name(model, parent_iter)
-                    item_full = Gtk.MenuItem(label=f"Copy snapshot: {full_name}")
-                    item_full.connect("activate", lambda _w, t=full_name: _copy_cb(t))
-                    menu.append(item_full)
-            else:
-                full_name = build_full_dataset_name(model, tree_iter)
-                if full_name != cell_value:
-                    item_full = Gtk.MenuItem(label=f"Copy full name: {full_name}")
-                    item_full.connect("activate", lambda _w, t=full_name: _copy_cb(t))
-                    menu.append(item_full)
-
-        n_cols = model.get_n_columns()
-        if tv is datasets_view:
-            n_cols = min(n_cols, 7)
-        row_values = [model.get_value(tree_iter, i) for i in range(n_cols)]
-        row_text = "\t".join(str(v) for v in row_values)
-        item_row = Gtk.MenuItem(label="Copy row")
-        item_row.connect("activate", lambda _w, t=row_text: _copy_cb(t))
-        menu.append(item_row)
-
+        append_treeview_copy_items(
+            menu, tv, path_info, app=app, datasets_view=datasets_view
+        )
         menu.show_all()
         menu.popup_at_pointer(event)
         return True
