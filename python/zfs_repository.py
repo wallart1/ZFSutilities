@@ -23,7 +23,9 @@ def is_dataset_encrypted(path):
     try:
         result = subprocess.run(
             ["zfs", "list", "-H", "-o", "name,mountpoint"],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if result.returncode != 0:
             return False
@@ -44,7 +46,9 @@ def is_dataset_encrypted(path):
         ds_name = candidate[0]
         result = subprocess.run(
             ["zfs", "get", "-H", "-o", "value", "encryption", ds_name],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if result.returncode != 0:
             return False
@@ -131,9 +135,7 @@ class ZfsRepository:
         return (["sudo", "zpool"] if self.sudo else ["zpool"]) + list(args)
 
     def _run(self, cmd: list[str], check: bool = True, timeout: int | None = None):
-        return subprocess.run(
-            cmd, capture_output=True, text=True, check=check, timeout=timeout
-        )
+        return subprocess.run(cmd, capture_output=True, text=True, check=check, timeout=timeout)
 
     # ------------------------------------------------------------------
     # Pool reads
@@ -157,10 +159,7 @@ class ZfsRepository:
     def list_pools_full(self) -> list[dict]:
         """Return all pools with the extended 9-column field set."""
         result = self._run(
-            self._zpool(
-                "list", "-H", "-o",
-                "name,size,alloc,free,freeing,ckpoint,frag,cap,health"
-            )
+            self._zpool("list", "-H", "-o", "name,size,alloc,free,freeing,ckpoint,frag,cap,health")
         )
         rows = []
         for line in result.stdout.strip().split("\n"):
@@ -169,17 +168,19 @@ class ZfsRepository:
             parts = line.split("\t")
             if len(parts) < 9:
                 continue
-            rows.append({
-                "name": parts[0],
-                "size": parts[1],
-                "alloc": parts[2],
-                "free": parts[3],
-                "freeing": parts[4],
-                "ckpoint": parts[5],
-                "frag": parts[6],
-                "cap": parts[7],
-                "health": parts[8],
-            })
+            rows.append(
+                {
+                    "name": parts[0],
+                    "size": parts[1],
+                    "alloc": parts[2],
+                    "free": parts[3],
+                    "freeing": parts[4],
+                    "ckpoint": parts[5],
+                    "frag": parts[6],
+                    "cap": parts[7],
+                    "health": parts[8],
+                }
+            )
         return rows
 
     def pool_status(self, pool: str, timeout: int | None = None) -> str:
@@ -353,17 +354,13 @@ class ZfsRepository:
     # Dataset / snapshot reads
     # ------------------------------------------------------------------
 
-    def list_datasets(
-        self, pool: str | None = None, depth: int | None = None
-    ) -> list[DatasetRow]:
+    def list_datasets(self, pool: str | None = None, depth: int | None = None) -> list[DatasetRow]:
         """List datasets with the full 8-column field set.
 
         If *pool* is given, the listing is recursive under that pool/dataset.
         If *depth* is also given, recursion is limited to that depth.
         """
-        cmd = self._zfs(
-            "list", "-H", "-o", "name,creation,type,used,avail,refer,origin,clones"
-        )
+        cmd = self._zfs("list", "-H", "-o", "name,creation,type,used,avail,refer,origin,clones")
         if pool is not None:
             cmd.extend(["-r"])
             if depth is not None:
@@ -380,13 +377,10 @@ class ZfsRepository:
             rows.append(DatasetRow(*parts[:8]))
         return rows
 
-    def list_dataset_info(
-        self, pool: str | None = None
-    ) -> list[dict]:
+    def list_dataset_info(self, pool: str | None = None) -> list[dict]:
         """Return datasets as dicts with name, used, avail, refer, mountpoint."""
         cmd = self._zfs(
-            "list", "-H", "-o", "name,used,avail,refer,mountpoint",
-            "-t", "filesystem,volume"
+            "list", "-H", "-o", "name,used,avail,refer,mountpoint", "-t", "filesystem,volume"
         )
         if pool is not None:
             cmd.extend(["-r", pool])
@@ -398,13 +392,15 @@ class ZfsRepository:
             parts = line.split("\t")
             if len(parts) < 5:
                 continue
-            rows.append({
-                "name": parts[0],
-                "used": parts[1],
-                "avail": parts[2],
-                "refer": parts[3],
-                "mountpoint": parts[4],
-            })
+            rows.append(
+                {
+                    "name": parts[0],
+                    "used": parts[1],
+                    "avail": parts[2],
+                    "refer": parts[3],
+                    "mountpoint": parts[4],
+                }
+            )
         return rows
 
     def list_snapshots(
@@ -415,8 +411,12 @@ class ZfsRepository:
     ) -> list[SnapshotRow]:
         """List snapshots of *dataset* (recursively if depth is None)."""
         cmd = self._zfs(
-            "list", "-t", "snapshot", "-H",
-            "-o", "name,creation,type,used,avail,refer,origin,clones"
+            "list",
+            "-t",
+            "snapshot",
+            "-H",
+            "-o",
+            "name,creation,type,used,avail,refer,origin,clones",
         )
         if depth is not None:
             cmd.extend(["-d", str(depth)])
@@ -434,9 +434,7 @@ class ZfsRepository:
             rows.append(SnapshotRow(*parts[:8]))
         return rows
 
-    def list_all_snapshot_names(
-        self, pool: str | None = None
-    ) -> list[str]:
+    def list_all_snapshot_names(self, pool: str | None = None) -> list[str]:
         """Return full snapshot names, optionally filtered under *pool*."""
         cmd = self._zfs("list", "-t", "snapshot", "-H", "-o", "name")
         if pool is not None:
@@ -458,16 +456,24 @@ class ZfsRepository:
 
     def get_property(self, dataset: str, prop: str) -> str:
         """Return the value of a ZFS property."""
-        result = self._run(
-            self._zfs("get", "-H", "-o", "value", prop, dataset)
-        )
+        result = self._run(self._zfs("get", "-H", "-o", "value", prop, dataset))
         return result.stdout.strip()
 
     def get_all_properties(self, dataset: str) -> dict[str, str]:
         """Return all ZFS properties for *dataset* as a property->value dict."""
-        result = self._run(
-            self._zfs("get", "-H", "-o", "property,value", "all", dataset)
-        )
+        result = self._run(self._zfs("get", "-H", "-o", "property,value", "all", dataset))
+        props = {}
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t", 1)
+            if len(parts) == 2:
+                props[parts[0]] = parts[1]
+        return props
+
+    def get_all_pool_properties(self, pool: str) -> dict[str, str]:
+        """Return all zpool properties for *pool* as a property->value dict."""
+        result = self._run(self._zpool("get", "-H", "-o", "property,value", "all", pool))
         props = {}
         for line in result.stdout.strip().split("\n"):
             if not line:
@@ -479,19 +485,16 @@ class ZfsRepository:
 
     def get_recursive_snapshot_clones(self, dataset: str) -> list[str]:
         """Return non-empty clones values for all snapshots under *dataset*."""
-        result = self._run(
-            self._zfs("list", "-H", "-t", "snapshot", "-o", "clones", "-r", dataset)
-        )
+        result = self._run(self._zfs("list", "-H", "-t", "snapshot", "-o", "clones", "-r", dataset))
         return [
-            line.strip() for line in result.stdout.strip().split("\n")
+            line.strip()
+            for line in result.stdout.strip().split("\n")
             if line.strip() and line.strip() != "-"
         ]
 
     def list_bookmarks(self, dataset: str, snap_name: str | None = None) -> list[str]:
         """Return bookmark names under *dataset*, optionally filtering by snapshot name."""
-        result = self._run(
-            self._zfs("list", "-t", "bookmark", "-H", "-o", "name", "-r", dataset)
-        )
+        result = self._run(self._zfs("list", "-t", "bookmark", "-H", "-o", "name", "-r", dataset))
         names = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
         if snap_name is not None:
             suffix = f"#{snap_name}"

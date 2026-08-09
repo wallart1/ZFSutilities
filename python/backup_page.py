@@ -3,10 +3,11 @@ Backup tab UI — builds the full Backup page widget and handles interaction.
 """
 
 import os
+import shlex
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from command_builders import (
     build_post_backup_command,
     build_pre_backup_command,
@@ -44,14 +45,26 @@ from zfs_repository import is_dataset_encrypted
 DATASET_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
 
 ADVANCED_VARIABLES = [
-    "label", "autoresume", "receive_F_option", "releaseholds",
-    "releaseholds_tags", "doincrementals", "dointermediates",
-    "allow_destructive", "verify_after_transfer", "pv_rate_limit",
+    "label",
+    "autoresume",
+    "receive_F_option",
+    "releaseholds",
+    "releaseholds_tags",
+    "doincrementals",
+    "dointermediates",
+    "allow_destructive",
+    "verify_after_transfer",
+    "pv_rate_limit",
 ]
 
-YN_VARIABLES = {"autoresume", "releaseholds", "doincrementals",
-                "dointermediates", "allow_destructive",
-                "verify_after_transfer"}
+YN_VARIABLES = {
+    "autoresume",
+    "releaseholds",
+    "doincrementals",
+    "dointermediates",
+    "allow_destructive",
+    "verify_after_transfer",
+}
 
 _BACKUP_TOPIC_MAP = {
     "includes": "backup_includes",
@@ -167,8 +180,15 @@ def create_backup_page(app, ctx):
     ds_grid = _frame_grid(advanced_box, "Dataset Selection")
 
     for i, key in enumerate(DATASET_VARIABLES):
-        add_var_row(ds_grid, i, key, variables, app.backup_var_widgets,
-                    yn_vars=YN_VARIABLES, topic_map=_BACKUP_TOPIC_MAP)
+        add_var_row(
+            ds_grid,
+            i,
+            key,
+            variables,
+            app.backup_var_widgets,
+            yn_vars=YN_VARIABLES,
+            topic_map=_BACKUP_TOPIC_MAP,
+        )
 
     other_grid = Gtk.Grid()
     other_grid.set_row_spacing(5)
@@ -180,8 +200,15 @@ def create_backup_page(app, ctx):
     advanced_box.pack_start(other_grid, False, False, 0)
 
     for i, key in enumerate(ADVANCED_VARIABLES):
-        add_var_row(other_grid, i, key, variables, app.backup_var_widgets,
-                    yn_vars=YN_VARIABLES, topic_map=_BACKUP_TOPIC_MAP)
+        add_var_row(
+            other_grid,
+            i,
+            key,
+            variables,
+            app.backup_var_widgets,
+            yn_vars=YN_VARIABLES,
+            topic_map=_BACKUP_TOPIC_MAP,
+        )
 
     # --- ZFS Keys Backup ---
     zfs_keys_grid = Gtk.Grid()
@@ -220,34 +247,35 @@ def create_backup_page(app, ctx):
     app.backup_pause_scrubs = Gtk.CheckButton(
         label="Pause scrubs on source/destination pools during each step"
     )
-    app.backup_pause_scrubs.set_active(
-        backup_cfg.get("pause_scrubs", False)
-    )
+    app.backup_pause_scrubs.set_active(backup_cfg.get("pause_scrubs", False))
     app.backup_pause_scrubs.set_tooltip_text(
-        "Pause ZFS scrubs on the pools used by each send/receive step "
-        "while that step is running."
+        "Pause ZFS scrubs on the pools used by each send/receive step while that step is running."
     )
     advanced_box.pack_start(app.backup_pause_scrubs, False, False, 0)
 
     # --- Pull Steps (rsync) ---
     app.backup_pull_steps_active = Gtk.CheckButton(label="Active")
-    app.backup_pull_steps_active.set_active(
-        backup_cfg.get("pull_steps_active", True)
-    )
-    app.backup_pull_steps_active.set_tooltip_text(
-        "When unchecked, all pull steps are bypassed."
-    )
-    pull_box = _frame_box(
-        box, "Pull Steps (rsync)", header_widget=app.backup_pull_steps_active
-    )
+    app.backup_pull_steps_active.set_active(backup_cfg.get("pull_steps_active", True))
+    app.backup_pull_steps_active.set_tooltip_text("When unchecked, all pull steps are bypassed.")
+    pull_box = _frame_box(box, "Pull Steps (rsync)", header_widget=app.backup_pull_steps_active)
 
-    pull_elv = EditableListView()
+    pull_elv = EditableListView(
+        columns=[(1, "Source", 120), (2, "Destination", 120), (3, "Excludes", 120)],
+        column_names=["source", "dest", "excludes"],
+    )
     app.backup_pull_store = pull_elv.get_store()
     pull_box.pack_start(pull_elv.get_widget(), True, True, 0)
-    pull_elv.set_data([
-        (s["active"], s["source"], s["dest"])
-        for s in backup_cfg["pull_steps"]
-    ])
+    pull_elv.set_data(
+        [
+            (
+                s["active"],
+                s["source"],
+                s["dest"],
+                " ".join(shlex.quote(p) for p in s.get("excludes", [])),
+            )
+            for s in backup_cfg["pull_steps"]
+        ]
+    )
 
     # --- nextsnap (above ZFS Send/Receive Steps) ---
     snap_grid = _frame_grid(box, "Snapshot")
@@ -284,10 +312,9 @@ def create_backup_page(app, ctx):
     )
     app.backup_sr_store = sr_elv.get_store()
     sr_box.pack_start(sr_elv.get_widget(), True, True, 0)
-    sr_elv.set_data([
-        (s["active"], s["source"], s["dest"])
-        for s in backup_cfg["send_receive_steps"]
-    ])
+    sr_elv.set_data(
+        [(s["active"], s["source"], s["dest"]) for s in backup_cfg["send_receive_steps"]]
+    )
 
     # --- Post-Backup Steps ---
     post_grid = _frame_grid(box, "Post-Backup Steps")
@@ -302,9 +329,7 @@ def create_backup_page(app, ctx):
     post_grid.attach(app.backup_post_retention, 0, 1, 2, 1)
 
     app.backup_post_script_enabled = Gtk.CheckButton(label="Run post-backup command")
-    app.backup_post_script_enabled.set_active(
-        backup_cfg.get("post_backup_script_enabled", False)
-    )
+    app.backup_post_script_enabled.set_active(backup_cfg.get("post_backup_script_enabled", False))
     app.backup_post_script_enabled.set_tooltip_text(
         "Run a custom command after all backup steps. Runs even if a backup step fails."
     )
@@ -314,13 +339,10 @@ def create_backup_page(app, ctx):
     app.backup_post_script_text.set_text(backup_cfg.get("post_backup_script", ""))
     app.backup_post_script_text.set_hexpand(True)
     app.backup_post_script_text.set_width_chars(1)
-    app.backup_post_script_text.set_placeholder_text(
-        "Command to run after backup..."
-    )
+    app.backup_post_script_text.set_placeholder_text("Command to run after backup...")
     post_grid.attach(app.backup_post_script_text, 0, 3, 2, 1)
 
-    tracker = DirtyTracker(app, lambda: collect_backup_config(app),
-                           "_save_config_button")
+    tracker = DirtyTracker(app, lambda: collect_backup_config(app), "_save_config_button")
     app._backup_tracker = tracker
     pull_elv.set_on_changed(tracker.check)
     sr_elv.set_on_changed(tracker.check)
@@ -337,17 +359,14 @@ def create_backup_page(app, ctx):
     app.backup_pre_script_text.connect("changed", lambda _w, t=tracker: t.check())
     app.backup_zfs_keys_path.connect("changed", lambda _w, t=tracker: t.check())
     app.backup_zfs_keys_dest.connect("changed", lambda _w, t=tracker: t.check())
-    app.backup_pull_steps_active.connect(
-        "toggled", lambda _w, t=tracker: t.check()
-    )
-    app.backup_pause_scrubs.connect(
-        "toggled", lambda _w, t=tracker: t.check()
-    )
+    app.backup_pull_steps_active.connect("toggled", lambda _w, t=tracker: t.check())
+    app.backup_pause_scrubs.connect("toggled", lambda _w, t=tracker: t.check())
 
     return scrolled
 
 
 # --- Config helpers ---
+
 
 def load_backup_config(app, config):
     """Load a backup config dict into the UI widgets."""
@@ -358,11 +377,23 @@ def load_backup_config(app, config):
         else:
             widget.set_text(val)
 
-    for store, key in ((app.backup_pull_store, "pull_steps"),
-                        (app.backup_sr_store, "send_receive_steps")):
+    for store, key in ((app.backup_sr_store, "send_receive_steps"),):
         store.clear()
         for step in config.get(key, []):
             store.append([step["active"], step["source"], step["dest"]])
+
+    app.backup_pull_store.clear()
+    for step in config.get("pull_steps", []):
+        excludes = step.get("excludes", [])
+        excludes_text = " ".join(shlex.quote(p) for p in excludes)
+        app.backup_pull_store.append(
+            [
+                step["active"],
+                step["source"],
+                step["dest"],
+                excludes_text,
+            ]
+        )
 
     app.backup_post_snapfile.set_active(config.get("post_steps", {}).get("remove_snapfile", True))
     app.backup_post_retention.set_active(config.get("post_steps", {}).get("run_retention", True))
@@ -379,7 +410,7 @@ def load_backup_config(app, config):
 
 def check_backup_dirty(app):
     """Compare current UI state to last-saved state; style Save button."""
-    if hasattr(app, '_backup_tracker'):
+    if hasattr(app, "_backup_tracker"):
         app._backup_tracker.check()
 
 
@@ -392,10 +423,19 @@ def collect_backup_config(app):
         else:
             variables[key] = widget.get_text()
 
-    pull_steps = [{"active": r[0], "source": r[1], "dest": r[2]}
-                  for r in app.backup_pull_store]
-    sr_steps = [{"active": r[0], "source": r[1], "dest": r[2]}
-                for r in app.backup_sr_store]
+    pull_steps = []
+    for r in app.backup_pull_store:
+        excludes_text = r[3].strip()
+        excludes = shlex.split(excludes_text) if excludes_text else []
+        pull_steps.append(
+            {
+                "active": r[0],
+                "source": r[1],
+                "dest": r[2],
+                "excludes": excludes,
+            }
+        )
+    sr_steps = [{"active": r[0], "source": r[1], "dest": r[2]} for r in app.backup_sr_store]
 
     post_steps = {
         "remove_snapfile": app.backup_post_snapfile.get_active(),
@@ -420,6 +460,7 @@ def collect_backup_config(app):
 
 # --- Snapshot helpers ---
 
+
 def _do_generate_snap(app):
     """Generate a new snapshot name, update entry and label."""
     label_widget = app.backup_var_widgets.get("label")
@@ -441,6 +482,7 @@ def _on_generate_snap(button, app):
 # Action handlers
 # ---------------------------------------------------------------------------
 
+
 def on_backup_run(app, ctx):
     """Build step list and start backup execution."""
     app.clear_log_status()
@@ -450,8 +492,8 @@ def on_backup_run(app, ctx):
         log_msg("WARN: Generate or enter a snapshot name first")
         return
 
-    if nextsnap[0] != '@':
-        nextsnap = '@' + nextsnap
+    if nextsnap[0] != "@":
+        nextsnap = "@" + nextsnap
         app.backup_nextsnap_entry.set_text(nextsnap)
 
     while True:
@@ -480,7 +522,7 @@ def on_backup_run(app, ctx):
 
     backup_cfg = collect_backup_config(app)
     variables = backup_cfg["variables"]
-    dryrun = getattr(app, '_dry_run_active', False)
+    dryrun = getattr(app, "_dry_run_active", False)
 
     if dryrun:
         log_msg("INFO: Dry run mode enabled — no changes will be made")
@@ -497,14 +539,14 @@ def on_backup_run(app, ctx):
                 steps.append(build_pre_backup_command(script))
 
     if app.backup_pull_steps_active.get_active():
-        active_pulls = [(row[1], row[2]) for row in app.backup_pull_store if row[0]]
+        active_pulls = [(row[1], row[2], row[3]) for row in app.backup_pull_store if row[0]]
     else:
         active_pulls = []
         log_msg("INFO: Pull steps disabled by user; skipping")
 
     done_hosts = set()
 
-    for source, dest in active_pulls:
+    for source, dest, excludes_text in active_pulls:
         src_host, src_path = parse_rsync_endpoint(source)
         if src_host is None and src_path.startswith("/mnt/"):
             mount_path = src_path.rstrip("/")
@@ -516,10 +558,11 @@ def on_backup_run(app, ctx):
             except OSError:
                 log_msg(f"WARN: Skipping {source} -> {dest}: {mount_path} is not accessible")
                 continue
+        excludes = shlex.split(excludes_text.strip()) if excludes_text.strip() else []
         if dryrun:
             log_msg(f"INFO: Dry-run: Would rsync {source} -> {dest}")
         else:
-            steps.append(build_rsync_command(source, dest))
+            steps.append(build_rsync_command(source, dest, excludes=excludes))
 
     # Optional ZFS keys backup
     zfs_keys_path = backup_cfg.get("zfs_keys_path", "").strip()
@@ -531,24 +574,32 @@ def on_backup_run(app, ctx):
         if src_host is None and src_path.startswith("/mnt/"):
             mount_path = src_path.rstrip("/")
             if not os.path.ismount(mount_path):
-                log_msg(f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not mounted")
+                log_msg(
+                    f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not mounted"
+                )
             else:
                 try:
                     os.listdir(mount_path)
                 except OSError:
-                    log_msg(f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not accessible")
+                    log_msg(
+                        f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not accessible"
+                    )
                 else:
                     if not is_dataset_encrypted(zfs_keys_dest):
-                        log_msg("WARN: Skipping ZFS keys backup — destination is not encrypted. "
-                                "Set zfs_keys_dest to an encrypted dataset.")
+                        log_msg(
+                            "WARN: Skipping ZFS keys backup — destination is not encrypted. "
+                            "Set zfs_keys_dest to an encrypted dataset."
+                        )
                     elif dryrun:
                         log_msg(f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}")
                     else:
                         steps.append(build_rsync_command(zfs_keys_path, zfs_keys_dest))
         else:
             if not is_dataset_encrypted(zfs_keys_dest):
-                log_msg("WARN: Skipping ZFS keys backup — destination is not encrypted. "
-                                "Set zfs_keys_dest to an encrypted dataset.")
+                log_msg(
+                    "WARN: Skipping ZFS keys backup — destination is not encrypted. "
+                    "Set zfs_keys_dest to an encrypted dataset."
+                )
             elif dryrun:
                 log_msg(f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}")
             else:
@@ -559,12 +610,19 @@ def on_backup_run(app, ctx):
     for row in app.backup_sr_store:
         if row[0]:
             sr_step = build_send_receive_command(
-                row[1], row[2], variables, ctx.parent_dir, nextsnap,
+                row[1],
+                row[2],
+                variables,
+                ctx.parent_dir,
+                nextsnap,
                 dryrun=dryrun,
             )
             attach_step_scrub_callbacks(
-                sr_step, row[1], row[2],
-                enabled=pause_scrubs, dry_run=dryrun,
+                sr_step,
+                row[1],
+                row[2],
+                enabled=pause_scrubs,
+                dry_run=dryrun,
                 log_func=app.backup_runner._runner_log,
             )
             steps.append(sr_step)
@@ -574,9 +632,15 @@ def on_backup_run(app, ctx):
     if post.get("run_retention", False):
         label = variables.get("label", "dailybackup")
         pools = get_pool_names(ctx.config) or None
-        steps.append(build_retention_command(
-            ctx.parent_dir, label, pools=pools, dryrun=dryrun, fatal=False,
-        ))
+        steps.append(
+            build_retention_command(
+                ctx.parent_dir,
+                label,
+                pools=pools,
+                dryrun=dryrun,
+                fatal=False,
+            )
+        )
 
     # Finally: post-backup script (runs even on fatal error)
     has_finally = False
@@ -595,9 +659,7 @@ def on_backup_run(app, ctx):
 
     log_msg(f"INFO: Snapshot: {nextsnap}")
     app.backup_runner.set_steps(steps)
-    app.backup_runner.set_step_success_callback(
-        lambda md: _maybe_seed_checkagainst(app, md)
-    )
+    app.backup_runner.set_step_success_callback(lambda md: _maybe_seed_checkagainst(app, md))
     app.backup_runner.start(on_complete=lambda cancelled=False: _on_backup_complete(app, cancelled))
     app.update_action_buttons("backup")
 
@@ -605,7 +667,7 @@ def on_backup_run(app, ctx):
 def _on_backup_complete(app, cancelled=False):
     """Called when backup finishes or is cancelled."""
     if not cancelled and app.backup_post_snapfile.get_active():
-        if getattr(app, '_dry_run_active', False):
+        if getattr(app, "_dry_run_active", False):
             log_msg("INFO: Dry-run: Skipping snapfile cleanup (preserved for real run)")
         else:
             remove_snapfile()
@@ -625,11 +687,12 @@ def on_backup_save(app, ctx):
     offsite_cfg = get_offsite_config(ctx.config)
     warnings = validate_gui_settings(backup_data, offsite_cfg)
     if warnings:
-        show_warning_dialog(app, "Backup/offsite scope mismatch detected:\n\n" +
-                            "\n\n".join(warnings))
+        show_warning_dialog(
+            app, "Backup/offsite scope mismatch detected:\n\n" + "\n\n".join(warnings)
+        )
     try:
         save_backup_config(ctx.config, backup_data)
-        if hasattr(app, '_backup_tracker'):
+        if hasattr(app, "_backup_tracker"):
             app._backup_tracker.mark_clean()
         log_msg("INFO: Backup config saved to /var/lib/zfsutilities/config.json")
     except OSError as e:
@@ -638,7 +701,7 @@ def on_backup_save(app, ctx):
 
 def on_backup_revert(app, ctx):
     """Revert backup UI to last-saved state."""
-    if not hasattr(app, '_backup_tracker'):
+    if not hasattr(app, "_backup_tracker"):
         log_msg("INFO: Nothing to revert")
         return
     app._backup_tracker.revert(lambda cfg: load_backup_config(app, cfg))
@@ -658,5 +721,3 @@ def backup_set_all_active(app, ctx, active):
     app.backup_post_script_enabled.set_active(active)
     state = "selected" if active else "deselected"
     log_msg(f"INFO: All steps {state}")
-
-

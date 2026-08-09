@@ -29,6 +29,33 @@ class TestBackupConfig(unittest.TestCase):
         self.assertIn("pull_steps", backup)
         self.assertTrue(backup["pull_steps_active"])
 
+    def test_get_backup_config_adds_excludes_to_pull_steps(self):
+        config = {
+            "backup": {
+                "pull_steps": [
+                    {"active": True, "source": "host:/src", "dest": "/dst"},
+                ],
+            },
+        }
+        backup = feature_config.get_backup_config(config)
+        self.assertEqual(backup["pull_steps"][0]["excludes"], [])
+
+    def test_get_backup_config_preserves_existing_excludes(self):
+        config = {
+            "backup": {
+                "pull_steps": [
+                    {
+                        "active": True,
+                        "source": "host:/src",
+                        "dest": "/dst",
+                        "excludes": ["*.tmp", "cache/"],
+                    },
+                ],
+            },
+        }
+        backup = feature_config.get_backup_config(config)
+        self.assertEqual(backup["pull_steps"][0]["excludes"], ["*.tmp", "cache/"])
+
     def test_save_backup_config(self):
         with temp_config_dir():
             config = {}
@@ -234,8 +261,13 @@ class TestSnapshotNameGeneration(unittest.TestCase):
 
     def test_snapfile_roundtrip(self):
         with temp_config_dir():
-            feature_config._write_snapfile(feature_config.SNAPFILE, "@test-2025-01-01T00:00-04:00-d")
-            self.assertEqual(feature_config._read_snapfile(feature_config.SNAPFILE), "@test-2025-01-01T00:00-04:00-d")
+            feature_config._write_snapfile(
+                feature_config.SNAPFILE, "@test-2025-01-01T00:00-04:00-d"
+            )
+            self.assertEqual(
+                feature_config._read_snapfile(feature_config.SNAPFILE),
+                "@test-2025-01-01T00:00-04:00-d",
+            )
             feature_config._remove_snapfile(feature_config.SNAPFILE)
             self.assertIsNone(feature_config._read_snapfile(feature_config.SNAPFILE))
 
@@ -334,13 +366,15 @@ class TestScrubStatePersistence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "scrub_state.json")
             with patch.object(feature_config, "SCRUB_STATE_PATH", path):
-                feature_config.save_scrub_state({
-                    "pending": ["tank"],
-                    "active": ["fivebays"],
-                    "paused": [],
-                    "finished": ["threeamigos"],
-                    "target": 3,
-                })
+                feature_config.save_scrub_state(
+                    {
+                        "pending": ["tank"],
+                        "active": ["fivebays"],
+                        "paused": [],
+                        "finished": ["threeamigos"],
+                        "target": 3,
+                    }
+                )
                 data = feature_config.load_scrub_state()
         self.assertEqual(data["pending"], ["tank"])
         self.assertEqual(data["active"], ["fivebays"])
@@ -361,6 +395,7 @@ class TestScrubStatePersistence(unittest.TestCase):
             path = os.path.join(tmpdir, "scrub_state.json")
             with open(path, "w") as fh:
                 import json
+
                 json.dump({"pending": "oops", "target": 2}, fh)
             with patch.object(feature_config, "SCRUB_STATE_PATH", path):
                 data = feature_config.load_scrub_state()
@@ -391,10 +426,14 @@ class TestRetentionVerbMessages(unittest.TestCase):
 
     def test_get_retention_verb_messages_default_false(self):
         self.assertFalse(feature_config.get_retention_verb_messages({}))
-        self.assertFalse(feature_config.get_retention_verb_messages({"retention_verb_messages": False}))
+        self.assertFalse(
+            feature_config.get_retention_verb_messages({"retention_verb_messages": False})
+        )
 
     def test_get_retention_verb_messages_true(self):
-        self.assertTrue(feature_config.get_retention_verb_messages({"retention_verb_messages": True}))
+        self.assertTrue(
+            feature_config.get_retention_verb_messages({"retention_verb_messages": True})
+        )
 
     def test_save_retention_verb_messages_persists_bool(self):
         with temp_config_dir():
@@ -418,11 +457,14 @@ class TestMaybeSeedCheckagainst(unittest.TestCase):
         with temp_config_dir():
             config = {}
             app = self._mock_app(config)
-            feature_config._maybe_seed_checkagainst(app, {
-                "source": "threeamigos/proxmox",
-                "dest": "fivebays/threeamigos/proxmox",
-                "label": "dailybackup",
-            })
+            feature_config._maybe_seed_checkagainst(
+                app,
+                {
+                    "source": "threeamigos/proxmox",
+                    "dest": "fivebays/threeamigos/proxmox",
+                    "label": "dailybackup",
+                },
+            )
             entries = feature_config.get_checkagainst(config)["user_entries"]
             self.assertEqual(len(entries), 1)
             self.assertEqual(entries[0]["source_root"], "threeamigos/proxmox")
@@ -447,11 +489,14 @@ class TestMaybeSeedCheckagainst(unittest.TestCase):
         with temp_config_dir():
             config = {}
             app = self._mock_app(config)
-            feature_config._maybe_seed_checkagainst(app, {
-                "source": "threeamigos/proxmox",
-                "dest": "<offsite>/threeamigos/proxmox",
-                "label": "offsite",
-            })
+            feature_config._maybe_seed_checkagainst(
+                app,
+                {
+                    "source": "threeamigos/proxmox",
+                    "dest": "<offsite>/threeamigos/proxmox",
+                    "label": "offsite",
+                },
+            )
             entries = feature_config.get_checkagainst(config)["user_entries"]
             self.assertEqual(entries, [])
 
@@ -459,11 +504,14 @@ class TestMaybeSeedCheckagainst(unittest.TestCase):
         with temp_config_dir():
             config = {}
             app = self._mock_app(config)
-            feature_config._maybe_seed_checkagainst(app, {
-                "source": "threeamigos/proxmox",
-                "dest": "fivebays/threeamigos/proxmox",
-                "label": "",
-            })
+            feature_config._maybe_seed_checkagainst(
+                app,
+                {
+                    "source": "threeamigos/proxmox",
+                    "dest": "fivebays/threeamigos/proxmox",
+                    "label": "",
+                },
+            )
             entries = feature_config.get_checkagainst(config)["user_entries"]
             self.assertEqual(entries, [])
 

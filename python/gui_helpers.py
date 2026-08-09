@@ -7,7 +7,7 @@ import subprocess
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from backup_config import MSG_LEVELS, log_msg, set_log_sink
 from gi.repository import Gdk, GLib, Gtk, Pango
 from logging_config import DEFAULT_MSG_LEVEL
@@ -34,9 +34,7 @@ ACTIVE_COLUMN_WIDTH = 60
 TREEVIEW_MIN_WIDTH = 100
 
 # Placeholder rows used while lazy-loading tree children.
-PLACEHOLDER_NAMES = {
-    "(loading...)", "(no datasets)", "(empty)", "(no holds)"
-}
+PLACEHOLDER_NAMES = {"(loading...)", "(no datasets)", "(empty)", "(no holds)"}
 
 
 def configure_treeview_column(col, width=None, min_width=20, resizable=True):
@@ -63,6 +61,7 @@ def setup_row_scroll(scrolled_window, treeview):
     Connects to the treeview's size-allocate signal to update the vadjustment
     step increment once rows are rendered.
     """
+
     def _update_step(tv, _allocation):
         model = tv.get_model()
         if model is None:
@@ -76,12 +75,14 @@ def setup_row_scroll(scrolled_window, treeview):
             vadj = scrolled_window.get_vadjustment()
             if vadj.get_step_increment() != rect.height:
                 vadj.set_step_increment(rect.height)
+
     treeview.connect("size-allocate", _update_step)
 
 
 # ---------------------------------------------------------------------------
 # Cell data functions
 # ---------------------------------------------------------------------------
+
 
 def dataset_name_cell_func(column, renderer, model, tree_iter, data=None):
     """Style: bold for pools, italic for snapshots and holds, normal for datasets.
@@ -102,7 +103,7 @@ def dataset_name_cell_func(column, renderer, model, tree_iter, data=None):
         renderer.set_property("foreground", None)
         renderer.set_property("markup", None)
         renderer.set_property("text", name)
-    elif ds_type == "hold" or name.startswith('@'):
+    elif ds_type == "hold" or name.startswith("@"):
         renderer.set_property("weight", Pango.Weight.NORMAL)
         renderer.set_property("style", Pango.Style.ITALIC)
         renderer.set_property("foreground", None)
@@ -113,8 +114,7 @@ def dataset_name_cell_func(column, renderer, model, tree_iter, data=None):
         renderer.set_property("weight", Pango.Weight.NORMAL)
         renderer.set_property("style", Pango.Style.NORMAL)
         renderer.set_property("foreground", None)
-        renderer.set_property("markup",
-                              f'{escaped} <span foreground="gray">[clone]</span>')
+        renderer.set_property("markup", f'{escaped} <span foreground="gray">[clone]</span>')
     else:
         renderer.set_property("weight", Pango.Weight.NORMAL)
         renderer.set_property("style", Pango.Style.NORMAL)
@@ -126,6 +126,7 @@ def dataset_name_cell_func(column, renderer, model, tree_iter, data=None):
 # ---------------------------------------------------------------------------
 # Full name builder
 # ---------------------------------------------------------------------------
+
 
 def build_full_dataset_name(model, tree_iter):
     """Walk up the tree to build the full ZFS name from a TreeIter.
@@ -145,10 +146,10 @@ def build_full_dataset_name(model, tree_iter):
     parts.reverse()
     result = parts[0]
     for p in parts[1:]:
-        if p.startswith('@'):
+        if p.startswith("@"):
             result += p
         else:
-            result += '/' + p
+            result += "/" + p
     return result
 
 
@@ -156,9 +157,11 @@ def build_full_dataset_name(model, tree_iter):
 # Expand / collapse state helpers
 # ---------------------------------------------------------------------------
 
+
 def get_expanded_rows(store, view):
     """Return set of full dataset names whose rows are currently expanded."""
     expanded = set()
+
     def _walk(tree_iter, prefix):
         while tree_iter:
             name = store.get_value(tree_iter, 0)
@@ -170,12 +173,14 @@ def get_expanded_rows(store, view):
             if child:
                 _walk(child, full)
             tree_iter = store.iter_next(tree_iter)
+
     _walk(store.get_iter_first(), "")
     return expanded
 
 
 def restore_expanded_rows(store, view, expanded):
     """Re-expand rows that were previously expanded, loading children as needed."""
+
     def _walk(tree_iter, prefix):
         while tree_iter:
             name = store.get_value(tree_iter, 0)
@@ -191,6 +196,7 @@ def restore_expanded_rows(store, view, expanded):
                 if child:
                     _walk(child, full)
             tree_iter = next_iter
+
     _walk(store.get_iter_first(), "")
 
 
@@ -258,7 +264,7 @@ def expand_path_to_row(view, store, path):
         if it is None:
             return None
 
-        subpath = Gtk.TreePath.new_from_indices(indices[:depth + 1])
+        subpath = Gtk.TreePath.new_from_indices(indices[: depth + 1])
         name = store.get_value(it, 0)
         loaded = store.get_value(it, 7)
         if (
@@ -278,6 +284,7 @@ def expand_path_to_row(view, store, path):
 # Lazy loaders
 # ---------------------------------------------------------------------------
 
+
 def on_row_expanded(view, tree_iter, path, _data=None):
     """Load children on demand when a row is expanded."""
     store = view.get_model()
@@ -290,16 +297,16 @@ def on_row_expanded(view, tree_iter, path, _data=None):
     # Mark as loaded to prevent re-entry
     store.set_value(tree_iter, 7, True)
 
-    repo = getattr(view, '_zfs_repo', None) or get_default_repository()
+    repo = getattr(view, "_zfs_repo", None) or get_default_repository()
 
     # Determine what to load based on node type
     parent = store.iter_parent(tree_iter)
     if parent is None:
         load_pool_children(store, tree_iter, name, repo=repo)
-    elif ds_type in ("filesystem", "volume") or (not name.startswith('@') and ds_type != "hold"):
+    elif ds_type in ("filesystem", "volume") or (not name.startswith("@") and ds_type != "hold"):
         full_name = build_full_dataset_name(store, tree_iter)
         load_dataset_children(store, tree_iter, full_name, repo=repo)
-    elif name.startswith('@') or ds_type == "snapshot":
+    elif name.startswith("@") or ds_type == "snapshot":
         full_name = build_full_dataset_name(store, tree_iter)
         load_snapshot_children(store, tree_iter, full_name, repo=repo)
 
@@ -316,9 +323,11 @@ def on_row_expanded(view, tree_iter, path, _data=None):
     if not has_real:
         if parent is None:
             label = "(no datasets)"
-        elif ds_type in ("filesystem", "volume") or (not name.startswith('@') and ds_type != "hold"):
+        elif ds_type in ("filesystem", "volume") or (
+            not name.startswith("@") and ds_type != "hold"
+        ):
             label = "(empty)"
-        elif name.startswith('@') or ds_type == "snapshot":
+        elif name.startswith("@") or ds_type == "snapshot":
             label = "(no holds)"
         else:
             label = "(empty)"
@@ -343,23 +352,30 @@ def load_pool_children(store, pool_iter, pool_name, repo=None):
 
             if row.name == pool_name:
                 # Update pool row with real data
-                store.set(pool_iter,
-                          1, row_data[0], 2, row_data[1],
-                          3, row_data[2], 4, row_data[3],
-                          5, row_data[4], 6, "")
+                store.set(
+                    pool_iter,
+                    1,
+                    row_data[0],
+                    2,
+                    row_data[1],
+                    3,
+                    row_data[2],
+                    4,
+                    row_data[3],
+                    5,
+                    row_data[4],
+                    6,
+                    "",
+                )
                 continue
 
-            short_name = row.name.rsplit('/', 1)[-1]
-            child_iter = store.append(
-                pool_iter,
-                [short_name] + row_data + [origin_val, False]
-            )
+            short_name = row.name.rsplit("/", 1)[-1]
+            child_iter = store.append(pool_iter, [short_name] + row_data + [origin_val, False])
             # Add dummy so dataset appears expandable
             store.append(child_iter, ["(loading...)", "", "", "", "", "", "", True])
 
     except subprocess.CalledProcessError as e:
-        store.append(pool_iter,
-                     ["(error)", str(e), "", "", "", "", "", True])
+        store.append(pool_iter, ["(error)", str(e), "", "", "", "", "", True])
 
 
 def load_dataset_children(store, ds_iter, ds_name, repo=None):
@@ -371,17 +387,15 @@ def load_dataset_children(store, ds_iter, ds_name, repo=None):
     # at depth=0; depth=1 returns the target's snapshots and direct children's.
     try:
         snaps = [
-            row for row in repo.list_snapshots(ds_name, depth=1)
-            if row.name.split('@')[0] == ds_name
+            row
+            for row in repo.list_snapshots(ds_name, depth=1)
+            if row.name.split("@")[0] == ds_name
         ]
         for row in snaps:
-            snap_part = '@' + row.name.split('@')[1]
+            snap_part = "@" + row.name.split("@")[1]
             row_data = [row.creation, row.ds_type, row.used, row.avail, row.refer]
             clones_val = row.clones if row.clones != "-" else ""
-            child_iter = store.append(
-                ds_iter,
-                [snap_part] + row_data + [clones_val, False]
-            )
+            child_iter = store.append(ds_iter, [snap_part] + row_data + [clones_val, False])
             store.append(child_iter, ["(loading...)", "", "", "", "", "", "", True])
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Could not load snapshots for {ds_name}: {e}")
@@ -394,11 +408,8 @@ def load_dataset_children(store, ds_iter, ds_name, repo=None):
                 continue
             row_data = [row.creation, row.ds_type, row.used, row.avail, row.refer]
             origin_val = row.origin if row.origin != "-" else ""
-            short_name = row.name.rsplit('/', 1)[-1]
-            child_iter = store.append(
-                ds_iter,
-                [short_name] + row_data + [origin_val, False]
-            )
+            short_name = row.name.rsplit("/", 1)[-1]
+            child_iter = store.append(ds_iter, [short_name] + row_data + [origin_val, False])
             store.append(child_iter, ["(loading...)", "", "", "", "", "", "", True])
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Could not load children for {ds_name}: {e}")
@@ -409,32 +420,33 @@ def load_snapshot_children(store, snap_iter, snap_name, repo=None):
     repo = repo or get_default_repository()
     try:
         for hold in repo.list_holds(snap_name):
-            store.append(
-                snap_iter,
-                [hold.tag, hold.date, "hold", "", "", "", "", True]
-            )
+            store.append(snap_iter, [hold.tag, hold.date, "hold", "", "", "", "", True])
     except subprocess.CalledProcessError:
         pass
+
 
 # ---------------------------------------------------------------------------
 # Button styling
 # ---------------------------------------------------------------------------
 
+
 def set_button_markup_red(button, dirty):
     """Set a button label red if dirty, normal if clean."""
+
     def _find_label(widget):
         if isinstance(widget, Gtk.Label):
             return widget
-        if hasattr(widget, 'get_children'):
+        if hasattr(widget, "get_children"):
             for child in widget.get_children():
                 found = _find_label(child)
                 if found:
                     return found
-        if hasattr(widget, 'get_child'):
+        if hasattr(widget, "get_child"):
             child = widget.get_child()
             if child:
                 return _find_label(child)
         return None
+
     lbl = _find_label(button)
     if lbl:
         text = lbl.get_text()
@@ -446,11 +458,11 @@ def set_button_markup(widget, markup):
     if isinstance(widget, Gtk.Label):
         widget.set_markup(markup)
         return True
-    if hasattr(widget, 'get_children'):
+    if hasattr(widget, "get_children"):
         for child in widget.get_children():
             if set_button_markup(child, markup):
                 return True
-    if hasattr(widget, 'get_child'):
+    if hasattr(widget, "get_child"):
         child = widget.get_child()
         if child and set_button_markup(child, markup):
             return True
@@ -460,7 +472,8 @@ def set_button_markup(widget, markup):
 def show_error(app, msg):
     """Show a modal error dialog and wait for the user to dismiss it."""
     dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
+        transient_for=app,
+        modal=True,
         message_type=Gtk.MessageType.ERROR,
         buttons=Gtk.ButtonsType.OK,
         text=msg,
@@ -472,7 +485,8 @@ def show_error(app, msg):
 def show_error_dialog(app, message):
     """Show a modal error dialog and wait for the user to dismiss it."""
     dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
+        transient_for=app,
+        modal=True,
         message_type=Gtk.MessageType.ERROR,
         buttons=Gtk.ButtonsType.OK,
         text=message,
@@ -484,7 +498,8 @@ def show_error_dialog(app, message):
 def show_warning_dialog(app, message):
     """Show a modal warning dialog and wait for the user to dismiss it."""
     dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
+        transient_for=app,
+        modal=True,
         message_type=Gtk.MessageType.WARNING,
         buttons=Gtk.ButtonsType.OK,
         text=message,
@@ -496,6 +511,7 @@ def show_warning_dialog(app, message):
 # ---------------------------------------------------------------------------
 # Dirty state tracker
 # ---------------------------------------------------------------------------
+
 
 class DirtyTracker:
     """Generic dirty-state tracker for a page.
@@ -536,11 +552,10 @@ class DirtyTracker:
 # Dialog builders
 # ---------------------------------------------------------------------------
 
+
 def create_dialog(title, parent, buttons, default_response=None, size=None):
     """Create a standard Gtk.Dialog with margins and spacing."""
-    dialog = Gtk.Dialog(
-        title=title, transient_for=parent, modal=True, destroy_with_parent=True
-    )
+    dialog = Gtk.Dialog(title=title, transient_for=parent, modal=True, destroy_with_parent=True)
     for btn_text, response in buttons:
         dialog.add_button(btn_text, response)
     if default_response is not None:
@@ -556,8 +571,9 @@ def create_dialog(title, parent, buttons, default_response=None, size=None):
     return dialog
 
 
-def add_scrolled_text_view(parent, text, monospace=True,
-                           wrap_mode=Gtk.WrapMode.NONE, min_height=None):
+def add_scrolled_text_view(
+    parent, text, monospace=True, wrap_mode=Gtk.WrapMode.NONE, min_height=None
+):
     """Add a non-editable scrolled TextView to a container."""
     buf = Gtk.TextBuffer()
     buf.set_text(text)
@@ -580,6 +596,7 @@ def add_scrolled_text_view(parent, text, monospace=True,
 # ZFS path / process helpers
 # ---------------------------------------------------------------------------
 
+
 def get_snapshot_mountpoint(dataset, snap_name, repo=None):
     """Return the on-disk path where a ZFS snapshot is accessible."""
     repo = repo or get_default_repository()
@@ -592,7 +609,10 @@ def get_busy_processes(path):
     pids = set()
     try:
         result = subprocess.run(
-            ["fuser", "-m", path], capture_output=True, text=True, check=True,
+            ["fuser", "-m", path],
+            capture_output=True,
+            text=True,
+            check=True,
         )
         for line in result.stdout.strip().splitlines():
             if ":" in line:
@@ -603,7 +623,10 @@ def get_busy_processes(path):
     if not pids:
         try:
             result = subprocess.run(
-                ["lsof", "-t", "+D", path], capture_output=True, text=True, check=True,
+                ["lsof", "-t", "+D", path],
+                capture_output=True,
+                text=True,
+                check=True,
             )
             pids.update(result.stdout.strip().split())
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -613,7 +636,10 @@ def get_busy_processes(path):
     for pid in pids:
         try:
             ps = subprocess.run(
-                ["ps", "-p", pid, "-o", "comm="], capture_output=True, text=True, check=True,
+                ["ps", "-p", pid, "-o", "comm="],
+                capture_output=True,
+                text=True,
+                check=True,
             )
             name = ps.stdout.strip()
             if name:
@@ -642,7 +668,9 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
             clones = repo.get_property(target, "clones")
             if clones and clones != "-":
                 log_msg(f"WARN:   → Snapshot has clone dependents: {clones}")
-                log_msg("WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first.")
+                log_msg(
+                    "WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
+                )
                 found_cause = True
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
@@ -651,7 +679,9 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
             clone_snaps = repo.get_recursive_snapshot_clones(target)
             if clone_snaps:
                 log_msg(f"WARN:   → One or more snapshots of {target} have clone dependents.")
-                log_msg("WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first.")
+                log_msg(
+                    "WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
+                )
                 found_cause = True
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
@@ -689,7 +719,9 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
     try:
         token = repo.get_property(target, "receive_resume_token")
         if token and token != "-":
-            log_msg("WARN:   → Dataset has an active or interrupted receive (resume token present).")
+            log_msg(
+                "WARN:   → Dataset has an active or interrupted receive (resume token present)."
+            )
             log_msg("WARN:     Abort with 'zfs receive -A <dataset>' or allow it to complete.")
             found_cause = True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -698,7 +730,9 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
     try:
         result = subprocess.run(
             ["pgrep", "-f", f"zfs send.*{target}"],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if result.returncode == 0 and result.stdout.strip():
             log_msg(f"WARN:   → An active 'zfs send' involving {target} is running.")
@@ -726,20 +760,26 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
         try:
             result = subprocess.run(
                 ["targetcli", "/backstores/block", "ls"],
-                capture_output=True, text=True, check=False,
+                capture_output=True,
+                text=True,
+                check=False,
             )
             if result.returncode == 0 and f" {bsname} " in result.stdout:
                 lun_info = ""
                 try:
                     iscsi_out = subprocess.run(
                         ["targetcli", "/iscsi", "ls"],
-                        capture_output=True, text=True, check=True,
+                        capture_output=True,
+                        text=True,
+                        check=True,
                     ).stdout
                     for t in re.findall(r"iqn\.\S+", iscsi_out):
                         try:
                             luns = subprocess.run(
                                 ["targetcli", f"/iscsi/{t}/tpg1/luns", "ls"],
-                                capture_output=True, text=True, check=True,
+                                capture_output=True,
+                                text=True,
+                                check=True,
                             ).stdout
                             if bsname in luns:
                                 m = re.search(rf"lun(\d+).*?{re.escape(bsname)}", luns)
@@ -766,7 +806,9 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
         try:
             result = subprocess.run(
                 ["qm", "status", vmid],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
             if "running" in result.stdout:
                 log_msg(f"WARN:   → VM {vmid} is RUNNING and may be using {target}.")
@@ -780,7 +822,9 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
         try:
             value = subprocess.run(
                 ["zfs", "get", "-H", "-o", "value", prop, target],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             ).stdout.strip()
             if value and value != "off" and value != "-":
                 log_msg(f"WARN:   → Dataset is shared via {label} ({value}).")
@@ -801,23 +845,28 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
 # Editable list view (toggle + two text columns + buttons)
 # ---------------------------------------------------------------------------
 
-class EditableListView:
-    """Reusable ListStore(bool, str, str) with Add/Remove/Move buttons."""
 
-    def __init__(self, on_changed=None, columns=None):
+class EditableListView:
+    """Reusable ListStore(bool, str, ...) with Add/Remove/Move buttons."""
+
+    def __init__(self, on_changed=None, columns=None, column_names=None):
         self.on_changed = on_changed
-        self.columns = columns or [
-            (1, "Source", 120), (2, "Destination", 120)
-        ]
-        self.store = Gtk.ListStore(bool, str, str)
+        self.columns = columns or [(1, "Source", 120), (2, "Destination", 120)]
+        self.column_names = column_names or self._default_column_names()
+        if len(self.column_names) != len(self.columns):
+            raise ValueError(
+                f"column_names length ({len(self.column_names)}) must match "
+                f"columns length ({len(self.columns)})"
+            )
+        types = [bool] + [str] * len(self.columns)
+        self.store = Gtk.ListStore(*types)
         self.view = Gtk.TreeView(model=self.store)
         self.view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
 
         toggle = Gtk.CellRendererToggle()
         toggle.connect("toggled", self._on_toggle)
         col0 = Gtk.TreeViewColumn("Active", toggle, active=0)
-        configure_treeview_column(col0, width=ACTIVE_COLUMN_WIDTH,
-                                  min_width=ACTIVE_COLUMN_WIDTH)
+        configure_treeview_column(col0, width=ACTIVE_COLUMN_WIDTH, min_width=ACTIVE_COLUMN_WIDTH)
         self.view.append_column(col0)
 
         for idx, title, width in self.columns:
@@ -839,8 +888,7 @@ class EditableListView:
         setup_row_scroll(scroll, self.view)
 
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        for label, cb in (("Add", self._on_add),
-                          ("Remove", self._on_remove)):
+        for label, cb in (("Add", self._on_add), ("Remove", self._on_remove)):
             btn = Gtk.Button(label=label)
             btn.connect("clicked", cb)
             btn_box.pack_start(btn, False, False, 0)
@@ -852,6 +900,14 @@ class EditableListView:
         self.store.connect("row-changed", self._notify)
         self.store.connect("row-inserted", self._notify)
         self.store.connect("row-deleted", self._notify)
+
+    def _default_column_names(self):
+        """Return sensible dict keys when column_names is omitted."""
+        if len(self.columns) == 2:
+            return ["source", "dest"]
+        if len(self.columns) == 3:
+            return ["source", "dest", "excludes"]
+        return [f"col{i + 1}" for i in range(len(self.columns))]
 
     def set_on_changed(self, on_changed):
         self.on_changed = on_changed
@@ -870,11 +926,16 @@ class EditableListView:
 
     def _on_editing_started(self, renderer, editable, path, col_idx):
         editable.connect(
-            "key-press-event", handle_editing_key_press,
-            self.view, path, col_idx, [c[0] for c in self.columns])
+            "key-press-event",
+            handle_editing_key_press,
+            self.view,
+            path,
+            col_idx,
+            [c[0] for c in self.columns],
+        )
 
     def _on_add(self, button):
-        tree_iter = self.store.append([True, "", ""])
+        tree_iter = self.store.append([True] + [""] * len(self.columns))
         path = self.store.get_path(tree_iter)
         GLib.idle_add(self.view.set_cursor, path, self.view.get_column(1), True)
 
@@ -894,25 +955,30 @@ class EditableListView:
         return self.widget
 
     def set_data(self, rows):
-        """rows: iterable of (active, source, dest)"""
+        """rows: iterable of tuples (active, col1, col2, ...)."""
         self.store.clear()
-        for active, src, dst in rows:
-            self.store.append([active, src, dst])
+        for row in rows:
+            self.store.append(list(row))
 
     def get_data(self):
-        """Return list of dicts."""
-        return [
-            {"active": row[0], "source": row[1], "dest": row[2]}
-            for row in self.store
-        ]
+        """Return list of dicts keyed by column_names."""
+        result = []
+        for row in self.store:
+            entry = {"active": row[0]}
+            for name, (idx, _, _) in zip(self.column_names, self.columns):
+                entry[name] = row[idx]
+            result.append(entry)
+        return result
 
 
 # ---------------------------------------------------------------------------
 # Variable row builder (label + entry/combo + help icon)
 # ---------------------------------------------------------------------------
 
-def add_var_row(grid, row, key, variables, widgets_dict,
-                yn_vars=None, topic_map=None, tooltip=None):
+
+def add_var_row(
+    grid, row, key, variables, widgets_dict, yn_vars=None, topic_map=None, tooltip=None
+):
     """Add a label + widget row to a grid for the given variable key.
 
     If key is in yn_vars, a Y/N ComboBoxText is created.
@@ -945,6 +1011,7 @@ def add_var_row(grid, row, key, variables, widgets_dict,
 # TreeView search navigation
 # ---------------------------------------------------------------------------
 
+
 def on_row_activated(treeview, path, column, edit_col_idx):
     """When a row is clicked/activated, start editing the specified column."""
     col = treeview.get_column(edit_col_idx)
@@ -963,8 +1030,7 @@ def on_cell_edited(renderer, path, new_text, store, col_idx):
     store.set_value(tree_iter, col_idx, new_text)
 
 
-def handle_editing_key_press(widget, event, treeview, path_str, col_idx,
-                               editable_cols):
+def handle_editing_key_press(widget, event, treeview, path_str, col_idx, editable_cols):
     """Handle Tab/Shift+Tab across editable columns in a TreeView."""
     if event.keyval == Gdk.KEY_Tab:
         widget.editing_done()
@@ -974,14 +1040,14 @@ def handle_editing_key_press(widget, event, treeview, path_str, col_idx,
         cur = editable_cols.index(col_idx)
         if cur < len(editable_cols) - 1:
             next_col = editable_cols[cur + 1]
-            GLib.idle_add(treeview.set_cursor, path,
-                          treeview.get_column(next_col), True)
+            GLib.idle_add(treeview.set_cursor, path, treeview.get_column(next_col), True)
         else:
             nxt = model.iter_next(model.get_iter(path))
             if nxt:
                 nxt_path = model.get_path(nxt)
-                GLib.idle_add(treeview.set_cursor, nxt_path,
-                              treeview.get_column(editable_cols[0]), True)
+                GLib.idle_add(
+                    treeview.set_cursor, nxt_path, treeview.get_column(editable_cols[0]), True
+                )
         return True
     elif event.keyval == Gdk.KEY_ISO_Left_Tab:
         widget.editing_done()
@@ -991,14 +1057,14 @@ def handle_editing_key_press(widget, event, treeview, path_str, col_idx,
         cur = editable_cols.index(col_idx)
         if cur > 0:
             prev_col = editable_cols[cur - 1]
-            GLib.idle_add(treeview.set_cursor, path,
-                          treeview.get_column(prev_col), True)
+            GLib.idle_add(treeview.set_cursor, path, treeview.get_column(prev_col), True)
         else:
             row_idx = path[0]
             if row_idx > 0:
                 prev_path = Gtk.TreePath.new_from_indices([row_idx - 1])
-                GLib.idle_add(treeview.set_cursor, prev_path,
-                              treeview.get_column(editable_cols[-1]), True)
+                GLib.idle_add(
+                    treeview.set_cursor, prev_path, treeview.get_column(editable_cols[-1]), True
+                )
         return True
     return False
 
@@ -1006,15 +1072,26 @@ def handle_editing_key_press(widget, event, treeview, path_str, col_idx,
 class TreeSearch:
     """Debounced search with prev/next navigation for a Gtk.TreeView."""
 
-    def __init__(self, treeview, entry, results_label, prev_btn, next_btn,
-                 placeholder_names=None, full_name_func=None):
+    def __init__(
+        self,
+        treeview,
+        entry,
+        results_label,
+        prev_btn,
+        next_btn,
+        placeholder_names=None,
+        full_name_func=None,
+    ):
         self.view = treeview
         self.entry = entry
         self.results_label = results_label
         self.prev_btn = prev_btn
         self.next_btn = next_btn
         self.placeholder_names = placeholder_names or {
-            "(loading...)", "(no datasets)", "(empty)", "(no holds)"
+            "(loading...)",
+            "(no datasets)",
+            "(empty)",
+            "(no holds)",
         }
         self.full_name_func = full_name_func
         self._text = ""
@@ -1031,9 +1108,7 @@ class TreeSearch:
     def _on_changed(self, entry):
         if self._debounce_id is not None:
             GLib.source_remove(self._debounce_id)
-        self._debounce_id = GLib.timeout_add(
-            150, self._do_search, entry.get_text().strip()
-        )
+        self._debounce_id = GLib.timeout_add(150, self._do_search, entry.get_text().strip())
 
     def _do_search(self, text):
         self._debounce_id = None
@@ -1215,33 +1290,39 @@ def get_tree_selection_items(view):
 
         if ds_type == "hold":
             parent_iter = model.iter_parent(tree_iter)
-            snap_name = model.get_value(parent_iter, 0).lstrip('@')
+            snap_name = model.get_value(parent_iter, 0).lstrip("@")
             ds_iter = model.iter_parent(parent_iter)
             dataset = build_full_dataset_name(model, ds_iter)
-            items.append({
-                "type": "hold",
-                "tag": name,
-                "snapshot": snap_name,
-                "dataset": dataset,
-                "zfs_type": ds_type,
-            })
-        elif name.startswith('@') or ds_type == "snapshot":
+            items.append(
+                {
+                    "type": "hold",
+                    "tag": name,
+                    "snapshot": snap_name,
+                    "dataset": dataset,
+                    "zfs_type": ds_type,
+                }
+            )
+        elif name.startswith("@") or ds_type == "snapshot":
             parent_iter = model.iter_parent(tree_iter)
             dataset = build_full_dataset_name(model, parent_iter)
-            items.append({
-                "type": "snapshot",
-                "name": name.lstrip('@'),
-                "dataset": dataset,
-                "zfs_type": ds_type,
-            })
+            items.append(
+                {
+                    "type": "snapshot",
+                    "name": name.lstrip("@"),
+                    "dataset": dataset,
+                    "zfs_type": ds_type,
+                }
+            )
         elif model.iter_parent(tree_iter) is None:
             items.append({"type": "pool", "name": name, "zfs_type": ds_type})
         else:
-            items.append({
-                "type": "dataset",
-                "name": build_full_dataset_name(model, tree_iter),
-                "zfs_type": ds_type,
-            })
+            items.append(
+                {
+                    "type": "dataset",
+                    "name": build_full_dataset_name(model, tree_iter),
+                    "zfs_type": ds_type,
+                }
+            )
     return items
 
 
@@ -1268,6 +1349,7 @@ def _allow_scrolled_treeview_shrink(treeview):
 
 def _ensure_treeview_scrolling(treeview):
     """Apply _allow_scrolled_treeview_shrink once *treeview* is realized."""
+
     def _on_realize(tv):
         _allow_scrolled_treeview_shrink(tv)
 
@@ -1354,6 +1436,7 @@ def confirm_and_minimize_width(window):
     window.config.setdefault("ui_state", {}).setdefault("treeview_columns", {})
     window.config["ui_state"]["treeview_columns"] = {}
     from backup_config import save_config
+
     save_config(window.config)
 
     _width, height = window.get_size()
@@ -1362,10 +1445,7 @@ def confirm_and_minimize_width(window):
     window.queue_resize()
     window.resize(1, height)
 
-    log_msg(
-        f"INFO: Reset {count} column width(s) to minimum and minimized "
-        f"window width"
-    )
+    log_msg(f"INFO: Reset {count} column width(s) to minimum and minimized window width")
 
 
 def create_menu_bar(app):
@@ -1440,30 +1520,22 @@ class TextViewSearch:
         self.entry.connect("activate", lambda _e: self.search())
 
         search_btn = Gtk.Button()
-        search_btn.set_image(
-            Gtk.Image.new_from_icon_name("system-search", Gtk.IconSize.BUTTON)
-        )
+        search_btn.set_image(Gtk.Image.new_from_icon_name("system-search", Gtk.IconSize.BUTTON))
         search_btn.set_tooltip_text("Search")
         search_btn.connect("clicked", lambda _b: self.search())
 
         reset_btn = Gtk.Button()
-        reset_btn.set_image(
-            Gtk.Image.new_from_icon_name("edit-clear", Gtk.IconSize.BUTTON)
-        )
+        reset_btn.set_image(Gtk.Image.new_from_icon_name("edit-clear", Gtk.IconSize.BUTTON))
         reset_btn.set_tooltip_text("Reset")
         reset_btn.connect("clicked", lambda _b: self.clear())
 
         prev_btn = Gtk.Button()
-        prev_btn.set_image(
-            Gtk.Image.new_from_icon_name("go-previous", Gtk.IconSize.BUTTON)
-        )
+        prev_btn.set_image(Gtk.Image.new_from_icon_name("go-previous", Gtk.IconSize.BUTTON))
         prev_btn.set_tooltip_text("Previous match")
         prev_btn.connect("clicked", lambda _b: self.navigate(-1))
 
         next_btn = Gtk.Button()
-        next_btn.set_image(
-            Gtk.Image.new_from_icon_name("go-next", Gtk.IconSize.BUTTON)
-        )
+        next_btn.set_image(Gtk.Image.new_from_icon_name("go-next", Gtk.IconSize.BUTTON))
         next_btn.set_tooltip_text("Next match")
         next_btn.connect("clicked", lambda _b: self.navigate(1))
 
@@ -1561,9 +1633,7 @@ class TextViewSearch:
     def _update_counter(self):
         """Update the match counter label (e.g. '3 / 12')."""
         total = len(self.matches)
-        self.counter.set_text(
-            "" if total == 0 else f"{self.current + 1} / {total}"
-        )
+        self.counter.set_text("" if total == 0 else f"{self.current + 1} / {total}")
 
 
 class LogPopoutWindow(Gtk.Window):
@@ -1594,16 +1664,15 @@ def _on_popout_toggled(button, app, panel_box):
         app.popout_window.show_all()
         # Restore saved geometry
         from backup_config import get_ui_state
+
         state = get_ui_state(app.config).get("log_window", {})
         if state.get("width") and state.get("height"):
             app.popout_window.resize(state["width"], state["height"])
         if state.get("x") is not None and state.get("y") is not None:
             app.popout_window.move(state["x"], state["y"])
         # Wire up geometry tracking
-        if hasattr(app, '_ui_state') and app._ui_state is not None:
-            app.popout_window.connect(
-                "configure-event", app._ui_state.on_configure
-            )
+        if hasattr(app, "_ui_state") and app._ui_state is not None:
+            app.popout_window.connect("configure-event", app._ui_state.on_configure)
     else:
         # Pop back in
         app.popout_window.box.remove(panel_box)
@@ -1611,9 +1680,8 @@ def _on_popout_toggled(button, app, panel_box):
         app.popout_window.hide()
         # Restore vpaned position
         from backup_config import get_ui_state
-        vpaned_pos = get_ui_state(app.config).get("main_window", {}).get(
-            "vpaned_position"
-        )
+
+        vpaned_pos = get_ui_state(app.config).get("main_window", {}).get("vpaned_position")
         if vpaned_pos:
             app.vpaned.set_position(vpaned_pos)
 
@@ -1707,9 +1775,7 @@ def create_info_panel(app):
 
     app.log_status_event_box = Gtk.EventBox()
     app.log_status_event_box.add(app.log_status_label)
-    app.log_status_event_box.set_tooltip_text(
-        "Click to find the latest warning/error message"
-    )
+    app.log_status_event_box.set_tooltip_text("Click to find the latest warning/error message")
     app.log_status_event_box.connect(
         "button-press-event",
         lambda _widget, _event: _on_log_status_clicked(app),
@@ -1719,9 +1785,7 @@ def create_info_panel(app):
 
     app._info_panel_level = DEFAULT_MSG_LEVEL
     app._info_panel_lines = []
-    app.log_level_button = Gtk.MenuButton(
-        label=app._info_panel_level
-    )
+    app.log_level_button = Gtk.MenuButton(label=app._info_panel_level)
     app.log_level_button.set_tooltip_text("Filter messages shown in the log panel")
     log_menu = Gtk.Menu()
     log_group = []
@@ -1741,12 +1805,8 @@ def create_info_panel(app):
     app._info_panel_short_prefix = True
     app._info_short_prefix_toggle = Gtk.ToggleButton(label="Short prefix")
     app._info_short_prefix_toggle.set_active(True)
-    app._info_short_prefix_toggle.set_tooltip_text(
-        "Show only date and time in the log panel"
-    )
-    app._info_short_prefix_toggle.connect(
-        "toggled", app._on_info_short_prefix_toggled
-    )
+    app._info_short_prefix_toggle.set_tooltip_text("Show only date and time in the log panel")
+    app._info_short_prefix_toggle.connect("toggled", app._on_info_short_prefix_toggled)
     stdin_box.pack_start(app._info_short_prefix_toggle, False, False, 0)
 
     clear_btn = Gtk.Button(label="Clear")
@@ -1764,19 +1824,13 @@ def create_info_panel(app):
 
     # Pop-out toggle button
     app._popout_toggle = Gtk.ToggleButton()
-    app._popout_toggle.set_image(
-        Gtk.Image.new_from_icon_name("window-new", Gtk.IconSize.BUTTON)
-    )
-    app._popout_toggle.set_tooltip_text(
-        "Pop out log panel into a separate window"
-    )
+    app._popout_toggle.set_image(Gtk.Image.new_from_icon_name("window-new", Gtk.IconSize.BUTTON))
+    app._popout_toggle.set_tooltip_text("Pop out log panel into a separate window")
     app._popout_toggle.connect("toggled", _on_popout_toggled, app, panel_box)
     stdin_box.pack_end(app._popout_toggle, False, False, 0)
 
     # Create pop-out window (hidden by default)
-    app.popout_window = LogPopoutWindow(
-        app, toggle_widget=app._popout_toggle
-    )
+    app.popout_window = LogPopoutWindow(app, toggle_widget=app._popout_toggle)
 
     set_log_sink(app.log_message)
 
@@ -1797,6 +1851,7 @@ class UIStateManager:
     def restore(self):
         """Restore window state from config."""
         from backup_config import get_ui_state
+
         state = get_ui_state(self.config)
         mw = state.get("main_window", {})
 
@@ -1835,6 +1890,7 @@ class UIStateManager:
         with the same debounce used for window geometry.
         """
         from backup_config import get_ui_state
+
         ui_state = get_ui_state(self.config)
         saved_pos = ui_state.get("paned_positions", {}).get(state_key)
 
@@ -1861,6 +1917,7 @@ class UIStateManager:
         # allocated from saving placeholder widths for hidden stack pages.
         # state is not cached yet; read directly from config
         from backup_config import get_ui_state
+
         ui_state = get_ui_state(self.config)
         saved = ui_state.get("treeview_columns", {}).get(state_key)
         saved_widths = saved if saved else []
@@ -1898,9 +1955,7 @@ class UIStateManager:
             # default/minimum values.
             for col in treeview.get_columns():
                 if col.get_resizable():
-                    col.connect(
-                        "notify::width", lambda *_a: self._schedule_save()
-                    )
+                    col.connect("notify::width", lambda *_a: self._schedule_save())
                     col.connect(
                         "notify::fixed-width",
                         lambda *_a: self._schedule_save(),
@@ -1934,12 +1989,13 @@ class UIStateManager:
 
     def _do_save(self):
         from backup_config import save_ui_state
+
         self._timer = None
         state = {"main_window": {}, "log_window": {}}
         mw = state["main_window"]
         mw["maximized"] = bool(
-            self.window.get_window() and
-            self.window.get_window().get_state() & Gdk.WindowState.MAXIMIZED
+            self.window.get_window()
+            and self.window.get_window().get_state() & Gdk.WindowState.MAXIMIZED
         )
         if not mw["maximized"]:
             width, height = self.window.get_size()
@@ -1961,10 +2017,7 @@ class UIStateManager:
             state["paned_positions"] = paned_positions
 
         lw = state["log_window"]
-        popped = (
-            self.window.popout_window is not None
-            and self.window.popout_window.get_visible()
-        )
+        popped = self.window.popout_window is not None and self.window.popout_window.get_visible()
         lw["popped_out"] = popped
         if popped and self.window.popout_window:
             pw = self.window.popout_window
@@ -2008,14 +2061,14 @@ class UIStateManager:
             self._do_save()
 
 
-def append_treeview_copy_items(menu, treeview, path_info, app=None,
-                               datasets_view=None):
+def append_treeview_copy_items(menu, treeview, path_info, app=None, datasets_view=None):
     """Append Copy / Copy full name / Copy row items to *menu*.
 
     *path_info* is the tuple returned by ``treeview.get_path_at_pos``.
     If *datasets_view* is provided and matches *treeview*, additional
     "Copy full name" items are offered for dataset/snapshot rows.
     """
+
     def _copy_cb(text):
         if app is not None:
             display = app.get_display()
@@ -2067,6 +2120,7 @@ def enable_treeview_copy(treeview, app=None, datasets_view=None):
     If *datasets_view* is provided and matches *treeview*, additional
     "Copy full name" items are offered for dataset/snapshot rows.
     """
+
     def _on_button_press(tv, event):
         if event.button != 3:
             return False
@@ -2076,9 +2130,7 @@ def enable_treeview_copy(treeview, app=None, datasets_view=None):
         path, column = path_info[0], path_info[1]
         tv.set_cursor(path, column, False)
         menu = Gtk.Menu()
-        append_treeview_copy_items(
-            menu, tv, path_info, app=app, datasets_view=datasets_view
-        )
+        append_treeview_copy_items(menu, tv, path_info, app=app, datasets_view=datasets_view)
         menu.show_all()
         menu.popup_at_pointer(event)
         return True

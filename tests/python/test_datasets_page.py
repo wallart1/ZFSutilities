@@ -23,6 +23,7 @@ class _FakePoolRow:
 
 class _FakeStore:
     """Minimal TreeStore stand-in."""
+
     def __init__(self):
         self._rows = []
         self._counter = 0
@@ -103,8 +104,10 @@ class TestRefreshDatasetsPage(unittest.TestCase):
 
     def test_loads_online_pools_and_summary(self):
         app = self._make_app()
-        with patch.object(dp, "get_expanded_rows", return_value=set()), \
-             patch.object(dp, "restore_expanded_rows"):
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+        ):
             dp.refresh_datasets_page(app)
 
         app.ctx.zfs_repository.list_pools.assert_called_once()
@@ -115,8 +118,10 @@ class TestRefreshDatasetsPage(unittest.TestCase):
 
     def test_pool_filter_restricts_list(self):
         app = self._make_app()
-        with patch.object(dp, "get_expanded_rows", return_value=set()), \
-             patch.object(dp, "restore_expanded_rows"):
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+        ):
             dp.refresh_datasets_page(app, pool_filter="backup")
 
         self.assertEqual(len(app.datasets_store._rows), 2)  # backup + dummy child
@@ -126,8 +131,10 @@ class TestRefreshDatasetsPage(unittest.TestCase):
     def test_handles_pool_list_error(self):
         app = self._make_app()
         app.ctx.zfs_repository.list_pools.side_effect = FileNotFoundError("zfs not found")
-        with patch.object(dp, "get_expanded_rows", return_value=set()), \
-             patch.object(dp, "restore_expanded_rows"):
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+        ):
             dp.refresh_datasets_page(app)
 
         self.assertEqual(len(app.datasets_store._rows), 0)
@@ -136,9 +143,11 @@ class TestRefreshDatasetsPage(unittest.TestCase):
     def test_preserves_scroll_position(self):
         app = self._make_app()
         app.datasets_scrolled.get_vadjustment.return_value.get_value.return_value = 150.0
-        with patch.object(dp, "get_expanded_rows", return_value=set()), \
-             patch.object(dp, "restore_expanded_rows"), \
-             patch.object(dp.GLib, "idle_add") as mock_idle:
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+            patch.object(dp.GLib, "idle_add") as mock_idle,
+        ):
             dp.refresh_datasets_page(app)
 
         app.datasets_scrolled.get_vadjustment.assert_called_once()
@@ -151,9 +160,11 @@ class TestRefreshDatasetsPage(unittest.TestCase):
     def test_no_scroll_restore_when_scrolled_missing(self):
         app = self._make_app()
         del app.datasets_scrolled
-        with patch.object(dp, "get_expanded_rows", return_value=set()), \
-             patch.object(dp, "restore_expanded_rows"), \
-             patch.object(dp.GLib, "idle_add") as mock_idle:
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+            patch.object(dp.GLib, "idle_add") as mock_idle,
+        ):
             dp.refresh_datasets_page(app)
 
         mock_idle.assert_not_called()
@@ -186,9 +197,11 @@ class TestRefreshDatasetsPage(unittest.TestCase):
     def test_no_scroll_restore_when_adjustment_missing(self):
         app = self._make_app()
         app.datasets_scrolled.get_vadjustment.return_value = None
-        with patch.object(dp, "get_expanded_rows", return_value=set()), \
-             patch.object(dp, "restore_expanded_rows"), \
-             patch.object(dp.GLib, "idle_add") as mock_idle:
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+            patch.object(dp.GLib, "idle_add") as mock_idle,
+        ):
             dp.refresh_datasets_page(app)
         mock_idle.assert_not_called()
 
@@ -265,10 +278,12 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(False)
 
     def test_show_big_stuff_disabled_for_multiple_selections(self):
-        app = self._make_app([
-            {"type": "pool", "name": "tank"},
-            {"type": "pool", "name": "backup"},
-        ])
+        app = self._make_app(
+            [
+                {"type": "pool", "name": "tank"},
+                {"type": "pool", "name": "backup"},
+            ]
+        )
         app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(False)
 
     def test_show_big_stuff_disabled_when_empty(self):
@@ -298,19 +313,19 @@ class TestExpandSelectedDatasets(unittest.TestCase):
 
         model.get_value.side_effect = _get_value
         paths = [r[0] for r in rows]
-        app.datasets_view.get_selection.return_value.get_selected_rows.return_value = (
-            model, paths
-        )
+        app.datasets_view.get_selection.return_value.get_selected_rows.return_value = (model, paths)
         app.datasets_search = MagicMock()
         return app, model, nodes
 
     @patch.object(dp.Gtk, "events_pending", return_value=False)
     @patch.object(dp, "expand_tree_recursively")
     def test_expands_each_selected_row(self, mock_expand, _mock_events):
-        app, model, nodes = self._make_app([
-            ("0", "tank", ""),
-            ("1", "backup", ""),
-        ])
+        app, model, nodes = self._make_app(
+            [
+                ("0", "tank", ""),
+                ("1", "backup", ""),
+            ]
+        )
         dp.expand_selected_datasets(app)
 
         self.assertEqual(mock_expand.call_count, 2)
@@ -323,11 +338,13 @@ class TestExpandSelectedDatasets(unittest.TestCase):
     @patch.object(dp.Gtk, "events_pending", return_value=False)
     @patch.object(dp, "expand_tree_recursively")
     def test_skips_placeholders_and_holds(self, mock_expand, _mock_events):
-        app, model, nodes = self._make_app([
-            ("0", "(no holds)", ""),
-            ("1", "holdtag", "hold"),
-            ("2", "tank", ""),
-        ])
+        app, model, nodes = self._make_app(
+            [
+                ("0", "(no holds)", ""),
+                ("1", "holdtag", "hold"),
+                ("2", "tank", ""),
+            ]
+        )
         dp.expand_selected_datasets(app)
 
         mock_expand.assert_called_once_with(app.datasets_view, model, nodes["2"])
@@ -345,12 +362,17 @@ class TestExpandSelectedDatasets(unittest.TestCase):
     @patch.object(dp.Gtk, "events_pending", return_value=False)
     @patch.object(dp, "expand_tree_recursively")
     def test_no_dialog_when_all_selected_are_skipped(
-        self, mock_expand, _mock_events, mock_dialog,
+        self,
+        mock_expand,
+        _mock_events,
+        mock_dialog,
     ):
-        app, _, _ = self._make_app([
-            ("0", "(no datasets)", ""),
-            ("1", "holdtag", "hold"),
-        ])
+        app, _, _ = self._make_app(
+            [
+                ("0", "(no datasets)", ""),
+                ("1", "holdtag", "hold"),
+            ]
+        )
         dp.expand_selected_datasets(app)
 
         mock_expand.assert_not_called()
@@ -360,10 +382,12 @@ class TestExpandSelectedDatasets(unittest.TestCase):
     @patch.object(dp.Gtk, "events_pending", return_value=False)
     @patch.object(dp, "expand_tree_recursively")
     def test_skips_stale_paths_that_raise_valueerror(self, mock_expand, _mock_events):
-        app, model, nodes = self._make_app([
-            ("0", "tank", ""),
-            ("1", "backup", ""),
-        ])
+        app, model, nodes = self._make_app(
+            [
+                ("0", "tank", ""),
+                ("1", "backup", ""),
+            ]
+        )
 
         def _get_iter(path):
             if path == "0":
@@ -402,16 +426,20 @@ class TestRefreshDatasetsPageSearch(unittest.TestCase):
     def test_refresh_reruns_active_search(self):
         app = self._make_app()
         app.datasets_search._text = "foo"
-        with patch.object(dp, "get_expanded_rows", return_value=set()), \
-             patch.object(dp, "restore_expanded_rows"):
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+        ):
             dp.refresh_datasets_page(app)
         app.datasets_search._run_search.assert_called_once()
 
     def test_refresh_skips_search_when_entry_empty(self):
         app = self._make_app()
         app.datasets_search._text = ""
-        with patch.object(dp, "get_expanded_rows", return_value=set()), \
-             patch.object(dp, "restore_expanded_rows"):
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+        ):
             dp.refresh_datasets_page(app)
         app.datasets_search._run_search.assert_not_called()
 
@@ -449,15 +477,11 @@ class TestDatasetsContextMenu(unittest.TestCase):
 
     def test_right_click_shows_send_details_menu(self):
         path_info = (MagicMock(), None, 0, 0)
-        treeview, selection = self._make_treeview(
-            path_selected=False, path_info=path_info
-        )
+        treeview, selection = self._make_treeview(path_selected=False, path_info=path_info)
         app = MagicMock()
 
         with patch.object(dp, "append_treeview_copy_items") as mock_append:
-            result = dp._on_datasets_button_press(
-                treeview, self._make_event(3), app
-            )
+            result = dp._on_datasets_button_press(treeview, self._make_event(3), app)
 
         self.assertTrue(result)
         selection.unselect_all.assert_called_once()
@@ -480,12 +504,12 @@ class TestDatasetsContextMenu(unittest.TestCase):
     def test_send_details_to_log_warns_when_no_selection(self):
         app = MagicMock()
         app.datasets_view = MagicMock()
-        with patch.object(dp, "get_tree_selection_items", return_value=[]), \
-             patch.object(dp, "log_msg") as mock_log:
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=[]),
+            patch.object(dp, "log_msg") as mock_log,
+        ):
             dp._send_selection_details_to_log(app)
-        mock_log.assert_called_once_with(
-            "WARN: Select an item to send details to log"
-        )
+        mock_log.assert_called_once_with("WARN: Select an item to send details to log")
 
     def test_send_details_to_log_warns_on_multiple_selection(self):
         app = MagicMock()
@@ -494,12 +518,12 @@ class TestDatasetsContextMenu(unittest.TestCase):
             {"type": "dataset", "name": "tank/data"},
             {"type": "dataset", "name": "tank/other"},
         ]
-        with patch.object(dp, "get_tree_selection_items", return_value=items), \
-             patch.object(dp, "log_msg") as mock_log:
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "log_msg") as mock_log,
+        ):
             dp._send_selection_details_to_log(app)
-        mock_log.assert_called_once_with(
-            "WARN: Send details to log requires a single selection"
-        )
+        mock_log.assert_called_once_with("WARN: Send details to log requires a single selection")
 
     def test_send_details_to_log_logs_dataset_details(self):
         app = MagicMock()
@@ -511,13 +535,13 @@ class TestDatasetsContextMenu(unittest.TestCase):
         }
         items = [{"type": "dataset", "name": "tank/data"}]
 
-        with patch.object(dp, "get_tree_selection_items", return_value=items), \
-             patch.object(dp, "log_msg") as mock_log:
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "log_msg") as mock_log,
+        ):
             dp._send_selection_details_to_log(app)
 
-        app.ctx.zfs_repository.get_all_properties.assert_called_once_with(
-            "tank/data"
-        )
+        app.ctx.zfs_repository.get_all_properties.assert_called_once_with("tank/data")
         self.assertEqual(mock_log.call_count, 1)
         logged = mock_log.call_args[0][0]
         self.assertIn("INFO: Details for tank/data (dataset)", logged)
@@ -535,13 +559,15 @@ class TestDatasetsContextMenu(unittest.TestCase):
         }
         items = [{"type": "pool", "name": "tank"}]
 
-        with patch.object(dp, "get_tree_selection_items", return_value=items), \
-             patch.object(dp, "log_msg") as mock_log:
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "log_msg") as mock_log,
+        ):
             dp._send_selection_details_to_log(app)
 
         app.ctx.zfs_repository.get_all_properties.assert_called_once_with("tank")
         logged = mock_log.call_args[0][0]
-        self.assertIn("INFO: Details for tank (pool)", logged)
+        self.assertIn("INFO: Details for tank (dataset)", logged)
         self.assertIn("health: ONLINE", logged)
         self.assertIn("size: 10T", logged)
         self.assertIn("capacity: 50%", logged)
@@ -556,13 +582,13 @@ class TestDatasetsContextMenu(unittest.TestCase):
         }
         items = [{"type": "snapshot", "name": "snap1", "dataset": "tank/data"}]
 
-        with patch.object(dp, "get_tree_selection_items", return_value=items), \
-             patch.object(dp, "log_msg") as mock_log:
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "log_msg") as mock_log,
+        ):
             dp._send_selection_details_to_log(app)
 
-        app.ctx.zfs_repository.get_all_properties.assert_called_once_with(
-            "tank/data@snap1"
-        )
+        app.ctx.zfs_repository.get_all_properties.assert_called_once_with("tank/data@snap1")
         logged = mock_log.call_args[0][0]
         self.assertIn("INFO: Details for tank/data@snap1 (snapshot)", logged)
         self.assertIn("type: snapshot", logged)
@@ -572,15 +598,19 @@ class TestDatasetsContextMenu(unittest.TestCase):
     def test_send_details_to_log_logs_hold_details(self):
         app = MagicMock()
         app.datasets_view = MagicMock()
-        items = [{
-            "type": "hold",
-            "tag": "keep",
-            "snapshot": "snap1",
-            "dataset": "tank/data",
-        }]
+        items = [
+            {
+                "type": "hold",
+                "tag": "keep",
+                "snapshot": "snap1",
+                "dataset": "tank/data",
+            }
+        ]
 
-        with patch.object(dp, "get_tree_selection_items", return_value=items), \
-             patch.object(dp, "log_msg") as mock_log:
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "log_msg") as mock_log,
+        ):
             dp._send_selection_details_to_log(app)
 
         app.ctx.zfs_repository.get_all_properties.assert_not_called()

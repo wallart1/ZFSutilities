@@ -6,7 +6,6 @@ import config_migrations
 
 
 class TestIndividualMigrations(unittest.TestCase):
-
     def test_migrate_1_to_2_adds_archive_path(self):
         config = {"config_version": 1}
         result = config_migrations._migrate_1_to_2(config)
@@ -174,8 +173,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_22(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 22)
+    def test_config_version_is_23(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 23)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -245,6 +244,52 @@ class TestIndividualMigrations(unittest.TestCase):
         result2 = config_migrations._migrate_21_to_22(result1)
         self.assertEqual(result1, result2)
 
+    def test_migrate_22_to_23_adds_excludes_to_pull_steps(self):
+        config = {
+            "config_version": 22,
+            "backup": {
+                "pull_steps": [
+                    {"active": True, "source": "host:/src", "dest": "/dst"},
+                ],
+            },
+        }
+        result = config_migrations._migrate_22_to_23(config)
+        self.assertEqual(result["config_version"], 23)
+        self.assertEqual(result["backup"]["pull_steps"][0]["excludes"], [])
+
+    def test_migrate_22_to_23_preserves_existing_excludes(self):
+        config = {
+            "config_version": 22,
+            "backup": {
+                "pull_steps": [
+                    {
+                        "active": True,
+                        "source": "host:/src",
+                        "dest": "/dst",
+                        "excludes": ["*.tmp"],
+                    },
+                ],
+            },
+        }
+        result = config_migrations._migrate_22_to_23(config)
+        self.assertEqual(result["config_version"], 23)
+        self.assertEqual(result["backup"]["pull_steps"][0]["excludes"], ["*.tmp"])
+
+    def test_migrate_22_to_23_handles_missing_backup(self):
+        config = {"config_version": 22}
+        result = config_migrations._migrate_22_to_23(config)
+        self.assertEqual(result["config_version"], 23)
+        self.assertNotIn("backup", result)
+
+    def test_migrate_22_to_23_idempotent(self):
+        config = {
+            "config_version": 22,
+            "backup": {"pull_steps": [{"active": True, "source": "a", "dest": "b"}]},
+        }
+        result1 = config_migrations._migrate_22_to_23(dict(config))
+        result2 = config_migrations._migrate_22_to_23(result1)
+        self.assertEqual(result1, result2)
+
     def test_migrate_15_to_16_adds_prune_pools_order(self):
         config = {"config_version": 15}
         result = config_migrations._migrate_15_to_16(config)
@@ -259,7 +304,6 @@ class TestIndividualMigrations(unittest.TestCase):
 
 
 class TestRunMigrations(unittest.TestCase):
-
     def test_run_migrations_from_version_1(self):
         config = {"config_version": 1}
         result = config_migrations.run_migrations(config)
@@ -274,7 +318,9 @@ class TestRunMigrations(unittest.TestCase):
     def test_run_migrations_calls_save_func(self):
         saves = []
         config = {"config_version": 1}
-        config_migrations.run_migrations(config, save_func=lambda c: saves.append(c["config_version"]))
+        config_migrations.run_migrations(
+            config, save_func=lambda c: saves.append(c["config_version"])
+        )
         self.assertIn(2, saves)
         self.assertEqual(saves[-1], config_migrations.CONFIG_VERSION)
 
@@ -339,9 +385,18 @@ class TestRunMigrations(unittest.TestCase):
             "checkagainst": {
                 "backup_derived_active": False,
                 "offsite_derived_active": False,
-                "backup_derived": [{"dataset": "src", "quals": "0", "counterpart": "dst", "label": "dailybackup"}],
+                "backup_derived": [
+                    {"dataset": "src", "quals": "0", "counterpart": "dst", "label": "dailybackup"}
+                ],
                 "offsite_derived": [],
-                "user_entries": [{"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "offsite"}],
+                "user_entries": [
+                    {
+                        "dataset": "tank/a",
+                        "quals": "0",
+                        "counterpart": "backup/a",
+                        "label": "offsite",
+                    }
+                ],
             },
         }
         result = config_migrations._migrate_17_to_18(dict(config))
@@ -363,18 +418,30 @@ class TestRunMigrations(unittest.TestCase):
             "config_version": 18,
             "checkagainst": {
                 "backup_derived": [
-                    {"dataset": "tank/a", "quals": "0", "counterpart": "backup/a", "label": "daily"},
+                    {
+                        "dataset": "tank/a",
+                        "quals": "0",
+                        "counterpart": "backup/a",
+                        "label": "daily",
+                    },
                 ],
                 "offsite_derived": [],
                 "user_entries": [
-                    {"dataset": "fivebays/src", "quals": "1", "counterpart": "-", "label": "offsite"},
+                    {
+                        "dataset": "fivebays/src",
+                        "quals": "1",
+                        "counterpart": "-",
+                        "label": "offsite",
+                    },
                 ],
             },
         }
         result = config_migrations._migrate_18_to_19(config)
         self.assertEqual(result["config_version"], 19)
         self.assertEqual(result["checkagainst"]["backup_derived"][0]["source_root"], "tank/a")
-        self.assertEqual(result["checkagainst"]["backup_derived"][0]["dest_root"], "backup/a/tank/a")
+        self.assertEqual(
+            result["checkagainst"]["backup_derived"][0]["dest_root"], "backup/a/tank/a"
+        )
         self.assertEqual(result["checkagainst"]["user_entries"][0]["source_root"], "fivebays/src")
         self.assertEqual(result["checkagainst"]["user_entries"][0]["dest_root"], "src")
 
@@ -403,7 +470,7 @@ class TestRunMigrations(unittest.TestCase):
             "offsite": {"offsite_pools": ["z40tb"]},
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 22)
+        self.assertEqual(result["config_version"], 23)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))
         self.assertEqual(result["dashboard"]["refresh_seconds"], 30)
         row = result["checkagainst"]["user_entries"][0]
@@ -419,6 +486,7 @@ class TestRunMigrations(unittest.TestCase):
         self.assertFalse(result["backup"]["pause_scrubs"])
         self.assertFalse(result["offsite"]["pause_scrubs"])
         self.assertFalse(result["restore"]["pause_scrubs"])
+        self.assertEqual(result["backup"]["pull_steps"], [])
 
     def test_run_migrations_from_version_19(self):
         config = {
@@ -430,7 +498,7 @@ class TestRunMigrations(unittest.TestCase):
             },
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 22)
+        self.assertEqual(result["config_version"], 23)
         self.assertIn("retention_verb_messages", result)
         self.assertIs(result["retention_verb_messages"], False)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))

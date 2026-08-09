@@ -22,6 +22,7 @@ from feature_config import (
 )
 from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
+    append_treeview_copy_items,
     configure_treeview_column,
     set_button_markup_red,
     set_monospace_font,
@@ -217,7 +218,8 @@ def create_pools_page(app):
             app.pool_store.set_sort_func(col_idx, _numeric_sort_func, col_idx)
         app.pool_view.append_column(col)
 
-    app.enable_treeview_copy(app.pool_view)
+    # Right-click context menu (Copy + Send details to log)
+    app.pool_view.connect("button-press-event", _on_pool_button_press, app)
     app._ui_state.bind_treeview(app.pool_view, "pools_pool_view")
 
     # Enable drag-and-drop reordering; disable while sorted
@@ -887,3 +889,62 @@ def update_pools_button_sensitivity(app):
         btn = getattr(app, attr, None)
         if btn:
             btn.set_sensitive(sensitive)
+
+
+# ---------------------------------------------------------------------------
+# Context menu
+# ---------------------------------------------------------------------------
+
+
+def _on_pool_button_press(treeview, event, app):
+    """Show a right-click context menu for the selected pool registry row."""
+    if event.button != 3:  # Right-click only
+        return False
+
+    path_info = treeview.get_path_at_pos(int(event.x), int(event.y))
+    if path_info is None:
+        return False
+    tree_path, column, _cell_x, _cell_y = path_info
+
+    selection = treeview.get_selection()
+    if not selection.path_is_selected(tree_path):
+        selection.unselect_all()
+        selection.select_path(tree_path)
+    treeview.set_cursor(tree_path, column, False)
+
+    menu = Gtk.Menu()
+    append_treeview_copy_items(menu, treeview, path_info, app=app)
+    menu.append(Gtk.SeparatorMenuItem())
+    details_item = Gtk.MenuItem(label="Send details to log")
+    details_item.connect("activate", lambda _i: _send_pool_details_to_log(app))
+    menu.append(details_item)
+
+    menu.show_all()
+    menu.popup_at_pointer(event)
+    return True
+
+
+def _send_pool_details_to_log(app):
+    """Gather detailed zpool properties for the selected pool and log them."""
+    selection = app.pool_view.get_selection()
+    model, pathlist = selection.get_selected_rows()
+    if not pathlist:
+        log_msg("WARN: Select a pool to send details to log")
+        return
+    if len(pathlist) > 1:
+        log_msg("WARN: Send details to log requires a single selection")
+        return
+
+    tree_iter = model.get_iter(pathlist[0])
+    pool_name = model.get_value(tree_iter, COL_NAME)
+    repo = app.ctx.zfs_repository
+
+    try:
+        props = repo.get_all_pool_properties(pool_name)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log_msg(f"WARN: Error reading details for {pool_name}: {e}")
+        return
+
+    log_msg(f"INFO: Details for {pool_name} (pool)")
+    for prop in sorted(props):
+        log_msg(f"  {prop}: {props[prop]}")

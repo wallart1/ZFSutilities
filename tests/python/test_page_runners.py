@@ -46,18 +46,22 @@ class TestRestorePageRun(unittest.TestCase):
     def _patch_dependencies(self, auto_dest=False, dest="tank/dest"):
         return patch.multiple(
             "restore_page",
-            collect_restore_config=MagicMock(return_value={
-                "source": "backuppool/tank/source",
-                "dest": dest,
-                "auto_dest": auto_dest,
-                "do_part1": True,
-                "do_part2": False,
-                "variables": {},
-            }),
+            collect_restore_config=MagicMock(
+                return_value={
+                    "source": "backuppool/tank/source",
+                    "dest": dest,
+                    "auto_dest": auto_dest,
+                    "do_part1": True,
+                    "do_part2": False,
+                    "variables": {},
+                }
+            ),
             get_pool_names=MagicMock(return_value=["tank", "backuppool"]),
             compute_auto_destination=MagicMock(return_value="tank/source"),
             compute_restore_params=MagicMock(return_value=(1, "tank")),
-            build_restore_command=MagicMock(return_value=BashStep(["echo", "restore"], "Restore step")),
+            build_restore_command=MagicMock(
+                return_value=BashStep(["echo", "restore"], "Restore step")
+            ),
         )
 
     def test_prepare_session_log_called(self):
@@ -79,28 +83,33 @@ class TestRestorePageRun(unittest.TestCase):
         app = _mock_app_with_runner()
         app.parent_dir = REPO_ROOT
 
-        with patch.object(restore_page, "compute_auto_destination",
-                          return_value="tank/source") as mock_auto, \
-             patch.object(restore_page, "get_pool_names",
-                          return_value=["tank", "backuppool"]), \
-             patch.object(restore_page, "collect_restore_config",
-                          return_value={
-                              "source": "backuppool/tank/source",
-                              "dest": "",
-                              "auto_dest": True,
-                              "do_part1": True,
-                              "do_part2": False,
-                              "variables": {},
-                          }), \
-             patch.object(restore_page, "compute_restore_params",
-                          return_value=(1, "tank")), \
-             patch.object(restore_page, "build_restore_command",
-                          return_value=BashStep(["echo", "restore"], "Restore step")):
+        with (
+            patch.object(
+                restore_page, "compute_auto_destination", return_value="tank/source"
+            ) as mock_auto,
+            patch.object(restore_page, "get_pool_names", return_value=["tank", "backuppool"]),
+            patch.object(
+                restore_page,
+                "collect_restore_config",
+                return_value={
+                    "source": "backuppool/tank/source",
+                    "dest": "",
+                    "auto_dest": True,
+                    "do_part1": True,
+                    "do_part2": False,
+                    "variables": {},
+                },
+            ),
+            patch.object(restore_page, "compute_restore_params", return_value=(1, "tank")),
+            patch.object(
+                restore_page,
+                "build_restore_command",
+                return_value=BashStep(["echo", "restore"], "Restore step"),
+            ),
+        ):
             restore_page.on_restore_run(app, app.ctx)
 
-        mock_auto.assert_called_once_with(
-            "backuppool/tank/source", ["tank", "backuppool"]
-        )
+        mock_auto.assert_called_once_with("backuppool/tank/source", ["tank", "backuppool"])
         app.restore_runner.prepare_session_log.assert_called_once()
         app.restore_runner.set_steps.assert_called_once()
 
@@ -123,20 +132,24 @@ class TestOffsitePageRun(unittest.TestCase):
     def _patch_dependencies(self):
         return patch.multiple(
             "offsite_page",
-            collect_offsite_config=MagicMock(return_value={
-                "steps": [
-                    {
-                        "active": True,
-                        "source": "tank/src",
-                        "dest": "<offsite>/src",
-                        "includes": "",
-                        "excludes": "",
-                    },
-                ],
-                "variables": {},
-            }),
+            collect_offsite_config=MagicMock(
+                return_value={
+                    "steps": [
+                        {
+                            "active": True,
+                            "source": "tank/src",
+                            "dest": "<offsite>/src",
+                            "includes": "",
+                            "excludes": "",
+                        },
+                    ],
+                    "variables": {},
+                }
+            ),
             do_detect_offsite_pool=MagicMock(return_value="offsitepool"),
-            build_offsite_step_command=MagicMock(return_value=BashStep(["echo", "offsite"], "Offsite step")),
+            build_offsite_step_command=MagicMock(
+                return_value=BashStep(["echo", "offsite"], "Offsite step")
+            ),
         )
 
     def test_prepare_session_log_called(self):
@@ -172,16 +185,28 @@ class TestBackupPageRun(unittest.TestCase):
     def _patch_dependencies(self):
         return patch.multiple(
             "backup_page",
-            collect_backup_config=MagicMock(return_value={
-                "steps": [],
-                "variables": {},
-                "post_steps": {"remove_snapfile": False, "run_retention": False},
-            }),
-            build_pre_backup_command=MagicMock(return_value=BashStep(["echo", "pre"], "Pre-backup")),
-            build_rsync_command=MagicMock(return_value=BashStep(["echo", "rsync"], "Rsync step", is_rsync=True)),
-            build_send_receive_command=MagicMock(return_value=BashStep(["echo", "zfs"], "ZFS step")),
-            build_post_backup_command=MagicMock(return_value=BashStep(["echo", "post"], "Post-backup")),
-            build_retention_command=MagicMock(return_value=BashStep(["echo", "retain"], "Retention")),
+            collect_backup_config=MagicMock(
+                return_value={
+                    "steps": [],
+                    "variables": {},
+                    "post_steps": {"remove_snapfile": False, "run_retention": False},
+                }
+            ),
+            build_pre_backup_command=MagicMock(
+                return_value=BashStep(["echo", "pre"], "Pre-backup")
+            ),
+            build_rsync_command=MagicMock(
+                return_value=BashStep(["echo", "rsync"], "Rsync step", is_rsync=True)
+            ),
+            build_send_receive_command=MagicMock(
+                return_value=BashStep(["echo", "zfs"], "ZFS step")
+            ),
+            build_post_backup_command=MagicMock(
+                return_value=BashStep(["echo", "post"], "Post-backup")
+            ),
+            build_retention_command=MagicMock(
+                return_value=BashStep(["echo", "retain"], "Retention")
+            ),
         )
 
     def test_prepare_session_log_called(self):
@@ -220,14 +245,16 @@ class TestBackupPageRun(unittest.TestCase):
         _configure_dialog_ok(backup_page)
         app = _mock_app_with_runner()
         app.backup_nextsnap_entry.get_text.return_value = "@daily-2026-06-11T12:00-d"
-        app.backup_pull_store = [[True, "remote:/src", "/dst"]]
+        app.backup_pull_store = [[True, "remote:/src", "/dst", ""]]
         app.backup_sr_store = []
         app.backup_pull_steps_active.get_active.return_value = True
         app.config = {"retention": {"enabled": False}}
 
         with self._patch_dependencies():
             backup_page.on_backup_run(app, app.ctx)
-            backup_page.build_rsync_command.assert_called_once_with("remote:/src", "/dst")
+            backup_page.build_rsync_command.assert_called_once_with(
+                "remote:/src", "/dst", excludes=[]
+            )
 
     def test_sets_step_success_callback(self):
         with mock_gtk():
@@ -270,16 +297,26 @@ class TestBackupPageRun(unittest.TestCase):
 
             with patch.multiple(
                 "backup_page",
-                collect_backup_config=MagicMock(return_value={
-                    "steps": [],
-                    "variables": {},
-                    "post_steps": {"remove_snapfile": False, "run_retention": False},
-                }),
-                build_pre_backup_command=MagicMock(return_value=BashStep(["echo", "pre"], "Pre-backup")),
-                build_rsync_command=MagicMock(return_value=BashStep(["echo", "rsync"], "Rsync step", is_rsync=True)),
+                collect_backup_config=MagicMock(
+                    return_value={
+                        "steps": [],
+                        "variables": {},
+                        "post_steps": {"remove_snapfile": False, "run_retention": False},
+                    }
+                ),
+                build_pre_backup_command=MagicMock(
+                    return_value=BashStep(["echo", "pre"], "Pre-backup")
+                ),
+                build_rsync_command=MagicMock(
+                    return_value=BashStep(["echo", "rsync"], "Rsync step", is_rsync=True)
+                ),
                 build_send_receive_command=MagicMock(return_value=step),
-                build_post_backup_command=MagicMock(return_value=BashStep(["echo", "post"], "Post-backup")),
-                build_retention_command=MagicMock(return_value=BashStep(["echo", "retain"], "Retention")),
+                build_post_backup_command=MagicMock(
+                    return_value=BashStep(["echo", "post"], "Post-backup")
+                ),
+                build_retention_command=MagicMock(
+                    return_value=BashStep(["echo", "retain"], "Retention")
+                ),
             ):
                 backup_page.on_backup_run(app, app.ctx)
 

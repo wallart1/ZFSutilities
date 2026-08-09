@@ -66,14 +66,14 @@ def _rsync_log_setup_script(log_path):
     log_dir = shlex.quote(str(Path(log_path).parent))
     log_path_quoted = shlex.quote(log_path)
     return (
-        f'mkdir -p {log_dir}; '
-        f'if [ ! -f {log_path_quoted} ] || '
+        f"mkdir -p {log_dir}; "
+        f"if [ ! -f {log_path_quoted} ] || "
         f'[ "$(date -r {log_path_quoted} +%Y%m%d 2>/dev/null || echo 0)" != "$(date +%Y%m%d)" ]; then '
-        f': > {log_path_quoted}; fi'
+        f": > {log_path_quoted}; fi"
     )
 
 
-def build_rsync_command(source, dest, remote_log_path=None):
+def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
     """Build an rsync command list from source and dest strings.
 
     Args:
@@ -82,10 +82,15 @@ def build_rsync_command(source, dest, remote_log_path=None):
         remote_log_path: If set and the step is a pull, rsync output is streamed
             to this file on the source host. The file is truncated the first time
             it is used each day and appended to afterwards.
+        excludes: Optional iterable of rsync exclude patterns. Each item is
+            passed to rsync as ``--exclude=PATTERN``.
     """
     src_host, src_path = parse_rsync_endpoint(source)
     dst_host, dst_path = parse_rsync_endpoint(dest)
     rsync_opts = ["rsync", "--delete", "--progress", "-rav"]
+    if excludes:
+        for pattern in excludes:
+            rsync_opts.append(f"--exclude={pattern}")
     local_host = _get_local_hostname()
     if src_host and dst_host:
         remote_cmd = shlex.join(rsync_opts + [src_path, f"root@{dst_host}:{dst_path}"])
@@ -100,10 +105,10 @@ def build_rsync_command(source, dest, remote_log_path=None):
             host_quoted = shlex.quote(src_host)
             log_quoted = shlex.quote(remote_log_path)
             bash_script = (
-                f'_rh={host_quoted}; _rl={log_quoted}; '
-                f'{setup_cmd} && '
+                f"_rh={host_quoted}; _rl={log_quoted}; "
+                f"{setup_cmd} && "
                 f'{rsync_cmd} 2>&1 | ssh -q root@$_rh "cat >> $_rl"; '
-                f'exit ${{PIPESTATUS[0]}}'
+                f"exit ${{PIPESTATUS[0]}}"
             )
             cmd = ["bash", "-c", bash_script]
         else:
@@ -115,10 +120,10 @@ def build_rsync_command(source, dest, remote_log_path=None):
     else:
         if remote_log_path:
             bash_script = (
-                f'{_rsync_log_setup_script(remote_log_path)}; '
-                f'{shlex.join(rsync_opts)} '
-                f'{shlex.quote(src_path)} {shlex.quote(dst_path)} '
-                f'>> {shlex.quote(remote_log_path)} 2>&1'
+                f"{_rsync_log_setup_script(remote_log_path)}; "
+                f"{shlex.join(rsync_opts)} "
+                f"{shlex.quote(src_path)} {shlex.quote(dst_path)} "
+                f">> {shlex.quote(remote_log_path)} 2>&1"
             )
             cmd = ["bash", "-c", bash_script]
         else:
@@ -127,12 +132,11 @@ def build_rsync_command(source, dest, remote_log_path=None):
     return BashStep(cmd, desc, is_rsync=True, fatal=False)
 
 
-def build_send_receive_command(source, dest, variables, parent_dir, nextsnap,
-                               dryrun=False):
+def build_send_receive_command(source, dest, variables, parent_dir, nextsnap, dryrun=False):
     """Build the bash command string for a zfs send/receive step."""
     v = variables
     var_assignments = (
-        f'{_dryrun_assignments(dryrun)}'
+        f"{_dryrun_assignments(dryrun)}"
         f'sourcefs="{source}"; destfs="{dest}"; nextsnap="{nextsnap}"; '
         f'doincrementals="{v.get("doincrementals", "Y")}"; '
         f'dointermediates="{v.get("dointermediates", "Y")}"; '
@@ -152,15 +156,15 @@ def build_send_receive_command(source, dest, variables, parent_dir, nextsnap,
     if includes:
         items = shlex.split(includes)
         arr = " ".join(f'"{i}"' for i in items)
-        var_assignments += f'includes=({arr}); '
+        var_assignments += f"includes=({arr}); "
     else:
-        var_assignments += 'includes=(); '
+        var_assignments += "includes=(); "
     if excludes:
         items = shlex.split(excludes)
         arr = " ".join(f'"{i}"' for i in items)
-        var_assignments += f'excludes=({arr}); '
+        var_assignments += f"excludes=({arr}); "
     else:
-        var_assignments += 'excludes=(); '
+        var_assignments += "excludes=(); "
     if startwith:
         var_assignments += f'startwith="{startwith}"; '
     if endwith:
@@ -168,8 +172,8 @@ def build_send_receive_command(source, dest, variables, parent_dir, nextsnap,
     bash_script = (
         f'source ~/bashinit; bashinit; mydir="{parent_dir}"; '
         f'source "$mydir/zfs-send-receive"; '
-        f'{var_assignments}'
-        f'send-receive'
+        f"{var_assignments}"
+        f"send-receive"
     )
     metadata = {
         "source": source,
@@ -205,8 +209,7 @@ def build_post_backup_command(script):
     )
 
 
-def build_retention_command(parent_dir, label, pools=None, dryrun=False,
-                            fatal=True):
+def build_retention_command(parent_dir, label, pools=None, dryrun=False, fatal=True):
     """Build the command to run retention/cleanup.
 
     If *pools* is provided, prune each pool in the given order; otherwise
@@ -217,7 +220,7 @@ def build_retention_command(parent_dir, label, pools=None, dryrun=False,
     base_script = (
         f'source ~/bashinit; bashinit; mydir="{parent_dir}"; '
         f'source "$mydir/zfscleanup"; '
-        f'{dryrun_part}'
+        f"{dryrun_part}"
         f'autoproceed="Y"; '
         f'releaseholds="Y"; '
         f'releaseholds_tags=("offsite-*"); '
@@ -225,19 +228,16 @@ def build_retention_command(parent_dir, label, pools=None, dryrun=False,
     if pools:
         pool_list = " ".join(shlex.quote(p) for p in pools)
         bash_script = (
-            f'{base_script}'
-            f'overall_rc=0; '
-            f'for pool in {pool_list}; do '
+            f"{base_script}"
+            f"overall_rc=0; "
+            f"for pool in {pool_list}; do "
             f'  cleanup "$pool" "" {label_quoted} || overall_rc=$?; '
-            f'done; '
-            f'exit $overall_rc'
+            f"done; "
+            f"exit $overall_rc"
         )
         desc = f"Prune snapshots ({', '.join(pools)})"
     else:
-        bash_script = (
-            f'{base_script}'
-            f'cleanup "" "" {label_quoted}'
-        )
+        bash_script = f'{base_script}cleanup "" "" {label_quoted}'
         desc = "Prune snapshots"
     return BashStep(
         ["bash", "-c", bash_script],

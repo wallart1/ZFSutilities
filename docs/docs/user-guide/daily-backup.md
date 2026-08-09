@@ -147,6 +147,30 @@ sudo ./zfsdailybackup "pull_steps_active='N'"
 This is the same setting controlled by the **Active** checkbox on the Backup
 tab in the GUI.
 
+## Rsync Exclude Patterns
+
+Each rsync pull step can have its own list of exclude patterns. In the GUI,
+add them to the **Excludes** column of the **Pull Steps (rsync)** table. Enter
+multiple patterns as a space-separated list:
+
+```
+*.tmp cache/ "name with space"
+```
+
+The patterns are passed directly to rsync as `--exclude=PATTERN` arguments, so
+they use rsync's own include/exclude syntax, not the `zfsbuildfsarray`
+substring syntax used elsewhere in ZFSutilities. Common examples:
+
+- `*.tmp` — exclude all files ending in `.tmp`
+- `cache/` — exclude any directory named `cache`
+- `/absolute/path` — exclude a path relative to the transfer root
+- `dir/**` — exclude everything under `dir`
+
+Patterns containing spaces can be entered with shell-style quoting, because the
+Excludes cell is parsed with `shlex.split`. The exclude list is saved per step
+in the main JSON configuration (`backup.pull_steps[*].excludes`) as a list of
+strings.
+
 ## Dry Run
 
 To simulate the entire backup without making changes:

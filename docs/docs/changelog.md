@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.78.0
+
+*Released 2026-08-09*
+
+### Added
+
+- **Rsync exclude patterns per pull step** — Each rsync pull step in the Backup
+  tab and in scheduled backup profiles can now have its own list of rsync
+  exclude patterns. Enter them in the new **Excludes** column as a
+  space-separated list; patterns containing spaces can be quoted with shell
+  syntax. They are saved in `backup.pull_steps[*].excludes` and passed to rsync
+  as `--exclude=PATTERN`.
+
+- **Pools tab context menu: Send details to log** — Right-clicking a row in the
+  Pool Registry now offers **Send details to log** in addition to the existing
+  Copy actions. It writes all `zpool get all` properties for the selected pool
+  to the log panel.
+
+- **`ZfsRepository.get_all_pool_properties()`** — New repository method that
+  returns a dict of all `zpool` properties for a given pool, used by the Pools
+  tab **Send details to log** feature.
+
+- **`EditableListView` generalized columns** — `EditableListView` now accepts
+  `columns` and `column_names` constructor arguments so the same widget can be
+  reused for tables with more than two editable columns (for example, the
+  three-column pull-steps table).
+
+### Changed
+
+- **Config schema version 23** — Existing configurations are automatically
+  migrated to add an empty `excludes` list to every backup pull step.
+
+### Tests
+
+- Added `tests/python/test_backup_page.py` coverage for loading, saving, and
+  running pull steps with exclude patterns.
+
+- Extended `tests/python/test_command_builders.py` coverage for rsync commands
+  with `excludes`.
+
+- Extended `tests/python/test_config_migrations.py` coverage for the version
+  22→23 migration.
+
+- Extended `tests/python/test_feature_config.py` coverage for normalizing the
+  `excludes` field in `get_backup_config()`.
+
+- Extended `tests/python/test_gui_infrastructure.py` coverage for
+  `EditableListView` custom `column_names` and `get_data()`.
+
+- Added `tests/python/test_pools_page.py` coverage for the Pool Registry
+  right-click context menu and the **Send details to log** helper.
+
+- Extended `tests/python/test_profile_runner.py` coverage to verify that
+  profile-driven rsync pull steps pass excludes through to the command.
+
+- Extended `tests/python/test_zfs_repository.py` coverage for
+  `get_all_pool_properties()`.
+
+### Documentation
+
+- Updated `docs/docs/user-guide/gtk-gui.md` to document the Backup tab pull-step
+  **Excludes** column and the Pools tab **Send details to log** context-menu
+  item.
+
+- Added `docs/docs/user-guide/daily-backup.md#rsync-exclude-patterns` with
+  syntax details and examples.
+
 ## 0.77.0
 
 *Released 2026-08-08*

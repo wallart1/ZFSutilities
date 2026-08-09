@@ -7,7 +7,6 @@ from command_builders import BashStep
 
 
 class TestDryrunAssignments(unittest.TestCase):
-
     def test_no_dryrun_empty(self):
         result = command_builders._dryrun_assignments(dryrun=False)
         self.assertEqual(result, "")
@@ -17,9 +16,7 @@ class TestDryrunAssignments(unittest.TestCase):
         self.assertIn("dryrun='Y'", result)
 
 
-
 class TestLocalHostname(unittest.TestCase):
-
     def test_get_local_hostname_no_domain(self):
         hn = command_builders._get_local_hostname()
         self.assertNotIn(".", hn)
@@ -33,7 +30,6 @@ class TestLocalHostname(unittest.TestCase):
 
 
 class TestParseRsyncEndpoint(unittest.TestCase):
-
     def test_local_absolute_path(self):
         host, path = command_builders.parse_rsync_endpoint("/mnt/backup")
         self.assertIsNone(host)
@@ -52,7 +48,6 @@ class TestParseRsyncEndpoint(unittest.TestCase):
 
 
 class TestBuildRsyncCommand(unittest.TestCase):
-
     def test_local_rsync(self):
         step = command_builders.build_rsync_command("/src", "/dst")
         self.assertIsInstance(step, BashStep)
@@ -80,7 +75,8 @@ class TestBuildRsyncCommand(unittest.TestCase):
 
     def test_pull_rsync_with_remote_log_uses_bash_wrapper(self):
         step = command_builders.build_rsync_command(
-            "remote:/src", "/dst",
+            "remote:/src",
+            "/dst",
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
         )
         self.assertEqual(step.command[0], "bash")
@@ -94,7 +90,8 @@ class TestBuildRsyncCommand(unittest.TestCase):
 
     def test_local_rsync_with_remote_log_uses_bash_wrapper(self):
         step = command_builders.build_rsync_command(
-            "/src", "/dst",
+            "/src",
+            "/dst",
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
         )
         self.assertEqual(step.command[0], "bash")
@@ -115,9 +112,7 @@ class TestBuildRsyncCommand(unittest.TestCase):
         self.assertIn("/dst", step.command)
 
     def test_local_rsync_log_setup_script(self):
-        script = command_builders._rsync_log_setup_script(
-            "/var/log/zfsutilities/rsync-pull.log"
-        )
+        script = command_builders._rsync_log_setup_script("/var/log/zfsutilities/rsync-pull.log")
         self.assertIn("mkdir -p /var/log/zfsutilities", script)
         self.assertIn("date -r /var/log/zfsutilities/rsync-pull.log", script)
         self.assertIn(": > /var/log/zfsutilities/rsync-pull.log", script)
@@ -127,7 +122,8 @@ class TestBuildRsyncCommand(unittest.TestCase):
         # but with remote_log_path set it should still use the log wrapper.
         hn = command_builders._get_local_hostname()
         step = command_builders.build_rsync_command(
-            f"{hn}:/src", "/dst",
+            f"{hn}:/src",
+            "/dst",
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
         )
         self.assertEqual(step.command[0], "bash")
@@ -137,7 +133,8 @@ class TestBuildRsyncCommand(unittest.TestCase):
 
     def test_local_rsync_with_remote_log_preserves_exit_code(self):
         step = command_builders.build_rsync_command(
-            "/src", "/dst",
+            "/src",
+            "/dst",
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
         )
         script = step.command[2]
@@ -150,7 +147,9 @@ class TestBuildRsyncCommand(unittest.TestCase):
         host = "remote"
         log_path = "/var/log/zfsutilities/rsync-pull.log"
         cmd = [
-            "ssh", "-q", f"root@{host}",
+            "ssh",
+            "-q",
+            f"root@{host}",
             command_builders._rsync_log_setup_script(log_path),
         ]
         self.assertEqual(cmd[0], "ssh")
@@ -163,11 +162,60 @@ class TestBuildRsyncCommand(unittest.TestCase):
 
     def test_pull_rsync_with_remote_log_preserves_exit_code(self):
         step = command_builders.build_rsync_command(
-            "remote:/src", "/dst",
+            "remote:/src",
+            "/dst",
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
         )
         script = step.command[2]
         self.assertIn("exit ${PIPESTATUS[0]}", script)
+
+    def test_local_rsync_with_excludes(self):
+        step = command_builders.build_rsync_command("/src", "/dst", excludes=["*.tmp", "cache/"])
+        self.assertIn("--exclude=*.tmp", step.command)
+        self.assertIn("--exclude=cache/", step.command)
+        self.assertIn("/src", step.command)
+        self.assertIn("/dst", step.command)
+
+    def test_pull_rsync_with_excludes(self):
+        step = command_builders.build_rsync_command("remote:/src", "/dst", excludes=["*.log"])
+        self.assertIn("--exclude=*.log", step.command)
+        self.assertIn("root@remote:/src", step.command)
+        self.assertIn("/dst", step.command)
+
+    def test_push_rsync_with_excludes(self):
+        step = command_builders.build_rsync_command("/src", "remote:/dst", excludes=["temp"])
+        self.assertIn("--exclude=temp", step.command)
+        self.assertIn("/src", step.command)
+        self.assertIn("root@remote:/dst", step.command)
+
+    def test_local_rsync_with_remote_log_and_excludes(self):
+        step = command_builders.build_rsync_command(
+            "/src",
+            "/dst",
+            remote_log_path="/var/log/zfsutilities/rsync-pull.log",
+            excludes=["*.tmp"],
+        )
+        script = step.command[2]
+        self.assertIn("rsync --delete --progress -rav", script)
+        self.assertIn("--exclude=*.tmp", script)
+        self.assertIn("/src /dst", script)
+
+    def test_pull_rsync_with_remote_log_and_excludes(self):
+        step = command_builders.build_rsync_command(
+            "remote:/src",
+            "/dst",
+            remote_log_path="/var/log/zfsutilities/rsync-pull.log",
+            excludes=["*.tmp"],
+        )
+        script = step.command[2]
+        self.assertIn("rsync --delete --progress -rav", script)
+        self.assertIn("--exclude=*.tmp", script)
+        self.assertIn("root@remote:/src /dst", script)
+
+    def test_empty_excludes_omitted(self):
+        step = command_builders.build_rsync_command("/src", "/dst", excludes=[])
+        for arg in step.command:
+            self.assertNotIn("--exclude", arg)
 
 
 class TestSendReceiveMetadata(unittest.TestCase):
@@ -201,7 +249,6 @@ class TestSendReceiveMetadata(unittest.TestCase):
 
 
 class TestBuildSendReceiveCommand(unittest.TestCase):
-
     def test_includes_basic_variables(self):
         variables = {
             "doincrementals": "Y",
@@ -228,17 +275,13 @@ class TestBuildSendReceiveCommand(unittest.TestCase):
 
     def test_includes_array(self):
         variables = {"includes": "foo bar"}
-        step = command_builders.build_send_receive_command(
-            "src", "dst", variables, "/bin", "@snap"
-        )
+        step = command_builders.build_send_receive_command("src", "dst", variables, "/bin", "@snap")
         bash_script = step.command[2]
         self.assertIn('includes=("foo" "bar")', bash_script)
 
     def test_excludes_array(self):
         variables = {"excludes": "temp cache"}
-        step = command_builders.build_send_receive_command(
-            "src", "dst", variables, "/bin", "@snap"
-        )
+        step = command_builders.build_send_receive_command("src", "dst", variables, "/bin", "@snap")
         bash_script = step.command[2]
         self.assertIn('excludes=("temp" "cache")', bash_script)
 
@@ -253,23 +296,18 @@ class TestBuildSendReceiveCommand(unittest.TestCase):
 
     def test_releaseholds_tags_default(self):
         variables = {"releaseholds": "Y"}
-        step = command_builders.build_send_receive_command(
-            "src", "dst", variables, "/bin", "@snap"
-        )
+        step = command_builders.build_send_receive_command("src", "dst", variables, "/bin", "@snap")
         bash_script = step.command[2]
         self.assertIn('releaseholds_tags=("offsite-*")', bash_script)
 
     def test_releaseholds_tags_custom(self):
         variables = {"releaseholds": "Y", "releaseholds_tags": "custom-*"}
-        step = command_builders.build_send_receive_command(
-            "src", "dst", variables, "/bin", "@snap"
-        )
+        step = command_builders.build_send_receive_command("src", "dst", variables, "/bin", "@snap")
         bash_script = step.command[2]
         self.assertIn('releaseholds_tags=("custom-*")', bash_script)
 
 
 class TestBuildPrePostBackupCommands(unittest.TestCase):
-
     def test_pre_backup(self):
         step = command_builders.build_pre_backup_command("echo hello")
         self.assertTrue(step.fatal)
@@ -285,7 +323,6 @@ class TestBuildPrePostBackupCommands(unittest.TestCase):
 
 
 class TestBuildRetentionCommand(unittest.TestCase):
-
     def test_basic(self):
         step = command_builders.build_retention_command("/bin", "dailybackup")
         self.assertTrue(step.fatal)

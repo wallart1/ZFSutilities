@@ -16,6 +16,22 @@ class _NoOpDirtyTracker:
         pass
 
 
+class _FakeListStore:
+    """Minimal ListStore stand-in supporting append/clear/iteration."""
+
+    def __init__(self):
+        self._rows = []
+
+    def clear(self):
+        self._rows.clear()
+
+    def append(self, row):
+        self._rows.append(list(row))
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
 class _FakeWidgetBase:
     """Minimal widget stand-in for the backup page unit tests."""
 
@@ -179,6 +195,7 @@ class TestBackupVariables(unittest.TestCase):
     def test_releaseholds_tags_in_advanced_variables(self):
         with mock_gtk():
             import backup_page
+
             self.assertIn("releaseholds_tags", backup_page.ADVANCED_VARIABLES)
             self.assertIn("releaseholds_tags", backup_page._BACKUP_TOPIC_MAP)
             self.assertEqual(
@@ -193,6 +210,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
     def test_load_backup_config_sets_pull_steps_active(self):
         with mock_gtk():
             import backup_page
+
             backup_page.Gtk.Entry = _FakeEntry
             backup_page.Gtk.CheckButton = _FakeCheckButton
 
@@ -203,6 +221,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
     def test_load_backup_config_defaults_pull_steps_active_to_true(self):
         with mock_gtk():
             import backup_page
+
             backup_page.Gtk.Entry = _FakeEntry
             backup_page.Gtk.CheckButton = _FakeCheckButton
 
@@ -213,6 +232,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
     def test_collect_backup_config_includes_pull_steps_active(self):
         with mock_gtk():
             import backup_page
+
             backup_page.Gtk.Entry = _FakeEntry
             backup_page.Gtk.CheckButton = _FakeCheckButton
 
@@ -224,6 +244,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
     def test_collect_backup_config_includes_pause_scrubs(self):
         with mock_gtk():
             import backup_page
+
             backup_page.Gtk.Entry = _FakeEntry
             backup_page.Gtk.CheckButton = _FakeCheckButton
 
@@ -235,6 +256,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
     def test_load_backup_config_sets_pause_scrubs(self):
         with mock_gtk():
             import backup_page
+
             backup_page.Gtk.Entry = _FakeEntry
             backup_page.Gtk.CheckButton = _FakeCheckButton
 
@@ -245,12 +267,69 @@ class TestBackupConfigHelpers(unittest.TestCase):
     def test_load_backup_config_defaults_pause_scrubs_to_false(self):
         with mock_gtk():
             import backup_page
+
             backup_page.Gtk.Entry = _FakeEntry
             backup_page.Gtk.CheckButton = _FakeCheckButton
 
             app = _backup_app()
             backup_page.load_backup_config(app, {})
             self.assertFalse(app.backup_pause_scrubs.get_active())
+
+    def test_load_backup_config_populates_pull_step_excludes(self):
+        with mock_gtk():
+            import backup_page
+
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+
+            app = _backup_app()
+            app.backup_pull_store = _FakeListStore()
+            backup_page.load_backup_config(
+                app,
+                {
+                    "pull_steps": [
+                        {
+                            "active": True,
+                            "source": "host:/src",
+                            "dest": "/dst",
+                            "excludes": ["*.tmp", "cache/"],
+                        },
+                    ],
+                },
+            )
+            rows = list(app.backup_pull_store)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0][3], "'*.tmp' cache/")
+
+    def test_collect_backup_config_round_trips_pull_step_excludes(self):
+        with mock_gtk():
+            import backup_page
+
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+
+            app = _backup_app()
+            app.backup_pull_store = _FakeListStore()
+            app.backup_pull_store.append(
+                [
+                    True,
+                    "host:/src",
+                    "/dst",
+                    "*.log temp/",
+                ]
+            )
+            config = backup_page.collect_backup_config(app)
+            self.assertEqual(
+                config["pull_steps"],
+                [
+                    {
+                        "active": True,
+                        "source": "host:/src",
+                        "dest": "/dst",
+                        "excludes": ["*.log", "temp/"],
+                    },
+                ],
+            )
 
 
 class TestBackupPageFrames(unittest.TestCase):
@@ -259,6 +338,7 @@ class TestBackupPageFrames(unittest.TestCase):
     def test_frame_box_uses_header_widget_when_provided(self):
         with mock_gtk():
             import backup_page
+
             parent = MagicMock()
             header = MagicMock()
             backup_page._frame_box(parent, "Pull Steps", header_widget=header)
@@ -269,6 +349,7 @@ class TestBackupPageFrames(unittest.TestCase):
     def test_frame_box_uses_plain_label_without_header_widget(self):
         with mock_gtk():
             import backup_page
+
             parent = MagicMock()
             backup_page._frame_box(parent, "Send/Receive")
             frame = parent.pack_start.call_args_list[0][0][0]
@@ -305,8 +386,8 @@ class _FakeBackupApp:
         self.backup_post_script_enabled = _FakeCheckButton()
         self.backup_post_script_text = _FakeEntry()
         self.backup_pull_steps_active = _FakeCheckButton()
-        self.backup_pull_store = []
-        self.backup_sr_store = []
+        self.backup_pull_store = _FakeListStore()
+        self.backup_sr_store = _FakeListStore()
         self.backup_post_snapfile = _FakeCheckButton()
         self.backup_post_retention = _FakeCheckButton()
 
@@ -317,11 +398,13 @@ class TestBackupRunDialog(unittest.TestCase):
     def _patch_run(self, backup_page):
         return patch.multiple(
             backup_page,
-            collect_backup_config=MagicMock(return_value={
-                "steps": [],
-                "variables": {},
-                "post_steps": {"remove_snapfile": False, "run_retention": False},
-            }),
+            collect_backup_config=MagicMock(
+                return_value={
+                    "steps": [],
+                    "variables": {},
+                    "post_steps": {"remove_snapfile": False, "run_retention": False},
+                }
+            ),
             build_pre_backup_command=MagicMock(),
             build_rsync_command=MagicMock(),
             build_send_receive_command=MagicMock(),
@@ -388,6 +471,32 @@ class TestBackupRunDialog(unittest.TestCase):
             backup_page._do_generate_snap.assert_not_called()
             dialog_mock.run.assert_called_once()
             app.backup_runner.prepare_session_log.assert_called_once()
+
+    def test_pull_step_excludes_passed_to_build_rsync_command(self):
+        with mock_gtk():
+            import backup_page
+
+        app = _FakeBackupApp()
+        app.backup_nextsnap_entry.set_text("@daily-2026-06-11T12:00-d")
+        app.backup_pull_steps_active.set_active(True)
+        app.backup_pull_store.append(
+            [
+                True,
+                "remote:/src",
+                "/dst",
+                "*.tmp cache/",
+            ]
+        )
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
+        backup_page.Gtk.MessageDialog.return_value = dialog_mock
+
+        with self._patch_run(backup_page):
+            backup_page.on_backup_run(app, app.ctx)
+
+            backup_page.build_rsync_command.assert_called_once_with(
+                "remote:/src", "/dst", excludes=["*.tmp", "cache/"]
+            )
 
     def test_retention_step_uses_pool_registry_order(self):
         with mock_gtk():
@@ -473,8 +582,6 @@ class TestBackupRunDialog(unittest.TestCase):
             self.assertNotIn("restore", call[0][0].lower())
 
 
-
-
 class TestBackupSaveValidation(unittest.TestCase):
     """on_backup_save validates backup/offsite scope alignment."""
 
@@ -494,11 +601,13 @@ class TestBackupSaveValidation(unittest.TestCase):
             import backup_page
 
         app = self._make_app()
-        with patch.object(backup_page, "collect_backup_config", return_value={"steps": []}), \
-             patch.object(backup_page, "get_offsite_config", return_value={"steps": []}), \
-             patch.object(backup_page, "validate_gui_settings", return_value=[]), \
-             patch.object(backup_page, "show_warning_dialog") as mock_warn, \
-             patch.object(backup_page, "save_backup_config") as mock_save:
+        with (
+            patch.object(backup_page, "collect_backup_config", return_value={"steps": []}),
+            patch.object(backup_page, "get_offsite_config", return_value={"steps": []}),
+            patch.object(backup_page, "validate_gui_settings", return_value=[]),
+            patch.object(backup_page, "show_warning_dialog") as mock_warn,
+            patch.object(backup_page, "save_backup_config") as mock_save,
+        ):
             backup_page.on_backup_save(app, app.ctx)
 
         mock_warn.assert_not_called()
@@ -509,11 +618,13 @@ class TestBackupSaveValidation(unittest.TestCase):
             import backup_page
 
         app = self._make_app()
-        with patch.object(backup_page, "collect_backup_config", return_value={"steps": []}), \
-             patch.object(backup_page, "get_offsite_config", return_value={"steps": []}), \
-             patch.object(backup_page, "validate_gui_settings", return_value=["mismatch"]), \
-             patch.object(backup_page, "show_warning_dialog") as mock_warn, \
-             patch.object(backup_page, "save_backup_config") as mock_save:
+        with (
+            patch.object(backup_page, "collect_backup_config", return_value={"steps": []}),
+            patch.object(backup_page, "get_offsite_config", return_value={"steps": []}),
+            patch.object(backup_page, "validate_gui_settings", return_value=["mismatch"]),
+            patch.object(backup_page, "show_warning_dialog") as mock_warn,
+            patch.object(backup_page, "save_backup_config") as mock_save,
+        ):
             backup_page.on_backup_save(app, app.ctx)
 
         mock_warn.assert_called_once()

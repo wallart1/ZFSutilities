@@ -319,7 +319,9 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
 
     if cfg.get("pull_steps_active", True):
         active_pulls = [
-            (s["source"], s["dest"]) for s in cfg.get("pull_steps", []) if s.get("active")
+            (s["source"], s["dest"], s.get("excludes", []))
+            for s in cfg.get("pull_steps", [])
+            if s.get("active")
         ]
     else:
         active_pulls = []
@@ -327,7 +329,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
 
     done_hosts = set()
 
-    for source, dest in active_pulls:
+    for source, dest, excludes in active_pulls:
         src_host, src_path = _parse_rsync_endpoint(source)
         if src_host is None and src_path.startswith("/mnt/"):
             mount_path = src_path.rstrip("/")
@@ -342,7 +344,14 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
         if dryrun:
             log_msg(f"INFO: Dry-run: Would rsync {source} -> {dest}")
         else:
-            steps.append(_build_rsync_command(source, dest, remote_log_path=_REMOTE_RSYNC_LOG_PATH))
+            steps.append(
+                _build_rsync_command(
+                    source,
+                    dest,
+                    remote_log_path=_REMOTE_RSYNC_LOG_PATH,
+                    excludes=excludes,
+                )
+            )
 
     # Optional ZFS keys backup
     zfs_keys_path = cfg.get("zfs_keys_path", "").strip()

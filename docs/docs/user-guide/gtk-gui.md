@@ -563,12 +563,17 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
 
 - **Pull Steps** — Editable list of rsync pull operations. The frame header has
   an **Active** checkbox; unchecking it bypasses every pull step while still
-  running the other backup steps. Each row has two columns:
+  running the other backup steps. Each row has three columns:
   
   - **Source** — the remote hostname or IP and file path to pull from. Examples:
     `proxmox1:/etc`, `192.168.1.50:/root`, `backup-server.local:/home`.
   - **Destination path** — the local directory where pulled files are placed.
     Example: `/backups/proxmox1`
+  - **Excludes** — optional rsync exclude patterns as a space-separated list.
+    Patterns are passed directly to rsync as `--exclude=PATTERN`; use shell-style
+    quoting for patterns that contain spaces. See
+    [Daily Backup — Rsync Exclude Patterns](daily-backup.md#rsync-exclude-patterns)
+    for details and examples.
   
   Add or remove rows with the buttons; reorder by dragging rows.
   
@@ -1119,8 +1124,10 @@ For example, **Watch** is only available when at least one selected pool is
 registered and online, **Details** requires exactly one selected pool, and
 **Export** requires at least one selected online pool.
 
-Right-click any cell to **Copy** the cell value or the full row
-(tab-separated).
+Right-click any cell to open a context menu with **Copy** actions (cell value
+or full row, tab-separated) and **Send details to log**, which writes all
+`zpool get all` properties for the selected pool to the log panel. **Send
+details to log** requires a single selected pool.
 
 ### Scrub Manager
 

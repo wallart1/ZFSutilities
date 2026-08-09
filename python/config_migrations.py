@@ -1,6 +1,6 @@
 """Config schema migrations. Bump CONFIG_VERSION when JSON structure changes."""
 
-CONFIG_VERSION = 22
+CONFIG_VERSION = 23
 
 
 def _migrate_1_to_2(config):
@@ -46,8 +46,11 @@ def _migrate_5_to_6(config):
 
 def _migrate_6_to_7(config):
     for section in ("backup", "offsite"):
-        if section in config and "variables" in config[section] \
-                and "verify_after_transfer" not in config[section]["variables"]:
+        if (
+            section in config
+            and "variables" in config[section]
+            and "verify_after_transfer" not in config[section]["variables"]
+        ):
             config[section]["variables"]["verify_after_transfer"] = "Y"
     config["config_version"] = 7
     return config
@@ -246,6 +249,26 @@ def _migrate_21_to_22(config):
     return config
 
 
+def _migrate_22_to_23(config):
+    """Add per-rsync-step excludes list to backup pull_steps."""
+    backup = config.get("backup")
+    if isinstance(backup, dict):
+        if "pull_steps" not in backup:
+            backup["pull_steps"] = []
+        pull_steps = backup.get("pull_steps")
+        if isinstance(pull_steps, list):
+            migrated = []
+            for step in pull_steps:
+                if isinstance(step, dict):
+                    step = dict(step)
+                    if "excludes" not in step:
+                        step["excludes"] = []
+                migrated.append(step)
+            backup["pull_steps"] = migrated
+    config["config_version"] = 23
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -268,6 +291,7 @@ MIGRATIONS = [
     _migrate_19_to_20,
     _migrate_20_to_21,
     _migrate_21_to_22,
+    _migrate_22_to_23,
 ]
 
 
@@ -278,9 +302,7 @@ def run_migrations(config, save_func=None):
     while current < target:
         idx = current - 1
         if idx < 0 or idx >= len(MIGRATIONS):
-            raise RuntimeError(
-                f"No migration defined from version {current} to {current + 1}"
-            )
+            raise RuntimeError(f"No migration defined from version {current} to {current + 1}")
         config = MIGRATIONS[idx](config)
         current = config.get("config_version", 0)
         if save_func:

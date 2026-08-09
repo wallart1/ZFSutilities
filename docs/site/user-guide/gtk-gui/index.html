@@ -3640,7 +3640,7 @@ remote host cannot be reached, its version is shown as <em>unknown</em>.</p>
 <li>
 <p><strong>Pull Steps</strong> — Editable list of rsync pull operations. The frame header has
   an <strong>Active</strong> checkbox; unchecking it bypasses every pull step while still
-  running the other backup steps. Each row has two columns:</p>
+  running the other backup steps. Each row has three columns:</p>
 </li>
 <li>
 <p><strong>Source</strong> — the remote hostname or IP and file path to pull from. Examples:
@@ -3648,6 +3648,11 @@ remote host cannot be reached, its version is shown as <em>unknown</em>.</p>
 </li>
 <li><strong>Destination path</strong> — the local directory where pulled files are placed.
     Example: <code>/backups/proxmox1</code></li>
+<li><strong>Excludes</strong> — optional rsync exclude patterns as a space-separated list.
+    Patterns are passed directly to rsync as <code>--exclude=PATTERN</code>; use shell-style
+    quoting for patterns that contain spaces. See
+    <a href="../daily-backup/#rsync-exclude-patterns">Daily Backup — Rsync Exclude Patterns</a>
+    for details and examples.</li>
 </ul>
 <p>Add or remove rows with the buttons; reorder by dragging rows.</p>
 <p>A pull-step failure is <strong>non-fatal</strong>: it is logged as a warning, the backup
@@ -4523,8 +4528,10 @@ candidates. The checkbox state is saved with the registry when you click
 For example, <strong>Watch</strong> is only available when at least one selected pool is
 registered and online, <strong>Details</strong> requires exactly one selected pool, and
 <strong>Export</strong> requires at least one selected online pool.</p>
-<p>Right-click any cell to <strong>Copy</strong> the cell value or the full row
-(tab-separated).</p>
+<p>Right-click any cell to open a context menu with <strong>Copy</strong> actions (cell value
+or full row, tab-separated) and <strong>Send details to log</strong>, which writes all
+<code>zpool get all</code> properties for the selected pool to the log panel. <strong>Send
+details to log</strong> requires a single selected pool.</p>
 <h3 id="scrub-manager">Scrub Manager<a class="headerlink" href="#scrub-manager" title="Permanent link">&para;</a></h3>
 <p>Below the pool registry is the Scrub Manager, separated by a draggable
 divider. It maintains a queue of pending, active, paused, and finished
@@ -5141,7 +5148,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.77.0
+      ZFS Utilities v0.78.0
     </div>
   
   
@@ -5166,7 +5173,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.77.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.78.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

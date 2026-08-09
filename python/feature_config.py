@@ -28,15 +28,31 @@ def get_backup_config(config):
     for key in ("pull_steps_active", "pull_steps", "send_receive_steps"):
         if key not in backup:
             backup[key] = defaults[key]
+    pull_steps = backup.get("pull_steps", [])
+    if isinstance(pull_steps, list):
+        normalized = []
+        for step in pull_steps:
+            if isinstance(step, dict):
+                step = dict(step)
+                if "excludes" not in step:
+                    step["excludes"] = []
+            normalized.append(step)
+        backup["pull_steps"] = normalized
     if "post_steps" not in backup:
         backup["post_steps"] = defaults["post_steps"]
     else:
         merged_post = dict(defaults["post_steps"])
         merged_post.update(backup["post_steps"])
         backup["post_steps"] = merged_post
-    for key in ("pre_backup_script_enabled", "pre_backup_script",
-                "post_backup_script_enabled", "post_backup_script",
-                "zfs_keys_path", "zfs_keys_dest", "pause_scrubs"):
+    for key in (
+        "pre_backup_script_enabled",
+        "pre_backup_script",
+        "post_backup_script_enabled",
+        "post_backup_script",
+        "zfs_keys_path",
+        "zfs_keys_dest",
+        "pause_scrubs",
+    ):
         if key not in backup:
             backup[key] = defaults[key]
     config["backup"] = backup
@@ -105,8 +121,7 @@ RESTORE_DEFAULTS = {
 def get_restore_config(config):
     defaults = _deep_copy(RESTORE_DEFAULTS)
     restore = config.get("restore", {})
-    for key in ("source", "dest", "auto_dest", "do_part1", "do_part2",
-                "pause_scrubs"):
+    for key in ("source", "dest", "auto_dest", "do_part1", "do_part2", "pause_scrubs"):
         if key not in restore:
             restore[key] = defaults[key]
     merged_vars = dict(defaults["variables"])
@@ -147,10 +162,7 @@ def get_pool_names(config):
 
 def get_offsite_candidate_names(config):
     """Return names of pools marked as offsite candidates."""
-    return [
-        p["name"] for p in get_pools(config)
-        if p.get("offsite_candidate", False)
-    ]
+    return [p["name"] for p in get_pools(config) if p.get("offsite_candidate", False)]
 
 
 def save_pools(config, pools):
@@ -310,11 +322,13 @@ def derive_checkagainst_entries(config):
         if not source or not dest:
             continue
         dest_root = _compute_destination_root(source, dest)
-        backup_derived.append({
-            "source_root": source,
-            "dest_root": dest_root,
-            "label": backup_label,
-        })
+        backup_derived.append(
+            {
+                "source_root": source,
+                "dest_root": dest_root,
+                "label": backup_label,
+            }
+        )
         backup_derived.append(_reverse_checkagainst_row(source, dest_root, backup_label))
 
     offsite_derived = []
@@ -326,11 +340,13 @@ def derive_checkagainst_entries(config):
         if not source or not dest:
             continue
         dest_root = _compute_destination_root(source, dest)
-        offsite_derived.append({
-            "source_root": source,
-            "dest_root": dest_root,
-            "label": "offsite",
-        })
+        offsite_derived.append(
+            {
+                "source_root": source,
+                "dest_root": dest_root,
+                "label": "offsite",
+            }
+        )
         offsite_derived.append(_reverse_checkagainst_row(source, dest_root, "offsite"))
 
     return (
@@ -416,9 +432,8 @@ def _maybe_seed_checkagainst(app, step_metadata):
     }
     if add_checkagainst_entry(app.ctx.config, row):
         from backup_config import log_msg
-        log_msg(
-            f"INFO: Added checkagainst entry for {source} -> {dest_root} ({label})"
-        )
+
+        log_msg(f"INFO: Added checkagainst entry for {source} -> {dest_root} ({label})")
 
 
 def get_archive_path(config):
@@ -533,6 +548,7 @@ def import_legacy_retention(config, parent_dir):
     """One-time migration: scan parent_dir for zfsretainpol-* files and add
     missing pools to config['retention']. Returns list of imported pools."""
     from legacy_retention import scan_legacy_retention
+
     retention = get_all_retention(config)
     imported = scan_legacy_retention(parent_dir, retention)
     if imported:
@@ -634,7 +650,7 @@ def _read_snapfile(path):
 def _write_snapfile(path, name):
     run_migration()
     try:
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             f.write(name)
     except OSError:
         pass
@@ -761,7 +777,11 @@ def _build_snapshot_name(label):
     datestr = datestr[:-2] + ":" + datestr[-2:]
     day_of_week = now.strftime("%a")
     day_of_month = now.strftime("%d")
-    bucket = "s" if label == "offsite" else ("m" if day_of_month == "01" else ("w" if day_of_week == "Sun" else "d"))
+    bucket = (
+        "s"
+        if label == "offsite"
+        else ("m" if day_of_month == "01" else ("w" if day_of_week == "Sun" else "d"))
+    )
     return f"@{label}-{datestr}-{bucket}"
 
 

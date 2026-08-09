@@ -374,6 +374,40 @@ class TestRunBackupProfile(unittest.TestCase):
             self.assertFalse(any("rsync" in s for s in bash_scripts))
             self.assertTrue(any("send-receive" in s for s in bash_scripts))
 
+    def test_pull_step_excludes_passed_to_rsync(self):
+        with temp_config_dir():
+            profile = {
+                "config": {
+                    "variables": {"label": "dailybackup"},
+                    "pull_steps": [
+                        {
+                            "source": "remote:/src",
+                            "dest": "/dst",
+                            "active": True,
+                            "excludes": ["*.tmp", "cache/"],
+                        },
+                    ],
+                    "send_receive_steps": [],
+                    "post_steps": {"run_retention": False, "remove_snapfile": False},
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                }
+            }
+            config = {}
+            with mock_subprocess() as m:
+                m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
+                rc = profile_runner.run_backup_profile(profile, config, "/bin")
+            self.assertEqual(rc, 0)
+            pull_calls = [
+                call
+                for call in m.calls
+                if call[0] and isinstance(call[0], list) and call[0][0] == "bash"
+            ]
+            self.assertEqual(len(pull_calls), 1)
+            bash_script = pull_calls[0][0][2]
+            self.assertIn("--exclude=*.tmp", bash_script)
+            self.assertIn("--exclude=cache/", bash_script)
+
     def test_retention_step_uses_config_pool_order(self):
         with temp_config_dir():
             profile = {

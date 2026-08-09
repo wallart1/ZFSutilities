@@ -743,5 +743,128 @@ class TestSelectionChangedHandlers(unittest.TestCase):
         mock_update.assert_called_once_with(app)
 
 
+class TestPoolContextMenu(unittest.TestCase):
+    """Right-click context menu on the Pool Registry tree."""
+
+    def _make_event(self, button, x=10, y=20):
+        event = MagicMock()
+        event.button = button
+        event.x = x
+        event.y = y
+        return event
+
+    def _make_treeview(self, path_selected=False, path_info=None):
+        treeview = MagicMock()
+        selection = MagicMock()
+        selection.path_is_selected.return_value = path_selected
+        treeview.get_selection.return_value = selection
+        treeview.get_path_at_pos.return_value = path_info
+        return treeview, selection
+
+    def test_left_click_does_not_show_menu(self):
+        pp = _import_pools_page()
+        treeview, _selection = self._make_treeview()
+        app = MagicMock()
+        result = pp._on_pool_button_press(treeview, self._make_event(1), app)
+        self.assertFalse(result)
+        treeview.get_path_at_pos.assert_not_called()
+
+    def test_right_click_without_row_does_not_show_menu(self):
+        pp = _import_pools_page()
+        treeview, _selection = self._make_treeview(path_info=None)
+        app = MagicMock()
+        result = pp._on_pool_button_press(treeview, self._make_event(3), app)
+        self.assertFalse(result)
+
+    def test_right_click_shows_send_details_menu(self):
+        pp = _import_pools_page()
+        path_info = (MagicMock(), None, 0, 0)
+        treeview, selection = self._make_treeview(path_selected=False, path_info=path_info)
+        app = MagicMock()
+
+        with patch.object(pp, "append_treeview_copy_items") as mock_append:
+            result = pp._on_pool_button_press(treeview, self._make_event(3), app)
+
+        self.assertTrue(result)
+        selection.unselect_all.assert_called_once()
+        selection.select_path.assert_called_once_with(path_info[0])
+        treeview.set_cursor.assert_called_once_with(path_info[0], None, False)
+        pp.Gtk.Menu.assert_called_once()
+        mock_append.assert_called_once_with(pp.Gtk.Menu.return_value, treeview, path_info, app=app)
+        menu = pp.Gtk.Menu.return_value
+        menu.append.assert_any_call(pp.Gtk.SeparatorMenuItem.return_value)
+        pp.Gtk.MenuItem.assert_any_call(label="Send details to log")
+        menu.show_all.assert_called_once()
+        menu.popup_at_pointer.assert_called_once()
+
+
+class TestSendPoolDetailsToLog(unittest.TestCase):
+    """Pool Registry "Send details to log" handler."""
+
+    def _make_app(self, names=None, props=None, error=None):
+        app = MagicMock()
+        names = names or []
+        pathlist = [MagicMock() for _ in names]
+
+        model = MagicMock()
+        iters = [MagicMock() for _ in names]
+        model.get_iter.side_effect = iters
+        model.get_value.side_effect = lambda _it, _col: names[iters.index(_it)]
+
+        selection = MagicMock()
+        selection.get_selected_rows.return_value = (model, pathlist)
+        app.pool_view.get_selection.return_value = selection
+
+        repo = MagicMock()
+        if error is not None:
+            repo.get_all_pool_properties.side_effect = error
+        else:
+            repo.get_all_pool_properties.return_value = props or {}
+        app.ctx.zfs_repository = repo
+        return app
+
+    def test_warns_when_no_selection(self):
+        pp = _import_pools_page()
+        app = self._make_app(names=[])
+        with patch.object(pp, "log_msg") as mock_log:
+            pp._send_pool_details_to_log(app)
+        mock_log.assert_called_once_with("WARN: Select a pool to send details to log")
+
+    def test_warns_on_multiple_selection(self):
+        pp = _import_pools_page()
+        app = self._make_app(names=["tank", "backup"])
+        with patch.object(pp, "log_msg") as mock_log:
+            pp._send_pool_details_to_log(app)
+        mock_log.assert_called_once_with("WARN: Send details to log requires a single selection")
+
+    def test_logs_pool_properties_line_by_line(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            names=["tank"],
+            props={"size": "10T", "capacity": "50%", "health": "ONLINE"},
+        )
+        with patch.object(pp, "log_msg") as mock_log:
+            pp._send_pool_details_to_log(app)
+
+        app.ctx.zfs_repository.get_all_pool_properties.assert_called_once_with("tank")
+        logged = [call[0][0] for call in mock_log.call_args_list]
+        self.assertIn("INFO: Details for tank (pool)", logged)
+        self.assertIn("  capacity: 50%", logged)
+        self.assertIn("  health: ONLINE", logged)
+        self.assertIn("  size: 10T", logged)
+
+    def test_handles_repository_error(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            names=["tank"],
+            error=FileNotFoundError("zpool not found"),
+        )
+        with patch.object(pp, "log_msg") as mock_log:
+            pp._send_pool_details_to_log(app)
+
+        logged = mock_log.call_args[0][0]
+        self.assertIn("WARN: Error reading details for tank", logged)
+
+
 if __name__ == "__main__":
     unittest.main()

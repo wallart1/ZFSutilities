@@ -9,7 +9,7 @@ import subprocess
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     TreeSearch,
@@ -31,6 +31,7 @@ from logging_config import log_msg
 # Page builder
 # ---------------------------------------------------------------------------
 
+
 def create_datasets_page(app):
     """Build and return the full Datasets tab widget."""
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -48,9 +49,7 @@ def create_datasets_page(app):
 
     # Search bar
     search_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-    search_icon = Gtk.Image.new_from_icon_name(
-        "system-search", Gtk.IconSize.BUTTON
-    )
+    search_icon = Gtk.Image.new_from_icon_name("system-search", Gtk.IconSize.BUTTON)
     search_box.pack_start(search_icon, False, False, 0)
 
     app.datasets_search_entry = Gtk.Entry()
@@ -84,7 +83,6 @@ def create_datasets_page(app):
     app.datasets_search_results_label.set_margin_end(10)
     search_box.pack_start(app.datasets_search_results_label, False, False, 5)
 
-
     box.pack_start(search_box, False, False, 0)
 
     # TreeStore: pools -> datasets -> snapshots -> holds
@@ -104,9 +102,7 @@ def create_datasets_page(app):
         app.datasets_search_next_btn,
         full_name_func=build_full_dataset_name,
     )
-    app.datasets_search_clear_btn.connect(
-        "clicked", lambda _b: app.datasets_search.clear()
-    )
+    app.datasets_search_clear_btn.connect("clicked", lambda _b: app.datasets_search.clear())
 
     ds_columns = [
         ("Name", 0, 150),
@@ -151,12 +147,8 @@ def create_datasets_page(app):
 
     # Lazy-load children when rows are expanded
     app.datasets_view.connect("row-expanded", on_row_expanded, None)
-    app.datasets_view.connect(
-        "row-expanded", _on_ds_row_expanded_collapsed, app
-    )
-    app.datasets_view.connect(
-        "row-collapsed", _on_ds_row_expanded_collapsed, app
-    )
+    app.datasets_view.connect("row-expanded", _on_ds_row_expanded_collapsed, app)
+    app.datasets_view.connect("row-collapsed", _on_ds_row_expanded_collapsed, app)
 
     # Right-click context menu
     app.datasets_view.connect("button-press-event", _on_datasets_button_press, app)
@@ -170,6 +162,7 @@ def create_datasets_page(app):
 # ---------------------------------------------------------------------------
 # Data refresh
 # ---------------------------------------------------------------------------
+
 
 def refresh_datasets_page(app, pool_filter=None):
     """Refresh dataset tree: load only pools initially; children load on demand."""
@@ -249,6 +242,7 @@ def _restore_scroll(scrolled, saved_value):
 
 # build_full_dataset_name is imported from gui_helpers.py
 
+
 def _select_by_name(store, view, names):
     """Walk the tree and select rows whose full ZFS name is in *names*."""
     selection = view.get_selection()
@@ -273,6 +267,7 @@ def _select_by_name(store, view, names):
 # Search
 # ---------------------------------------------------------------------------
 
+
 def _on_ds_row_expanded_collapsed(_view, _iter, _path, app):
     """Re-run the active search when the tree structure changes."""
     app.datasets_search.handle_expand_collapse()
@@ -281,6 +276,7 @@ def _on_ds_row_expanded_collapsed(_view, _iter, _path, app):
 # ---------------------------------------------------------------------------
 # Expand selected rows
 # ---------------------------------------------------------------------------
+
 
 def expand_selected_datasets(app):
     """Recursively expand all rows currently selected in the Datasets tree."""
@@ -331,6 +327,7 @@ def expand_selected_datasets(app):
 # Button sensitivity
 # ---------------------------------------------------------------------------
 
+
 def _on_ds_selection_changed(selection, app):
     """Update action button sensitivity when the tree selection changes."""
     update_ds_button_sensitivity(app)
@@ -350,9 +347,10 @@ def update_ds_button_sensitivity(app):
     if len(items) == 1 and items[0].get("zfs_type") == "filesystem":
         try:
             result = subprocess.run(
-                ["zfs", "get", "-H", "-o", "value", "mounted",
-                 items[0]["name"]],
-                capture_output=True, text=True, check=True,
+                ["zfs", "get", "-H", "-o", "value", "mounted", items[0]["name"]],
+                capture_output=True,
+                text=True,
+                check=True,
             )
             can_show_files = result.stdout.strip() == "yes"
         except subprocess.CalledProcessError:
@@ -367,7 +365,9 @@ def update_ds_button_sensitivity(app):
         try:
             parent_mounted = subprocess.run(
                 ["zfs", "get", "-H", "-o", "value", "mounted", dataset],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
             if parent_mounted.stdout.strip() == "yes":
                 can_browse_snapshot = True
@@ -376,7 +376,9 @@ def update_ds_button_sensitivity(app):
         try:
             mount_result = subprocess.run(
                 ["mount", "-t", "zfs"],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
             can_unmount_snapshot = full_snap in mount_result.stdout
         except subprocess.CalledProcessError:
@@ -389,25 +391,25 @@ def update_ds_button_sensitivity(app):
     can_show_big_stuff = len(items) == 1 and types == {"pool"}
 
     for attr, sensitive in [
-        ('_ds_snapshot_btn', can_snapshot),
-        ('_ds_delete_btn', can_delete),
-        ('_ds_hold_btn', can_hold),
-        ('_ds_rollback_btn', can_rollback),
-        ('_ds_showfiles_btn', can_show_files),
-        ('_ds_browsesnap_btn', can_browse_snapshot),
-        ('_ds_unmountsnap_btn', can_unmount_snapshot),
-        ('_ds_expand_selected_btn', can_expand_selected),
-        ('_ds_showbigstuff_btn', can_show_big_stuff),
+        ("_ds_snapshot_btn", can_snapshot),
+        ("_ds_delete_btn", can_delete),
+        ("_ds_hold_btn", can_hold),
+        ("_ds_rollback_btn", can_rollback),
+        ("_ds_showfiles_btn", can_show_files),
+        ("_ds_browsesnap_btn", can_browse_snapshot),
+        ("_ds_unmountsnap_btn", can_unmount_snapshot),
+        ("_ds_expand_selected_btn", can_expand_selected),
+        ("_ds_showbigstuff_btn", can_show_big_stuff),
     ]:
         btn = getattr(app, attr, None)
         if btn:
             btn.set_sensitive(sensitive)
 
 
-
 # ---------------------------------------------------------------------------
 # Context menu
 # ---------------------------------------------------------------------------
+
 
 def _on_datasets_button_press(treeview, event, app):
     """Show a right-click context menu for the selected dataset tree item."""
@@ -426,9 +428,7 @@ def _on_datasets_button_press(treeview, event, app):
     treeview.set_cursor(tree_path, column, False)
 
     menu = Gtk.Menu()
-    append_treeview_copy_items(
-        menu, treeview, path_info, app=app, datasets_view=treeview
-    )
+    append_treeview_copy_items(menu, treeview, path_info, app=app, datasets_view=treeview)
     menu.append(Gtk.SeparatorMenuItem())
     details_item = Gtk.MenuItem(label="Send details to log")
     details_item.connect("activate", lambda _i: _send_selection_details_to_log(app))
@@ -474,7 +474,8 @@ def _send_selection_details_to_log(app):
         log_msg(f"WARN: Error reading details for {full_name}: {e}")
         return
 
-    lines = [f"INFO: Details for {full_name} ({item_type})"]
+    display_type = "dataset" if item_type == "pool" else item_type
+    lines = [f"INFO: Details for {full_name} ({display_type})"]
     for prop in sorted(props):
         lines.append(f"  {prop}: {props[prop]}")
     log_msg("\n".join(lines))

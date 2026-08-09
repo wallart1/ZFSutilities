@@ -25,9 +25,7 @@ class TestZfsRepositoryReads(unittest.TestCase):
     """Read methods parse tab-separated zfs/zpool output."""
 
     def _repo(self, stdout, rc=0):
-        result = subprocess.CompletedProcess(
-            args=[], returncode=rc, stdout=stdout, stderr=""
-        )
+        result = subprocess.CompletedProcess(args=[], returncode=rc, stdout=stdout, stderr="")
         repo = ZfsRepository(sudo=False)
         repo._run = lambda *a, **k: result
         return repo
@@ -69,15 +67,13 @@ class TestZfsRepositoryReads(unittest.TestCase):
         self.assertEqual(rows[0].ds_type, "filesystem")
 
     def test_list_snapshots_parses_eight_columns(self):
-        stdout = (
-            "tank/data@snap1\t2025-01-01\tsnapshot\t100K\t-\t50G\t-\t-\n"
-        )
+        stdout = "tank/data@snap1\t2025-01-01\tsnapshot\t100K\t-\t50G\t-\t-\n"
         repo = self._repo(stdout)
         rows = repo.list_snapshots("tank/data", depth=1)
         self.assertEqual(len(rows), 1)
         self.assertEqual(
             rows[0],
-            SnapshotRow("tank/data@snap1", "2025-01-01", "snapshot", "100K", "-", "50G", "-", "-")
+            SnapshotRow("tank/data@snap1", "2025-01-01", "snapshot", "100K", "-", "50G", "-", "-"),
         )
 
     def test_list_holds_parses_three_columns(self):
@@ -92,12 +88,7 @@ class TestZfsRepositoryReads(unittest.TestCase):
         self.assertEqual(repo.get_property("tank/data", "mountpoint"), "/mnt/data")
 
     def test_get_all_properties_parses_tab_separated_output(self):
-        stdout = (
-            "type\tfilesystem\n"
-            "used\t100G\n"
-            "available\t500G\n"
-            "compression\toff\n"
-        )
+        stdout = "type\tfilesystem\nused\t100G\navailable\t500G\ncompression\toff\n"
         repo = self._repo(stdout)
         props = repo.get_all_properties("tank/data")
         self.assertEqual(props["type"], "filesystem")
@@ -110,6 +101,20 @@ class TestZfsRepositoryReads(unittest.TestCase):
         repo = self._repo(stdout)
         props = repo.get_all_properties("tank/data")
         self.assertEqual(props, {"type": "filesystem", "used": "100G"})
+
+    def test_get_all_pool_properties_parses_tab_separated_output(self):
+        stdout = "size\t10T\ncapacity\t50%\nhealth\tONLINE\n"
+        repo = self._repo(stdout)
+        props = repo.get_all_pool_properties("tank")
+        self.assertEqual(props["size"], "10T")
+        self.assertEqual(props["capacity"], "50%")
+        self.assertEqual(props["health"], "ONLINE")
+
+    def test_get_all_pool_properties_ignores_blank_lines(self):
+        stdout = "size\t10T\n\ncapacity\t50%\n\n"
+        repo = self._repo(stdout)
+        props = repo.get_all_pool_properties("tank")
+        self.assertEqual(props, {"size": "10T", "capacity": "50%"})
 
     def test_get_clones_reads_clones_property(self):
         repo = self._repo("tank/data/clone1\n")
@@ -126,9 +131,7 @@ class TestZfsRepositoryWrites(unittest.TestCase):
     """Write methods return True on success and False on failure."""
 
     def _repo(self, rc):
-        result = subprocess.CompletedProcess(
-            args=[], returncode=rc, stdout="", stderr="boom"
-        )
+        result = subprocess.CompletedProcess(args=[], returncode=rc, stdout="", stderr="boom")
         repo = ZfsRepository(sudo=False)
         repo._run = lambda *a, **k: result
         return repo
@@ -173,9 +176,7 @@ class TestZfsRepositoryWrites(unittest.TestCase):
         self.assertFalse(self._repo(1).stop_scrub("tank"))
 
     def test_pool_status_returns_stdout(self):
-        result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="status text", stderr=""
-        )
+        result = subprocess.CompletedProcess(args=[], returncode=0, stdout="status text", stderr="")
         repo = ZfsRepository(sudo=False)
         repo._run = lambda *a, **k: result
         self.assertEqual(repo.pool_status("tank"), "status text")
@@ -206,9 +207,7 @@ class TestPoolStatusErrors(unittest.TestCase):
     """pool_status_errors parses zpool status output."""
 
     def _repo(self, stdout):
-        result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=stdout, stderr=""
-        )
+        result = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
         repo = ZfsRepository(sudo=False)
         repo._run = lambda *a, **k: result
         return repo
