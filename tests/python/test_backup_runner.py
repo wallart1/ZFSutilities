@@ -330,6 +330,30 @@ class TestAbortHandling(unittest.TestCase):
         self.assertFalse(runner.running)
         on_complete.assert_called_once_with(cancelled=True)
 
+    def test_rc_nine_calls_post_callback(self):
+        runner = self._runner()
+        runner.running = True
+        post = MagicMock()
+        runner.steps = [BashStep([], "step1", is_rsync=False, fatal=False,
+                                 post_callback=post)]
+        runner.current_step = 0
+        runner._finally_step = None
+        runner._session_start_time = time.time()
+        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+            runner.prepare_session_log()
+
+            fake_process = MagicMock()
+            fake_process.poll.return_value = 9
+            fake_process.stdout.fileno.return_value = 3
+            fake_process.stdout.closed = True
+            fake_process.stderr.fileno.return_value = 4
+            fake_process.stderr.closed = True
+            runner.process = fake_process
+
+            runner._check_process()
+
+        post.assert_called_once_with()
+
     def test_cancel_sends_sigint_during_lock_wait(self):
         runner = self._runner()
         runner.running = True

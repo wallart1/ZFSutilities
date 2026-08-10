@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.80.0
+
+*Released 2026-08-10*
+
+### Added
+
+- **Headless timed lock waits** — `zfslock_wait_or_resolve` now honors the
+  `ZFSLOCK_HEADLESS_WAIT_SECONDS` environment variable. In non-interactive mode
+  it waits up to the configured number of seconds for a dataset lock before
+  aborting. The default remains `0`, preserving the legacy immediate-abort
+  behavior. Waits are throttled by `ZFSLOCK_WAIT_INTERVAL` (default 30 seconds).
+
+- **Per-profile lock waiting** — `profile_runner.py` now waits up to
+  `ZFSUTILITIES_PROFILE_LOCK_TIMEOUT` seconds (default 600) when the same
+  profile is already running, instead of immediately skipping the duplicate
+  invocation. If the prior run finishes in time, the new run proceeds normally;
+  otherwise it exits cleanly with code `0` so cron does not generate duplicate-run
+  email spam. While waiting, a `<profile>.waiting` file is written so the
+  Dashboard can display the profile as "Waiting for profile lock".
+
+- **Dataset-level lock waiting for scheduled profiles** — `profile_runner.py`
+  exports `ZFSLOCK_HEADLESS_WAIT_SECONDS=600` to every bash ZFS step it invokes,
+  so scheduled runs tolerate short-term dataset lock overlaps from manual jobs
+  instead of failing immediately with `rc=9`.
+
+- **Scrub pause/resume state polling** — `scrub_manager.py` polls ZFS scrub
+  state after `zpool scrub -p` / scrub resume commands and handles pools that
+  were externally resumed or finished while paused. The scrub queue is cleaned
+  up in all of these cases so the session log always shows a clear outcome.
+
+- **Dashboard visibility for waiting profiles** — The Dashboard **Running
+  Tasks** list distinguishes active profile runs from blocked duplicates and
+  emits a warning when any task is waiting for a lock.
+
+### Changed
+
+- **`zfsretain` locking** — `zfsretain` now uses `zfslock_wait_or_resolve`
+  instead of `zfslock_acquire`, allowing it to wait for a dataset lock when
+  `ZFSLOCK_HEADLESS_WAIT_SECONDS` is configured. Return codes were consolidated:
+  the function returns `1` for both user-skipped and error cases; the legacy
+  `rc=8` path is no longer used.
+
+- **`zfsdelfs` argument forwarding** — Direct execution now passes all
+  command-line arguments with `"$@"`, fixing a regression where override
+  arguments were dropped when the script was run as a subprocess.
+
+### Tests
+
+- Added `tests/test-zfslockmanager` cases for headless timed-wait acquisition
+  and timeout.
+
+- Added `tests/test-zfsdelfs` regression test verifying that override arguments
+  survive direct subprocess execution.
+
+- Updated `tests/test-zfsretain` mock to match `zfslock_wait_or_resolve` return
+  semantics (acquired/abort/skip).
+
+- Added `tests/python/test_profile_runner.py` cases verifying that
+  `ZFSLOCK_HEADLESS_WAIT_SECONDS` is exported to bash steps and that the value
+  is configurable via `ZFSUTILITIES_HEADLESS_LOCK_WAIT_SECONDS`.
+
+- Added `tests/python/test_profile_runner_concurrency.py` cases for profile
+  lock waiting and waiting-file cleanup.
+
+- Extended `tests/python/test_scrub_manager.py` to cover scrub-state polling,
+  externally-resumed scrubs, scrubs that finished while paused, and queue
+  cleanup for all of these states.
+
+### Documentation
+
+- Updated `docs/docs/user-guide/profiles.md`,
+  `docs/docs/developer-guide/concurrency-collisions.md`,
+  `docs/docs/developer-guide/lock-manager.md`,
+  `docs/docs/user-guide/daily-backup.md`,
+  `docs/docs/user-guide/offsite-backup.md`,
+  `docs/docs/commands-and-modules/modules.md`, and
+  `docs/docs/commands-and-modules/python-modules.md` to describe the new
+  headless wait behavior, profile lock waiting, and scrub resume outcomes.
+
 ## 0.79.0
 
 *Released 2026-08-09*

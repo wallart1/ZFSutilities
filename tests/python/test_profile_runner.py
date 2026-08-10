@@ -769,6 +769,26 @@ class TestRunStepList(unittest.TestCase):
         call_kwargs = mock_popen.call_args[1]
         self.assertEqual(call_kwargs["env"]["ZFSUTILITIES_HEADLESS"], "Y")
 
+    def test_run_command_sets_headless_lock_wait_env(self):
+        """profile_runner exports ZFSLOCK_HEADLESS_WAIT_SECONDS for bash steps."""
+        with patch("profile_runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = _mock_popen_process(rc=0)
+            profile_runner._run_command(BashStep(["echo", "hello"], "Say hello"))
+        call_kwargs = mock_popen.call_args[1]
+        self.assertEqual(
+            call_kwargs["env"]["ZFSLOCK_HEADLESS_WAIT_SECONDS"],
+            str(profile_runner.HEADLESS_LOCK_WAIT_SECONDS),
+        )
+
+    def test_run_command_headless_lock_wait_env_overridable(self):
+        """ZFSUTILITIES_HEADLESS_LOCK_WAIT_SECONDS overrides the default wait."""
+        with patch.object(profile_runner, "HEADLESS_LOCK_WAIT_SECONDS", 123):
+            with patch("profile_runner.subprocess.Popen") as mock_popen:
+                mock_popen.return_value = _mock_popen_process(rc=0)
+                profile_runner._run_command(BashStep(["echo", "hello"], "Say hello"))
+        call_kwargs = mock_popen.call_args[1]
+        self.assertEqual(call_kwargs["env"]["ZFSLOCK_HEADLESS_WAIT_SECONDS"], "123")
+
     def test_run_command_streams_merged_stdout_stderr(self):
         """_run_command merges stdout/stderr and writes each line in order."""
         with patch("profile_runner.subprocess.Popen") as mock_popen:

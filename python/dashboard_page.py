@@ -140,31 +140,47 @@ def _is_profile_lock_stale(lock_path):
 
 
 def list_running_profiles():
-    """Return a list of running profile dicts from the profile lock directory.
+    """Return running profile dicts from the profile lock directory.
 
-    Each dict contains: name, pid, started.
-    Stale locks are ignored.
+    Each dict contains: name, pid, started, log_file.  Entries from
+    ``<profile>.waiting`` files are marked with ``waiting=True`` so the
+    Dashboard can distinguish an active run from a blocked duplicate
+    invocation.
+
+    Stale locks and stale waiting files are ignored.
     """
     if not os.path.isdir(PROFILE_LOCK_DIR):
         return []
 
     profiles = []
     for entry in os.listdir(PROFILE_LOCK_DIR):
-        if not entry.endswith(".lock"):
+        path = os.path.join(PROFILE_LOCK_DIR, entry)
+        if not os.path.isfile(path):
             continue
-        lock_path = os.path.join(PROFILE_LOCK_DIR, entry)
-        if not os.path.isfile(lock_path):
-            continue
-        if _is_profile_lock_stale(lock_path):
-            continue
-        data = _read_json_lock(lock_path) or {}
-        name = data.get("profile") or entry[:-5]
-        profiles.append({
-            "name": name,
-            "pid": data.get("pid"),
-            "started": data.get("started", "?"),
-            "log_file": data.get("log_file"),
-        })
+
+        if entry.endswith(".lock"):
+            if _is_profile_lock_stale(path):
+                continue
+            data = _read_json_lock(path) or {}
+            name = data.get("profile") or entry[:-5]
+            profiles.append({
+                "name": name,
+                "pid": data.get("pid"),
+                "started": data.get("started", "?"),
+                "log_file": data.get("log_file"),
+            })
+        elif entry.endswith(".waiting"):
+            if _is_profile_lock_stale(path):
+                continue
+            data = _read_json_lock(path) or {}
+            name = data.get("profile") or entry[:-8]
+            profiles.append({
+                "name": name,
+                "pid": data.get("pid"),
+                "started": data.get("started", "?"),
+                "log_file": data.get("log_file"),
+                "waiting": True,
+            })
     return profiles
 
 
@@ -863,7 +879,7 @@ def _get_warnings(pools, recent_history, threshold, waiting_tasks=None):
     if waiting_tasks:
         for task in waiting_tasks:
             warnings.append(
-                f"'{task['name']}' is waiting for a dataset lock"
+                f"'{task['name']}' is waiting for a lock"
             )
 
     return warnings
@@ -1703,13 +1719,21 @@ def _collect_running_tasks(app):
     # 3. Running scheduled profiles (advisory lock files)
     for profile in list_running_profiles():
         pid = profile.get("pid")
-        status = f"PID {pid}" if pid else "Running"
+        if profile.get("waiting"):
+            status = "Waiting for profile lock"
+            waiting_for_lock = True
+            task_key = f"profile-wait:{profile['name']}"
+        else:
+            status = f"PID {pid}" if pid else "Running"
+            waiting_for_lock = False
+            task_key = f"profile:{profile['name']}"
         tasks.append({
             "name": profile["name"],
             "type": "Profile",
             "status": status,
-            "task_key": f"profile:{profile['name']}",
+            "task_key": task_key,
             "log_file": profile.get("log_file"),
+            "waiting_for_lock": waiting_for_lock,
         })
 
     # 4. Legacy scheduled tasks (profile_runner.py processes not yet using locks)

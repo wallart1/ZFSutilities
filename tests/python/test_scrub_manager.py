@@ -902,7 +902,8 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                 for call in custom_log.call_args_list)
         )
 
-    def test_pause_scrubs_for_pools_warns_when_state_does_not_change(self):
+    @patch.object(sm.time, "sleep")
+    def test_pause_scrubs_for_pools_warns_when_state_does_not_change(self, _mock_sleep):
         """If zpool scrub -p succeeds but state is not PAUSED, log a warning."""
         repo = MagicMock()
         repo.pause_scrub.return_value = True
@@ -932,7 +933,8 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                         for call in custom_log.call_args_list)
                 )
 
-    def test_resume_scrubs_for_pools_warns_when_state_does_not_change(self):
+    @patch.object(sm.time, "sleep")
+    def test_resume_scrubs_for_pools_warns_when_state_does_not_change(self, _mock_sleep):
         """If zpool scrub succeeds but state is not SCANNING, log a warning."""
         repo = MagicMock()
         repo.resume_scrub.return_value = True
@@ -967,6 +969,150 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                     any("did not resume" in call[0][0]
                         for call in custom_log.call_args_list)
                 )
+
+    def test_pause_scrubs_for_pools_polls_until_paused(self):
+        """If zpool status flips to paused shortly after the command, record it."""
+        repo = MagicMock()
+        repo.pause_scrub.return_value = True
+        states = {"src": self._state(sm.ScrubState.SCANNING)}
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
+                with patch.object(
+                    sm, "get_all_pool_scrub_states", return_value=states
+                ):
+                    with patch.object(
+                        sm, "get_pool_scrub_info",
+                        side_effect=[
+                            self._state(sm.ScrubState.SCANNING),
+                            self._state(sm.ScrubState.PAUSED),
+                        ],
+                    ):
+                        paused = sm.pause_scrubs_for_pools(
+                            ["src"], repo=repo, dry_run=False
+                        )
+                self.assertEqual(paused, ["src"])
+                repo.pause_scrub.assert_called_once_with("src", timeout=30)
+                queue = sm.ScrubQueue()
+                self.assertIn("src", queue.paused)
+                self.assertIn("src", queue.paused_by_user)
+
+    @patch.object(sm.time, "sleep")
+    def test_pause_scrubs_for_pools_warns_when_never_paused(self, _mock_sleep):
+        """A pool whose state never flips to paused is not recorded."""
+        repo = MagicMock()
+        repo.pause_scrub.return_value = True
+        repo.pool_status.return_value = "scan: scrub in progress since Mon"
+        states = {"src": self._state(sm.ScrubState.SCANNING)}
+        custom_log = MagicMock()
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
+                with patch.object(
+                    sm, "get_all_pool_scrub_states", return_value=states
+                ):
+                    with patch.object(
+                        sm, "get_pool_scrub_info",
+                        return_value=self._state(sm.ScrubState.SCANNING),
+                    ):
+                        paused = sm.pause_scrubs_for_pools(
+                            ["src"], repo=repo, dry_run=False,
+                            log_func=custom_log
+                        )
+                self.assertEqual(paused, [])
+                self.assertTrue(
+                    any("did not pause" in call[0][0]
+                        for call in custom_log.call_args_list)
+                )
+                queue = sm.ScrubQueue()
+                self.assertNotIn("src", queue.paused)
+                self.assertNotIn("src", queue.paused_by_user)
+
+    def test_resume_scrubs_for_pools_clears_queue_when_already_running(self):
+        """If a paused scrub resumed externally, log it and clean the queue."""
+        repo = MagicMock()
+        repo.resume_scrub.return_value = True
+        states = {"src": self._state(sm.ScrubState.SCANNING)}
+        custom_log = MagicMock()
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
+                queue = sm.ScrubQueue()
+                queue.paused.add("src")
+                queue.paused_by_user.add("src")
+                queue._save()
+
+                with patch.object(
+                    sm, "get_all_pool_scrub_states", return_value=states
+                ):
+                    sm.resume_scrubs_for_pools(
+                        ["src"], repo=repo, dry_run=False,
+                        log_func=custom_log
+                    )
+
+                repo.resume_scrub.assert_not_called()
+                self.assertTrue(
+                    any("already running" in call[0][0]
+                        for call in custom_log.call_args_list)
+                )
+                queue = sm.ScrubQueue()
+                self.assertNotIn("src", queue.paused)
+                self.assertNotIn("src", queue.paused_by_user)
+
+    def test_resume_scrubs_for_pools_clears_queue_when_finished(self):
+        """If a paused scrub finished on its own, log it and clean the queue."""
+        repo = MagicMock()
+        repo.resume_scrub.return_value = True
+        states = {"src": self._state(sm.ScrubState.FINISHED)}
+        custom_log = MagicMock()
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
+                queue = sm.ScrubQueue()
+                queue.paused.add("src")
+                queue.paused_by_user.add("src")
+                queue._save()
+
+                with patch.object(
+                    sm, "get_all_pool_scrub_states", return_value=states
+                ):
+                    sm.resume_scrubs_for_pools(
+                        ["src"], repo=repo, dry_run=False,
+                        log_func=custom_log
+                    )
+
+                repo.resume_scrub.assert_not_called()
+                self.assertTrue(
+                    any("finished while paused" in call[0][0]
+                        for call in custom_log.call_args_list)
+                )
+                queue = sm.ScrubQueue()
+                self.assertNotIn("src", queue.paused)
+                self.assertNotIn("src", queue.paused_by_user)
+
+    def test_resume_scrubs_for_pools_polls_until_scanning(self):
+        """resume_scrubs_for_pools waits for the state to flip to scanning."""
+        repo = MagicMock()
+        repo.resume_scrub.return_value = True
+        states = {"src": self._state(sm.ScrubState.PAUSED)}
+        with temp_config_dir() as tmpdir:
+            state_path = self._state_path(tmpdir)
+            with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
+                with patch.object(
+                    sm, "get_all_pool_scrub_states", return_value=states
+                ):
+                    with patch.object(
+                        sm, "get_pool_scrub_info",
+                        side_effect=[
+                            self._state(sm.ScrubState.PAUSED),
+                            self._state(sm.ScrubState.SCANNING),
+                        ],
+                    ):
+                        sm.resume_scrubs_for_pools(["src"], repo=repo)
+                repo.resume_scrub.assert_called_once_with("src", timeout=30)
+                queue = sm.ScrubQueue()
+                self.assertNotIn("src", queue.paused)
+                self.assertNotIn("src", queue.paused_by_user)
 
 
 class TestSystemScrubHelpers(unittest.TestCase):

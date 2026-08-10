@@ -2159,8 +2159,13 @@
 <li>Returns: 0=acquired, 1=user aborted, 2=user skipped</li>
 </ul>
 <p>When stdin is not a TTY or <code>ZFSUTILITIES_HEADLESS=Y</code> is set, the function does not
-prompt. It logs a <code>FATAL:</code> message and returns 1 immediately. This prevents cron or
-headless profile runs from hanging indefinitely.</p>
+prompt. By default it logs a <code>FATAL:</code> message and returns 1 immediately. This
+prevents cron or headless profile runs from hanging indefinitely.</p>
+<p>If <code>ZFSLOCK_HEADLESS_WAIT_SECONDS</code> is set to a positive number, the function
+will wait up to that many seconds for the lock to become free before logging
+<code>FATAL:</code> and returning 1.  Between attempts it sleeps for
+<code>ZFSLOCK_WAIT_INTERVAL</code> seconds (default 30).  <code>profile_runner.py</code> exports
+this variable for all bash steps it invokes.</p>
 <p>The conflict-resolution loop also throttles repeated acquisition attempts with a
 short backoff when a conflict persists, so a closed stdin or an invalid choice
 cannot spin the CPU.</p>
@@ -2372,7 +2377,7 @@ deterministic order to avoid deadlocks. Use:</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.79.0
+      ZFS Utilities v0.80.0
     </div>
   
   
@@ -2397,7 +2402,7 @@ deterministic order to avoid deadlocks. Use:</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.79.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.80.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

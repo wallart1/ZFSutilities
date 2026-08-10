@@ -1384,10 +1384,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#7-headless-profile_runnerpy-has-no-global-lock" class="md-nav__link">
+  <a href="#7-headless-profile_runnerpy-waits-for-profile-and-dataset-locks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        7. Headless profile_runner.py has no global lock
+        7. Headless profile_runner.py waits for profile and dataset locks
       
     </span>
   </a>
@@ -2264,18 +2264,21 @@ each action consults the live <code>zpool status</code> scrub state and skips it
 the requested transition is invalid (for example, pausing a pool that is not
 currently scanning).  ZFS itself rejects invalid transitions, so the worst-case
 outcome of concurrent scrub control is a logged warning, not data loss.</p>
-<h3 id="7-headless-profile_runnerpy-has-no-global-lock">7. Headless <code>profile_runner.py</code> has no global lock<a class="headerlink" href="#7-headless-profile_runnerpy-has-no-global-lock" title="Permanent link">&para;</a></h3>
+<h3 id="7-headless-profile_runnerpy-waits-for-profile-and-dataset-locks">7. Headless <code>profile_runner.py</code> waits for profile and dataset locks<a class="headerlink" href="#7-headless-profile_runnerpy-waits-for-profile-and-dataset-locks" title="Permanent link">&para;</a></h3>
 <p><code>profile_runner.py run &lt;profile&gt;</code> is what cron executes. It:</p>
 <ul>
-<li>Sets <code>ZFSUTILITIES_HEADLESS=Y</code>, which makes <code>zfslock_wait_or_resolve</code> <strong>abort</strong>
-  immediately on a dataset lock conflict instead of waiting.</li>
-<li>Has no global mutex, so the same profile can be started again by cron while the
-  previous instance is still running.</li>
-<li>Can run at the same time as the GUI, a manual CLI script, or another profile.</li>
+<li>Acquires a per-profile advisory lock. If the same profile is already running,
+  the new invocation waits up to <code>ZFSUTILITIES_PROFILE_LOCK_TIMEOUT</code> (default
+  600) for the prior run to finish.</li>
+<li>Exports <code>ZFSLOCK_HEADLESS_WAIT_SECONDS=600</code> to its bash steps, so
+  <code>zfslock_wait_or_resolve</code> waits up to 10 minutes for a dataset lock before
+  aborting instead of failing immediately.</li>
+<li>Can run at the same time as the GUI, a manual CLI script, or another profile,
+  as long as they touch disjoint datasets.</li>
 </ul>
-<p>Because headless mode aborts on lock conflict, a scheduled job can fail with
-<code>rc=9</code> just because a manual operation happened to be holding a dataset lock at
-that moment.</p>
+<p>If the timeouts expire, the blocked invocation logs a warning and exits cleanly
+(with code <code>0</code> for a duplicate-run suppression, or <code>rc=9</code> for a dataset-level
+abort) so cron does not treat a transient overlap as an error.</p>
 <h3 id="8-checkagainst-reads-while-deletions-are-in-progress">8. Checkagainst reads while deletions are in progress<a class="headerlink" href="#8-checkagainst-reads-while-deletions-are-in-progress" title="Permanent link">&para;</a></h3>
 <p><code>zfscheckagainst</code> reads snapshot lists and GUIDs to compare source and
 counterpart datasets. It does not lock the datasets it reads. If a prune or
@@ -2367,8 +2370,8 @@ happens before or during destination preparation.</p>
 <tr>
 <td>Headless profile overlap</td>
 <td><strong>Medium</strong></td>
-<td><code>rc=9</code> on lock conflict</td>
-<td><strong>Yes</strong> (Phase 5 per-profile <code>flock</code>)</td>
+<td>Waits, then <code>rc=9</code> only on timeout</td>
+<td><strong>Yes</strong> (Phase 5 per-profile <code>flock</code> + timed dataset waits)</td>
 </tr>
 <tr>
 <td>Checkagainst during deletions</td>
@@ -2543,7 +2546,7 @@ snapshot.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.79.0
+      ZFS Utilities v0.80.0
     </div>
   
   
@@ -2568,7 +2571,7 @@ snapshot.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.79.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.80.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

@@ -23,6 +23,7 @@ if [[ ! -r "$NODE_CONF" ]]; then
         NODE_CONF="/etc/two-node.conf"
     else
         log_msg "FATAL: Missing $NODE_CONF — install via: bin/install-single-node"
+        # shellcheck source=bin/bashfatal
         source "$_zfsdelfs_dir/bashfatal" 1
     fi
 fi
@@ -37,6 +38,7 @@ fi
 ISCSI_LIB=$(find_zfsutility_script iscsi-lib.sh)
 if [[ -z "$ISCSI_LIB" ]]; then
     log_msg "FATAL: Could not locate iscsi-lib.sh"
+    # shellcheck source=bin/bashfatal
     source "$_zfsdelfs_dir/bashfatal"
 fi
 source "$ISCSI_LIB"
@@ -104,7 +106,7 @@ function delfs {
         unset startwith
     fi
 
-    if [[ $5 != '' ]]; then overrides $5; fi
+    if [[ $5 != '' ]]; then overrides "$5"; fi
 
     zfslock_init
     zfslock_wait_or_resolve "$sourcefs" "x" "destroy dataset $sourcefs"
@@ -187,4 +189,4 @@ function delfs {
 
     restore-caller-filter-state
 }
-if calledbybash; then delfs $1 $2 $3 $4; fi
+if calledbybash; then delfs "$@"; fi

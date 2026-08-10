@@ -304,6 +304,99 @@ test_delfs_aborts_when_locked() {
 }
 
 # ------------------------------------------------------------------
+# Regression test: direct execution must pass the overrides argument
+# ------------------------------------------------------------------
+
+run_delfs_subprocess() {
+    local _state_dir="$1"
+    local _mock_bin="$_state_dir/mockbin"
+    local _mock_home="$_state_dir/home"
+    mkdir -p "$_mock_bin" "$_mock_home" "$_state_dir/logs"
+
+    cp "$mydir/bin/zfsdelfs" "$_mock_bin/zfsdelfs"
+    # Provide a private ~/bashinit so the subprocess bootstraps itself.
+    ln -sfn "$mydir/bin/bashinit" "$_mock_home/bashinit"
+
+    cat > "$_mock_bin/node-lib.sh" <<'EOF'
+NODE_MODE=single-node
+is_single_node() { return 0; }
+is_two_node() { return 1; }
+EOF
+    cat > "$_mock_bin/zfsbuildfsarray" <<'EOF'
+buildfsarray() { fsarray=("${_mock_delfs_fsarray[@]}"); }
+EOF
+    cat > "$_mock_bin/zfsdelallsnaps" <<'EOF'
+delallsnaps() { return 0; }
+EOF
+    cat > "$_mock_bin/zfsoverrides" <<'EOF'
+overrides() { eval "$*"; }
+EOF
+    cat > "$_mock_bin/zfs-diagnose-busy" <<'EOF'
+diagnose_dataset_busy() { true; }
+EOF
+    cat > "$_mock_bin/zfslockmanager" <<EOF
+zfslock_init() { true; }
+zfslock_wait_or_resolve() {
+    ZFSLOCK_ID="$_state_dir/lock_\${1//\\//_}"
+    return 0
+}
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+    cat > "$_mock_bin/rootcheck" <<'EOF'
+rootcheck() { true; }
+EOF
+    cat > "$_mock_bin/iscsi-lib.sh" <<'EOF'
+declare -A ISCSI_TEARDOWN
+iscsi_teardown_zvol() { return 0; }
+EOF
+    cat > "$_state_dir/node.conf" <<'EOF'
+NODE_MODE=single-node
+EOF
+    cat > "$_mock_bin/zfs" <<'EOF'
+#!/usr/bin/bash
+case "$*" in
+    "list -t filesystem,volume pool/data") exit 0 ;;
+    "list -H -t snapshot -o clones -r pool/data") echo "-" ;;
+    "destroy pool/data") exit 0 ;;
+    *) exit 0 ;;
+esac
+EOF
+    chmod +x "$_mock_bin/zfs"
+
+    _mock_delfs_fsarray=(pool/data) \
+        HOME="$_mock_home" \
+        NODE_CONF="$_state_dir/node.conf" \
+        ZFSUTILITIES_BIN_DIR="$_mock_bin" \
+        ZFSUTILITIES_DISABLE_MIGRATION=1 \
+        ZFSUTILITIES_SESSION_LOG_DIR="$_state_dir/logs" \
+        timeout 5 "$_mock_bin/zfsdelfs" "pool/data" '' '' '' "autoproceed='Y'" \
+        >"$_state_dir/out" 2>"$_state_dir/err"
+    echo $? > "$_state_dir/rc"
+}
+
+test_delfs_autoproceed_override_subprocess() {
+    reset_mocks
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/delfs_autoproceed_test"
+    mkdir -p "$_state_dir"
+    run_delfs_subprocess "$_state_dir"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    local _combined
+    _combined=$(cat "$_state_dir/out" "$_state_dir/err" 2>/dev/null)
+    test_start "delfs honors autoproceed='Y' override when executed as subprocess"
+    # With the override honored, the interactive "About to delete..." prompt
+    # block is skipped entirely. If the override is dropped, that message is
+    # emitted and the script then waits at read -p.
+    if [[ "$rc" -eq 0 && "$_combined" != *"About to delete"* ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 and no 'About to delete' prompt, got rc=$rc, output: $_combined"
+    fi
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_teardown_removes_expected_backstore
@@ -315,5 +408,6 @@ test_encrypted_conf_add_backstore
 test_teardown_skips_non_vm_disk
 test_delfs_acquires_destroy_lock
 test_delfs_aborts_when_locked
+test_delfs_autoproceed_override_subprocess
 
 test_summary

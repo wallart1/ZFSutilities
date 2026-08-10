@@ -682,6 +682,89 @@ test_wait_interval_minimum() {
 }
 
 # ---------------------------------------------------------------------------
+# Headless timed wait
+# ---------------------------------------------------------------------------
+
+test_headless_wait_acquires() {
+    echo ""
+    echo "=== Headless Timed Wait Acquire Tests ==="
+    cleanup_test_locks
+
+    _bg_lock_start "test/headlesswait" "w" "holder" 2
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
+    if [[ "$bg_rc" -ne 0 ]]; then
+        _bg_lock_kill
+        test_start "Headless wait mode acquires lock after holder releases"
+        test_fail "Background lock could not be acquired (rc=$bg_rc)"
+        return
+    fi
+
+    test_start "Headless wait mode acquires lock after holder releases"
+    local rcfile="$_mock_zfs_state_dir/headless_wait_rc"
+    (
+        ZFSUTILITIES_HEADLESS=Y ZFSLOCK_HEADLESS_WAIT_SECONDS=5 \
+            ZFSLOCK_WAIT_INTERVAL=1 \
+            zfslock_wait_or_resolve "test/headlesswait" "w" "test" </dev/null \
+            >/dev/null 2>&1
+        echo $? > "$rcfile"
+    ) &
+    local wait_pid=$!
+    wait "$wait_pid"
+    local rc
+    rc=$(cat "$rcfile")
+    _bg_lock_kill
+    if [[ "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 after lock released, got rc=$rc"
+    fi
+    zfslock_release_all
+}
+
+test_headless_wait_times_out() {
+    echo ""
+    echo "=== Headless Timed Wait Timeout Tests ==="
+    cleanup_test_locks
+
+    _bg_lock_start "test/headlesstimeout" "w" "holder" 10
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
+    if [[ "$bg_rc" -ne 0 ]]; then
+        _bg_lock_kill
+        test_start "Headless wait mode aborts after configured timeout"
+        test_fail "Background lock could not be acquired (rc=$bg_rc)"
+        return
+    fi
+
+    test_start "Headless wait mode aborts after configured timeout"
+    clear_test_log_file
+    local rcfile="$_mock_zfs_state_dir/headless_timeout_rc"
+    local start end elapsed
+    start=$(date +%s)
+    (
+        ZFSUTILITIES_HEADLESS=Y ZFSLOCK_HEADLESS_WAIT_SECONDS=2 \
+            ZFSLOCK_WAIT_INTERVAL=1 \
+            zfslock_wait_or_resolve "test/headlesstimeout" "w" "test" </dev/null \
+            >/dev/null 2>&1
+        echo $? > "$rcfile"
+    ) &
+    local wait_pid=$!
+    wait "$wait_pid"
+    end=$(date +%s)
+    elapsed=$((end - start))
+    local rc
+    rc=$(cat "$rcfile")
+    _bg_lock_kill
+    if [[ "$rc" -eq 1 && "$elapsed" -ge 2 && "$elapsed" -le 5 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=1 and elapsed 2-5s, got rc=$rc elapsed=${elapsed}s"
+    fi
+    zfslock_release_all
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -698,5 +781,7 @@ test_wait_loop
 test_retry_option
 test_wait_interval_minimum
 test_multi_lock_acquisition
+test_headless_wait_acquires
+test_headless_wait_times_out
 
 test_summary

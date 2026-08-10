@@ -1907,16 +1907,26 @@ settings, and save again.</p>
 entries directly.  The GUI generates cron lines that run
 <code>profile_runner.py run &lt;profile_name&gt;</code>.</p>
 <p>When a scheduled profile is still running and cron tries to start it again,
-the second invocation exits cleanly with code <code>0</code> and logs an informative
-message.  This prevents cron from sending duplicate-run email spam.  Cron
-stdout/stderr for every scheduled profile is appended to
-<code>/var/log/zfsutilities/cron.log</code> so that errors occurring before the runner
-creates its own session log remain visible.</p>
+the second invocation waits up to 10 minutes for the first run to finish.
+If the first run finishes in time, the second run proceeds normally.
+If the lock is still held after 10 minutes, the second invocation exits
+cleanly with code <code>0</code> and logs an informative message.  This prevents cron
+from sending duplicate-run email spam.  Cron stdout/stderr for every
+scheduled profile is appended to <code>/var/log/zfsutilities/cron.log</code> so that
+errors occurring before the runner creates its own session log remain visible.</p>
+<p>The Dashboard <strong>Running Tasks</strong> list shows a waiting profile with the status
+"Waiting for profile lock".</p>
+<p>Both the per-profile wait time and the dataset-level wait time are controlled
+by environment variables (<code>ZFSUTILITIES_PROFILE_LOCK_TIMEOUT</code> and
+<code>ZFSLOCK_HEADLESS_WAIT_SECONDS</code>) so they can be adjusted per host without
+editing code.</p>
 <h2 id="running-profiles-from-the-command-line">Running profiles from the command line<a class="headerlink" href="#running-profiles-from-the-command-line" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>python3<span class="w"> </span>/usr/local/lib/zfsutilities/current/bin/profile_runner.py<span class="w"> </span>run<span class="w"> </span>root-backup-daily
 </code></pre></div>
-<p>The runner operates in headless mode, so it aborts immediately if it encounters
-a dataset lock conflict rather than prompting interactively.</p>
+<p>The runner operates in headless mode.  By default it waits up to 10 minutes
+when a ZFS step encounters a dataset lock conflict, then aborts if the lock
+is still held.  This reduces transient <code>rc=9</code> failures when a manual job
+happens to overlap with a scheduled run.</p>
 <h2 id="concurrent-execution">Concurrent execution<a class="headerlink" href="#concurrent-execution" title="Permanent link">&para;</a></h2>
 <p>Multiple profiles can run at the same time when they touch <strong>disjoint</strong>
 datasets or pools.  For example:</p>
@@ -1929,18 +1939,21 @@ datasets or pools.  For example:</p>
 operation acquires a short-term lock on only the datasets or pools it needs.
 This maximizes parallelism while preventing dangerous collisions.</p>
 <h2 id="conflict-resolution">Conflict resolution<a class="headerlink" href="#conflict-resolution" title="Permanent link">&para;</a></h2>
-<p>When two jobs need the same dataset or pool, the second one either waits (in
-interactive/GUI mode) or fails safely (in headless/cron mode).  Examples:</p>
+<p>When two jobs need the same dataset or pool, the second one either waits or
+fails safely.  In interactive/GUI mode you are prompted.  In headless/cron
+mode the runner waits up to 10 minutes by default, then fails safely if the
+lock is still held.  Examples:</p>
 <ul>
 <li>Two backup profiles targeting <code>tank/share</code> cannot run simultaneously.  The
-  second fails with a lock-conflict message.</li>
+  second waits; if the first finishes within the timeout, the second runs.</li>
 <li>A prune job on <code>tank</code> cannot run while a backup of <code>tank/share</code> is in
-  progress.  The prune is skipped safely; no snapshots are lost.</li>
+  progress.  The prune waits, then proceeds once the backup releases the lock.</li>
 <li>A dataset destroy cannot run while a backup is sending or receiving that
-  dataset.</li>
+  dataset.  The destroy waits, then proceeds once the backup step finishes.</li>
 </ul>
-<p>No data corruption occurs in these cases.  The blocked job logs a warning and
-exits, and cron does not treat a duplicate-run suppression as an error.</p>
+<p>No data corruption occurs in these cases.  If the timeout expires, the blocked
+job logs a warning and exits, and cron does not treat a duplicate-run
+suppression as an error.</p>
 <h2 id="scope-alignment">Scope alignment<a class="headerlink" href="#scope-alignment" title="Permanent link">&para;</a></h2>
 <p>A backup profile and an offsite profile that send overlapping datasets to the
 same destination must agree on which datasets receive <code>@offsite</code> snapshots.</p>
@@ -2005,7 +2018,7 @@ the offsite source/includes (for example, back up <code>NVME1/proxmox</code> ins
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.79.0
+      ZFS Utilities v0.80.0
     </div>
   
   
@@ -2030,7 +2043,7 @@ the offsite source/includes (for example, back up <code>NVME1/proxmox</code> ins
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.79.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.80.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

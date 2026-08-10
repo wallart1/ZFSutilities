@@ -975,6 +975,34 @@ class TestCollectRunningTasks(unittest.TestCase):
             "/var/log/zfsutilities/sessions/profile-daily.log",
         )
 
+    def test_waiting_profile_task(self):
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        app.scrub_queue = None
+        with patch.object(
+            dp, "list_running_profiles", return_value=[{
+                "name": "Daily",
+                "pid": 1235,
+                "started": "2026-06-29T10:00:00",
+                "log_file": "/var/log/zfsutilities/sessions/profile-daily-wait.log",
+                "waiting": True,
+            }]
+        ):
+            tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["name"], "Daily")
+        self.assertEqual(tasks[0]["type"], "Profile")
+        self.assertEqual(tasks[0]["status"], "Waiting for profile lock")
+        self.assertEqual(tasks[0]["task_key"], "profile-wait:Daily")
+        self.assertTrue(tasks[0]["waiting_for_lock"])
+        self.assertEqual(
+            tasks[0]["log_file"],
+            "/var/log/zfsutilities/sessions/profile-daily-wait.log",
+        )
+
     def test_gui_runner_waiting_for_lock(self):
         app = MagicMock()
         runner = MagicMock()
@@ -1133,6 +1161,26 @@ class TestListRunningProfiles(unittest.TestCase):
             json.dump({"profile": "Old", "pid": 999999, "started": "2026-06-29T10:00:00"}, f)
         self.assertEqual(dp.list_running_profiles(), [])
 
+    def test_returns_waiting_profile(self):
+        waiting_path = os.path.join(self.tmpdir, "Daily.waiting")
+        with open(waiting_path, "w") as f:
+            import json
+            json.dump({
+                "profile": "Daily",
+                "pid": os.getpid(),
+                "started": "2026-06-29T10:00:00",
+                "log_file": "/var/log/zfsutilities/sessions/daily.log",
+            }, f)
+        profiles = dp.list_running_profiles()
+        self.assertEqual(len(profiles), 1)
+        self.assertEqual(profiles[0]["name"], "Daily")
+        self.assertEqual(profiles[0]["pid"], os.getpid())
+        self.assertTrue(profiles[0].get("waiting"))
+        self.assertEqual(
+            profiles[0]["log_file"],
+            "/var/log/zfsutilities/sessions/daily.log",
+        )
+
 
 class TestWaitingTaskWarnings(unittest.TestCase):
 
@@ -1147,7 +1195,15 @@ class TestWaitingTaskWarnings(unittest.TestCase):
         warnings = dp._get_warnings(pools, [], 80, waiting)
         self.assertEqual(len(warnings), 1)
         self.assertIn("Backup", warnings[0])
-        self.assertIn("waiting for a dataset lock", warnings[0])
+        self.assertIn("waiting for a lock", warnings[0])
+
+    def test_warning_for_waiting_profile(self):
+        pools = []
+        waiting = [{"name": "Daily", "waiting_for_lock": True}]
+        warnings = dp._get_warnings(pools, [], 80, waiting)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Daily", warnings[0])
+        self.assertIn("waiting for a lock", warnings[0])
 
     def test_no_warning_when_no_tasks_waiting(self):
         pools = []

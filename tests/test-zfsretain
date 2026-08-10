@@ -40,6 +40,20 @@ zfslock_acquire() {
     ZFSLOCK_ID="/tmp/mock_lock_${1//\//_}"
     return 0
 }
+zfslock_wait_or_resolve() {
+    _mock_lock_acquisitions+=("$1 $2")
+    # Real zfslock_wait_or_resolve returns:
+    #   0 = acquired, 1 = aborted/error, 2 = skipped by user.
+    # retain maps rc 2 -> INFO skip and rc 1 -> WARN skip.
+    if [[ "${_mock_lock_error:-}" == "$1" ]]; then
+        return 1
+    fi
+    if [[ "${_mock_lock_conflict:-}" == "$1" ]]; then
+        return 2
+    fi
+    ZFSLOCK_ID="/tmp/mock_lock_${1//\//_}"
+    return 0
+}
 zfslock_release() { true; }
 zfslock_release_all() { true; }
 EOF
@@ -323,11 +337,11 @@ test_retain_returns_on_lock_error() {
     mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d'
     retain "pool/fs" "dailybackup"
     local rc=$?
-    test_start "retain returns 8 on unexpected lock acquisition error"
-    if [[ $rc -eq 8 && ${#_mock_delsnap_calls[@]} -eq 0 && "${_mock_lock_acquisitions[*]}" == *"pool/fs w"* ]]; then
+    test_start "retain returns 1 on unexpected lock acquisition error"
+    if [[ $rc -eq 1 && ${#_mock_delsnap_calls[@]} -eq 0 && "${_mock_lock_acquisitions[*]}" == *"pool/fs w"* ]]; then
         test_pass
     else
-        test_fail "Expected rc=8 with no deletions, got rc=$rc, deletions=${_mock_delsnap_calls[*]}"
+        test_fail "Expected rc=1 with no deletions, got rc=$rc, deletions=${_mock_delsnap_calls[*]}"
     fi
 }
 

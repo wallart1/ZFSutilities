@@ -4,7 +4,7 @@ import fcntl
 import json
 import os
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 
 from config_core import BACKUP_DEFAULTS, _deep_copy, save_config
@@ -585,11 +585,15 @@ def save_scrub_manager_config(config, scrub_data):
 SCRUB_STATE_PATH = get_scrub_state_path()
 
 
-def load_scrub_state():
+def load_scrub_state(locked: bool = True):
     """Load scrub queue state from disk.
 
     Returns a dict with empty-list defaults for the bucket keys. If the file
     is missing, unreadable, or malformed, the defaults are returned.
+
+    When *locked* is False, the caller is responsible for holding the
+    scrub-state lock; this avoids deadlocks when the function is called from
+    code that already holds ``scrub_state_lock_write()``.
     """
     run_migration()
     defaults = {
@@ -601,8 +605,9 @@ def load_scrub_state():
     }
     if not os.path.exists(SCRUB_STATE_PATH):
         return dict(defaults)
+    lock_ctx = scrub_state_lock_read() if locked else nullcontext()
     try:
-        with scrub_state_lock_read(), open(SCRUB_STATE_PATH, "r") as f:
+        with lock_ctx, open(SCRUB_STATE_PATH, "r") as f:
             data = json.load(f)
         for key, value in defaults.items():
             if key not in data:
@@ -617,11 +622,16 @@ def load_scrub_state():
         return dict(defaults)
 
 
-def save_scrub_state(state):
-    """Persist scrub queue state to disk."""
+def save_scrub_state(state, locked: bool = True):
+    """Persist scrub queue state to disk.
+
+    When *locked* is False, the caller is responsible for holding the
+    scrub-state lock.
+    """
     os.makedirs(os.path.dirname(SCRUB_STATE_PATH), exist_ok=True)
+    lock_ctx = scrub_state_lock_write() if locked else nullcontext()
     try:
-        with scrub_state_lock_write(), open(SCRUB_STATE_PATH, "w") as f:
+        with lock_ctx, open(SCRUB_STATE_PATH, "w") as f:
             json.dump(state, f, indent=2)
     except OSError as e:
         log_msg(f"WARN: Could not save scrub state: {e}")

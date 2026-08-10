@@ -93,8 +93,14 @@ When acquiring a lock on `/pool/parent/child`:
 - Returns: 0=acquired, 1=user aborted, 2=user skipped
 
 When stdin is not a TTY or `ZFSUTILITIES_HEADLESS=Y` is set, the function does not
-prompt. It logs a `FATAL:` message and returns 1 immediately. This prevents cron or
-headless profile runs from hanging indefinitely.
+prompt. By default it logs a `FATAL:` message and returns 1 immediately. This
+prevents cron or headless profile runs from hanging indefinitely.
+
+If `ZFSLOCK_HEADLESS_WAIT_SECONDS` is set to a positive number, the function
+will wait up to that many seconds for the lock to become free before logging
+`FATAL:` and returning 1.  Between attempts it sleeps for
+`ZFSLOCK_WAIT_INTERVAL` seconds (default 30).  `profile_runner.py` exports
+this variable for all bash steps it invokes.
 
 The conflict-resolution loop also throttles repeated acquisition attempts with a
 short backoff when a conflict persists, so a closed stdin or an invalid choice

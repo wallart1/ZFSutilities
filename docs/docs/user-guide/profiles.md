@@ -36,11 +36,21 @@ entries directly.  The GUI generates cron lines that run
 `profile_runner.py run <profile_name>`.
 
 When a scheduled profile is still running and cron tries to start it again,
-the second invocation exits cleanly with code `0` and logs an informative
-message.  This prevents cron from sending duplicate-run email spam.  Cron
-stdout/stderr for every scheduled profile is appended to
-`/var/log/zfsutilities/cron.log` so that errors occurring before the runner
-creates its own session log remain visible.
+the second invocation waits up to 10 minutes for the first run to finish.
+If the first run finishes in time, the second run proceeds normally.
+If the lock is still held after 10 minutes, the second invocation exits
+cleanly with code `0` and logs an informative message.  This prevents cron
+from sending duplicate-run email spam.  Cron stdout/stderr for every
+scheduled profile is appended to `/var/log/zfsutilities/cron.log` so that
+errors occurring before the runner creates its own session log remain visible.
+
+The Dashboard **Running Tasks** list shows a waiting profile with the status
+"Waiting for profile lock".
+
+Both the per-profile wait time and the dataset-level wait time are controlled
+by environment variables (`ZFSUTILITIES_PROFILE_LOCK_TIMEOUT` and
+`ZFSLOCK_HEADLESS_WAIT_SECONDS`) so they can be adjusted per host without
+editing code.
 
 ## Running profiles from the command line
 
@@ -48,8 +58,10 @@ creates its own session log remain visible.
 sudo python3 /usr/local/lib/zfsutilities/current/bin/profile_runner.py run root-backup-daily
 ```
 
-The runner operates in headless mode, so it aborts immediately if it encounters
-a dataset lock conflict rather than prompting interactively.
+The runner operates in headless mode.  By default it waits up to 10 minutes
+when a ZFS step encounters a dataset lock conflict, then aborts if the lock
+is still held.  This reduces transient `rc=9` failures when a manual job
+happens to overlap with a scheduled run.
 
 ## Concurrent execution
 
@@ -66,18 +78,21 @@ This maximizes parallelism while preventing dangerous collisions.
 
 ## Conflict resolution
 
-When two jobs need the same dataset or pool, the second one either waits (in
-interactive/GUI mode) or fails safely (in headless/cron mode).  Examples:
+When two jobs need the same dataset or pool, the second one either waits or
+fails safely.  In interactive/GUI mode you are prompted.  In headless/cron
+mode the runner waits up to 10 minutes by default, then fails safely if the
+lock is still held.  Examples:
 
 - Two backup profiles targeting `tank/share` cannot run simultaneously.  The
-  second fails with a lock-conflict message.
+  second waits; if the first finishes within the timeout, the second runs.
 - A prune job on `tank` cannot run while a backup of `tank/share` is in
-  progress.  The prune is skipped safely; no snapshots are lost.
+  progress.  The prune waits, then proceeds once the backup releases the lock.
 - A dataset destroy cannot run while a backup is sending or receiving that
-  dataset.
+  dataset.  The destroy waits, then proceeds once the backup step finishes.
 
-No data corruption occurs in these cases.  The blocked job logs a warning and
-exits, and cron does not treat a duplicate-run suppression as an error.
+No data corruption occurs in these cases.  If the timeout expires, the blocked
+job logs a warning and exits, and cron does not treat a duplicate-run
+suppression as an error.
 
 ## Scope alignment
 

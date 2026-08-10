@@ -1,7 +1,9 @@
 """Tests for profile_runner.py per-profile locking."""
 
+import multiprocessing
 import os
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -74,6 +76,52 @@ class TestProfileLockHelpers(unittest.TestCase):
     def test_release_none_is_safe(self):
         profile_runner.release_profile_lock(None, "/nonexistent/lock")
 
+    def test_acquire_waits_then_acquires(self):
+        """A blocked acquire_profile_lock should succeed once the lock is released."""
+
+        def _hold_lock(result_queue):
+            fd, path = profile_runner.acquire_profile_lock("daily", timeout=0.5)
+            result_queue.put(path)
+            time.sleep(0.5)
+            profile_runner.release_profile_lock(fd, path)
+            result_queue.put("released")
+
+        queue = multiprocessing.Queue()
+        proc = multiprocessing.Process(target=_hold_lock, args=(queue,))
+        proc.start()
+        try:
+            lock_path = queue.get(timeout=2)
+            waiting_path = os.path.join(self.lock_dir, "daily.waiting")
+            fd2, path2 = profile_runner.acquire_profile_lock("daily", timeout=2.0)
+            self.assertIsNotNone(fd2)
+            self.assertEqual(lock_path, path2)
+            self.assertFalse(
+                os.path.exists(waiting_path),
+                "waiting file should be removed once the lock is acquired",
+            )
+            profile_runner.release_profile_lock(fd2, path2)
+            self.assertEqual(queue.get(timeout=2), "released")
+        finally:
+            proc.join(timeout=3)
+            if proc.is_alive():
+                proc.terminate()
+                proc.join()
+
+    def test_waiting_file_removed_on_timeout(self):
+        """A blocked acquire removes its .waiting file when the timeout expires."""
+        fd1, lock_path1 = profile_runner.acquire_profile_lock("daily", timeout=0.5)
+        self.assertIsNotNone(fd1)
+        waiting_path = os.path.join(self.lock_dir, "daily.waiting")
+        try:
+            fd2, lock_path2 = profile_runner.acquire_profile_lock("daily", timeout=0.1)
+            self.assertIsNone(fd2)
+            self.assertFalse(
+                os.path.exists(waiting_path),
+                "waiting file should be removed after timeout",
+            )
+        finally:
+            profile_runner.release_profile_lock(fd1, lock_path1)
+
 
 class TestMainDuplicateInvocation(unittest.TestCase):
 
@@ -99,9 +147,12 @@ class TestMainDuplicateInvocation(unittest.TestCase):
                         with patch("session_log.SESSION_LOG_DIR", session_dir):
                             with patch("profile_runner.load_config", return_value={}):
                                 with patch("profile_runner.prune_old_logs"):
-                                    with capture_logs() as logs:
-                                        with self.assertRaises(SystemExit) as cm:
-                                            profile_runner.main()
+                                    with patch.object(
+                                        profile_runner, "PROFILE_LOCK_TIMEOUT", 0.0
+                                    ):
+                                        with capture_logs() as logs:
+                                            with self.assertRaises(SystemExit) as cm:
+                                                profile_runner.main()
             self.assertEqual(cm.exception.code, 0)
             self.assertTrue(
                 any("already running" in msg for msg in logs),

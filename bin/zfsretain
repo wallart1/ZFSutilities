@@ -12,8 +12,10 @@ function retain {
     local _local_bashinit
     _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
     if [[ -f "$_local_bashinit" ]]; then
+        # shellcheck source=bin/bashinit
         source "$_local_bashinit"
     else
+        # shellcheck source=bin/bashinit
         source ~/bashinit
     fi
     bashinit
@@ -48,17 +50,16 @@ function retain {
     zfslock_init
 
     local retain_lock=""
-    if zfslock_acquire "$retainfs" "w" "retain $label"; then
+    zfslock_wait_or_resolve "$retainfs" "w" "retain $label"
+    local lock_rc=$?
+    if [[ $lock_rc -eq 0 ]]; then
         retain_lock="$ZFSLOCK_ID"
+    elif [[ $lock_rc -eq 2 ]]; then
+        log_msg "INFO: Skipping $retainfs (lock conflict)."
+        return 1
     else
-        local lock_rc=$?
-        if [[ $lock_rc -eq 1 ]]; then
-            log_msg "WARN: Cannot prune $retainfs — locked by another operation; skipping."
-            return 1
-        else
-            log_msg "WARN: Unable to acquire lock for $retainfs. Skipping."
-            return 8
-        fi
+        log_msg "WARN: Cannot prune $retainfs — locked by another operation; skipping."
+        return 1
     fi
 
     # =========================================================================

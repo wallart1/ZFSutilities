@@ -477,7 +477,7 @@ as the GUI runners but writes its own session logs and history entries.
 | `run_retention_profile(profile)` | Run retention/cleanup for configured pools |
 | `run_scrub_profile(profile)` | Queue and poll scrubs for configured pools |
 | `_check_weekday_ordinal(weekday_field)` | Runtime guard for weekday ordinal expressions |
-| `acquire_profile_lock(profile_name, timeout=1.0)` | Acquire the profile lock; suppress duplicate runs |
+| `acquire_profile_lock(profile_name, timeout=1.0, log_file=None)` | Acquire the profile lock; wait for an existing run and suppress duplicates on timeout |
 | `release_profile_lock(fd, lock_path)` | Release the profile lock |
 | `main()` | CLI entry point for cron execution |
 
@@ -486,7 +486,8 @@ as the GUI runners but writes its own session logs and history entries.
 1. Load the requested profile from disk to determine its tab type.
 2. Create a session log with `session_log.create_session_log_file()` so that
    lock-skip messages and early errors are recorded.
-3. Acquire a per-profile advisory lock so a duplicate cron invocation exits
+3. Acquire a per-profile advisory lock so a duplicate cron invocation waits
+   for the running instance (by default up to 10 minutes) and then exits
    cleanly instead of running the profile twice.
 4. If the profile's cron weekday field contains an ordinal expression
    (`#1`–`#5` or `#L`), verify today matches it; otherwise skip the run.

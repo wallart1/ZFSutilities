@@ -20,6 +20,7 @@ from enum import Enum
 
 import feature_config
 from backup_config import log_msg
+from file_locking import scrub_state_lock_write
 from zfs_repository import get_default_repository
 
 # ---------------------------------------------------------------------------
@@ -359,6 +360,24 @@ def _emit(log_func, msg):
         log_func(msg, caller_file=caller_file, caller_line=caller_line)
 
 
+def _wait_for_scrub_state(pool_name: str, desired_state: ScrubState,
+                          repo=None, timeout: float = 5.0) -> ScrubInfo:
+    """Poll *pool_name* until its scrub state reaches *desired_state*.
+
+    Returns the last ScrubInfo observed.  The poll is bounded by *timeout*
+    seconds to avoid hanging forever when ZFS does not make the expected
+    transition.
+    """
+    repo = repo or get_default_repository()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        info = get_pool_scrub_info(pool_name, repo=repo)
+        if info.state == desired_state:
+            return info
+        time.sleep(0.2)
+    return get_pool_scrub_info(pool_name, repo=repo)
+
+
 def pause_scrubs_for_pools(pool_names: list[str], repo=None,
                            dry_run: bool = False,
                            log_func: Callable | None = None) -> list[str]:
@@ -400,7 +419,7 @@ def pause_scrubs_for_pools(pool_names: list[str], repo=None,
         _emit(_log, f"VERB: Pausing scrub on '{name}'")
         try:
             if repo.pause_scrub(name, timeout=30):
-                info_after = get_pool_scrub_info(name, repo=repo)
+                info_after = _wait_for_scrub_state(name, ScrubState.PAUSED, repo=repo)
                 if info_after.state == ScrubState.PAUSED:
                     _emit(_log, f"VERB: Scrub paused on '{name}'")
                     paused.append(name)
@@ -419,14 +438,15 @@ def pause_scrubs_for_pools(pool_names: list[str], repo=None,
             _emit(_log, f"WARN: cannot pause scrub on '{name}': {exc}")
 
     if not dry_run and paused:
-        queue = ScrubQueue()
-        for name in paused:
-            queue.active.discard(name)
-            queue.pending.discard(name)
-            queue.paused.add(name)
-            queue.paused_by_user.add(name)
-        _emit(_log, f"INFO: Pools paused: {', '.join(sorted(paused))}")
-        queue._save()
+        with scrub_state_lock_write():
+            queue = ScrubQueue(load_locked=False, save_locked=False)
+            for name in paused:
+                queue.active.discard(name)
+                queue.pending.discard(name)
+                queue.paused.add(name)
+                queue.paused_by_user.add(name)
+            _emit(_log, f"INFO: Pools paused: {', '.join(sorted(paused))}")
+            queue._save()
 
     return paused
 
@@ -436,8 +456,9 @@ def resume_scrubs_for_pools(pool_names: list[str], repo=None,
                             log_func: Callable | None = None) -> None:
     """Resume scrubs that were paused by pause_scrubs_for_pools().
 
-    Pools that were not actually paused (e.g., already finished or paused)
-    are left alone. In dry-run mode no system state is changed.
+    Pools that are no longer paused (e.g., externally resumed, finished, or
+    offline) are removed from the queue and logged so the session log always
+    shows a clear outcome.  In dry-run mode no system state is changed.
 
     If *log_func* is provided, it is used instead of the global ``log_msg``
     for all messages produced by this call, but the file:line prefix in the
@@ -451,50 +472,89 @@ def resume_scrubs_for_pools(pool_names: list[str], repo=None,
 
     states = get_all_pool_scrub_states(repo=repo)
     resumed = []
+    already_running = []
+    finished_while_paused = []
+    offline_or_unknown = []
+
     for name in names:
         info = states.get(name)
         if info is None:
             _emit(_log, f"DEBUG: Pool '{name}' is not online; skipping scrub resume")
-            continue
-        if info.state != ScrubState.PAUSED:
-            _emit(
-                _log,
-                f"DEBUG: Scrub on '{name}' is {info.state.value}; "
-                f"not resuming"
-            )
+            offline_or_unknown.append(name)
             continue
         if dry_run:
-            _emit(_log, f"INFO: Dry-run: would resume scrub on '{name}'")
-            resumed.append(name)
-            continue
-        _emit(_log, f"VERB: Resuming scrub on '{name}'")
-        try:
-            if repo.resume_scrub(name, timeout=30):
-                info_after = get_pool_scrub_info(name, repo=repo)
-                if info_after.state == ScrubState.SCANNING:
-                    _emit(_log, f"VERB: Scrub resumed on '{name}'")
-                    resumed.append(name)
-                else:
-                    raw = repo.pool_status(name, timeout=15)
-                    _emit(
-                        _log,
-                        f"WARN: Scrub on '{name}' did not resume "
-                        f"(state: {info_after.state.value}); "
-                        f"scan line: {info_after.scan_line!r}; "
-                        f"raw status:\n{raw}"
-                    )
+            if info.state == ScrubState.PAUSED:
+                _emit(_log, f"INFO: Dry-run: would resume scrub on '{name}'")
+                resumed.append(name)
             else:
-                _emit(_log, f"WARN: Failed to resume scrub on '{name}'")
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            _emit(_log, f"WARN: cannot resume scrub on '{name}': {exc}")
+                _emit(
+                    _log,
+                    f"DEBUG: Dry-run: scrub on '{name}' is {info.state.value}; "
+                    f"not resuming"
+                )
+            continue
+        if info.state == ScrubState.PAUSED:
+            _emit(_log, f"VERB: Resuming scrub on '{name}'")
+            try:
+                if repo.resume_scrub(name, timeout=30):
+                    info_after = _wait_for_scrub_state(name, ScrubState.SCANNING, repo=repo)
+                    if info_after.state == ScrubState.SCANNING:
+                        _emit(_log, f"VERB: Scrub resumed on '{name}'")
+                        resumed.append(name)
+                    else:
+                        raw = repo.pool_status(name, timeout=15)
+                        _emit(
+                            _log,
+                            f"WARN: Scrub on '{name}' did not resume "
+                            f"(state: {info_after.state.value}); "
+                            f"scan line: {info_after.scan_line!r}; "
+                            f"raw status:\n{raw}"
+                        )
+                else:
+                    _emit(_log, f"WARN: Failed to resume scrub on '{name}'")
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+                _emit(_log, f"WARN: cannot resume scrub on '{name}': {exc}")
+        elif info.state == ScrubState.SCANNING:
+            _emit(
+                _log,
+                f"INFO: Scrub on '{name}' is already running; no resume needed"
+            )
+            already_running.append(name)
+        elif info.state in (ScrubState.FINISHED, ScrubState.NONE):
+            _emit(
+                _log,
+                f"INFO: Scrub on '{name}' finished while paused; no resume needed"
+            )
+            finished_while_paused.append(name)
+        else:
+            _emit(
+                _log,
+                f"WARN: Scrub on '{name}' is in unexpected state "
+                f"{info.state.value}; leaving it alone"
+            )
+            offline_or_unknown.append(name)
 
-    if not dry_run and resumed:
-        queue = ScrubQueue()
-        for name in resumed:
+    if dry_run:
+        return
+
+    cleared = resumed + already_running + finished_while_paused + offline_or_unknown
+    if not cleared:
+        return
+
+    with scrub_state_lock_write():
+        queue = ScrubQueue(load_locked=False, save_locked=False)
+        for name in cleared:
             queue.paused.discard(name)
             queue.paused_by_user.discard(name)
             queue.pending.discard(name)
-        _emit(_log, f"INFO: Pools resumed: {', '.join(sorted(resumed))}")
+        if resumed:
+            _emit(_log, f"INFO: Pools resumed: {', '.join(sorted(resumed))}")
+        elif already_running or finished_while_paused:
+            _emit(
+                _log,
+                "INFO: No paused scrubs required resuming "
+                f"(handled: {', '.join(sorted(already_running + finished_while_paused))})"
+            )
         queue._save()
 
 
@@ -552,7 +612,7 @@ class ScrubQueue:
     # -- Persistence --
 
     def _load(self):
-        data = feature_config.load_scrub_state()
+        data = feature_config.load_scrub_state(locked=self._load_locked)
         self.pending = set(data.get("pending", []))
         self.active = set(data.get("active", []))
         self.paused = set(data.get("paused", []))
@@ -568,7 +628,7 @@ class ScrubQueue:
             "finished": sorted(self.finished),
             "paused_by_user": sorted(self.paused_by_user),
             "target": self.target,
-        })
+        }, locked=self._save_locked)
 
     # -- Public API --
 
@@ -824,7 +884,8 @@ class ScrubQueue:
         if self._changed_since_save():
             self._save()
 
-    def __init__(self, target: int = 1):
+    def __init__(self, target: int = 1, *, load_locked: bool = True,
+                 save_locked: bool = True):
         self.pending: set[str] = set()
         self.active: set[str] = set()
         self.paused: set[str] = set()
@@ -833,6 +894,8 @@ class ScrubQueue:
         self.target = max(1, target)
         self._start_times: dict[str, float] = {}
         self._last_saved_state: dict | None = None
+        self._load_locked = load_locked
+        self._save_locked = save_locked
         had_state = os.path.exists(feature_config.SCRUB_STATE_PATH)
         self._load()
         if not had_state:

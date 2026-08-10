@@ -485,6 +485,15 @@ zfslock_wait_or_resolve() {
     local _wait_interval="${ZFSLOCK_WAIT_INTERVAL:-30}"
     [[ "$_wait_interval" =~ ^[0-9]+$ && $_wait_interval -ge 1 ]] || _wait_interval=1
 
+    # In headless mode, optionally wait up to this many seconds before aborting.
+    # A value of 0 (the default) keeps the legacy immediate-abort behavior.
+    local _headless_wait_seconds="${ZFSLOCK_HEADLESS_WAIT_SECONDS:-0}"
+    [[ "$_headless_wait_seconds" =~ ^[0-9]+$ ]] || _headless_wait_seconds=0
+    local _headless_deadline=""
+    if [[ $_headless_wait_seconds -gt 0 ]]; then
+        _headless_deadline=$(($(date +%s) + _headless_wait_seconds))
+    fi
+
     while true; do
         # Throttle repeated acquisition attempts so a closed stdin or a
         # rapidly-reacquired lock cannot spin the CPU.
@@ -501,8 +510,20 @@ zfslock_wait_or_resolve() {
         # Conflict exists
         local lockfile="$ZFSLOCK_CONFLICT_INFO"
 
-        # In non-interactive/headless mode, do not prompt; abort immediately.
+        # In non-interactive/headless mode, either wait for the lock or abort.
         if ! _zfslock_is_interactive; then
+            if [[ -n "$_headless_deadline" ]]; then
+                local _now
+                _now=$(date +%s)
+                if [[ $_now -ge $_headless_deadline ]]; then
+                    log_msg "FATAL: Lock conflict on '$dataset' in non-interactive mode; " \
+                        "waited ${_headless_wait_seconds}s. Aborting."
+                    return 1
+                fi
+                sleep "$_wait_interval"
+                _first_pass=1
+                continue
+            fi
             log_msg "FATAL: Lock conflict on '$dataset' in non-interactive mode. Aborting."
             return 1
         fi

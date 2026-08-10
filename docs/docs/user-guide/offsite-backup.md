@@ -118,6 +118,9 @@ the offsite copy and resumes scrubs automatically when the step finishes.
   they are not marked as user-paused.
 - In dry-run mode the option logs what it would pause/resume but does not
   change scrub state.
+- When a step finishes, the runner attempts to resume any scrub it paused. If
+  the scrub was already resumed by another process or finished on its own, the
+  session log records that fact instead of silently doing nothing.
 
 ## Hold Tags as Receipts
 

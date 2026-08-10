@@ -158,19 +158,22 @@ the requested transition is invalid (for example, pausing a pool that is not
 currently scanning).  ZFS itself rejects invalid transitions, so the worst-case
 outcome of concurrent scrub control is a logged warning, not data loss.
 
-### 7. Headless `profile_runner.py` has no global lock
+### 7. Headless `profile_runner.py` waits for profile and dataset locks
 
 `profile_runner.py run <profile>` is what cron executes. It:
 
-* Sets `ZFSUTILITIES_HEADLESS=Y`, which makes `zfslock_wait_or_resolve` **abort**
-  immediately on a dataset lock conflict instead of waiting.
-* Has no global mutex, so the same profile can be started again by cron while the
-  previous instance is still running.
-* Can run at the same time as the GUI, a manual CLI script, or another profile.
+* Acquires a per-profile advisory lock. If the same profile is already running,
+  the new invocation waits up to `ZFSUTILITIES_PROFILE_LOCK_TIMEOUT` (default
+  600) for the prior run to finish.
+* Exports `ZFSLOCK_HEADLESS_WAIT_SECONDS=600` to its bash steps, so
+  `zfslock_wait_or_resolve` waits up to 10 minutes for a dataset lock before
+  aborting instead of failing immediately.
+* Can run at the same time as the GUI, a manual CLI script, or another profile,
+  as long as they touch disjoint datasets.
 
-Because headless mode aborts on lock conflict, a scheduled job can fail with
-`rc=9` just because a manual operation happened to be holding a dataset lock at
-that moment.
+If the timeouts expire, the blocked invocation logs a warning and exits cleanly
+(with code `0` for a duplicate-run suppression, or `rc=9` for a dataset-level
+abort) so cron does not treat a transient overlap as an error.
 
 ### 8. Checkagainst reads while deletions are in progress
 
@@ -220,7 +223,7 @@ happens before or during destination preparation.
 | Two prune jobs on same pool | **Medium** | Logged warnings | **Yes** (Phase 1 per-dataset `w` lock) |
 | History/log-index/config write races | **Medium** | Silent data loss or stale UI | **Yes** (Phase 4 file locking) |
 | Uncoordinated scrub paths | **Low** | Live state check + `zpool scrub` reject | **Yes** (live `zpool status` checks) |
-| Headless profile overlap | **Medium** | `rc=9` on lock conflict | **Yes** (Phase 5 per-profile `flock`) |
+| Headless profile overlap | **Medium** | Waits, then `rc=9` only on timeout | **Yes** (Phase 5 per-profile `flock` + timed dataset waits) |
 | Checkagainst during deletions | **Low** | Spurious mismatch or error | **No** |
 | rsync log truncation/interleaving | **Low** | Mixed or missing output | **No** |
 

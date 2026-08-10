@@ -990,7 +990,9 @@ releases it.
    the lock file. `zfslock_cleanup_stale` removes stale locks and dead PID files.
 6. `zfslock_wait_or_resolve` repeatedly attempts acquisition. On conflict, it
    offers interactive choices: wait, retry now, skip, abort, or force-release.
-   In non-interactive/headless mode it aborts immediately.
+   In non-interactive/headless mode it aborts immediately by default, but waits
+   up to `ZFSLOCK_HEADLESS_WAIT_SECONDS` when that variable is set to a positive
+   number.
 7. `zfslock_release` removes the lock file and the corresponding entry from the
    PID file. `zfslock_release_all` removes every lock owned by the current PID
    (used by the `EXIT` trap).

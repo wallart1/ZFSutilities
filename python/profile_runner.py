@@ -69,6 +69,18 @@ from zfs_repository import is_dataset_encrypted
 # Directory for per-profile advisory locks. Override for testing.
 PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles")
 
+# How long to wait for an already-running instance of the same profile before
+# giving up. Overridable via environment so no host-specific value is hard-coded.
+PROFILE_LOCK_TIMEOUT = float(
+    os.environ.get("ZFSUTILITIES_PROFILE_LOCK_TIMEOUT", "600.0")
+)
+
+# How long bash ZFS steps invoked by this runner should wait for a dataset lock
+# in headless mode before aborting.
+HEADLESS_LOCK_WAIT_SECONDS = int(
+    os.environ.get("ZFSUTILITIES_HEADLESS_LOCK_WAIT_SECONDS", "600")
+)
+
 # Regex: received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds
 # Purpose: Match the final summary line emitted by `zfs receive` on stderr,
 #          which reports actual bytes received and elapsed time.
@@ -127,8 +139,11 @@ def acquire_profile_lock(profile_name, timeout=1.0, log_file=None):
 
     Creates the lock directory and lock file if needed. Returns a tuple
     (fd, lock_path) on success, or (None, lock_path) if the lock is already
-    held by another process. With *timeout* > 0, retry briefly with a short
-    sleep before giving up.
+    held by another process and the timeout expires.
+
+    While waiting, a sibling ``<profile>.waiting`` file is written so the
+    Dashboard can show the profile as "Waiting for profile lock". The waiting
+    file is removed as soon as the lock is acquired or the timeout expires.
 
     If *log_file* is provided, it is recorded in the lock metadata so the
     Dashboard can jump directly to the running profile's session log.
@@ -136,35 +151,10 @@ def acquire_profile_lock(profile_name, timeout=1.0, log_file=None):
     os.makedirs(PROFILE_LOCK_DIR, exist_ok=True)
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", profile_name)
     lock_path = os.path.join(PROFILE_LOCK_DIR, f"{safe}.lock")
+    waiting_path = os.path.join(PROFILE_LOCK_DIR, f"{safe}.waiting")
     fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
     flags = fcntl.LOCK_EX | fcntl.LOCK_NB
 
-    if timeout is None:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        except OSError:
-            os.close(fd)
-            raise
-        return fd, lock_path
-
-    deadline = time.time() + max(0.0, float(timeout))
-    acquired = False
-    while True:
-        try:
-            fcntl.flock(fd, flags)
-            acquired = True
-            break
-        except (BlockingIOError, OSError):
-            if time.time() >= deadline:
-                break
-            time.sleep(0.05)
-
-    if not acquired:
-        os.close(fd)
-        return None, lock_path
-
-    # Record metadata so the Dashboard can identify the owning profile, PID,
-    # and (optionally) the live session log.
     timestamp = datetime.now(tz=timezone.utc).astimezone().isoformat(timespec="seconds")
     metadata = {
         "profile": profile_name,
@@ -173,6 +163,61 @@ def acquire_profile_lock(profile_name, timeout=1.0, log_file=None):
     }
     if log_file:
         metadata["log_file"] = log_file
+
+    def _write_waiting_file():
+        try:
+            with open(waiting_path, "w") as f:
+                f.write(json.dumps(metadata) + "\n")
+        except OSError:
+            pass
+
+    def _remove_waiting_file():
+        try:
+            os.unlink(waiting_path)
+        except OSError:
+            pass
+
+    if timeout is None:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            os.close(fd)
+            _remove_waiting_file()
+            raise
+        _remove_waiting_file()
+        try:
+            with open(lock_path, "w") as f:
+                f.write(json.dumps(metadata) + "\n")
+        except OSError:
+            pass
+        return fd, lock_path
+
+    deadline = time.time() + max(0.0, float(timeout))
+    acquired = False
+    notified = False
+    while True:
+        try:
+            fcntl.flock(fd, flags)
+            acquired = True
+            break
+        except (BlockingIOError, OSError):
+            if timeout > 0 and not notified:
+                log_msg(
+                    f"INFO: Profile '{profile_name}' is already running; "
+                    "waiting for it to finish..."
+                )
+                _write_waiting_file()
+                notified = True
+            if time.time() >= deadline:
+                break
+            time.sleep(0.05)
+
+    if not acquired:
+        os.close(fd)
+        _remove_waiting_file()
+        return None, lock_path
+
+    _remove_waiting_file()
     try:
         with open(lock_path, "w") as f:
             f.write(json.dumps(metadata) + "\n")
@@ -225,6 +270,7 @@ def _run_command(step, session_log_file=None):
         log_msg(f"DEBUG: {' '.join(shlex.quote(str(c)) for c in step.command)}")
         env = os.environ.copy()
         env["ZFSUTILITIES_HEADLESS"] = "Y"
+        env["ZFSLOCK_HEADLESS_WAIT_SECONDS"] = str(HEADLESS_LOCK_WAIT_SECONDS)
         if session_log_file:
             env["ZFSUTILITIES_LOG_FILE"] = session_log_file
             env["ZFSUTILITIES_LOG_INHERIT"] = "Y"
@@ -684,12 +730,20 @@ def main():
             sys.exit(1)
 
         lock_fd, lock_path = acquire_profile_lock(
-            profile_name, timeout=1.0, log_file=_session_log_file
+            profile_name, timeout=PROFILE_LOCK_TIMEOUT, log_file=_session_log_file
         )
         if lock_fd is None:
-            log_msg(
-                f"INFO: Profile '{profile_name}' is already running; skipping duplicate invocation"
-            )
+            if PROFILE_LOCK_TIMEOUT > 0:
+                log_msg(
+                    f"WARN: Profile '{profile_name}' is already running and did not "
+                    f"finish within {int(PROFILE_LOCK_TIMEOUT)} seconds; "
+                    "skipping duplicate invocation"
+                )
+            else:
+                log_msg(
+                    f"INFO: Profile '{profile_name}' is already running; "
+                    "skipping duplicate invocation"
+                )
             session_log.write_session_trailer(_session_log_file, _session_start_time, rc=0)
             sys.exit(0)
 
