@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.79.0
+
+*Released 2026-08-09*
+
+### Added
+
+- **`space_check_min_buffer` environment variable** — `zfs-send-receive` now
+  lets callers override the 1 GiB minimum destination free-space buffer used
+  during space checks. Setting this to `0` allows the real-pool integration
+  suite to run on the small `zfstest1`/`zfstest2` test pools; production
+  behavior is unchanged when the variable is unset.
+
+- **Real-pool integration suite for `zfs-send-receive`** — New
+  `tests/integration/test-zfs-send-receive-pools` exercises full copy,
+  incremental copy with/without intermediates, destination rollback, resume
+  token recovery, space-check skip, and clone copy against actual ZFS pools.
+  Requires root and the `zfstest1`/`zfstest2` local test pools described in
+  `docs/docs/developer-guide/testing.md`.
+
+### Changed
+
+- **Pin MkDocs to `mkdocs<2`** — MkDocs 2.x is incompatible with this project.
+  `bin/check-prerequisites` now fails if MkDocs >= 2 is installed and reports
+  `"mkdocs<2"` as the required package. `lib/installer-lib.sh` installs
+  `"mkdocs<2"` via pip3 when distribution packages are unavailable.
+
+### Tests
+
+- Added `tests/test-check-prerequisites` covering `check_mkdocs_version`:
+  absent mkdocs, mkdocs 1.x, mkdocs 2.x, mkdocs 10.x, and malformed version
+  output.
+
+- Extended `tests/test-installer-checks` to verify `install_doc_server` passes
+  `"mkdocs<2"` to pip3.
+
+- Extended `tests/test-zfs-send-receive-dryrun` to cover the new
+  `space_check_min_buffer` override and its default 1 GiB behavior.
+
+### Documentation
+
+- Updated `docs/docs/developer-guide/testing.md` to describe the new
+  integration suite, required test pools, and how to create them.
+
+- Updated `docs/docs/commands-and-modules/commands.md`,
+  `docs/docs/commands-and-modules/modules.md`,
+  `docs/docs/developer-guide/doc-server.md`, and
+  `docs/docs/developer-guide/global-variables.md` to document the `mkdocs<2`
+  requirement and the `space_check_min_buffer` variable.
+
 ## 0.78.0
 
 *Released 2026-08-09*

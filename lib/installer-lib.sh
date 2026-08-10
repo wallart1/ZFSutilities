@@ -119,7 +119,10 @@ install_doc_server() {
 
     echo ""
     echo "  Installing mkdocs and mkdocs-material via pip3..."
-    if pip3 install --break-system-packages mkdocs mkdocs-material; then
+    # Pin mkdocs<2 to avoid the incompatible MkDocs 2.0 rewrite until the
+    # project migrates to Zensical. Material for MkDocs 9.7.5+ enforces this
+    # itself, but pinning here protects earlier versions and non-apt installs.
+    if pip3 install --break-system-packages "mkdocs<2" mkdocs-material; then
         echo "  ✓ mkdocs installed"
         return 0
     else
@@ -335,7 +338,7 @@ ensure_doc_server() {
         echo "  ✗ Documentation server could not be installed." >&2
         echo "    Install manually and re-run the installer:" >&2
         echo "      sudo apt-get install python3-pip" >&2
-        echo "      sudo pip3 install --break-system-packages mkdocs mkdocs-material" >&2
+        echo "      sudo pip3 install --break-system-packages \"mkdocs<2\" mkdocs-material" >&2
         return 1
     fi
 }

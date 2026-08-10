@@ -1,0 +1,99 @@
+#!/usr/bin/bash
+# test-check-prerequisites — Unit tests for check-prerequisites helpers.
+# shellcheck disable=SC1090,SC2034,SC2154
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+PREREQ_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/check-prerequisites"
+
+# Load a named function from check-prerequisites without executing the script's
+# top-level checks (the script exits at the end, which would terminate tests).
+load_helper_from_prereq() {
+    local helper_name="$1"
+    local tmp_file
+    tmp_file=$(mktemp)
+    sed -n "/^${helper_name}() {/,/^}/p" "$PREREQ_SCRIPT" > "$tmp_file"
+    # shellcheck source=/dev/null
+    source "$tmp_file"
+    rm -f "$tmp_file"
+}
+
+# ---------------------------------------------------------------------------
+# check_mkdocs_version
+# ---------------------------------------------------------------------------
+
+test_mkdocs_version_absent() {
+    test_start "check_mkdocs_version returns 0 when mkdocs is absent"
+
+    mkdocs() { return 1; }
+    load_helper_from_prereq check_mkdocs_version
+    if check_mkdocs_version; then
+        test_pass
+    else
+        test_fail "Expected success when mkdocs is absent"
+    fi
+    unset -f mkdocs 2>/dev/null || true
+}
+
+test_mkdocs_version_1_x() {
+    test_start "check_mkdocs_version returns 0 for mkdocs 1.x"
+
+    mkdocs() { echo "mkdocs, version 1.6.0"; }
+    load_helper_from_prereq check_mkdocs_version
+    if check_mkdocs_version; then
+        test_pass
+    else
+        test_fail "Expected success for mkdocs 1.x"
+    fi
+    unset -f mkdocs 2>/dev/null || true
+}
+
+test_mkdocs_version_2_x() {
+    test_start "check_mkdocs_version returns 1 for mkdocs 2.x"
+
+    mkdocs() { echo "mkdocs, version 2.0.0"; }
+    load_helper_from_prereq check_mkdocs_version
+    if ! check_mkdocs_version; then
+        test_pass
+    else
+        test_fail "Expected failure for mkdocs 2.x"
+    fi
+    unset -f mkdocs 2>/dev/null || true
+}
+
+test_mkdocs_version_10_x() {
+    test_start "check_mkdocs_version returns 1 for mkdocs 10.x"
+
+    mkdocs() { echo "mkdocs, version 10.1.0"; }
+    load_helper_from_prereq check_mkdocs_version
+    if ! check_mkdocs_version; then
+        test_pass
+    else
+        test_fail "Expected failure for mkdocs 10.x"
+    fi
+    unset -f mkdocs 2>/dev/null || true
+}
+
+test_mkdocs_version_malformed() {
+    test_start "check_mkdocs_version returns 0 for malformed version output"
+
+    mkdocs() { echo "mkdocs, version unknown"; }
+    load_helper_from_prereq check_mkdocs_version
+    if check_mkdocs_version; then
+        test_pass
+    else
+        test_fail "Expected success for malformed version"
+    fi
+    unset -f mkdocs 2>/dev/null || true
+}
+
+test_mkdocs_version_absent
+test_mkdocs_version_1_x
+test_mkdocs_version_2_x
+test_mkdocs_version_10_x
+test_mkdocs_version_malformed
+
+test_summary
+teardown_test_env

@@ -134,6 +134,18 @@ check_apt_pkg() {
     fi
 }
 
+# Check the installed mkdocs version. Returns 0 if mkdocs is absent or
+# its major version is < 2, 1 if mkdocs >= 2 is installed.
+check_mkdocs_version() {
+    local version
+    version=$(mkdocs --version 2>/dev/null | awk '{print $3}')
+    [[ -n "$version" ]] || return 0
+    local major
+    major=$(echo "$version" | cut -d. -f1)
+    [[ "$major" =~ ^[0-9]+$ ]] || return 0
+    (( major < 2 ))
+}
+
 # ------------------------------------------------------------------
 # Core ZFS utilities
 # ------------------------------------------------------------------
@@ -218,9 +230,14 @@ if [[ -z "$LIST_FAILURES" ]]; then
 fi
 check_cmd "docs" "pip3" "python3-pip"
 if command -v mkdocs >/dev/null 2>&1; then
-    pass "mkdocs"
+    if check_mkdocs_version; then
+        pass "mkdocs"
+    else
+        fail "docs" "mkdocs" '"mkdocs<2"' \
+            "mkdocs 2.x is incompatible with this project; pin to mkdocs<2"
+    fi
 else
-    fail "docs" "mkdocs" "mkdocs" "not installed"
+    fail "docs" "mkdocs" '"mkdocs<2"' "not installed"
 fi
 if python3 -c "import material" >/dev/null 2>&1; then
     pass "mkdocs-material"

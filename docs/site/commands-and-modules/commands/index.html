@@ -2538,8 +2538,9 @@ On failure, removes the partial output file.</p>
 <p><strong>Globals:</strong> none.</p>
 <p>Checks the following categories: core ZFS utilities (<code>bash</code>, <code>zfs</code>, <code>zpool</code>,
 <code>pv</code>, <code>rsync</code>), optional Proxmox VE, GTK GUI packages, two-node tools (<code>ssh</code>,
-<code>scp</code>, <code>iscsiadm</code>), and documentation tools (<code>pip3</code>, <code>mkdocs</code>,
-<code>mkdocs-material</code>).</p>
+<code>scp</code>, <code>iscsiadm</code>), and documentation tools (<code>pip3</code>, <code>mkdocs&lt;2</code>,
+<code>mkdocs-material</code>). MkDocs 2.x is incompatible with this project; the installer
+and prerequisite checker both enforce <code>mkdocs&lt;2</code>.</p>
 <p><strong>Called modules:</strong> none.</p>
 <p><strong>Data structures consumed / produced:</strong> none.</p>
 <p><strong>Return codes:</strong></p>
@@ -7509,7 +7510,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.78.0
+      ZFS Utilities v0.79.0
     </div>
   
   
@@ -7534,7 +7535,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.78.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.79.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

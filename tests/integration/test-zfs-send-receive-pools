@@ -1,0 +1,601 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090
+# Integration tests for zfs-send-receive using real ZFS pools.
+#
+# This suite creates small test datasets on local test pools, runs
+# bin/zfs-send-receive against them, and asserts on the resulting ZFS state.
+# It is intentionally separate from the mock-based unit tests.
+#
+# Environment:
+#   ZFSUTILITIES_TEST_SRC_POOL  Source pool (default: zfstest1)
+#   ZFSUTILITIES_TEST_DST_POOL  Destination pool (default: zfstest2)
+#
+# Must be run as root. The configured pools must be in the allow-list below.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+TEST_SRC_POOL="${ZFSUTILITIES_TEST_SRC_POOL:-zfstest1}"
+TEST_DST_POOL="${ZFSUTILITIES_TEST_DST_POOL:-zfstest2}"
+
+# Allow-list: only these local test pools may be used.
+declare -ar ALLOWED_TEST_POOLS=(zfstest1 zfstest2 zfstest3)
+
+# Test dataset name prefix.
+TEST_PREFIX="test-sendrecv"
+
+# Common override values used by every scenario.
+COMMON_OVERRIDES="autoproceed='Y'; sourcefsremovequalifiers=1; verify_after_transfer='Y'"
+
+# Path to the script under test.
+SEND_RECEIVE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/bin/zfs-send-receive"
+
+# ---------------------------------------------------------------------------
+# Test counters and reporting helpers
+# ---------------------------------------------------------------------------
+
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+TESTS_SKIPPED=0
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+test_start() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    _CURRENT_TEST_NAME="$1"
+    echo -n "  Test ${TESTS_RUN}: $1... "
+}
+
+test_pass() {
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    echo -e "${GREEN}PASS${NC}"
+}
+
+test_fail() {
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    local reason="$1"
+    echo -e "${RED}FAIL${NC}"
+    [[ -n "$reason" ]] && echo "    Reason: ${reason}"
+    return 1
+}
+
+test_skip() {
+    TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+    echo -e "${YELLOW}SKIP${NC}"
+    [[ -n "$1" ]] && echo "    Reason: $1"
+}
+
+assert_equals() {
+    local expected="$1" actual="$2"
+    if [[ "$expected" == "$actual" ]]; then
+        test_pass
+        return 0
+    else
+        test_fail "Expected '${expected}', got '${actual}'"
+        return 1
+    fi
+}
+
+assert_contains() {
+    local haystack="$1" needle="$2"
+    if [[ "$haystack" == *"$needle"* ]]; then
+        test_pass
+        return 0
+    else
+        test_fail "Expected string to contain '${needle}'"
+        return 1
+    fi
+}
+
+assert_true() {
+    local rc="$1"
+    if [[ "$rc" -eq 0 ]]; then
+        test_pass
+        return 0
+    else
+        test_fail "Expected success, got rc=${rc}"
+        return 1
+    fi
+}
+
+test_summary() {
+    echo ""
+    echo "========================================"
+    echo "Total:   ${TESTS_RUN}"
+    echo "Passed:  ${TESTS_PASSED}"
+    echo "Failed:  ${TESTS_FAILED}"
+    echo "Skipped: ${TESTS_SKIPPED}"
+    echo "========================================"
+    if [[ ${TESTS_FAILED} -gt 0 ]]; then
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Safety and setup helpers
+# ---------------------------------------------------------------------------
+
+require_root() {
+    if [[ $EUID -ne 0 ]]; then
+        test_skip "Must be run as root"
+        test_summary
+        exit 0
+    fi
+}
+
+pool_in_allow_list() {
+    local pool="$1"
+    local allowed
+    for allowed in "${ALLOWED_TEST_POOLS[@]}"; do
+        [[ "$pool" == "$allowed" ]] && return 0
+    done
+    return 1
+}
+
+validate_test_pools() {
+    local pool
+    for pool in "$TEST_SRC_POOL" "$TEST_DST_POOL"; do
+        if ! pool_in_allow_list "$pool"; then
+            echo "FATAL: Pool '${pool}' is not in the integration test allow-list." >&2
+            exit 1
+        fi
+        if ! zpool list -Ho name "$pool" >/dev/null 2>&1; then
+            echo "FATAL: Pool '${pool}' is not online." >&2
+            exit 1
+        fi
+    done
+}
+
+generate_dataset_name() {
+    local case_name="$1"
+    local ts
+    ts="$(date +%Y%m%d%H%M%S)"
+    echo "${TEST_PREFIX}-${$}-${ts}-${case_name}"
+}
+
+create_test_data() {
+    local dataset="$1"
+    local marker="$2"
+    local mountpoint
+    mountpoint="$(zfs get -Hpo value mountpoint "$dataset")"
+    if [[ ! -d "$mountpoint" ]]; then
+        zfs mount "$dataset" || true
+        mountpoint="$(zfs get -Hpo value mountpoint "$dataset")"
+    fi
+    echo "${marker}" > "${mountpoint}/marker.txt"
+    sync
+}
+
+read_test_marker() {
+    local dataset="$1"
+    local mountpoint
+    mountpoint="$(zfs get -Hpo value mountpoint "$dataset")"
+    if [[ ! -d "$mountpoint" ]]; then
+        zfs mount "$dataset" >/dev/null 2>&1 || true
+        mountpoint="$(zfs get -Hpo value mountpoint "$dataset")"
+    fi
+    if [[ -f "${mountpoint}/marker.txt" ]]; then
+        cat "${mountpoint}/marker.txt"
+    else
+        echo ""
+    fi
+}
+
+# Track all test datasets created so cleanup can destroy them.
+declare -a TEST_DATASETS=()
+
+register_test_dataset() {
+    TEST_DATASETS+=("$1")
+}
+
+cleanup_test_datasets() {
+    # Destroy in reverse registration order so clones/children are removed
+    # before their parents/origins.
+    local idx
+    for (( idx=${#TEST_DATASETS[@]}-1; idx>=0; idx-- )); do
+        local ds="${TEST_DATASETS[$idx]}"
+        if zfs list -Ho name "$ds" >/dev/null 2>&1; then
+            zfs destroy -r "$ds" >/dev/null 2>&1 || true
+        fi
+    done
+}
+
+# ---------------------------------------------------------------------------
+# ZFS assertion helpers
+# ---------------------------------------------------------------------------
+
+assert_snapshot_exists() {
+    local snap="$1"
+    if zfs list -t snapshot "$snap" >/dev/null 2>&1; then
+        test_pass
+        return 0
+    else
+        test_fail "Snapshot ${snap} does not exist"
+        return 1
+    fi
+}
+
+assert_snapshot_missing() {
+    local snap="$1"
+    if ! zfs list -t snapshot "$snap" >/dev/null 2>&1; then
+        test_pass
+        return 0
+    else
+        test_fail "Snapshot ${snap} should not exist"
+        return 1
+    fi
+}
+
+assert_dataset_exists() {
+    local dataset="$1"
+    if zfs list -Ho name "$dataset" >/dev/null 2>&1; then
+        test_pass
+        return 0
+    else
+        test_fail "Dataset ${dataset} does not exist"
+        return 1
+    fi
+}
+
+assert_guid_match() {
+    local src="$1" dst="$2" snap="$3"
+    local src_guid dst_guid
+    src_guid="$(zfs get -Hpo value guid "${src}${snap}")"
+    dst_guid="$(zfs get -Hpo value guid "${dst}${snap}")"
+    if [[ "$src_guid" == "$dst_guid" && -n "$src_guid" ]]; then
+        test_pass
+        return 0
+    else
+        test_fail "GUID mismatch for ${snap}: source=${src_guid} dest=${dst_guid}"
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# send-receive invocation helper
+# ---------------------------------------------------------------------------
+
+build_overrides() {
+    # Append a small space-check buffer so the suite can run on the 448 MiB
+    # test pools created from a 1.5 GiB virtual disk. Preserve an explicit
+    # test override if one was supplied.
+    local overrides="$1"
+    if [[ "$overrides" == *"space_check_min_buffer"* ]]; then
+        echo "$overrides"
+    else
+        echo "$overrides; space_check_min_buffer=0"
+    fi
+}
+
+run_send_receive() {
+    local sourcefs="$1"
+    local destfs="$2"
+    local overrides
+    overrides="$(build_overrides "$3")"
+    local rc=0
+    # zfs-send-receive relies on empty expansion of unset variables, so
+    # disable nounset for the duration of the call.
+    (
+        set +u
+        send-receive "$sourcefs" "$destfs" "$overrides"
+    ) || rc=$?
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Test scenarios
+# ---------------------------------------------------------------------------
+
+get_latest_snap_name() {
+    local dataset="$1"
+    local snap
+    snap="$(zfs list -t snap -Ho name -S createtxg -d1 "$dataset" | head -1)"
+    echo "${snap##*@}"
+}
+
+clear_snapfile() {
+    local snapfile
+    snapfile="/run/zfsutilities/nextsnap_test-send-receive-pools"
+    rm -f "$snapfile"
+}
+
+test_full_copy_to_empty_destination() {
+    test_start "Full copy to empty destination"
+
+    local ds
+    ds="$(generate_dataset_name full)"
+    local src="${TEST_SRC_POOL}/${ds}"
+    local dst="${TEST_DST_POOL}/${ds}"
+
+    zfs create "$src"
+    register_test_dataset "$src"
+    register_test_dataset "$dst"
+    create_test_data "$src" "full-copy-test"
+
+    run_send_receive "$src" "$TEST_DST_POOL" \
+        "doincrementals='N'; ${COMMON_OVERRIDES}" \
+        || return
+
+    assert_dataset_exists "$dst" || return
+
+    local snap_name
+    snap_name="$(get_latest_snap_name "$src")"
+    if [[ -z "$snap_name" ]]; then
+        test_fail "No snapshot found on source after full copy"
+        return 1
+    fi
+    assert_snapshot_exists "${src}@${snap_name}" || return
+    assert_snapshot_exists "${dst}@${snap_name}" || return
+    assert_guid_match "$src" "$dst" "@${snap_name}" || return
+
+    local marker
+    marker="$(read_test_marker "$dst")"
+    assert_equals "full-copy-test" "$marker" || return
+}
+
+test_incremental_copy_with_common_snapshot() {
+    test_start "Incremental copy with common snapshot"
+
+    local ds
+    ds="$(generate_dataset_name incr)"
+    local src="${TEST_SRC_POOL}/${ds}"
+    local dst="${TEST_DST_POOL}/${ds}"
+
+    zfs create "$src"
+    register_test_dataset "$src"
+    register_test_dataset "$dst"
+    create_test_data "$src" "before-incremental"
+
+    run_send_receive "$src" "$TEST_DST_POOL" \
+        "doincrementals='N'; ${COMMON_OVERRIDES}" \
+        || return
+
+    local first_snap_name
+    first_snap_name="$(get_latest_snap_name "$src")"
+
+    # Change source and create a fresh snapshot for the incremental run.
+    clear_snapfile
+    create_test_data "$src" "after-incremental"
+    zfs snapshot "${src}@incr-common"
+    run_send_receive "$src" "$TEST_DST_POOL" \
+        "doincrementals='Y'; dointermediates='Y'; nextsnap='notneeded'; ${COMMON_OVERRIDES}" \
+        || return
+
+    local second_snap_name
+    second_snap_name="$(get_latest_snap_name "$src")"
+    if [[ "$first_snap_name" == "$second_snap_name" ]]; then
+        test_fail "No new snapshot used for incremental run"
+        return 1
+    fi
+    assert_snapshot_exists "${dst}@${second_snap_name}" || return
+    assert_guid_match "$src" "$dst" "@${second_snap_name}" || return
+
+    local marker
+    marker="$(read_test_marker "$dst")"
+    assert_equals "after-incremental" "$marker" || return
+}
+
+test_incremental_copy_without_intermediates() {
+    test_start "Incremental copy without intermediates (-i)"
+
+    local ds
+    ds="$(generate_dataset_name nointer)"
+    local src="${TEST_SRC_POOL}/${ds}"
+    local dst="${TEST_DST_POOL}/${ds}"
+
+    zfs create "$src"
+    register_test_dataset "$src"
+    register_test_dataset "$dst"
+    create_test_data "$src" "first"
+
+    run_send_receive "$src" "$TEST_DST_POOL" \
+        "doincrementals='N'; ${COMMON_OVERRIDES}" \
+        || return
+
+    clear_snapfile
+    create_test_data "$src" "second"
+    zfs snapshot "${src}@incr-nointer"
+    run_send_receive "$src" "$TEST_DST_POOL" \
+        "doincrementals='Y'; dointermediates='N'; nextsnap='notneeded'; ${COMMON_OVERRIDES}" \
+        || return
+
+    local latest_snap_name
+    latest_snap_name="$(get_latest_snap_name "$src")"
+    assert_snapshot_exists "${dst}@${latest_snap_name}" || return
+    assert_guid_match "$src" "$dst" "@${latest_snap_name}" || return
+}
+
+test_destination_rollback() {
+    test_start "Destination rollback when destination has newer snapshots"
+
+    local ds
+    ds="$(generate_dataset_name rollback)"
+    local src="${TEST_SRC_POOL}/${ds}"
+    local dst="${TEST_DST_POOL}/${ds}"
+
+    zfs create "$src"
+    register_test_dataset "$src"
+    register_test_dataset "$dst"
+    create_test_data "$src" "rollback-base"
+
+    run_send_receive "$src" "$TEST_DST_POOL" \
+        "doincrementals='N'; ${COMMON_OVERRIDES}" \
+        || return
+
+    # Add a newer snapshot on the destination only.
+    zfs snapshot "${dst}@extra-only-on-dest"
+
+    # Advance the source with a new snapshot.
+    clear_snapfile
+    create_test_data "$src" "rollback-advance"
+    zfs snapshot "${src}@incr-rollback"
+    run_send_receive "$src" "$TEST_DST_POOL" \
+        "doincrementals='Y'; dointermediates='Y'; nextsnap='notneeded'; ${COMMON_OVERRIDES}" \
+        || return
+
+    # The extra destination-only snapshot should have been rolled back/removed.
+    assert_snapshot_missing "${dst}@extra-only-on-dest" || return
+
+    local latest_snap_name
+    latest_snap_name="$(get_latest_snap_name "$src")"
+    assert_snapshot_exists "${dst}@${latest_snap_name}" || return
+    assert_guid_match "$src" "$dst" "@${latest_snap_name}" || return
+
+    local marker
+    marker="$(read_test_marker "$dst")"
+    assert_equals "rollback-advance" "$marker" || return
+}
+
+test_resume_token() {
+    test_start "Resume interrupted transfer via resume token"
+
+    local ds
+    ds="$(generate_dataset_name resume)"
+    local src="${TEST_SRC_POOL}/${ds}"
+    local dst="${TEST_DST_POOL}/${ds}"
+
+    zfs create "$src"
+    register_test_dataset "$src"
+    register_test_dataset "$dst"
+    # Write enough data that interrupting partway leaves a meaningful token.
+    dd if=/dev/urandom of="$(zfs get -Hpo value mountpoint "$src")/data.bin" \
+        bs=1M count=5 >/dev/null 2>&1
+    sync
+
+    local snap_name="resume-snap"
+    zfs snapshot "${src}@${snap_name}"
+
+    # Create a partial receive so a resume token is left on the destination.
+    if ! zfs send -cw "${src}@${snap_name}" | head -c 10000 | zfs receive -s "$dst"; then
+        # A partial receive is expected to fail/abort; the token should remain.
+        :
+    fi
+
+    local token
+    token="$(zfs get -Hpo value receive_resume_token "$dst" 2>/dev/null)"
+    if [[ -z "$token" || "$token" == "-" ]]; then
+        test_fail "No resume token was created on destination"
+        return 1
+    fi
+
+    clear_snapfile
+    run_send_receive "$src" "$TEST_DST_POOL" \
+        "doincrementals='Y'; dointermediates='Y'; nextsnap='notneeded'; ${COMMON_OVERRIDES}" \
+        || return
+
+    assert_snapshot_exists "${dst}@${snap_name}" || return
+    assert_guid_match "$src" "$dst" "@${snap_name}" || return
+}
+
+test_space_check_skips() {
+    test_start "Space check skips transfer when buffer cannot be satisfied"
+
+    local ds
+    ds="$(generate_dataset_name space)"
+    local src="${TEST_SRC_POOL}/${ds}"
+    local dst="${TEST_DST_POOL}/${ds}"
+
+    zfs create "$src"
+    register_test_dataset "$src"
+    register_test_dataset "$dst"
+    create_test_data "$src" "space-check"
+
+    # Set a space-check buffer larger than any test pool so the transfer is
+    # guaranteed to be skipped while still exercising the check logic.
+    run_send_receive "$src" "$TEST_DST_POOL" \
+        "doincrementals='N'; ${COMMON_OVERRIDES}; space_check_min_buffer=1000000000000" \
+        || return
+
+    assert_dataset_exists "$dst" || return
+
+    local snap_name
+    snap_name="$(get_latest_snap_name "$src")"
+    assert_snapshot_exists "${src}@${snap_name}" || return
+    assert_snapshot_missing "${dst}@${snap_name}" || return
+}
+
+test_clone_dataset_copy() {
+    test_start "Clone dataset copies as independent dataset"
+
+    local parent_ds
+    parent_ds="$(generate_dataset_name cloneparent)"
+    local clone_ds
+    clone_ds="$(generate_dataset_name clone)"
+    local src_parent="${TEST_SRC_POOL}/${parent_ds}"
+    local src_clone="${TEST_SRC_POOL}/${clone_ds}"
+    local dst_clone="${TEST_DST_POOL}/${clone_ds}"
+
+    zfs create "$src_parent"
+    register_test_dataset "$src_parent"
+    create_test_data "$src_parent" "clone-origin"
+
+    local snap_name="cloneorigin"
+    zfs snapshot "${src_parent}@${snap_name}"
+    zfs clone "${src_parent}@${snap_name}" "$src_clone"
+    register_test_dataset "$src_clone"
+    register_test_dataset "$dst_clone"
+    create_test_data "$src_clone" "clone-data"
+
+    run_send_receive "$src_clone" "$TEST_DST_POOL" \
+        "doincrementals='N'; ${COMMON_OVERRIDES}" \
+        || return
+
+    assert_dataset_exists "$dst_clone" || return
+
+    local clone_origin
+    clone_origin="$(zfs get -Hpo value origin "$dst_clone")"
+    if [[ "$clone_origin" != "-" ]]; then
+        test_fail "Destination clone still has origin: ${clone_origin}"
+        return 1
+    else
+        test_pass
+    fi
+
+    local marker
+    marker="$(read_test_marker "$dst_clone")"
+    assert_equals "clone-data" "$marker" || return
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+main() {
+    require_root
+    validate_test_pools
+
+    trap cleanup_test_datasets EXIT
+
+    clear_snapfile
+
+    echo "========================================"
+    echo "Integration tests for zfs-send-receive"
+    echo "Source pool: ${TEST_SRC_POOL}"
+    echo "Dest pool:   ${TEST_DST_POOL}"
+    echo "========================================"
+
+    # Source the script under test once to define the send-receive function.
+    source "${SEND_RECEIVE}"
+
+    test_full_copy_to_empty_destination
+    test_incremental_copy_with_common_snapshot
+    test_incremental_copy_without_intermediates
+    test_destination_rollback
+    test_resume_token
+    test_space_check_skips
+    test_clone_dataset_copy
+
+    clear_snapfile
+
+    test_summary
+}
+
+main "$@"

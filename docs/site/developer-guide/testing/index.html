@@ -1389,6 +1389,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#integration-tests-with-real-pools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration Tests with Real Pools
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Integration Tests with Real Pools">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required-test-pools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required Test Pools
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#creating-local-test-pools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating Local Test Pools
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#running-the-integration-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running the Integration Suite
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scenarios-covered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scenarios Covered
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tips-and-gotchas" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2013,9 +2074,14 @@ tests/run-tests<span class="w"> </span>--failures-only
 <td><code>ensure-restored-vm-iscsi</code> parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding</td>
 </tr>
 <tr>
+<td><code>test-check-prerequisites</code></td>
+<td>5</td>
+<td><code>check-prerequisites</code> helper <code>check_mkdocs_version</code>: absent mkdocs, mkdocs 1.x, mkdocs 2.x, mkdocs 10.x, and malformed version output</td>
+</tr>
+<tr>
 <td><code>test-installer-checks</code></td>
-<td>12</td>
-<td>Installer safety checks: ZFS root filesystem detection with <code>findmnt</code>; desktop-user detection; home-directory symlink creation and removal</td>
+<td>17</td>
+<td>Installer safety checks: ZFS root filesystem detection with <code>findmnt</code>; desktop-user detection; home-directory symlink creation and removal; partial-uninstall detection; <code>install_doc_server</code> pins <code>mkdocs&lt;2</code></td>
 </tr>
 <tr>
 <td><code>test-move-vm-disk</code></td>
@@ -2109,8 +2175,13 @@ tests/run-tests<span class="w"> </span>--failures-only
 </tr>
 <tr>
 <td><code>test-zfs-send-receive-dryrun</code></td>
-<td>33</td>
-<td>Dry-run logging, space-check logic, resume-token decisions (including non-existent destination), <code>handle_commsnap_rc</code> paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling</td>
+<td>35</td>
+<td>Dry-run logging, space-check logic (including <code>space_check_min_buffer</code> override), resume-token decisions (including non-existent destination), <code>handle_commsnap_rc</code> paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling</td>
+</tr>
+<tr>
+<td><code>integration/test-zfs-send-receive-pools</code></td>
+<td>7</td>
+<td>Real-pool integration tests for <code>zfs-send-receive</code>: full copy, incremental with/without intermediates, rollback, resume token, space-check skip, clone copy. Requires root and the local test pools described below.</td>
 </tr>
 <tr>
 <td><code>test-zfssnapbuild</code></td>
@@ -2538,6 +2609,110 @@ the bash harness format.</p>
     <span class="bp">self</span><span class="o">.</span><span class="n">assertEqual</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">m</span><span class="o">.</span><span class="n">calls</span><span class="p">),</span> <span class="mi">2</span><span class="p">)</span>
 </code></pre></div>
 <hr />
+<h2 id="integration-tests-with-real-pools">Integration Tests with Real Pools<a class="headerlink" href="#integration-tests-with-real-pools" title="Permanent link">&para;</a></h2>
+<p>In addition to the mock-based bash and Python suites, the repository contains a
+small real-pool integration suite:</p>
+<div class="highlight"><pre><span></span><code>tests/integration/test-zfs-send-receive-pools
+</code></pre></div>
+<p>This suite exercises <code>bin/zfs-send-receive</code> against actual ZFS pools. It is kept
+separate from <code>tests/run-tests</code> because it requires root privileges and
+dedicated test pools.</p>
+<h3 id="required-test-pools">Required Test Pools<a class="headerlink" href="#required-test-pools" title="Permanent link">&para;</a></h3>
+<p>The suite expects two local test pools. Defaults:</p>
+<ul>
+<li>Source: <code>zfstest1</code></li>
+<li>Destination: <code>zfstest2</code></li>
+</ul>
+<p>Pool names are configurable via environment variables:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">ZFSUTILITIES_TEST_SRC_POOL</span><span class="o">=</span>zfstest1
+<span class="nb">export</span><span class="w"> </span><span class="nv">ZFSUTILITIES_TEST_DST_POOL</span><span class="o">=</span>zfstest2
+sudo<span class="w"> </span>tests/integration/test-zfs-send-receive-pools
+</code></pre></div>
+<p>Only pools in the suite's explicit allow-list (<code>zfstest1</code>, <code>zfstest2</code>,
+<code>zfstest3</code>) may be used. The suite refuses to run if a configured pool is not
+in the allow-list or is not online.</p>
+<h3 id="creating-local-test-pools">Creating Local Test Pools<a class="headerlink" href="#creating-local-test-pools" title="Permanent link">&para;</a></h3>
+<p>On the development VM, <code>/dev/sdb</code> is a 1.5 GiB empty virtual disk. It can be
+partitioned and used to create three small RAIDZ1 test pools:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Create a GPT label and 15 ~100 MiB partitions.</span>
+parted<span class="w"> </span>-s<span class="w"> </span>/dev/sdb<span class="w"> </span>mklabel<span class="w"> </span>gpt
+<span class="k">for</span><span class="w"> </span>i<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">{</span><span class="m">1</span>..15<span class="o">}</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span><span class="nv">$i</span><span class="w"> </span>-eq<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">        </span><span class="nv">start</span><span class="o">=</span><span class="s2">&quot;1MiB&quot;</span>
+<span class="w">    </span><span class="k">else</span>
+<span class="w">        </span><span class="nv">start</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$((</span><span class="w"> </span><span class="o">(</span><span class="nv">i</span><span class="o">-</span><span class="m">1</span><span class="o">)*</span><span class="m">100</span><span class="w"> </span><span class="k">))</span><span class="s2">MiB&quot;</span>
+<span class="w">    </span><span class="k">fi</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span><span class="nv">$i</span><span class="w"> </span>-eq<span class="w"> </span><span class="m">15</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<span class="w">        </span><span class="nv">end</span><span class="o">=</span><span class="s2">&quot;1499MiB&quot;</span>
+<span class="w">    </span><span class="k">else</span>
+<span class="w">        </span><span class="nv">end</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$((</span><span class="w"> </span><span class="nv">i</span><span class="o">*</span><span class="m">100</span><span class="w"> </span><span class="k">))</span><span class="s2">MiB&quot;</span>
+<span class="w">    </span><span class="k">fi</span>
+<span class="w">    </span>parted<span class="w"> </span>-a<span class="w"> </span>optimal<span class="w"> </span>-s<span class="w"> </span>/dev/sdb<span class="w"> </span>mkpart<span class="w"> </span>primary<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">start</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">end</span><span class="si">}</span><span class="s2">&quot;</span>
+<span class="k">done</span>
+partprobe<span class="w"> </span>/dev/sdb
+
+<span class="c1"># Create three RAIDZ1 pools.</span>
+zpool<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>zfstest1<span class="w"> </span>raidz1<span class="w"> </span>/dev/sdb1<span class="w"> </span>/dev/sdb2<span class="w"> </span>/dev/sdb3<span class="w"> </span>/dev/sdb4<span class="w"> </span>/dev/sdb5
+zpool<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>zfstest2<span class="w"> </span>raidz1<span class="w"> </span>/dev/sdb6<span class="w"> </span>/dev/sdb7<span class="w"> </span>/dev/sdb8<span class="w"> </span>/dev/sdb9<span class="w"> </span>/dev/sdb10
+zpool<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>zfstest3<span class="w"> </span>raidz1<span class="w"> </span>/dev/sdb11<span class="w"> </span>/dev/sdb12<span class="w"> </span>/dev/sdb13<span class="w"> </span>/dev/sdb14<span class="w"> </span>/dev/sdb15
+</code></pre></div>
+<p>Each pool provides roughly 448 MiB of usable space. The integration suite sets
+<code>space_check_min_buffer=0</code> for its normal scenarios because the default 1 GiB
+minimum buffer in <code>zfs-send-receive</code> exceeds the capacity of these small pools.
+The space-check scenario itself verifies the skip behavior by setting an
+artificially large buffer.</p>
+<h3 id="running-the-integration-suite">Running the Integration Suite<a class="headerlink" href="#running-the-integration-suite" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>tests/integration/test-zfs-send-receive-pools
+</code></pre></div>
+<p>The suite:</p>
+<ul>
+<li>Skips cleanly with a message if not run as root.</li>
+<li>Validates pool names against the allow-list.</li>
+<li>Creates uniquely named test datasets for each scenario.</li>
+<li>Uses <code>trap</code> to destroy all test datasets on success and on failure.</li>
+</ul>
+<p>After a run, verify that no test datasets remain:</p>
+<div class="highlight"><pre><span></span><code>zfs<span class="w"> </span>list<span class="w"> </span>-r<span class="w"> </span>zfstest1<span class="w"> </span>zfstest2
+</code></pre></div>
+<h3 id="scenarios-covered">Scenarios Covered<a class="headerlink" href="#scenarios-covered" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>What it exercises</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Full copy to empty destination</td>
+<td><code>doincrementals='N'</code>, snapshot creation, destination dataset created</td>
+</tr>
+<tr>
+<td>Incremental copy with common snapshot</td>
+<td><code>doincrementals='Y'</code> with <code>dointermediates='Y'</code></td>
+</tr>
+<tr>
+<td>Incremental copy without intermediates</td>
+<td><code>doincrementals='Y'</code> with <code>dointermediates='N'</code></td>
+</tr>
+<tr>
+<td>Destination rollback</td>
+<td><code>handle_commsnap_rc</code> rc=16 with <code>autoproceed='Y'</code></td>
+</tr>
+<tr>
+<td>Resume token handling</td>
+<td>Partial receive leaves a token; re-run resumes and completes</td>
+</tr>
+<tr>
+<td>Space check skip</td>
+<td>Large <code>space_check_min_buffer</code> causes skip</td>
+</tr>
+<tr>
+<td>Clone dataset copy</td>
+<td>Clone replicates as an independent dataset</td>
+</tr>
+</tbody>
+</table>
 <h2 id="tips-and-gotchas">Tips and Gotchas<a class="headerlink" href="#tips-and-gotchas" title="Permanent link">&para;</a></h2>
 <h3 id="bash">Bash<a class="headerlink" href="#bash" title="Permanent link">&para;</a></h3>
 <ul>
@@ -2613,7 +2788,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.78.0
+      ZFS Utilities v0.79.0
     </div>
   
   
@@ -2638,7 +2813,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.78.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.79.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

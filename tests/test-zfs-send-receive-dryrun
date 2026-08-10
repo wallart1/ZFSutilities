@@ -537,6 +537,54 @@ test_check_space_ask_yn_override() {
 }
 
 # ---------------------------------------------------------------------------
+# Test check_space_available honors space_check_min_buffer override
+# ---------------------------------------------------------------------------
+
+test_check_space_min_buffer_override() {
+    test_start "check_space_available honors space_check_min_buffer override"
+
+    reset_mocks
+    set_msg_level FATAL
+    # 1.5 GB available, 1 GB to send. Default 1 GiB buffer would require 2 GB,
+    # but with min_buffer=0 the needed space drops to ~1.1 GB, so it passes.
+    _mock_zfs_props["pool:available"]="1500000000"
+    fs="pool/src/data"
+    autoproceed='Y'
+    space_check_min_buffer=0
+    capture_stderr
+    local rc
+    check_space_available "1000000000" "pool"
+    rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Test check_space_available defaults to a 1 GiB buffer
+# ---------------------------------------------------------------------------
+
+test_check_space_default_min_buffer() {
+    test_start "check_space_available defaults to 1 GiB minimum buffer"
+
+    reset_mocks
+    set_msg_level FATAL
+    # 1.5 GB available, 1 GB to send. Default 1 GiB buffer means 2 GB is
+    # required, so the check should report insufficient space.
+    _mock_zfs_props["pool:available"]="1500000000"
+    fs="pool/src/data"
+    autoproceed='Y'
+    unset space_check_min_buffer
+    capture_stderr
+    local rc
+    check_space_available "1000000000" "pool"
+    rc=$?
+    restore_stderr
+
+    assert_rc 1 "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # Test prepare_destination_for_full_copy in dry-run mode (force path)
 # ---------------------------------------------------------------------------
 
@@ -1454,6 +1502,8 @@ test_do_transfer_forces_pv_when_log_inherit
 test_check_space_passes
 test_check_space_skips
 test_check_space_ask_yn_override
+test_check_space_min_buffer_override
+test_check_space_default_min_buffer
 test_prepare_dest_dryrun_force
 test_prepare_dest_dryrun_nonforce
 test_abort_resume_token_dryrun

@@ -65,6 +65,7 @@ and its wrappers ([`zfsdailybackup`](../commands-and-modules/commands.md#zfsdail
 | `$maxcommsnapperiod`            | Maximum age (days) of an acceptable common snapshot. Default `130`                                                                                                                                                                                                                                                     |
 | `$pv_rate_limit`                | Maximum transfer rate passed to `pv -L` (e.g. `200M`, `1G`). Leave empty to disable rate limiting. In headless mode `pv` is used only for rate limiting (no progress display)                                                                                                                                          |
 | `$pvthreshold`                  | Size in bytes above which `pv` progress display is used. Default 300 MB                                                                                                                                                                                                                                                |
+| `$space_check_min_buffer`       | Minimum destination free-space buffer (bytes) required before a send. Default 1 GiB; set to `0` for small test pools                                                                                                                                                                                             |
 
 ## Retention
 

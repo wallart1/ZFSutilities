@@ -401,5 +401,44 @@ test_partial_uninstall_detects_missing_current
 test_partial_uninstall_detects_systemd_cron_remnants
 test_partial_uninstall_runs_cleanup_when_confirmed
 
+# ------------------------------------------------------------------
+# Documentation server installation (from installer-lib.sh)
+# ------------------------------------------------------------------
+
+test_install_doc_server_pins_mkdocs() {
+    test_start "install_doc_server pins mkdocs<2"
+
+    # Force the apt fallback path so the pip3 command is exercised.
+    apt_install() { return 1; }
+    ask_yn() { return 0; }
+
+    local _pip3_args=()
+    pip3() {
+        _pip3_args=("$@")
+        return 0
+    }
+    install_doc_server >/dev/null 2>&1
+    local rc=$?
+    unset -f apt_install ask_yn pip3 2>/dev/null || true
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ "${_pip3_args[*]}" != *"mkdocs<2"* ]]; then
+        failed=1
+        echo "    Expected pip3 args to contain 'mkdocs<2', got '${_pip3_args[*]}'"
+    fi
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "install_doc_server did not pin mkdocs<2"
+    fi
+}
+
+test_install_doc_server_pins_mkdocs
+
 test_summary
 teardown_test_env

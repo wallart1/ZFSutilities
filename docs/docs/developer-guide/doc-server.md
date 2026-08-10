@@ -7,8 +7,9 @@ The documentation is built with [MkDocs](https://www.mkdocs.org/) using the
 
 Both installers — `bin/install-single-node` and
 `bin/install-two-node` — install MkDocs and the Material theme as
-one of their first steps. After the installer runs, start the server
-manually:
+one of their first steps. MkDocs is pinned to `mkdocs<2` because
+MkDocs 2.x is incompatible with this project. After the installer runs,
+start the server manually:
 
 ```bash
 startdocserver

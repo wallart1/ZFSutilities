@@ -42,7 +42,8 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-attach-vm-disk` | 9 | `attach-vm-disk` argument validation: zvol path parsing, VM ID format, and disk-key format |
 | `test-detach-vm-disk` | 2 | `detach-vm-disk` manifest handling: exact backstore removal and no-match pass-through |
 | `test-ensure-restored-vm-iscsi` | 23 | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding |
-| `test-installer-checks` | 12 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal |
+| `test-check-prerequisites` | 5 | `check-prerequisites` helper `check_mkdocs_version`: absent mkdocs, mkdocs 1.x, mkdocs 2.x, mkdocs 10.x, and malformed version output |
+| `test-installer-checks` | 17 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal; partial-uninstall detection; `install_doc_server` pins `mkdocs<2` |
 | `test-move-vm-disk` | 8 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove |
 | `test-switch-version` | 6 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, and `--list` |
 | `test-repair-iscsi-luns` | 9 | Backstore/LUN parsing, zvol discovery, gap-free LUN index allocation, missing backstore/LUN creation, dry-run mode, and compute-host rescan |
@@ -61,7 +62,8 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-zfsdelallsnaps` | 4 | Return-code behavior of `zfsdelallsnaps`: all-success returns `0`, any `delsnap` failure returns `1`, empty list returns `0` |
 | `test-zfslockmanager` | 33 | Lock acquire / release, same-dataset conflicts, hierarchy conflicts, stale detection, concurrent access, path encoding. **Requires root.** |
 | `test-zfsretain` | 10 | Retention policy phases: offsite monthly dedup, same-day dedup, bucket pruning with empty-snapshot preference, empty logging, retain=0 |
-| `test-zfs-send-receive-dryrun` | 33 | Dry-run logging, space-check logic, resume-token decisions (including non-existent destination), `handle_commsnap_rc` paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling |
+| `test-zfs-send-receive-dryrun` | 35 | Dry-run logging, space-check logic (including `space_check_min_buffer` override), resume-token decisions (including non-existent destination), `handle_commsnap_rc` paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling |
+| `integration/test-zfs-send-receive-pools` | 7 | Real-pool integration tests for `zfs-send-receive`: full copy, incremental with/without intermediates, rollback, resume token, space-check skip, clone copy. Requires root and the local test pools described below. |
 | `test-zfssnapbuild` | 9 | Snapshot name generation, bucket logic (daily / weekly / monthly / offsite), snapfile reuse |
 | `test-logging` | 4 | `log_msg` writes all messages to the session log file and ignores `msg_level` |
 | `test-module-dependencies` | 1 | Static analysis: every root-level bash module call to a known module function is satisfied by a local definition, a sourced module, or `bashinit` |
@@ -270,6 +272,104 @@ with mock_subprocess() as m:
 ```
 
 ---
+
+## Integration Tests with Real Pools
+
+In addition to the mock-based bash and Python suites, the repository contains a
+small real-pool integration suite:
+
+```
+tests/integration/test-zfs-send-receive-pools
+```
+
+This suite exercises `bin/zfs-send-receive` against actual ZFS pools. It is kept
+separate from `tests/run-tests` because it requires root privileges and
+dedicated test pools.
+
+### Required Test Pools
+
+The suite expects two local test pools. Defaults:
+
+- Source: `zfstest1`
+- Destination: `zfstest2`
+
+Pool names are configurable via environment variables:
+
+```bash
+export ZFSUTILITIES_TEST_SRC_POOL=zfstest1
+export ZFSUTILITIES_TEST_DST_POOL=zfstest2
+sudo tests/integration/test-zfs-send-receive-pools
+```
+
+Only pools in the suite's explicit allow-list (`zfstest1`, `zfstest2`,
+`zfstest3`) may be used. The suite refuses to run if a configured pool is not
+in the allow-list or is not online.
+
+### Creating Local Test Pools
+
+On the development VM, `/dev/sdb` is a 1.5 GiB empty virtual disk. It can be
+partitioned and used to create three small RAIDZ1 test pools:
+
+```bash
+# Create a GPT label and 15 ~100 MiB partitions.
+parted -s /dev/sdb mklabel gpt
+for i in {1..15}; do
+    if [[ $i -eq 1 ]]; then
+        start="1MiB"
+    else
+        start="$(( (i-1)*100 ))MiB"
+    fi
+    if [[ $i -eq 15 ]]; then
+        end="1499MiB"
+    else
+        end="$(( i*100 ))MiB"
+    fi
+    parted -a optimal -s /dev/sdb mkpart primary "${start}" "${end}"
+done
+partprobe /dev/sdb
+
+# Create three RAIDZ1 pools.
+zpool create -f zfstest1 raidz1 /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4 /dev/sdb5
+zpool create -f zfstest2 raidz1 /dev/sdb6 /dev/sdb7 /dev/sdb8 /dev/sdb9 /dev/sdb10
+zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15
+```
+
+Each pool provides roughly 448 MiB of usable space. The integration suite sets
+`space_check_min_buffer=0` for its normal scenarios because the default 1 GiB
+minimum buffer in `zfs-send-receive` exceeds the capacity of these small pools.
+The space-check scenario itself verifies the skip behavior by setting an
+artificially large buffer.
+
+### Running the Integration Suite
+
+```bash
+sudo tests/integration/test-zfs-send-receive-pools
+```
+
+The suite:
+
+- Skips cleanly with a message if not run as root.
+- Validates pool names against the allow-list.
+- Creates uniquely named test datasets for each scenario.
+- Uses `trap` to destroy all test datasets on success and on failure.
+
+After a run, verify that no test datasets remain:
+
+```bash
+zfs list -r zfstest1 zfstest2
+```
+
+### Scenarios Covered
+
+| Scenario | What it exercises |
+|----------|-------------------|
+| Full copy to empty destination | `doincrementals='N'`, snapshot creation, destination dataset created |
+| Incremental copy with common snapshot | `doincrementals='Y'` with `dointermediates='Y'` |
+| Incremental copy without intermediates | `doincrementals='Y'` with `dointermediates='N'` |
+| Destination rollback | `handle_commsnap_rc` rc=16 with `autoproceed='Y'` |
+| Resume token handling | Partial receive leaves a token; re-run resumes and completes |
+| Space check skip | Large `space_check_min_buffer` causes skip |
+| Clone dataset copy | Clone replicates as an independent dataset |
 
 ## Tips and Gotchas
 

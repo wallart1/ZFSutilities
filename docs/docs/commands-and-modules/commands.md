@@ -120,8 +120,9 @@ sudo check-prerequisites [--single-node|--two-node] [--list-failures]
 
 Checks the following categories: core ZFS utilities (`bash`, `zfs`, `zpool`,
 `pv`, `rsync`), optional Proxmox VE, GTK GUI packages, two-node tools (`ssh`,
-`scp`, `iscsiadm`), and documentation tools (`pip3`, `mkdocs`,
-`mkdocs-material`).
+`scp`, `iscsiadm`), and documentation tools (`pip3`, `mkdocs<2`,
+`mkdocs-material`). MkDocs 2.x is incompatible with this project; the installer
+and prerequisite checker both enforce `mkdocs<2`.
 
 **Called modules:** none.
 
