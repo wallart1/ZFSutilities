@@ -243,7 +243,7 @@ emit_vm_data() {
 }
 
 emit_lun_data() {
-    local backstores TARGET line LUN BSNAME ZVOL SIZE origin clone_info clone_list src_vmid targetshort
+    local backstores TARGET line LUN BSNAME ZVOL SIZE origin clone_info clone_list targetshort
     backstores=$(targetcli /backstores/block ls 2>/dev/null)
 
     while IFS= read -r TARGET; do
@@ -412,7 +412,7 @@ run_single_node() {
     echo "=== VM Disk Inventory (single-node) ==="
     echo ""
 
-    local pool zvols zvol bsname SIZE disk_id origin clone_info clone_list src_vmid
+    local pool zvols zvol bsname SIZE disk_id origin clone_info clone_list
     for pool in $(zpool list -H -o name 2>/dev/null); do
         zvols=$(zfs list -H -t volume -o name -r "$pool" 2>/dev/null | grep '/proxmox/vm-' || true)
         [[ -n "$zvols" ]] || continue
