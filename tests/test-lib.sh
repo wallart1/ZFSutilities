@@ -549,6 +549,12 @@ zfslock_release_all() { true; }
 # VM Check Stubs
 # =============================================================================
 
+# Default Proxmox tool stubs so scripts that source VM lifecycle helpers do not
+# fail their qm/pct guard during tests. Tests that need to simulate an absent
+# Proxmox installation can unset these functions.
+qm() { true; }
+pct() { true; }
+
 checkrunningvms() { return 2; }
 printrunningvms() { true; }
 

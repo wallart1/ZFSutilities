@@ -2,10 +2,12 @@
 
 ZFSutilities supports two deployment modes:
 
-- **Single-node** — All ZFS pools are local to the Proxmox host. No iSCSI,
-  no separate storage server. This is the default for new installations.
+- **Single-node** — All ZFS pools are local to this host. No iSCSI, no
+  separate storage server. Proxmox VE is optional; it is only needed if you
+  want VM disk lifecycle management. This is the default for new installations.
 - **Two-node** — A dedicated storage host exports zvols via iSCSI to a
-  separate compute host running Proxmox VMs.
+  separate compute host running Proxmox VE VMs. The storage host does not need
+  Proxmox VE.
 
 ## Prerequisites
 
@@ -27,18 +29,22 @@ ZFSutilities supports two deployment modes:
     retention, and iSCSI lifecycle scripts may interact with the root pool in
     unexpected ways. Proceed at your own risk.
 
-### Proxmox VE (optional)
+### Proxmox VE (optional on single node and storage node)
 
-Proxmox VE is **only required for VM management, iSCSI initiator integration,
-and PVE-specific patches**. For single-node deployments that only need ZFS
-backup, snapshot, and retention features, Proxmox VE is optional.
+Proxmox VE is **required** on a two-node compute host and on a single-node host
+that runs VMs. It is **optional** on a single-node host that only needs ZFS
+backup, snapshot, and retention features and on a two-node storage host.
 
 - **Single node without VMs/iSCSI**: Proxmox VE is not required.
 - **Compute node or single node with VMs**: Proxmox VE 8.x or 9.x is required
   for VM disk lifecycle integration.
-- **Two-node storage node**: Proxmox VE is strongly recommended for iSCSI
-  target support, but the core ZFS features work on any ZFS-capable
-  Debian-based Linux distribution.
+- **Two-node storage node**: Proxmox VE is not required. The storage host is a
+  plain Debian-based ZFS/iSCSI server.
+
+!!! warning "Non-Proxmox hypervisors are unsupported"
+    ZFSutilities VM disk lifecycle scripts are tightly coupled to Proxmox VE
+    (`qm`, `/etc/pve/qemu-server/`, PVE config formats). Running these scripts
+    against other hypervisors is unsupported and may damage VM configurations.
 
 ### GUI Desktop Environment
 
@@ -65,12 +71,20 @@ On the **compute host**:
 ssh-copy-id root@<storage-host>
 ```
 
+The installer will also check for and offer to install the following iSCSI
+packages if they are missing:
+
+- **Storage host:** `targetcli-fb` (provides `targetcli` and the
+  `rtslib-fb-targetctl` systemd service)
+- **Compute host:** `open-iscsi` (provides the `iscsiadm` initiator tool and
+  the `iscsid` service)
+
 ## Quick Start
 
 ### Single-node (recommended for new installs)
 
 ```bash
-sudo /path/to/zfsutilities-dev/10\ Installers/install-single-node
+sudo /path/to/zfsutilities-dev/bin/install-single-node
 ```
 
 The installer will:
@@ -93,7 +107,7 @@ The installer will:
 Run on the **storage host** (the machine with the ZFS pools):
 
 ```bash
-sudo /path/to/zfsutilities-dev/10\ Installers/install-two-node
+sudo /path/to/zfsutilities-dev/bin/install-two-node
 ```
 
 The installer will:
@@ -101,30 +115,34 @@ The installer will:
 1. Check that required two-node prerequisites are present
 2. Explain any missing prerequisites and offer to install them automatically
 3. Install the documentation server (MkDocs)
-4. Prompt for storage host, compute host, storage network IP, iSCSI IQN
+4. Verify/offer to install the iSCSI target stack (`targetcli-fb`) on the
+   storage host and the iSCSI initiator (`open-iscsi`) on the compute host
+5. Prompt for storage host, compute host, storage network IP, iSCSI IQN
    prefix, and pool-to-target mappings
-5. Generate the installation configuration file `/etc/zfsutilities/node.conf` (legacy `/etc/zfsutilities-node.conf` also works)
-6. **Create iSCSI targets** on the storage host automatically (idempotent —
+6. Generate the installation configuration file `/etc/zfsutilities/node.conf` (legacy `/etc/zfsutilities-node.conf` also works)
+7. **Create iSCSI targets** on the storage host automatically (idempotent —
    skips targets that already exist)
-
-The installer asks for an **iSCSI Qualified Name (IQN) prefix**. This becomes
-part of every iSCSI target's persistent on-disk name and is baked in when the
-LUN is first created. Changing it later requires recreating Proxmox iSCSI
-storage entries and re-mapping LUNs, so accept the generated default unless
-your site already uses a registered naming convention. See
-[Two-node configuration](../developer-guide/two-node-config.md) for details.
-
-7. Deploy scripts as a **versioned installation** on both hosts via SSH
-8. Activate the version on both hosts and wire it into active production:
+8. Deploy scripts as a **versioned installation** on both hosts via SSH
+9. Activate the version on both hosts and wire it into active production:
    - Configure `PATH` in `/etc/profile.d` and `/etc/sudoers.d`
    - Create the `/root/bashinit` symlink
    - Create the `/usr/local/lib/zfsutilities/bin` symlink and library symlinks
    - Create desktop shortcuts in the installing user's home directory:
      **ZFSutilities GUI** and **ZFSutilities Documentation**
-9. Verify SSH key authorization between hosts
-11. **Patch PVE's iSCSI rescan rate limit** on the compute host (if PVE is
-    detected) — limits automatic `iscsiadm --rescan` to once per day, which
-    eliminates repetitive kernel log spam on the storage host
+10. Verify SSH key authorization between hosts
+11. **Patch PVE's iSCSI rescan rate limit** on the compute host when PVE is
+    detected — limits automatic `iscsiadm --rescan` to once per day, which
+    eliminates repetitive kernel log spam on the storage host. If PVE is not
+    detected, the installer prints a reminder that Proxmox VE is required on
+    the compute host but does not fail.
+
+The installer asks for an **iSCSI Qualified Name (IQN) prefix** when
+configuring pool-to-target mappings. This becomes part of every iSCSI target's
+persistent on-disk name and is baked in when the LUN is first created. Changing
+it later requires recreating Proxmox iSCSI storage entries and re-mapping LUNs,
+so accept the generated default unless your site already uses a registered
+naming convention. See [Two-node configuration](../developer-guide/two-node-config.md)
+for details.
 
 See [Next Steps](#next-steps) for what to do after installation.
 

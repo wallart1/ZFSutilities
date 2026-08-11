@@ -4,10 +4,12 @@
 
 ZFSutilities supports two deployment modes:
 
-- **Single-node** — All ZFS pools are local to the Proxmox host. No iSCSI,
-  no separate storage server. Zvols are accessed directly via `/dev/zvol/...`.
+- **Single-node** — All ZFS pools are local to this host. No iSCSI, no
+  separate storage server. Proxmox VE is optional; if present, zvols can be
+  attached to local VMs. Zvols are accessed directly via `/dev/zvol/...`.
 - **Two-node** — A dedicated storage host exports zvols via iSCSI to a
-  separate compute host running Proxmox VMs.
+  separate compute host running Proxmox VE VMs. The storage host does not
+  need Proxmox VE.
 
 Both modes use the same scripts and the same config file format. The
 `NODE_MODE` variable controls which code paths are active.

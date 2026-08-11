@@ -1,7 +1,8 @@
 #!/usr/bin/bash
 # test-installer-checks — Verify installer safety checks.
-# shellcheck disable=SC1090,SC2034,SC2154
+# shellcheck disable=SC1090,SC1091,SC2034,SC2154,SC2317
 
+# shellcheck source=test-lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
 setup_test_env
@@ -75,12 +76,75 @@ test_silent_on_xfs_root
 test_silent_on_findmnt_failure
 
 # ------------------------------------------------------------------
-# Desktop launcher helpers (from desktop-launcher-lib.sh)
+# Shared libraries
 # ------------------------------------------------------------------
 
 DESKTOP_LAUNCHER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/desktop-launcher-lib.sh"
 [[ -f "$DESKTOP_LAUNCHER_LIB" ]] || die "Missing: $DESKTOP_LAUNCHER_LIB"
 source "$DESKTOP_LAUNCHER_LIB"
+
+INSTALLER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/installer-lib.sh"
+[[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
+source "$INSTALLER_LIB"
+
+# ------------------------------------------------------------------
+# Installer prerequisite descriptions (from installer-lib.sh)
+# ------------------------------------------------------------------
+
+test_prerequisite_description_for_targetcli() {
+    test_start "prerequisite_description explains targetcli"
+    local result
+    result=$(prerequisite_description "targetcli")
+    assert_contains "$result" "LIO target configuration CLI"
+}
+
+test_prerequisite_description_for_rtslib_service() {
+    test_start "prerequisite_description explains rtslib-fb-targetctl"
+    local result
+    result=$(prerequisite_description "rtslib-fb-targetctl")
+    assert_contains "$result" "LIO target systemd service"
+}
+
+test_prerequisite_description_for_iscsiadm() {
+    test_start "prerequisite_description explains iscsiadm"
+    local result
+    result=$(prerequisite_description "iscsiadm")
+    assert_contains "$result" "iSCSI initiator administration tool"
+}
+
+test_prerequisite_why_needed_for_target_stack() {
+    test_start "prerequisite_why_needed explains target stack purpose"
+    local result
+    result=$(prerequisite_why_needed "targetcli")
+    assert_contains "$result" "storage host"
+    assert_contains "$result" "iSCSI LUNs"
+}
+
+test_prerequisite_why_needed_for_open_iscsi() {
+    test_start "prerequisite_why_needed explains initiator purpose"
+    local result
+    result=$(prerequisite_why_needed "iscsiadm")
+    assert_contains "$result" "compute host"
+    assert_contains "$result" "iSCSI targets"
+}
+
+test_prerequisite_remediation_for_rtslib_service() {
+    test_start "prerequisite_remediation maps rtslib-fb-targetctl to targetcli-fb"
+    local result
+    result=$(prerequisite_remediation "rtslib-fb-targetctl" "python3-rtslib-fb")
+    assert_contains "$result" "apt-get install targetcli-fb"
+}
+
+test_prerequisite_description_for_targetcli
+test_prerequisite_description_for_rtslib_service
+test_prerequisite_description_for_iscsiadm
+test_prerequisite_why_needed_for_target_stack
+test_prerequisite_why_needed_for_open_iscsi
+test_prerequisite_remediation_for_rtslib_service
+
+# ------------------------------------------------------------------
+# Desktop launcher helpers (from desktop-launcher-lib.sh)
+# ------------------------------------------------------------------
 
 saved_sudo_user="${SUDO_USER:-}"
 
@@ -439,6 +503,199 @@ test_install_doc_server_pins_mkdocs() {
 }
 
 test_install_doc_server_pins_mkdocs
+
+# ------------------------------------------------------------------
+# Two-node iSCSI stack installation helpers (from installer-lib.sh)
+# ------------------------------------------------------------------
+
+test_ensure_iscsi_target_stack_already_installed() {
+    test_start "ensure_iscsi_target_stack returns 0 when LIO stack is present"
+
+    command() {
+        if [[ "$1" == "-v" && "$2" == "targetcli" ]]; then
+            return 0
+        fi
+        # Forward other command invocations to the builtin.
+        builtin command "$@"
+    }
+    systemctl() { [[ "$1" == "cat" && "$2" == "rtslib-fb-targetctl" ]] && return 0 || return 1; }
+
+    local output rc
+    output=$(ensure_iscsi_target_stack 2>&1)
+    rc=$?
+
+    unset -f command systemctl 2>/dev/null || true
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected rc=0 when stack is installed, got $rc"
+        return
+    fi
+    if [[ "$output" != *"targetcli found"* || "$output" != *"rtslib-fb-targetctl.service found"* ]]; then
+        test_fail "Expected found messages in output, got: $output"
+        return
+    fi
+    test_pass
+}
+
+test_ensure_iscsi_target_stack_declines_install() {
+    test_start "ensure_iscsi_target_stack returns 1 when user declines install"
+
+    command() {
+        if [[ "$1" == "-v" && "$2" == "targetcli" ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    systemctl() { [[ "$1" == "cat" && "$2" == "rtslib-fb-targetctl" ]] && return 1 || return 0; }
+    ask_yn() { return 1; }
+
+    local rc
+    ensure_iscsi_target_stack >/dev/null 2>&1
+    rc=$?
+
+    unset -f command systemctl ask_yn 2>/dev/null || true
+
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected rc=1 when user declines, got $rc"
+        return
+    fi
+    test_pass
+}
+
+test_ensure_iscsi_target_stack_installs_and_enables() {
+    test_start "ensure_iscsi_target_stack installs and enables LIO stack"
+
+    command() {
+        if [[ "$1" == "-v" && "$2" == "targetcli" ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    systemctl() {
+        if [[ "$1" == "cat" && "$2" == "rtslib-fb-targetctl" ]]; then
+            return 1
+        fi
+        return 0
+    }
+    ask_yn() { return 0; }
+    local marker
+    marker=$(mktemp)
+    apt_install() { echo "$1" > "$marker"; return 0; }
+
+    local output rc
+    output=$(ensure_iscsi_target_stack 2>&1)
+    rc=$?
+
+    local installed_package=""
+    [[ -f "$marker" ]] && installed_package=$(cat "$marker")
+    rm -f "$marker"
+    unset -f command systemctl ask_yn apt_install 2>/dev/null || true
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected rc=0 after successful install, got $rc"
+        return
+    fi
+    if [[ "$installed_package" != "targetcli-fb" ]]; then
+        test_fail "Expected apt_install to be called with targetcli-fb, got: $installed_package"
+        return
+    fi
+    if [[ "$output" != *"Enabling rtslib-fb-targetctl.service"* ]]; then
+        test_fail "Expected enable output, got: $output"
+        return
+    fi
+    test_pass
+}
+
+test_ensure_open_iscsi_remote_already_installed() {
+    test_start "ensure_open_iscsi_remote returns 0 when iscsiadm is present"
+
+    ssh() { return 0; }
+
+    local output rc
+    output=$(ensure_open_iscsi_remote "compute" 2>&1)
+    rc=$?
+
+    unset -f ssh 2>/dev/null || true
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected rc=0 when iscsiadm present, got $rc"
+        return
+    fi
+    if [[ "$output" != *"open-iscsi (iscsiadm) found"* ]]; then
+        test_fail "Expected found message, got: $output"
+        return
+    fi
+    test_pass
+}
+
+test_ensure_open_iscsi_remote_declines_install() {
+    test_start "ensure_open_iscsi_remote returns 1 when user declines install"
+
+    ssh() { return 1; }
+    ask_yn() { return 1; }
+
+    local rc
+    ensure_open_iscsi_remote "compute" >/dev/null 2>&1
+    rc=$?
+
+    unset -f ssh ask_yn 2>/dev/null || true
+
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected rc=1 when user declines, got $rc"
+        return
+    fi
+    test_pass
+}
+
+test_ensure_open_iscsi_remote_installs_and_enables() {
+    test_start "ensure_open_iscsi_remote installs and enables open-iscsi"
+
+    local marker
+    marker=$(mktemp)
+    ssh() {
+        if [[ "$*" == *"command -v iscsiadm"* ]]; then
+            echo "check" >> "$marker"
+            return 1
+        fi
+        if [[ "$*" == *"apt-get install"* ]]; then
+            echo "install" >> "$marker"
+            return 0
+        fi
+        return 1
+    }
+    ask_yn() { return 0; }
+
+    local output rc
+    output=$(ensure_open_iscsi_remote "compute" 2>&1)
+    rc=$?
+
+    local calls=""
+    [[ -f "$marker" ]] && calls=$(cat "$marker")
+    rm -f "$marker"
+    unset -f ssh ask_yn 2>/dev/null || true
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected rc=0 after successful install, got $rc"
+        return
+    fi
+    if [[ "$calls" != *"check"* ]]; then
+        test_fail "Expected ssh check for iscsiadm"
+        return
+    fi
+    if [[ "$calls" != *"install"* ]]; then
+        test_fail "Expected ssh install command"
+        return
+    fi
+    test_pass
+}
+
+test_ensure_iscsi_target_stack_already_installed
+test_ensure_iscsi_target_stack_declines_install
+test_ensure_iscsi_target_stack_installs_and_enables
+test_ensure_open_iscsi_remote_already_installed
+test_ensure_open_iscsi_remote_declines_install
+test_ensure_open_iscsi_remote_installs_and_enables
+
 
 test_summary
 teardown_test_env

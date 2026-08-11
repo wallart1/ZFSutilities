@@ -1,0 +1,97 @@
+#!/usr/bin/bash
+# test-zfscheckrunningvms — Tests for the zfscheckrunningvms helper.
+# shellcheck disable=SC1090,SC1091,SC2034,SC2154,SC2317
+
+# shellcheck source=test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Load the functions from the module under test.
+# shellcheck source=/dev/null
+source "$REPO_ROOT/bin/zfscheckrunningvms"
+
+test_returns_two_when_tools_missing() {
+    test_start "checkrunningvms returns 2 when qm and pct are missing"
+
+    # Ensure qm/pct are not available as functions.
+    unset -f qm pct 2>/dev/null || true
+
+    # Override log_msg so we can inspect the output.  Capture rc from inside
+    # the command substitution so the || true guard does not mask it.
+    local log_output rc
+    log_output=$(
+        log_msg() { echo "$*"; }
+        checkrunningvms "pool/dataset"
+        echo "RC=$?"
+    )
+    rc=$(echo "$log_output" | grep -oP '^RC=\K[0-9]+' || echo "0")
+    log_output=$(echo "$log_output" | grep -v '^RC=')
+
+    if [[ "$rc" != "2" ]]; then
+        test_fail "Expected return code 2, got $rc"
+        return
+    fi
+
+    if [[ "$log_output" != *"Proxmox tools (qm/pct) not found"* ]]; then
+        test_fail "Expected informative log line about missing Proxmox tools"
+        return
+    fi
+
+    test_pass
+}
+
+test_returns_two_for_empty_argument() {
+    test_start "checkrunningvms returns 2 for empty dataset argument"
+
+    local log_output rc
+    log_output=$(
+        log_msg() { echo "$*"; }
+        checkrunningvms ""
+        echo "RC=$?"
+    )
+    rc=$(echo "$log_output" | grep -oP '^RC=\K[0-9]+' || echo "0")
+
+    if [[ "$rc" != "2" ]]; then
+        test_fail "Expected return code 2, got $rc"
+        return
+    fi
+
+    test_pass
+}
+
+test_returns_zero_when_no_running_vms() {
+    test_start "checkrunningvms returns 0 when no VMs are running"
+
+    qm() {
+        if [[ "$1" == "list" ]]; then
+            echo "VMID NAME                 STATUS    MEM(MB)    BOOTDISK(GB) PID"
+            echo "100  vm1                  stopped   4096       50             -"
+        fi
+    }
+    pct() {
+        if [[ "$1" == "list" ]]; then
+            echo "VMID STATUS    LOCK         NAME"
+        fi
+    }
+
+    checkrunningvms "pool/dataset" >/dev/null 2>&1 || true
+    local rc=$?
+
+    unset -f qm pct 2>/dev/null || true
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected return code 0, got $rc"
+        return
+    fi
+
+    test_pass
+}
+
+test_returns_two_when_tools_missing
+test_returns_two_for_empty_argument
+test_returns_zero_when_no_running_vms
+
+test_summary
+teardown_test_env

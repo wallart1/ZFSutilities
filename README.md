@@ -93,6 +93,12 @@ cron syntax:
 
 - ZFS pools already created and online (may be imported on the Pools tab)
 
+- Proxmox VE is **required** only on two-node compute hosts and on single-node
+  hosts that run VMs. It is **optional** on single-node hosts that only use ZFS
+  backup/retention and on two-node storage hosts.
+
+- Non-Proxmox hypervisors are **not supported**.
+
 - MkDocs and the Material theme (required; the installer builds the HTML
   documentation site from `docs/docs/`):
   

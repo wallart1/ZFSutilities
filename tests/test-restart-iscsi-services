@@ -187,6 +187,84 @@ test_aborts_tells_user_to_stop_vms() {
 }
 
 # ------------------------------------------------------------------
+# Full-script sourcing tests (non-Proxmox storage node behavior)
+# ------------------------------------------------------------------
+
+# Make qm unavailable in this subshell context without affecting the outer shell.
+qm() { return 1; }
+
+source_full_script() {
+    # shellcheck source=/dev/null
+    source "$old_mydir/bin/restart-iscsi-services"
+}
+
+test_script_loads_without_qm() {
+    test_start "Script sources without local qm when targetcli is present"
+    (
+        NODE_MODE="two-node"
+        STORAGE_HOST="stewie"
+        COMPUTE_HOST="tweety"
+        NODE_LIB="/dev/null"
+        find_zfsutility_script() { echo "/dev/null"; }
+        targetcli() { return 0; }
+        systemctl() { [[ "$*" == "cat rtslib-fb-targetctl" ]] && return 0 || return 1; }
+        log_msg() { echo "$*" >&2; }
+        RESTART_ISCSI_SERVICES_TEST_MODE="Y"
+        source_full_script
+    ) >/dev/null 2>&1
+    if [[ $? -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Script should source successfully without local qm"
+    fi
+}
+
+test_script_fails_without_targetcli() {
+    test_start "Script fails when targetcli is missing"
+    local output
+    output=$(
+        NODE_MODE="two-node"
+        STORAGE_HOST="stewie"
+        COMPUTE_HOST="tweety"
+        NODE_LIB="/dev/null"
+        find_zfsutility_script() { echo "/dev/null"; }
+        unset -f targetcli 2>/dev/null || true
+        hash -r 2>/dev/null || true
+        systemctl() { [[ "$*" == "cat rtslib-fb-targetctl" ]] && return 0 || return 1; }
+        log_msg() { echo "$*" >&2; }
+        RESTART_ISCSI_SERVICES_TEST_MODE="Y"
+        source_full_script 2>&1 || true
+    )
+    if [[ "$output" == *"targetcli not found"* ]]; then
+        test_pass
+    else
+        test_fail "Expected targetcli missing error, got: $output"
+    fi
+}
+
+test_script_fails_without_target_service() {
+    test_start "Script fails when rtslib-fb-targetctl service is missing"
+    local output
+    output=$(
+        NODE_MODE="two-node"
+        STORAGE_HOST="stewie"
+        COMPUTE_HOST="tweety"
+        NODE_LIB="/dev/null"
+        find_zfsutility_script() { echo "/dev/null"; }
+        targetcli() { return 0; }
+        systemctl() { return 1; }
+        log_msg() { echo "$*" >&2; }
+        RESTART_ISCSI_SERVICES_TEST_MODE="Y"
+        source_full_script 2>&1 || true
+    )
+    if [[ "$output" == *"rtslib-fb-targetctl.service not found"* ]]; then
+        test_pass
+    else
+        test_fail "Expected service missing error, got: $output"
+    fi
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_single_node_skips_check
@@ -197,5 +275,8 @@ test_running_vm_aborts
 test_multiple_running_vms_aborts
 test_running_vm_outputs_error
 test_aborts_tells_user_to_stop_vms
+test_script_loads_without_qm
+test_script_fails_without_targetcli
+test_script_fails_without_target_service
 
 test_summary

@@ -1,6 +1,11 @@
 # Two-Node Infrastructure Commands
 
-These scripts manage the two-node Proxmox/ZFS setup: a **compute node** (running VMs) and a dedicated **storage node** (hosting the ZFS pools and exporting VM disks via iSCSI). They are deployed via the versioned installation to `/usr/local/lib/zfsutilities/bin/` on one or both nodes and are not part of the core ZFS Utilities backup system.
+These scripts manage the two-node Proxmox/ZFS setup: a **compute node** running
+Proxmox VE VMs and a dedicated **storage node** hosting the ZFS pools and
+exporting VM disks via iSCSI. The storage node is plain Debian-based ZFS/iSCSI
+and does not need Proxmox VE. The scripts are deployed via the versioned
+installation to `/usr/local/lib/zfsutilities/bin/` on one or both nodes and are
+not part of the core ZFS Utilities backup system.
 
 Scripts marked **both** run on either node and delegate automatically via SSH as appropriate. Scripts marked **storage node** or **compute node** are node-specific.
 
@@ -410,6 +415,10 @@ reveal all LUNs.
 ```bash
 sudo repair-iscsi-luns [--dry-run] [--force-relogin]
 ```
+
+**Prerequisites:** `targetcli` and the `rtslib-fb-targetctl` systemd service must
+be installed on the storage host (Debian/Ubuntu package `targetcli-fb`).
+Proxmox VE is **not** required on the storage host.
 
 **Arguments:**
 
@@ -1217,6 +1226,11 @@ keys are currently loaded.
 ```bash
 sudo restart-iscsi-services
 ```
+
+**Prerequisites:** `targetcli` and the `rtslib-fb-targetctl` systemd service must
+be installed on the storage host (Debian/Ubuntu package `targetcli-fb`). The
+compute host must run Proxmox VE so the script can check VM status, but Proxmox
+VE is **not** required on the storage host.
 
 **Arguments:** none.
 

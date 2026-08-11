@@ -2,8 +2,13 @@
 
 This page applies only if you are using Proxmox VE.
 
+!!! warning "Non-Proxmox hypervisors are unsupported"
+    ZFSutilities VM disk lifecycle scripts are tightly coupled to Proxmox VE
+    (`qm`, `/etc/pve/qemu-server/`, PVE config formats). They will not run on
+    hosts without Proxmox VE and are not compatible with other hypervisors.
+
 How ZFSutilities interacts with the Proxmox GUI depends on whether you are
-running a **single-node** setup (ZFS pools local to the Proxmox host) or a
+running a **single-node** setup (ZFS pools local to a Proxmox host) or a
 **two-node** setup (ZFS pools on a separate storage host, exported via
 iSCSI).
 

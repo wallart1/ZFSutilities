@@ -4,7 +4,9 @@
 # Interactive installer for two-node ZFSutilities configuration.
 #
 # Two-node means a separate storage host (ZFS pools, iSCSI target) and
-# compute host (Proxmox VMs, iSCSI initiator). ZFS clone support is included.
+# compute host (Proxmox VE VMs, iSCSI initiator). The storage host does not
+# need Proxmox VE; the compute host must run Proxmox VE. ZFS clone support
+# is included.
 #
 # This installer:
 #   1. Checks prerequisites interactively and offers to install missing items
@@ -145,7 +147,7 @@ if [[ "${SKIP_CONFIG:-}" != "true" ]]; then
     # ------------------------------------------------------------------
 
     default_storage=$(hostname -s)
-    echo "Two-node mode: separate storage host (ZFS/iSCSI) and compute host (Proxmox VMs)."
+    echo "Two-node mode: separate storage host (ZFS/iSCSI) and compute host (Proxmox VE VMs)."
     echo ""
 
     read -rp "Storage host short name [${default_storage}]: " input_storage
@@ -306,6 +308,17 @@ if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${COMPUTE_HOST}" \
         "  Fix: on ${COMPUTE_HOST}, run: ssh-copy-id root@${STORAGE_HOST}"
 fi
 echo "  ✓ root@${COMPUTE_HOST} → root@${STORAGE_HOST}"
+
+echo ""
+
+# ------------------------------------------------------------------
+# Step 4b: Verify/Install iSCSI packages
+# ------------------------------------------------------------------
+echo "=== Verifying iSCSI Packages ==="
+echo ""
+
+ensure_iscsi_target_stack || exit 1
+ensure_open_iscsi_remote "$COMPUTE_HOST" || exit 1
 
 echo ""
 
@@ -537,7 +550,9 @@ if ssh -o ConnectTimeout=5 "root@${COMPUTE_HOST}" "[[ -f '${PVE_ISCSI_PLUGIN}' ]
         && echo "  ✓ Restarted pvestatd" \
         || echo "  ⚠ Could not restart pvestatd on $COMPUTE_HOST"
 else
-    echo "  · PVE not detected on $COMPUTE_HOST (skipping patch)"
+    echo "  · Proxmox VE not detected on $COMPUTE_HOST (skipping patch)."
+    echo "      Proxmox VE is required on the compute host for VM management."
+    echo "      If Proxmox is installed later, re-run this installer or apply the patch manually."
 fi
 
 echo ""

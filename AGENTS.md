@@ -584,6 +584,7 @@ This project uses **bash** (not sh). Follow these conventions:
   - **Exception**: output variables that callers read (like `$fsarray`) are intentionally global and should **not** be declared `local`.
 - **Apply Single Responsibility Principle**: each function should do one thing.
 - **No single-caller functions**: Functions should have at least two calling sites. Otherwise, keep the code inline.
+- **Never use absolute line numbers when editing files** Instead, use surrounding context to locate the editing target location.
 
 **Project-specific patterns:**
 
@@ -670,6 +671,7 @@ The GTK GUI code in `python/` follows standard Python conventions:
 - **Avoid mutable defaults** in function parameters.
 - **Comparisons to `None`**: Use `is None` / `is not None`.
 - **No single-caller functions**: Functions should have at least two calling sites. Otherwise, keep the code inline.
+- **Never use absolute line numbers when editing files** Instead, use surrounding context to locate the editing target location.
 
 **Logging:**
 

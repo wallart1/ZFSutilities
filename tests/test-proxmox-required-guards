@@ -1,0 +1,96 @@
+#!/usr/bin/bash
+# test-proxmox-required-guards — Verify Proxmox-only scripts fail fast when qm is absent.
+# shellcheck disable=SC1090,SC1091,SC2034,SC2154,SC2317
+
+# shellcheck source=test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Run a script in a subshell where root appears to be root (fake id -u) and qm
+# is not available.  Returns the script's exit code.
+run_without_qm() {
+    local script_path="$1"
+    shift
+
+    local tmp_bin
+    tmp_bin=$(mktemp -d)
+    cat > "$tmp_bin/id" << 'EOF'
+#!/usr/bin/bash
+if [[ "$1" == "-u" ]]; then
+    echo "0"
+else
+    command id "$@"
+fi
+EOF
+    chmod +x "$tmp_bin/id"
+
+    # Ensure no qm/pct in the subshell PATH or as inherited functions.
+    PATH="$tmp_bin:$PATH" bash -c '
+        unset -f qm pct 2>/dev/null || true
+        export PATH
+        "$0" "$@"
+    ' "$script_path" "$@"
+    local rc=$?
+    rm -rf "$tmp_bin"
+    return $rc
+}
+
+assert_guard_fails() {
+    local script_name="$1"
+    local script_path="$REPO_ROOT/bin/$script_name"
+
+    test_start "$script_name fails fast when qm is absent"
+
+    local output rc
+    output=$(run_without_qm "$script_path" 2>&1) || rc=$?
+    rc=${rc:-0}
+
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected exit code 1, got $rc"
+        return
+    fi
+
+    if [[ "$output" != *"This script requires Proxmox VE"* ]]; then
+        test_fail "Expected Proxmox VE required message in output"
+        return
+    fi
+
+    if [[ "$output" != *"Non-Proxmox hypervisors are not supported"* ]]; then
+        test_fail "Expected unsupported-hypervisor message in output"
+        return
+    fi
+
+    test_pass
+}
+
+# Scripts that should enforce the Proxmox requirement at startup.
+# Note: storage-node iSCSI scripts (repair-iscsi-luns, ensure-restored-vm-iscsi,
+# restart-iscsi-services) are intentionally excluded. They run on the storage
+# host, which does not need Proxmox VE; they check for the LIO target stack
+# instead.
+GUARDED_SCRIPTS=(
+    zfsaddisk
+    attach-vm-disk
+    detach-vm-disk
+    move-vm-disk
+    clone-vm
+    zfsclone-vm
+    new-vm-disk
+    remove-vm
+    remove-vm-disk
+    archive-vm
+    unarchive-vm
+    resize-vm-disk
+    enroll-efi-keys-vm
+    promote-vm-clone
+    list-vm-disks
+)
+
+for script in "${GUARDED_SCRIPTS[@]}"; do
+    assert_guard_fails "$script"
+done
+
+test_summary
+teardown_test_env

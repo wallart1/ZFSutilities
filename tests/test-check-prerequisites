@@ -89,11 +89,129 @@ test_mkdocs_version_malformed() {
     unset -f mkdocs 2>/dev/null || true
 }
 
+# ---------------------------------------------------------------------------
+# Proxmox section output
+# ---------------------------------------------------------------------------
+
+# Create a minimal fake PATH with mock commands so check-prerequisites can run
+# to completion without real dependencies.
+run_check_prerequisites_with_mock_env() {
+    local tmp_bin
+    tmp_bin=$(mktemp -d)
+
+    # Core commands
+    cat > "$tmp_bin/bash" << 'EOF'
+#!/usr/bin/bash
+[[ "$1" == "--version" ]] && echo "5.2.0" || true
+EOF
+    chmod +x "$tmp_bin/bash"
+
+    for cmd in zfs zpool pv rsync python3 pip3; do
+        ln -s /bin/true "$tmp_bin/$cmd"
+    done
+
+    # mkdocs 1.x
+    cat > "$tmp_bin/mkdocs" << 'EOF'
+#!/usr/bin/bash
+echo "mkdocs, version 1.6.0"
+EOF
+    chmod +x "$tmp_bin/mkdocs"
+
+    # dpkg simulates all requested packages as installed
+    cat > "$tmp_bin/dpkg" << 'EOF'
+#!/usr/bin/bash
+if [[ "$1" == "-l" ]]; then
+    echo "ii  $2"
+fi
+EOF
+    chmod +x "$tmp_bin/dpkg"
+
+    # pveversion is handled by the caller via PATH order; we leave it absent here.
+    PATH="$tmp_bin:$PATH" "$PREREQ_SCRIPT" "$@"
+    local rc=$?
+    rm -rf "$tmp_bin"
+    return $rc
+}
+
+test_proxmox_absent_warning() {
+    test_start "Proxmox absence produces informational warning, not failure"
+
+    local output rc
+    output=$(run_check_prerequisites_with_mock_env --single-node 2>&1) || true
+    rc=$?
+
+    # Should exit 0 because Proxmox is optional.
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 when Proxmox is absent, got $rc"
+        return
+    fi
+
+    # Should use the updated section title and warning wording.
+    if [[ "$output" != *"Proxmox VE / VM tools"* ]]; then
+        test_fail "Expected section title 'Proxmox VE / VM tools' in output"
+        return
+    fi
+    if [[ "$output" != *"required only on a two-node compute host"* ]]; then
+        test_fail "Expected 'required only on a two-node compute host' warning"
+        return
+    fi
+    test_pass
+}
+
+test_proxmox_present_pass() {
+    test_start "Proxmox presence reports pveversion pass"
+
+    local tmp_bin
+    tmp_bin=$(mktemp -d)
+
+    cat > "$tmp_bin/bash" << 'EOF'
+#!/usr/bin/bash
+[[ "$1" == "--version" ]] && echo "5.2.0" || true
+EOF
+    chmod +x "$tmp_bin/bash"
+    for cmd in zfs zpool pv rsync python3 pip3; do
+        ln -s /bin/true "$tmp_bin/$cmd"
+    done
+    cat > "$tmp_bin/mkdocs" << 'EOF'
+#!/usr/bin/bash
+echo "mkdocs, version 1.6.0"
+EOF
+    chmod +x "$tmp_bin/mkdocs"
+    cat > "$tmp_bin/dpkg" << 'EOF'
+#!/usr/bin/bash
+[[ "$1" == "-l" ]] && echo "ii  $2"
+EOF
+    chmod +x "$tmp_bin/dpkg"
+    cat > "$tmp_bin/pveversion" << 'EOF'
+#!/usr/bin/bash
+echo "pve-manager/8.0.0/0d00c89cd4c8d7f5"
+EOF
+    chmod +x "$tmp_bin/pveversion"
+
+    local output rc
+    output=$(PATH="$tmp_bin:$PATH" "$PREREQ_SCRIPT" --single-node 2>&1) || true
+    rc=$?
+
+    rm -rf "$tmp_bin"
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 when Proxmox is present, got $rc"
+        return
+    fi
+    if [[ "$output" != *"pveversion:"* ]]; then
+        test_fail "Expected pveversion pass line in output"
+        return
+    fi
+    test_pass
+}
+
 test_mkdocs_version_absent
 test_mkdocs_version_1_x
 test_mkdocs_version_2_x
 test_mkdocs_version_10_x
 test_mkdocs_version_malformed
+test_proxmox_absent_warning
+test_proxmox_present_pass
 
 test_summary
 teardown_test_env

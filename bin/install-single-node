@@ -4,7 +4,8 @@
 # Interactive installer for single-node ZFSutilities configuration.
 #
 # Single-node means all ZFS pools are local to this host — no separate
-# storage node, no iSCSI. ZFS clone support is included.
+# storage node, no iSCSI. Proxmox VE is optional; if present, ZFSUtilities
+# can manage VM disks, otherwise only ZFS backup/retention features are used.
 #
 # This installer:
 #   1. Checks prerequisites interactively and offers to install missing items

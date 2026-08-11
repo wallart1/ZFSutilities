@@ -24,7 +24,23 @@ unset _local_bashinit
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 source "$(find_zfsutility_script rootcheck)"
+
 rootcheck
+
+# Storage-node dependency: LIO target stack. The compute host needs Proxmox VE,
+# but this script runs on the storage host and does not require a local qm binary.
+if ! command -v targetcli >/dev/null 2>&1; then
+    log_msg "FATAL: targetcli not found. Install the LIO target stack on this storage host."
+    log_msg "FATAL:   On Debian/Ubuntu: apt-get install targetcli-fb"
+    exit 1
+fi
+
+if ! systemctl cat rtslib-fb-targetctl >/dev/null 2>&1; then
+    log_msg "FATAL: rtslib-fb-targetctl.service not found." \
+            "Install the LIO target stack on this storage host."
+    log_msg "FATAL:   On Debian/Ubuntu: apt-get install python3-rtslib-fb"
+    exit 1
+fi
 
 CONF="/etc/iscsi-encrypted-luns.conf"
 
@@ -92,46 +108,52 @@ check_running_vms() {
 # ------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------
+main() {
+    echo "=== Restarting iSCSI Target Services ==="
 
-echo "=== Restarting iSCSI Target Services ==="
+    check_running_vms
 
-check_running_vms
+    # Stop the iSCSI target service
+    echo "Stopping rtslib-fb-targetctl..."
+    systemctl stop rtslib-fb-targetctl
 
-# Stop the iSCSI target service
-echo "Stopping rtslib-fb-targetctl..."
-systemctl stop rtslib-fb-targetctl
+    # Start the iSCSI target service
+    # ExecStart restores boot config; ExecStartPost adds encrypted LUNs if available
+    echo "Starting rtslib-fb-targetctl..."
+    systemctl start rtslib-fb-targetctl
 
-# Start the iSCSI target service
-# ExecStart restores boot config; ExecStartPost adds encrypted LUNs if available
-echo "Starting rtslib-fb-targetctl..."
-systemctl start rtslib-fb-targetctl
+    # Show encrypted LUN status
+    echo ""
+    echo "Encrypted LUN status:"
+    if [[ -f "$CONF" ]]; then
+        while IFS=: read -r name device target; do
+            [[ -z "$name" || "$name" == \#* ]] && continue
+            if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
+                echo "  ✓ $name configured"
+            elif [[ ! -e "$device" ]]; then
+                log_msg "WARN:   $name — device not available (keys not loaded?)"
+            else
+                log_msg "WARN:   $name — missing from iSCSI target"
+            fi
+        done < "$CONF"
+    else
+        echo "  (no encrypted LUNs config at $CONF)"
+    fi
 
-# Show encrypted LUN status
-echo ""
-echo "Encrypted LUN status:"
-if [[ -f "$CONF" ]]; then
-    while IFS=: read -r name device target; do
-        [[ -z "$name" || "$name" == \#* ]] && continue
-        if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
-            echo "  ✓ $name configured"
-        elif [[ ! -e "$device" ]]; then
-            log_msg "WARN:   $name — device not available (keys not loaded?)"
-        else
-            log_msg "WARN:   $name — missing from iSCSI target"
-        fi
-    done < "$CONF"
-else
-    echo "  (no encrypted LUNs config at $CONF)"
+    # Save only if all expected LUNs are active
+    echo ""
+    "$mydir/safe-iscsi-save"
+
+    # Show current status
+    echo ""
+    echo "=== iSCSI Target Status ==="
+    targetcli ls /iscsi 2>/dev/null | grep -E "iqn\.|LUNs"
+
+    echo ""
+    echo "=== Complete ==="
+}
+
+# Run main only when executed directly, not when sourced for tests.
+if [[ -z "${RESTART_ISCSI_SERVICES_TEST_MODE:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main
 fi
-
-# Save only if all expected LUNs are active
-echo ""
-"$mydir/safe-iscsi-save"
-
-# Show current status
-echo ""
-echo "=== iSCSI Target Status ==="
-targetcli ls /iscsi 2>/dev/null | grep -E "iqn\.|LUNs"
-
-echo ""
-echo "=== Complete ==="

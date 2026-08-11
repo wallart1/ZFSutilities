@@ -8,11 +8,20 @@ setup_test_env
 # argument validation), then exercise run_on_storage / ensure_lun_on_storage
 # with mocked bash/ssh and zfs so no root or real storage node is needed.
 # shellcheck source=/dev/null
-source <(sed -n '72,396p' "$mydir/bin/ensure-restored-vm-iscsi")
+source <(sed -n '76,396p' "$mydir/bin/ensure-restored-vm-iscsi")
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+test_no_local_qm_requirement() {
+    test_start "script does not require local qm"
+    if grep -q "command -v qm" "$mydir/bin/ensure-restored-vm-iscsi"; then
+        test_fail "Script still contains a local qm requirement"
+    else
+        test_pass
+    fi
+}
 
 test_parse_vm_disk_zvol_standard_path() {
     test_start "parse standard VM disk zvol path"
@@ -491,6 +500,7 @@ test_ensure_lun_on_storage_sends_correct_storage_script() {
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
+test_no_local_qm_requirement
 test_run_on_storage_remote_forwards_heredoc
 test_run_on_storage_local_forwards_heredoc
 test_is_local_host

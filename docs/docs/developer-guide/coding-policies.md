@@ -224,6 +224,7 @@ This initializes basic runtime variables and sources commonly-used functions.
   `${PWD}/data`).
 - **Use `log_msg` instead of `echo`** (bash) or **`print()`** (Python) for
   consistent, portable output.
+- **Never use absolute line numbers when editing files** Instead, use surrounding context to locate the editing target location.
 
 ---
 
@@ -325,6 +326,7 @@ log_msg("DEBUG: variable =", value)
         target.append(item)
         return target
     ```
+- **Never use absolute line numbers when editing files** Instead, use surrounding context to locate the editing target location.
 
 ### Linting
 

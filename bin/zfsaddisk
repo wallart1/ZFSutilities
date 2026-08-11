@@ -9,7 +9,15 @@ bashinit
 unset _local_bashinit
 
 source_helper rootcheck
+
 rootcheck
+
+if ! command -v qm >/dev/null 2>&1; then
+    log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
+    log_msg "FATAL:   On a single node without Proxmox there are no VMs to manage."
+    log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
+    exit 1
+fi
 
 # Add a virtual disk to a VM.
 # This works around a problem in the Proxmox GUI where it assigns the wrong disk number

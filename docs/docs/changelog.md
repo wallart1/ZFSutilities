@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.82.0
+
+*Released 2026-08-11*
+
+### Added
+
+- **Proxmox-optional single-node and storage-node support** — Proxmox VE is now
+  optional on single-node hosts (needed only for VM disk lifecycle features)
+  and on two-node storage hosts. The compute node in a two-node deployment
+  still requires Proxmox VE.
+
+- **VM lifecycle Proxmox guards** — All VM disk lifecycle scripts
+  (`archive-vm`, `attach-vm-disk`, `clone-vm`, `detach-vm-disk`,
+  `enroll-efi-keys-vm`, `list-vm-disks`, `move-vm-disk`, `new-vm-disk`,
+  `promote-vm-clone`, `remove-vm`, `remove-vm-disk`, `resize-vm-disk`,
+  `unarchive-vm`, `zfsaddisk`, `zfsclone-vm`) now fail fast with a clear
+  message when the Proxmox VE `qm` tool is not found.
+
+- **LIO target-stack guards for storage scripts** — `repair-iscsi-luns` and
+  `restart-iscsi-services` now require `targetcli` and the
+  `rtslib-fb-targetctl` systemd service on the storage host instead of
+  requiring local Proxmox VE tools.
+
+- **Two-node installer iSCSI package verification** — `install-two-node` now
+  checks for and offers to install the LIO target stack (`targetcli-fb`) on
+  the storage host and the iSCSI initiator (`open-iscsi`) on the compute host.
+  New `installer-lib.sh` helpers `ensure_iscsi_target_stack()` and
+  `ensure_open_iscsi_remote()` implement these checks.
+
+- **`check-prerequisites` iSCSI checks** — In two-node mode,
+  `check-prerequisites` now reports `targetcli`,
+  `rtslib-fb-targetctl.service`, and `iscsiadm` as required items.
+
+- **`zfscheckrunningvms` informative logging** — When Proxmox tools are not
+  available, the helper now logs an explicit `INFO` message explaining that
+  running-VM checks cannot be performed.
+
+### Tests
+
+- Added `tests/test-proxmox-required-guards` to verify all VM lifecycle
+  scripts fail fast when `qm` is absent.
+
+- Added `tests/test-zfscheckrunningvms` to cover the missing-tools return
+  code and the new log message.
+
+- Extended `tests/test-check-prerequisites` for Proxmox absence/presence
+  output.
+
+- Extended `tests/test-installer-checks` with prerequisite descriptions for
+  `targetcli`, `rtslib-fb-targetctl`, and `iscsiadm`, plus tests for
+  `ensure_iscsi_target_stack()` and `ensure_open_iscsi_remote()`.
+
+- Extended `tests/test-restart-iscsi-services`,
+  `tests/test-repair-iscsi-luns`, and
+  `tests/test-ensure-restored-vm-iscsi` to confirm storage-node scripts do
+  not require local `qm`.
+
+### Documentation
+
+- Updated `README.md`, `docs/docs/installation/index.md`,
+  `docs/docs/developer-guide/index.md`,
+  `docs/docs/developer-guide/two-node-config.md`,
+  `docs/docs/commands-and-modules/two-node.md`,
+  `docs/docs/commands-and-modules/commands.md`,
+  `docs/docs/commands-and-modules/index.md`, and
+  `docs/docs/user-guide/proxmox-integration.md` to state that Proxmox VE is
+  optional on single-node and storage-node hosts and that non-Proxmox
+  hypervisors are unsupported.
+
+### Developer Notes
+
+- Added "Never use absolute line numbers when editing files" to the bash and
+  Python coding standards in `AGENTS.md` and
+  `docs/docs/developer-guide/coding-policies.md`.
+
 ## 0.81.0
 
 *Released 2026-08-10*

@@ -182,6 +182,17 @@ reset_mocks() {
 # Tests
 # ------------------------------------------------------------------
 
+test_script_loads_without_qm() {
+    test_start "repair-iscsi-luns sources without local qm"
+    # The script was already sourced above in a test environment that does not
+    # provide qm. If we reach this point, the top-level qm check no longer aborts.
+    if declare -f main >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "main() should be defined after sourcing the script"
+    fi
+}
+
 test_parse_backstores() {
     reset_mocks
     test_start "parse_backstores extracts backstore names and device paths"
@@ -479,6 +490,7 @@ test_empty_manifest_exports_nothing() {
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
+test_script_loads_without_qm
 test_parse_backstores
 test_parse_target_luns
 test_discover_zvols

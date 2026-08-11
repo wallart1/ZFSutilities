@@ -286,6 +286,12 @@ mode the script is a no-op.
 sudo ensure-restored-vm-iscsi <zvol>...
 ```
 
+**Prerequisites:** The storage host must have `targetcli` and the
+`rtslib-fb-targetctl` systemd service installed (Debian/Ubuntu package
+`targetcli-fb`). This script does **not** require Proxmox VE on the host where it
+is invoked; it reads Proxmox VM configs remotely from the compute host and
+delegates storage-side work via SSH.
+
 **Arguments:**
 
 | Argument | Description |

@@ -2465,6 +2465,34 @@ class TestGetHostOsInfo(unittest.TestCase):
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
     @patch("subprocess.run")
+    def test_local_ubuntu_when_pveversion_absent(self, mock_run, _mock_local):
+        """pveversion returning 127 (command not found) falls back to /etc/os-release."""
+
+        def side_effect(cmd, **kwargs):
+            result = MagicMock()
+            if cmd[:2] == ["cat", "/etc/os-release"]:
+                result.returncode = 0
+                result.stdout = (
+                    'PRETTY_NAME="Ubuntu 24.04.1 LTS"\n'
+                    'NAME="Ubuntu"\n'
+                    'VERSION_ID="24.04"\n'
+                    'VERSION="24.04.1 LTS (Noble Numbat)"\n'
+                    "ID=ubuntu\n"
+                    'ID_LIKE="debian"\n'
+                )
+            else:
+                # Simulate pveversion not being installed.
+                result.returncode = 127
+                result.stdout = ""
+            return result
+
+        mock_run.side_effect = side_effect
+        name, version = dp._get_host_os_info("myhost")
+        self.assertEqual(name, "Ubuntu")
+        self.assertEqual(version, "24.04.1 LTS (Noble Numbat)")
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    @patch("subprocess.run")
     def test_remote_proxmox_detected_via_ssh(self, mock_run, _mock_local):
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = "pve-manager/8.1.0/abcdef1234567890\n"

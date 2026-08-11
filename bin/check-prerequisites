@@ -12,7 +12,7 @@
 #
 # Categories checked:
 #   core     — bash, zfs, zpool, pv, rsync
-#   proxmox  — pveversion (warn if absent; optional for single-node)
+#   proxmox  — pveversion (warn if absent; required only on two-node compute host)
 #   gui      — python3, python3-gi, gir1.2-gtk-3.0, DISPLAY
 #   two-node — ssh, scp, open-iscsi (only in --two-node mode)
 #   docs     — pip3, mkdocs, mkdocs-material (required)
@@ -134,6 +134,17 @@ check_apt_pkg() {
     fi
 }
 
+check_systemd_service() {
+    local category="$1"
+    local name="$2"
+    local package="${3:-$name}"
+    if systemctl cat "$name" >/dev/null 2>&1; then
+        pass "$name"
+    else
+        fail "$category" "$name" "$package" "service not found"
+    fi
+}
+
 # Check the installed mkdocs version. Returns 0 if mkdocs is absent or
 # its major version is < 2, 1 if mkdocs >= 2 is installed.
 check_mkdocs_version() {
@@ -167,12 +178,13 @@ fi
 # ------------------------------------------------------------------
 
 if [[ -z "$LIST_FAILURES" ]]; then
-    echo "=== Proxmox VE (optional) ==="
+    echo "=== Proxmox VE / VM tools ==="
 fi
 if command -v pveversion >/dev/null 2>&1; then
     pass "pveversion: $(pveversion 2>/dev/null || true)"
 else
-    warn "pveversion not found — Proxmox VE integration is optional and only needed for VM/iSCSI features"
+    warn "pveversion not found — Proxmox VE is required only on a two-node compute host;" \
+         "optional on single-node and two-node storage hosts"
 fi
 if [[ -z "$LIST_FAILURES" ]]; then
     echo ""
@@ -210,12 +222,9 @@ if [[ "$CHECK_MODE" == "two-node" ]]; then
     fi
     check_cmd "two-node" "ssh" "openssh-client"
     check_cmd "two-node" "scp" "openssh-client"
-
-    if command -v iscsiadm >/dev/null 2>&1; then
-        pass "open-iscsi (iscsiadm)"
-    else
-        warn "open-iscsi not found — required on compute nodes for two-node mode"
-    fi
+    check_cmd "two-node" "targetcli" "targetcli-fb"
+    check_systemd_service "two-node" "rtslib-fb-targetctl" "python3-rtslib-fb"
+    check_cmd "two-node" "iscsiadm" "open-iscsi"
     if [[ -z "$LIST_FAILURES" ]]; then
         echo ""
     fi

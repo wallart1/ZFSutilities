@@ -8,7 +8,7 @@ every module or script it contains.
 
 | Page                                            | Contents                                                                  |
 | ----------------------------------------------- | ------------------------------------------------------------------------- |
-| [Two-Node Infrastructure Commands](two-node.md) | VM disk and iSCSI scripts for single-node and two-node Proxmox/ZFS setups |
+| [Two-Node Infrastructure Commands](two-node.md) | VM disk and iSCSI scripts for single-node and two-node ZFS setups (Proxmox VE required only for VM features) |
 | [Commands](commands.md)                         | Root-level commands of the ZFSutilities backup system                     |
 | [Modules](modules.md)                           | Sourceable helper modules used by the commands                            |
 | [Python Modules](python-modules.md)             | GTK GUI and command-orchestration modules                                 |

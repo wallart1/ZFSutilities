@@ -30,6 +30,7 @@ NODE_LIB="${REPAIR_ISCSI_LUNS_NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 
 source "$(find_zfsutility_script rootcheck)"
+
 rootcheck
 
 # iSCSI-only script — exit silently in single-node mode
@@ -63,6 +64,14 @@ done
 # Verify we're on the storage host
 if [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
     log_msg "FATAL: Must run on the storage host ($STORAGE_HOST), not $MY_HOST"
+    exit 1
+fi
+
+# Storage-node dependency: LIO target stack. The compute host needs Proxmox VE,
+# but this script runs on the storage host and does not require a local qm binary.
+if ! command -v targetcli >/dev/null 2>&1; then
+    log_msg "FATAL: targetcli not found. Install the LIO target stack on this storage host."
+    log_msg "FATAL:   On Debian/Ubuntu: apt-get install targetcli-fb"
     exit 1
 fi
 

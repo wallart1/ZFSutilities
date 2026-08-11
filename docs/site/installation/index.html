@@ -585,10 +585,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#proxmox-ve-optional" class="md-nav__link">
+  <a href="#proxmox-ve-optional-on-single-node-and-storage-node" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Proxmox VE (optional)
+        Proxmox VE (optional on single node and storage node)
       
     </span>
   </a>
@@ -2095,10 +2095,12 @@
 <h1 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h1>
 <p>ZFSutilities supports two deployment modes:</p>
 <ul>
-<li><strong>Single-node</strong> — All ZFS pools are local to the Proxmox host. No iSCSI,
-  no separate storage server. This is the default for new installations.</li>
+<li><strong>Single-node</strong> — All ZFS pools are local to this host. No iSCSI, no
+  separate storage server. Proxmox VE is optional; it is only needed if you
+  want VM disk lifecycle management. This is the default for new installations.</li>
 <li><strong>Two-node</strong> — A dedicated storage host exports zvols via iSCSI to a
-  separate compute host running Proxmox VMs.</li>
+  separate compute host running Proxmox VE VMs. The storage host does not need
+  Proxmox VE.</li>
 </ul>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
@@ -2126,18 +2128,23 @@
 retention, and iSCSI lifecycle scripts may interact with the root pool in
 unexpected ways. Proceed at your own risk.</p>
 </div>
-<h3 id="proxmox-ve-optional">Proxmox VE (optional)<a class="headerlink" href="#proxmox-ve-optional" title="Permanent link">&para;</a></h3>
-<p>Proxmox VE is <strong>only required for VM management, iSCSI initiator integration,
-and PVE-specific patches</strong>. For single-node deployments that only need ZFS
-backup, snapshot, and retention features, Proxmox VE is optional.</p>
+<h3 id="proxmox-ve-optional-on-single-node-and-storage-node">Proxmox VE (optional on single node and storage node)<a class="headerlink" href="#proxmox-ve-optional-on-single-node-and-storage-node" title="Permanent link">&para;</a></h3>
+<p>Proxmox VE is <strong>required</strong> on a two-node compute host and on a single-node host
+that runs VMs. It is <strong>optional</strong> on a single-node host that only needs ZFS
+backup, snapshot, and retention features and on a two-node storage host.</p>
 <ul>
 <li><strong>Single node without VMs/iSCSI</strong>: Proxmox VE is not required.</li>
 <li><strong>Compute node or single node with VMs</strong>: Proxmox VE 8.x or 9.x is required
   for VM disk lifecycle integration.</li>
-<li><strong>Two-node storage node</strong>: Proxmox VE is strongly recommended for iSCSI
-  target support, but the core ZFS features work on any ZFS-capable
-  Debian-based Linux distribution.</li>
+<li><strong>Two-node storage node</strong>: Proxmox VE is not required. The storage host is a
+  plain Debian-based ZFS/iSCSI server.</li>
 </ul>
+<div class="admonition warning">
+<p class="admonition-title">Non-Proxmox hypervisors are unsupported</p>
+<p>ZFSutilities VM disk lifecycle scripts are tightly coupled to Proxmox VE
+(<code>qm</code>, <code>/etc/pve/qemu-server/</code>, PVE config formats). Running these scripts
+against other hypervisors is unsupported and may damage VM configurations.</p>
+</div>
 <h3 id="gui-desktop-environment">GUI Desktop Environment<a class="headerlink" href="#gui-desktop-environment" title="Permanent link">&para;</a></h3>
 <p>The GTK GUI requires a <strong>GTK3-capable desktop environment or window manager</strong>
 with X11 or Wayland. Cinnamon is the tested and reference environment, but
@@ -2153,9 +2160,17 @@ direction is not working.</p>
 <p>On the <strong>compute host</strong>:</p>
 <div class="highlight"><pre><span></span><code>ssh-copy-id<span class="w"> </span>root@&lt;storage-host&gt;
 </code></pre></div>
+<p>The installer will also check for and offer to install the following iSCSI
+packages if they are missing:</p>
+<ul>
+<li><strong>Storage host:</strong> <code>targetcli-fb</code> (provides <code>targetcli</code> and the
+  <code>rtslib-fb-targetctl</code> systemd service)</li>
+<li><strong>Compute host:</strong> <code>open-iscsi</code> (provides the <code>iscsiadm</code> initiator tool and
+  the <code>iscsid</code> service)</li>
+</ul>
 <h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
 <h3 id="single-node-recommended-for-new-installs">Single-node (recommended for new installs)<a class="headerlink" href="#single-node-recommended-for-new-installs" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>/path/to/zfsutilities-dev/10<span class="se">\ </span>Installers/install-single-node
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>/path/to/zfsutilities-dev/bin/install-single-node
 </code></pre></div>
 <p>The installer will:</p>
 <ol>
@@ -2174,26 +2189,20 @@ direction is not working.</p>
 </ol>
 <h3 id="two-node">Two-node<a class="headerlink" href="#two-node" title="Permanent link">&para;</a></h3>
 <p>Run on the <strong>storage host</strong> (the machine with the ZFS pools):</p>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>/path/to/zfsutilities-dev/10<span class="se">\ </span>Installers/install-two-node
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>/path/to/zfsutilities-dev/bin/install-two-node
 </code></pre></div>
 <p>The installer will:</p>
 <ol>
 <li>Check that required two-node prerequisites are present</li>
 <li>Explain any missing prerequisites and offer to install them automatically</li>
 <li>Install the documentation server (MkDocs)</li>
+<li>Verify/offer to install the iSCSI target stack (<code>targetcli-fb</code>) on the
+   storage host and the iSCSI initiator (<code>open-iscsi</code>) on the compute host</li>
 <li>Prompt for storage host, compute host, storage network IP, iSCSI IQN
    prefix, and pool-to-target mappings</li>
 <li>Generate the installation configuration file <code>/etc/zfsutilities/node.conf</code> (legacy <code>/etc/zfsutilities-node.conf</code> also works)</li>
 <li><strong>Create iSCSI targets</strong> on the storage host automatically (idempotent —
    skips targets that already exist)</li>
-</ol>
-<p>The installer asks for an <strong>iSCSI Qualified Name (IQN) prefix</strong>. This becomes
-part of every iSCSI target's persistent on-disk name and is baked in when the
-LUN is first created. Changing it later requires recreating Proxmox iSCSI
-storage entries and re-mapping LUNs, so accept the generated default unless
-your site already uses a registered naming convention. See
-<a href="../developer-guide/two-node-config/">Two-node configuration</a> for details.</p>
-<ol>
 <li>Deploy scripts as a <strong>versioned installation</strong> on both hosts via SSH</li>
 <li>Activate the version on both hosts and wire it into active production:</li>
 <li>Configure <code>PATH</code> in <code>/etc/profile.d</code> and <code>/etc/sudoers.d</code></li>
@@ -2202,10 +2211,19 @@ your site already uses a registered naming convention. See
 <li>Create desktop shortcuts in the installing user's home directory:
      <strong>ZFSutilities GUI</strong> and <strong>ZFSutilities Documentation</strong></li>
 <li>Verify SSH key authorization between hosts</li>
-<li><strong>Patch PVE's iSCSI rescan rate limit</strong> on the compute host (if PVE is
-    detected) — limits automatic <code>iscsiadm --rescan</code> to once per day, which
-    eliminates repetitive kernel log spam on the storage host</li>
+<li><strong>Patch PVE's iSCSI rescan rate limit</strong> on the compute host when PVE is
+    detected — limits automatic <code>iscsiadm --rescan</code> to once per day, which
+    eliminates repetitive kernel log spam on the storage host. If PVE is not
+    detected, the installer prints a reminder that Proxmox VE is required on
+    the compute host but does not fail.</li>
 </ol>
+<p>The installer asks for an <strong>iSCSI Qualified Name (IQN) prefix</strong> when
+configuring pool-to-target mappings. This becomes part of every iSCSI target's
+persistent on-disk name and is baked in when the LUN is first created. Changing
+it later requires recreating Proxmox iSCSI storage entries and re-mapping LUNs,
+so accept the generated default unless your site already uses a registered
+naming convention. See <a href="../developer-guide/two-node-config/">Two-node configuration</a>
+for details.</p>
 <p>See <a href="#next-steps">Next Steps</a> for what to do after installation.</p>
 <h2 id="versioned-upgrades">Versioned Upgrades<a class="headerlink" href="#versioned-upgrades" title="Permanent link">&para;</a></h2>
 <p>After the initial install, use <a href="../commands-and-modules/two-node/#deploy-version-repo-root">deploy-version</a> from the repository root to
@@ -2497,7 +2515,7 @@ sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.81.0
+      ZFS Utilities v0.82.0
     </div>
   
   
@@ -2522,7 +2540,7 @@ sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.81.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.0"}</script>
     
     
       <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>

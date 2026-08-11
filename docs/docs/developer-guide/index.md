@@ -46,7 +46,8 @@ relevant to developers working on ZFS Utilities.
 - `targetcli` (`rtslib-fb-targetctl`) — iSCSI target management on the storage
   host
 - `open-iscsi` (`iscsiadm`) — iSCSI initiator on the compute host
-- `qm` — Proxmox VE VM management tools (for VM disk lifecycle scripts)
+- `qm` — Proxmox VE VM management tools (required on the two-node compute
+  node; optional on a single node that uses VM features)
 
 ### GUI (optional)
 

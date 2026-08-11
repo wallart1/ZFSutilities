@@ -171,6 +171,9 @@ prerequisite_description() {
         "libwebkit2gtk-4.1-0") echo "WebKit2 runtime library" ;;
         ssh)                  echo "OpenSSH client for remote two-node commands" ;;
         scp)                  echo "OpenSSH secure copy for remote two-node file transfer" ;;
+        targetcli)            echo "LIO target configuration CLI" ;;
+        rtslib-fb-targetctl)  echo "LIO target systemd service" ;;
+        iscsiadm)             echo "iSCSI initiator administration tool" ;;
         pip3)                 echo "Python package installer used to install MkDocs when distribution packages are unavailable" ;;
         *)                    echo "$name" ;;
     esac
@@ -188,6 +191,12 @@ prerequisite_why_needed() {
         ssh|scp)
             echo "Required for two-node mode to communicate between storage and compute hosts"
             ;;
+        targetcli|rtslib-fb-targetctl)
+            echo "Required on the storage host to export ZFS zvols as iSCSI LUNs"
+            ;;
+        iscsiadm)
+            echo "Required on the compute host to connect to the storage host's iSCSI targets"
+            ;;
         pip3)
             echo "Required to build the ZFSutilities documentation site (used as a fallback by the documentation-server installer)"
             ;;
@@ -200,11 +209,20 @@ prerequisite_why_needed() {
 prerequisite_remediation() {
     local name="$1"
     local package="$2"
-    if [[ -n "$package" ]]; then
-        echo "Run: apt-get install $package"
-    else
-        echo "No automatic installation step is known; please install $name manually"
-    fi
+    case "$name" in
+        rtslib-fb-targetctl)
+            # The service is provided by python3-rtslib-fb, but installing
+            # targetcli-fb pulls in the full LIO target stack including the service.
+            echo "Run: apt-get install targetcli-fb"
+            ;;
+        *)
+            if [[ -n "$package" ]]; then
+                echo "Run: apt-get install $package"
+            else
+                echo "No automatic installation step is known; please install $name manually"
+            fi
+            ;;
+    esac
 }
 
 # Explain every failure currently in INSTALLER_FAILURES.
@@ -341,6 +359,118 @@ ensure_doc_server() {
         echo "      sudo pip3 install --break-system-packages \"mkdocs<2\" mkdocs-material" >&2
         return 1
     fi
+}
+
+# ------------------------------------------------------------------
+# Two-node iSCSI stack installation
+# ------------------------------------------------------------------
+
+# Ensure the LIO target stack is installed and the service is enabled on the
+# local storage host. Returns 0 if ready, non-zero if the user declines or
+# installation fails.
+ensure_iscsi_target_stack() {
+    echo "=== iSCSI Target Stack (storage host) ==="
+    echo ""
+
+    local need_install=false
+    if ! command -v targetcli >/dev/null 2>&1; then
+        echo "  ✗ targetcli not found"
+        need_install=true
+    else
+        echo "  ✓ targetcli found"
+    fi
+
+    if ! systemctl cat rtslib-fb-targetctl >/dev/null 2>&1; then
+        echo "  ✗ rtslib-fb-targetctl.service not found"
+        need_install=true
+    else
+        echo "  ✓ rtslib-fb-targetctl.service found"
+    fi
+
+    if [[ "$need_install" != true ]]; then
+        echo ""
+        return 0
+    fi
+
+    echo ""
+    echo "  The LIO target stack is required on the storage host to export"
+    echo "  ZFS zvols as iSCSI LUNs. It can be installed from distribution packages."
+    echo ""
+
+    if ! ask_yn "Install the LIO target stack now (apt-get install targetcli-fb)?" "Y"; then
+        echo "  Aborted. Install targetcli-fb manually and re-run the installer."
+        return 1
+    fi
+
+    if ! apt_install targetcli-fb; then
+        echo "  ✗ Could not install targetcli-fb." >&2
+        echo "    Install manually and re-run the installer:" >&2
+        echo "      sudo apt-get install targetcli-fb" >&2
+        return 1
+    fi
+
+    echo ""
+    echo "  Enabling rtslib-fb-targetctl.service..."
+    if systemctl enable rtslib-fb-targetctl >/dev/null 2>&1; then
+        echo "  ✓ rtslib-fb-targetctl.service enabled"
+    else
+        echo "  ⚠ Could not enable rtslib-fb-targetctl.service" >&2
+    fi
+
+    echo ""
+    return 0
+}
+
+# Ensure open-iscsi is installed and the initiator service is enabled on the
+# remote compute host. Returns 0 if ready, non-zero if the user declines or
+# installation fails.
+ensure_open_iscsi_remote() {
+    local host="$1"
+
+    echo "=== iSCSI Initiator (compute host: $host) ==="
+    echo ""
+
+    if ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${host}" \
+        "command -v iscsiadm >/dev/null 2>&1" >/dev/null 2>&1; then
+        echo "  ✓ open-iscsi (iscsiadm) found on $host"
+        echo ""
+        return 0
+    fi
+
+    echo "  ✗ open-iscsi (iscsiadm) not found on $host"
+    echo ""
+    echo "  The iSCSI initiator is required on the compute host so Proxmox VE"
+    echo "  can connect to the storage host's iSCSI targets."
+    echo ""
+
+    if ! ask_yn "Install open-iscsi on $host now?" "Y"; then
+        echo "  Aborted. Install open-iscsi on $host manually and re-run the installer."
+        return 1
+    fi
+
+    echo ""
+    echo "  Installing open-iscsi on $host..."
+    if ssh -o ConnectTimeout=30 "root@${host}" \
+        "apt-get update -qq && apt-get install -y open-iscsi" >/dev/null 2>&1; then
+        echo "  ✓ open-iscsi installed on $host"
+    else
+        echo "  ✗ Could not install open-iscsi on $host." >&2
+        echo "    Install manually and re-run the installer:" >&2
+        echo "      ssh root@${host} apt-get install open-iscsi" >&2
+        return 1
+    fi
+
+    echo ""
+    echo "  Enabling iscsid.service on $host..."
+    if ssh -o ConnectTimeout=10 "root@${host}" \
+        "systemctl enable iscsid >/dev/null 2>&1"; then
+        echo "  ✓ iscsid.service enabled on $host"
+    else
+        echo "  ⚠ Could not enable iscsid.service on $host" >&2
+    fi
+
+    echo ""
+    return 0
 }
 
 # ------------------------------------------------------------------
