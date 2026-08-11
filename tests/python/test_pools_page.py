@@ -30,7 +30,8 @@ def _import_pools_page():
 class TestRefreshPoolsPage(unittest.TestCase):
     """refresh_pools_page() populates the pool store including offsite flags."""
 
-    def _make_app(self, known_pools, online_pools=None, errors_by_pool=None):
+    def _make_app(self, known_pools, online_pools=None, errors_by_pool=None,
+                  importable_names=None):
         app = MagicMock()
         app.config = {"pools": known_pools}
         app.known_pools = list(known_pools)
@@ -54,6 +55,9 @@ class TestRefreshPoolsPage(unittest.TestCase):
 
         app.ctx.zfs_repository.pool_status_errors.side_effect = _pool_status_errors
         app._offsite_candidates = set()
+        cache = MagicMock()
+        cache.get.return_value = set(importable_names or [])
+        app._importable_pool_cache = cache
         return app
 
     def test_registered_pool_shows_offsite_candidate_true(self):
@@ -161,6 +165,97 @@ class TestRefreshPoolsPage(unittest.TestCase):
         self.assertEqual(captured[0][pp.COL_HEALTH], "OFFLINE")
         self.assertEqual(captured[0][pp.COL_ERRORS], "—")
 
+    def test_importable_registered_pool_shows_importable_health(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            [{"name": "tank", "offsite_candidate": False}],
+            [],
+            importable_names=["tank"],
+        )
+        captured = []
+        app.pool_store.append = captured.append
+
+        with patch.object(pp, "_update_pools_dirty_indicator"):
+            pp.refresh_pools_page(app)
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][pp.COL_HEALTH], "IMPORTABLE")
+        self.assertEqual(captured[0][pp.COL_FLAG], pp.FLAG_REGISTERED)
+
+    def test_unregistered_importable_pool_appears_in_store(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            [],
+            [],
+            importable_names=["foreign"],
+        )
+        captured = []
+        app.pool_store.append = captured.append
+
+        with patch.object(pp, "_update_pools_dirty_indicator"):
+            pp.refresh_pools_page(app)
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][pp.COL_NAME], "foreign")
+        self.assertEqual(captured[0][pp.COL_HEALTH], "IMPORTABLE")
+        self.assertEqual(captured[0][pp.COL_FLAG], pp.FLAG_UNREGISTERED)
+
+    def test_summary_counts_importable_pools(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            [
+                {"name": "online", "offsite_candidate": False},
+                {"name": "offline", "offsite_candidate": False},
+                {"name": "importable", "offsite_candidate": False},
+            ],
+            [
+                {
+                    "name": "online",
+                    "health": "ONLINE",
+                    "size": "1T",
+                    "alloc": "100G",
+                    "free": "900G",
+                    "freeing": "0",
+                    "ckpoint": "-",
+                    "frag": "5%",
+                    "cap": "10%",
+                }
+            ],
+            importable_names=["importable", "foreign"],
+        )
+        with patch.object(pp, "_update_pools_dirty_indicator"):
+            pp.refresh_pools_page(app)
+
+        text = app.pool_summary_label.set_text.call_args[0][0]
+        self.assertIn("3 registered pools: 1 online, 1 offline, 1 importable", text)
+        self.assertIn("1 unregistered importable", text)
+
+
+class TestOnPoolsRefresh(unittest.TestCase):
+    """on_pools_refresh() invalidates the importable cache and redraws."""
+
+    def test_invalidates_cache_and_refreshes(self):
+        pp = _import_pools_page()
+        app = MagicMock()
+        cache = MagicMock()
+        app._importable_pool_cache = cache
+
+        with patch.object(pp, "refresh_pools_page") as mock_refresh:
+            pp.on_pools_refresh(app)
+
+        cache.invalidate.assert_called_once_with()
+        mock_refresh.assert_called_once_with(app)
+
+    def test_missing_cache_still_refreshes(self):
+        pp = _import_pools_page()
+        app = MagicMock()
+        app._importable_pool_cache = None
+
+        with patch.object(pp, "refresh_pools_page") as mock_refresh:
+            pp.on_pools_refresh(app)
+
+        mock_refresh.assert_called_once_with(app)
+
 
 class TestErrorsSummaryForPool(unittest.TestCase):
     """_errors_summary_for_pool() translates repository output to labels."""
@@ -228,6 +323,23 @@ class TestPoolErrorsCellFunc(unittest.TestCase):
                 pp, renderer = self._call(value)
                 renderer.set_property.assert_any_call("foreground", None)
                 renderer.set_property.assert_any_call("weight", pp.Pango.Weight.NORMAL)
+
+
+class TestPoolHealthCellFunc(unittest.TestCase):
+    """_pool_health_cell_func() colors the Health column correctly."""
+
+    def _call(self, health):
+        pp = _import_pools_page()
+        renderer = MagicMock()
+        model = MagicMock()
+        model.get_value.return_value = health
+        pp._pool_health_cell_func(None, renderer, model, None)
+        return pp, renderer
+
+    def test_importable_is_blue_and_bold(self):
+        _pp, renderer = self._call("IMPORTABLE")
+        renderer.set_property.assert_any_call("foreground", "#2196F3")
+        renderer.set_property.assert_any_call("weight", ANY)
 
 
 class TestOffsiteToggle(unittest.TestCase):
@@ -648,6 +760,17 @@ class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
     def test_offline_pool_disables_watch_and_export(self):
         pp = _import_pools_page()
         app = self._make_app(pool_rows=[("tank", pp.FLAG_REGISTERED, "OFFLINE")])
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+
+        self.assertFalse(sens["_pools_watch_btn"])
+        self.assertTrue(sens["_pools_details_btn"])
+        self.assertTrue(sens["_pools_remove_btn"])
+        self.assertFalse(sens["_pools_export_btn"])
+
+    def test_importable_pool_disables_watch_and_export(self):
+        pp = _import_pools_page()
+        app = self._make_app(pool_rows=[("tank", pp.FLAG_REGISTERED, "IMPORTABLE")])
         pp.update_pools_button_sensitivity(app)
         sens = self._sensitivities(app)
 

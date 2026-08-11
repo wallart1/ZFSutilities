@@ -28,14 +28,16 @@ from test_support import (
 
 def _write_lock_file(path, dataset, pid, lock_type="w"):
     """Write a lock file in the format produced by zfslockmanager."""
-    content = json.dumps({
-        "dataset": dataset,
-        "type": lock_type,
-        "pid": pid,
-        "script": "test",
-        "acquired": "2026-01-01T00:00:00-05:00",
-        "description": "test lock",
-    })
+    content = json.dumps(
+        {
+            "dataset": dataset,
+            "type": lock_type,
+            "pid": pid,
+            "script": "test",
+            "acquired": "2026-01-01T00:00:00-05:00",
+            "description": "test lock",
+        }
+    )
     with open(path, "w") as f:
         f.write(content)
 
@@ -61,7 +63,6 @@ def _frame_title(frame):
 
 
 class TestGetPoolHealth(unittest.TestCase):
-
     def test_empty_zpool_list(self):
         with mock_subprocess() as m:
             m.add_zpool_list([])
@@ -109,9 +110,7 @@ class TestGetPoolHealth(unittest.TestCase):
                 r"zpool list -H -o name,health,size,alloc,free,cap",
                 lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
             )
-            status = (
-                "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
-            )
+            status = "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
             m.set_command_handler(r"zpool status", lambda *_a, **_k: m._completed(status))
             pools = dp._get_pool_health()
         self.assertEqual(pools[0]["scrub_date"], "In progress")
@@ -122,9 +121,7 @@ class TestGetPoolHealth(unittest.TestCase):
                 r"zpool list -H -o name,health,size,alloc,free,cap",
                 lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
             )
-            status = (
-                "  scan: scrub repaired 0B in 1 days 01:35:48 with 0 errors on Wed Jun  3 20:50:19 2026\n"
-            )
+            status = "  scan: scrub repaired 0B in 1 days 01:35:48 with 0 errors on Wed Jun  3 20:50:19 2026\n"
             m.set_command_handler(r"zpool status", lambda *_a, **_k: m._completed(status))
             pools = dp._get_pool_health()
         self.assertEqual(pools[0]["scrub_date"], "Wed Jun  3 20:50:19 2026")
@@ -142,7 +139,6 @@ class TestGetPoolHealth(unittest.TestCase):
 
 
 class TestGetRecentEntries(unittest.TestCase):
-
     @patch("dashboard_page.load_history")
     def test_returns_newest_entries(self, mock_load):
         mock_load.return_value = [
@@ -184,7 +180,6 @@ class TestGetRecentEntries(unittest.TestCase):
 
 
 class TestIsTwoNode(unittest.TestCase):
-
     def test_single_node_conf(self):
         with patch.object(dp.os.path, "exists", return_value=True):
             with patch("builtins.open", create=True) as mock_open:
@@ -203,10 +198,12 @@ class TestIsTwoNode(unittest.TestCase):
         """Legacy /etc/two-node.conf without NODE_MODE= defaults to two-node."""
         with patch.object(dp.os.path, "exists", return_value=True):
             with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter([
-                    'STORAGE_HOST="storage1"\n',
-                    'COMPUTE_HOST="compute1"\n',
-                ])
+                mock_open.return_value.__enter__.return_value = iter(
+                    [
+                        'STORAGE_HOST="storage1"\n',
+                        'COMPUTE_HOST="compute1"\n',
+                    ]
+                )
                 result = dp._is_two_node()
                 self.assertTrue(result)
 
@@ -217,7 +214,6 @@ class TestIsTwoNode(unittest.TestCase):
 
 
 class TestGetNodeConfig(unittest.TestCase):
-
     @patch("dashboard_page._local_hostname", return_value="myhost")
     def test_no_conf_defaults_single_node(self, _mock):
         with patch.object(dp.os.path, "exists", return_value=False):
@@ -231,10 +227,12 @@ class TestGetNodeConfig(unittest.TestCase):
     def test_single_node_conf(self, _mock):
         with patch.object(dp.os.path, "exists", return_value=True):
             with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter([
-                    'NODE_MODE="single-node"\n',
-                    'THIS_HOST="myhost"\n',
-                ])
+                mock_open.return_value.__enter__.return_value = iter(
+                    [
+                        'NODE_MODE="single-node"\n',
+                        'THIS_HOST="myhost"\n',
+                    ]
+                )
                 cfg = dp._get_node_config()
         self.assertEqual(cfg["mode"], "single-node")
         self.assertEqual(cfg["storage_host"], "myhost")
@@ -244,13 +242,15 @@ class TestGetNodeConfig(unittest.TestCase):
     def test_two_node_conf(self, _mock):
         with patch.object(dp.os.path, "exists", return_value=True):
             with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter([
-                    'NODE_MODE="two-node"\n',
-                    'THIS_HOST="storage1"\n',
-                    'STORAGE_HOST="storage1"\n',
-                    'COMPUTE_HOST="compute1"\n',
-                    'STORAGE_IP="192.168.1.10"\n',
-                ])
+                mock_open.return_value.__enter__.return_value = iter(
+                    [
+                        'NODE_MODE="two-node"\n',
+                        'THIS_HOST="storage1"\n',
+                        'STORAGE_HOST="storage1"\n',
+                        'COMPUTE_HOST="compute1"\n',
+                        'STORAGE_IP="192.168.1.10"\n',
+                    ]
+                )
                 cfg = dp._get_node_config()
         self.assertEqual(cfg["mode"], "two-node")
         self.assertEqual(cfg["storage_host"], "storage1")
@@ -261,10 +261,12 @@ class TestGetNodeConfig(unittest.TestCase):
     def test_legacy_conf_defaults_two_node(self, _mock):
         with patch.object(dp.os.path, "exists", return_value=True):
             with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter([
-                    'STORAGE_HOST="storage1"\n',
-                    'COMPUTE_HOST="compute1"\n',
-                ])
+                mock_open.return_value.__enter__.return_value = iter(
+                    [
+                        'STORAGE_HOST="storage1"\n',
+                        'COMPUTE_HOST="compute1"\n',
+                    ]
+                )
                 cfg = dp._get_node_config()
         self.assertEqual(cfg["mode"], "two-node")
         self.assertEqual(cfg["storage_host"], "storage1")
@@ -272,37 +274,42 @@ class TestGetNodeConfig(unittest.TestCase):
 
 
 class TestGetPeerHost(unittest.TestCase):
-
     @patch("dashboard_page._local_hostname", return_value="storage1")
     def test_storage_peer_is_compute(self, _mock):
         with patch.object(dp.os.path, "exists", return_value=True):
             with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter([
-                    'NODE_MODE="two-node"\n',
-                    'STORAGE_HOST="storage1"\n',
-                    'COMPUTE_HOST="compute1"\n',
-                ])
+                mock_open.return_value.__enter__.return_value = iter(
+                    [
+                        'NODE_MODE="two-node"\n',
+                        'STORAGE_HOST="storage1"\n',
+                        'COMPUTE_HOST="compute1"\n',
+                    ]
+                )
                 self.assertEqual(dp._get_peer_host(), "compute1")
 
     @patch("dashboard_page._local_hostname", return_value="compute1")
     def test_compute_peer_is_storage(self, _mock):
         with patch.object(dp.os.path, "exists", return_value=True):
             with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter([
-                    'NODE_MODE="two-node"\n',
-                    'STORAGE_HOST="storage1"\n',
-                    'COMPUTE_HOST="compute1"\n',
-                ])
+                mock_open.return_value.__enter__.return_value = iter(
+                    [
+                        'NODE_MODE="two-node"\n',
+                        'STORAGE_HOST="storage1"\n',
+                        'COMPUTE_HOST="compute1"\n',
+                    ]
+                )
                 self.assertEqual(dp._get_peer_host(), "storage1")
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
     def test_single_node_returns_none(self, _mock):
         with patch.object(dp.os.path, "exists", return_value=True):
             with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter([
-                    'NODE_MODE="single-node"\n',
-                    'THIS_HOST="myhost"\n',
-                ])
+                mock_open.return_value.__enter__.return_value = iter(
+                    [
+                        'NODE_MODE="single-node"\n',
+                        'THIS_HOST="myhost"\n',
+                    ]
+                )
                 self.assertIsNone(dp._get_peer_host())
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
@@ -315,27 +322,30 @@ class TestGetPeerHost(unittest.TestCase):
         """If the local host matches neither role, return a non-local host."""
         with patch.object(dp.os.path, "exists", return_value=True):
             with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter([
-                    'NODE_MODE="two-node"\n',
-                    'STORAGE_HOST="storage1"\n',
-                    'COMPUTE_HOST="compute1"\n',
-                ])
+                mock_open.return_value.__enter__.return_value = iter(
+                    [
+                        'NODE_MODE="two-node"\n',
+                        'STORAGE_HOST="storage1"\n',
+                        'COMPUTE_HOST="compute1"\n',
+                    ]
+                )
                 self.assertEqual(dp._get_peer_host(), "storage1")
 
     @patch("dashboard_page._local_hostname", return_value="storage1")
     def test_both_roles_local_returns_none(self, _mock):
         with patch.object(dp.os.path, "exists", return_value=True):
             with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter([
-                    'NODE_MODE="two-node"\n',
-                    'STORAGE_HOST="storage1"\n',
-                    'COMPUTE_HOST="storage1"\n',
-                ])
+                mock_open.return_value.__enter__.return_value = iter(
+                    [
+                        'NODE_MODE="two-node"\n',
+                        'STORAGE_HOST="storage1"\n',
+                        'COMPUTE_HOST="storage1"\n',
+                    ]
+                )
                 self.assertIsNone(dp._get_peer_host())
 
 
 class TestLogPeerVersionResult(unittest.TestCase):
-
     def test_matching_versions_log_info(self):
         with capture_logs() as logs:
             dp._log_peer_version_result("1.2.3", "compute1", "1.2.3")
@@ -362,7 +372,6 @@ class TestLogPeerVersionResult(unittest.TestCase):
 
 
 class TestGetHostVersion(unittest.TestCase):
-
     @patch("dashboard_page._local_hostname", return_value="myhost")
     @patch("dashboard_page.get_version", return_value="1.2.3")
     def test_local_repo_version(self, _mock_version, _mock_host):
@@ -391,7 +400,6 @@ class TestGetHostVersion(unittest.TestCase):
 
 
 class TestGetIscsiMissingLuns(unittest.TestCase):
-
     @patch("dashboard_page._is_two_node", return_value=False)
     def test_single_node_returns_empty(self, _mock):
         self.assertEqual(dp._get_iscsi_missing_luns(), [])
@@ -482,16 +490,8 @@ class TestRefreshIscsiSection(unittest.TestCase):
 
     def test_healthy_message(self):
         _app, labels, label_kwargs, _buttons, _button_kwargs = self._run_refresh([])
-        label_texts = [
-            kwargs.get("label")
-            for kwargs in label_kwargs
-            if kwargs.get("label")
-        ]
-        label_texts.extend(
-            call.args[0]
-            for lbl in labels
-            for call in lbl.set_markup.call_args_list
-        )
+        label_texts = [kwargs.get("label") for kwargs in label_kwargs if kwargs.get("label")]
+        label_texts.extend(call.args[0] for lbl in labels for call in lbl.set_markup.call_args_list)
         self.assertTrue(
             any("All VM disks are exported" in text for text in label_texts),
             f"Expected healthy message in {label_texts}",
@@ -501,11 +501,7 @@ class TestRefreshIscsiSection(unittest.TestCase):
         _app, labels, _label_kwargs, _buttons, _button_kwargs = self._run_refresh(
             [{"name": "vm-207-disk-2", "target": "threeamigos"}]
         )
-        markup_texts = [
-            call.args[0]
-            for lbl in labels
-            for call in lbl.set_markup.call_args_list
-        ]
+        markup_texts = [call.args[0] for lbl in labels for call in lbl.set_markup.call_args_list]
         self.assertTrue(
             any("VM 207 disk 2" in text for text in markup_texts),
             f"Expected user-friendly markup in {markup_texts}",
@@ -520,14 +516,10 @@ class TestRefreshIscsiSection(unittest.TestCase):
             [{"name": "vm-207-disk-2", "target": "threeamigos"}]
         )
         label_tooltips = [
-            call.args[0]
-            for lbl in labels
-            for call in lbl.set_tooltip_text.call_args_list
+            call.args[0] for lbl in labels for call in lbl.set_tooltip_text.call_args_list
         ]
         button_tooltips = [
-            call.args[0]
-            for btn in buttons
-            for call in btn.set_tooltip_text.call_args_list
+            call.args[0] for btn in buttons for call in btn.set_tooltip_text.call_args_list
         ]
         self.assertTrue(
             any("Each VM disk is a ZFS zvol" in t for t in label_tooltips),
@@ -550,8 +542,7 @@ class TestLockPid(unittest.TestCase):
             _write_lock_file(lock_file, "pool/dataset", 12345)
 
             with patch.object(dp, "ZFSLOCK_LOCKS_DIR", locks_dir):
-                with patch.object(dp, "ZFSLOCK_PIDS_DIR",
-                                  os.path.join(tmpdir, ".pids")):
+                with patch.object(dp, "ZFSLOCK_PIDS_DIR", os.path.join(tmpdir, ".pids")):
                     pid = dp._lock_pid("pool%2Fdataset.lock")
             self.assertEqual(pid, 12345)
 
@@ -564,8 +555,7 @@ class TestLockPid(unittest.TestCase):
                 f.write("not json")
 
             with patch.object(dp, "ZFSLOCK_LOCKS_DIR", locks_dir):
-                with patch.object(dp, "ZFSLOCK_PIDS_DIR",
-                                  os.path.join(tmpdir, ".pids")):
+                with patch.object(dp, "ZFSLOCK_PIDS_DIR", os.path.join(tmpdir, ".pids")):
                     pid = dp._lock_pid("bad.lock")
             self.assertIsNone(pid)
 
@@ -575,8 +565,7 @@ class TestLockPid(unittest.TestCase):
             os.makedirs(locks_dir)
 
             with patch.object(dp, "ZFSLOCK_LOCKS_DIR", locks_dir):
-                with patch.object(dp, "ZFSLOCK_PIDS_DIR",
-                                  os.path.join(tmpdir, ".pids")):
+                with patch.object(dp, "ZFSLOCK_PIDS_DIR", os.path.join(tmpdir, ".pids")):
                     pid = dp._lock_pid("missing.lock")
             self.assertIsNone(pid)
 
@@ -586,14 +575,12 @@ class TestLockPid(unittest.TestCase):
             os.makedirs(locks_dir)
 
             with patch.object(dp, "ZFSLOCK_LOCKS_DIR", locks_dir):
-                with patch.object(dp, "ZFSLOCK_PIDS_DIR",
-                                  os.path.join(tmpdir, ".pids")):
+                with patch.object(dp, "ZFSLOCK_PIDS_DIR", os.path.join(tmpdir, ".pids")):
                     pid = dp._lock_pid("pool%2Fdataset.pid.6789")
             self.assertEqual(pid, 6789)
 
 
 class TestCountStaleLocks(unittest.TestCase):
-
     def test_no_lock_dir(self):
         with patch.object(dp.os.path, "isdir", return_value=False):
             self.assertEqual(dp._count_stale_locks(), 0)
@@ -636,7 +623,6 @@ class TestCountStaleLocks(unittest.TestCase):
 
 
 class TestCleanupStaleLocks(unittest.TestCase):
-
     def test_removes_stale_lock(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             locks_dir = os.path.join(tmpdir, ".locks")
@@ -658,7 +644,6 @@ class TestCleanupStaleLocks(unittest.TestCase):
 
 
 class TestGetWarnings(unittest.TestCase):
-
     def test_no_warnings(self):
         pools = [{"name": "tank", "health": "ONLINE", "cap": "50%", "cap_int": 50}]
         warnings = dp._get_warnings(pools, {}, threshold=80)
@@ -756,7 +741,6 @@ class TestGetWarnings(unittest.TestCase):
 
 
 class TestHealthIcon(unittest.TestCase):
-
     def test_online(self):
         self.assertIn("#00AA00", dp._health_icon("ONLINE"))
 
@@ -768,7 +752,6 @@ class TestHealthIcon(unittest.TestCase):
 
 
 class TestResultIcon(unittest.TestCase):
-
     def test_success(self):
         self.assertIn("#00AA00", dp._result_icon("success"))
 
@@ -831,7 +814,6 @@ class TestScrubDateRe(unittest.TestCase):
 
 
 class TestParseCap(unittest.TestCase):
-
     def test_parse_75_percent(self):
         self.assertEqual(dp._parse_cap("75%"), 75)
 
@@ -843,7 +825,6 @@ class TestParseCap(unittest.TestCase):
 
 
 class TestFormatHistoryTimestamp(unittest.TestCase):
-
     def test_naive_iso_timestamp(self):
         result = dp._format_history_timestamp("2026-05-28T14:32:00")
         self.assertTrue(result.startswith("2026-05-28T14:32"))
@@ -860,7 +841,6 @@ class TestFormatHistoryTimestamp(unittest.TestCase):
 
 
 class TestCollectRunningTasks(unittest.TestCase):
-
     def test_no_tasks_when_everything_idle(self):
         app = MagicMock()
         app.backup_runner = None
@@ -957,12 +937,16 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.retention_runner = None
         app.scrub_queue = None
         with patch.object(
-            dp, "list_running_profiles", return_value=[{
-                "name": "Daily",
-                "pid": 1234,
-                "started": "2026-06-29T10:00:00",
-                "log_file": "/var/log/zfsutilities/sessions/profile-daily.log",
-            }]
+            dp,
+            "list_running_profiles",
+            return_value=[
+                {
+                    "name": "Daily",
+                    "pid": 1234,
+                    "started": "2026-06-29T10:00:00",
+                    "log_file": "/var/log/zfsutilities/sessions/profile-daily.log",
+                }
+            ],
         ):
             tasks = dp._collect_running_tasks(app)
         self.assertEqual(len(tasks), 1)
@@ -983,13 +967,17 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.retention_runner = None
         app.scrub_queue = None
         with patch.object(
-            dp, "list_running_profiles", return_value=[{
-                "name": "Daily",
-                "pid": 1235,
-                "started": "2026-06-29T10:00:00",
-                "log_file": "/var/log/zfsutilities/sessions/profile-daily-wait.log",
-                "waiting": True,
-            }]
+            dp,
+            "list_running_profiles",
+            return_value=[
+                {
+                    "name": "Daily",
+                    "pid": 1235,
+                    "started": "2026-06-29T10:00:00",
+                    "log_file": "/var/log/zfsutilities/sessions/profile-daily-wait.log",
+                    "waiting": True,
+                }
+            ],
         ):
             tasks = dp._collect_running_tasks(app)
         self.assertEqual(len(tasks), 1)
@@ -1123,7 +1111,6 @@ class TestCollectRunningTasks(unittest.TestCase):
 
 
 class TestListRunningProfiles(unittest.TestCase):
-
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.orig_dir = dp.PROFILE_LOCK_DIR
@@ -1139,12 +1126,16 @@ class TestListRunningProfiles(unittest.TestCase):
         lock_path = os.path.join(self.tmpdir, "Daily.lock")
         with open(lock_path, "w") as f:
             import json
-            json.dump({
-                "profile": "Daily",
-                "pid": os.getpid(),
-                "started": "2026-06-29T10:00:00",
-                "log_file": "/var/log/zfsutilities/sessions/daily.log",
-            }, f)
+
+            json.dump(
+                {
+                    "profile": "Daily",
+                    "pid": os.getpid(),
+                    "started": "2026-06-29T10:00:00",
+                    "log_file": "/var/log/zfsutilities/sessions/daily.log",
+                },
+                f,
+            )
         profiles = dp.list_running_profiles()
         self.assertEqual(len(profiles), 1)
         self.assertEqual(profiles[0]["name"], "Daily")
@@ -1158,6 +1149,7 @@ class TestListRunningProfiles(unittest.TestCase):
         lock_path = os.path.join(self.tmpdir, "Old.lock")
         with open(lock_path, "w") as f:
             import json
+
             json.dump({"profile": "Old", "pid": 999999, "started": "2026-06-29T10:00:00"}, f)
         self.assertEqual(dp.list_running_profiles(), [])
 
@@ -1165,12 +1157,16 @@ class TestListRunningProfiles(unittest.TestCase):
         waiting_path = os.path.join(self.tmpdir, "Daily.waiting")
         with open(waiting_path, "w") as f:
             import json
-            json.dump({
-                "profile": "Daily",
-                "pid": os.getpid(),
-                "started": "2026-06-29T10:00:00",
-                "log_file": "/var/log/zfsutilities/sessions/daily.log",
-            }, f)
+
+            json.dump(
+                {
+                    "profile": "Daily",
+                    "pid": os.getpid(),
+                    "started": "2026-06-29T10:00:00",
+                    "log_file": "/var/log/zfsutilities/sessions/daily.log",
+                },
+                f,
+            )
         profiles = dp.list_running_profiles()
         self.assertEqual(len(profiles), 1)
         self.assertEqual(profiles[0]["name"], "Daily")
@@ -1183,7 +1179,6 @@ class TestListRunningProfiles(unittest.TestCase):
 
 
 class TestWaitingTaskWarnings(unittest.TestCase):
-
     def test_no_warning_for_running_profiles(self):
         pools = []
         warnings = dp._get_warnings(pools, [], 80, [])
@@ -1212,7 +1207,6 @@ class TestWaitingTaskWarnings(unittest.TestCase):
 
 
 class TestCancelTask(unittest.TestCase):
-
     def test_cancel_runner(self):
         app = MagicMock()
         runner = MagicMock()
@@ -1249,7 +1243,6 @@ class TestCancelTask(unittest.TestCase):
 
 
 class TestCachedOrFresh(unittest.TestCase):
-
     def test_stores_and_returns_fresh_value(self):
         app = MagicMock()
         value, stale = dp._get_cached_or_fresh(app, "_test_cache", ["a"])
@@ -1273,19 +1266,20 @@ class TestCachedOrFresh(unittest.TestCase):
 
 
 class TestRefreshPoolSection(unittest.TestCase):
-
     def test_stale_indicator_shown_when_stale(self):
         with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
             app = MagicMock()
             grid = MagicMock()
             app.dashboard_pool_grid = grid
-            pools = [{
-                "name": "tank",
-                "health": "ONLINE",
-                "cap": "50%",
-                "cap_int": 50,
-                "scrub_date": "Sun May 10 00:24:03 2026",
-            }]
+            pools = [
+                {
+                    "name": "tank",
+                    "health": "ONLINE",
+                    "cap": "50%",
+                    "cap_int": 50,
+                    "scrub_date": "Sun May 10 00:24:03 2026",
+                }
+            ]
             dp._refresh_pool_section(app, pools, scrub_states={}, stale=True)
 
         attach_calls = grid.attach.call_args_list
@@ -1301,21 +1295,20 @@ class TestRefreshPoolSection(unittest.TestCase):
             app = MagicMock()
             grid = MagicMock()
             app.dashboard_pool_grid = grid
-            pools = [{
-                "name": "tank",
-                "health": "ONLINE",
-                "cap": "50%",
-                "cap_int": 50,
-                "scrub_date": "Sun May 10 00:24:03 2026",
-            }]
+            pools = [
+                {
+                    "name": "tank",
+                    "health": "ONLINE",
+                    "cap": "50%",
+                    "cap_int": 50,
+                    "scrub_date": "Sun May 10 00:24:03 2026",
+                }
+            ]
             dp._refresh_pool_section(app, pools, scrub_states={}, stale=False)
 
         attach_calls = grid.attach.call_args_list
         # Stale label would span 4 columns at row 0; ensure no such call exists.
-        stale_calls = [
-            c for c in attach_calls
-            if c[0][2] == 0 and c[0][3] == 4
-        ]
+        stale_calls = [c for c in attach_calls if c[0][2] == 0 and c[0][3] == 4]
         self.assertEqual(stale_calls, [])
 
     def test_scrub_date_label_is_monospace(self):
@@ -1327,31 +1320,29 @@ class TestRefreshPoolSection(unittest.TestCase):
                 app = MagicMock()
                 grid = MagicMock()
                 app.dashboard_pool_grid = grid
-                pools = [{
-                    "name": "tank",
-                    "health": "ONLINE",
-                    "cap": "50%",
-                    "cap_int": 50,
-                    "scrub_date": "Sun May 10 00:24:03 2026",
-                }]
+                pools = [
+                    {
+                        "name": "tank",
+                        "health": "ONLINE",
+                        "cap": "50%",
+                        "cap_int": 50,
+                        "scrub_date": "Sun May 10 00:24:03 2026",
+                    }
+                ]
                 dp._refresh_pool_section(app, pools, scrub_states={}, stale=False)
 
         # Column 2 contains both the "Last Scrub" header and the per-pool
         # value label; find the label that was styled as monospace.
         scrub_labels = [c[0][0] for c in grid.attach.call_args_list if c[0][1] == 2]
         styled = [
-            lbl for lbl in scrub_labels
-            if lbl.get_style_context.return_value.add_class.called
+            lbl for lbl in scrub_labels if lbl.get_style_context.return_value.add_class.called
         ]
         self.assertEqual(len(styled), 1)
         scrub_label = styled[0]
-        scrub_label.get_style_context.return_value.add_class.assert_called_once_with(
-            "monospace"
-        )
+        scrub_label.get_style_context.return_value.add_class.assert_called_once_with("monospace")
 
 
 class TestRefreshDashboardCache(unittest.TestCase):
-
     def _refresh_patches(self):
         """Return a stack of patches for refresh_dashboard_page dependencies."""
         return [
@@ -1361,7 +1352,18 @@ class TestRefreshDashboardCache(unittest.TestCase):
             patch("scrub_manager.get_all_pool_scrub_states", return_value={}),
             patch.object(dp, "_get_recent_entries", return_value=[]),
             patch.object(dp, "_get_warnings", return_value=[]),
-            patch.object(dp, "_gather_config_section_data", return_value={"cfg": {"mode": "single-node", "this_host": "test"}, "mode": "single-node", "hosts": [("Hostname", "test")], "os_info_map": {"test": ("TestOS", "1")}, "versions": "dev", "zfs_versions": "zfs-1"}),
+            patch.object(
+                dp,
+                "_gather_config_section_data",
+                return_value={
+                    "cfg": {"mode": "single-node", "this_host": "test"},
+                    "mode": "single-node",
+                    "hosts": [("Hostname", "test")],
+                    "os_info_map": {"test": ("TestOS", "1")},
+                    "versions": "dev",
+                    "zfs_versions": "zfs-1",
+                },
+            ),
             patch.object(dp, "_refresh_pool_section"),
             patch.object(dp, "_refresh_ops_section"),
             patch.object(dp, "_refresh_iscsi_section"),
@@ -1374,13 +1376,15 @@ class TestRefreshDashboardCache(unittest.TestCase):
     def test_uses_cached_pools_when_zpool_list_fails(self):
         app = MagicMock()
         app.config = {}
-        cached = [{
-            "name": "tank",
-            "health": "ONLINE",
-            "cap": "50%",
-            "cap_int": 50,
-            "scrub_date": "Sun May 10 00:24:03 2026",
-        }]
+        cached = [
+            {
+                "name": "tank",
+                "health": "ONLINE",
+                "cap": "50%",
+                "cap_int": 50,
+                "scrub_date": "Sun May 10 00:24:03 2026",
+            }
+        ]
         app._dashboard_pools = cached
 
         patches = self._refresh_patches()
@@ -1400,13 +1404,15 @@ class TestRefreshDashboardCache(unittest.TestCase):
         app.config = {}
         app._dashboard_pools = [{"name": "old"}]
         app._dashboard_pools_stale = True
-        fresh = [{
-            "name": "tank",
-            "health": "ONLINE",
-            "cap": "50%",
-            "cap_int": 50,
-            "scrub_date": "Sun May 10 00:24:03 2026",
-        }]
+        fresh = [
+            {
+                "name": "tank",
+                "health": "ONLINE",
+                "cap": "50%",
+                "cap_int": 50,
+                "scrub_date": "Sun May 10 00:24:03 2026",
+            }
+        ]
 
         patches = self._refresh_patches()
         with ExitStack() as stack:
@@ -1501,10 +1507,12 @@ class TestDashboardRefreshDone(unittest.TestCase):
         app._dashboard_refresh_pending = True
         data = {"pools": []}
 
-        with patch.object(dp, "_update_dashboard_ui"), \
-             patch.object(dp, "_hide_dashboard_refreshing") as mock_hide, \
-             patch.object(dp, "GLib") as mock_glib, \
-             patch.object(dp, "refresh_dashboard_page") as mock_refresh:
+        with (
+            patch.object(dp, "_update_dashboard_ui"),
+            patch.object(dp, "_hide_dashboard_refreshing") as mock_hide,
+            patch.object(dp, "GLib") as mock_glib,
+            patch.object(dp, "refresh_dashboard_page") as mock_refresh,
+        ):
             dp._on_dashboard_refresh_done(app, data)
             mock_glib.timeout_add_seconds.assert_called_once()
             callback = mock_glib.timeout_add_seconds.call_args[0][1]
@@ -1521,10 +1529,12 @@ class TestDashboardRefreshDone(unittest.TestCase):
         app._dashboard_refresh_in_progress = True
         app._dashboard_refresh_pending = False
 
-        with patch.object(dp, "_gather_dashboard_data", side_effect=RuntimeError("boom")), \
-             patch("dashboard_page.log_msg") as mock_log, \
-             patch.object(dp, "GLib") as mock_glib, \
-             patch.object(dp, "_hide_dashboard_refreshing") as mock_hide:
+        with (
+            patch.object(dp, "_gather_dashboard_data", side_effect=RuntimeError("boom")),
+            patch("dashboard_page.log_msg") as mock_log,
+            patch.object(dp, "GLib") as mock_glib,
+            patch.object(dp, "_hide_dashboard_refreshing") as mock_hide,
+        ):
             dp._dashboard_refresh_worker(app)
             idle_callback = mock_glib.idle_add.call_args[0][0]
             idle_args = mock_glib.idle_add.call_args[0][1:]
@@ -1534,9 +1544,7 @@ class TestDashboardRefreshDone(unittest.TestCase):
 
         mock_hide.assert_called_once_with(app)
         self.assertFalse(app._dashboard_refresh_in_progress)
-        self.assertTrue(
-            any("boom" in str(call) for call in mock_log.call_args_list)
-        )
+        self.assertTrue(any("boom" in str(call) for call in mock_log.call_args_list))
 
     def test_hides_refreshing_when_done_without_pending(self):
         app = MagicMock()
@@ -1545,8 +1553,10 @@ class TestDashboardRefreshDone(unittest.TestCase):
         app._dashboard_refresh_pending = False
         data = {"pools": []}
 
-        with patch.object(dp, "_update_dashboard_ui"), \
-             patch.object(dp, "_hide_dashboard_refreshing") as mock_hide:
+        with (
+            patch.object(dp, "_update_dashboard_ui"),
+            patch.object(dp, "_hide_dashboard_refreshing") as mock_hide,
+        ):
             dp._on_dashboard_refresh_done(app, data)
 
         mock_hide.assert_called_once_with(app)
@@ -1583,7 +1593,6 @@ class TestRefreshIntervalChanged(unittest.TestCase):
 
 
 class TestUpdateFixLocksButton(unittest.TestCase):
-
     def test_enables_when_stale_present(self):
         app = MagicMock()
         btn = MagicMock()
@@ -1609,8 +1618,11 @@ class TestViewLogButton(unittest.TestCase):
     """Dashboard View Log button tracks running tasks and recent operations."""
 
     def _make_app(
-        self, ops_iter=None, ops_log_file=None,
-        task_paths=None, task_log_files=None,
+        self,
+        ops_iter=None,
+        ops_log_file=None,
+        task_paths=None,
+        task_log_files=None,
     ):
         app = MagicMock()
         app._view_log_button = MagicMock()
@@ -1647,26 +1659,20 @@ class TestViewLogButton(unittest.TestCase):
         app._view_log_button.set_sensitive.assert_called_with(False)
 
     def test_enables_when_operation_selected(self):
-        app, _selection = self._make_app(
-            ops_iter=MagicMock(), ops_log_file="/var/log/ops.log"
-        )
+        app, _selection = self._make_app(ops_iter=MagicMock(), ops_log_file="/var/log/ops.log")
         dp.setup_dashboard_actions(app)
         app._view_log_button.set_sensitive.assert_called_with(True)
         self.assertEqual(app._dashboard_view_log_path, "/var/log/ops.log")
 
     def test_enables_when_running_task_with_log_selected(self):
         path = MagicMock()
-        app, _selection = self._make_app(
-            task_paths=[path], task_log_files=["/var/log/gui.log"]
-        )
+        app, _selection = self._make_app(task_paths=[path], task_log_files=["/var/log/gui.log"])
         dp.setup_dashboard_actions(app)
         app._view_log_button.set_sensitive.assert_called_with(True)
 
     def test_disabled_when_running_task_without_log_selected(self):
         path = MagicMock()
-        app, _selection = self._make_app(
-            task_paths=[path], task_log_files=[""]
-        )
+        app, _selection = self._make_app(task_paths=[path], task_log_files=[""])
         dp.setup_dashboard_actions(app)
         app._view_log_button.set_sensitive.assert_called_with(False)
 
@@ -1684,9 +1690,7 @@ class TestViewLogButton(unittest.TestCase):
         self.assertEqual(app._dashboard_view_log_path, "/var/log/ops.log")
 
     def test_disabled_when_operation_selected_without_log(self):
-        app, _selection = self._make_app(
-            ops_iter=MagicMock(), ops_log_file=""
-        )
+        app, _selection = self._make_app(ops_iter=MagicMock(), ops_log_file="")
         dp.setup_dashboard_actions(app)
         app._view_log_button.set_sensitive.assert_called_with(False)
         self.assertIsNone(app._dashboard_view_log_path)
@@ -1695,7 +1699,8 @@ class TestViewLogButton(unittest.TestCase):
         app, _selection = self._make_app()
         app._dashboard_view_log_path = "/var/log/cached.log"
         app.dashboard_ops_view.get_selection.return_value.get_selected.return_value = (
-            MagicMock(), None,
+            MagicMock(),
+            None,
         )
         with patch("dashboard_page.select_log_by_path", return_value=True) as mock_select:
             dp.on_dashboard_view_log(app)
@@ -1709,7 +1714,6 @@ class TestViewLogButton(unittest.TestCase):
 
 
 class TestOnDashboardViewLog(unittest.TestCase):
-
     def _make_app(self, ops_log_path, task_log_path=None):
         app = MagicMock()
         # Ensure the handler falls back to reading the current selection.
@@ -1731,13 +1735,9 @@ class TestOnDashboardViewLog(unittest.TestCase):
             tree_iter = MagicMock()
             tasks_model.get_iter.return_value = tree_iter
             tasks_model.get_value.return_value = task_log_path
-            tasks_selection.get_selected_rows.return_value = (
-                tasks_model, [path]
-            )
+            tasks_selection.get_selected_rows.return_value = (tasks_model, [path])
         else:
-            tasks_selection.get_selected_rows.return_value = (
-                tasks_model, []
-            )
+            tasks_selection.get_selected_rows.return_value = (tasks_model, [])
         app.dashboard_tasks_view.get_selection.return_value = tasks_selection
         return app, ops_model, tasks_model
 
@@ -1749,26 +1749,21 @@ class TestOnDashboardViewLog(unittest.TestCase):
         )
         dp.on_dashboard_view_log(app)
         app.stack.set_visible_child_name.assert_called_once_with("logs")
-        mock_select.assert_called_once_with(
-            app, "/var/log/zfsutilities/sessions/current.log"
-        )
+        mock_select.assert_called_once_with(app, "/var/log/zfsutilities/sessions/current.log")
 
     @patch("dashboard_page.select_log_by_path", return_value=True)
     def test_falls_back_to_recent_operation(self, mock_select):
-        app, _ops_model, _tasks_model = self._make_app(
-            "/var/log/zfsutilities/sessions/recent.log"
-        )
+        app, _ops_model, _tasks_model = self._make_app("/var/log/zfsutilities/sessions/recent.log")
         dp.on_dashboard_view_log(app)
         app.stack.set_visible_child_name.assert_called_once_with("logs")
-        mock_select.assert_called_once_with(
-            app, "/var/log/zfsutilities/sessions/recent.log"
-        )
+        mock_select.assert_called_once_with(app, "/var/log/zfsutilities/sessions/recent.log")
 
     @patch("dashboard_page.select_log_by_path")
     def test_warns_when_no_selection(self, mock_select):
         app, _ops_model, _tasks_model = self._make_app("")
         app.dashboard_ops_view.get_selection.return_value.get_selected.return_value = (
-            MagicMock(), None,
+            MagicMock(),
+            None,
         )
         with capture_logs() as logs:
             dp.on_dashboard_view_log(app)
@@ -1792,7 +1787,6 @@ class TestOnDashboardViewLog(unittest.TestCase):
 
 
 class TestRefreshOpsSection(unittest.TestCase):
-
     def test_log_file_stored_in_hidden_column(self):
         with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
             app = MagicMock()
@@ -1801,13 +1795,15 @@ class TestRefreshOpsSection(unittest.TestCase):
             selection = MagicMock()
             selection.get_selected.return_value = (MagicMock(), None)
             app.dashboard_ops_view.get_selection.return_value = selection
-            recent = [{
-                "timestamp": "2026-05-28T14:32:00",
-                "type": "backup",
-                "name": "Daily",
-                "result": "success",
-                "log_file": "/var/log/zfsutilities/sessions/daily.log",
-            }]
+            recent = [
+                {
+                    "timestamp": "2026-05-28T14:32:00",
+                    "type": "backup",
+                    "name": "Daily",
+                    "result": "success",
+                    "log_file": "/var/log/zfsutilities/sessions/daily.log",
+                }
+            ]
             dp._refresh_ops_section(app, recent)
         store.append.assert_called_once()
         appended = store.append.call_args[0][0]
@@ -1865,13 +1861,15 @@ class TestRefreshOpsSection(unittest.TestCase):
 
             store.append.return_value = MagicMock()
 
-            recent = [{
-                "timestamp": "2026-05-28T14:32:00",
-                "type": "backup",
-                "name": "Daily",
-                "result": "success",
-                "log_file": "/var/log/zfsutilities/sessions/daily.log",
-            }]
+            recent = [
+                {
+                    "timestamp": "2026-05-28T14:32:00",
+                    "type": "backup",
+                    "name": "Daily",
+                    "result": "success",
+                    "log_file": "/var/log/zfsutilities/sessions/daily.log",
+                }
+            ]
             dp._refresh_ops_section(app, recent)
 
         store.clear.assert_called_once()
@@ -1893,6 +1891,74 @@ class TestRefreshProcessesSection(unittest.TestCase):
         appended = store.append.call_args[0][0]
         self.assertEqual(len(appended), 5)
         self.assertEqual(appended[0], "No running tasks")
+
+
+class TestRefreshActiveLocksSection(unittest.TestCase):
+    """_refresh_active_locks_section populates the Active Locks list."""
+
+    def test_empty_locks_placeholder_has_six_columns(self):
+        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
+            app = MagicMock()
+            store = MagicMock()
+            app.dashboard_locks_store = store
+            dp._refresh_active_locks_section(app, [])
+
+        store.append.assert_called_once()
+        appended = store.append.call_args[0][0]
+        self.assertEqual(len(appended), 6)
+        self.assertEqual(appended[0], "No active locks")
+
+    def test_populates_store_from_lock_dicts(self):
+        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
+            app = MagicMock()
+            store = MagicMock()
+            app.dashboard_locks_store = store
+            locks = [
+                {
+                    "dataset": "tank/data",
+                    "type": "w",
+                    "pid": 1234,
+                    "script": "zfsdailybackup",
+                    "acquired": "2026-06-01T12:00:00",
+                    "description": "daily backup",
+                }
+            ]
+            dp._refresh_active_locks_section(app, locks)
+
+        store.append.assert_called_once()
+        appended = store.append.call_args[0][0]
+        self.assertEqual(
+            appended,
+            [
+                "tank/data",
+                "w",
+                "1234",
+                "zfsdailybackup",
+                "2026-06-01T12:00:00",
+                "daily backup",
+            ],
+        )
+
+
+class TestGatherDashboardData(unittest.TestCase):
+    """_gather_dashboard_data includes active locks and other dashboard state."""
+
+    def test_includes_active_locks_key(self):
+        app = MagicMock()
+        app.config = {}
+        with (
+            patch.object(dp, "_get_pool_health", return_value=[]),
+            patch.object(dp, "_get_recent_entries", return_value=[]),
+            patch.object(dp, "_get_iscsi_missing_luns", return_value=([], False)),
+            patch.object(dp, "_count_stale_locks", return_value=0),
+            patch.object(dp, "_collect_running_tasks", return_value=[]),
+            patch.object(dp, "list_active_locks", return_value=[]),
+            patch.object(dp, "_gather_config_section_data", return_value={}),
+            patch.object(dp, "get_dashboard_config", return_value={"low_space_threshold": 80}),
+        ):
+            data = dp._gather_dashboard_data(app)
+        self.assertIn("active_locks", data)
+        self.assertEqual(data["active_locks"], [])
 
 
 class TestCreateDashboardPage(unittest.TestCase):
@@ -1936,14 +2002,15 @@ class TestCreateDashboardPage(unittest.TestCase):
         self.assertIsNotNone(app.dashboard_ops_view)
         self.assertIsNotNone(app.dashboard_ops_store)
         self.assertIsNotNone(app.dashboard_tasks_store)
+        self.assertIsNotNone(app.dashboard_locks_frame)
+        self.assertIsNotNone(app.dashboard_locks_view)
+        self.assertIsNotNone(app.dashboard_locks_store)
 
     def test_dashboard_ops_view_is_bound_for_width_persistence(self):
         """Recent Operations columns should be saved and restored."""
         app = self._create_app()
         self._run_create(app)
-        app._ui_state.bind_treeview.assert_any_call(
-            app.dashboard_ops_view, "dashboard_ops_view"
-        )
+        app._ui_state.bind_treeview.assert_any_call(app.dashboard_ops_view, "dashboard_ops_view")
 
     def test_section_order_in_top_level_box(self):
         app = self._create_app()
@@ -1953,6 +2020,7 @@ class TestCreateDashboardPage(unittest.TestCase):
             "<b>Warnings</b>",
             "<b>Pool Health</b>",
             "<b>Running Tasks</b>",
+            "<b>Active Locks</b>",
             "<b>Recent Operations</b>",
             "<b>iSCSI Issues</b>",
             "<b>Configuration</b>",
@@ -1960,7 +2028,7 @@ class TestCreateDashboardPage(unittest.TestCase):
         # children[0] is the title label; children[1] is the refresh controls;
         # the remaining children are the section frames.
         frame_children = top_box.children[2:]
-        self.assertEqual(len(frame_children), 6)
+        self.assertEqual(len(frame_children), 7)
         self.assertEqual([_frame_title(f) for f in frame_children], expected_titles)
 
     def test_refresh_spinner_configuration(self):
@@ -2095,9 +2163,7 @@ class TestCancelSelectedButton(unittest.TestCase):
         # Simulate a selection-change callback with a task selected
         path = MagicMock()
         model = selection.get_selected_rows.return_value[0]
-        model.get_value.side_effect = lambda _iter, col: (
-            "runner:backup_runner" if col == 3 else ""
-        )
+        model.get_value.side_effect = lambda _iter, col: "runner:backup_runner" if col == 3 else ""
         selection.get_selected_rows.return_value = (model, [path])
         callback = selection.connect.call_args[0][1]
         callback(selection, app)
@@ -2105,9 +2171,7 @@ class TestCancelSelectedButton(unittest.TestCase):
 
     def test_disabled_when_only_placeholder_selected(self):
         """Selecting the 'No running tasks' placeholder keeps Cancel disabled."""
-        app, _selection = self._make_app_and_selection(
-            [MagicMock()], task_keys=[""]
-        )
+        app, _selection = self._make_app_and_selection([MagicMock()], task_keys=[""])
         dp.setup_dashboard_actions(app)
         app._cancel_selected_button.set_sensitive.assert_called_once_with(False)
 
@@ -2180,9 +2244,7 @@ class TestRefreshConfigSection(unittest.TestCase):
             gtk_mock.Label.side_effect = lambda *args, **kwargs: MagicMock()
             with patch.object(dp, "Gtk", gtk_mock):
                 with patch.object(dp, "_get_node_config", return_value=cfg):
-                    with patch.object(
-                        dp, "_get_host_version", side_effect=versions.get
-                    ):
+                    with patch.object(dp, "_get_host_version", side_effect=versions.get):
                         with patch.object(
                             dp,
                             "_get_host_zfs_version",
@@ -2268,12 +2330,7 @@ class TestRefreshConfigSection(unittest.TestCase):
                 "host-b": ("Debian GNU/Linux", "12 (bookworm)"),
             },
         )
-        expected = (
-            "host-a (this,storage):\n"
-            "zfs-2.2.2\n\n"
-            "host-b (compute):\n"
-            "zfs-2.2.3"
-        )
+        expected = "host-a (this,storage):\nzfs-2.2.2\n\nhost-b (compute):\nzfs-2.2.3"
         self.assertTrue(self._find_label_with_text(gtk_mock, expected))
 
     def test_single_node_shows_local_os_info(self):
@@ -2289,11 +2346,7 @@ class TestRefreshConfigSection(unittest.TestCase):
             zfs_versions={"myhost": "zfs-2.2.2"},
             os_infos={"myhost": ("Debian GNU/Linux", "13 (trixie)")},
         )
-        self.assertTrue(
-            self._find_label_with_text(
-                gtk_mock, "Debian GNU/Linux 13 (trixie)"
-            )
-        )
+        self.assertTrue(self._find_label_with_text(gtk_mock, "Debian GNU/Linux 13 (trixie)"))
 
     def test_two_node_shows_os_info_per_unique_host(self):
         cfg = {
@@ -2324,9 +2377,7 @@ class TestRefreshConfigSection(unittest.TestCase):
             "host-c (compute):\n"
             "Linux Mint 22 (Wilma)"
         )
-        self.assertTrue(
-            self._find_label_with_text(gtk_mock, expected_name)
-        )
+        self.assertTrue(self._find_label_with_text(gtk_mock, expected_name))
 
     def test_two_node_deduplicates_same_host_across_roles_for_os(self):
         cfg = {
@@ -2350,9 +2401,7 @@ class TestRefreshConfigSection(unittest.TestCase):
             "host-b (compute):\n"
             "Debian GNU/Linux 12 (bookworm)"
         )
-        self.assertTrue(
-            self._find_label_with_text(gtk_mock, expected_name)
-        )
+        self.assertTrue(self._find_label_with_text(gtk_mock, expected_name))
 
 
 class TestGetHostOsInfo(unittest.TestCase):
@@ -2401,7 +2450,7 @@ class TestGetHostOsInfo(unittest.TestCase):
                 result.stdout = (
                     'NAME="Linux Mint"\n'
                     'VERSION="22 (Wilma)"\n'
-                    'ID=linuxmint\n'
+                    "ID=linuxmint\n"
                     'ID_LIKE="ubuntu debian"\n'
                 )
             else:
@@ -2494,9 +2543,7 @@ class TestFixIscsiButton(unittest.TestCase):
                 with capture_logs() as logs:
                     dp._on_fix_iscsi_clicked(None, app)
 
-        self.assertTrue(
-            any("repair-iscsi-luns exited 1" in msg for msg in logs)
-        )
+        self.assertTrue(any("repair-iscsi-luns exited 1" in msg for msg in logs))
 
     def test_fix_iscsi_logs_failure(self):
         app = self._create_app()
@@ -2505,9 +2552,7 @@ class TestFixIscsiButton(unittest.TestCase):
                 with capture_logs() as logs:
                     dp._on_fix_iscsi_clicked(None, app)
 
-        self.assertTrue(
-            any("repair-iscsi-luns failed" in msg for msg in logs)
-        )
+        self.assertTrue(any("repair-iscsi-luns failed" in msg for msg in logs))
 
     def test_fix_iscsi_preserves_inner_log_level(self):
         """Bash log_msg lines on stderr must not be reclassified as WARN."""
@@ -2520,9 +2565,11 @@ class TestFixIscsiButton(unittest.TestCase):
                 "/test/bin/repair-iscsi-luns:414: WARN: Device not available: "
                 "/dev/zvol/threeamigos/proxmox/vm-215-disk-1 (skipping vm-215-disk-1)\n"
             )
-            with patch.object(dp, "refresh_dashboard_page"), patch.object(
-                dp, "resolve_local_bin", return_value="/test/bin/repair-iscsi-luns"
-            ), capture_logs() as logs:
+            with (
+                patch.object(dp, "refresh_dashboard_page"),
+                patch.object(dp, "resolve_local_bin", return_value="/test/bin/repair-iscsi-luns"),
+                capture_logs() as logs,
+            ):
                 dp._on_fix_iscsi_clicked(None, app)
 
         levels = [parse_msg_level(msg) for msg in logs]

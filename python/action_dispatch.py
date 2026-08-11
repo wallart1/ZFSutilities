@@ -78,7 +78,7 @@ from pool_actions import (
     on_scrub_start,
     on_scrub_stop,
 )
-from pools_page import refresh_pools_page, update_pools_button_sensitivity
+from pools_page import on_pools_refresh, update_pools_button_sensitivity
 from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
 from restore_page import (
     check_restore_dirty,
@@ -401,7 +401,7 @@ ACTION_HANDLERS = {
         "Export": on_pools_export,
         "Save": _handler_pools_save,
         "Revert": _handler_pools_revert,
-        "Refresh": refresh_pools_page,
+        "Refresh": on_pools_refresh,
         "Start Scrub": on_scrub_start,
         "Pause Scrub": on_scrub_pause,
         "Resume Scrub": on_scrub_resume,

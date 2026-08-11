@@ -1183,6 +1183,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#active-locks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Active Locks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#recent-operations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3453,9 +3464,9 @@ send/receive behaviour, holds, and verification rather than dataset selection.</
 and <a href="../../commands-and-modules/modules/#zfs-send-receive">Commands &amp; Modules — zfs-send-receive</a>.</p>
 <hr />
 <h2 id="dashboard-tab">Dashboard Tab<a class="headerlink" href="#dashboard-tab" title="Permanent link">&para;</a></h2>
-<p>The Dashboard provides an at-a-glance overview of ZFS health. It refreshes
-automatically every 30 seconds while visible, or manually via the <strong>Refresh</strong>
-action button.</p>
+<p>The Dashboard provides an at-a-glance overview of ZFS health and active locks.
+It refreshes automatically every 30 seconds while visible, or manually via the
+<strong>Refresh</strong> action button.</p>
 <div class="admonition tip">
 <p class="admonition-title">Dashboard data during heavy load</p>
 <p>Pool and iSCSI information comes from live <code>zpool</code>/<code>targetcli</code> commands with
@@ -3551,6 +3562,45 @@ only when the selection contains at least one real task; selecting the
 scrubs that finish or are paused externally — for example, by a headless
 profile that uses the <strong>Pause scrubs during each step</strong> option — do not keep
 showing as running after the actual scrub state changes.</p>
+<h3 id="active-locks">Active Locks<a class="headerlink" href="#active-locks" title="Permanent link">&para;</a></h3>
+<p>Lists every currently held (non-stale) ZFS dataset lock. Each row shows:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Dataset</strong></td>
+<td>Locked dataset path</td>
+</tr>
+<tr>
+<td><strong>Type</strong></td>
+<td>Lock type: <code>r</code> (shared read), <code>w</code> (exclusive write), or <code>x</code> (exclusive destroy)</td>
+</tr>
+<tr>
+<td><strong>PID</strong></td>
+<td>Process ID holding the lock</td>
+</tr>
+<tr>
+<td><strong>Script</strong></td>
+<td>Name of the script or process that acquired the lock</td>
+</tr>
+<tr>
+<td><strong>Acquired</strong></td>
+<td>ISO timestamp when the lock was acquired</td>
+</tr>
+<tr>
+<td><strong>Description</strong></td>
+<td>Optional description written when the lock was acquired</td>
+</tr>
+</tbody>
+</table>
+<p>The list refreshes automatically with the rest of the Dashboard. Stale locks
+(whose owning process has exited) are not shown here; they are reported in the
+<strong>Warnings</strong> section and can be removed with the <strong>Fix Locks</strong> action button.</p>
 <h3 id="recent-operations">Recent Operations<a class="headerlink" href="#recent-operations" title="Permanent link">&para;</a></h3>
 <p>A scrollable table showing the last <strong>10</strong> history entries:</p>
 <table>
@@ -3633,11 +3683,6 @@ remote host cannot be reached, its version is shown as <em>unknown</em>.</p>
   <strong>Run pre-backup command</strong> — Enable a custom command that runs before all backup steps. If it fails, the backup aborts. </p>
 </li>
 <li>
-<p><strong>Advanced</strong> — Collapsible expander with
-  <a href="#dataset-selection-criteria">dataset-selection criteria</a>
-  (<code>includes</code>, <code>excludes</code>, <code>depth</code>, <code>startwith</code>, <code>endwith</code>) plus <a href="#advanced-options">advanced options</a>.</p>
-</li>
-<li>
 <p><strong>Pull Steps</strong> — Editable list of rsync pull operations. The frame header has
   an <strong>Active</strong> checkbox; unchecking it bypasses every pull step while still
   running the other backup steps. Each row has three columns:</p>
@@ -3673,27 +3718,31 @@ remote host cannot be reached, its version is shown as <em>unknown</em>.</p>
   (Source pool, Destination pool). Reorder by dragging rows.</p>
 </li>
 <li>
+<p><strong>Advanced</strong> — Collapsible expander, placed after the send/receive steps, with
+  <a href="#dataset-selection-criteria">dataset-selection criteria</a>
+  (<code>includes</code>, <code>excludes</code>, <code>depth</code>, <code>startwith</code>, <code>endwith</code>), <a href="#advanced-options">advanced options</a>,
+  and:</p>
+</li>
+<li>
+<p><strong>ZFS Keys Backup</strong> — Two entries:</p>
+<ul>
+<li><strong>ZFS keys source</strong> — rsync endpoint where the key files currently live
+  (e.g. <code>/mnt/ZFSkeys/</code> or <code>storage-host:/backups/zfs-keys/</code>)</li>
+<li><strong>ZFS keys destination</strong> — rsync endpoint where the copied keys should be placed.
+  Must resolve to an <strong>encrypted ZFS dataset</strong>; the step is skipped with a
+  warning if it does not. See <a href="../daily-backup/#zfs-keys-backup">Daily Backup — ZFS Keys Backup</a>
+  for the security implications.</li>
+</ul>
+</li>
+<li>
 <p><strong>Post-Backup Steps</strong> — Three checkboxes and a command entry:</p>
 </li>
 <li>
 <p><strong>Clear snapshot name memory</strong> after sending</p>
 </li>
 <li><strong>Prune snapshots</strong> when the backup finishes</li>
-<li>
-<p><strong>Run post-backup command</strong> — Enable a custom command that runs after all
-    backup steps finish. It executes even if a fatal error aborts the backup early.</p>
-</li>
-<li>
-<p><strong>ZFS Keys Backup</strong> — Two entries in the Advanced expander:</p>
-</li>
-<li>
-<p><strong>ZFS keys source</strong> — rsync endpoint where the key files currently live
-    (e.g. <code>/mnt/ZFSkeys/</code> or <code>storage-host:/backups/zfs-keys/</code>)</p>
-</li>
-<li><strong>ZFS keys destination</strong> — rsync endpoint where the copied keys should be placed.
-    Must resolve to an <strong>encrypted ZFS dataset</strong>; the step is skipped with a
-    warning if it does not. See <a href="../daily-backup/#zfs-keys-backup">Daily Backup — ZFS Keys Backup</a>
-    for the security implications.</li>
+<li><strong>Run post-backup command</strong> — Enable a custom command that runs after all
+    backup steps finish. It executes even if a fatal error aborts the backup early.</li>
 </ul>
 <h3 id="actions_1">Actions<a class="headerlink" href="#actions_1" title="Permanent link">&para;</a></h3>
 <table>
@@ -3759,11 +3808,6 @@ from modifying the same dataset at the same time.</p>
   first online candidate becomes the active offsite target at run time. Updates automatically.</p>
 </li>
 <li>
-<p><strong>Advanced</strong> — Collapsible expander with
-  <a href="#dataset-selection-criteria">dataset-selection criteria</a>
-  (<code>includes</code>, <code>excludes</code>, <code>depth</code>, <code>startwith</code>, <code>endwith</code>) and advanced send/receive options.</p>
-</li>
-<li>
 <p><strong>Snapshot</strong> — Enter a snapshot name (or click <strong>Generate</strong> to build one
   from the current time). The <code>@</code> prefix is added automatically if omitted.</p>
 </li>
@@ -3772,6 +3816,11 @@ from modifying the same dataset at the same time.</p>
   Destination, Includes, Excludes. Reorder rows by dragging. The <code>&lt;offsite&gt;</code>
   token in the Destination column is replaced at runtime with the detected
   offsite pool name.</p>
+</li>
+<li>
+<p><strong>Advanced</strong> — Collapsible expander, placed after the send/receive steps, with
+  <a href="#dataset-selection-criteria">dataset-selection criteria</a>
+  (<code>includes</code>, <code>excludes</code>, <code>depth</code>, <code>startwith</code>, <code>endwith</code>) and advanced send/receive options.</p>
 </li>
 </ul>
 <h3 id="actions_2">Actions<a class="headerlink" href="#actions_2" title="Permanent link">&para;</a></h3>
@@ -4391,9 +4440,10 @@ the corresponding source/destination pair is automatically added to the
 does not happen for scheduled profile or cron runs; it is GUI-only.</p>
 <hr />
 <h2 id="pools-tab">Pools Tab<a class="headerlink" href="#pools-tab" title="Permanent link">&para;</a></h2>
-<p>This tab shows every pool known to the system (from <code>zpool list</code>) and
-lets you maintain the pool registry stored in JSON. It also contains the
-<strong>Scrub Manager</strong> for starting, pausing, resuming, and stopping pool scrubs.</p>
+<p>This tab shows every pool known to the system (from <code>zpool list</code>), pools
+that are present but not yet imported (<code>zpool import</code>), and lets you maintain
+the pool registry stored in JSON. It also contains the <strong>Scrub Manager</strong> for
+starting, pausing, resuming, and stopping pool scrubs.</p>
 <h3 id="pool-table">Pool table<a class="headerlink" href="#pool-table" title="Permanent link">&para;</a></h3>
 <p>Columns: <strong>Pool</strong>, <strong>Offsite</strong>, <strong>Health</strong>, <strong>Errors</strong>, <strong>Size</strong>, <strong>Alloc</strong>, <strong>Free</strong>, <strong>Freeing</strong>,
 <strong>Ckpoint</strong>, <strong>Frag</strong>, <strong>Cap</strong>.</p>
@@ -4410,11 +4460,11 @@ actions operate on every selected row.</p>
 <tbody>
 <tr>
 <td><strong>Red</strong></td>
-<td>Pool is online but <em>not</em> in the registry. Select the pool, click <strong>Add</strong> then <strong>Save</strong> to register it.</td>
+<td>Pool is online or importable but <em>not</em> in the registry. Select the pool, click <strong>Add</strong> then <strong>Save</strong> to register it.</td>
 </tr>
 <tr>
 <td>Orange</td>
-<td>Pool is registered but currently offline (not returned by <code>zpool list</code>).</td>
+<td>Pool is registered but currently offline (not returned by <code>zpool list</code> and not importable).</td>
 </tr>
 <tr>
 <td>Default color</td>
@@ -4441,12 +4491,16 @@ candidates. The checkbox state is saved with the registry when you click
 <td><code>ONLINE</code></td>
 </tr>
 <tr>
+<td>Blue, bold</td>
+<td><code>IMPORTABLE</code> (devices are present but the pool is not imported)</td>
+</tr>
+<tr>
 <td>Orange, bold</td>
 <td><code>DEGRADED</code></td>
 </tr>
 <tr>
 <td>Orange, normal</td>
-<td><code>OFFLINE</code> (not present in <code>zpool list</code>)</td>
+<td><code>OFFLINE</code> (not present in <code>zpool list</code> or <code>zpool import</code>)</td>
 </tr>
 <tr>
 <td>Red</td>
@@ -4504,7 +4558,7 @@ candidates. The checkbox state is saved with the registry when you click
 </tr>
 <tr>
 <td><strong>Import</strong></td>
-<td>Imports selected offline pools directly, or opens a dialog listing importable pools if none are selected</td>
+<td>Imports selected offline or importable pools directly, or opens a dialog listing importable pools if none are selected</td>
 </tr>
 <tr>
 <td><strong>Export</strong></td>
@@ -4520,14 +4574,18 @@ candidates. The checkbox state is saved with the registry when you click
 </tr>
 <tr>
 <td><strong>Refresh</strong></td>
-<td>Re-runs <code>zpool list</code> and refreshes the table</td>
+<td>Re-runs <code>zpool list</code>, rescans importable pools, and refreshes the table</td>
 </tr>
 </tbody>
 </table>
 <p>Action buttons enable or disable automatically based on the current selection.
 For example, <strong>Watch</strong> is only available when at least one selected pool is
 registered and online, <strong>Details</strong> requires exactly one selected pool, and
-<strong>Export</strong> requires at least one selected online pool.</p>
+<strong>Export</strong> requires at least one selected online pool. <strong>Import</strong> can be used
+on offline or importable pools.</p>
+<p>The importable-pool scan runs in the background and is cached for a few
+seconds so the table stays responsive. Click <strong>Refresh</strong> to force an
+immediate rescan.</p>
 <p>Right-click any cell to open a context menu with <strong>Copy</strong> actions (cell value
 or full row, tab-separated) and <strong>Send details to log</strong>, which writes all
 <code>zpool get all</code> properties for the selected pool to the log panel. <strong>Send
@@ -5148,7 +5206,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.80.0
+      ZFS Utilities v0.81.0
     </div>
   
   
@@ -5173,7 +5231,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.80.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.81.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

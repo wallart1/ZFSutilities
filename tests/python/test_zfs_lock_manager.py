@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -75,14 +76,17 @@ class TestAcquireAndRelease(unittest.TestCase):
             lockfile = zlm._lock_file("tank")
             os.makedirs(os.path.dirname(lockfile), exist_ok=True)
             with open(lockfile, "w") as f:
-                json.dump({
-                    "dataset": "tank",
-                    "type": "w",
-                    "pid": 999999,
-                    "script": "other",
-                    "acquired": "2026-01-01T00:00:00",
-                    "description": "",
-                }, f)
+                json.dump(
+                    {
+                        "dataset": "tank",
+                        "type": "w",
+                        "pid": 999999,
+                        "script": "other",
+                        "acquired": "2026-01-01T00:00:00",
+                        "description": "",
+                    },
+                    f,
+                )
             self.assertFalse(zlm.release(lockfile))
 
     def test_acquire_writes_complete_lock_file_atomically(self):
@@ -95,7 +99,8 @@ class TestAcquireAndRelease(unittest.TestCase):
             self.assertEqual(data["dataset"], "tank/atomic")
             lock_dir = os.path.dirname(lock_id)
             leftovers = [
-                name for name in os.listdir(lock_dir)
+                name
+                for name in os.listdir(lock_dir)
                 if name.startswith(".lock-") and name.endswith(".tmp")
             ]
             self.assertEqual(leftovers, [])
@@ -107,15 +112,116 @@ def _conflicting_lock(dataset, lock_type="w"):
     lockfile = zlm._lock_file(dataset)
     os.makedirs(os.path.dirname(lockfile), exist_ok=True)
     with open(lockfile, "w") as f:
-        json.dump({
-            "dataset": dataset,
-            "type": lock_type,
-            "pid": proc.pid,
-            "script": os.path.basename(sys.executable),
-            "acquired": "2026-01-01T00:00:00",
-            "description": "",
-        }, f)
+        json.dump(
+            {
+                "dataset": dataset,
+                "type": lock_type,
+                "pid": proc.pid,
+                "script": os.path.basename(sys.executable),
+                "acquired": "2026-01-01T00:00:00",
+                "description": "",
+            },
+            f,
+        )
     return proc
+
+
+class TestListActiveLocks(unittest.TestCase):
+    """Enumeration of currently held (non-stale) dataset locks."""
+
+    def _write_lock(
+        self,
+        dataset,
+        pid,
+        lock_type="w",
+        script="python",
+        acquired="2026-01-01T00:00:00",
+        description="",
+    ):
+        lockfile = zlm._lock_file(dataset)
+        os.makedirs(os.path.dirname(lockfile), exist_ok=True)
+        with open(lockfile, "w") as f:
+            json.dump(
+                {
+                    "dataset": dataset,
+                    "type": lock_type,
+                    "pid": pid,
+                    "script": script,
+                    "acquired": acquired,
+                    "description": description,
+                },
+                f,
+            )
+        return lockfile
+
+    def test_empty_when_lock_dir_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = os.path.join(tmpdir, "no-such-dir")
+            orig = zlm.ZFSLOCK_LOCKS_DIR
+            try:
+                zlm.ZFSLOCK_LOCKS_DIR = missing
+                self.assertEqual(zlm.list_active_locks(), [])
+            finally:
+                zlm.ZFSLOCK_LOCKS_DIR = orig
+
+    def test_returns_active_lock(self):
+        with temp_lock_dir():
+            self._write_lock(
+                "tank", os.getpid(), "w", "zfsdailybackup", "2026-06-01T12:00:00", "backup"
+            )
+            locks = zlm.list_active_locks()
+            self.assertEqual(len(locks), 1)
+            self.assertEqual(locks[0]["dataset"], "tank")
+            self.assertEqual(locks[0]["type"], "w")
+            self.assertEqual(locks[0]["pid"], os.getpid())
+            self.assertEqual(locks[0]["script"], "zfsdailybackup")
+            self.assertEqual(locks[0]["acquired"], "2026-06-01T12:00:00")
+            self.assertEqual(locks[0]["description"], "backup")
+
+    def test_skips_stale_locks(self):
+        with temp_lock_dir():
+            self._write_lock("tank", 999999)
+            self._write_lock("data", os.getpid())
+            locks = zlm.list_active_locks()
+            self.assertEqual([lock["dataset"] for lock in locks], ["data"])
+
+    def test_decodes_dataset_from_filename(self):
+        with temp_lock_dir():
+            lockfile = zlm._lock_file("tank/sub@snap")
+            os.makedirs(os.path.dirname(lockfile), exist_ok=True)
+            with open(lockfile, "w") as f:
+                json.dump(
+                    {
+                        "type": "r",
+                        "pid": os.getpid(),
+                        "script": "test",
+                        "acquired": "2026-01-01T00:00:00",
+                        "description": "",
+                    },
+                    f,
+                )
+            locks = zlm.list_active_locks()
+            self.assertEqual(len(locks), 1)
+            self.assertEqual(locks[0]["dataset"], "tank/sub@snap")
+
+    def test_sorts_results(self):
+        with temp_lock_dir():
+            self._write_lock("tank/c", os.getpid(), "w")
+            self._write_lock("tank/a", os.getpid(), "r")
+            self._write_lock("tank/b", os.getpid(), "w")
+            locks = zlm.list_active_locks()
+            self.assertEqual(
+                [lock["dataset"] for lock in locks],
+                ["tank/a", "tank/b", "tank/c"],
+            )
+
+    def test_skips_unparseable_lock_files(self):
+        with temp_lock_dir():
+            lockfile = zlm._lock_file("tank")
+            os.makedirs(os.path.dirname(lockfile), exist_ok=True)
+            with open(lockfile, "w") as f:
+                f.write("not-json")
+            self.assertEqual(zlm.list_active_locks(), [])
 
 
 class TestAcquireMultiple(unittest.TestCase):
@@ -126,9 +232,7 @@ class TestAcquireMultiple(unittest.TestCase):
 
     def test_sorts_by_depth_then_lexicographically(self):
         with temp_lock_dir():
-            lock_ids = zlm.acquire_multiple("w", [
-                "tank/c", "tank/a/b", "tank", "tank/a"
-            ])
+            lock_ids = zlm.acquire_multiple("w", ["tank/c", "tank/a/b", "tank", "tank/a"])
             datasets = []
             for lid in lock_ids:
                 with open(lid) as f:
@@ -222,14 +326,17 @@ class TestStaleCleanup(unittest.TestCase):
         lockfile = zlm._lock_file(dataset)
         os.makedirs(os.path.dirname(lockfile), exist_ok=True)
         with open(lockfile, "w") as f:
-            json.dump({
-                "dataset": dataset,
-                "type": "w",
-                "pid": pid,
-                "script": script,
-                "acquired": "2026-01-01T00:00:00",
-                "description": "",
-            }, f)
+            json.dump(
+                {
+                    "dataset": dataset,
+                    "type": "w",
+                    "pid": pid,
+                    "script": script,
+                    "acquired": "2026-01-01T00:00:00",
+                    "description": "",
+                },
+                f,
+            )
         return lockfile
 
     def test_is_stale_for_nonexistent_pid(self):

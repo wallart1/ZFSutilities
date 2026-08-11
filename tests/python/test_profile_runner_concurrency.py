@@ -113,7 +113,7 @@ class TestProfileLockHelpers(unittest.TestCase):
         self.assertIsNotNone(fd1)
         waiting_path = os.path.join(self.lock_dir, "daily.waiting")
         try:
-            fd2, lock_path2 = profile_runner.acquire_profile_lock("daily", timeout=0.1)
+            fd2, _ = profile_runner.acquire_profile_lock("daily", timeout=0.1)
             self.assertIsNone(fd2)
             self.assertFalse(
                 os.path.exists(waiting_path),

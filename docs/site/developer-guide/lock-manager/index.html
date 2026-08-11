@@ -1439,6 +1439,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#python-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python client
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2177,6 +2188,11 @@ If it is stale, it is removed and acquisition is retried automatically.</p>
 <h3 id="zfslockctl">zfslockctl<a class="headerlink" href="#zfslockctl" title="Permanent link">&para;</a></h3>
 <h5 id="standalone-cli-tool">Standalone CLI tool:<a class="headerlink" href="#standalone-cli-tool" title="Permanent link">&para;</a></h5>
 <p><code>zfslockctl list [dataset]</code>                  List active locks</p>
+<h3 id="python-client">Python client<a class="headerlink" href="#python-client" title="Permanent link">&para;</a></h3>
+<p><code>python/zfs_lock_manager.py</code> provides <code>list_active_locks()</code>, which returns all
+currently active (non-stale) locks as a list of dicts with <code>dataset</code>, <code>type</code>,
+<code>pid</code>, <code>script</code>, <code>acquired</code>, and <code>description</code> keys. The Dashboard uses this to
+populate its <strong>Active Locks</strong> section.</p>
 <p><code>zfslockctl status &lt;dataset&gt;</code>            Check lock status</p>
 <p><code>zfslockctl release &lt;lock_id&gt;</code>          Force release a lock</p>
 <p><code>zfslockctl cleanup</code>                               Remove stale locks</p>
@@ -2377,7 +2393,7 @@ deterministic order to avoid deadlocks. Use:</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.80.0
+      ZFS Utilities v0.81.0
     </div>
   
   
@@ -2402,7 +2418,7 @@ deterministic order to avoid deadlocks. Use:</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.80.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.81.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

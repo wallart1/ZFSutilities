@@ -51,7 +51,7 @@ from logging_config import format_log_line_short, log_msg
 from logs_page import create_logs_page
 from offsite_page import create_offsite_page, do_detect_offsite_pool
 from path_utils import get_version
-from pools_page import create_pools_page, refresh_pools_page
+from pools_page import create_pools_page, on_pools_refresh
 from restore_page import create_restore_page
 from retention_page import create_retention_page, refresh_prune_pools
 from runner_factory import RunnerFactory
@@ -167,11 +167,13 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
         self._ui_state = UIStateManager(self, self.config)
 
+        # --- Bottom: Info Panel ---
+        # Create the info panel before the tab pages so the GUI log sink is
+        # installed when Backup/Offsite/Pools page constructors run.
+        create_info_panel(self)
+
         self.create_sidebar_and_stack()
         self.create_action_panel()
-
-        # --- Bottom: Info Panel ---
-        create_info_panel(self)
 
         # Create runners after the info panel exists so log/stdin callbacks
         # and widgets are already available.
@@ -804,7 +806,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         """Handle refresh button."""
         page = self.stack.get_visible_child_name()
         if page == "pools":
-            refresh_pools_page(self)
+            on_pools_refresh(self)
             log_msg("INFO: Pool data refreshed")
         elif page == "datasets":
             refresh_datasets_page(self)

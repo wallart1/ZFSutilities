@@ -8,7 +8,7 @@ optional ZFS hold application.
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from feature_config import (
     OFFSITE_SNAPFILE,
     _maybe_seed_checkagainst,
@@ -39,12 +39,22 @@ from profile_validation import validate_gui_settings
 from scrub_manager import attach_step_scrub_callbacks
 
 OFFSITE_DATASET_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
-OFFSITE_VARIABLES = ["applyholds", "doincrementals", "dointermediates",
-                     "allow_destructive", "receive_F_option",
-                     "verify_after_transfer", "pv_rate_limit"]
-OFFSITE_YN_VARIABLES = {"applyholds", "doincrementals", "dointermediates",
-                        "allow_destructive",
-                        "verify_after_transfer"}
+OFFSITE_VARIABLES = [
+    "applyholds",
+    "doincrementals",
+    "dointermediates",
+    "allow_destructive",
+    "receive_F_option",
+    "verify_after_transfer",
+    "pv_rate_limit",
+]
+OFFSITE_YN_VARIABLES = {
+    "applyholds",
+    "doincrementals",
+    "dointermediates",
+    "allow_destructive",
+    "verify_after_transfer",
+}
 _OFFSITE_TOPIC_MAP = {
     "includes": "offsite_includes",
     "excludes": "offsite_excludes",
@@ -64,6 +74,7 @@ _EDITABLE_COLS = [1, 2, 3, 4]
 # ---------------------------------------------------------------------------
 # Page builder
 # ---------------------------------------------------------------------------
+
 
 def create_offsite_page(app, ctx):
     """Build and return the full Offsite Backup tab widget."""
@@ -113,55 +124,6 @@ def create_offsite_page(app, ctx):
 
     # Auto-detect offsite pool from candidates defined in the Pools tab.
     do_detect_offsite_pool(app)
-
-    # --- Advanced expander ---
-    adv_exp = Gtk.Expander()
-    adv_exp.set_label_widget(bold_label("Advanced"))
-    adv_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-    adv_box.set_margin_start(10)
-    adv_box.set_margin_end(10)
-    adv_box.set_margin_top(5)
-    adv_box.set_margin_bottom(5)
-    adv_exp.add(adv_box)
-    box.pack_start(adv_exp, False, False, 0)
-
-    # Dataset Selection subsection
-    ds_frame = Gtk.Frame()
-    ds_frame.set_label_widget(bold_label("Dataset Selection"))
-    ds_grid = Gtk.Grid()
-    ds_grid.set_row_spacing(5)
-    ds_grid.set_column_spacing(10)
-    ds_grid.set_margin_start(10)
-    ds_grid.set_margin_end(10)
-    ds_grid.set_margin_top(5)
-    ds_grid.set_margin_bottom(5)
-    ds_frame.add(ds_grid)
-    adv_box.pack_start(ds_frame, False, False, 0)
-
-    for i, key in enumerate(OFFSITE_DATASET_VARIABLES):
-        add_var_row(ds_grid, i, key, variables, app.offsite_var_widgets,
-                    yn_vars=OFFSITE_YN_VARIABLES, topic_map=_OFFSITE_TOPIC_MAP)
-
-    adv_grid = Gtk.Grid()
-    adv_grid.set_row_spacing(5)
-    adv_grid.set_column_spacing(10)
-    adv_box.pack_start(adv_grid, False, False, 0)
-
-    for i, key in enumerate(OFFSITE_VARIABLES):
-        add_var_row(adv_grid, i, key, variables, app.offsite_var_widgets,
-                    yn_vars=OFFSITE_YN_VARIABLES, topic_map=_OFFSITE_TOPIC_MAP)
-
-    app.offsite_pause_scrubs = Gtk.CheckButton(
-        label="Pause scrubs on source/destination pools during each step"
-    )
-    app.offsite_pause_scrubs.set_active(
-        offsite_cfg.get("pause_scrubs", False)
-    )
-    app.offsite_pause_scrubs.set_tooltip_text(
-        "Pause ZFS scrubs on the pools used by each offsite step "
-        "while that step is running."
-    )
-    adv_box.pack_start(app.offsite_pause_scrubs, False, False, 0)
 
     # --- Snapshot frame ---
     snap_frame = Gtk.Frame()
@@ -219,8 +181,7 @@ def create_offsite_page(app, ctx):
     toggle_r = Gtk.CellRendererToggle()
     toggle_r.connect("toggled", on_toggle, app.offsite_step_store)
     col_active = Gtk.TreeViewColumn("Active", toggle_r, active=0)
-    configure_treeview_column(col_active, width=ACTIVE_COLUMN_WIDTH,
-                              min_width=ACTIVE_COLUMN_WIDTH)
+    configure_treeview_column(col_active, width=ACTIVE_COLUMN_WIDTH, min_width=ACTIVE_COLUMN_WIDTH)
     step_view.append_column(col_active)
 
     col_defs = [
@@ -258,24 +219,84 @@ def create_offsite_page(app, ctx):
     sr_box.pack_start(btn_box, False, False, 0)
 
     for step in offsite_cfg["steps"]:
-        app.offsite_step_store.append([
-            step["active"], step["source"], step["dest"],
-            step.get("includes", ""), step.get("excludes", ""),
-        ])
+        app.offsite_step_store.append(
+            [
+                step["active"],
+                step["source"],
+                step["dest"],
+                step.get("includes", ""),
+                step.get("excludes", ""),
+            ]
+        )
 
-    tracker = DirtyTracker(app, lambda: collect_offsite_config(app),
-                           "_offsite_save_button")
+    # --- Advanced expander ---
+    adv_exp = Gtk.Expander()
+    adv_exp.set_label_widget(bold_label("Advanced"))
+    adv_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+    adv_box.set_margin_start(10)
+    adv_box.set_margin_end(10)
+    adv_box.set_margin_top(5)
+    adv_box.set_margin_bottom(5)
+    adv_exp.add(adv_box)
+    box.pack_start(adv_exp, False, False, 0)
+
+    # Dataset Selection subsection
+    ds_frame = Gtk.Frame()
+    ds_frame.set_label_widget(bold_label("Dataset Selection"))
+    ds_grid = Gtk.Grid()
+    ds_grid.set_row_spacing(5)
+    ds_grid.set_column_spacing(10)
+    ds_grid.set_margin_start(10)
+    ds_grid.set_margin_end(10)
+    ds_grid.set_margin_top(5)
+    ds_grid.set_margin_bottom(5)
+    ds_frame.add(ds_grid)
+    adv_box.pack_start(ds_frame, False, False, 0)
+
+    for i, key in enumerate(OFFSITE_DATASET_VARIABLES):
+        add_var_row(
+            ds_grid,
+            i,
+            key,
+            variables,
+            app.offsite_var_widgets,
+            yn_vars=OFFSITE_YN_VARIABLES,
+            topic_map=_OFFSITE_TOPIC_MAP,
+        )
+
+    adv_grid = Gtk.Grid()
+    adv_grid.set_row_spacing(5)
+    adv_grid.set_column_spacing(10)
+    adv_box.pack_start(adv_grid, False, False, 0)
+
+    for i, key in enumerate(OFFSITE_VARIABLES):
+        add_var_row(
+            adv_grid,
+            i,
+            key,
+            variables,
+            app.offsite_var_widgets,
+            yn_vars=OFFSITE_YN_VARIABLES,
+            topic_map=_OFFSITE_TOPIC_MAP,
+        )
+
+    app.offsite_pause_scrubs = Gtk.CheckButton(
+        label="Pause scrubs on source/destination pools during each step"
+    )
+    app.offsite_pause_scrubs.set_active(offsite_cfg.get("pause_scrubs", False))
+    app.offsite_pause_scrubs.set_tooltip_text(
+        "Pause ZFS scrubs on the pools used by each offsite step while that step is running."
+    )
+    adv_box.pack_start(app.offsite_pause_scrubs, False, False, 0)
+
+    tracker = DirtyTracker(app, lambda: collect_offsite_config(app), "_offsite_save_button")
     app._offsite_tracker = tracker
     for widget in app.offsite_var_widgets.values():
         widget.connect("changed", lambda _w, t=tracker: t.check())
-    app.offsite_step_store.connect(
-        "row-changed", lambda _m, _p, _i, t=tracker: t.check())
-    app.offsite_step_store.connect(
-        "row-inserted", lambda _m, _p, _i, t=tracker: t.check())
-    app.offsite_step_store.connect(
-        "row-deleted", lambda _m, _p, t=tracker: t.check())
-    app.offsite_pause_scrubs.connect(
-        "toggled", lambda _w, t=tracker: t.check())
+    app.offsite_step_store.connect("row-changed", lambda _m, _p, _i, t=tracker: t.check())
+    app.offsite_step_store.connect("row-inserted", lambda _m, _p, _i, t=tracker: t.check())
+    app.offsite_step_store.connect("row-deleted", lambda _m, _p, t=tracker: t.check())
+    app.offsite_pause_scrubs.connect("toggled", lambda _w, t=tracker: t.check())
 
     return scrolled
 
@@ -283,6 +304,7 @@ def create_offsite_page(app, ctx):
 # ---------------------------------------------------------------------------
 # Config snapshot helpers
 # ---------------------------------------------------------------------------
+
 
 def collect_offsite_config(app):
     """Collect current offsite UI state into a config dict."""
@@ -295,13 +317,15 @@ def collect_offsite_config(app):
 
     steps = []
     for row in app.offsite_step_store:
-        steps.append({
-            "active": row[0],
-            "source": row[1],
-            "dest": row[2],
-            "includes": row[3],
-            "excludes": row[4],
-        })
+        steps.append(
+            {
+                "active": row[0],
+                "source": row[1],
+                "dest": row[2],
+                "includes": row[3],
+                "excludes": row[4],
+            }
+        )
 
     return {
         "variables": variables,
@@ -312,7 +336,7 @@ def collect_offsite_config(app):
 
 def check_offsite_dirty(app):
     """Compare current UI state to last-saved state; style Save button."""
-    if hasattr(app, '_offsite_tracker'):
+    if hasattr(app, "_offsite_tracker"):
         app._offsite_tracker.check()
 
 
@@ -330,10 +354,15 @@ def load_offsite_config(app, config):
 
     app.offsite_step_store.clear()
     for step in config.get("steps", []):
-        app.offsite_step_store.append([
-            step["active"], step["source"], step["dest"],
-            step.get("includes", ""), step.get("excludes", ""),
-        ])
+        app.offsite_step_store.append(
+            [
+                step["active"],
+                step["source"],
+                step["dest"],
+                step.get("includes", ""),
+                step.get("excludes", ""),
+            ]
+        )
     app.offsite_pause_scrubs.set_active(config.get("pause_scrubs", False))
 
 
@@ -360,9 +389,7 @@ def do_detect_offsite_pool(app):
     if pool:
         app.offsite_detected_label.set_markup(f"<b>{pool}</b>")
     else:
-        app.offsite_detected_label.set_text(
-            f"(none online; looked for: {', '.join(candidates)})"
-        )
+        app.offsite_detected_label.set_text(f"(none online; looked for: {', '.join(candidates)})")
     return pool
 
 
@@ -370,10 +397,12 @@ def do_detect_offsite_pool(app):
 # Signal handlers
 # ---------------------------------------------------------------------------
 
+
 def _on_editing_started(renderer, editable, path, treeview, col_idx):
     """Connect key-press on the editable to handle Tab/Shift+Tab."""
-    editable.connect("key-press-event", handle_editing_key_press,
-                     treeview, path, col_idx, _EDITABLE_COLS)
+    editable.connect(
+        "key-press-event", handle_editing_key_press, treeview, path, col_idx, _EDITABLE_COLS
+    )
 
 
 def _on_step_add(button, app):
@@ -396,6 +425,7 @@ def _on_step_remove(button, app):
 # Action handlers
 # ---------------------------------------------------------------------------
 
+
 def on_offsite_run(app, ctx):
     """Build step list and start offsite backup execution."""
     app.clear_log_status()
@@ -405,8 +435,8 @@ def on_offsite_run(app, ctx):
         log_msg("WARN: Generate or enter a snapshot name first")
         return
 
-    if nextsnap[0] != '@':
-        nextsnap = '@' + nextsnap
+    if nextsnap[0] != "@":
+        nextsnap = "@" + nextsnap
         app.offsite_nextsnap_entry.set_text(nextsnap)
 
     offsite_pool = do_detect_offsite_pool(app)
@@ -421,9 +451,7 @@ def on_offsite_run(app, ctx):
             message_type=Gtk.MessageType.QUESTION,
             text=f"New snapshot: {nextsnap}",
         )
-        dialog.format_secondary_text(
-            f"Offsite pool: {offsite_pool}\nProceed with offsite backup?"
-        )
+        dialog.format_secondary_text(f"Offsite pool: {offsite_pool}\nProceed with offsite backup?")
         dialog.add_button("Generate", Gtk.ResponseType.APPLY)
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
         dialog.add_button("OK", Gtk.ResponseType.OK)
@@ -442,7 +470,7 @@ def on_offsite_run(app, ctx):
 
     offsite_cfg = collect_offsite_config(app)
     variables = offsite_cfg["variables"]
-    dryrun = getattr(app, '_dry_run_active', False)
+    dryrun = getattr(app, "_dry_run_active", False)
 
     if dryrun:
         log_msg("INFO: Dry run mode enabled — no changes will be made")
@@ -458,13 +486,21 @@ def on_offsite_run(app, ctx):
         excludes = step.get("excludes", "")
 
         offsite_step = build_offsite_step_command(
-            source, dest, variables, ctx.parent_dir, nextsnap,
-            includes, excludes,
+            source,
+            dest,
+            variables,
+            ctx.parent_dir,
+            nextsnap,
+            includes,
+            excludes,
             dryrun=dryrun,
         )
         attach_step_scrub_callbacks(
-            offsite_step, source, dest,
-            enabled=pause_scrubs, dry_run=dryrun,
+            offsite_step,
+            source,
+            dest,
+            enabled=pause_scrubs,
+            dry_run=dryrun,
             log_func=app.offsite_runner._runner_log,
         )
         steps.append(offsite_step)
@@ -475,10 +511,10 @@ def on_offsite_run(app, ctx):
 
     log_msg(f"INFO: Snapshot: {nextsnap}")
     app.offsite_runner.set_steps(steps)
-    app.offsite_runner.set_step_success_callback(
-        lambda md: _maybe_seed_checkagainst(app, md)
+    app.offsite_runner.set_step_success_callback(lambda md: _maybe_seed_checkagainst(app, md))
+    app.offsite_runner.start(
+        on_complete=lambda cancelled=False: _on_offsite_complete(app, cancelled)
     )
-    app.offsite_runner.start(on_complete=lambda cancelled=False: _on_offsite_complete(app, cancelled))
     app.update_action_buttons("offsite")
 
 
@@ -500,11 +536,12 @@ def on_offsite_save(app, ctx):
     backup_cfg = get_backup_config(ctx.config)
     warnings = validate_gui_settings(backup_cfg, offsite_data)
     if warnings:
-        show_warning_dialog(app, "Backup/offsite scope mismatch detected:\n\n" +
-                            "\n\n".join(warnings))
+        show_warning_dialog(
+            app, "Backup/offsite scope mismatch detected:\n\n" + "\n\n".join(warnings)
+        )
     try:
         save_offsite_config(ctx.config, offsite_data)
-        if hasattr(app, '_offsite_tracker'):
+        if hasattr(app, "_offsite_tracker"):
             app._offsite_tracker.mark_clean()
         log_msg("INFO: Offsite config saved to /var/lib/zfsutilities/config.json")
     except OSError as e:
@@ -513,7 +550,7 @@ def on_offsite_save(app, ctx):
 
 def on_offsite_revert(app, ctx):
     """Revert offsite UI to last-saved state."""
-    if not hasattr(app, '_offsite_tracker'):
+    if not hasattr(app, "_offsite_tracker"):
         log_msg("INFO: Nothing to revert")
         return
     app._offsite_tracker.revert(lambda cfg: load_offsite_config(app, cfg))

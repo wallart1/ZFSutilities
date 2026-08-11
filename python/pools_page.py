@@ -35,6 +35,7 @@ from scrub_manager import (
     get_all_pool_scrub_states,
     sync_system_scrub_for_pools,
 )
+from zfs_repository import ImportablePoolCache
 
 # ListStore columns:
 #   0 name, 1 health, 2 size, 3 alloc, 4 free, 5 freeing,
@@ -246,6 +247,9 @@ def create_pools_page(app):
     # Track offsite candidates for comparison during refresh
     app._offsite_candidates = set(get_offsite_candidate_names(app.config))
 
+    # Cache importable-pool scan results so the table stays responsive
+    app._importable_pool_cache = ImportablePoolCache(app.ctx.zfs_repository)
+
     # Load status data
     refresh_pools_page(app)
 
@@ -355,6 +359,39 @@ def create_pools_page(app):
 # ---------------------------------------------------------------------------
 
 
+def _importable_pool_names(app):
+    """Return the cached set of importable pool names, refreshing in background."""
+    cache = getattr(app, "_importable_pool_cache", None)
+    if cache is None:
+        return set()
+    return cache.get(callback=_make_importable_refresh_callback(app))
+
+
+def _make_importable_refresh_callback(app):
+    """Return a callback that refreshes the Pools page when the scan finishes."""
+
+    def _callback():
+        # The cache worker thread calls this; schedule UI work on the GTK main thread.
+        GLib.idle_add(_refresh_pools_page_if_visible, app)
+
+    return _callback
+
+
+def _refresh_pools_page_if_visible(app):
+    """Refresh the Pools page only if it is the active tab."""
+    if app.stack.get_visible_child_name() == "pools":
+        refresh_pools_page(app)
+    return False
+
+
+def on_pools_refresh(app):
+    """Manual refresh: invalidate the importable cache and redraw the table."""
+    cache = getattr(app, "_importable_pool_cache", None)
+    if cache is not None:
+        cache.invalidate()
+    refresh_pools_page(app)
+
+
 def refresh_pools_page(app):
     """Refresh the table from zpool list, preserving the known-pool order."""
     # Preserve multi-selection by pool name
@@ -374,8 +411,10 @@ def refresh_pools_page(app):
         log_msg(f"WARN: Error running zpool list: {e}")
         online_pools = {}
 
+    importable_names = _importable_pool_names(app)
     online_count = 0
     offline_count = 0
+    importable_registered_count = 0
 
     known_names = {p["name"] for p in app.known_pools}
 
@@ -402,6 +441,24 @@ def refresh_pools_page(app):
                 ]
             )
             online_count += 1
+        elif pool_name in importable_names:
+            app.pool_store.append(
+                [
+                    pool_name,
+                    "IMPORTABLE",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    FLAG_REGISTERED,
+                    is_candidate,
+                    "—",
+                ]
+            )
+            importable_registered_count += 1
         else:
             app.pool_store.append(
                 [
@@ -441,12 +498,37 @@ def refresh_pools_page(app):
                     errors_summary,
                 ]
             )
-            log_msg(f"WARN: Pool '{pool_name}' is online but not in the pool registry")
+            log_msg(f"VERB: Pool '{pool_name}' is online but not in the pool registry")
+
+    # Unregistered importable pools (present but not imported or registered)
+    unregistered_importable = importable_names - known_names - set(online_pools.keys())
+    for pool_name in sorted(unregistered_importable):
+        app.pool_store.append(
+            [
+                pool_name,
+                "IMPORTABLE",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                FLAG_UNREGISTERED,
+                False,
+                "—",
+            ]
+        )
+        log_msg(f"VERB: Pool '{pool_name}' is importable but not in the pool registry")
 
     total = len(app.known_pools)
-    app.pool_summary_label.set_text(
-        f"{total} registered pools: {online_count} online, {offline_count} offline"
+    summary = (
+        f"{total} registered pools: {online_count} online, {offline_count} offline, "
+        f"{importable_registered_count} importable"
     )
+    if unregistered_importable:
+        summary += f"; {len(unregistered_importable)} unregistered importable"
+    app.pool_summary_label.set_text(summary)
     _update_pools_dirty_indicator(app)
 
     # Restore multi-selection
@@ -500,6 +582,9 @@ def _pool_health_cell_func(column, renderer, model, tree_iter, data=None):
     elif health == "OFFLINE":
         renderer.set_property("foreground", "#FF9800")
         renderer.set_property("weight", Pango.Weight.NORMAL)
+    elif health == "IMPORTABLE":
+        renderer.set_property("foreground", "#2196F3")
+        renderer.set_property("weight", Pango.Weight.BOLD)
     elif health != "-":
         renderer.set_property("foreground", "#F44336")
         renderer.set_property("weight", Pango.Weight.BOLD)
@@ -854,10 +939,11 @@ def update_pools_button_sensitivity(app):
     pool_rows = _get_selected_pool_rows(app.pool_view)
 
     has_registered_online = any(
-        flag == FLAG_REGISTERED and health != "OFFLINE" for _name, flag, health in pool_rows
+        flag == FLAG_REGISTERED and health not in ("OFFLINE", "IMPORTABLE")
+        for _name, flag, health in pool_rows
     )
     has_registered = any(flag == FLAG_REGISTERED for _name, flag, _health in pool_rows)
-    has_online = any(health != "OFFLINE" for _name, _flag, health in pool_rows)
+    has_online = any(health not in ("OFFLINE", "IMPORTABLE") for _name, _flag, health in pool_rows)
     single_pool = len(pool_rows) == 1
 
     scrub_view = getattr(app, "scrub_view", None)

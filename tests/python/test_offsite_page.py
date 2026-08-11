@@ -248,7 +248,7 @@ class TestOffsitePageFrames(unittest.TestCase):
     def test_snapshot_frame_above_send_receive_steps(
         self, _mock_detect, _mock_gen
     ):
-        """Snapshot frame is packed after Advanced and before Send/Receive Steps."""
+        """Snapshot frame is before Send/Receive Steps; Advanced is after them."""
         op = _import_offsite_page()
         op.Gtk.ComboBoxText = _FakeComboBoxText
 
@@ -272,16 +272,16 @@ class TestOffsitePageFrames(unittest.TestCase):
         # The first Box created is the outer vertical container.
         outer_box = boxes[0]
 
-        # Frame creation order: Offsite Pool, Dataset Selection, Snapshot,
-        # Send/Receive Steps.
-        pool_frame, _, snap_frame, sr_frame = frames
+        # Frame creation order: Offsite Pool, Snapshot, Send/Receive Steps,
+        # Dataset Selection (inside the Advanced expander).
+        pool_frame, snap_frame, sr_frame, _ = frames
         adv_expander = expanders[0]
 
         packed = [call[0][0] for call in outer_box.pack_start.call_args_list]
         self.assertEqual(
             packed,
             [op.Gtk.Label.return_value, op.Gtk.Separator.return_value,
-             pool_frame, adv_expander, snap_frame, sr_frame],
+             pool_frame, snap_frame, sr_frame, adv_expander],
         )
 
 

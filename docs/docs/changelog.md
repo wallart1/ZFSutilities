@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.81.0
+
+*Released 2026-08-10*
+
+### Added
+
+- **Dashboard Active Locks panel** — The Dashboard now lists every currently
+  held, non-stale ZFS dataset lock, showing dataset, lock type, PID, script,
+  acquisition time, and optional description. `python/zfs_lock_manager.py`
+  provides `list_active_locks()` for this.
+
+- **Pools tab importable-pool visibility** — The Pools tab now shows pools that
+  are present but not yet imported (`zpool import`) with a new `IMPORTABLE`
+  health state. Registered importable pools appear alongside online/offline
+  pools, and unregistered importable pools are shown so they can be added to
+  the registry. The importable-pool scan runs in a background-cached daemon
+  thread so the UI stays responsive.
+
+- **Pool import from importable state** — The **Import** action now imports
+  selected `IMPORTABLE` pools directly, as well as `OFFLINE` pools.
+
+- **`list-vm-disks` qemu-ga compatibility** — `bin/list-vm-disks` now decodes
+  base64-encoded `out-data` returned by newer Proxmox/qemu-guest-agent versions,
+  and accepts both boolean and integer `"exited"` values from `qm guest exec`.
+
+### Changed
+
+- **Backup/Offsite tab layout** — The Advanced expander is now placed after the
+  Pull Steps / Snapshot / Send-Receive Steps sections in both the Backup and
+  Offsite tabs, putting the most frequently edited controls first.
+
+- **Info panel initialization order** — The GUI creates the info panel before
+  the tab pages so log output produced during page construction is captured.
+
+### Tests
+
+- Added `tests/python/test_zfs_lock_manager.py` cases for `list_active_locks()`.
+
+- Added `tests/python/test_zfs_repository.py` cases for
+  `list_importable_pool_names()` and `ImportablePoolCache`.
+
+- Extended `tests/python/test_dashboard_page.py` to cover the Active Locks
+  section and data gathering.
+
+- Extended `tests/python/test_pools_page.py` and
+  `tests/python/test_pool_actions.py` for importable-pool display, summary
+  counts, button sensitivity, and import handling.
+
+- Added `tests/test-list-vm-disks` cases for base64 decoding, immediate status
+  return, and integer `"exited"` values.
+
+### Documentation
+
+- Updated `docs/docs/user-guide/gtk-gui.md` to describe the Dashboard Active
+  Locks section and Pools tab importable-pool behavior.
+
+- Updated `docs/docs/developer-guide/lock-manager.md` with the Python
+  `list_active_locks()` API.
+
+- Updated `docs/docs/commands-and-modules/python-modules.md` to list
+  `list_active_locks()`.
+
+- Updated `docs/docs/developer-guide/testing.md` to match the larger
+  development-VM test disk sizes.
+
 ## 0.80.0
 
 *Released 2026-08-10*

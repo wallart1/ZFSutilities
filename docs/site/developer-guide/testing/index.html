@@ -2632,20 +2632,20 @@ sudo<span class="w"> </span>tests/integration/test-zfs-send-receive-pools
 <code>zfstest3</code>) may be used. The suite refuses to run if a configured pool is not
 in the allow-list or is not online.</p>
 <h3 id="creating-local-test-pools">Creating Local Test Pools<a class="headerlink" href="#creating-local-test-pools" title="Permanent link">&para;</a></h3>
-<p>On the development VM, <code>/dev/sdb</code> is a 1.5 GiB empty virtual disk. It can be
+<p>On the development VM, <code>/dev/sdb</code> is a 75 GiB empty virtual disk. It can be
 partitioned and used to create three small RAIDZ1 test pools:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Create a GPT label and 15 ~100 MiB partitions.</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># Create a GPT label and 15 ~5 GiB partitions.</span>
 parted<span class="w"> </span>-s<span class="w"> </span>/dev/sdb<span class="w"> </span>mklabel<span class="w"> </span>gpt
 <span class="k">for</span><span class="w"> </span>i<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">{</span><span class="m">1</span>..15<span class="o">}</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span><span class="nv">$i</span><span class="w"> </span>-eq<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
 <span class="w">        </span><span class="nv">start</span><span class="o">=</span><span class="s2">&quot;1MiB&quot;</span>
 <span class="w">    </span><span class="k">else</span>
-<span class="w">        </span><span class="nv">start</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$((</span><span class="w"> </span><span class="o">(</span><span class="nv">i</span><span class="o">-</span><span class="m">1</span><span class="o">)*</span><span class="m">100</span><span class="w"> </span><span class="k">))</span><span class="s2">MiB&quot;</span>
+<span class="w">        </span><span class="nv">start</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$((</span><span class="w"> </span><span class="o">(</span><span class="nv">i</span><span class="o">-</span><span class="m">1</span><span class="o">)*</span><span class="m">5120</span><span class="w"> </span><span class="k">))</span><span class="s2">MiB&quot;</span>
 <span class="w">    </span><span class="k">fi</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="o">[[</span><span class="w"> </span><span class="nv">$i</span><span class="w"> </span>-eq<span class="w"> </span><span class="m">15</span><span class="w"> </span><span class="o">]]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
-<span class="w">        </span><span class="nv">end</span><span class="o">=</span><span class="s2">&quot;1499MiB&quot;</span>
+<span class="w">        </span><span class="nv">end</span><span class="o">=</span><span class="s2">&quot;100%&quot;</span>
 <span class="w">    </span><span class="k">else</span>
-<span class="w">        </span><span class="nv">end</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$((</span><span class="w"> </span><span class="nv">i</span><span class="o">*</span><span class="m">100</span><span class="w"> </span><span class="k">))</span><span class="s2">MiB&quot;</span>
+<span class="w">        </span><span class="nv">end</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$((</span><span class="w"> </span><span class="nv">i</span><span class="o">*</span><span class="m">5120</span><span class="w"> </span><span class="k">))</span><span class="s2">MiB&quot;</span>
 <span class="w">    </span><span class="k">fi</span>
 <span class="w">    </span>parted<span class="w"> </span>-a<span class="w"> </span>optimal<span class="w"> </span>-s<span class="w"> </span>/dev/sdb<span class="w"> </span>mkpart<span class="w"> </span>primary<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">start</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">end</span><span class="si">}</span><span class="s2">&quot;</span>
 <span class="k">done</span>
@@ -2656,11 +2656,11 @@ zpool<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </
 zpool<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>zfstest2<span class="w"> </span>raidz1<span class="w"> </span>/dev/sdb6<span class="w"> </span>/dev/sdb7<span class="w"> </span>/dev/sdb8<span class="w"> </span>/dev/sdb9<span class="w"> </span>/dev/sdb10
 zpool<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>zfstest3<span class="w"> </span>raidz1<span class="w"> </span>/dev/sdb11<span class="w"> </span>/dev/sdb12<span class="w"> </span>/dev/sdb13<span class="w"> </span>/dev/sdb14<span class="w"> </span>/dev/sdb15
 </code></pre></div>
-<p>Each pool provides roughly 448 MiB of usable space. The integration suite sets
-<code>space_check_min_buffer=0</code> for its normal scenarios because the default 1 GiB
-minimum buffer in <code>zfs-send-receive</code> exceeds the capacity of these small pools.
-The space-check scenario itself verifies the skip behavior by setting an
-artificially large buffer.</p>
+<p>Each pool reports roughly 24.5 GiB of raw space, yielding about 20 GiB of
+usable space after RAIDZ1 parity. The integration suite still sets
+<code>space_check_min_buffer=0</code> for its normal scenarios to keep the existing small-
+transfer logic path. The space-check scenario itself verifies the skip behavior
+by setting an artificially large buffer.</p>
 <h3 id="running-the-integration-suite">Running the Integration Suite<a class="headerlink" href="#running-the-integration-suite" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>tests/integration/test-zfs-send-receive-pools
 </code></pre></div>
@@ -2788,7 +2788,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.80.0
+      ZFS Utilities v0.81.0
     </div>
   
   
@@ -2813,7 +2813,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.80.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.81.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

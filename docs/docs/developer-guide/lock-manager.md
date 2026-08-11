@@ -120,6 +120,13 @@ If it is stale, it is removed and acquisition is retried automatically.
 
 `zfslockctl list [dataset]`                  List active locks
 
+### Python client
+
+`python/zfs_lock_manager.py` provides `list_active_locks()`, which returns all
+currently active (non-stale) locks as a list of dicts with `dataset`, `type`,
+`pid`, `script`, `acquired`, and `description` keys. The Dashboard uses this to
+populate its **Active Locks** section.
+
 
 `zfslockctl status <dataset> `            Check lock status
 

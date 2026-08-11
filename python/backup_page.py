@@ -166,6 +166,69 @@ def create_backup_page(app, ctx):
     app.backup_pre_script_text.set_placeholder_text("Command to run before backup...")
     pre_grid.attach(app.backup_pre_script_text, 0, 1, 2, 1)
 
+    # --- Pull Steps (rsync) ---
+    app.backup_pull_steps_active = Gtk.CheckButton(label="Active")
+    app.backup_pull_steps_active.set_active(backup_cfg.get("pull_steps_active", True))
+    app.backup_pull_steps_active.set_tooltip_text("When unchecked, all pull steps are bypassed.")
+    pull_box = _frame_box(box, "Pull Steps (rsync)", header_widget=app.backup_pull_steps_active)
+
+    pull_elv = EditableListView(
+        columns=[(1, "Source", 120), (2, "Destination", 120), (3, "Excludes", 120)],
+        column_names=["source", "dest", "excludes"],
+    )
+    app.backup_pull_store = pull_elv.get_store()
+    pull_box.pack_start(pull_elv.get_widget(), True, True, 0)
+    pull_elv.set_data(
+        [
+            (
+                s["active"],
+                s["source"],
+                s["dest"],
+                " ".join(shlex.quote(p) for p in s.get("excludes", [])),
+            )
+            for s in backup_cfg["pull_steps"]
+        ]
+    )
+
+    # --- nextsnap (above ZFS Send/Receive Steps) ---
+    snap_grid = _frame_grid(box, "Snapshot")
+
+    app.backup_nextsnap_label = Gtk.Label(label="nextsnap")
+    app.backup_nextsnap_label.set_halign(Gtk.Align.END)
+    snap_grid.attach(app.backup_nextsnap_label, 0, 0, 1, 1)
+
+    snap_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+    app.backup_nextsnap_entry = Gtk.Entry()
+    app.backup_nextsnap_entry.set_hexpand(True)
+    app.backup_nextsnap_entry.set_width_chars(1)
+    snap_box.pack_start(app.backup_nextsnap_entry, True, True, 0)
+
+    gen_btn = Gtk.Button(label="Generate")
+    gen_btn.connect("clicked", _on_generate_snap, app)
+    snap_box.pack_start(gen_btn, False, False, 0)
+    snap_grid.attach(snap_box, 1, 0, 1, 1)
+
+    # Inline: read previously saved snapshot name from disk
+    saved = _read_snapfile(SNAPFILE)
+    if saved:
+        app.backup_nextsnap_entry.set_text(saved)
+        app.backup_nextsnap_label.set_text("nextsnap (previous)")
+        log_msg(f"INFO: Previous snapshot name found: {saved}")
+    else:
+        _do_generate_snap(app)
+
+    # --- ZFS Send/Receive Steps ---
+    sr_box = _frame_box(box, "ZFS Send/Receive Steps")
+
+    sr_elv = EditableListView(
+        columns=[(1, "Source Pool/Subpool", 160), (2, "Destination Pool", 120)],
+    )
+    app.backup_sr_store = sr_elv.get_store()
+    sr_box.pack_start(sr_elv.get_widget(), True, True, 0)
+    sr_elv.set_data(
+        [(s["active"], s["source"], s["dest"]) for s in backup_cfg["send_receive_steps"]]
+    )
+
     # --- Advanced (collapsed expander) ---
     advanced_exp = Gtk.Expander()
     advanced_exp.set_label_widget(bold_label("Advanced"))
@@ -252,69 +315,6 @@ def create_backup_page(app, ctx):
         "Pause ZFS scrubs on the pools used by each send/receive step while that step is running."
     )
     advanced_box.pack_start(app.backup_pause_scrubs, False, False, 0)
-
-    # --- Pull Steps (rsync) ---
-    app.backup_pull_steps_active = Gtk.CheckButton(label="Active")
-    app.backup_pull_steps_active.set_active(backup_cfg.get("pull_steps_active", True))
-    app.backup_pull_steps_active.set_tooltip_text("When unchecked, all pull steps are bypassed.")
-    pull_box = _frame_box(box, "Pull Steps (rsync)", header_widget=app.backup_pull_steps_active)
-
-    pull_elv = EditableListView(
-        columns=[(1, "Source", 120), (2, "Destination", 120), (3, "Excludes", 120)],
-        column_names=["source", "dest", "excludes"],
-    )
-    app.backup_pull_store = pull_elv.get_store()
-    pull_box.pack_start(pull_elv.get_widget(), True, True, 0)
-    pull_elv.set_data(
-        [
-            (
-                s["active"],
-                s["source"],
-                s["dest"],
-                " ".join(shlex.quote(p) for p in s.get("excludes", [])),
-            )
-            for s in backup_cfg["pull_steps"]
-        ]
-    )
-
-    # --- nextsnap (above ZFS Send/Receive Steps) ---
-    snap_grid = _frame_grid(box, "Snapshot")
-
-    app.backup_nextsnap_label = Gtk.Label(label="nextsnap")
-    app.backup_nextsnap_label.set_halign(Gtk.Align.END)
-    snap_grid.attach(app.backup_nextsnap_label, 0, 0, 1, 1)
-
-    snap_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-    app.backup_nextsnap_entry = Gtk.Entry()
-    app.backup_nextsnap_entry.set_hexpand(True)
-    app.backup_nextsnap_entry.set_width_chars(1)
-    snap_box.pack_start(app.backup_nextsnap_entry, True, True, 0)
-
-    gen_btn = Gtk.Button(label="Generate")
-    gen_btn.connect("clicked", _on_generate_snap, app)
-    snap_box.pack_start(gen_btn, False, False, 0)
-    snap_grid.attach(snap_box, 1, 0, 1, 1)
-
-    # Inline: read previously saved snapshot name from disk
-    saved = _read_snapfile(SNAPFILE)
-    if saved:
-        app.backup_nextsnap_entry.set_text(saved)
-        app.backup_nextsnap_label.set_text("nextsnap (previous)")
-        log_msg(f"INFO: Previous snapshot name found: {saved}")
-    else:
-        _do_generate_snap(app)
-
-    # --- ZFS Send/Receive Steps ---
-    sr_box = _frame_box(box, "ZFS Send/Receive Steps")
-
-    sr_elv = EditableListView(
-        columns=[(1, "Source Pool/Subpool", 160), (2, "Destination Pool", 120)],
-    )
-    app.backup_sr_store = sr_elv.get_store()
-    sr_box.pack_start(sr_elv.get_widget(), True, True, 0)
-    sr_elv.set_data(
-        [(s["active"], s["source"], s["dest"]) for s in backup_cfg["send_receive_steps"]]
-    )
 
     # --- Post-Backup Steps ---
     post_grid = _frame_grid(box, "Post-Backup Steps")

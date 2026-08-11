@@ -332,7 +332,7 @@ class TestOnPoolsRevert(unittest.TestCase):
 class TestOnPoolsImport(unittest.TestCase):
     """on_pools_import refreshes both pool and scrub tables."""
 
-    def _make_app_with_offline_selection(self, pa, pools, selected):
+    def _make_app_with_offline_selection(self, pa, pools, selected, health="OFFLINE"):
         app = _make_app(pools)
         model = MagicMock()
         paths = []
@@ -350,7 +350,7 @@ class TestOnPoolsImport(unittest.TestCase):
             if col == pa.COL_NAME:
                 return name
             if col == pa.COL_HEALTH:
-                return "OFFLINE"
+                return health
             return None
 
         model.get_value.side_effect = get_value
@@ -379,6 +379,31 @@ class TestOnPoolsImport(unittest.TestCase):
         mock_refresh.assert_called_once_with(app)
         mock_scrub_refresh.assert_called_once_with(app)
         mock_burst.assert_called_once_with(app)
+
+    def test_import_importable_selected_refreshes_scrub_table(self):
+        pa = _import_pool_actions()
+        app = self._make_app_with_offline_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+            health="IMPORTABLE",
+        )
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh,
+            patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst,
+            patch.object(app.ctx.zfs_repository, "import_pool", return_value=True) as mock_import,
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_import(app)
+
+            mock_import.assert_called_once_with("tank")
+            mock_refresh.assert_called_once_with(app)
+            mock_scrub_refresh.assert_called_once_with(app)
+            mock_burst.assert_called_once_with(app)
 
 
 class TestOnPoolsExport(unittest.TestCase):

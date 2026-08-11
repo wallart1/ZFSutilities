@@ -187,9 +187,9 @@ def _import_single_pool(app, pool_name):
 
 
 def on_pools_import(app):
-    """Import selected offline pools, or show importable pools dialog if none selected."""
+    """Import selected offline/importable pools, or show importable pools dialog if none selected."""
     selected = _get_selected_rows(app)
-    offline_selected = [n for n, h in selected if h == "OFFLINE"]
+    offline_selected = [n for n, h in selected if h in ("OFFLINE", "IMPORTABLE")]
 
     if offline_selected:
         dlg = Gtk.MessageDialog(

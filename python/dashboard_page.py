@@ -19,6 +19,7 @@ from gui_helpers import configure_treeview_column, set_monospace_font
 from logging_config import log_msg
 from logs_page import select_log_by_path
 from path_utils import get_version, resolve_local_bin, resolve_remote_version
+from zfs_lock_manager import list_active_locks
 from zfs_repository import get_default_repository
 
 # ---------------------------------------------------------------------------
@@ -110,9 +111,7 @@ _ENCRYPTED_LUN_RE = re.compile(r"^([^#\s][^:]*):([^:]+):(.+)$")
 ZFSLOCK_DIR = "/run/lock/zfs"
 ZFSLOCK_LOCKS_DIR = os.path.join(ZFSLOCK_DIR, ".locks")
 ZFSLOCK_PIDS_DIR = os.path.join(ZFSLOCK_DIR, ".pids")
-PROFILE_LOCK_DIR = os.environ.get(
-    "ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles"
-)
+PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles")
 
 
 def _read_json_lock(lock_path):
@@ -163,24 +162,28 @@ def list_running_profiles():
                 continue
             data = _read_json_lock(path) or {}
             name = data.get("profile") or entry[:-5]
-            profiles.append({
-                "name": name,
-                "pid": data.get("pid"),
-                "started": data.get("started", "?"),
-                "log_file": data.get("log_file"),
-            })
+            profiles.append(
+                {
+                    "name": name,
+                    "pid": data.get("pid"),
+                    "started": data.get("started", "?"),
+                    "log_file": data.get("log_file"),
+                }
+            )
         elif entry.endswith(".waiting"):
             if _is_profile_lock_stale(path):
                 continue
             data = _read_json_lock(path) or {}
             name = data.get("profile") or entry[:-8]
-            profiles.append({
-                "name": name,
-                "pid": data.get("pid"),
-                "started": data.get("started", "?"),
-                "log_file": data.get("log_file"),
-                "waiting": True,
-            })
+            profiles.append(
+                {
+                    "name": name,
+                    "pid": data.get("pid"),
+                    "started": data.get("started", "?"),
+                    "log_file": data.get("log_file"),
+                    "waiting": True,
+                }
+            )
     return profiles
 
 
@@ -188,7 +191,11 @@ def _run_cmd(cmd, timeout=5):
     """Run a command, return stdout text or None on failure/timeout."""
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
             check=False,
         )
         return result.stdout.strip()
@@ -408,7 +415,8 @@ def _get_host_zfs_version(host):
             result = subprocess.run(
                 ["zfs", "version"],
                 capture_output=True,
-                text=True, check=False,
+                text=True,
+                check=False,
                 timeout=10,
             )
             if result.returncode == 0:
@@ -421,7 +429,8 @@ def _get_host_zfs_version(host):
         result = subprocess.run(
             ["ssh", f"root@{host}", "zfs version"],
             capture_output=True,
-            text=True, check=False,
+            text=True,
+            check=False,
             timeout=10,
         )
         if result.returncode == 0:
@@ -486,7 +495,8 @@ def _get_host_os_info(host):
         result = subprocess.run(
             pve_cmd,
             capture_output=True,
-            text=True, check=False,
+            text=True,
+            check=False,
             timeout=10,
         )
         if result.returncode == 0:
@@ -497,12 +507,15 @@ def _get_host_os_info(host):
         pass
 
     # 2. Standard /etc/os-release.
-    os_cmd = ["cat", "/etc/os-release"] if is_local else ["ssh", f"root@{host}", "cat /etc/os-release"]
+    os_cmd = (
+        ["cat", "/etc/os-release"] if is_local else ["ssh", f"root@{host}", "cat /etc/os-release"]
+    )
     try:
         result = subprocess.run(
             os_cmd,
             capture_output=True,
-            text=True, check=False,
+            text=True,
+            check=False,
             timeout=10,
         )
         if result.returncode == 0:
@@ -518,7 +531,8 @@ def _get_host_os_info(host):
         result = subprocess.run(
             inxi_cmd,
             capture_output=True,
-            text=True, check=False,
+            text=True,
+            check=False,
             timeout=10,
         )
         if result.returncode == 0:
@@ -595,10 +609,7 @@ def _get_peer_host():
 def _log_peer_version_result(local_version, peer_host, peer_version):
     """Log the outcome of a startup peer-node version comparison."""
     if peer_version == "unknown":
-        log_msg(
-            f"WARN: Could not determine ZFSutilities version on peer node "
-            f"{peer_host}"
-        )
+        log_msg(f"WARN: Could not determine ZFSutilities version on peer node {peer_host}")
     elif peer_version != local_version:
         log_msg(
             f"WARN: Peer node {peer_host} is running ZFSutilities "
@@ -705,10 +716,12 @@ def _get_iscsi_missing_luns():
             pass
 
     savefile = "/etc/rtslib-fb-target/saveconfig.json"
-    if (not target_map or any(n not in target_map for n in missing_names)) \
-            and os.path.exists(savefile):
+    if (not target_map or any(n not in target_map for n in missing_names)) and os.path.exists(
+        savefile
+    ):
         try:
             import json
+
             with open(savefile) as f:
                 config = json.load(f)
             for target in config.get("targets", []):
@@ -860,27 +873,18 @@ def _get_warnings(pools, recent_history, threshold, waiting_tasks=None):
             warnings.append(f'Pool "{p["name"]}" is {health}')
         cap = p.get("cap_int", 0)
         if cap >= threshold:
-            warnings.append(
-                f'Pool "{p["name"]}" capacity at {p["cap"]} (threshold: {threshold}%)'
-            )
+            warnings.append(f'Pool "{p["name"]}" capacity at {p["cap"]} (threshold: {threshold}%)')
         status_errors = p.get("status_errors") or {}
         if status_errors.get("has_errors"):
             summary = status_errors.get("errors_summary", "unknown error")
-            warnings.append(
-                f'Pool "{p["name"]}" has ZFS errors: {summary}'
-            )
+            warnings.append(f'Pool "{p["name"]}" has ZFS errors: {summary}')
         ckpoint = p.get("ckpoint", "")
         if ckpoint and ckpoint != "-":
-            warnings.append(
-                f'Pool "{p["name"]}" has an active ZFS checkpoint '
-                f"({ckpoint})"
-            )
+            warnings.append(f'Pool "{p["name"]}" has an active ZFS checkpoint ({ckpoint})')
 
     if waiting_tasks:
         for task in waiting_tasks:
-            warnings.append(
-                f"'{task['name']}' is waiting for a lock"
-            )
+            warnings.append(f"'{task['name']}' is waiting for a lock")
 
     return warnings
 
@@ -914,6 +918,7 @@ def _result_icon(result):
 # ---------------------------------------------------------------------------
 # Page builder
 # ---------------------------------------------------------------------------
+
 
 def create_dashboard_page(app):
     """Build and return the full Dashboard tab widget."""
@@ -975,9 +980,7 @@ def create_dashboard_page(app):
 
     # --- Section 1: Warnings ---
     app.dashboard_warn_frame = _make_section_frame("Warnings")
-    app.dashboard_warn_box = Gtk.Box(
-        orientation=Gtk.Orientation.VERTICAL, spacing=5
-    )
+    app.dashboard_warn_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     app.dashboard_warn_box.set_margin_start(10)
     app.dashboard_warn_box.set_margin_end(10)
     app.dashboard_warn_box.set_margin_top(10)
@@ -1042,6 +1045,46 @@ def create_dashboard_page(app):
     app.dashboard_proc_frame.add(tasks_box)
     box.pack_start(app.dashboard_proc_frame, False, False, 0)
 
+    # --- Section 3a: Active Locks ---
+    app.dashboard_locks_frame = _make_section_frame("Active Locks")
+    app.dashboard_locks_store = Gtk.ListStore(str, str, str, str, str, str)
+    app.dashboard_locks_view = Gtk.TreeView(model=app.dashboard_locks_store)
+    app.dashboard_locks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+    app.dashboard_locks_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+
+    for col_idx, title_text, width in [
+        (0, "Dataset", 180),
+        (1, "Type", 60),
+        (2, "PID", 70),
+        (3, "Script", 120),
+        (4, "Acquired", 150),
+        (5, "Description", 200),
+    ]:
+        r = Gtk.CellRendererText()
+        r.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
+        if col_idx == 4:
+            set_monospace_font(r)
+        col = Gtk.TreeViewColumn(title_text, r, text=col_idx)
+        configure_treeview_column(col, width=width)
+        app.dashboard_locks_view.append_column(col)
+    app._ui_state.bind_treeview(app.dashboard_locks_view, "dashboard_locks_view")
+
+    app.enable_treeview_copy(app.dashboard_locks_view)
+
+    locks_scrolled = Gtk.ScrolledWindow()
+    locks_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+    locks_scrolled.set_min_content_height(120)
+    locks_scrolled.add(app.dashboard_locks_view)
+
+    locks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+    locks_box.set_margin_start(10)
+    locks_box.set_margin_end(10)
+    locks_box.set_margin_top(10)
+    locks_box.set_margin_bottom(10)
+    locks_box.pack_start(locks_scrolled, True, True, 0)
+    app.dashboard_locks_frame.add(locks_box)
+    box.pack_start(app.dashboard_locks_frame, False, False, 0)
+
     # --- Section 4: Recent Operations ---
     app.dashboard_ops_frame = _make_section_frame("Recent Operations")
     # Columns: datetime, type, name, outcome (markup), log_file (hidden)
@@ -1066,9 +1109,7 @@ def create_dashboard_page(app):
         col = Gtk.TreeViewColumn(title_text, r, **{attr: col_idx})
         configure_treeview_column(col, width=width)
         app.dashboard_ops_view.append_column(col)
-    app._ui_state.bind_treeview(
-        app.dashboard_ops_view, "dashboard_ops_view"
-    )
+    app._ui_state.bind_treeview(app.dashboard_ops_view, "dashboard_ops_view")
 
     ops_scrolled = Gtk.ScrolledWindow()
     ops_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -1086,9 +1127,7 @@ def create_dashboard_page(app):
 
     # --- Section 5: iSCSI Issues ---
     app.dashboard_iscsi_frame = _make_section_frame("iSCSI Issues")
-    app.dashboard_iscsi_box = Gtk.Box(
-        orientation=Gtk.Orientation.VERTICAL, spacing=5
-    )
+    app.dashboard_iscsi_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     app.dashboard_iscsi_box.set_margin_start(10)
     app.dashboard_iscsi_box.set_margin_end(10)
     app.dashboard_iscsi_box.set_margin_top(10)
@@ -1145,9 +1184,7 @@ def _gather_dashboard_data(app):
     dashboard_cfg = get_dashboard_config(app.config)
     threshold = dashboard_cfg.get("low_space_threshold", 80)
 
-    pools, pools_stale = _get_cached_or_fresh(
-        app, "_dashboard_pools", _get_pool_health()
-    )
+    pools, pools_stale = _get_cached_or_fresh(app, "_dashboard_pools", _get_pool_health())
     recent = _get_recent_entries(10)
     missing_luns, iscsi_stale = _get_cached_or_fresh(
         app, "_dashboard_iscsi", _get_iscsi_missing_luns()
@@ -1156,18 +1193,23 @@ def _gather_dashboard_data(app):
 
     # Scrub status for dashboard
     from scrub_manager import get_all_pool_scrub_states
+
     scrub_states = get_all_pool_scrub_states()
 
     tasks = _collect_running_tasks(app)
     waiting_tasks = [t for t in tasks if t.get("waiting_for_lock")]
+    active_locks = list_active_locks()
 
     # Build warnings: live checks + startup-style checks
     warnings = _get_warnings(pools, recent, threshold, waiting_tasks)
-    if not app.config.get("backup", {}).get("pull_steps") and not app.config.get("backup", {}).get("send_receive_steps"):
+    if not app.config.get("backup", {}).get("pull_steps") and not app.config.get("backup", {}).get(
+        "send_receive_steps"
+    ):
         warnings.append("No backup steps configured — configure in the Backup tab")
     if not app.config.get("offsite", {}).get("steps"):
         warnings.append("No offsite steps configured — configure in the Offsite tab")
     from feature_config import get_checkagainst, get_pools
+
     if not get_pools(app.config):
         warnings.append("No pools registered — add pools in the Pools tab")
     if not get_checkagainst(app.config):
@@ -1189,6 +1231,7 @@ def _gather_dashboard_data(app):
         "tasks": tasks,
         "warnings": warnings,
         "config_data": config_data,
+        "active_locks": active_locks,
     }
 
 
@@ -1228,6 +1271,7 @@ def _update_dashboard_ui(app, data):
     _refresh_iscsi_section(app, data["missing_luns"], stale=data["iscsi_stale"])
     _refresh_warnings_section(app, data["warnings"])
     _refresh_processes_section(app, tasks=data["tasks"])
+    _refresh_active_locks_section(app, data["active_locks"])
 
     # Update the contextual "Fix Locks" button visibility
     _update_fix_locks_button(app, data["stale_count"])
@@ -1237,6 +1281,7 @@ def _update_dashboard_ui(app, data):
     app.dashboard_ops_frame.show_all()
     app.dashboard_warn_frame.show_all()
     app.dashboard_proc_frame.show_all()
+    app.dashboard_locks_frame.show_all()
 
     # iSCSI frame visibility depends on mode
     if _is_two_node():
@@ -1323,13 +1368,10 @@ def _gather_config_section_data(app):
     # Gather OS info once per host to avoid duplicate SSH calls.
     if cfg["mode"] == "two-node":
         data["os_info_map"] = {
-            host: _get_host_os_info(host)
-            for host, _roles in _get_host_role_list(cfg)
+            host: _get_host_os_info(host) for host, _roles in _get_host_role_list(cfg)
         }
     else:
-        data["os_info_map"] = {
-            cfg["this_host"]: _get_host_os_info(cfg["this_host"])
-        }
+        data["os_info_map"] = {cfg["this_host"]: _get_host_os_info(cfg["this_host"])}
 
     # Versions
     if cfg["mode"] == "two-node":
@@ -1443,9 +1485,7 @@ def _refresh_pool_section(app, pools, scrub_states=None, stale=False):
     row = 0
     if stale:
         stale_lbl = Gtk.Label()
-        stale_lbl.set_markup(
-            "<i>Pool data may be stale while pools are busy.</i>"
-        )
+        stale_lbl.set_markup("<i>Pool data may be stale while pools are busy.</i>")
         stale_lbl.set_halign(Gtk.Align.START)
         app.dashboard_pool_grid.attach(stale_lbl, 0, row, 4, 1)
         row += 1
@@ -1460,6 +1500,7 @@ def _refresh_pool_section(app, pools, scrub_states=None, stale=False):
     header_row = row
     if scrub_states:
         from scrub_manager import ScrubState
+
         scanning = sum(1 for s in scrub_states.values() if s.state == ScrubState.SCANNING)
         paused = sum(1 for s in scrub_states.values() if s.state == ScrubState.PAUSED)
         if scanning or paused:
@@ -1534,9 +1575,7 @@ def _refresh_ops_section(app, recent):
     """
     selection = app.dashboard_ops_view.get_selection()
     model, selected_iter = selection.get_selected()
-    selected_log_file = (
-        model.get_value(selected_iter, 4) if selected_iter is not None else None
-    )
+    selected_log_file = model.get_value(selected_iter, 4) if selected_iter is not None else None
 
     app.dashboard_ops_store.clear()
 
@@ -1552,9 +1591,7 @@ def _refresh_ops_section(app, recent):
         result = entry.get("result", "unknown")
         outcome = f"{_result_icon(result)} {result}"
         log_file = entry.get("log_file", "")
-        tree_iter = app.dashboard_ops_store.append(
-            [ts, etype, name, outcome, log_file]
-        )
+        tree_iter = app.dashboard_ops_store.append([ts, etype, name, outcome, log_file])
         if selected_log_file and log_file == selected_log_file:
             new_iter_to_select = tree_iter
 
@@ -1592,9 +1629,7 @@ def _refresh_iscsi_section(app, missing_luns, stale=False):
 
     if stale:
         stale_lbl = Gtk.Label()
-        stale_lbl.set_markup(
-            "<i>iSCSI data may be stale while storage is busy.</i>"
-        )
+        stale_lbl.set_markup("<i>iSCSI data may be stale while storage is busy.</i>")
         stale_lbl.set_halign(Gtk.Align.START)
         app.dashboard_iscsi_box.pack_start(stale_lbl, False, False, 0)
 
@@ -1641,7 +1676,8 @@ def _on_fix_iscsi_clicked(_button, app):
         result = subprocess.run(
             [repair_script],
             capture_output=True,
-            text=True, check=False,
+            text=True,
+            check=False,
             timeout=120,
         )
         if result.returncode == 0:
@@ -1683,19 +1719,22 @@ def _collect_running_tasks(app):
                 step_text = f"Step {runner.current_step + 1}/{total}" if total > 0 else "Running"
                 status = step_text
                 waiting_for_lock = False
-            tasks.append({
-                "name": label,
-                "type": "GUI",
-                "status": status,
-                "task_key": f"runner:{runner_name}",
-                "log_file": getattr(runner, "_session_log_file", None),
-                "waiting_for_lock": waiting_for_lock,
-            })
+            tasks.append(
+                {
+                    "name": label,
+                    "type": "GUI",
+                    "status": status,
+                    "task_key": f"runner:{runner_name}",
+                    "log_file": getattr(runner, "_session_log_file", None),
+                    "waiting_for_lock": waiting_for_lock,
+                }
+            )
 
     # 2. Active scrubs
     queue = getattr(app, "scrub_queue", None)
     if queue:
         from scrub_manager import ScrubState, get_all_pool_scrub_states
+
         scrub_states = get_all_pool_scrub_states()
         # Reconcile queue against live zpool status so finished or paused
         # scrubs are not still shown as running when the in-memory queue
@@ -1709,12 +1748,14 @@ def _collect_running_tasks(app):
                     status = f"{info.progress_percent:.1f}% complete"
                 if info.eta is not None:
                     status += f" (ETA {info.eta:%Y-%m-%d %H:%M})"
-            tasks.append({
-                "name": f"Scrub: {pool_name}",
-                "type": "Scrub",
-                "status": status,
-                "task_key": f"scrub:{pool_name}",
-            })
+            tasks.append(
+                {
+                    "name": f"Scrub: {pool_name}",
+                    "type": "Scrub",
+                    "status": status,
+                    "task_key": f"scrub:{pool_name}",
+                }
+            )
 
     # 3. Running scheduled profiles (advisory lock files)
     for profile in list_running_profiles():
@@ -1727,20 +1768,25 @@ def _collect_running_tasks(app):
             status = f"PID {pid}" if pid else "Running"
             waiting_for_lock = False
             task_key = f"profile:{profile['name']}"
-        tasks.append({
-            "name": profile["name"],
-            "type": "Profile",
-            "status": status,
-            "task_key": task_key,
-            "log_file": profile.get("log_file"),
-            "waiting_for_lock": waiting_for_lock,
-        })
+        tasks.append(
+            {
+                "name": profile["name"],
+                "type": "Profile",
+                "status": status,
+                "task_key": task_key,
+                "log_file": profile.get("log_file"),
+                "waiting_for_lock": waiting_for_lock,
+            }
+        )
 
     # 4. Legacy scheduled tasks (profile_runner.py processes not yet using locks)
     try:
         result = subprocess.run(
             ["pgrep", "-f", "profile_runner.py"],
-            capture_output=True, text=True, timeout=5, check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
         if result.returncode == 0:
             for line in result.stdout.strip().splitlines():
@@ -1752,7 +1798,10 @@ def _collect_running_tasks(app):
                 try:
                     ps_result = subprocess.run(
                         ["ps", "-p", pid, "-o", "args="],
-                        capture_output=True, text=True, timeout=5, check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        check=False,
                     )
                     if ps_result.returncode == 0:
                         args = ps_result.stdout.strip()
@@ -1765,13 +1814,15 @@ def _collect_running_tasks(app):
                 # Skip if already shown as a profile task.
                 if any(t["type"] == "Profile" and t["name"] == profile_name for t in tasks):
                     continue
-                tasks.append({
-                    "name": f"Scheduled: {profile_name}",
-                    "type": "Scheduled",
-                    "status": f"PID {pid}",
-                    "task_key": f"scheduled:{pid}",
-                    "log_file": _log_file_from_pid_environ(int(pid)),
-                })
+                tasks.append(
+                    {
+                        "name": f"Scheduled: {profile_name}",
+                        "type": "Scheduled",
+                        "status": f"PID {pid}",
+                        "task_key": f"scheduled:{pid}",
+                        "log_file": _log_file_from_pid_environ(int(pid)),
+                    }
+                )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         pass
 
@@ -1789,13 +1840,36 @@ def _refresh_processes_section(app, tasks=None):
         return
 
     for t in tasks:
-        app.dashboard_tasks_store.append([
-            t["name"],
-            t["type"],
-            t["status"],
-            t["task_key"],
-            t.get("log_file", ""),
-        ])
+        app.dashboard_tasks_store.append(
+            [
+                t["name"],
+                t["type"],
+                t["status"],
+                t["task_key"],
+                t.get("log_file", ""),
+            ]
+        )
+
+
+def _refresh_active_locks_section(app, locks):
+    """Clear and repopulate the Active Locks list."""
+    app.dashboard_locks_store.clear()
+
+    if not locks:
+        app.dashboard_locks_store.append(["No active locks", "", "", "", "", ""])
+        return
+
+    for lock in locks:
+        app.dashboard_locks_store.append(
+            [
+                lock.get("dataset", ""),
+                lock.get("type", ""),
+                str(lock.get("pid", "")),
+                lock.get("script", ""),
+                lock.get("acquired", ""),
+                lock.get("description", ""),
+            ]
+        )
 
 
 def _refresh_warnings_section(app, warnings):
@@ -1849,6 +1923,7 @@ def _cancel_task(app, task_key):
     elif task_key.startswith("scrub:"):
         pool_name = task_key.split(":", 1)[1]
         from scrub_manager import stop_scrub
+
         stop_scrub(pool_name)
         log_msg(f"INFO: Stopped scrub on '{pool_name}'")
     elif task_key.startswith("profile:"):
@@ -1993,4 +2068,3 @@ def setup_dashboard_actions(app):
     ops_selection = app.dashboard_ops_view.get_selection()
     ops_selection.connect("changed", _on_dashboard_ops_selection_changed, app)
     _on_dashboard_ops_selection_changed(ops_selection, app)
-

@@ -443,9 +443,9 @@ and [Commands & Modules — zfs-send-receive](../commands-and-modules/modules.md
 
 ## Dashboard Tab
 
-The Dashboard provides an at-a-glance overview of ZFS health. It refreshes
-automatically every 30 seconds while visible, or manually via the **Refresh**
-action button.
+The Dashboard provides an at-a-glance overview of ZFS health and active locks.
+It refreshes automatically every 30 seconds while visible, or manually via the
+**Refresh** action button.
 
 !!! tip "Dashboard data during heavy load"
     Pool and iSCSI information comes from live `zpool`/`targetcli` commands with
@@ -502,6 +502,23 @@ scrubs that finish or are paused externally — for example, by a headless
 profile that uses the **Pause scrubs during each step** option — do not keep
 showing as running after the actual scrub state changes.
 
+### Active Locks
+
+Lists every currently held (non-stale) ZFS dataset lock. Each row shows:
+
+| Column        | Meaning                                                                  |
+| ------------- | ------------------------------------------------------------------------ |
+| **Dataset**   | Locked dataset path                                                      |
+| **Type**      | Lock type: `r` (shared read), `w` (exclusive write), or `x` (exclusive destroy) |
+| **PID**       | Process ID holding the lock                                              |
+| **Script**    | Name of the script or process that acquired the lock                     |
+| **Acquired**  | ISO timestamp when the lock was acquired                                 |
+| **Description** | Optional description written when the lock was acquired                |
+
+The list refreshes automatically with the rest of the Dashboard. Stale locks
+(whose owning process has exited) are not shown here; they are reported in the
+**Warnings** section and can be removed with the **Fix Locks** action button.
+
 ### Recent Operations
 
 A scrollable table showing the last **10** history entries:
@@ -557,10 +574,6 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
 - **Pre-Backup** — One checkbox and a command entry:
   **Run pre-backup command** — Enable a custom command that runs before all backup steps. If it fails, the backup aborts. 
 
-- **Advanced** — Collapsible expander with
-  [dataset-selection criteria](#dataset-selection-criteria)
-  (`includes`, `excludes`, `depth`, `startwith`, `endwith`) plus [advanced options](#advanced-options).
-
 - **Pull Steps** — Editable list of rsync pull operations. The frame header has
   an **Active** checkbox; unchecking it bypasses every pull step while still
   running the other backup steps. Each row has three columns:
@@ -592,21 +605,25 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
 - **Send/Receive Steps** — Editable list of ZFS send/receive operations
   (Source pool, Destination pool). Reorder by dragging rows.
 
+- **Advanced** — Collapsible expander, placed after the send/receive steps, with
+  [dataset-selection criteria](#dataset-selection-criteria)
+  (`includes`, `excludes`, `depth`, `startwith`, `endwith`), [advanced options](#advanced-options),
+  and:
+  
+  - **ZFS Keys Backup** — Two entries:
+    - **ZFS keys source** — rsync endpoint where the key files currently live
+      (e.g. `/mnt/ZFSkeys/` or `storage-host:/backups/zfs-keys/`)
+    - **ZFS keys destination** — rsync endpoint where the copied keys should be placed.
+      Must resolve to an **encrypted ZFS dataset**; the step is skipped with a
+      warning if it does not. See [Daily Backup — ZFS Keys Backup](daily-backup.md#zfs-keys-backup)
+      for the security implications.
+
 - **Post-Backup Steps** — Three checkboxes and a command entry:
   
   - **Clear snapshot name memory** after sending
   - **Prune snapshots** when the backup finishes
   - **Run post-backup command** — Enable a custom command that runs after all
     backup steps finish. It executes even if a fatal error aborts the backup early.
-
-- **ZFS Keys Backup** — Two entries in the Advanced expander:
-  
-  - **ZFS keys source** — rsync endpoint where the key files currently live
-    (e.g. `/mnt/ZFSkeys/` or `storage-host:/backups/zfs-keys/`)
-  - **ZFS keys destination** — rsync endpoint where the copied keys should be placed.
-    Must resolve to an **encrypted ZFS dataset**; the step is skipped with a
-    warning if it does not. See [Daily Backup — ZFS Keys Backup](daily-backup.md#zfs-keys-backup)
-    for the security implications.
 
 ### Actions
 
@@ -643,17 +660,17 @@ This tab configures offsite backups ([`zfssendoffsite`](../commands-and-modules/
   selected in the [Pools tab](#pools-tab) entries using the **Offsite** checkbox; the
   first online candidate becomes the active offsite target at run time. Updates automatically.
 
-- **Advanced** — Collapsible expander with
-  [dataset-selection criteria](#dataset-selection-criteria)
-  (`includes`, `excludes`, `depth`, `startwith`, `endwith`) and advanced send/receive options.
-
 - **Snapshot** — Enter a snapshot name (or click **Generate** to build one
   from the current time). The `@` prefix is added automatically if omitted.
- 
+
 - **Send/Receive Steps** — Editable list with columns: Active, Source,
   Destination, Includes, Excludes. Reorder rows by dragging. The `<offsite>`
   token in the Destination column is replaced at runtime with the detected
   offsite pool name.
+
+- **Advanced** — Collapsible expander, placed after the send/receive steps, with
+  [dataset-selection criteria](#dataset-selection-criteria)
+  (`includes`, `excludes`, `depth`, `startwith`, `endwith`) and advanced send/receive options.
 
 ### Actions
 
@@ -1062,9 +1079,10 @@ does not happen for scheduled profile or cron runs; it is GUI-only.
 
 ## Pools Tab
 
-This tab shows every pool known to the system (from `zpool list`) and
-lets you maintain the pool registry stored in JSON. It also contains the
-**Scrub Manager** for starting, pausing, resuming, and stopping pool scrubs.
+This tab shows every pool known to the system (from `zpool list`), pools
+that are present but not yet imported (`zpool import`), and lets you maintain
+the pool registry stored in JSON. It also contains the **Scrub Manager** for
+starting, pausing, resuming, and stopping pool scrubs.
 
 ### Pool table
 
@@ -1078,9 +1096,9 @@ actions operate on every selected row.
 
 | Style          | Meaning                                                                                                |
 | -------------- | ------------------------------------------------------------------------------------------------------ |
-| **Red**  | Pool is online but *not* in the registry. Select the pool, click **Add** then **Save** to register it. |
-| Orange | Pool is registered but currently offline (not returned by `zpool list`).                               |
-| Default color  | Pool is registered and online.                                                                         |
+| **Red**  | Pool is online or importable but *not* in the registry. Select the pool, click **Add** then **Save** to register it. |
+| Orange | Pool is registered but currently offline (not returned by `zpool list` and not importable).                         |
+| Default color  | Pool is registered and online.                                                                                      |
 
 The **Offsite** column shows a checkbox for every registered pool. Checking it
 marks that pool as an offsite candidate; the Offsite tab detects the first
@@ -1093,8 +1111,9 @@ candidates. The checkbox state is saved with the registry when you click
 | Style          | Meaning                                              |
 | -------------- | ---------------------------------------------------- |
 | Green    | `ONLINE`                                             |
+| Blue, bold     | `IMPORTABLE` (devices are present but the pool is not imported) |
 | Orange, bold   | `DEGRADED`                                           |
-| Orange, normal | `OFFLINE` (not present in `zpool list`)              |
+| Orange, normal | `OFFLINE` (not present in `zpool list` or `zpool import`) |
 | Red      | Any other state (`FAULTED`, `UNAVAIL`, `REMOVED`, …) |
 
 **Errors column:**
@@ -1113,16 +1132,21 @@ candidates. The checkbox state is saved with the registry when you click
 | **Details** | Writes `zpool status` output for the single selected pool to the log panel                                 |
 | **Add**     | Adds the selected unregistered pool to the registry (or opens a dialog to type a name if none is selected) |
 | **Remove**  | Removes all selected registered pools from the registry (not from ZFS) after confirmation                  |
-| **Import**  | Imports selected offline pools directly, or opens a dialog listing importable pools if none are selected   |
-| **Export**  | Confirms, then runs `zpool export` on all selected online pools                                            |
-| **Save**    | Saves registry changes; turns **red** while there are unsaved changes                                      |
-| **Revert**  | Reloads registry from the last saved settings                                                              |
-| **Refresh** | Re-runs `zpool list` and refreshes the table                                                               |
+| **Import**  | Imports selected offline or importable pools directly, or opens a dialog listing importable pools if none are selected |
+| **Export**  | Confirms, then runs `zpool export` on all selected online pools                                                        |
+| **Save**    | Saves registry changes; turns **red** while there are unsaved changes                                                  |
+| **Revert**  | Reloads registry from the last saved settings                                                                          |
+| **Refresh** | Re-runs `zpool list`, rescans importable pools, and refreshes the table                                                |
 
 Action buttons enable or disable automatically based on the current selection.
 For example, **Watch** is only available when at least one selected pool is
 registered and online, **Details** requires exactly one selected pool, and
-**Export** requires at least one selected online pool.
+**Export** requires at least one selected online pool. **Import** can be used
+on offline or importable pools.
+
+The importable-pool scan runs in the background and is cached for a few
+seconds so the table stays responsive. Click **Refresh** to force an
+immediate rescan.
 
 Right-click any cell to open a context menu with **Copy** actions (cell value
 or full row, tab-separated) and **Send details to log**, which writes all

@@ -10,6 +10,9 @@ import os
 import re
 import shlex
 import subprocess
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from logging_config import log_msg
@@ -288,6 +291,36 @@ class ZfsRepository:
         result = self._run(self._zpool("import"), check=False)
         return result.stdout
 
+    def list_importable_pool_names(self) -> set[str]:
+        """Return names of pools that can be imported.
+
+        Parses `zpool import` output and filters out pools whose vdevs are
+        zvol-backed (device names starting with `zd`). These are normally
+        VM-attached pools that should not be touched by this tool.
+        """
+        raw = self.importable_pools_raw()
+        names: set[str] = set()
+        current_name: str | None = None
+        in_config = False
+        is_zvol_backed = False
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("pool:"):
+                if current_name and not is_zvol_backed:
+                    names.add(current_name)
+                current_name = stripped.split(":", 1)[1].strip()
+                in_config = False
+                is_zvol_backed = False
+            elif stripped == "config:":
+                in_config = True
+            elif in_config and stripped:
+                parts = stripped.split()
+                if parts and parts[0].startswith("zd"):
+                    is_zvol_backed = True
+        if current_name and not is_zvol_backed:
+            names.add(current_name)
+        return names
+
     def import_pool(self, pool: str) -> bool:
         """Import one pool by name."""
         result = self._run(self._zpool("import", pool), check=False)
@@ -537,6 +570,60 @@ class ZfsRepository:
         """Rollback a dataset to a snapshot (-r)."""
         result = self._run(self._zfs("rollback", "-r", snapshot), check=False)
         return result.returncode == 0
+
+
+class ImportablePoolCache:
+    """Async TTL cache for the set of pools available to import.
+
+    `zpool import` can be slow because it scans block devices. This cache
+    returns the last known result immediately and refreshes it in a daemon
+    thread so callers never block on the scan.
+    """
+
+    def __init__(self, repository: ZfsRepository, ttl_seconds: float = 30.0):
+        self.repository = repository
+        self.ttl = ttl_seconds
+        self._names: set[str] = set()
+        self._last_update = 0.0
+        self._lock = threading.Lock()
+        self._refreshing = False
+
+    def get(self, callback: Callable[[], None] | None = None) -> set[str]:
+        """Return cached importable pool names, refreshing in background if stale.
+
+        The returned set is a copy so callers can safely iterate while the
+        cache is being refreshed.
+        """
+        with self._lock:
+            now = time.monotonic()
+            fresh = now - self._last_update < self.ttl
+            if fresh and not self._refreshing:
+                return set(self._names)
+            if not self._refreshing:
+                self._refreshing = True
+                thread = threading.Thread(
+                    target=self._refresh, args=(callback,), daemon=True
+                )
+                thread.start()
+            return set(self._names)
+
+    def invalidate(self) -> None:
+        """Force a fresh scan on the next `get()` call."""
+        with self._lock:
+            self._last_update = 0.0
+
+    def _refresh(self, callback: Callable[[], None] | None) -> None:
+        try:
+            names = self.repository.list_importable_pool_names()
+        except Exception as exc:  # pragma: no cover - defensive
+            log_msg(f"WARN: Error scanning importable pools: {exc}")
+            names = set()
+        with self._lock:
+            self._names = names
+            self._last_update = time.monotonic()
+            self._refreshing = False
+        if callback is not None:
+            callback()
 
 
 _default_repo = None

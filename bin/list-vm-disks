@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# shellcheck disable=SC1090
 # list-vm-disks [--with-devices]
 # Lists all zvols currently exported as iSCSI LUNs, with VM ownership,
 # sizes, clone relationships, and host/guest device names.
@@ -151,6 +152,22 @@ build_guest_device_map() {
     done
 }
 
+# Proxmox/qemu-ga returns out-data base64-encoded. Decode it if possible; otherwise
+# fall back to the older plain-text output with escaped newlines.
+_decode_guest_output() {
+    local raw="$1"
+    local decoded
+
+    [[ -z "$raw" ]] && return 0
+
+    decoded=$(printf '%s' "$raw" | base64 -d 2>/dev/null) || decoded=""
+    if [[ "$decoded" == /dev/* ]]; then
+        printf '%s' "$decoded"
+    else
+        printf '%s' "$raw" | sed 's/\\n/\n/g'
+    fi
+}
+
 _query_guest_disk() {
     local vmid="$1" disk_key="$2" disk_id="$3"
     local scsi_num=""
@@ -172,18 +189,32 @@ _query_guest_disk() {
 
     local exec_result pid
     exec_result=$(qm guest exec "$vmid" -- /bin/sh -c "$guest_cmd" 2>/dev/null) || return 0
+
+    # Some Proxmox versions return the completed status directly from guest exec.
+    local exited out_raw out
+    exited=$(echo "$exec_result" | grep -oP '"exited"\s*:\s*\K(true|1|false|0)' 2>/dev/null)
+    if [[ "$exited" == "true" || "$exited" == "1" ]]; then
+        out_raw=$(echo "$exec_result" | grep -oP '"out-data"\s*:\s*"\K[^"]*' 2>/dev/null)
+        out=$(_decode_guest_output "$out_raw")
+        if [[ -n "$out" ]]; then
+            GUEST_DEV["$disk_id"]=$(echo "$out" | head -1)
+            GUEST_BYPATH["$disk_id"]=$(echo "$out" | tail -1)
+        fi
+        return 0
+    fi
+
     pid=$(echo "$exec_result" | grep -oP '"pid"\s*:\s*\K[0-9]+' 2>/dev/null)
     [[ -n "$pid" ]] || return 0
 
-    local status out exited
+    local status
     local -i i
     for (( i=1; i<=LIST_VM_DISKS_GUEST_POLL_MAX; i++ )); do
         status=$(qm guest exec-status "$vmid" "$pid" 2>/dev/null) || return 0
-        exited=$(echo "$status" | grep -oP '"exited"\s*:\s*\K(true|false)' 2>/dev/null)
-        if [[ "$exited" == "true" ]]; then
-            out=$(echo "$status" | grep -oP '"out-data"\s*:\s*"\K[^"]*' 2>/dev/null)
+        exited=$(echo "$status" | grep -oP '"exited"\s*:\s*\K(true|1|false|0)' 2>/dev/null)
+        if [[ "$exited" == "true" || "$exited" == "1" ]]; then
+            out_raw=$(echo "$status" | grep -oP '"out-data"\s*:\s*"\K[^"]*' 2>/dev/null)
+            out=$(_decode_guest_output "$out_raw")
             if [[ -n "$out" ]]; then
-                out=$(printf '%s' "$out" | sed 's/\\n/\n/g')
                 GUEST_DEV["$disk_id"]=$(echo "$out" | head -1)
                 GUEST_BYPATH["$disk_id"]=$(echo "$out" | tail -1)
             fi

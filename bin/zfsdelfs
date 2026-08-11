@@ -152,11 +152,11 @@ function delfs {
                 restore-caller-filter-state
                 exit 8
             fi
-            read -p 'Press enter to continue.'
+            read -rp 'Press enter to continue.'
         fi
         rc=''
         for fs in "${fsarray[@]}"; do
-            if zfs list -t filesystem,volume $fs > /dev/null 2>&1; then
+            if zfs list -t filesystem,volume "$fs" > /dev/null 2>&1; then
                 if has_clone_dependents "$fs"; then
                     log_msg "FATAL: $fs has ZFS clone dependents — cannot delete." \
                         "Use promote-vm-clone to cut dependencies first."
@@ -168,8 +168,8 @@ function delfs {
                     restore-caller-filter-state
                     exit 8
                 fi
-                if delallsnaps $fs '' 'releaseholds'; then
-                    if ! zfs destroy $fs; then
+                if delallsnaps "$fs" '' 'releaseholds'; then
+                    if ! zfs destroy "$fs"; then
                         diagnose_dataset_busy "$fs"
                         log_msg "FATAL: $fs was NOT deleted."
                         restore-caller-filter-state

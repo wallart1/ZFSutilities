@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# shellcheck disable=SC2034,SC2154
 # Apply retension policies (aka "prune")
 #
 # Policies live in the shared JSON config at /var/lib/zfsutilities/config.json
@@ -29,7 +30,7 @@ function retain {
 
     if [[ "$1" != '' ]]; then retainfs="$1"; fi
     # awk -F'[/ ]' '{print $1}'  —  Split on slash or space; get the pool name (first token).
-    retainfspool=$(echo $retainfs | awk -F'[/ ]' '{print $1}')
+    retainfspool=$(echo "$retainfs" | awk -F'[/ ]' '{print $1}')
     # awk '{print $1}'  —  Get the first whitespace-delimited token (the dataset path).
     retainfs=$(echo "$retainfs" | awk '{print $1}')
 
@@ -110,7 +111,7 @@ function retain {
     #
     # Get the snapshot array, sorted. For the current fs only - NOT RECURSIVE.
     # Be sure to sort by creation timestamp in ascending order (oldest ones first).
-    readarray -t snaparray < <(zfs list -Ht snapshot -o name,creation -s creation $retainfs)
+    readarray -t snaparray < <(zfs list -Ht snapshot -o name,creation -s creation "$retainfs")
     snaparraylen=${#snaparray[@]}           # Get number of items in the source array
 
     # ========================================================================
@@ -124,26 +125,26 @@ function retain {
             # snaparray entries come from "zfs list -Ht snapshot -o name,creation".
             # Each line is: <snapshot_name>TAB<creation_date>
             # awk '{print $1}'  —  Extract the snapshot name (field before the tab).
-            _snapsnap=$(echo ${snaparray[$i]} | awk '{print $1}')
+            _snapsnap=$(echo "${snaparray[$i]}" | awk '{print $1}')
             # awk -F'@' '{print $1}'  —  Extract the dataset path (before @).
-            _snapfs=$(echo ${snaparray[$i]} | awk -F'@' '{print $1}')
+            _snapfs=$(echo "${snaparray[$i]}" | awk -F'@' '{print $1}')
             # awk -F'@' '{print $2}' | awk -F'-' '{print $1}'  —  Extract the label from the snapshot name.
             #   Example: "threeamigos/proxmox@daily-2026-05-11T12:00-04:00-d" -> "daily"
-            _snaplabel=$(echo ${snaparray[$i]} | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
+            _snaplabel=$(echo "${snaparray[$i]}" | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
             # awk '{print $1}' | awk -F'-' '{print $NF}'  —  Extract the bucket letter (last dash-delimited field).
             #   Example: "threeamigos/proxmox@daily-2026-05-11T12:00-04:00-d" -> "d"
-            _snapbucket=$(echo ${snaparray[$i]} | awk '{print $1}' | awk -F'-' '{print $NF}')
+            _snapbucket=$(echo "${snaparray[$i]}" | awk '{print $1}' | awk -F'-' '{print $NF}')
 
             if [[ $_snaplabel == 'clone' ]] || [[ $_snapbucket == 'c' ]]; then
                 _retain_verb "Keeping $_snapsnap — clone label or bucket 'c' is excluded from retention."
                 continue
             fi
 
-            if [[ $_snapfs != $retainfs ]]; then
+            if [[ $_snapfs != "$retainfs" ]]; then
                 _retain_verb "Keeping $_snapsnap — dataset '$_snapfs' does not match target '$retainfs'."
                 continue
             fi
-            if [[ $_snaplabel != ${label:1} ]]; then
+            if [[ $_snaplabel != "${label:1}" ]]; then
                 _retain_verb "Keeping $_snapsnap — label '$_snaplabel' does not match target label '${label:1}'."
                 continue
             fi
@@ -151,7 +152,7 @@ function retain {
             # awk '{print $6"-"$3}'  —  From the creation date (e.g. "Mon May 11 12:00 2026"),
             #   build a "Year-Month" string for monthly de-duplication.
             #   Example: "Mon May 11 12:00 2026" -> "2026-May"
-            _snapym=$(echo ${snaparray[$i]} | awk '{print $6"-"$3}')
+            _snapym=$(echo "${snaparray[$i]}" | awk '{print $6"-"$3}')
 
             if [[ -n "${snapshot_has:-}" && "$_snapsnap" != *"$snapshot_has"* ]]; then
                 _retain_verb "Keeping $_snapsnap — does not contain required substring '$snapshot_has'."
@@ -168,7 +169,7 @@ function retain {
                 else
                     log_msg "INFO: Removing $_prev_snap --- Offsite same-month."
                     if [[ $autoproceed != 'Y' ]]; then
-                        read -p 'Press enter to continue.'
+                        read -rp 'Press enter to continue.'
                     fi
                     delsnap "$_prev_snap" "0" "$relholds"
                 fi
@@ -193,13 +194,13 @@ function retain {
     do
         i=$i_retain
         # Same field-extraction logic as Phase 0 (see comments above).
-        snapsnap2=$(echo ${snaparray[$i]}   | awk '{print $1}')
-        snapfs2=$(echo ${snaparray[$i]}     | awk -F'@' '{print $1}')
-        snaplabel2=$(echo ${snaparray[$i]}  | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
-        snapbucket2=$(echo ${snaparray[$i]} | awk '{print $1}'       | awk -F'-' '{print $NF}')
+        snapsnap2=$(echo "${snaparray[$i]}"   | awk '{print $1}')
+        snapfs2=$(echo "${snaparray[$i]}"     | awk -F'@' '{print $1}')
+        snaplabel2=$(echo "${snaparray[$i]}"  | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
+        snapbucket2=$(echo "${snaparray[$i]}" | awk '{print $1}'       | awk -F'-' '{print $NF}')
         # awk '{print $6 $3 $4}'  —  Build a compact "YearMonthDay" string from creation date.
         #   Example: "Mon May 11 12:00 2026" -> "2026May11"
-        snapymd2=$(echo ${snaparray[$i]}    | awk '{print $6 $3 $4}')
+        snapymd2=$(echo "${snaparray[$i]}"    | awk '{print $6 $3 $4}')
 
         # Skip clone snapshots and bucket 'c' snapshots entirely
         if [[ $snaplabel2 == 'clone' ]] || [[ $snapbucket2 == 'c' ]]; then
@@ -209,7 +210,7 @@ function retain {
         fi
 
         # Skip snapshots that don't match the specified label
-        if [[ $snaplabel2 != ${label:1} ]]; then
+        if [[ $snaplabel2 != "${label:1}" ]]; then
             _retain_verb "Keeping $snapsnap2 — label '$snaplabel2' does not match target label '${label:1}'."
             # Reset comparison values so we don't compare across label boundaries
             snapsnap1=""; snaplabel1=""; snapfs1=""; snapbucket1=""; snapymd1=""
@@ -234,10 +235,10 @@ function retain {
 
         # Determine whether two snapshots are related and were taken on the same day.
         # If so, remove the older snapshot.
-        if [[ $snapfs1 = $snapfs2 ]] \
-          && [[ $snaplabel1 = $snaplabel2 ]] \
-          && [[ $snapbucket1 = $snapbucket2 ]] \
-          && [[ $snapymd1 = $snapymd2 ]]; then
+        if [[ $snapfs1 = "$snapfs2" ]] \
+          && [[ $snaplabel1 = "$snaplabel2" ]] \
+          && [[ $snapbucket1 = "$snapbucket2" ]] \
+          && [[ $snapymd1 = "$snapymd2" ]]; then
             _retain_verb "Keeping $snapsnap2 — most recent same-day snapshot for bucket '$snapbucket2'."
             phase1_removed["$snapsnap1"]=1    # Track for Phase 2 exclusion
             if [[ $dryrun != "N" ]]; then
@@ -245,7 +246,7 @@ function retain {
             else
                 log_msg "INFO: Removing $snapsnap1 --- Same-day."
                 if [[ $autoproceed != 'Y' ]]; then
-                    read -p 'Press enter to continue.'
+                    read -rp 'Press enter to continue.'
                 fi
                 delsnap "$snapsnap1" "0" "$relholds"
             fi
@@ -275,7 +276,7 @@ function retain {
 
     # Get an array of the snapshots in the current filesystem
     declare -i k=0                           # Index for the bktsnaparray array that holds the data from zfs
-    readarray -t bktsnaparray < <(zfs list -Ht snapshot -o name -s creation $retainfs)
+    readarray -t bktsnaparray < <(zfs list -Ht snapshot -o name -s creation "$retainfs")
     bktsnaparraylen=${#bktsnaparray[@]}           # Get number of items in the snapshot array
 
     # Put each snapshot into its corresponding array
@@ -293,15 +294,15 @@ function retain {
         fi
 
         # Get the snapshot's label from its name
-        snaplabel=$(echo ${bktsnaparray[$k]} | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
-        if [[ $snaplabel != ${originlabel:1} ]] \
-          && [[ $snaplabel != ${targetlabel:1} ]]; then # Wrong label for this run. Do not consider this snapshot.
+        snaplabel=$(echo "${bktsnaparray[$k]}" | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
+        if [[ $snaplabel != "${originlabel:1}" ]] \
+          && [[ $snaplabel != "${targetlabel:1}" ]]; then # Wrong label for this run. Do not consider this snapshot.
             _retain_verb "Keeping ${bktsnaparray[$k]} — label '$snaplabel' does not match target labels '${originlabel:1}'/'${targetlabel:1}'."
             continue
         fi
 
         # Get the snapshot's bucket from its name
-        snapbkt=$(echo ${bktsnaparray[$k]} | awk -F'-' '{print $NF}')
+        snapbkt=$(echo "${bktsnaparray[$k]}" | awk -F'-' '{print $NF}')
 
         # Skip snapshots that don't contain the optional substring filter
         if [[ -n "${snapshot_has:-}" && "${bktsnaparray[$k]}" != *"$snapshot_has"* ]]; then
@@ -318,12 +319,12 @@ function retain {
         # Put the snapshot into its appropriate bucket array
         bucketfound=false
         for ((i=0; i<bktlen; i++)); do                      # for each bucket
-            if [[ $snapbkt = ${bktname[$i]} ]]; then        # Find the right bucket array for the snapshot
+            if [[ $snapbkt = "${bktname[$i]}" ]]; then        # Find the right bucket array for the snapshot
                 bucketfound=true
                 x="snapbucketlen_${bktname[$i]}"            # Get the length of the current bucket array
                 declare l=${!x}
                 x="snapbucket_${bktname[$i]}[$l]"
-                declare $x=${bktsnaparray[$k]}              # Put the snapshot into the bucket array
+                printf -v "$x" '%s' "${bktsnaparray[$k]}"   # Put the snapshot into the bucket array
                 # Increment the bucket array length
                 local _bkt="${bktname[$i]}"
                 local _len_var="snapbucketlen_${_bkt}"
@@ -335,7 +336,7 @@ function retain {
             _retain_verb "Keeping ${bktsnaparray[$k]} — bucket '$snapbkt' is not defined in retention policy."
             log_msg "WARN: No bucket was found for ${bktsnaparray[$k]}. Skipping."
             if [[ $autoproceed != 'Y' ]]; then
-                read -p "Press enter to continue."
+                read -rp "Press enter to continue."
             fi
         fi
     done
@@ -398,5 +399,7 @@ function retain {
         fi
     done
 
-    [[ -n "$retain_lock" ]] && zfslock_release "$retain_lock" 2>/dev/null || true
+    if [[ -n "$retain_lock" ]]; then
+        zfslock_release "$retain_lock" 2>/dev/null || true
+    fi
 }

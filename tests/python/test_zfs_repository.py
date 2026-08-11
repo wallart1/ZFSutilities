@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -14,6 +15,7 @@ if PYTHON_SRC not in sys.path:
 from test_support import capture_logs, mock_subprocess
 from zfs_repository import (
     HoldRow,
+    ImportablePoolCache,
     PoolRow,
     SnapshotRow,
     ZfsRepository,
@@ -297,6 +299,113 @@ class TestPoolStatusErrors(unittest.TestCase):
         errors = repo.pool_status_errors("tank")
         self.assertFalse(errors["has_errors"])
         self.assertEqual(errors["errors_summary"], "status unavailable")
+
+
+class TestListImportablePoolNames(unittest.TestCase):
+    """list_importable_pool_names parses `zpool import` output."""
+
+    def _repo(self, stdout):
+        result = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: result
+        return repo
+
+    def test_parses_single_importable_pool(self):
+        stdout = (
+            "   pool: tank\n"
+            "     id: 1234567890\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\ttank        ONLINE       0     0     0\n"
+            "\t  sda       ONLINE       0     0     0\n"
+        )
+        repo = self._repo(stdout)
+        self.assertEqual(repo.list_importable_pool_names(), {"tank"})
+
+    def test_parses_multiple_importable_pools(self):
+        stdout = (
+            "   pool: tank\n"
+            "     id: 1\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\ttank        ONLINE       0     0     0\n"
+            "   pool: archive\n"
+            "     id: 2\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\tarchive     ONLINE       0     0     0\n"
+        )
+        repo = self._repo(stdout)
+        self.assertEqual(repo.list_importable_pool_names(), {"tank", "archive"})
+
+    def test_filters_zvol_backed_pools(self):
+        stdout = (
+            "   pool: nested\n"
+            "     id: 1\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\tnested      ONLINE       0     0     0\n"
+            "\t  zd0       ONLINE       0     0     0\n"
+            "   pool: normal\n"
+            "     id: 2\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\tnormal      ONLINE       0     0     0\n"
+            "\t  sda       ONLINE       0     0     0\n"
+        )
+        repo = self._repo(stdout)
+        self.assertEqual(repo.list_importable_pool_names(), {"normal"})
+
+    def test_empty_output_returns_empty_set(self):
+        repo = self._repo("")
+        self.assertEqual(repo.list_importable_pool_names(), set())
+
+
+class TestImportablePoolCache(unittest.TestCase):
+    """ImportablePoolCache refreshes in the background and honours TTL."""
+
+    def _repo(self, names):
+        repo = MagicMock()
+        repo.list_importable_pool_names.return_value = set(names)
+        return repo
+
+    def test_first_call_returns_empty_and_triggers_refresh(self):
+        repo = self._repo(["tank"])
+        cache = ImportablePoolCache(repo, ttl_seconds=60.0)
+        result = cache.get()
+        self.assertEqual(result, set())
+        # Give the daemon thread time to finish.
+        time.sleep(0.05)
+        repo.list_importable_pool_names.assert_called_once()
+        self.assertEqual(cache.get(), {"tank"})
+
+    def test_second_call_within_ttl_returns_cached_value(self):
+        repo = self._repo(["tank"])
+        cache = ImportablePoolCache(repo, ttl_seconds=60.0)
+        cache.get()
+        time.sleep(0.05)
+        self.assertEqual(cache.get(), {"tank"})
+        repo.list_importable_pool_names.assert_called_once()
+
+    def test_callback_invoked_after_refresh(self):
+        repo = self._repo(["tank"])
+        callback = MagicMock()
+        cache = ImportablePoolCache(repo, ttl_seconds=60.0)
+        cache.get(callback=callback)
+        time.sleep(0.05)
+        callback.assert_called_once()
+
+    def test_invalidate_forces_new_refresh(self):
+        repo = self._repo(["tank"])
+        cache = ImportablePoolCache(repo, ttl_seconds=60.0)
+        cache.get()
+        time.sleep(0.05)
+        repo.list_importable_pool_names.reset_mock()
+
+        cache.invalidate()
+        cache.get()
+        time.sleep(0.05)
+        repo.list_importable_pool_names.assert_called_once()
 
 
 class TestScrubCommandsLogDebug(unittest.TestCase):

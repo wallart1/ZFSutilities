@@ -89,6 +89,8 @@ targetcli() {
 #   qm guest exec <vmid> -- /bin/sh -c "..."
 #   qm guest exec-status <vmid> <pid>
 _qm_guest_output=""
+_qm_exec_returns_status=false
+_qm_exec_status_exited="true"
 qm() {
     local cmd="$1" subcmd="$2" vmid="$3"
     case "$cmd" in
@@ -99,15 +101,15 @@ qm() {
             ;;
         guest)
             if [[ "$subcmd" == "exec" ]]; then
-                # Return a deterministic pid; tests never poll exec-status because
-                # we override the python3 parser to return the prepared output.
-                echo '{"pid": 12345}'
-            elif [[ "$subcmd" == "exec-status" ]]; then
-                if [[ -n "$_qm_guest_output" ]]; then
-                    printf '{"exited": true, "exitcode": 0, "out-data": "%s"}\n' "$_qm_guest_output"
+                if [[ "$_qm_exec_returns_status" == true ]]; then
+                    printf '{"exited": %s, "exitcode": 0, "out-data": "%s"}\n' \
+                        "$_qm_exec_status_exited" "$_qm_guest_output"
                 else
-                    echo '{"exited": true, "exitcode": 0, "out-data": ""}'
+                    echo '{"pid": 12345}'
                 fi
+            elif [[ "$subcmd" == "exec-status" ]]; then
+                printf '{"exited": %s, "exitcode": 0, "out-data": "%s"}\n' \
+                    "$_qm_exec_status_exited" "$_qm_guest_output"
             fi
             ;;
     esac
@@ -148,6 +150,8 @@ reset_mocks() {
     _mock_zfs_props=()
     _mock_zpool_list=""
     _qm_guest_output=""
+    _qm_exec_returns_status=false
+    _qm_exec_status_exited="true"
     VM_MAP_VMID=()
     VM_MAP_NAME=()
     VM_MAP_KEY=()
@@ -284,6 +288,59 @@ test_build_guest_device_map_stopped() {
         test_pass
     else
         test_fail "Stopped VM should have no guest device: $(declare -p GUEST_DEV GUEST_BYPATH)"
+    fi
+}
+
+test_build_guest_device_map_base64() {
+    test_start "build_guest_device_map decodes base64 out-data"
+    reset_mocks
+    write_two_node_configs
+    _qm_guest_output=$(printf '/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n' | base64 -w0)
+
+    build_vm_disk_map
+    build_running_vm_set
+    build_guest_device_map
+
+    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" && "${GUEST_BYPATH[threeamigos:0]}" == "/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0" ]]; then
+        test_pass
+    else
+        test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
+    fi
+}
+
+test_build_guest_device_map_exited_one() {
+    test_start "build_guest_device_map accepts exited: 1 as completed"
+    reset_mocks
+    write_two_node_configs
+    _qm_exec_status_exited="1"
+    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+
+    build_vm_disk_map
+    build_running_vm_set
+    build_guest_device_map
+
+    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" && "${GUEST_BYPATH[threeamigos:0]}" == "/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0" ]]; then
+        test_pass
+    else
+        test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
+    fi
+}
+
+test_build_guest_device_map_immediate_status() {
+    test_start "build_guest_device_map uses status returned directly by qm guest exec"
+    reset_mocks
+    write_two_node_configs
+    _qm_exec_returns_status=true
+    _qm_guest_output=$(printf '/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n' | base64 -w0)
+
+    build_vm_disk_map
+    build_running_vm_set
+    build_guest_device_map
+
+    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" && "${GUEST_BYPATH[threeamigos:0]}" == "/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0" ]]; then
+        test_pass
+    else
+        test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
     fi
 }
 
@@ -479,6 +536,9 @@ test_build_host_device_map
 test_build_running_vm_set
 test_build_guest_device_map_running
 test_build_guest_device_map_stopped
+test_build_guest_device_map_base64
+test_build_guest_device_map_exited_one
+test_build_guest_device_map_immediate_status
 test_two_node_output_compute_host
 test_two_node_output_storage_host
 test_single_node_output

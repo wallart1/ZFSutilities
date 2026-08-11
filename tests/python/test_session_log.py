@@ -49,14 +49,16 @@ class TestCreateSessionLogFile(unittest.TestCase):
 
     def test_returns_none_on_create_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Make the directory unwritable.
-            os.chmod(tmpdir, 0o555)
-            try:
-                with patch("session_log.SESSION_LOG_DIR", tmpdir):
+            # Simulate a write failure without depending on filesystem
+            # permissions, which may be ignored when running as root or on
+            # certain filesystems.
+            def _failing_open(*args, **kwargs):
+                raise PermissionError("simulated write failure")
+
+            with patch("session_log.SESSION_LOG_DIR", tmpdir):
+                with patch("session_log.open", side_effect=_failing_open):
                     path = sl.create_session_log_file("Backup")
-                self.assertIsNone(path)
-            finally:
-                os.chmod(tmpdir, 0o755)
+            self.assertIsNone(path)
 
 
 class TestWriteRawLine(unittest.TestCase):

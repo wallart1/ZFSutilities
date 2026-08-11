@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 import threading
+import urllib.parse
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -36,6 +37,7 @@ _refcount_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _ensure_dirs() -> None:
     """Create lock directories if they do not exist."""
@@ -223,6 +225,7 @@ def _pool(dataset: str) -> str | None:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def check(dataset: str, lock_type: str) -> bool:
     """Return True if *lock_type* can be acquired on *dataset*.
 
@@ -256,6 +259,53 @@ def check(dataset: str, lock_type: str) -> bool:
             return False
 
     return True
+
+
+def list_active_locks() -> list[dict]:
+    """Return all currently active ZFS dataset locks.
+
+    Reads ``ZFSLOCK_LOCKS_DIR/*.lock``, parses each JSON lock file, and
+    skips stale entries (owner PID is dead).  Returns a list of dicts
+    with keys: dataset, type, pid, script, acquired, description.
+    """
+    locks: list[dict] = []
+    if not os.path.isdir(ZFSLOCK_LOCKS_DIR):
+        return locks
+
+    for lock_path in glob.glob(os.path.join(ZFSLOCK_LOCKS_DIR, "*.lock")):
+        try:
+            with open(lock_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+
+        pid = data.get("pid")
+        if not isinstance(pid, int) or pid <= 0:
+            continue
+
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            continue
+
+        dataset = data.get("dataset")
+        if not dataset:
+            encoded_name = os.path.basename(lock_path)[:-5]
+            dataset = urllib.parse.unquote(encoded_name)
+
+        locks.append(
+            {
+                "dataset": dataset,
+                "type": data.get("type", ""),
+                "pid": pid,
+                "script": data.get("script", ""),
+                "acquired": data.get("acquired", ""),
+                "description": data.get("description", ""),
+            }
+        )
+
+    locks.sort(key=lambda lock: (lock["dataset"], lock["type"], lock["pid"]))
+    return locks
 
 
 def acquire(dataset: str, lock_type: str, description: str = "") -> str:

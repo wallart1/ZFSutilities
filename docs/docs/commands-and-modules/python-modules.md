@@ -1379,6 +1379,7 @@ without conflicting on the same lock files.
 | `release(lock_id)` / `release_all()` | Release one lock or all locks held by this process |
 | `lock(dataset, lock_type, description="")` | Context manager for a single lock |
 | `locks(lock_type, datasets)` | Context manager for multiple locks |
+| `list_active_locks()` | Return all currently active (non-stale) dataset locks |
 
 **Called modules / imported helpers:** none (stdlib only).
 

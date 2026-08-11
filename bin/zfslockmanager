@@ -73,7 +73,8 @@ _zfslock_encode() {
 # Usage: lockfile=$(_zfslock_file "pool/dataset")
 _zfslock_file() {
     local dataset="$1"
-    local encoded=$(_zfslock_encode "$dataset")
+    local encoded
+    encoded=$(_zfslock_encode "$dataset")
     echo "$ZFSLOCK_LOCKS_DIR/${encoded}.lock"
 }
 
@@ -148,7 +149,8 @@ _zfslock_hierarchy_conflict() {
 _zfslock_read_field() {
     local lockfile="$1" field="$2"
     [[ -f "$lockfile" ]] || return 1
-    local content=$(<"$lockfile")
+    local content
+    content=$(<"$lockfile")
     # Regex: "field":[[:space:]]*"([^"]+)"
     # Purpose: Extract a string value for a given JSON field.
     # Group 1: The string value.
@@ -294,7 +296,8 @@ zfslock_check() {
         _zfslock_check_one "$lockfile" "$type" "ancestor" || return $?
     fi
 
-    local dataset_encoded=$(_zfslock_encode "$dataset")
+    local dataset_encoded
+    dataset_encoded=$(_zfslock_encode "$dataset")
     for lockfile in "$ZFSLOCK_LOCKS_DIR"/"${dataset_encoded}%2F"*.lock; do
         [[ -f "$lockfile" ]] || continue
         _zfslock_check_one "$lockfile" "$type" "descendant" || return $?
@@ -346,7 +349,9 @@ zfslock_acquire() {
     fi
 
     lockfile=$(_zfslock_file "$dataset")
-    local timestamp=$(date -Iseconds) script=$(_zfslock_scriptname)
+    local timestamp script
+    timestamp=$(date -Iseconds)
+    script=$(_zfslock_scriptname)
     local tmpfile="${lockfile}.tmp.$$"
     printf '{"dataset":"%s","type":"%s","pid":%s,"script":"%s","acquired":"%s","description":"%s"}\n' \
         "$dataset" "$type" "$$" "$script" "$timestamp" "$description" > "$tmpfile" || {
@@ -355,7 +360,8 @@ zfslock_acquire() {
         rm -f "$tmpfile"; log_msg "WARN: Failed to install lock file $lockfile"; return 2; }
 
     # Track this lock in the PID file
-    local pidfile=$(_zfslock_pidfile)
+    local pidfile
+    pidfile=$(_zfslock_pidfile)
     echo "$lockfile" >> "$pidfile"
 
     ZFSLOCK_ID="$lockfile"
@@ -372,8 +378,8 @@ zfslock_acquire_multiple() {
     local -a sorted=()
     local -a kept=()
     local -a acquired=()
-    local ds other i j held
-    local depth slashes sorted_keys
+    local ds i j held
+    local depth slashes
 
     ZFSLOCK_IDS=()
 
@@ -428,6 +434,7 @@ zfslock_acquire_multiple() {
         fi
     done
 
+    # shellcheck disable=SC2034
     ZFSLOCK_IDS=("${acquired[@]}")
     return 0
 }
@@ -444,7 +451,8 @@ zfslock_release() {
     [[ "$lock_id" == REENTRY:* ]] && return 0
     [[ -f "$lock_id" ]] || return 0
 
-    local lock_pid=$(_zfslock_read_field "$lock_id" "pid")
+    local lock_pid
+    lock_pid=$(_zfslock_read_field "$lock_id" "pid")
     if [[ "$lock_pid" != "$$" ]]; then
         log_msg "WARN: Cannot release lock owned by PID $lock_pid (we are $$)"
         return 1
@@ -452,16 +460,24 @@ zfslock_release() {
 
     rm -f "$lock_id"
 
-    local pidfile=$(_zfslock_pidfile)
+    local pidfile
+    pidfile=$(_zfslock_pidfile)
     if [[ -f "$pidfile" ]]; then
-        local temp=$(grep -v "^${lock_id}$" "$pidfile" 2>/dev/null)
-        [[ -n "$temp" ]] && echo "$temp" > "$pidfile" || rm -f "$pidfile"
+        local temp
+        temp=$(grep -v "^${lock_id}$" "$pidfile" 2>/dev/null)
+        if [[ -n "$temp" ]]; then
+            echo "$temp" > "$pidfile"
+        else
+            rm -f "$pidfile"
+        fi
     fi
 }
 
 # Release all locks held by current PID
 zfslock_release_all() {
-    local pidfile=$(_zfslock_pidfile) lockfile
+    local pidfile
+    pidfile=$(_zfslock_pidfile)
+    local lockfile
     [[ -f "$pidfile" ]] || return 0
     while IFS= read -r lockfile; do
         [[ -n "$lockfile" && -f "$lockfile" ]] && rm -f "$lockfile"
@@ -547,8 +563,10 @@ zfslock_wait_or_resolve() {
         lock_script=$(_zfslock_read_field "$lockfile" "script")
         lock_acquired=$(_zfslock_read_field "$lockfile" "acquired")
         lock_desc=$(_zfslock_read_field "$lockfile" "description")
-        local acquired_epoch=$(date -d "$lock_acquired" +%s 2>/dev/null) || acquired_epoch=""
-        local diff_seconds=$(($(date +%s) - acquired_epoch))
+        local acquired_epoch
+        acquired_epoch=$(date -d "$lock_acquired" +%s 2>/dev/null) || acquired_epoch=""
+        local diff_seconds
+        diff_seconds=$(($(date +%s) - acquired_epoch))
         local relative_time
         if [[ $diff_seconds -lt 60 ]]; then
             relative_time="${diff_seconds} seconds ago"

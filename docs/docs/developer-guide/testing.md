@@ -307,22 +307,22 @@ in the allow-list or is not online.
 
 ### Creating Local Test Pools
 
-On the development VM, `/dev/sdb` is a 1.5 GiB empty virtual disk. It can be
+On the development VM, `/dev/sdb` is a 75 GiB empty virtual disk. It can be
 partitioned and used to create three small RAIDZ1 test pools:
 
 ```bash
-# Create a GPT label and 15 ~100 MiB partitions.
+# Create a GPT label and 15 ~5 GiB partitions.
 parted -s /dev/sdb mklabel gpt
 for i in {1..15}; do
     if [[ $i -eq 1 ]]; then
         start="1MiB"
     else
-        start="$(( (i-1)*100 ))MiB"
+        start="$(( (i-1)*5120 ))MiB"
     fi
     if [[ $i -eq 15 ]]; then
-        end="1499MiB"
+        end="100%"
     else
-        end="$(( i*100 ))MiB"
+        end="$(( i*5120 ))MiB"
     fi
     parted -a optimal -s /dev/sdb mkpart primary "${start}" "${end}"
 done
@@ -334,11 +334,11 @@ zpool create -f zfstest2 raidz1 /dev/sdb6 /dev/sdb7 /dev/sdb8 /dev/sdb9 /dev/sdb
 zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15
 ```
 
-Each pool provides roughly 448 MiB of usable space. The integration suite sets
-`space_check_min_buffer=0` for its normal scenarios because the default 1 GiB
-minimum buffer in `zfs-send-receive` exceeds the capacity of these small pools.
-The space-check scenario itself verifies the skip behavior by setting an
-artificially large buffer.
+Each pool reports roughly 24.5 GiB of raw space, yielding about 20 GiB of
+usable space after RAIDZ1 parity. The integration suite still sets
+`space_check_min_buffer=0` for its normal scenarios to keep the existing small-
+transfer logic path. The space-check scenario itself verifies the skip behavior
+by setting an artificially large buffer.
 
 ### Running the Integration Suite
 
