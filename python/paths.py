@@ -134,6 +134,24 @@ def get_profile_lock_dir() -> str:
 
 
 # ---------------------------------------------------------------------------
+# User-specific paths (non-root GUI components)
+# ---------------------------------------------------------------------------
+
+
+def get_user_config_dir() -> str:
+    """Return the per-user configuration directory.
+
+    Respects ``$XDG_CONFIG_HOME`` and falls back to ``~/.config``.
+    """
+    return os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+
+
+def get_docs_viewer_state_path() -> str:
+    """Return the path to the per-user docs viewer state file."""
+    return os.path.join(get_user_config_dir(), "zfsutilities", "docs_viewer_state.json")
+
+
+# ---------------------------------------------------------------------------
 # Legacy paths (for migration/rollback compatibility)
 # ---------------------------------------------------------------------------
 

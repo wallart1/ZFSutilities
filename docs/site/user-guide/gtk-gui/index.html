@@ -3170,9 +3170,14 @@ browser's local storage and is also remembered by the GUI so the viewer reopens
 in the same mode.</p>
 <h4 id="remembered-state">Remembered State<a class="headerlink" href="#remembered-state" title="Permanent link">&para;</a></h4>
 <p>The viewer remembers its window size, position, maximized state, zoom level,
-and the active Material light / dark palette. These values are stored in the
-<code>ui_state.docs_viewer</code> section of the GUI configuration file and are restored
-the next time the documentation window opens.</p>
+and the active Material light / dark palette. When the viewer is opened from
+the GUI or as root, these values are stored in the <code>ui_state.docs_viewer</code>
+section of the system GUI configuration file. When it is opened without root
+privileges (for example, from the <strong>ZFSutilities Documentation</strong> symlink in a
+user's home directory), they are stored in that user's own configuration file
+(<code>$XDG_CONFIG_HOME/zfsutilities/docs_viewer_state.json</code>, falling back to
+<code>~/.config/zfsutilities/docs_viewer_state.json</code>). The values are restored the
+next time the documentation window opens.</p>
 <h4 id="editing-pages">Editing Pages<a class="headerlink" href="#editing-pages" title="Permanent link">&para;</a></h4>
 <p>Every documentation page has a pencil icon at the upper-right. Clicking it opens
 the source <code>.md</code> (markdown) file in the editor configured via <strong>Help → Set Documentation Editor...</strong></p>
@@ -5223,7 +5228,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.0
+      ZFS Utilities v0.83.1
     </div>
   
   
@@ -5248,7 +5253,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

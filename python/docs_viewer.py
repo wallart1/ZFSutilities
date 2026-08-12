@@ -3,6 +3,7 @@
 
 import contextlib
 import functools
+import json
 import os
 import pwd
 import shlex
@@ -36,7 +37,9 @@ from backup_config import (
     log_msg,
     save_ui_state,
 )
+from config_core import CONFIG_PATH
 from path_utils import _DEPLOYMENT_BASE, get_docs_path
+from paths import get_docs_viewer_state_path
 
 # URI schemes the viewer is allowed to navigate to.
 _ALLOWED_SCHEMES = ("file:", "http:", "https:", "about:")
@@ -132,6 +135,56 @@ def _get_desktop_user():
     return None
 
 
+def _is_root():
+    """Return True when the process is running with root privileges."""
+    return os.geteuid() == 0
+
+
+def _load_system_config_raw():
+    """Load the system JSON config without acquiring an advisory lock.
+
+    This is intended for read-only use by unprivileged components that cannot
+    write to the lock directory.  Errors are logged and an empty dict is
+    returned.
+    """
+    if not os.path.exists(CONFIG_PATH):
+        return {}
+    try:
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        log_msg(f"WARN: Could not read system config {CONFIG_PATH}: {exc}")
+    return {}
+
+
+def _load_user_state():
+    """Load the per-user docs viewer state file, returning {} on error."""
+    path = get_docs_viewer_state_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        log_msg(f"WARN: Could not load docs viewer user state from {path}: {exc}")
+    return {}
+
+
+def _save_user_state(state):
+    """Persist the docs viewer state to the per-user file.
+
+    Failures are logged but not raised so a missing home directory or full
+    disk does not crash the viewer.
+    """
+    path = get_docs_viewer_state_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(state, f, indent=2)
+    except OSError as exc:
+        log_msg(f"WARN: Could not save docs viewer user state to {path}: {exc}")
+
+
 class DocsViewerWindow(Gtk.Window):
     """A standalone window that displays the MkDocs documentation site."""
 
@@ -141,8 +194,30 @@ class DocsViewerWindow(Gtk.Window):
 
         self._script_dir = script_dir
         self._docs_path = get_docs_path(script_dir)
-        self._config = config if config is not None else load_config()
-        self._docs_state = get_ui_state(self._config).get("docs_viewer", {})
+
+        # The docs viewer runs as the desktop user when launched from the home
+        # directory symlink.  Unprivileged users cannot write the system config
+        # or its lock file, so we persist UI state in a per-user file while
+        # still reading the system config for the configured markdown editor.
+        if config is not None:
+            self._config = config
+        elif _is_root():
+            self._config = load_config()
+        else:
+            self._config = None
+
+        if self._config is not None:
+            self._docs_state = get_ui_state(self._config).get("docs_viewer", {})
+            self._docs_editor = get_docs_editor(self._config)
+        else:
+            user_state = _load_user_state()
+            self._docs_state = user_state.get("docs_viewer", {})
+            if not self._docs_state:
+                self._docs_state = get_ui_state(_load_system_config_raw()).get(
+                    "docs_viewer", {}
+                )
+            self._docs_editor = get_docs_editor(_load_system_config_raw())
+
         self._restore_geometry()
 
         if not _WEBKIT_AVAILABLE:
@@ -195,7 +270,9 @@ class DocsViewerWindow(Gtk.Window):
 
     def _schedule_save(self):
         """Debounce geometry/zoom saves so resize drags don't hammer disk."""
-        if self._config is None:
+        # A non-root viewer has no system config but still needs to persist
+        # state to the per-user file.
+        if self._config is None and _is_root():
             return
         if hasattr(self, "_save_timer") and self._save_timer is not None:
             GLib.source_remove(self._save_timer)
@@ -211,8 +288,6 @@ class DocsViewerWindow(Gtk.Window):
     def _do_save(self):
         """Persist current geometry, zoom, and theme."""
         self._save_timer = None
-        if self._config is None:
-            return False
         state = {"docs_viewer": {"zoom": self._zoom_level, "theme": self._theme}}
         ds = state["docs_viewer"]
         maximized = getattr(self, "_maximized", False)
@@ -230,7 +305,10 @@ class DocsViewerWindow(Gtk.Window):
             ds["height"] = height
             ds["x"] = x
             ds["y"] = y
-        save_ui_state(self._config, state)
+        if self._config is not None:
+            save_ui_state(self._config, state)
+        else:
+            _save_user_state(state)
         return False
 
     def _on_configure(self, _window, event):
@@ -771,8 +849,7 @@ class DocsViewerWindow(Gtk.Window):
 
     def _launch_editor(self, path):
         """Open the given markdown file in the user's configured editor."""
-        config = load_config()
-        command = get_docs_editor(config)
+        command = self._docs_editor
         if command:
             parts = shlex.split(command)
             resolved = shutil.which(parts[0])
@@ -788,7 +865,7 @@ class DocsViewerWindow(Gtk.Window):
         # If running as root, drop to the desktop user so Electron/GTK editors
         # don't crash inside their sandboxes.
         desktop_user = _get_desktop_user()
-        if os.geteuid() == 0 and desktop_user:
+        if _is_root() and desktop_user:
             cmd = ["runuser", "-u", desktop_user, "--"] + cmd
 
         try:

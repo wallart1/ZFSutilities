@@ -84,6 +84,37 @@ class TestPathDefaults(unittest.TestCase):
         self.assertEqual(paths.get_profile_lock_dir(), "/run/lock/zfs/profiles")
 
 
+class TestUserPaths(unittest.TestCase):
+    """Verify per-user path helpers for non-root GUI components."""
+
+    def test_user_config_dir_default(self):
+        with patch_environ(XDG_CONFIG_HOME=None, HOME="/home/testuser"):
+            self.assertEqual(
+                paths.get_user_config_dir(),
+                "/home/testuser/.config",
+            )
+
+    def test_user_config_dir_xdg(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch_environ(XDG_CONFIG_HOME=tmpdir):
+                self.assertEqual(paths.get_user_config_dir(), tmpdir)
+
+    def test_docs_viewer_state_path_default(self):
+        with patch_environ(XDG_CONFIG_HOME=None, HOME="/home/testuser"):
+            self.assertEqual(
+                paths.get_docs_viewer_state_path(),
+                "/home/testuser/.config/zfsutilities/docs_viewer_state.json",
+            )
+
+    def test_docs_viewer_state_path_xdg(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch_environ(XDG_CONFIG_HOME=tmpdir):
+                self.assertEqual(
+                    paths.get_docs_viewer_state_path(),
+                    os.path.join(tmpdir, "zfsutilities", "docs_viewer_state.json"),
+                )
+
+
 class TestPathOverrides(unittest.TestCase):
     """Verify environment-variable overrides propagate to derived paths."""
 

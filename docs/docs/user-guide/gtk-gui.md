@@ -257,9 +257,14 @@ in the same mode.
 #### Remembered State
 
 The viewer remembers its window size, position, maximized state, zoom level,
-and the active Material light / dark palette. These values are stored in the
-`ui_state.docs_viewer` section of the GUI configuration file and are restored
-the next time the documentation window opens.
+and the active Material light / dark palette. When the viewer is opened from
+the GUI or as root, these values are stored in the `ui_state.docs_viewer`
+section of the system GUI configuration file. When it is opened without root
+privileges (for example, from the **ZFSutilities Documentation** symlink in a
+user's home directory), they are stored in that user's own configuration file
+(`$XDG_CONFIG_HOME/zfsutilities/docs_viewer_state.json`, falling back to
+`~/.config/zfsutilities/docs_viewer_state.json`). The values are restored the
+next time the documentation window opens.
 
 #### Editing Pages
 

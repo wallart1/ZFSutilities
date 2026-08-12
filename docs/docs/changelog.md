@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.83.1
+
+*Released 2026-08-12*
+
+### Added
+
+- **Per-user documentation viewer state** — When `python/docs_viewer.py` is
+  launched without root privileges (for example, from the **ZFSutilities
+  Documentation** symlink in a user's home directory), window geometry, zoom,
+  and theme state are saved to
+  `$XDG_CONFIG_HOME/zfsutilities/docs_viewer_state.json`, falling back to
+  `~/.config/zfsutilities/docs_viewer_state.json`. The system GUI configuration
+  is still read for the configured markdown editor.
+- **User path helpers** — Added `paths.get_user_config_dir()` and
+  `paths.get_docs_viewer_state_path()` to `python/paths.py`.
+
+### Tests
+
+- Added `TestDocsViewerStatePersistence` to `tests/python/test_docs_viewer.py`
+  covering non-root load/save and root system-config save paths.
+- Added `TestUserPaths` to `tests/python/test_paths.py` for the new
+  user-specific path helpers.
+
 ## 0.83.0
 
 *Released 2026-08-12*
