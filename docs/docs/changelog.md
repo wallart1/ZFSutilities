@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.83.0
+
+*Released 2026-08-12*
+
+### Added
+
+- **Conditional scheduled profiles** — Profile schedules now support an
+  optional **Condition** field. The shell command is prepended to the generated
+  cron line with `&&`; the profile runs only when the condition exits `0`. This
+  allows schedules that cron expressions alone cannot express, such as
+  `[ $(date +%d) -ge 28 ]` to run only during the last three days of the month.
+  The Schedule tab shows the condition, includes it in the live interpretation,
+  and persists it in the profile JSON.
+- **Scrub queue priority ordering** — The Pools tab scrub table now supports
+  drag-and-drop reordering. Pools at the top of the list are preferred when the
+  scrub manager chooses the next scrub to start. The order is saved with the
+  scrub queue state and survives GUI restarts. Sorting a column disables
+  drag-and-drop until the sort is cleared.
+
+### Changed
+
+- **Pool Import button sensitivity** — The **Import** button on the Pools tab
+  is now enabled only when at least one selected pool is `IMPORTABLE`.
+  Previously it also acted on `OFFLINE` selections; those now fall back to the
+  importable-pools dialog.
+- **Logs tab pop-out reparenting** — When the Logs tab viewer is popped out,
+  the viewer pane is now removed from the Logs tab and restored when docked
+  again. Geometry is applied before the pop-out window is shown so the window
+  manager honours the requested position.
+
+### Fixed
+
+- **Documentation viewer launch** — `python/docs_viewer.py` now explicitly pins
+  `Gdk` to version `3.0` before importing it, preventing the
+  `Requiring namespace 'Gdk' version '3.0', but '4.0' is already loaded` crash
+  on systems where a newer Gdk version would otherwise be loaded first.
+- **Two-node installer iSCSI path** — `bin/install-two-node` now calls
+  `bin/setup-iscsi-targets` directly instead of the stale
+  `08 Two-node/setup-iscsi-targets` path.
+- **Offsite dry-run holds** — `bin/zfssendoffsite` `applyholds` now honors the
+  `$dryrun` override and skips real ZFS holds during dry-run mode.
+- **Test helper cleanup** — Removed a duplicated `STARTDOCSERVER_PATH`
+  definition in `tests/python/test_support.py`.
+
+### Removed
+
+- **Placeholder scripts** — Deleted `bin/bashindex` and `bin/bashredirect`,
+  which were development leftovers, from the repository and from the
+  documentation audit log.
+
 ## 0.82.3
 
 *Released 2026-08-12*

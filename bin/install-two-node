@@ -274,7 +274,7 @@ echo ""
 # ------------------------------------------------------------------
 echo "=== Setting up iSCSI targets ==="
 echo ""
-SETUP_TARGETS="$REPO_DIR/08\ Two-node/setup-iscsi-targets"
+SETUP_TARGETS="$REPO_DIR/bin/setup-iscsi-targets"
 if [[ -f "$SETUP_TARGETS" ]]; then
     "$SETUP_TARGETS"
 else
@@ -366,6 +366,7 @@ ensure_retention_profiles_remote() {
 if [[ -n "${COMPUTE_HOST:-}" ]]; then
     echo ""
     echo "Activating version on $COMPUTE_HOST..."
+    # shellcheck disable=SC2029 # VERSION expands intentionally on the client side
     ssh "root@${COMPUTE_HOST}" \
         "/usr/local/lib/zfsutilities/versions/${VERSION}/bin/switch-version" "${VERSION}"
     echo "  ✓ $COMPUTE_HOST activated"
@@ -516,9 +517,12 @@ fi
 # Step 6: Copy node config to compute host if missing
 # ------------------------------------------------------------------
 echo "Checking node config on $COMPUTE_HOST..."
+# shellcheck disable=SC2029 # NODE_CONF expands intentionally on the client side
 if ssh "root@${COMPUTE_HOST}" "[[ ! -f ${NODE_CONF} ]]"; then
+    # shellcheck disable=SC2029 # NODE_CONF expands intentionally on the client side
     ssh "root@${COMPUTE_HOST}" "install -d -m 0755 '$(dirname "$NODE_CONF")'"
     scp -q "$NODE_CONF" "root@${COMPUTE_HOST}:${NODE_CONF}"
+    # shellcheck disable=SC2029 # NODE_CONF expands intentionally on the client side
     ssh "root@${COMPUTE_HOST}" "chmod 0644 ${NODE_CONF}"
     echo "  ✓ ${COMPUTE_HOST}:${NODE_CONF}"
 else

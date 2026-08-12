@@ -33,6 +33,12 @@ function applyholds {
     if [[ $applyholds = 'Y' ]]; then
         local sourcefspool=${sourcefs%%/*}
         local destfspool=${destfs%%/*}
+
+        if [[ $dryrun != 'N' ]]; then
+            log_msg "INFO: Dry-run: Would apply holds to $sourcefspool and $destfspool snapshots."
+            return
+        fi
+
         log_msg "INFO: Applying holds to $sourcefspool and $destfspool snapshots."
 
         local fs
@@ -73,7 +79,7 @@ else
     log_msg "INFO: Will be sending to pool $onlineoffsitepool." \
         "\n\tThe snapshot will be $nextsnap."
     if [[ $autoproceed != 'Y' ]]; then
-        read -p 'Press enter to continue.'
+        read -rp 'Press enter to continue.'
     fi
 fi
 
@@ -110,8 +116,9 @@ if [[ $step1 = 'Y' ]]; then
     includes=()
     excludes=('temp/temp')  # This area is intended for work files and needn't be backed up.
     log_msg "INFO: ***  Step 1: Sending $sourcefs to offsite $destfs  ***"
-    send-receive
-    if [[ $? -eq 0 ]]; then applyholds; fi
+    if send-receive; then
+        applyholds
+    fi
 fi
 
 #   (2) Send the threeamigos/proxmox subpool to fivebays
@@ -122,8 +129,9 @@ if [[ $step2 = 'Y' ]]; then
     includes=('proxmox')
     excludes=()
     log_msg "INFO: ***  Step 2: Sending $sourcefs to $destfs  ***"
-    send-receive
-    if [[ $? -eq 0 ]]; then applyholds; fi
+    if send-receive; then
+        applyholds
+    fi
 fi
 
 #   (3) Send the NVME1 pool to fivebays.
@@ -134,8 +142,9 @@ if [[ $step3 = 'Y' ]]; then
     includes=()
     excludes=()
     log_msg "INFO: ***  Step 3: Sending $sourcefs to $destfs  ***"
-    send-receive
-    if [[ $? -eq 0 ]]; then applyholds; fi
+    if send-receive; then
+        applyholds
+    fi
 fi
 
 #   (4) Send the fivebays/threeamigos/proxmox and fivebays/NVME1/proxmox subpools to offsite pool.
@@ -149,8 +158,9 @@ if [[ $step4 = 'Y' ]]; then
     # shellcheck disable=SC2034
     excludes=()
     log_msg "INFO: ***  Step 4: Sending $sourcefs to $destfs  ***"
-    send-receive
-    if [[ $? -eq 0 ]]; then applyholds; fi
+    if send-receive; then
+        applyholds
+    fi
 fi
 
 # Clean up the saved nextsnap file would normally be done at this point,  however ...

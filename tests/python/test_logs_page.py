@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 from contextlib import contextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 
 @contextmanager
@@ -848,7 +848,7 @@ class TestCreateLogsPage(unittest.TestCase):
 
 
 class TestLogsPopoutToggle(unittest.TestCase):
-    def test_popout_restores_saved_geometry(self):
+    def test_popout_restores_saved_geometry_and_removes_pane(self):
         app = MagicMock()
         app.config = {
             "ui_state": {"logs_log_window": {"width": 800, "height": 600, "x": 100, "y": 200}}
@@ -858,14 +858,24 @@ class TestLogsPopoutToggle(unittest.TestCase):
         button.get_active.return_value = True
         viewer_box = MagicMock()
         viewer_frame = MagicMock()
+        outer = MagicMock()
 
-        lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame)
+        lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame, outer)
 
-        viewer_frame.remove.assert_called_once_with(viewer_box)
+        outer.remove.assert_called_once_with(viewer_frame)
+        app.logs_popout_window.box.pack_start.assert_called_once_with(viewer_box, True, True, 0)
         app.logs_popout_window.resize.assert_called_once_with(800, 600)
         app.logs_popout_window.move.assert_called_once_with(100, 200)
+        app.logs_popout_window.show_all.assert_called_once()
+        # Geometry must be applied before the window is shown.
+        calls = app.logs_popout_window.mock_calls
+        show_idx = calls.index(call.show_all())
+        resize_idx = calls.index(call.resize(800, 600))
+        move_idx = calls.index(call.move(100, 200))
+        self.assertGreater(show_idx, resize_idx)
+        self.assertGreater(show_idx, move_idx)
 
-    def test_popout_back_in_flushes_ui_state(self):
+    def test_popout_back_in_restores_pane_and_flushes(self):
         app = MagicMock()
         app.config = {}
         app.logs_popout_window = MagicMock()
@@ -873,11 +883,15 @@ class TestLogsPopoutToggle(unittest.TestCase):
         button.get_active.return_value = False
         viewer_box = MagicMock()
         viewer_frame = MagicMock()
+        outer = MagicMock()
 
-        lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame)
+        lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame, outer)
 
         app._ui_state.flush.assert_called_once()
+        app.logs_popout_window.box.remove.assert_called_once_with(viewer_box)
         viewer_frame.add.assert_called_once_with(viewer_box)
+        outer.pack_start.assert_called_once_with(viewer_frame, True, True, 0)
+        viewer_frame.show_all.assert_called_once()
         app.logs_popout_window.hide.assert_called_once()
 
     def test_popout_does_not_restore_geometry_when_not_saved(self):
@@ -888,11 +902,14 @@ class TestLogsPopoutToggle(unittest.TestCase):
         button.get_active.return_value = True
         viewer_box = MagicMock()
         viewer_frame = MagicMock()
+        outer = MagicMock()
 
-        lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame)
+        lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame, outer)
 
+        outer.remove.assert_called_once_with(viewer_frame)
         app.logs_popout_window.resize.assert_not_called()
         app.logs_popout_window.move.assert_not_called()
+        app.logs_popout_window.show_all.assert_called_once()
 
 
 class TestLogViewerStatusLabel(unittest.TestCase):

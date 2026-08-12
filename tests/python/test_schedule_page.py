@@ -170,12 +170,16 @@ class TestScheduleDirtyTracking(unittest.TestCase):
             "day": MagicMock(),
             "month": MagicMock(),
             "weekday": MagicMock(),
+            "condition": MagicMock(),
         }
         return app
 
     def _cron_text(self, app, cron):
-        for key, val in cron.items():
-            app.schedule_cron_entries[key].get_text.return_value = val
+        for key in app.schedule_cron_entries:
+            if key == "condition":
+                app.schedule_cron_entries[key].get_text.return_value = cron.get(key, "")
+            else:
+                app.schedule_cron_entries[key].get_text.return_value = cron.get(key, "*")
 
     @patch("schedule_page.set_button_markup_red")
     def test_active_toggle_marks_save_red(self, mock_red):
@@ -353,6 +357,7 @@ class TestConfigSummary(unittest.TestCase):
             "day": MagicMock(),
             "month": MagicMock(),
             "weekday": MagicMock(),
+            "condition": MagicMock(),
         }
         return app
 
@@ -548,6 +553,7 @@ class TestConfigSummaryScroll(unittest.TestCase):
             "day": MagicMock(),
             "month": MagicMock(),
             "weekday": MagicMock(),
+            "condition": MagicMock(),
         }
 
         buffer = MagicMock()
@@ -636,9 +642,9 @@ class TestSchedulePageWidgets(unittest.TestCase):
 
         calls = mock_gtk.Entry.return_value.set_width_chars.call_args_list
         self.assertTrue(calls, "Expected set_width_chars to be called for cron entries")
-        for call in calls:
-            width = call[0][0]
-            self.assertEqual(width, 15)
+        widths = [call[0][0] for call in calls]
+        self.assertEqual(widths.count(15), 5, "Expected five cron fields to be 15 chars wide")
+        self.assertTrue(any(w > 15 for w in widths), "Expected condition field to be wider")
 
     @patch("schedule_page.Gtk")
     @patch("schedule_page.list_profiles", return_value=[])
@@ -891,6 +897,7 @@ class TestRunNow(unittest.TestCase):
             "day": MagicMock(),
             "month": MagicMock(),
             "weekday": MagicMock(),
+            "condition": MagicMock(),
         }
         return app
 
@@ -1197,6 +1204,7 @@ class TestScheduleDelete(unittest.TestCase):
             "day": MagicMock(),
             "month": MagicMock(),
             "weekday": MagicMock(),
+            "condition": MagicMock(),
         }
         return app
 
@@ -1544,6 +1552,250 @@ class TestLogProfileLine(unittest.TestCase):
         self.assertTrue(result)
         mock_status.assert_not_called()
         mock_log.assert_called_once_with("[my-profile] INFO: Step finished")
+
+
+class TestConditionField(unittest.TestCase):
+    """Verify the optional shell condition field in the Schedule tab."""
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+
+            return schedule_page
+
+    def _make_app(self, rows):
+        app = MagicMock()
+        app.schedule_store = FakeScheduleStore(rows)
+        app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
+            app.schedule_store,
+            [FakeTreePath(0)],
+        )
+        app._schedule_save_button = MagicMock()
+        app._schedule_pending = {}
+        app._schedule_ignore_changes = False
+        app.schedule_cron_entries = {
+            "minute": MagicMock(),
+            "hour": MagicMock(),
+            "day": MagicMock(),
+            "month": MagicMock(),
+            "weekday": MagicMock(),
+            "condition": MagicMock(),
+        }
+        return app
+
+    @patch("schedule_page.Gtk")
+    @patch("schedule_page.list_profiles", return_value=[])
+    def test_condition_entry_is_wider_than_cron_fields(self, _lst, mock_gtk):
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._ui_state = MagicMock()
+
+        schedule_page.create_schedule_page(app)
+
+        condition_entry = app.schedule_cron_entries["condition"]
+        width_calls = condition_entry.set_width_chars.call_args_list
+        self.assertTrue(width_calls)
+        self.assertGreater(max(call[0][0] for call in width_calls), 15)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_condition_edit_marks_save_red(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {
+            "profile_name": "p1",
+            "active": False,
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+                "condition": "",
+            },
+        }
+        for key in app.schedule_cron_entries:
+            app.schedule_cron_entries[key].get_text.return_value = saved_profile["cron"].get(key, "")
+        app.schedule_cron_entries["condition"].get_text.return_value = "[ $(date +%d) -ge 28 ]"
+
+        with patch("schedule_page.load_profile", return_value=saved_profile):
+            schedule_page._on_cron_entry_changed(None, app)
+
+        self.assertIn("p1", app._schedule_pending)
+        self.assertEqual(
+            app._schedule_pending["p1"]["cron"]["condition"],
+            "[ $(date +%d) -ge 28 ]",
+        )
+        mock_red.assert_called_with(app._schedule_save_button, True)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_save_writes_condition(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {
+            "profile_name": "p1",
+            "active": False,
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+                "condition": "",
+            },
+        }
+        app._schedule_pending = {
+            "p1": {
+                "cron": {
+                    "minute": "0",
+                    "hour": "2",
+                    "day": "*",
+                    "month": "*",
+                    "weekday": "*",
+                    "condition": "[ $(date +%d) -ge 28 ]",
+                }
+            }
+        }
+        saved = []
+
+        def fake_save(profile):
+            saved.append(dict(profile))
+
+        with (
+            patch("schedule_page.load_profile", return_value=dict(saved_profile)),
+            patch("schedule_page.save_profile", side_effect=fake_save),
+            patch("schedule_page.list_profiles", return_value=[dict(saved_profile)]),
+            patch("schedule_page.write_cron_file") as mock_write_cron,
+            patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN]),
+        ):
+            schedule_page.on_schedule_save(app)
+
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["cron"]["condition"], "[ $(date +%d) -ge 28 ]")
+        mock_write_cron.assert_called_once()
+        self.assertFalse(app._schedule_pending)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_revert_restores_condition(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {
+            "profile_name": "p1",
+            "active": False,
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+                "condition": "[ $(date +%d) -ge 28 ]",
+            },
+        }
+        app._schedule_pending = {
+            "p1": {
+                "cron": {
+                    "minute": "0",
+                    "hour": "2",
+                    "day": "*",
+                    "month": "*",
+                    "weekday": "*",
+                    "condition": "",
+                }
+            }
+        }
+
+        with (
+            patch("schedule_page.load_profile", return_value=saved_profile),
+            patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN]),
+        ):
+            schedule_page.on_schedule_revert(app)
+
+        self.assertFalse(app._schedule_pending)
+        condition_entry = app.schedule_cron_entries["condition"]
+        condition_entry.set_text.assert_called_with("[ $(date +%d) -ge 28 ]")
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_interpretation_mentions_condition(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        app = self._make_app(rows)
+        for key in app.schedule_cron_entries:
+            app.schedule_cron_entries[key].get_text.return_value = "*"
+        app.schedule_cron_entries["condition"].get_text.return_value = "[ $(date +%d) -ge 28 ]"
+
+        schedule_page._update_interpretation(app)
+
+        markup = app.schedule_interpret_label.set_markup.call_args[0][0]
+        self.assertIn("only when the shell condition exits 0", markup)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_missing_condition_key_does_not_mark_dirty(self, mock_red):
+        """Old profiles without a condition key should not be dirty on selection."""
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {
+            "profile_name": "p1",
+            "active": False,
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+            },
+        }
+        for key in app.schedule_cron_entries:
+            app.schedule_cron_entries[key].get_text.return_value = saved_profile["cron"].get(
+                key, "" if key == "condition" else "*"
+            )
+
+        selection = MagicMock()
+        selection.get_selected_rows.return_value = (app.schedule_store, [FakeTreePath(0)])
+
+        with patch("schedule_page.load_profile", return_value=saved_profile):
+            schedule_page._on_selection_changed(selection, app)
+
+        self.assertFalse(app._schedule_pending)
+        mock_red.assert_called_with(app._schedule_save_button, False)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_crontab_entry_shows_condition(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[True, "p1", "backup", "0 2 * * *", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {
+            "profile_name": "p1",
+            "active": True,
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+                "condition": "[ $(date +%d) -ge 28 ]",
+            },
+            "config": {"source": "tank/src"},
+        }
+        selection = MagicMock()
+        selection.get_selected_rows.return_value = (app.schedule_store, [FakeTreePath(0)])
+
+        with (
+            patch("schedule_page.load_profile", return_value=saved_profile),
+            patch(
+                "schedule_page._resolve_profile_runner_path", return_value="/fake/profile_runner.py"
+            ),
+        ):
+            schedule_page._on_selection_changed(selection, app)
+
+        actual = app.schedule_summary_textview.get_buffer().set_text.call_args[0][0]
+        expected_cron_line = schedule_page.generate_cron_line(
+            saved_profile, "/fake/profile_runner.py"
+        )
+        self.assertIn(expected_cron_line, actual)
+        self.assertIn("[ $(date +%d) -ge 28 ]", actual)
 
 
 class TestNextRunCache(unittest.TestCase):

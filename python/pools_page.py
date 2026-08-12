@@ -334,6 +334,11 @@ def create_pools_page(app):
     app._ui_state.bind_treeview(app.scrub_view, "pools_scrub_view")
     app.scrub_view.get_selection().connect("changed", _on_scrub_selection_changed, app)
 
+    # Enable drag-and-drop reordering for scrub priority; disable while sorted
+    app.scrub_view.set_reorderable(True)
+    app.scrub_store.connect("sort-column-changed", _on_scrub_sort_column_changed, app)
+    app.scrub_view.connect("drag-end", _on_scrub_drag_end, app)
+
     scrub_scrolled = Gtk.ScrolledWindow()
     scrub_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
     scrub_scrolled.set_min_content_height(150)
@@ -659,6 +664,42 @@ def _on_pools_sort_column_changed(model, app):
     app.pool_view.set_reorderable(sort_col_id is None)
 
 
+def _on_scrub_sort_column_changed(model, app):
+    """Disable scrub DND while the model is sorted; re-enable when unsorted."""
+    sort_col_id, _order = model.get_sort_column_id()
+    app.scrub_view.set_reorderable(sort_col_id is None)
+
+
+def _on_scrub_drag_end(treeview, drag_context, app):
+    """After a DND reorder, persist the new scrub priority order."""
+    model = treeview.get_model()
+    new_order = []
+    tree_iter = model.get_iter_first()
+    while tree_iter:
+        name = model.get_value(tree_iter, 0)
+        if name:
+            new_order.append(name)
+        tree_iter = model.iter_next(tree_iter)
+
+    if new_order == app.scrub_queue.order:
+        return
+
+    # Preserve selection after the refresh that follows set_order
+    selection = treeview.get_selection()
+    selected_pools = []
+    model_sel, pathlist = selection.get_selected_rows()
+    for path in pathlist:
+        sel_iter = model_sel.get_iter(path)
+        if sel_iter:
+            selected_pools.append(model_sel.get_value(sel_iter, 0))
+
+    app.scrub_queue.set_order(new_order)
+    refresh_scrub_table(app)
+
+    for pool_name in selected_pools:
+        _select_pool_by_name(treeview, pool_name)
+
+
 def _select_pool_by_name(treeview, pool_name):
     """Select the row matching *pool_name* and scroll it into view."""
     model = treeview.get_model()
@@ -772,8 +813,9 @@ def refresh_scrub_table(app):
             app.scrub_store.remove(tree_iter)
             del existing[name]
 
-    # Update or add rows
-    for pool_name in sorted(new_data.keys()):
+    # Update or add rows in the user's scrub priority order
+    ordered = queue.ordered_names(set(new_data.keys()))
+    for pool_name in ordered:
         row = new_data[pool_name]
         if pool_name in existing:
             tree_iter = existing[pool_name]
@@ -944,6 +986,7 @@ def update_pools_button_sensitivity(app):
     )
     has_registered = any(flag == FLAG_REGISTERED for _name, flag, _health in pool_rows)
     has_online = any(health not in ("OFFLINE", "IMPORTABLE") for _name, _flag, health in pool_rows)
+    has_importable = any(health == "IMPORTABLE" for _name, _flag, health in pool_rows)
     single_pool = len(pool_rows) == 1
 
     scrub_view = getattr(app, "scrub_view", None)
@@ -961,7 +1004,7 @@ def update_pools_button_sensitivity(app):
         ("_pools_details_btn", single_pool),
         ("_pools_add_btn", True),
         ("_pools_remove_btn", has_registered),
-        ("_pools_import_btn", True),
+        ("_pools_import_btn", has_importable),
         ("_pools_export_btn", has_online),
         ("_pools_save_btn", getattr(app, "pools_dirty", False)),
         ("_pools_revert_btn", getattr(app, "pools_dirty", False)),

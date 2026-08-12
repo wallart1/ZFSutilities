@@ -514,25 +514,25 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_backup_runner`      | 19    | Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and log size cap |
 | `test_command_builders`   | 31    | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
 | `test_config_migrations`  | 17    | Schema migrations 1→12, idempotency, missing migration errors                                                  |
-| `test_cron_manager`       | 17    | Cron line generation, human-readable interpretation, next-run computation                                      |
+| `test_cron_manager`       | 41    | Cron line generation, condition support, human-readable interpretation, next-run computation                     |
 | `test_dashboard_page`     | 167   | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, async refresh loading state |
 | `test_docs_integrity`     | 12    | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability  |
 | `test_gui_infrastructure` | 81    | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling            |
 | `test_installer_retention` | 5     | Installer retention profile initialization: default-only on new install and preservation of existing profiles |
 | `test_legacy_retention`   | 7     | Legacy `zfsretainpol-*` file parsing and pool scanning                                                         |
 | `test_logging_config`     | 24    | Message levels, GUI sink, session log env helpers, and session log truncation                                  |
-| `test_logs_page`          | 33    | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, and column-header label tooltips |
+| `test_logs_page`          | 50    | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, column-header label tooltips, and pop-out reparenting |
 | `test_main`               | 40    | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, initial dashboard refresh |
 | `test_page_runners`       | 6     | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation           |
-| `test_profile_manager`    | 18    | Profile CRUD, update, name validation, listing, existence checks, lifecycle logging                            |
+| `test_profile_manager`    | 19    | Profile CRUD, update, name validation, listing, existence checks, lifecycle logging, condition defaults          |
 | `test_profile_dialogs`    | 11    | Add/Recall profile dialogs, duplicate-name overwrite handling                                                  |
 | `test_profile_runner`     | 43    | Backup/offsite/restore/retention profile step building                                                         |
 | `test_profile_runner_concurrency` | 7 | Per-profile advisory locks, duplicate-invocation suppression, and metadata                                  |
 | `test_profile_integration` | 3    | Concurrent profile execution: disjoint datasets, same-dataset conflict, backup+prune serialization             |
 | `test_restore_runner`     | 16    | Restore destination computation and zfs-send-receive parameter mapping                                         |
-| `test_schedule_page`      | 52    | Schedule page path resolution, dirty tracking, run-now child-watch handling, fatal-fallback logging, async refresh, and next-run caching |
-| `test_scrub_manager`      | 24    | Scrub state parsing, queue/target management, tick logic, systemd timers                                       |
-| `test_scrub_page`         | 5     | Scrub page store schema and flicker-free refresh logic                                                         |
+| `test_schedule_page`      | 61    | Schedule page path resolution, dirty tracking, condition field, run-now child-watch handling, fatal-fallback logging, async refresh, and next-run caching |
+| `test_scrub_manager`      | 88    | Scrub state parsing, queue/target management, priority ordering, tick logic, systemd timers                      |
+| `test_scrub_page`         | 8     | Scrub page store schema, flicker-free refresh logic, and drag-and-drop priority ordering                         |
 | `test_zfs_diagnostics`    | 8     | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run`                     |
 | `test_zfsinfo`            | 10    | Pool/dataset/snapshot info gathering with mocked `subprocess`                                                  |
 

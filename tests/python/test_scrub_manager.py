@@ -335,6 +335,51 @@ class TestScrubQueue(unittest.TestCase):
         q.set_target(3)
         self.assertEqual(q.target, 3)
 
+    def test_ordered_names_sorts_by_persisted_order(self):
+        q = sm.ScrubQueue(target=1)
+        q.set_order(["gamma", "alpha", "beta"])
+        ordered = q.ordered_names({"beta", "alpha", "gamma", "delta"})
+        self.assertEqual(ordered, ["gamma", "alpha", "beta", "delta"])
+
+    def test_ordered_names_appends_unknown_alphabetically(self):
+        q = sm.ScrubQueue(target=1)
+        q.set_order(["zulu"])
+        ordered = q.ordered_names({"alpha", "zulu", "mike"})
+        self.assertEqual(ordered, ["zulu", "alpha", "mike"])
+
+    def test_set_order_removes_duplicates(self):
+        q = sm.ScrubQueue(target=1)
+        q.set_order(["a", "b", "a", "c", ""])
+        self.assertEqual(q.order, ["a", "b", "c"])
+
+    def test_order_persists(self):
+        q = sm.ScrubQueue(target=1)
+        q.set_order(["beta", "alpha"])
+
+        q2 = sm.ScrubQueue(target=1)
+        self.assertEqual(q2.order, ["beta", "alpha"])
+
+    def test_tick_starts_pending_in_configured_order(self):
+        q = sm.ScrubQueue(target=1)
+        q.set_order(["second", "first"])
+        q.add_pending(["first", "second"])
+        states = {
+            "first": sm.ScrubInfo(state=sm.ScrubState.NONE),
+            "second": sm.ScrubInfo(state=sm.ScrubState.NONE),
+        }
+        started = []
+
+        def fake_start(name):
+            started.append(name)
+            return True
+
+        with patch.object(sm, "start_scrub", side_effect=fake_start):
+            q.tick(states)
+
+        self.assertEqual(started, ["second"])
+        self.assertIn("second", q.active)
+        self.assertIn("first", q.pending)
+
     def test_tick_moves_pending_to_active(self):
         q = sm.ScrubQueue(target=1)
         q.add_pending(["tank"])

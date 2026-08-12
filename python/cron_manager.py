@@ -74,14 +74,23 @@ def generate_cron_line(profile, runner_path):
     name = profile["profile_name"]
     quoted_runner = shlex_quote(runner_path)
     inner = f"python3 {quoted_runner} run {shlex_quote(name)}"
+    log_dir = shlex_quote(os.path.dirname(CRON_LOG_FILE))
+    lock_dir = shlex_quote(PROFILE_LOCK_DIR)
+    cron_log = shlex_quote(CRON_LOG_FILE)
+    condition = cron.get("condition", "").strip().replace("\n", " ")
     # The runner acquires its own advisory lock and exits 0 when the profile is
     # already running, so a cron-level flock wrapper is not needed. Redirect
     # stdout/stderr to a persistent cron log so pre-log errors are visible.
+    if condition:
+        return (
+            f"{minute} {hour} {day} {month} {weekday} "
+            f"root {condition} && mkdir -p {log_dir} {lock_dir} && "
+            f"{inner} >> {cron_log} 2>&1"
+        )
     return (
         f"{minute} {hour} {day} {month} {weekday} "
-        f"root mkdir -p {shlex_quote(os.path.dirname(CRON_LOG_FILE))} "
-        f"{shlex_quote(PROFILE_LOCK_DIR)} && "
-        f"{inner} >> {shlex_quote(CRON_LOG_FILE)} 2>&1"
+        f"root mkdir -p {log_dir} {lock_dir} && "
+        f"{inner} >> {cron_log} 2>&1"
     )
 
 

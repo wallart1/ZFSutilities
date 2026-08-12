@@ -786,6 +786,11 @@ or removed outside the Schedule tab (for example, by another GUI instance or by
 editing the profile files directly), the list is rebuilt and any pending
 unsaved changes for deleted profiles are discarded.
 
+**Next Run** is computed from the cron expression only. If a profile has an
+optional **Condition**, the condition is evaluated at runtime by `/bin/sh`; a
+matching cron time does not guarantee the profile will run if the condition
+exits non-zero.
+
 ### Run Now
 
 Select one or more profiles and click **Run Now** in the Actions panel to execute
@@ -832,7 +837,7 @@ after recalling.
 ### Detail pane (profile selected)
 
 - **Profile / Type** — read-only name and tab type
-- **Cron Parameters** — five editable fields. Each field accepts numbers, `*` (any value), comma-separated lists,
+- **Cron Parameters** — six editable fields. The first five accept numbers, `*` (any value), comma-separated lists,
   ranges, and steps:
   - **Minute** — `0-59`, `*`, e.g. `1,15,30`, `9-17`, `*/5`
   - **Hour** — `0-23`, `*`, e.g. `0,6,12`, `9-17`, `*/2`
@@ -841,8 +846,15 @@ after recalling.
   - **Day of Week** — `0-7` (`0` and `7` are Sunday), `*`, e.g. `1-5`, `*/2`,
     plus ordinal qualifiers `6#1` (first Saturday) through `6#5`, `6#L` (last
     Saturday), lists `6#1,3`, and ranges `6#1,3-5`
+  - **Condition (optional)** — a shell command prepended to the profile command
+    with `&&`. The profile runs only when this command exits 0. This allows
+    runtime checks that cron expressions cannot express, such as
+    `[ $(date +%d) -ge 28 ]` to run only during the last three days of the
+    month.
 - **Interpretation** — live prose explanation of the cron expression
-  (e.g. *"At 02:00 every day"* or *"Every 15 minutes on weekdays"*)
+  (e.g. *"At 02:00 every day"* or *"Every 15 minutes on weekdays"*). When a
+  condition is set, the interpretation notes that the profile runs only when
+  the shell condition exits 0.
 - **Examples** — next three datetimes that match the expression
 - **Crontab entry** — for active profiles, the exact cron line that was written
   to `/etc/cron.d/zfsutilities`. This is shown at the top of the detail pane so
@@ -1132,7 +1144,7 @@ candidates. The checkbox state is saved with the registry when you click
 | **Details** | Writes `zpool status` output for the single selected pool to the log panel                                 |
 | **Add**     | Adds the selected unregistered pool to the registry (or opens a dialog to type a name if none is selected) |
 | **Remove**  | Removes all selected registered pools from the registry (not from ZFS) after confirmation                  |
-| **Import**  | Imports selected offline or importable pools directly, or opens a dialog listing importable pools if none are selected |
+| **Import**  | Enabled only when at least one selected pool is `IMPORTABLE`. Imports those pools directly, or opens a dialog listing importable pools if none are selected |
 | **Export**  | Confirms, then runs `zpool export` on all selected online pools                                                        |
 | **Save**    | Saves registry changes; turns **red** while there are unsaved changes                                                  |
 | **Revert**  | Reloads registry from the last saved settings                                                                          |
@@ -1140,9 +1152,9 @@ candidates. The checkbox state is saved with the registry when you click
 
 Action buttons enable or disable automatically based on the current selection.
 For example, **Watch** is only available when at least one selected pool is
-registered and online, **Details** requires exactly one selected pool, and
-**Export** requires at least one selected online pool. **Import** can be used
-on offline or importable pools.
+registered and online, **Details** requires exactly one selected pool,
+**Export** requires at least one selected online pool, and **Import** is
+enabled only for `IMPORTABLE` pools.
 
 The importable-pool scan runs in the background and is cached for a few
 seconds so the table stays responsive. Click **Refresh** to force an
@@ -1178,8 +1190,11 @@ Columns: **Pool**, **Status**, **Progress**, **Last Scrub**, **Scan Line**.
 `Last Scrub` shows the date the last scrub finished or was canceled; it is
 blank (`—`) if the pool has never been scrubbed.
 
+Drag rows to reorder scrub priority — pools at the top of the list are
+preferred over lower ones when the manager chooses the next scrub to start.
 Multi-select rows with Ctrl+click or Shift+click, then use the action
-buttons to control them.
+buttons to control them. The order is saved with the scrub queue and
+survives GUI restarts.
 
 #### Actions — Scrub Manager
 
@@ -1231,11 +1246,10 @@ prefixed with a `YYYY-MM-DD HH:MM:SS` timestamp. The divider between
 the main content area and the log panel can be dragged to resize the log.
 
 A **Pop Out** button (window icon) next to the **Log** level dropdown detaches the
-entire bottom panel into an independent window. This lets you further resize the
-window or move it to a second monitor. Click the button again (or close
-the pop-out window) to dock it back. The pop-out window's size and position are
-remembered across sessions. The search bar and Clear button travel with the
-panel when popped out.
+log viewer (search controls + text view + Show More) into an independent window.
+While popped out, the viewer pane is removed from the Logs tab; it is restored
+when the pop-out window is closed or docked again. The pop-out window's size and
+position are remembered across sessions.
 
 ### Search and Clear
 
@@ -1352,9 +1366,10 @@ Right-click any row to open a context menu:
   authoritative.
 
 - **Pop Out** — a button in the search bar detaches the entire viewer (search
-  controls + text view + Show More) into an independent window. The pop-out
-  window remembers its size, position, and popped-out state across GUI restarts
-  and release updates.
+  controls + text view + Show More) into an independent window. While popped out,
+  the Log Viewer pane is removed from the Logs tab; it is restored when the
+  pop-out window is closed or docked again. The pop-out window remembers its
+  size, position, and popped-out state across GUI restarts and release updates.
 
 - **Search bar** — above the text view:
   

@@ -187,22 +187,22 @@ def _import_single_pool(app, pool_name):
 
 
 def on_pools_import(app):
-    """Import selected offline/importable pools, or show importable pools dialog if none selected."""
+    """Import selected importable pools, or show importable pools dialog if none selected."""
     selected = _get_selected_rows(app)
-    offline_selected = [n for n, h in selected if h in ("OFFLINE", "IMPORTABLE")]
+    importable_selected = [n for n, h in selected if h == "IMPORTABLE"]
 
-    if offline_selected:
+    if importable_selected:
         dlg = Gtk.MessageDialog(
             transient_for=app,
             modal=True,
             message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.YES_NO,
-            text=f"Import {len(offline_selected)} selected pool(s)?",
+            text=f"Import {len(importable_selected)} selected pool(s)?",
         )
         response = dlg.run()
         dlg.destroy()
         if response == Gtk.ResponseType.YES:
-            for pool_name in offline_selected:
+            for pool_name in importable_selected:
                 _import_single_pool(app, pool_name)
             refresh_pools_page(app)
             refresh_scrub_table(app)

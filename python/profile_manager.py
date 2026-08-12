@@ -167,6 +167,7 @@ def create_profile(tab_type, custom_name, config, dry_run=False):
             "day": "*",
             "month": "*",
             "weekday": "*",
+            "condition": "",
         },
         "active": False,
     }

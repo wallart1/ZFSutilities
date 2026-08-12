@@ -723,7 +723,7 @@ class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
         self.assertFalse(sens["_pools_details_btn"])
         self.assertTrue(sens["_pools_add_btn"])
         self.assertFalse(sens["_pools_remove_btn"])
-        self.assertTrue(sens["_pools_import_btn"])
+        self.assertFalse(sens["_pools_import_btn"])
         self.assertFalse(sens["_pools_export_btn"])
         self.assertFalse(sens["_pools_save_btn"])
         self.assertFalse(sens["_pools_revert_btn"])
@@ -777,6 +777,39 @@ class TestUpdatePoolsButtonSensitivity(unittest.TestCase):
         self.assertTrue(sens["_pools_details_btn"])
         self.assertTrue(sens["_pools_remove_btn"])
         self.assertFalse(sens["_pools_export_btn"])
+
+    def test_importable_pool_enables_import_button(self):
+        pp = _import_pools_page()
+        app = self._make_app(pool_rows=[("tank", pp.FLAG_REGISTERED, "IMPORTABLE")])
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+        self.assertTrue(sens["_pools_import_btn"])
+
+    def test_online_pool_disables_import_button(self):
+        pp = _import_pools_page()
+        app = self._make_app(pool_rows=[("tank", pp.FLAG_REGISTERED, "ONLINE")])
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+        self.assertFalse(sens["_pools_import_btn"])
+
+    def test_offline_pool_disables_import_button(self):
+        pp = _import_pools_page()
+        app = self._make_app(pool_rows=[("tank", pp.FLAG_REGISTERED, "OFFLINE")])
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+        self.assertFalse(sens["_pools_import_btn"])
+
+    def test_mixed_selection_enables_import_when_any_importable(self):
+        pp = _import_pools_page()
+        app = self._make_app(
+            pool_rows=[
+                ("offline", pp.FLAG_REGISTERED, "OFFLINE"),
+                ("importable", pp.FLAG_REGISTERED, "IMPORTABLE"),
+            ]
+        )
+        pp.update_pools_button_sensitivity(app)
+        sens = self._sensitivities(app)
+        self.assertTrue(sens["_pools_import_btn"])
 
     def test_multiple_selection_disables_details(self):
         pp = _import_pools_page()

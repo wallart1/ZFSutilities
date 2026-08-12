@@ -84,6 +84,15 @@ class TestProfileCrud(unittest.TestCase):
             loaded = profile_manager.load_profile(profile["profile_name"])
             self.assertFalse(loaded.get("dry_run", True))
 
+    def test_cron_includes_condition_default(self):
+        with temp_config_dir():
+            profile = profile_manager.create_profile("backup", "cond", {})
+            self.assertIn("condition", profile["cron"])
+            self.assertEqual(profile["cron"]["condition"], "")
+            loaded = profile_manager.load_profile(profile["profile_name"])
+            self.assertIn("condition", loaded["cron"])
+            self.assertEqual(loaded["cron"]["condition"], "")
+
     def test_dry_run_stored_true(self):
         with temp_config_dir():
             profile = profile_manager.create_profile("backup", "dry", {}, dry_run=True)

@@ -597,6 +597,7 @@ class ScrubQueue:
         self.finished = set(data.get("finished", []))
         self.paused_by_user = set(data.get("paused_by_user", []))
         self.target = max(1, int(data.get("target", 1)))
+        self.order = list(data.get("order", []))
 
     def _save(self):
         feature_config.save_scrub_state(
@@ -607,6 +608,7 @@ class ScrubQueue:
                 "finished": sorted(self.finished),
                 "paused_by_user": sorted(self.paused_by_user),
                 "target": self.target,
+                "order": list(self.order),
             },
             locked=self._save_locked,
         )
@@ -619,6 +621,30 @@ class ScrubQueue:
         self.target = max(1, n)
         if self.target != old:
             log_msg(f"INFO: Scrub target changed from {old} to {self.target}")
+            self._save()
+
+    def ordered_names(self, names: set[str]) -> list[str]:
+        """Return *names* ordered by the user's scrub priority.
+
+        Names that have never been ordered are appended alphabetically.
+        """
+        order_index = {name: idx for idx, name in enumerate(self.order)}
+        known = sorted(n for n in names if n in order_index)
+        known.sort(key=lambda n: order_index[n])
+        unknown = sorted(n for n in names if n not in order_index)
+        return known + unknown
+
+    def set_order(self, pool_names: list[str]):
+        """Persist a new scrub-queue priority order."""
+        seen = set()
+        new_order = []
+        for name in pool_names:
+            if name and name not in seen:
+                new_order.append(name)
+                seen.add(name)
+        if new_order != self.order:
+            self.order = new_order
+            log_msg("INFO: Scrub queue order updated")
             self._save()
 
     def add_pending(self, pool_names: list[str]):
@@ -766,7 +792,7 @@ class ScrubQueue:
 
         if active_count < self.target:
             # Start pending first, then resume paused
-            for candidate in sorted(self.pending):
+            for candidate in self.ordered_names(self.pending):
                 if len(self.active) >= self.target:
                     break
                 info = states.get(candidate)
@@ -809,7 +835,7 @@ class ScrubQueue:
                 # Only auto-resume pools paused by target management; user-paused
                 # pools stay paused until the user explicitly resumes them.
                 candidate = None
-                for name in sorted(self.paused):
+                for name in self.ordered_names(self.paused):
                     if name not in self.paused_by_user:
                         candidate = name
                         break
@@ -831,7 +857,7 @@ class ScrubQueue:
 
         elif active_count > self.target:
             # Pause newest active scrubs
-            to_pause = sorted(self.active)[self.target :]
+            to_pause = self.ordered_names(self.active)[self.target :]
             for candidate in to_pause:
                 info = states.get(candidate)
                 if info and info.state == ScrubState.SCANNING:
@@ -872,6 +898,7 @@ class ScrubQueue:
         self.finished: set[str] = set()
         self.paused_by_user: set[str] = set()
         self.target = max(1, target)
+        self.order: list[str] = []
         self._start_times: dict[str, float] = {}
         self._last_saved_state: dict | None = None
         self._load_locked = load_locked
@@ -891,6 +918,7 @@ class ScrubQueue:
             "finished": sorted(self.finished),
             "paused_by_user": sorted(self.paused_by_user),
             "target": self.target,
+            "order": list(self.order),
         }
         if current != getattr(self, "_last_saved_state", None):
             self._last_saved_state = current

@@ -9,6 +9,8 @@ Scope: `docs/docs/` vs `bin/`, `lib/`, `python/`, `share/`
   `install-two-node`, `uninstall-zfsutilities`, `watchall`,
   `setup-iscsi-targets`, `installer_retention.py`, and `zfsretainpol-default`.
   Removed stale `zfsmaketest` entry.
+- **Development leftovers removed:** Deleted placeholder scripts `bashindex` and
+  `bashredirect` from `bin/` and removed their entries from this audit log.
 - **Semantic fixes applied:** 20+ corrections across `commands.md`,
   `two-node.md`, `python-modules.md`, and the User Guide.
 - **Verification:** `test_docs_integrity` passes; full test suite passes
@@ -28,8 +30,6 @@ Scope: `docs/docs/` vs `bin/`, `lib/`, `python/`, `share/`
 
 | Script | What it does | Proposed doc home | Status |
 | ------ | ------------ | ----------------- | ------ |
-| `bashindex` | One-line `expr index` test/placeholder | None — development leftover | Noted |
-| `bashredirect` | No-op `: >/dev/null 2>&1` placeholder | None — development leftover | Noted |
 | `install-single-node` | Interactive single-node installer | `commands.md` | Fixed |
 | `install-two-node` | Interactive two-node installer | `commands.md` | Fixed |
 | `setup-iscsi-targets` | Create iSCSI targets/portals from node.conf | `two-node.md` | Fixed |
@@ -88,11 +88,9 @@ Scope: `docs/docs/` vs `bin/`, `lib/`, `python/`, `share/`
 | `restore.md` | "Oldest common snapshot" wording | Fixed — changed to "oldest available source snapshot" |
 | `gtk-gui.md` | Same restore wording | Fixed |
 
-## Code bugs noted (not fixed)
+## Fixed code bugs
 
-- `bin/install-two-node` references `08 Two-node/setup-iscsi-targets` which no
-  longer exists; the actual script is `bin/setup-iscsi-targets`. This is a code
-  bug, not a documentation issue.
-- `bin/zfssendoffsite` `applyholds` does not honor `$dryrun`; the Python layer
-  skips holds in dry-run but the bash script does not. Documented as a known
-  behavioral difference.
+- `bin/install-two-node` now references `bin/setup-iscsi-targets` instead of the
+  stale `08 Two-node/setup-iscsi-targets` path.
+- `bin/zfssendoffsite` `applyholds` now honors `$dryrun`, skipping real holds
+  and logging the would-be actions during a dry run.

@@ -4020,6 +4020,10 @@ updated in place and the current selection is preserved. If profiles were added
 or removed outside the Schedule tab (for example, by another GUI instance or by
 editing the profile files directly), the list is rebuilt and any pending
 unsaved changes for deleted profiles are discarded.</p>
+<p><strong>Next Run</strong> is computed from the cron expression only. If a profile has an
+optional <strong>Condition</strong>, the condition is evaluated at runtime by <code>/bin/sh</code>; a
+matching cron time does not guarantee the profile will run if the condition
+exits non-zero.</p>
 <h3 id="run-now">Run Now<a class="headerlink" href="#run-now" title="Permanent link">&para;</a></h3>
 <p>Select one or more profiles and click <strong>Run Now</strong> in the Actions panel to execute
 them immediately. <strong>Run Now ignores the Active checkbox</strong> — even disabled
@@ -4060,7 +4064,7 @@ after recalling.</p>
 <h3 id="detail-pane-profile-selected">Detail pane (profile selected)<a class="headerlink" href="#detail-pane-profile-selected" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Profile / Type</strong> — read-only name and tab type</li>
-<li><strong>Cron Parameters</strong> — five editable fields. Each field accepts numbers, <code>*</code> (any value), comma-separated lists,
+<li><strong>Cron Parameters</strong> — six editable fields. The first five accept numbers, <code>*</code> (any value), comma-separated lists,
   ranges, and steps:</li>
 <li><strong>Minute</strong> — <code>0-59</code>, <code>*</code>, e.g. <code>1,15,30</code>, <code>9-17</code>, <code>*/5</code></li>
 <li><strong>Hour</strong> — <code>0-23</code>, <code>*</code>, e.g. <code>0,6,12</code>, <code>9-17</code>, <code>*/2</code></li>
@@ -4069,8 +4073,15 @@ after recalling.</p>
 <li><strong>Day of Week</strong> — <code>0-7</code> (<code>0</code> and <code>7</code> are Sunday), <code>*</code>, e.g. <code>1-5</code>, <code>*/2</code>,
     plus ordinal qualifiers <code>6#1</code> (first Saturday) through <code>6#5</code>, <code>6#L</code> (last
     Saturday), lists <code>6#1,3</code>, and ranges <code>6#1,3-5</code></li>
+<li><strong>Condition (optional)</strong> — a shell command prepended to the profile command
+    with <code>&amp;&amp;</code>. The profile runs only when this command exits 0. This allows
+    runtime checks that cron expressions cannot express, such as
+    <code>[ $(date +%d) -ge 28 ]</code> to run only during the last three days of the
+    month.</li>
 <li><strong>Interpretation</strong> — live prose explanation of the cron expression
-  (e.g. <em>"At 02:00 every day"</em> or <em>"Every 15 minutes on weekdays"</em>)</li>
+  (e.g. <em>"At 02:00 every day"</em> or <em>"Every 15 minutes on weekdays"</em>). When a
+  condition is set, the interpretation notes that the profile runs only when
+  the shell condition exits 0.</li>
 <li><strong>Examples</strong> — next three datetimes that match the expression</li>
 <li><strong>Crontab entry</strong> — for active profiles, the exact cron line that was written
   to <code>/etc/cron.d/zfsutilities</code>. This is shown at the top of the detail pane so
@@ -4558,7 +4569,7 @@ candidates. The checkbox state is saved with the registry when you click
 </tr>
 <tr>
 <td><strong>Import</strong></td>
-<td>Imports selected offline or importable pools directly, or opens a dialog listing importable pools if none are selected</td>
+<td>Enabled only when at least one selected pool is <code>IMPORTABLE</code>. Imports those pools directly, or opens a dialog listing importable pools if none are selected</td>
 </tr>
 <tr>
 <td><strong>Export</strong></td>
@@ -4580,9 +4591,9 @@ candidates. The checkbox state is saved with the registry when you click
 </table>
 <p>Action buttons enable or disable automatically based on the current selection.
 For example, <strong>Watch</strong> is only available when at least one selected pool is
-registered and online, <strong>Details</strong> requires exactly one selected pool, and
-<strong>Export</strong> requires at least one selected online pool. <strong>Import</strong> can be used
-on offline or importable pools.</p>
+registered and online, <strong>Details</strong> requires exactly one selected pool,
+<strong>Export</strong> requires at least one selected online pool, and <strong>Import</strong> is
+enabled only for <code>IMPORTABLE</code> pools.</p>
 <p>The importable-pool scan runs in the background and is cached for a few
 seconds so the table stays responsive. Click <strong>Refresh</strong> to force an
 immediate rescan.</p>
@@ -4627,8 +4638,11 @@ They modify systemd timer units directly and persist across GUI restarts.</p>
 <p>Columns: <strong>Pool</strong>, <strong>Status</strong>, <strong>Progress</strong>, <strong>Last Scrub</strong>, <strong>Scan Line</strong>.</p>
 <p><code>Last Scrub</code> shows the date the last scrub finished or was canceled; it is
 blank (<code>—</code>) if the pool has never been scrubbed.</p>
-<p>Multi-select rows with Ctrl+click or Shift+click, then use the action
-buttons to control them.</p>
+<p>Drag rows to reorder scrub priority — pools at the top of the list are
+preferred over lower ones when the manager chooses the next scrub to start.
+Multi-select rows with Ctrl+click or Shift+click, then use the action
+buttons to control them. The order is saved with the scrub queue and
+survives GUI restarts.</p>
 <h4 id="actions-scrub-manager">Actions — Scrub Manager<a class="headerlink" href="#actions-scrub-manager" title="Permanent link">&para;</a></h4>
 <table>
 <thead>
@@ -4693,11 +4707,10 @@ from being mistakenly marked finished while ZFS is still initializing them.</p>
 prefixed with a <code>YYYY-MM-DD HH:MM:SS</code> timestamp. The divider between
 the main content area and the log panel can be dragged to resize the log.</p>
 <p>A <strong>Pop Out</strong> button (window icon) next to the <strong>Log</strong> level dropdown detaches the
-entire bottom panel into an independent window. This lets you further resize the
-window or move it to a second monitor. Click the button again (or close
-the pop-out window) to dock it back. The pop-out window's size and position are
-remembered across sessions. The search bar and Clear button travel with the
-panel when popped out.</p>
+log viewer (search controls + text view + Show More) into an independent window.
+While popped out, the viewer pane is removed from the Logs tab; it is restored
+when the pop-out window is closed or docked again. The pop-out window's size and
+position are remembered across sessions.</p>
 <h3 id="search-and-clear">Search and Clear<a class="headerlink" href="#search-and-clear" title="Permanent link">&para;</a></h3>
 <p>Above the text view, a search bar provides:</p>
 <ul>
@@ -4847,9 +4860,10 @@ operate on the full selection.</p>
 </li>
 <li>
 <p><strong>Pop Out</strong> — a button in the search bar detaches the entire viewer (search
-  controls + text view + Show More) into an independent window. The pop-out
-  window remembers its size, position, and popped-out state across GUI restarts
-  and release updates.</p>
+  controls + text view + Show More) into an independent window. While popped out,
+  the Log Viewer pane is removed from the Logs tab; it is restored when the
+  pop-out window is closed or docked again. The pop-out window remembers its
+  size, position, and popped-out state across GUI restarts and release updates.</p>
 </li>
 <li>
 <p><strong>Search bar</strong> — above the text view:</p>
@@ -5209,7 +5223,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.3
+      ZFS Utilities v0.83.0
     </div>
   
   
@@ -5234,7 +5248,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.3"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

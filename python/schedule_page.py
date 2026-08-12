@@ -193,6 +193,12 @@ def create_schedule_page(app):
             ),
             4,
         ),
+        (
+            "condition",
+            "Condition (optional)",
+            "Optional shell command prepended with &&. The profile runs only if this command exits 0. Example: [ $(date +%d) -ge 28 ]",
+            5,
+        ),
     ]
     app.schedule_cron_entries = {}
     for key, label_text, tooltip, row in cron_fields:
@@ -201,7 +207,11 @@ def create_schedule_page(app):
         cron_grid.attach(lbl, 0, row, 1, 1)
 
         entry = Gtk.Entry()
-        entry.set_width_chars(15)
+        if key == "condition":
+            entry.set_width_chars(40)
+            entry.set_hexpand(True)
+        else:
+            entry.set_width_chars(15)
         entry.set_tooltip_text(tooltip)
         entry.connect("changed", _on_cron_entry_changed, app)
         cron_grid.attach(entry, 1, row, 1, 1)
@@ -264,15 +274,23 @@ def _format_cron(cron):
 
 def collect_schedule_config(app):
     """Collect current cron entry values into a dict."""
-    return {
-        key: entry.get_text().strip() or "*" for key, entry in app.schedule_cron_entries.items()
-    }
+    result = {}
+    for key, entry in app.schedule_cron_entries.items():
+        text = entry.get_text().strip()
+        if key == "condition":
+            result[key] = text
+        else:
+            result[key] = text or "*"
+    return result
 
 
 def load_schedule_config(app, cron):
     """Load a cron dict into the schedule UI widgets."""
     for key, entry in app.schedule_cron_entries.items():
-        entry.set_text(cron.get(key, "*"))
+        if key == "condition":
+            entry.set_text(cron.get(key, ""))
+        else:
+            entry.set_text(cron.get(key, "*"))
 
 
 def _next_run_strings(cron):
@@ -584,6 +602,7 @@ def _on_selection_changed(selection, app):
 
     pending = app._schedule_pending.get(profile_name, {})
     cron = pending.get("cron", profile.get("cron", {}))
+    cron.setdefault("condition", "")
 
     app._schedule_ignore_changes = True
     load_schedule_config(app, cron)
@@ -598,6 +617,7 @@ def _on_selection_changed(selection, app):
 
     current_cron = collect_schedule_config(app)
     saved_cron = profile.get("cron", {})
+    saved_cron.setdefault("condition", "")
     if current_cron != saved_cron:
         pending["cron"] = current_cron
     else:
@@ -657,6 +677,7 @@ def _on_cron_entry_changed(entry, app):
         return
 
     saved_cron = profile.get("cron", {})
+    saved_cron.setdefault("condition", "")
     current_cron = collect_schedule_config(app)
     pending = app._schedule_pending.setdefault(profile_name, {})
     if current_cron != saved_cron:
@@ -675,8 +696,11 @@ def _update_interpretation(app):
     day = app.schedule_cron_entries["day"].get_text().strip() or "*"
     month = app.schedule_cron_entries["month"].get_text().strip() or "*"
     weekday = app.schedule_cron_entries["weekday"].get_text().strip() or "*"
+    condition = app.schedule_cron_entries["condition"].get_text().strip()
 
     prose = interpret_cron(minute, hour, day, month, weekday)
+    if condition:
+        prose = f"{prose}; only when the shell condition exits 0"
     app.schedule_interpret_label.set_markup(f"<b>Interpretation:</b> {prose}")
 
     examples = format_next_runs(minute, hour, day, month, weekday, count=3)

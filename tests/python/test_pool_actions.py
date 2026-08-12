@@ -357,7 +357,8 @@ class TestOnPoolsImport(unittest.TestCase):
         app.pool_view.get_selection.return_value.get_selected_rows.return_value = (model, paths)
         return app
 
-    def test_import_offline_selected_refreshes_scrub_table(self):
+    def test_import_offline_selected_opens_fallback_dialog(self):
+        """OFFLINE selections no longer import directly; fallback dialog is shown."""
         pa = _import_pool_actions()
         app = self._make_app_with_offline_selection(
             pa,
@@ -365,20 +366,25 @@ class TestOnPoolsImport(unittest.TestCase):
             ["tank"],
         )
         msg_dialog = MagicMock()
-        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.OK
 
         with (
             patch.object(pa, "refresh_pools_page") as mock_refresh,
             patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh,
             patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst,
-            patch.object(app.ctx.zfs_repository, "import_pool", return_value=True),
+            patch.object(app.ctx.zfs_repository, "import_pool") as mock_import,
+            patch.object(
+                app.ctx.zfs_repository, "importable_pools_raw", return_value=""
+            ),
         ):
             pa.Gtk.MessageDialog = msg_dialog
             pa.on_pools_import(app)
 
-        mock_refresh.assert_called_once_with(app)
-        mock_scrub_refresh.assert_called_once_with(app)
-        mock_burst.assert_called_once_with(app)
+        msg_dialog.assert_called_once()
+        mock_import.assert_not_called()
+        mock_refresh.assert_not_called()
+        mock_scrub_refresh.assert_not_called()
+        mock_burst.assert_not_called()
 
     def test_import_importable_selected_refreshes_scrub_table(self):
         pa = _import_pool_actions()

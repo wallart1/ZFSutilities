@@ -201,24 +201,28 @@ def _scan_logs(app):
     return rows
 
 
-def _on_logs_popout_toggled(button, app, viewer_box, viewer_frame):
+def _on_logs_popout_toggled(button, app, viewer_box, viewer_frame, outer):
     """Toggle the Logs tab viewer between the tab and a pop-out window."""
     if button.get_active():
-        viewer_frame.remove(viewer_box)
+        # Remove the entire viewer pane from the Logs tab and host it in the
+        # pop-out window.  Apply saved geometry before showing so the window
+        # manager honours the requested position.
+        outer.remove(viewer_frame)
         app.logs_popout_window.box.pack_start(viewer_box, True, True, 0)
-        app.logs_popout_window.show_all()
-        # Restore saved geometry if present.
         state = get_ui_state(app.config).get("logs_log_window", {})
         if state.get("width") and state.get("height"):
             app.logs_popout_window.resize(state["width"], state["height"])
         if state.get("x") is not None and state.get("y") is not None:
             app.logs_popout_window.move(state["x"], state["y"])
+        app.logs_popout_window.show_all()
     else:
         # Persist geometry before reparenting/hiding.
         if hasattr(app, "_ui_state") and app._ui_state is not None:
             app._ui_state.flush()
         app.logs_popout_window.box.remove(viewer_box)
         viewer_frame.add(viewer_box)
+        outer.pack_start(viewer_frame, True, True, 0)
+        viewer_frame.show_all()
         app.logs_popout_window.hide()
 
 
@@ -352,7 +356,7 @@ def create_logs_page(app):
     )
     app._logs_popout_toggle.set_tooltip_text("Pop out log viewer into a separate window")
     app._logs_popout_toggle.connect(
-        "toggled", _on_logs_popout_toggled, app, viewer_box, viewer_frame
+        "toggled", _on_logs_popout_toggled, app, viewer_box, viewer_frame, outer
     )
     viewer_toolbar.pack_start(app._logs_popout_toggle, False, False, 0)
 
