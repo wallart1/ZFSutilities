@@ -233,10 +233,24 @@ Top-level keys:
 | `restore`                                                             | object                    | GUI Restore tab settings                                                                                             |
 | `msg_level`                                                           | string                    | Deprecated. Kept for backward compatibility; no longer used for filtering.                                           |
 | `history_retention_days`                                              | integer                   | How many days of backup log history entries to keep (default `90`)                                                   |
+| `ui_state`                                                            | object                    | Saved GUI window geometry, pop-out state, TreeView column widths, and paned divider positions (see below)            |
 | `config_version`                                                      | integer                   | Config schema version (see migrations below)                                                                         |
 
 All sections default to empty on first run — the user populates them through
 the GUI. Override the path in the environment with `$ZFSCONFIG_PATH`.
+
+### `ui_state` object
+
+Persisted by `UIStateManager` in `python/gui_helpers.py`.
+
+| Key                  | Type    | Contents                                                                                            |
+| -------------------- | ------- | --------------------------------------------------------------------------------------------------- |
+| `main_window`        | object  | `width`, `height`, `x`, `y`, `maximized`, `vpaned_position`                                         |
+| `log_window`         | object  | `popped_out`, `width`, `height`, `x`, `y` for the bottom-panel info pop-out                         |
+| `logs_log_window`    | object  | `popped_out`, `width`, `height`, `x`, `y` for the Logs tab viewer pop-out                           |
+| `docs_viewer`        | object  | `width`, `height`, `x`, `y`, `maximized`, `zoom`, `theme`                                           |
+| `treeview_columns`   | object  | Map of TreeView state key to `{column_title: width}` dicts                                          |
+| `paned_positions`    | object  | Map of paned state key to divider position (integer pixels)                                         |
 
 ### Python access
 

@@ -1754,6 +1754,115 @@ class TestUIStateManagerPanedPositions(unittest.TestCase):
             self.assertNotIn("paned_positions", args)
 
 
+class TestUIStateManagerPopouts(unittest.TestCase):
+    @patch("backup_config.save_ui_state")
+    def test_bind_popout_registers_window_and_wires_configure(self, mock_save):
+        with mock_gtk():
+            import gui_helpers
+
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            popout = MagicMock()
+            popout.connect.side_effect = lambda signal, handler: 1
+            mgr.bind_popout(popout, "logs_log_window")
+
+            self.assertIn("logs_log_window", mgr._popouts)
+            popout.connect.assert_called_once_with("configure-event", mgr.on_configure)
+
+    @patch("backup_config.save_ui_state")
+    def test_do_save_persists_visible_popout_geometry(self, mock_save):
+        with mock_gtk():
+            import gui_helpers
+
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            popout = MagicMock()
+            popout.get_visible.return_value = True
+            popout.get_size.return_value = (800, 600)
+            popout.get_position.return_value = (100, 200)
+            mgr._popouts["logs_log_window"] = popout
+
+            mgr._do_save()
+
+            args = mock_save.call_args[0][1]
+            self.assertIn("logs_log_window", args)
+            self.assertTrue(args["logs_log_window"]["popped_out"])
+            self.assertEqual(args["logs_log_window"]["width"], 800)
+            self.assertEqual(args["logs_log_window"]["height"], 600)
+            self.assertEqual(args["logs_log_window"]["x"], 100)
+            self.assertEqual(args["logs_log_window"]["y"], 200)
+
+    @patch("backup_config.save_ui_state")
+    def test_do_save_marks_hidden_popout_as_not_popped_out(self, mock_save):
+        with mock_gtk():
+            import gui_helpers
+
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            popout = MagicMock()
+            popout.get_visible.return_value = False
+            mgr._popouts["logs_log_window"] = popout
+
+            mgr._do_save()
+
+            args = mock_save.call_args[0][1]
+            self.assertIn("logs_log_window", args)
+            self.assertFalse(args["logs_log_window"]["popped_out"])
+            self.assertIsNone(args["logs_log_window"]["width"])
+
+    @patch("backup_config.save_ui_state")
+    def test_do_save_keeps_distinct_state_per_popout(self, mock_save):
+        with mock_gtk():
+            import gui_helpers
+
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            config = {"ui_state": {}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            popout_a = MagicMock()
+            popout_a.get_visible.return_value = True
+            popout_a.get_size.return_value = (800, 600)
+            popout_a.get_position.return_value = (10, 20)
+            popout_b = MagicMock()
+            popout_b.get_visible.return_value = True
+            popout_b.get_size.return_value = (900, 700)
+            popout_b.get_position.return_value = (30, 40)
+            mgr._popouts["log_window"] = popout_a
+            mgr._popouts["logs_log_window"] = popout_b
+
+            mgr._do_save()
+
+            args = mock_save.call_args[0][1]
+            self.assertEqual(args["log_window"]["width"], 800)
+            self.assertEqual(args["logs_log_window"]["width"], 900)
+
+
 class _FakeTreeStore:
     """Minimal TreeStore for testing tree helper functions."""
 

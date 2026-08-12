@@ -769,6 +769,131 @@ class TestCreateLogsPage(unittest.TestCase):
             widget.set_tooltip_text.assert_called_once_with(expected[text])
             widget.show_all.assert_called_once()
 
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
+    @patch("logs_page.prune_old_logs")
+    def test_create_logs_page_prunes_old_logs_on_startup(self, mock_prune, _mock_update, mock_sync):
+        app = MagicMock()
+        app.config = {"log_retention_days": 7}
+        app._ui_state.bind_treeview = MagicMock()
+        app._ui_state.bind_popout = MagicMock()
+        mock_prune.return_value = 2
+
+        lp.create_logs_page(app)
+
+        mock_prune.assert_called_once_with(7)
+        self.assertEqual(mock_sync.call_count, 2)
+
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
+    @patch("logs_page.prune_old_logs")
+    def test_create_logs_page_skips_prune_when_retention_is_zero(
+        self, mock_prune, _mock_update, mock_sync
+    ):
+        app = MagicMock()
+        app.config = {"log_retention_days": 0}
+        app._ui_state.bind_treeview = MagicMock()
+        app._ui_state.bind_popout = MagicMock()
+
+        lp.create_logs_page(app)
+
+        mock_prune.assert_not_called()
+        mock_sync.assert_called_once()
+
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
+    @patch("logs_page.get_ui_state")
+    def test_create_logs_page_restores_popped_out_log_viewer(
+        self, mock_get_state, _mock_update, mock_sync
+    ):
+        app = MagicMock()
+        app.config = {}
+        app._ui_state.bind_treeview = MagicMock()
+        app._ui_state.bind_popout = MagicMock()
+        mock_get_state.return_value = {"logs_log_window": {"popped_out": True}}
+
+        lp.create_logs_page(app)
+
+        app.connect.assert_called_once()
+        self.assertEqual(app.connect.call_args[0][0], "realize")
+
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
+    def test_create_logs_page_binds_log_popout_to_ui_state(self, _mock_update, _mock_sync):
+        app = MagicMock()
+        app.config = {}
+        app._ui_state.bind_treeview = MagicMock()
+        app._ui_state.bind_popout = MagicMock()
+
+        lp.create_logs_page(app)
+
+        app._ui_state.bind_popout.assert_called_once_with(app.logs_popout_window, "logs_log_window")
+
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
+    @patch("logs_page.prune_old_logs")
+    def test_create_logs_page_does_not_refresh_when_no_logs_pruned(
+        self, mock_prune, _mock_update, mock_sync
+    ):
+        app = MagicMock()
+        app.config = {"log_retention_days": 7}
+        app._ui_state.bind_treeview = MagicMock()
+        app._ui_state.bind_popout = MagicMock()
+        mock_prune.return_value = 0
+
+        lp.create_logs_page(app)
+
+        mock_prune.assert_called_once_with(7)
+        mock_sync.assert_called_once()
+
+
+class TestLogsPopoutToggle(unittest.TestCase):
+    def test_popout_restores_saved_geometry(self):
+        app = MagicMock()
+        app.config = {
+            "ui_state": {"logs_log_window": {"width": 800, "height": 600, "x": 100, "y": 200}}
+        }
+        app.logs_popout_window = MagicMock()
+        button = MagicMock()
+        button.get_active.return_value = True
+        viewer_box = MagicMock()
+        viewer_frame = MagicMock()
+
+        lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame)
+
+        viewer_frame.remove.assert_called_once_with(viewer_box)
+        app.logs_popout_window.resize.assert_called_once_with(800, 600)
+        app.logs_popout_window.move.assert_called_once_with(100, 200)
+
+    def test_popout_back_in_flushes_ui_state(self):
+        app = MagicMock()
+        app.config = {}
+        app.logs_popout_window = MagicMock()
+        button = MagicMock()
+        button.get_active.return_value = False
+        viewer_box = MagicMock()
+        viewer_frame = MagicMock()
+
+        lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame)
+
+        app._ui_state.flush.assert_called_once()
+        viewer_frame.add.assert_called_once_with(viewer_box)
+        app.logs_popout_window.hide.assert_called_once()
+
+    def test_popout_does_not_restore_geometry_when_not_saved(self):
+        app = MagicMock()
+        app.config = {"ui_state": {"logs_log_window": {}}}
+        app.logs_popout_window = MagicMock()
+        button = MagicMock()
+        button.get_active.return_value = True
+        viewer_box = MagicMock()
+        viewer_frame = MagicMock()
+
+        lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame)
+
+        app.logs_popout_window.resize.assert_not_called()
+        app.logs_popout_window.move.assert_not_called()
+
 
 class TestLogViewerStatusLabel(unittest.TestCase):
     """Verify the log viewer status label shows pv progress for running logs."""

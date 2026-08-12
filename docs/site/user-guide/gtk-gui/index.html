@@ -4847,7 +4847,9 @@ operate on the full selection.</p>
 </li>
 <li>
 <p><strong>Pop Out</strong> — a button in the search bar detaches the entire viewer (search
-  controls + text view + Show More) into an independent window.</p>
+  controls + text view + Show More) into an independent window. The pop-out
+  window remembers its size, position, and popped-out state across GUI restarts
+  and release updates.</p>
 </li>
 <li>
 <p><strong>Search bar</strong> — above the text view:</p>
@@ -4870,7 +4872,8 @@ operate on the full selection.</p>
 <p>A <strong>success-rate summary</strong> appears above the log list (e.g. <em>"Success rate (30 days): 95 % (19 / 20)"</em>). It is computed from the backup history file and updates automatically every time the log list refreshes.</p>
 <p>A <strong>Retention (days)</strong> spin button above the log list sets how long session
 files are kept. The default is <strong>30 days</strong>. Old files are pruned automatically
-when a scheduled run starts, or manually via the <strong>Prune Old</strong> action button.</p>
+when the GUI starts and whenever a scheduled run starts; they can also be
+removed manually via the <strong>Prune Old</strong> action button.</p>
 <div class="admonition warning">
 <p class="admonition-title">Setting retention to 0</p>
 <p>A value of <strong>0</strong> means <strong>all</strong> session log files will be deleted. Use this with caution.</p>
@@ -5206,7 +5209,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.1
+      ZFS Utilities v0.82.2-
     </div>
   
   
@@ -5231,7 +5234,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.2-"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

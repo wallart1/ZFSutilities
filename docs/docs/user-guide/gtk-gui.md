@@ -1352,7 +1352,9 @@ Right-click any row to open a context menu:
   authoritative.
 
 - **Pop Out** — a button in the search bar detaches the entire viewer (search
-  controls + text view + Show More) into an independent window.
+  controls + text view + Show More) into an independent window. The pop-out
+  window remembers its size, position, and popped-out state across GUI restarts
+  and release updates.
 
 - **Search bar** — above the text view:
   
@@ -1374,7 +1376,8 @@ A **success-rate summary** appears above the log list (e.g. *"Success rate (30 d
 
 A **Retention (days)** spin button above the log list sets how long session
 files are kept. The default is **30 days**. Old files are pruned automatically
-when a scheduled run starts, or manually via the **Prune Old** action button.
+when the GUI starts and whenever a scheduled run starts; they can also be
+removed manually via the **Prune Old** action button.
 
 !!! warning "Setting retention to 0"
     A value of **0** means **all** session log files will be deleted. Use this with caution.

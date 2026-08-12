@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.82.2
+
+*Released 2026-08-11*
+
+### Added
+
+- **Logs tab pop-out persistence** — The Logs tab viewer pop-out now remembers
+  its size, position, and popped-out state across GUI restarts. State is stored
+  under `ui_state.logs_log_window`.
+- **UIStateManager pop-out binding** — `UIStateManager.bind_popout()` registers
+  additional pop-out windows for geometry persistence.
+- **Startup session-log pruning** — The GUI now prunes old session log files
+  when the Logs tab loads, matching the existing scheduled-run behavior. A
+  retention setting of `0` still skips pruning.
+
+### Tests
+
+- Added coverage for `logs_log_window` defaults, `UIStateManager` pop-out
+  persistence, and Logs page startup pruning and geometry restoration.
+
+### Documentation
+
+- Updated `docs/docs/developer-guide/data-structures.md` to document the
+  `ui_state` object and the new `logs_log_window` key.
+- Updated `docs/docs/user-guide/gtk-gui.md` to describe pop-out persistence and
+  startup log pruning.
+
 ## 0.82.1
 
 *Released 2026-08-11*

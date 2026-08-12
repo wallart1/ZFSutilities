@@ -145,6 +145,13 @@ UI_STATE_DEFAULTS = {
         "x": None,
         "y": None,
     },
+    "logs_log_window": {
+        "popped_out": False,
+        "width": None,
+        "height": None,
+        "x": None,
+        "y": None,
+    },
     "docs_viewer": {
         "width": None,
         "height": None,

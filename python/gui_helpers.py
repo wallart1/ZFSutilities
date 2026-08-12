@@ -1847,6 +1847,7 @@ class UIStateManager:
         self._timer = None
         self._treeviews = {}
         self._paneds = {}
+        self._popouts = {}
 
     def restore(self):
         """Restore window state from config."""
@@ -1971,6 +1972,18 @@ class UIStateManager:
         # are restored to wide fixed widths.
         _ensure_treeview_scrolling(treeview)
 
+    def bind_popout(self, window, state_key):
+        """Register a pop-out window for geometry persistence.
+
+        The window's configure events are wired into the same debounced save
+        path used for the main window, so size and position are saved under
+        *state_key* in ``ui_state``.  Callers are responsible for restoring
+        geometry when the window is first shown and for setting the saved
+        ``popped_out`` flag.
+        """
+        window.connect("configure-event", self.on_configure)
+        self._popouts[state_key] = window
+
     def on_configure(self, _window, _event):
         self._schedule_save()
         return False
@@ -2027,6 +2040,24 @@ class UIStateManager:
             lw["height"] = p_height
             lw["x"] = p_x
             lw["y"] = p_y
+
+        # Persist any additional registered pop-out windows.
+        for state_key, window in self._popouts.items():
+            pw_state = {
+                "popped_out": window.get_visible(),
+                "width": None,
+                "height": None,
+                "x": None,
+                "y": None,
+            }
+            if window.get_visible():
+                p_width, p_height = window.get_size()
+                p_x, p_y = window.get_position()
+                pw_state["width"] = p_width
+                pw_state["height"] = p_height
+                pw_state["x"] = p_x
+                pw_state["y"] = p_y
+            state[state_key] = pw_state
 
         # Persist TreeView column widths.  Skip TreeViews that are not yet
         # realized.  Save the user's intended width (fixed_width) rather than

@@ -110,6 +110,13 @@ class TestUiState(unittest.TestCase):
         self.assertIn("main_window", state)
         self.assertFalse(state["main_window"]["maximized"])
 
+    def test_get_ui_state_includes_logs_log_window_defaults(self):
+        config = {}
+        state = config_core.get_ui_state(config)
+        self.assertIn("logs_log_window", state)
+        self.assertFalse(state["logs_log_window"]["popped_out"])
+        self.assertIsNone(state["logs_log_window"]["width"])
+
     def test_save_ui_state_merges(self):
         with temp_config_dir():
             config = {}

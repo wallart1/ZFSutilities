@@ -17,6 +17,7 @@ from config_core import (
     SESSION_LOG_DIR,
     get_history_retention_days,
     get_log_retention_days,
+    get_ui_state,
     prune_old_logs,
     save_log_retention_days,
 )
@@ -206,7 +207,16 @@ def _on_logs_popout_toggled(button, app, viewer_box, viewer_frame):
         viewer_frame.remove(viewer_box)
         app.logs_popout_window.box.pack_start(viewer_box, True, True, 0)
         app.logs_popout_window.show_all()
+        # Restore saved geometry if present.
+        state = get_ui_state(app.config).get("logs_log_window", {})
+        if state.get("width") and state.get("height"):
+            app.logs_popout_window.resize(state["width"], state["height"])
+        if state.get("x") is not None and state.get("y") is not None:
+            app.logs_popout_window.move(state["x"], state["y"])
     else:
+        # Persist geometry before reparenting/hiding.
+        if hasattr(app, "_ui_state") and app._ui_state is not None:
+            app._ui_state.flush()
         app.logs_popout_window.box.remove(viewer_box)
         viewer_frame.add(viewer_box)
         app.logs_popout_window.hide()
@@ -366,6 +376,8 @@ def create_logs_page(app):
         title="ZFS Utilities — Log Viewer",
         toggle_widget=app._logs_popout_toggle,
     )
+    if hasattr(app, "_ui_state") and app._ui_state is not None:
+        app._ui_state.bind_popout(app.logs_popout_window, "logs_log_window")
 
     # Show More button (hidden until needed)
     app.logs_show_more_btn = Gtk.Button(label="Show More")
@@ -403,8 +415,21 @@ def create_logs_page(app):
     # Initial load
     _sync_log_list(app)
 
+    # Prune logs older than the configured retention. This is a safety net for
+    # dev/GUI-only systems where profile_runner.py does not run regularly.
+    days = get_log_retention_days(app.config)
+    if days > 0:
+        removed = prune_old_logs(days)
+        if removed:
+            _sync_log_list(app)
+
     # Default sort descending by Date/Time
     app.logs_store.set_sort_column_id(COL_DATETIME, Gtk.SortType.DESCENDING)
+
+    # Restore the popped-out log viewer state after the main window is realized.
+    logs_window_state = get_ui_state(app.config).get("logs_log_window", {})
+    if logs_window_state.get("popped_out"):
+        app.connect("realize", lambda _w: app._logs_popout_toggle.set_active(True))
 
     # Watch the sessions directory for async updates
     dir_file = Gio.File.new_for_path(SESSION_LOG_DIR)

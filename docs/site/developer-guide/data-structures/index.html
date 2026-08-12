@@ -1518,6 +1518,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#ui_state-object" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ui_state object
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#python-access" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2459,6 +2470,11 @@ Top-level keys:</p>
 <td>How many days of backup log history entries to keep (default <code>90</code>)</td>
 </tr>
 <tr>
+<td><code>ui_state</code></td>
+<td>object</td>
+<td>Saved GUI window geometry, pop-out state, TreeView column widths, and paned divider positions (see below)</td>
+</tr>
+<tr>
 <td><code>config_version</code></td>
 <td>integer</td>
 <td>Config schema version (see migrations below)</td>
@@ -2467,6 +2483,49 @@ Top-level keys:</p>
 </table>
 <p>All sections default to empty on first run — the user populates them through
 the GUI. Override the path in the environment with <code>$ZFSCONFIG_PATH</code>.</p>
+<h3 id="ui_state-object"><code>ui_state</code> object<a class="headerlink" href="#ui_state-object" title="Permanent link">&para;</a></h3>
+<p>Persisted by <code>UIStateManager</code> in <code>python/gui_helpers.py</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Type</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>main_window</code></td>
+<td>object</td>
+<td><code>width</code>, <code>height</code>, <code>x</code>, <code>y</code>, <code>maximized</code>, <code>vpaned_position</code></td>
+</tr>
+<tr>
+<td><code>log_window</code></td>
+<td>object</td>
+<td><code>popped_out</code>, <code>width</code>, <code>height</code>, <code>x</code>, <code>y</code> for the bottom-panel info pop-out</td>
+</tr>
+<tr>
+<td><code>logs_log_window</code></td>
+<td>object</td>
+<td><code>popped_out</code>, <code>width</code>, <code>height</code>, <code>x</code>, <code>y</code> for the Logs tab viewer pop-out</td>
+</tr>
+<tr>
+<td><code>docs_viewer</code></td>
+<td>object</td>
+<td><code>width</code>, <code>height</code>, <code>x</code>, <code>y</code>, <code>maximized</code>, <code>zoom</code>, <code>theme</code></td>
+</tr>
+<tr>
+<td><code>treeview_columns</code></td>
+<td>object</td>
+<td>Map of TreeView state key to <code>{column_title: width}</code> dicts</td>
+</tr>
+<tr>
+<td><code>paned_positions</code></td>
+<td>object</td>
+<td>Map of paned state key to divider position (integer pixels)</td>
+</tr>
+</tbody>
+</table>
 <h3 id="python-access">Python access<a class="headerlink" href="#python-access" title="Permanent link">&para;</a></h3>
 <p>The Python config API is split across two modules:</p>
 <ul>
@@ -3041,7 +3100,7 @@ characters in dataset names are URL-encoded (<code>%2F</code> for <code>/</code>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.1
+      ZFS Utilities v0.82.2-
     </div>
   
   
@@ -3066,7 +3125,7 @@ characters in dataset names are URL-encoded (<code>%2F</code> for <code>/</code>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.2-"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
