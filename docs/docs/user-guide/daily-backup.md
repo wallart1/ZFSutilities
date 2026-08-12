@@ -55,27 +55,27 @@ sudo ./zfsdailybackup "pre_backup_script_enabled='Y'; pre_backup_script='echo st
 
 Or configure it permanently in the GUI (Backup tab → **Pre-Backup**).
 
-## Post-Backup Command
+## Post-Backup Command (GUI / Profiles)
 
-You can run a custom command after all backup steps finish. Unlike the pre-backup
-command, the post-backup command executes **even if a fatal error aborts the backup
-early** — for example, if the pre-backup command fails or a ZFS send/receive step
-errors out. This makes it useful for notifications, cleanup, or status reporting
-that must run regardless of outcome.
+The GTK GUI and scheduled profiles can run a custom command after all backup
+steps finish. Unlike the pre-backup command, the post-backup command executes
+**even if a fatal error aborts the backup early** — for example, if the
+pre-backup command fails or a ZFS send/receive step errors out. This makes it
+useful for notifications, cleanup, or status reporting that must run regardless
+of outcome.
 
-Enable and set it via override:
-
-```bash
-sudo ./zfsdailybackup "post_backup_script_enabled='Y'; post_backup_script='echo backup finished'"
-```
-
-Or configure it permanently in the GUI (Backup tab → **Post-Backup Steps**).
+The bash `zfsdailybackup` script does **not** implement a post-backup command;
+configure it in the GUI (Backup tab → **Post-Backup Steps**) or in a profile.
 
 ## ZFS Keys Backup
 
-The daily backup can optionally copy your ZFS encryption key files to an
-encrypted destination dataset. This is configured in the GUI (Backup tab →
-Advanced expander) or in the JSON config as `zfs_keys_path` (source) and
+!!! note "GUI / profiles only"
+    The bash `zfsdailybackup` script does **not** copy ZFS keys. This step is
+    implemented only by the GTK GUI and scheduled profiles.
+
+The GTK GUI and scheduled profiles can optionally copy your ZFS encryption key
+files to an encrypted destination dataset. This is configured in the GUI (Backup
+tab → Advanced expander) or in the JSON config as `zfs_keys_path` (source) and
 `zfs_keys_dest` (destination).
 
 Both fields accept rsync endpoint syntax:
@@ -138,14 +138,15 @@ sudo ./zfsdailybackup "run_installed_programs='N'"
 ```
 
 To skip **all** pull steps at once (for example, when the remote hosts are
-unreachable and you only want to run ZFS send/receive and retention):
+unreachable and you only want to run ZFS send/receive and retention), disable
+each rsync-pull flag individually:
 
 ```bash
-sudo ./zfsdailybackup "pull_steps_active='N'"
+sudo ./zfsdailybackup "pull_rocky='N'; pull_tweety='N'; pull_stewie='N'"
 ```
 
-This is the same setting controlled by the **Active** checkbox on the Backup
-tab in the GUI.
+The GUI uses a single **Active** checkbox to disable the entire pull-step group;
+that setting is applied by the Python/profile layer, not by `zfsdailybackup`.
 
 ## Rsync Exclude Patterns
 
@@ -213,7 +214,7 @@ resume automatically when the step finishes.
 
 ```
 [zfsdailybackup:45] *** Step: Sending NVME1 to fivebays ***
-[zfs-send-receive:88] Snapshot fivebays/NVME1@dailybackup-2026-02-21T02:00-05:00-d already exists. Skipping.
+[zfs-send-receive:88] Snapshot fivebays/NVME1@dailybackup-2026-02-21T02:00-05:00-d already exists.
 ...
 [zfsdailybackup:60] *** Retention: fivebays ***
 [zfsretain:32] Phase 0: Removing offsite same-month duplicates ...

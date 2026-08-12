@@ -723,7 +723,7 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
 
 - **Restore Steps** — Two checkboxes:
   
-  - **Part 1** — Full copy of the oldest common snapshot
+  - **Part 1** — Full copy of the oldest available source snapshot
   - **Part 2** — Incremental copy of remaining snapshots
 
 - **Notes** — A reminder that Part 1 is destructive on the destination.

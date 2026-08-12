@@ -48,7 +48,7 @@ NVME1 ───────────────────┘
 | 1    | `temp`        | `<offsite>` | Excludes `temp/temp`   |
 | 2    | `threeamigos` | `fivebays`  | `proxmox` subtree only |
 | 3    | `NVME1`       | `fivebays`  | All datasets           |
-| 4    | `fivebays`    | `<offsite>` | All datasets           |
+| 4    | `fivebays`    | `<offsite>` | `threeamigos/proxmox` and `NVME1/proxmox` only |
 
 The `<offsite>` token is replaced at run time with the first online offsite
 pool marked as an offsite candidate in the pool registry.
@@ -102,8 +102,9 @@ sudo ./zfssendoffsite "dryrun='Y'"
 ```
 
 In dry-run mode, the script logs what it would send but does not create
-snapshots, transfer data, or apply holds. Hold application is skipped entirely
-when dry-run is enabled.
+snapshots or transfer data. The Python/profile layer skips hold application when
+dry-run is enabled; the bash `zfssendoffsite` script does **not** check dry-run
+before applying holds to existing snapshots.
 
 ## Pause Scrubs During Send/Receive
 

@@ -1565,3 +1565,33 @@ One-time parser for legacy `zfsretainpol-<pool>` bash files.
 [ds-backup]: ../developer-guide/data-structures.md#backup-object
 [ds-config-migrations]: ../developer-guide/data-structures.md#config-migrations
 [ds-retention]: ../developer-guide/data-structures.md#retention-policy-arrays-bktname-bktretain-minage
+
+---
+
+### `installer_retention.py`
+
+Initializes the shared JSON config retention section for the installers. On a
+new install it ensures only the `default` retention policy exists, clearing any
+pool-specific policies. On an existing install it leaves user-created per-pool
+policies untouched and only adds a missing `default` policy.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `ensure_default_retention_profile(config_path, new_install)` | Load or create the JSON config and enforce the default retention rule |
+| `main()` | CLI entry point used by `install-two-node` over SSH |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `config_core` | `load_config`, `save_config`, `CONFIG_PATH` |
+| `feature_config` | `get_all_retention` |
+| `logging_config` | `log_msg` |
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| JSON config `retention` | [Retention policy arrays](../developer-guide/data-structures.md#retention-policy-arrays-bktname-bktretain-minage) |

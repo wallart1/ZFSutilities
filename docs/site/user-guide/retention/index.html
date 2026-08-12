@@ -1184,6 +1184,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#default-retention-policy-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Default Retention Policy File
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1958,7 +1969,7 @@
 <li><strong>Same-day pruning</strong> — keeps only the most recent snapshot per day within
    each bucket. Older snapshots from the same day are removed.</li>
 <li><strong>Bucket count limits</strong> — for the buckets <code>d</code>, <code>w</code>, <code>m</code>, <code>s</code>, keeps only
-   the N most recent snapshots as specified in the pool's retention policy. When a bucket overflows, the oldest snapshots are deleted first. The most recent snapshot in each bucket is always protected so it can serve as the base for the next incremental backup.</li>
+   the N most recent snapshots as specified in the pool's retention policy. When a bucket overflows, the oldest snapshots are deleted first. The most recent snapshot in each bucket is protected so it can serve as the base for the next incremental backup, unless the bucket is configured with <code>retain=0</code>.</li>
 </ol>
 <p>Clone snapshots (<code>c</code> bucket) are <strong>never touched</strong> by retention.</p>
 <p>For the complete algorithm, see the
@@ -1968,14 +1979,14 @@
 <ul>
 <li><strong><code>retain</code></strong> — how many snapshots of this bucket are kept. When a bucket has
   more than this many snapshots, the oldest snapshots are deleted first. The
-  most recent snapshot in each bucket is always protected so it can serve as
-  the base for the next incremental backup.</li>
+  most recent snapshot in each bucket is protected so it can serve as the base
+  for the next incremental backup, unless <code>retain=0</code>.</li>
 <li><strong><code>minage</code></strong> — the minimum age, in days, before a snapshot in this bucket is
   allowed to be deleted. It is <strong>not</strong> a maximum age: setting <code>minage=65</code> does
   not mean snapshots are deleted after 65 days; it means they cannot be deleted
   until they are at least 65 days old. A snapshot older than <code>minage</code> is still
-  kept if it is within the <code>retain</code> count or is the most recent snapshot in its
-  bucket.</li>
+  kept if it is within the <code>retain</code> count (or is the most recent snapshot and
+  <code>retain &gt; 0</code>).</li>
 </ul>
 <p>For example, an offsite (<code>s</code>) bucket configured as <code>retain=4 minage=65</code> keeps
 up to four offsite snapshots and never deletes any of them until each one is at
@@ -2185,6 +2196,55 @@ holds are released automatically without an additional confirmation per snapshot
 <span class="nb">export</span><span class="w"> </span><span class="nv">snapshot_label</span><span class="o">=</span><span class="s2">&quot;dailybackup&quot;</span><span class="w"> </span><span class="nv">ignore_retention_policies</span><span class="o">=</span><span class="s2">&quot;Y&quot;</span>
 sudo<span class="w"> </span>-E<span class="w"> </span>./zfsmassdelsnaps<span class="w"> </span>fivebays
 </code></pre></div>
+<h2 id="default-retention-policy-file">Default Retention Policy File<a class="headerlink" href="#default-retention-policy-file" title="Permanent link">&para;</a></h2>
+<p>The repository ships a legacy-style default retention policy in
+<code>share/retention/zfsretainpol-default</code> (also copied to <code>bin/zfsretainpol-default</code>
+for deployment). It defines the <code>default</code> retention policy used when the JSON
+config does not yet contain a <code>retention</code> section:</p>
+<table>
+<thead>
+<tr>
+<th>Bucket</th>
+<th>Name</th>
+<th>Retain</th>
+<th>Min age (days)</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td><code>d</code></td>
+<td>3</td>
+<td>0</td>
+<td>Daily snapshots</td>
+</tr>
+<tr>
+<td>1</td>
+<td><code>w</code></td>
+<td>2</td>
+<td>0</td>
+<td>Weekly snapshots</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>m</code></td>
+<td>2</td>
+<td>0</td>
+<td>Monthly snapshots</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>s</code></td>
+<td>4</td>
+<td>65</td>
+<td>Offsite snapshots</td>
+</tr>
+</tbody>
+</table>
+<p>On a fresh install, <code>install-single-node</code> and <code>install-two-node</code> import this
+policy into <code>/var/lib/zfsutilities/config.json</code> as the <code>default</code> retention
+policy. Per-pool policies can be added later in the GUI Retention tab.</p>
 
 
 
@@ -2220,7 +2280,7 @@ sudo<span class="w"> </span>-E<span class="w"> </span>./zfsmassdelsnaps<span cla
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.2-
+      ZFS Utilities v0.82.3
     </div>
   
   
@@ -2245,7 +2305,7 @@ sudo<span class="w"> </span>-E<span class="w"> </span>./zfsmassdelsnaps<span cla
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.2-"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.3"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

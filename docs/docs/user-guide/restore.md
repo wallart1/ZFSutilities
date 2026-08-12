@@ -40,9 +40,10 @@ cp /<mountpoint>/.zfs/snapshot/dailybackup-2026-02-21T02:00-05:00-d/path/to/file
     share blocks with its former origin. This is expected and correct behavior.
 
 A two-step restore gives the most complete result: a full copy of the oldest
-common snapshot followed by an incremental copy that brings the destination up
-to date. Customize and use [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore),
-which automates this two-step process.
+available source snapshot followed by an incremental copy that brings the
+destination up to date. Customize and use
+[`zfsrestore`](../commands-and-modules/commands.md#zfsrestore), which automates
+this two-step process.
 
 In a two-node configuration, the restore pipeline also ensures that restored
 VM disk zvols are exported as iSCSI LUNs. It reads the LUN index from the

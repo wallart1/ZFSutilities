@@ -11,7 +11,7 @@ Pruning happens in three phases:
 2. **Same-day pruning** — keeps only the most recent snapshot per day within
    each bucket. Older snapshots from the same day are removed.
 3. **Bucket count limits** — for the buckets `d`, `w`, `m`, `s`, keeps only
-   the N most recent snapshots as specified in the pool's retention policy. When a bucket overflows, the oldest snapshots are deleted first. The most recent snapshot in each bucket is always protected so it can serve as the base for the next incremental backup.
+   the N most recent snapshots as specified in the pool's retention policy. When a bucket overflows, the oldest snapshots are deleted first. The most recent snapshot in each bucket is protected so it can serve as the base for the next incremental backup, unless the bucket is configured with `retain=0`.
 
 Clone snapshots (`c` bucket) are **never touched** by retention.
 
@@ -24,14 +24,14 @@ Each bucket in a retention policy has two parameters:
 
 - **`retain`** — how many snapshots of this bucket are kept. When a bucket has
   more than this many snapshots, the oldest snapshots are deleted first. The
-  most recent snapshot in each bucket is always protected so it can serve as
-  the base for the next incremental backup.
+  most recent snapshot in each bucket is protected so it can serve as the base
+  for the next incremental backup, unless `retain=0`.
 - **`minage`** — the minimum age, in days, before a snapshot in this bucket is
   allowed to be deleted. It is **not** a maximum age: setting `minage=65` does
   not mean snapshots are deleted after 65 days; it means they cannot be deleted
   until they are at least 65 days old. A snapshot older than `minage` is still
-  kept if it is within the `retain` count or is the most recent snapshot in its
-  bucket.
+  kept if it is within the `retain` count (or is the most recent snapshot and
+  `retain > 0`).
 
 For example, an offsite (`s`) bucket configured as `retain=4 minage=65` keeps
 up to four offsite snapshots and never deletes any of them until each one is at
@@ -231,3 +231,21 @@ When **Ignore retention policies** is checked, the GUI invokes
 export snapshot_label="dailybackup" ignore_retention_policies="Y"
 sudo -E ./zfsmassdelsnaps fivebays
 ```
+
+## Default Retention Policy File
+
+The repository ships a legacy-style default retention policy in
+`share/retention/zfsretainpol-default` (also copied to `bin/zfsretainpol-default`
+for deployment). It defines the `default` retention policy used when the JSON
+config does not yet contain a `retention` section:
+
+| Bucket | Name | Retain | Min age (days) | Purpose              |
+| ------ | ---- | ------ | -------------- | -------------------- |
+| 0      | `d`  | 3      | 0              | Daily snapshots      |
+| 1      | `w`  | 2      | 0              | Weekly snapshots     |
+| 2      | `m`  | 2      | 0              | Monthly snapshots    |
+| 3      | `s`  | 4      | 65             | Offsite snapshots    |
+
+On a fresh install, `install-single-node` and `install-two-node` import this
+policy into `/var/lib/zfsutilities/config.json` as the `default` retention
+policy. Per-pool policies can be added later in the GUI Retention tab.

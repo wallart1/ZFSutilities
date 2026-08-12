@@ -2249,6 +2249,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#installer_retentionpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        installer_retention.py
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5926,6 +5937,69 @@ HTTP server and renders it in a WebKit window.</p>
 <li>Retention policy arrays in
   <a href="../../developer-guide/data-structures/#retention-policy-arrays-bktname-bktretain-minage">Retention policy arrays</a>.</li>
 </ul>
+<hr />
+<h3 id="installer_retentionpy"><code>installer_retention.py</code><a class="headerlink" href="#installer_retentionpy" title="Permanent link">&para;</a></h3>
+<p>Initializes the shared JSON config retention section for the installers. On a
+new install it ensures only the <code>default</code> retention policy exists, clearing any
+pool-specific policies. On an existing install it leaves user-created per-pool
+policies untouched and only adds a missing <code>default</code> policy.</p>
+<p><strong>Key functions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ensure_default_retention_profile(config_path, new_install)</code></td>
+<td>Load or create the JSON config and enforce the default retention rule</td>
+</tr>
+<tr>
+<td><code>main()</code></td>
+<td>CLI entry point used by <code>install-two-node</code> over SSH</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules / imported helpers:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Purpose in this module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config_core</code></td>
+<td><code>load_config</code>, <code>save_config</code>, <code>CONFIG_PATH</code></td>
+</tr>
+<tr>
+<td><code>feature_config</code></td>
+<td><code>get_all_retention</code></td>
+</tr>
+<tr>
+<td><code>logging_config</code></td>
+<td><code>log_msg</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>JSON config <code>retention</code></td>
+<td><a href="../../developer-guide/data-structures/#retention-policy-arrays-bktname-bktretain-minage">Retention policy arrays</a></td>
+</tr>
+</tbody>
+</table>
 
 
 
@@ -5961,7 +6035,7 @@ HTTP server and renders it in a WebKit window.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.2-
+      ZFS Utilities v0.82.3
     </div>
   
   
@@ -5986,7 +6060,7 @@ HTTP server and renders it in a WebKit window.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.2-"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.3"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

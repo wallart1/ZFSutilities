@@ -946,10 +946,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#post-backup-command" class="md-nav__link">
+  <a href="#post-backup-command-gui-profiles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Post-Backup Command
+        Post-Backup Command (GUI / Profiles)
       
     </span>
   </a>
@@ -2001,20 +2001,24 @@ the entire backup aborts immediately.</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>./zfsdailybackup<span class="w"> </span><span class="s2">&quot;pre_backup_script_enabled=&#39;Y&#39;; pre_backup_script=&#39;echo starting backup&#39;&quot;</span>
 </code></pre></div>
 <p>Or configure it permanently in the GUI (Backup tab → <strong>Pre-Backup</strong>).</p>
-<h2 id="post-backup-command">Post-Backup Command<a class="headerlink" href="#post-backup-command" title="Permanent link">&para;</a></h2>
-<p>You can run a custom command after all backup steps finish. Unlike the pre-backup
-command, the post-backup command executes <strong>even if a fatal error aborts the backup
-early</strong> — for example, if the pre-backup command fails or a ZFS send/receive step
-errors out. This makes it useful for notifications, cleanup, or status reporting
-that must run regardless of outcome.</p>
-<p>Enable and set it via override:</p>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>./zfsdailybackup<span class="w"> </span><span class="s2">&quot;post_backup_script_enabled=&#39;Y&#39;; post_backup_script=&#39;echo backup finished&#39;&quot;</span>
-</code></pre></div>
-<p>Or configure it permanently in the GUI (Backup tab → <strong>Post-Backup Steps</strong>).</p>
+<h2 id="post-backup-command-gui-profiles">Post-Backup Command (GUI / Profiles)<a class="headerlink" href="#post-backup-command-gui-profiles" title="Permanent link">&para;</a></h2>
+<p>The GTK GUI and scheduled profiles can run a custom command after all backup
+steps finish. Unlike the pre-backup command, the post-backup command executes
+<strong>even if a fatal error aborts the backup early</strong> — for example, if the
+pre-backup command fails or a ZFS send/receive step errors out. This makes it
+useful for notifications, cleanup, or status reporting that must run regardless
+of outcome.</p>
+<p>The bash <code>zfsdailybackup</code> script does <strong>not</strong> implement a post-backup command;
+configure it in the GUI (Backup tab → <strong>Post-Backup Steps</strong>) or in a profile.</p>
 <h2 id="zfs-keys-backup">ZFS Keys Backup<a class="headerlink" href="#zfs-keys-backup" title="Permanent link">&para;</a></h2>
-<p>The daily backup can optionally copy your ZFS encryption key files to an
-encrypted destination dataset. This is configured in the GUI (Backup tab →
-Advanced expander) or in the JSON config as <code>zfs_keys_path</code> (source) and
+<div class="admonition note">
+<p class="admonition-title">GUI / profiles only</p>
+<p>The bash <code>zfsdailybackup</code> script does <strong>not</strong> copy ZFS keys. This step is
+implemented only by the GTK GUI and scheduled profiles.</p>
+</div>
+<p>The GTK GUI and scheduled profiles can optionally copy your ZFS encryption key
+files to an encrypted destination dataset. This is configured in the GUI (Backup
+tab → Advanced expander) or in the JSON config as <code>zfs_keys_path</code> (source) and
 <code>zfs_keys_dest</code> (destination).</p>
 <p>Both fields accept rsync endpoint syntax:</p>
 <ul>
@@ -2059,11 +2063,12 @@ for the full list.</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>./zfsdailybackup<span class="w"> </span><span class="s2">&quot;run_installed_programs=&#39;N&#39;&quot;</span>
 </code></pre></div>
 <p>To skip <strong>all</strong> pull steps at once (for example, when the remote hosts are
-unreachable and you only want to run ZFS send/receive and retention):</p>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>./zfsdailybackup<span class="w"> </span><span class="s2">&quot;pull_steps_active=&#39;N&#39;&quot;</span>
+unreachable and you only want to run ZFS send/receive and retention), disable
+each rsync-pull flag individually:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>./zfsdailybackup<span class="w"> </span><span class="s2">&quot;pull_rocky=&#39;N&#39;; pull_tweety=&#39;N&#39;; pull_stewie=&#39;N&#39;&quot;</span>
 </code></pre></div>
-<p>This is the same setting controlled by the <strong>Active</strong> checkbox on the Backup
-tab in the GUI.</p>
+<p>The GUI uses a single <strong>Active</strong> checkbox to disable the entire pull-step group;
+that setting is applied by the Python/profile layer, not by <code>zfsdailybackup</code>.</p>
 <h2 id="rsync-exclude-patterns">Rsync Exclude Patterns<a class="headerlink" href="#rsync-exclude-patterns" title="Permanent link">&para;</a></h2>
 <p>Each rsync pull step can have its own list of exclude patterns. In the GUI,
 add them to the <strong>Excludes</strong> column of the <strong>Pull Steps (rsync)</strong> table. Enter
@@ -2117,7 +2122,7 @@ resume automatically when the step finishes.</p>
 </ul>
 <h2 id="what-a-successful-run-looks-like">What a Successful Run Looks Like<a class="headerlink" href="#what-a-successful-run-looks-like" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>[zfsdailybackup:45] *** Step: Sending NVME1 to fivebays ***
-[zfs-send-receive:88] Snapshot fivebays/NVME1@dailybackup-2026-02-21T02:00-05:00-d already exists. Skipping.
+[zfs-send-receive:88] Snapshot fivebays/NVME1@dailybackup-2026-02-21T02:00-05:00-d already exists.
 ...
 [zfsdailybackup:60] *** Retention: fivebays ***
 [zfsretain:32] Phase 0: Removing offsite same-month duplicates ...
@@ -2200,7 +2205,7 @@ name. Answer <code>y</code> to keep everything consistent.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.2-
+      ZFS Utilities v0.82.3
     </div>
   
   
@@ -2225,7 +2230,7 @@ name. Answer <code>y</code> to keep everything consistent.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.2-"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.3"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

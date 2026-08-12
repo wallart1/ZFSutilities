@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.82.3
+
+*Released 2026-08-12*
+
+### Documentation
+
+- **Documentation audit** — Audited `docs/docs/` against `bin/`, `lib/`,
+  `python/`, and `share/`. Added missing documentation for
+  `install-single-node`, `install-two-node`, `uninstall-zfsutilities`,
+  `watchall`, `setup-iscsi-targets`, `python/installer_retention.py`, and the
+  default retention policy file `zfsretainpol-default`.
+- **Stale entry removal** — Removed the documented but non-existent
+  `zfsmaketest` entry from `commands.md`.
+- **Semantic corrections** — Fixed 20+ discrepancies across
+  `commands.md`, `two-node.md`, `python-modules.md`, and the User Guide,
+  including corrected config paths (`/etc/zfsutilities-deploy.conf`), required
+  variable names (`$restoresourcefs`), called modules, dry-run behavior notes,
+  and retention-policy edge cases (`retain=0`).
+- **Audit log** — Added `docs_audit_discrepancies.md` at the repository root
+  summarizing the audit scope, fixes applied, and code bugs noted for separate
+  follow-up.
+
+### Tests
+
+- Added `test_all_documented_command_scripts_exist` to
+  `tests/python/test_docs_integrity.py` so every script header in
+  `commands.md` is verified against an executable in `bin/`.
+
 ## 0.82.2
 
 *Released 2026-08-11*

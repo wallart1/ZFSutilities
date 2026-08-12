@@ -122,6 +122,22 @@ def extract_python_module_names(filepath):
     return modules
 
 
+def extract_command_script_names(filepath):
+    """Extract script names documented as ### `scriptname` headers in commands.md.
+
+    Headers that contain a parenthetical annotation (e.g. ``(Archived)``) are
+    ignored so intentionally stale or cross-referenced entries do not fail the
+    existence check.
+    """
+    scripts = []
+    with open(filepath) as f:
+        for line in f:
+            m = re.match(r"^###\s+`([a-zA-Z0-9_-]+)`\s*(?:\(|$)", line)
+            if m:
+                scripts.append(m.group(1))
+    return scripts
+
+
 def check_pyyaml():
     """Return True if pyyaml is installed, else raise SkipTest with install instructions."""
     try:

@@ -1823,6 +1823,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#setup-iscsi-targets-storage-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        setup-iscsi-targets (storage node)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#show-lun-map-compute-node" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2266,6 +2277,7 @@ detached unless you later re-attach them with <code>attach-vm-disk</code> or <co
 <li><a href="#resize-vm-disk-both"><code>resize-vm-disk</code> (both)</a></li>
 <li><a href="#restart-iscsi-services-storage-node"><code>restart-iscsi-services</code> (storage node)</a></li>
 <li><a href="#safe-iscsi-save-storage-node"><code>safe-iscsi-save</code> (storage node)</a></li>
+<li><a href="#setup-iscsi-targets-storage-node"><code>setup-iscsi-targets</code> (storage node)</a></li>
 <li><a href="#show-lun-map-compute-node"><code>show-lun-map</code> (compute node)</a></li>
 <li><a href="#unlock-zfs-keys-storage-node"><code>unlock-zfs-keys</code> (storage node)</a></li>
 <li><a href="#unlock-zfs-keys-auto-storage-node"><code>unlock-zfs-keys-auto</code> (storage node)</a></li>
@@ -2595,7 +2607,7 @@ at service startup.</p>
 </table>
 <p><strong>Internal flow / algorithm:</strong></p>
 <ol>
-<li>Exit silently in single-node mode.</li>
+<li>In single-node mode, print an informational message and exit.</li>
 <li>For each entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>:</li>
 <li>Skip if the device node is not present (keys not loaded).</li>
 <li>Skip if the backstore already exists.</li>
@@ -3382,7 +3394,7 @@ compute-node <code>by-path</code> symlinks remain stable.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
 <td>Source removed, destination added if encrypted</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -3405,7 +3417,7 @@ compute-node <code>by-path</code> symlinks remain stable.</p>
 <li><strong>Storage-node operations (two-node):</strong></li>
 <li>Tear down the old LUN and backstore.</li>
 <li>Remove the source entry from <code>expected-backstores.txt</code> and
-     <code>iscsi-encrypted-luns.conf</code> if encrypted.</li>
+     <code>/etc/iscsi-encrypted-luns.conf</code> if encrypted.</li>
 <li><code>zfs rename</code> the zvol to the destination name.</li>
 <li>The destination zvol is placed in the same parent dataset as the source
      zvol (for example, <code>pool/custom/vm-100-disk-0</code> → <code>pool/custom/vm-200-disk-0</code>).</li>
@@ -3489,7 +3501,7 @@ the disk line to the VM config on the compute node.</p>
 </tr>
 <tr>
 <td><code>--encrypted</code></td>
-<td>Optional. Create as an encrypted zvol; records the backstore in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td>Optional. Create as an encrypted zvol; records the backstore in <code>/etc/iscsi-encrypted-luns.conf</code></td>
 </tr>
 </tbody>
 </table>
@@ -3537,7 +3549,7 @@ the disk line to the VM config on the compute node.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
 <td>Entry added with <code>--encrypted</code></td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -3568,8 +3580,9 @@ the disk line to the VM config on the compute node.</p>
 <li>Trigger a compute-host rescan.</li>
 <li>Re-invoke <code>new-vm-disk --config-only=&lt;lun&gt;</code> on the compute host to write
      the VM config line (or initialize EFI vars for <code>EFI</code> size).</li>
-<li>Single-node mode: build a <code>storage:vm-...</code> disk line and append it to the VM
-   config.</li>
+<li>Single-node mode: only the zvol is created. The VM config line must be added
+   separately (the script does not write <code>storage:vm-...</code> lines or initialize EFI
+   disks in single-node mode).</li>
 </ol>
 <p><strong>EFI special case:</strong></p>
 <ul>
@@ -3611,11 +3624,11 @@ manifests; appends disk lines to the VM config.</p>
 <tbody>
 <tr>
 <td><code>encryption</code></td>
-<td><code>aes-256-gcm</code> by default; auto-detected from an existing entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code> if available</td>
+<td><code>aes-256-gcm</code> by default; auto-detected from an existing entry in <code>/etc/iscsi-encrypted-luns.conf</code> if available</td>
 </tr>
 <tr>
 <td><code>keyformat</code></td>
-<td><code>raw</code> by default; auto-detected from an existing entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code> if available</td>
+<td><code>raw</code> by default; auto-detected from an existing entry in <code>/etc/iscsi-encrypted-luns.conf</code> if available</td>
 </tr>
 <tr>
 <td><code>keylocation</code></td>
@@ -3746,7 +3759,7 @@ for the full workflow.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
 <td>Entry removed if present</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -3762,7 +3775,7 @@ for the full workflow.</p>
 <li>Find and remove the LUN mapping.</li>
 <li>Remove the block backstore.</li>
 <li>Remove entries from <code>expected-backstores.txt</code> and
-     <code>iscsi-encrypted-luns.conf</code>.</li>
+     <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
 <li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
 <li>Trigger a compute-host rescan.</li>
 <li>Destroy the zvol. If <code>zfs destroy</code> fails, source <code>zfs-diagnose-busy</code> and
@@ -3854,7 +3867,7 @@ each restored zvol and rewrites the Proxmox config disk lines with new LUN numbe
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
 <td>Encrypted restored LUNs added</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -3885,7 +3898,7 @@ each restored zvol and rewrites the Proxmox config disk lines with new LUN numbe
    new VMID.</li>
 <li>Restore each archived zvol with <code>zfs send -cw | zfs receive -o volblocksize=&lt;original&gt;</code>.</li>
 <li>In two-node mode, create backstores and LUNs for each restored zvol and
-   update <code>expected-backstores.txt</code> and <code>iscsi-encrypted-luns.conf</code>.</li>
+   update <code>expected-backstores.txt</code> and <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
 <li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
 <li>Restore/rewrite the Proxmox config:</li>
 <li>Single-node: rewrite VMID in disk lines if <code>--new-vmid</code> was used.</li>
@@ -3945,11 +3958,11 @@ for the full workflow.</p>
 <tbody>
 <tr>
 <td><code>0</code></td>
-<td>Rescan completed</td>
+<td>Rescan completed (or single-node no-op)</td>
 </tr>
 <tr>
 <td><code>1</code></td>
-<td>No iSCSI sessions or rescan error</td>
+<td>No iSCSI sessions found</td>
 </tr>
 </tbody>
 </table>
@@ -4075,7 +4088,7 @@ VE is <strong>not</strong> required on the storage host.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
 <td>Lists encrypted backstores to restore</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -4094,7 +4107,7 @@ VE is <strong>not</strong> required on the storage host.</p>
 <li>Start <code>rtslib-fb-targetctl</code>. The systemd drop-in restores
    <code>saveconfig-boot.json</code> (encrypted backstores excluded), then runs
    <code>iscsi-add-encrypted-luns</code> to add encrypted LUNs whose devices are available.</li>
-<li>Display encrypted LUN status from <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>.</li>
+<li>Display encrypted LUN status from <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
 <li>Save the config via <code>safe-iscsi-save</code>.</li>
 </ol>
 <p><strong>Return codes / side effects:</strong></p>
@@ -4108,11 +4121,11 @@ VE is <strong>not</strong> required on the storage host.</p>
 <tbody>
 <tr>
 <td><code>0</code></td>
-<td>Service restarted and config saved</td>
+<td>Service restarted and config saved (systemctl and save status are not checked)</td>
 </tr>
 <tr>
 <td><code>1</code></td>
-<td>Running VMs detected, service failure, or degraded save</td>
+<td>Running VMs detected, or required tools (<code>targetcli</code>, <code>rtslib-fb-targetctl</code>) missing</td>
 </tr>
 </tbody>
 </table>
@@ -4144,7 +4157,7 @@ preventing a degraded state from overwriting a good config.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
 <td>Backstores to exclude from boot config</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
@@ -4169,7 +4182,7 @@ preventing a degraded state from overwriting a good config.</p>
 <li>If active &gt; expected, warn but save anyway.</li>
 <li>Run <code>targetcli saveconfig</code>.</li>
 <li>Generate <code>saveconfig-boot.json</code> by stripping encrypted backstores listed in
-   <code>iscsi-encrypted-luns.conf</code>.</li>
+   <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
 <li>Regenerate <code>expected-backstores.txt</code> from the current list of loaded
    backstores so the manifest stays authoritative after LUN moves or repairs.</li>
 </ol>
@@ -4229,6 +4242,89 @@ truth for expected LUN count — it is not derived from <code>saveconfig.json</c
 </table>
 <p>Use <code>safe-iscsi-save</code> instead of <code>targetcli saveconfig</code> in any script that modifies
 iSCSI config.</p>
+<hr />
+<h3 id="setup-iscsi-targets-storage-node"><code>setup-iscsi-targets</code> (storage node)<a class="headerlink" href="#setup-iscsi-targets-storage-node" title="Permanent link">&para;</a></h3>
+<p>Creates iSCSI targets, TPGs, and portals from the pool-to-target mappings
+defined in <code>/etc/zfsutilities/node.conf</code>. Idempotent — safe to run multiple
+times. Skips targets that already exist and adds missing portals to existing
+targets.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>setup-iscsi-targets
+</code></pre></div>
+<p><strong>Arguments:</strong> none.</p>
+<p><strong>Globals:</strong> node-config globals only.</p>
+<p><strong>Called modules / commands:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>node-lib.sh</code></td>
+<td>Two-node host/target resolution</td>
+</tr>
+<tr>
+<td><code>targetcli</code></td>
+<td>Create targets, TPGs, and portals</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/etc/zfsutilities/node.conf</code></td>
+<td><code>POOL_TARGET</code> and <code>IQN_PREFIX</code> source</td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilitiesnodeconf">Node config</a></td>
+</tr>
+<tr>
+<td><code>targetcli</code> iSCSI config</td>
+<td>Targets, TPGs, and portals created or verified</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Internal flow / algorithm:</strong></p>
+<ol>
+<li>Exit silently in single-node mode.</li>
+<li>Verify the script is running on the storage host.</li>
+<li>Ensure <code>targetcli</code> is installed.</li>
+<li>For each entry in <code>POOL_TARGET</code>:</li>
+<li>Create the target IQN if it does not already exist.</li>
+<li>Ensure TPG1 exists.</li>
+<li>Disable authentication and demo-mode write protect.</li>
+<li>Create the portal <code>${STORAGE_IP}:3260</code> if it does not already exist.</li>
+<li>Save the targetcli configuration if anything changed.</li>
+</ol>
+<p><strong>Return codes / side effects:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Targets configured</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Not running on the storage host, or <code>targetcli</code> not found</td>
+</tr>
+</tbody>
+</table>
+<p>Side effects: creates or verifies iSCSI targets, TPGs, and portals.</p>
 <hr />
 <h3 id="show-lun-map-compute-node"><code>show-lun-map</code> (compute node)<a class="headerlink" href="#show-lun-map-compute-node" title="Permanent link">&para;</a></h3>
 <p>Shows which iSCSI LUN maps to which block device (<code>/dev/sdX</code>) and which Proxmox VM
@@ -4849,7 +4945,7 @@ to cut dependencies before retiring the source VM.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.2-
+      ZFS Utilities v0.82.3
     </div>
   
   
@@ -4874,7 +4970,7 @@ to cut dependencies before retiring the source VM.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.2-"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.3"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

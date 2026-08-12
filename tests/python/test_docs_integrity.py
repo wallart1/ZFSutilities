@@ -8,8 +8,10 @@ from test_support import (
     DOCS_DIR,
     MKDOCS_YML,
     PYTHON_SRC,
+    REPO_ROOT,
     check_pyyaml,
     collect_nav_files,
+    extract_command_script_names,
     extract_markdown_headers,
     extract_markdown_links,
     extract_python_module_names,
@@ -158,6 +160,22 @@ class TestMkDocsHooks(unittest.TestCase):
                     self.assertTrue(hasattr(mod, "on_page_context"))
                 elif fname == "version_stamp.py":
                     self.assertTrue(hasattr(mod, "on_config"))
+
+
+class TestCommandScriptsReference(unittest.TestCase):
+    def test_all_documented_command_scripts_exist(self):
+        """Every script listed in commands.md must exist in bin/."""
+        ref_path = os.path.join(DOCS_DIR, "commands-and-modules", "commands.md")
+        self.assertTrue(os.path.isfile(ref_path))
+        documented = extract_command_script_names(ref_path)
+        self.assertGreater(len(documented), 0)
+        missing = []
+        for script in documented:
+            script_path = os.path.join(REPO_ROOT, "bin", script)
+            if not os.path.isfile(script_path):
+                missing.append(script)
+        if missing:
+            self.fail(f"Documented command scripts missing from bin/: {missing}")
 
 
 class TestDocsDirectoryStructure(unittest.TestCase):

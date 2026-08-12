@@ -22,6 +22,8 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`ensure-restored-vm-iscsi`](#ensure-restored-vm-iscsi)
 - [`getlinecount`](#getlinecount)
 - [`git-release`](#git-release)
+- [`install-single-node`](#install-single-node)
+- [`install-two-node`](#install-two-node)
 - [`PVE-send-to-archive`](#pve-send-to-archive)
 - [`archive-vm`](#archive-vm)
 - [`remove-vm`](#remove-vm)
@@ -30,8 +32,10 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`switch-version`](#switch-version)
 - [`uninstall-version`](#uninstall-version)
 - [`uninstall-some-versions`](#uninstall-some-versions)
+- [`uninstall-zfsutilities`](#uninstall-zfsutilities)
 - [`unarchive-vm`](#unarchive-vm)
 - [`unroot`](#unroot)
+- [`watchall`](#watchall)
 - [`watchit`](#watchit)
 - [`zfs-diagnose-busy`](#zfs-diagnose-busy)
 - [`zfsaddisk`](#zfsaddisk)
@@ -51,7 +55,6 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsloadkeys`](#zfsloadkeys)
 - [`zfslockctl`](#zfslockctl)
 - [`zfslockmanager-test`](#zfslockmanager-test)
-- [`zfsmaketest`](#zfsmaketest-archived)
 - [`zfsmassdelsnaps`](#zfsmassdelsnaps)
 - [`zfsmount`](#zfsmount)
 - [`zfsmountsnapshot`](#zfsmountsnapshot)
@@ -235,7 +238,7 @@ sudo ./bin/deploy-version [version] [group ...]
 | Argument | Default | Description |
 | -------- | ------- | ----------- |
 | `version` | contents of `./VERSION` | Version string to deploy |
-| `group` | all groups in deploy.conf | Deployment group names from `/etc/zfsutilities/deploy.conf` |
+| `group` | all groups in deploy.conf | Deployment group names from `/etc/zfsutilities-deploy.conf` |
 
 **Globals:**
 
@@ -247,20 +250,20 @@ sudo ./bin/deploy-version [version] [group ...]
 
 | Script | Purpose |
 | ------ | ------- |
-| `lib/desktop-launcher-lib.sh` | Desktop shortcut helpers |
+| `lib/node-lib.sh` | Two-node host/target resolution (for legacy remote fallback) |
 
 **Data structures consumed / produced:**
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| `/etc/zfsutilities/deploy.conf` | Deployment group definitions | — |
+| `/etc/zfsutilities-deploy.conf` | Deployment group definitions | — |
 | Node config | Legacy remote host list | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | `/usr/local/lib/zfsutilities/versions/<version>/` | Deployed version directory | — |
 
 **Internal flow:**
 
 1. Parse arguments; read `./VERSION` if no version is supplied.
-2. Load `/etc/zfsutilities/deploy.conf` groups, or fall back to the node config for remote hosts.
+2. Load `/etc/zfsutilities-deploy.conf` groups, or fall back to the node config for remote hosts.
 3. Build the version directory and copy `bin/`, `lib/`, `python/`, `docs/`,
    and `share/` from the repository.
 4. Rebuild the static docs.
@@ -392,6 +395,107 @@ caller.
 | ---- | ------- |
 | `0` | Version bumped, committed, and tagged |
 | `1` | Not a git repository or git operation failed |
+
+---
+
+### `install-single-node`
+
+Interactive installer for single-node ZFS Utilities operation. Run as root from
+a repository checkout.
+
+```bash
+sudo ./bin/install-single-node
+```
+
+**Arguments:** none (fully interactive).
+
+**Globals:** none.
+
+The installer:
+
+1. Checks prerequisites interactively (`check-prerequisites --single-node`).
+2. Ensures MkDocs and the documentation server are installed.
+3. Generates `/etc/zfsutilities/node.conf` for `NODE_MODE=single-node`.
+4. Runs `deploy-version` and `switch-version` to install and activate the
+   versioned deployment.
+5. Initializes the JSON config retention section with only the `default`
+   policy on a fresh install.
+
+Can also re-run on an existing two-node host to switch it to single-node mode.
+
+**Called modules:**
+
+| Module | Purpose |
+| ------ | ------- |
+| `lib/installer-lib.sh` | Shared installer helpers (prereq checks, retention setup) |
+
+**Data structures consumed / produced:**
+
+| Structure | Role |
+| --------- | ---- |
+| `/etc/zfsutilities/node.conf` | Single-node node configuration |
+| `/var/lib/zfsutilities/config.json` | Retention policy initialization |
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Installation completed |
+| non-zero | Prerequisite failure or deployment error |
+
+---
+
+### `install-two-node`
+
+Interactive installer for two-node ZFS Utilities operation (storage host +
+compute host). Run as root on the storage host from a repository checkout.
+
+```bash
+sudo ./bin/install-two-node
+```
+
+**Arguments:** none (fully interactive).
+
+**Globals:** none.
+
+The installer:
+
+1. Checks prerequisites interactively (`check-prerequisites --two-node`).
+2. Ensures MkDocs and the documentation server are installed.
+3. Prompts for storage host, compute host, storage-network IP, IQN prefix, and
+   pool-to-target mappings.
+4. Generates `/etc/zfsutilities/node.conf` and `/etc/zfsutilities-deploy.conf`.
+5. Verifies bidirectional root SSH between the nodes.
+6. Ensures the iSCSI target/initiator packages are present.
+7. Deploys and activates the versioned installation on both nodes.
+8. Installs systemd drop-ins and the encrypted-LUNs config.
+9. Optionally creates `/root/.luks-key` for unattended boot unlocking.
+10. Patches the Proxmox iSCSI rescan rate limit on the compute host.
+
+Can also re-run on an existing single-node host to switch it to two-node mode.
+
+**Called modules:**
+
+| Module | Purpose |
+| ------ | ------- |
+| `lib/installer-lib.sh` | Shared installer helpers |
+| `bin/setup-iscsi-targets` | Creates initial iSCSI targets (when present) |
+
+**Data structures consumed / produced:**
+
+| Structure | Role |
+| --------- | ---- |
+| `/etc/zfsutilities/node.conf` | Two-node node configuration |
+| `/etc/zfsutilities-deploy.conf` | Deployment group definitions |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Encrypted-LUN mappings |
+| `/etc/systemd/system/rtslib-fb-targetctl.service.d/` | systemd drop-ins |
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Installation completed |
+| non-zero | Prerequisite failure, SSH failure, or deployment error |
 
 ---
 
@@ -586,6 +690,8 @@ sudo switch-version <version>|previous|--list|--uninstall
 | `ZFSUTILITIES_SUDOERS_FILE` | Override `/etc/sudoers.d/zfsutilities` (used by tests) |
 | `ZFSUTILITIES_NODE_LIB_LINK` | Override `/usr/local/lib/node-lib.sh` (used by tests) |
 | `ZFSUTILITIES_TWO_NODE_LIB_LINK` | Override `/usr/local/lib/two-node-lib.sh` (used by tests) |
+| `ZFSUTILITIES_ISCSI_LIB_LINK` | Override `/usr/local/lib/iscsi-lib.sh` (used by tests) |
+| `ZFSUTILITIES_ROOTCHECK_LINK` | Override `/usr/local/lib/rootcheck` (used by tests) |
 | `ZFSUTILITIES_LOCAL_BIN_DIR` | Override `/usr/local/bin` (used by tests) |
 
 **Called modules:**
@@ -606,6 +712,8 @@ sudo switch-version <version>|previous|--list|--uninstall
 | `/etc/sudoers.d/zfsutilities` | Adds the versioned `bin/` to `secure_path` |
 | `/usr/local/lib/node-lib.sh` | Symlink to the active version's node library |
 | `/usr/local/lib/two-node-lib.sh` | Compatibility symlink to the node library |
+| `/usr/local/lib/iscsi-lib.sh` | Symlink to the active version's iSCSI library |
+| `/usr/local/lib/rootcheck` | Symlink to the active version's rootcheck helper |
 
 **Internal flow:**
 
@@ -716,6 +824,76 @@ sudo uninstall-some-versions [listfile]
 
 ---
 
+### `uninstall-zfsutilities`
+
+Completely removes ZFS Utilities from the current host. By default it removes
+only the deployed software and production wiring, preserving configuration,
+logs, and history. Use `--purge` to remove those remnants as well. In two-node
+mode, `--all-nodes` runs the same uninstall on the peer host.
+
+```bash
+sudo uninstall-zfsutilities [OPTIONS]
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `--purge` | Also remove configs, logs, history, cron, systemd integration, cache-warm, and LUKS keyfile |
+| `--all-nodes` | In two-node mode, also run the uninstall on the peer host |
+| `--yes`, `-y` | Skip interactive confirmation prompts |
+| `--dry-run` | Print actions without executing them |
+| `--help`, `-h` | Show help and exit |
+
+**Globals / environment:**
+
+All default paths can be overridden via `ZFSUTILITIES_*` environment variables
+(used primarily by tests):
+
+| Variable | Default | Role |
+| -------- | ------- | ---- |
+| `ZFSUTILITIES_VERSION_BASE` | `/usr/local/lib/zfsutilities` | Deployed versions directory |
+| `ZFSUTILITIES_BASHINIT_LINK` | `/root/bashinit` | bashinit symlink |
+| `ZFSUTILITIES_NODE_LIB_LINK` | `/usr/local/lib/node-lib.sh` | node-lib symlink |
+| `ZFSUTILITIES_TWO_NODE_LIB_LINK` | `/usr/local/lib/two-node-lib.sh` | two-node-lib symlink |
+| `ZFSUTILITIES_ISCSI_LIB_LINK` | `/usr/local/lib/iscsi-lib.sh` | iscsi-lib symlink |
+| `ZFSUTILITIES_ROOTCHECK_LINK` | `/usr/local/lib/rootcheck` | rootcheck symlink |
+| `ZFSUTILITIES_PROFILE_FILE` | `/etc/profile.d/zfsutilities.sh` | PATH drop-in |
+| `ZFSUTILITIES_SUDOERS_FILE` | `/etc/sudoers.d/zfsutilities` | sudoers drop-in |
+| `ZFSUTILITIES_LOCAL_BIN_DIR` | `/usr/local/bin` | Local bin dir for cache-warm scripts |
+| `ZFSUTILITIES_SYSTEM_CONFIG_DIR` | `/etc/zfsutilities` | System config directory |
+| `ZFSUTILITIES_STATE_DIR` | `/var/lib/zfsutilities` | State directory |
+| `ZFSUTILITIES_LOG_DIR` | `/var/log/zfsutilities` | Log directory |
+| `ZFSUTILITIES_CRON_FILE` | `/etc/cron.d/zfsutilities` | Cron drop-in |
+| `ZFSUTILITIES_SYSTEMD_DIR` | `/etc/systemd/system` | systemd unit directory |
+
+**Called modules:**
+
+| Module | Purpose |
+| ------ | ------- |
+| `lib/desktop-launcher-lib.sh` | Remove desktop shortcuts |
+
+**Data structures consumed / produced:**
+
+| Structure | Role |
+| --------- | ---- |
+| `/usr/local/lib/zfsutilities/` | Removed (deployed versions) |
+| `/etc/zfsutilities/` | Preserved unless `--purge` |
+| `/var/lib/zfsutilities/` | Preserved unless `--purge` |
+| `/var/log/zfsutilities/` | Preserved unless `--purge` |
+| `/etc/cron.d/zfsutilities` | Removed |
+| `/etc/systemd/system/rtslib-fb-targetctl.service.d/` | Removed |
+| `/etc/systemd/system/zfs-keys-unlock.service` | Removed |
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Uninstall completed or cancelled |
+| `1` | Fatal error (missing bashinit, invalid option, etc.) |
+
+---
+
 ### `unroot`
 
 Relinquishes root privileges by switching to a normal user.
@@ -748,6 +926,41 @@ Has no effect if not currently running as root.
 | Code | Meaning |
 | ---- | ------- |
 | `0` | Completed successfully. |
+
+---
+
+### `watchall`
+
+Curses-based command repeater with scrolling output, similar to the standard
+Linux `watch` utility. Displays the output of a command and refreshes it at a
+configurable interval; arrow keys and Page Up/Page Down scroll long output.
+
+```bash
+sudo watchall [-d] [-n <interval>] [-m <max-lines>] <command> [args...]
+```
+
+**Arguments:**
+
+| Argument | Default | Description |
+| -------- | ------- | ----------- |
+| `-d` | off | Highlight differences between refreshes |
+| `-n` | `2` | Refresh interval in seconds |
+| `-m` | `200` | Maximum number of lines to keep in the scrollback pad |
+| `<command>` | — | Command to run and display |
+| `[args...]` | — | Arguments passed to `<command>` |
+
+**Globals:** none.
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Exited normally |
+| non-zero | Subcommand failed or curses error |
 
 ---
 
@@ -899,7 +1112,6 @@ sudo zfscleanup <pool> only <label> [overrides]
 | `$dryrun`                   | `'Y'` = report without deleting                                   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$releaseholds`             | `'Y'` = release matching holds before deletion                    | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$releaseholds_tags`        | Array of hold tag patterns to release (default `offsite-*`)       | [Execution Control](../developer-guide/global-variables.md#execution-control) |
-| `$retain_verb`              | `'Y'` = emit `VERB:` messages explaining why snapshots are kept   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 
 Calls [`zfsretain`](modules.md#zfsretain) for each pool.
 
@@ -911,6 +1123,8 @@ Calls [`zfsretain`](modules.md#zfsretain) for each pool.
 | [zfsbuildfsarray](modules.md#zfsbuildfsarray) | Build the per-pool dataset list |
 | [zfsretain](modules.md#zfsretain) | Apply retention policy to each dataset |
 | [zfsoverrides](modules.md#zfsoverrides) | Apply command-line parameter overrides |
+| [zfslockmanager](modules.md#zfslockmanager) | Acquire per-dataset locks |
+| [rootcheck](modules.md#rootcheck) | Verify root privileges |
 
 **Data structures consumed / produced:**
 
@@ -1072,6 +1286,9 @@ sudo zfsdailybackup [overrides]
 | `prune`                      | `'Y'`   | Run retention via `zfscleanup` on affected pools after the sends |
 | `autoresume`                 | `'Y'`   | Allow resumable-receive tokens to be picked up                   |
 | `receive_F_option`           | `'F'`   | Force rollback of destination modifications on receive           |
+| `pre_backup_script_enabled`  | `'N'`   | Enable a pre-backup command                                      |
+| `pre_backup_script`          | `''`    | Command to run before backup steps (when enabled)                |
+| `run_installed_programs`     | `'Y'`   | Save the installed-package list via `backup-installed-programs`  |
 
 **Global variables read:**
 
@@ -1223,7 +1440,7 @@ follow the `vm-<N>-disk-<N>` naming convention in a two-node configuration.
 
 | Variable                                         | Role                                                                                   | Reference                                                                          |
 | ------------------------------------------------ | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `$includes`, `$excludes`, `$startwith`, `$depth` | Forwarded to `zfsbuildfsarray`                                                         | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `$includes`, `$excludes`, `$startwith` | Forwarded to `zfsbuildfsarray`; `$depth` is reset internally and not forwarded | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$autoproceed`, `$dryrun`, `$releaseholds`, `$releaseholds_tags` | Execution control passed through to `zfsdelallsnaps`                                   | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 | `NODE_MODE`, `COMPUTE_HOST`                      | Determines whether iSCSI teardown/rebuild is attempted, and how `qm status` is queried | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
 
@@ -1260,6 +1477,9 @@ report the specific cause — holds, open files, iSCSI LUNs, running VMs, etc.
 | [zfsdelallsnaps](commands.md#zfsdelallsnaps) | Remove all snapshots before destroying each dataset |
 | [zfsoverrides](modules.md#zfsoverrides) | Apply command-line parameter overrides |
 | [zfs-diagnose-busy](modules.md#zfs-diagnose-busy) | Diagnose `zfs destroy` failures |
+| `node-lib.sh` | Two-node host/target resolution |
+| `iscsi-lib.sh` | Shared iSCSI teardown/rebuild helpers |
+| [zfslockmanager](modules.md#zfslockmanager) | Acquire per-dataset destroy locks |
 
 **Data structures consumed / produced:**
 
@@ -1356,7 +1576,7 @@ Step 2: Incremental copy to pull in all remaining snapshots
 
 | Variable                            | Required | Role                                                                     | Reference                                                                     |
 | ----------------------------------- | -------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `$restorefs`                        | yes      | Dataset to restore (source)                                              | —                                                                             |
+| `$restoresourcefs`                  | yes      | Dataset to restore (source)                                              | —                                                                             |
 | `$destfs`                           | yes      | Destination pool/subpool                                                 | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 | `$sourcefsremovequalifiers`         | no       | Leading qualifiers to strip from `$restorefs`before prepending `$destfs` | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 | `$nextsnap`                         | no       | If set, limits copy to this snapshot                                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
@@ -1717,51 +1937,6 @@ All 33 tests should pass.
 
 ---
 
-### `zfsmaketest` (Archived)
-
-> **Inactive.** This script has been moved to `03 Stash/zfsmaketest` and is not
-> currently in use. It will be revisited when work on the automated test
-> framework resumes.
-
-Creates test datasets and runs copy scenarios to validate
-[`zfs-send-receive`](modules.md#zfs-send-receive). Creates `nvme/test` and
-`nvme/test2`.
-
-```bash
-sudo zfsmaketest
-```
-
-**Arguments:** none (in-script variables).
-
-**In-script variables** (set before running):
-
-| Variable               | Values            | Role                                                                                     | Reference                                                              |
-| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `$doincrementals`      | `'Y'` / `'N'`     | Full vs incremental copies                                                               | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive) |
-| `$dointermediates`     | `'Y'` / `'N'`     | Include intermediate snapshots                                                           | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive) |
-| `$commsnap_mostrecent` | `'OLDEST'` / `''` | `'OLDEST'` = start from oldest snapshot on source; otherwise most recent common snapshot | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive) |
-
-**Called modules:**
-
-| Module | Purpose in this command |
-| ------ | ----------------------- |
-| [zfslockmanager](modules.md#zfslockmanager) | Exercise all lock-manager operations |
-
-**Data structures consumed / produced:**
-
-| Structure | Role | Reference |
-| --------- | ---- | --------- |
-| Lock files | Created and removed under `/run/lock/zfs/.locks/` | [Lock files](../developer-guide/data-structures.md#lock-files) |
-
-**Return codes:**
-
-| Code | Meaning |
-| ---- | ------- |
-| `0` | All tests passed. |
-| non-zero | One or more tests failed. |
-
----
-
 ### `zfsmassdelsnaps`
 
 Mass-delete snapshots across one or more pools. This is the backend used by
@@ -2025,8 +2200,8 @@ to catch up to the newest.
    `force='Y'`, `releaseholds='Y'`, `releaseholds_tags=('offsite-*')`,
    `commsnap_mostrecent='OLDEST'`).
 3. Re-apply `$1` and apply `$2` overrides for Part 2.
-4. **Part 2** — incremental copy with intermediates to newest snapshot (`doincrementals='Y'`, `dointermediates='Y'`).
-5. Prompt before Part 2 unless `$autoproceed='Y'`.
+4. **Part 2** — incremental copy with intermediates to newest snapshot (`doincrementals='Y'`, `dointermediates='Y'`); `autoproceed` is forced to `'Y'` so Part 2 proceeds automatically.
+5. (No interactive prompt between parts.)
 6. In two-node mode, call `ensure-restored-vm-iscsi` after the final send-receive
    to recreate missing iSCSI LUNs for restored VM disk zvols.  EFI disks are matched
    to the `efidisk0:` entry by their 4 MiB size, independent of the zvol disk number.
@@ -2137,9 +2312,13 @@ sudo zfsscruball [start|pause|resume]
 
 | Argument | Default | Description                  |
 | -------- | ------- | ---------------------------- |
-| `$1`     | `start` | `start` / `pause` / `resume` |
+| `$1`     | `start` | `start` / `pause` / `resume`, or a space-separated pool list |
 
-**Globals:** none.
+**Globals:**
+
+| Variable | Role |
+| -------- | ---- |
+| `STATEFILE` / `ZFSUTILITIES_SCRUBALL_STATEFILE` | Override the pause/resume state file path |
 
 State is tracked in `/run/zfsutilities/zfsscruball.state` during a run.
 
@@ -2158,7 +2337,7 @@ State is tracked in `/run/zfsutilities/zfsscruball.state` during a run.
 
 **Internal flow:**
 
-1. Parse mode (`start`, `pause`, `resume`, or a pool list).
+1. Parse mode (`start`, `pause`, `resume`) or an explicit pool list.
 2. **start**: clear state file, build pool list from `zpool list` plus offsite pool, run up to `$parallel` scrubs concurrently.
 3. **pause**: run `zpool scrub -p` on every pool with a scrub in progress.
 4. **resume**: load completed pools from state file, prioritize paused scrubs, then scrub remaining pools while skipping completed ones.
@@ -2247,7 +2426,7 @@ sudo zfssendoffsite [overrides]
 | Variable                                 | Role                               | Reference                                                                     |
 | ---------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------- |
 | `$autoproceed`, `$dryrun`, `$force`      | Forwarded to `zfs-send-receive`    | [Execution Control](../developer-guide/global-variables.md#execution-control) |
-| `$label`, `$originlabel`, `$targetlabel` | Set to `offsite` for this workflow | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
+| `$label`                                 | Set to `offsite` for this workflow | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 
 | Step | Source        | Destination |
 | ---- | ------------- | ----------- |
@@ -2259,7 +2438,9 @@ sudo zfssendoffsite [overrides]
 After each step, applies named holds to source and destination snapshots to help
 prevent accidental deletion.
 
-When `$dryrun='Y'`, send/receive is simulated and hold application is skipped.
+When `$dryrun='Y'`, send/receive is simulated. Note that the bash script's
+`applyholds` path does not check `$dryrun`; holds are applied to snapshots that
+already exist.
 
 ```bash
 sudo zfssendoffsite "dryrun='Y'"
@@ -2719,7 +2900,14 @@ sudo archive-vm <vmid>
    and destroys each referenced zvol (including iSCSI teardown via `remove-vm-disk` in
    two-node mode)
 
-**Globals:** node-config globals only (see [Two-Node Infrastructure Commands](two-node.md)).
+**Globals:**
+
+| Variable | Role |
+| -------- | ---- |
+| Node-config globals | See [Two-Node Infrastructure Commands](two-node.md) |
+| `PVE_CONF_DIR` | Directory containing Proxmox VM configs (default `/etc/pve/qemu-server`) |
+| `JSON_CONFIG` / `ZFSUTILITIES_CONFIG_PATH` | Path to the JSON config file |
+| `ARCHIVE_VM_TEST_NO_ROOT` | Test hook: skip root check when set |
 
 **Called modules:**
 
@@ -2797,7 +2985,14 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
    to avoid duplicate identifiers.
 6. **Rescan** (two-node) — Triggers iSCSI rescan on the compute host
 
-**Globals:** node-config globals only.
+**Globals:**
+
+| Variable | Role |
+| -------- | ---- |
+| Node-config globals | See [Two-Node Infrastructure Commands](two-node.md) |
+| `PVE_CONF_DIR` | Directory containing Proxmox VM configs (default `/etc/pve/qemu-server`) |
+| `JSON_CONFIG` / `ZFSUTILITIES_CONFIG_PATH` | Path to the JSON config file |
+| `UNARCHIVE_VM_TEST_NO_ROOT` | Test hook: skip root check when set |
 
 **Called modules:**
 
@@ -2813,7 +3008,7 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | Node config | Determines two-node iSCSI behavior | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | JSON config `archive_path` | Default archive base | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
 | `/etc/rtslib-fb-target/expected-backstores.txt` | Updated with restored backstores | [expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
-| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Updated for restored encrypted LUNs | [encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/iscsi-encrypted-luns.conf` | Updated for restored encrypted LUNs | [encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 
 **Internal flow:**
 
@@ -2867,7 +3062,13 @@ sudo remove-vm <vmid>
    configuration and rescans the compute host.
 7. **Remove config** — Deletes `/etc/pve/qemu-server/<vmid>.conf`.
 
-**Globals:** node-config globals only.
+**Globals:**
+
+| Variable | Role |
+| -------- | ---- |
+| Node-config globals | See [Two-Node Infrastructure Commands](two-node.md) |
+| `PVE_CONF_DIR` | Directory containing Proxmox VM configs (default `/etc/pve/qemu-server`) |
+| `REMOVE_VM_TEST_NO_ROOT` | Test hook: skip root check when set |
 
 **Called modules:**
 
