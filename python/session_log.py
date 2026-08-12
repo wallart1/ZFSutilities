@@ -75,12 +75,8 @@ def write_session_trailer(
     """Write the final trailer line and persist metadata to the log index."""
     if not session_log_file:
         return
-    duration = (
-        time.time() - session_start_time if session_start_time else 0.0
-    )
-    status = "cancelled" if cancelled else (
-        f"rc={rc}" if rc is not None else "done"
-    )
+    duration = time.time() - session_start_time if session_start_time else 0.0
+    status = "cancelled" if cancelled else (f"rc={rc}" if rc is not None else "done")
     trailer = f"# END: {status}, duration={duration:.1f}s"
     if bytes_transferred:
         trailer += f", bytes={bytes_transferred}"
@@ -95,9 +91,7 @@ def write_session_trailer(
         index = LogIndex.load()
         index.set_status(
             session_log_file,
-            status="Cancelled" if cancelled else (
-                "Done" if rc == 0 else "Failed"
-            ),
+            status="Cancelled" if cancelled else ("Done" if rc == 0 else "Failed"),
             duration=duration,
             bytes_transferred=bytes_transferred,
         )

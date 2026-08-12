@@ -553,11 +553,6 @@ for zvol in $zvols; do
 done
 
 config_dest_mount="${ARCHIVE_MOUNT}/${proxmoxconfig}"
-if is_single_node; then
-    config_check="$config_dest_mount"
-else
-    config_check="root@${STORAGE_HOST}:${config_dest_mount}"
-fi
 
 if is_single_node; then
     if [[ ! -f "$config_dest_mount" ]] || [[ ! -s "$config_dest_mount" ]]; then

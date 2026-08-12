@@ -77,20 +77,27 @@ NC='\033[0m'
 test_start() {
     ((TESTS_RUN++))
     _CURRENT_TEST_NAME="$1"
+    _CURRENT_TEST_COUNTED=0
     if [[ -z "$_ZFSUTILITIES_TESTS_QUIET" && -z "$_ZFSUTILITIES_TESTS_FAILURES_ONLY" ]]; then
         echo -n "  Test $TESTS_RUN: $1... "
     fi
 }
 
 test_pass() {
-    ((TESTS_PASSED++))
+    if [[ "$_CURRENT_TEST_COUNTED" -eq 0 ]]; then
+        ((TESTS_PASSED++))
+        _CURRENT_TEST_COUNTED=1
+    fi
     if [[ -z "$_ZFSUTILITIES_TESTS_QUIET" && -z "$_ZFSUTILITIES_TESTS_FAILURES_ONLY" ]]; then
         echo -e "${GREEN}PASS${NC}"
     fi
 }
 
 test_fail() {
-    ((TESTS_FAILED++))
+    if [[ "$_CURRENT_TEST_COUNTED" -eq 0 ]]; then
+        ((TESTS_FAILED++))
+        _CURRENT_TEST_COUNTED=1
+    fi
     local reason="$1"
     # Failures must always be visible, even when other per-test output is
     # suppressed. Emit the full test label when the harness did not already
@@ -103,7 +110,10 @@ test_fail() {
 }
 
 test_skip() {
-    ((TESTS_SKIPPED++))
+    if [[ "$_CURRENT_TEST_COUNTED" -eq 0 ]]; then
+        ((TESTS_SKIPPED++))
+        _CURRENT_TEST_COUNTED=1
+    fi
     if [[ -z "$_ZFSUTILITIES_TESTS_QUIET" && -z "$_ZFSUTILITIES_TESTS_FAILURES_ONLY" ]]; then
         echo -e "${YELLOW}SKIP${NC}"
         [[ -n "$1" ]] && echo "    Reason: $1"

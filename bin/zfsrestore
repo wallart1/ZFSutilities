@@ -53,14 +53,23 @@ sourcefsremovequalifiers='0'    # '0' = Keep the full sourcefs name in the destf
 destfs="notgiven"               # Add the dest pool name and '/' at the beginning of the sourcefs
                                 # name, giving the destination filesystem.
 
-# Parameters for zfsbuildfsarray                                
+# Parameters for zfsbuildfsarray
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfsbuildfsarray helper.
 depth=''
+# shellcheck disable=SC2034
 label=''
+# shellcheck disable=SC2034
 includes=()
+# shellcheck disable=SC2034
 excludes=()
+# shellcheck disable=SC2034
 startwith=''
+# shellcheck disable=SC2034
 endwith=''
 
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfs-send-receive helper.
 nextsnap='notneeded'            # Inhibit creation of a new snapshot name.
 dopart1='Y'
 dopart2='Y'
@@ -70,7 +79,10 @@ if [[ $1 != '' ]]; then overrides "$1"; fi
 if [[ $dopart1 = 'Y' ]]; then
     # Part 1: do a full copy using the oldest available snapshot.
     log_msg "INFO: Part one: Full copy using the oldest available snapshot."
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfs-send-receive helper.
     force='Y'                       # Do full copy even if common snapshots are found.
+    # shellcheck disable=SC2034
     releaseholds='Y'                # Release matching holds before restoring.
     if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
         releaseholds_tags=('offsite-*')
@@ -91,10 +103,16 @@ if [[ $dopart2 = 'Y' ]]; then
     # Part 2: do the rest of the snapshots incrementally.
     log_msg "INFO: Part two: The rest of the snapshots incrementally."
     autoproceed='Y'
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfs-send-receive helper.
     force='N'
+    # shellcheck disable=SC2034
     releaseholds='N'
+    # shellcheck disable=SC2034
     doincrementals='Y'              # Do incremental copies.
+    # shellcheck disable=SC2034
     dointermediates='Y'             # Do all the remaining snapshots.
+    # shellcheck disable=SC2034
     commsnap_mostrecent=''          # Finish by copying the remaining snapshots.
 
     # Re-apply $1 overrides so that includes, excludes, and other caller-specified

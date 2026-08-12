@@ -75,14 +75,13 @@ CONFIG_ONLY=false
 CONFIG_ONLY_LUN=""
 SECURE_BOOT_FLAG=false
 ENCRYPTED_FLAG=false
-ENCRYPTED_KEYFILE=""
 CLEAN_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --skip-rescan)    SKIP_RESCAN=true ;;
         --secure-boot)    SECURE_BOOT_FLAG=true ;;
         --encrypted)      ENCRYPTED_FLAG=true ;;
-        --encrypted=*)    ENCRYPTED_FLAG=true; ENCRYPTED_KEYFILE="${arg#--encrypted=}" ;;
+        --encrypted=*)    ENCRYPTED_FLAG=true ;;
         --config-only=*)  CONFIG_ONLY=true; CONFIG_ONLY_LUN="${arg#--config-only=}" ;;
         *)                CLEAN_ARGS+=("$arg") ;;
     esac
@@ -197,7 +196,7 @@ init_efi_disk() {
 
     # Wait up to 10s for device to appear after rescan
     local device=""
-    for i in $(seq 1 20); do
+    for _ in $(seq 1 20); do
         device=$(readlink -f "$by_path" 2>/dev/null)
         [[ -b "$device" ]] && break
         sleep 0.5
@@ -469,7 +468,7 @@ fi
 
 # Wait for /dev/zvol symlink to appear (udev is async)
 echo "Waiting for device node..."
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
     [[ -b "$ZVOL_DEV" ]] && break
     sleep 0.5
 done

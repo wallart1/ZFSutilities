@@ -30,9 +30,7 @@ class TestPathDefaults(unittest.TestCase):
         self.assertEqual(paths.get_lock_dir(), "/run/lock/zfs")
 
     def test_config_path_default(self):
-        self.assertEqual(
-            paths.get_config_path(), "/var/lib/zfsutilities/config.json"
-        )
+        self.assertEqual(paths.get_config_path(), "/var/lib/zfsutilities/config.json")
 
     def test_profiles_dir_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -43,9 +41,7 @@ class TestPathDefaults(unittest.TestCase):
                 )
 
     def test_history_path_default(self):
-        self.assertEqual(
-            paths.get_history_path(), "/var/lib/zfsutilities/history.json"
-        )
+        self.assertEqual(paths.get_history_path(), "/var/lib/zfsutilities/history.json")
 
     def test_scrub_state_path_default(self):
         self.assertEqual(
@@ -54,9 +50,7 @@ class TestPathDefaults(unittest.TestCase):
         )
 
     def test_snapfile_path_default(self):
-        self.assertEqual(
-            paths.get_snapfile_path(), "/var/lib/zfsutilities/nextsnap"
-        )
+        self.assertEqual(paths.get_snapfile_path(), "/var/lib/zfsutilities/nextsnap")
 
     def test_offsite_snapfile_path_default(self):
         self.assertEqual(
@@ -69,19 +63,13 @@ class TestPathDefaults(unittest.TestCase):
         )
 
     def test_run_snapfile_prefix_default(self):
-        self.assertEqual(
-            paths.get_run_snapfile_prefix(), "/run/zfsutilities/nextsnap_"
-        )
+        self.assertEqual(paths.get_run_snapfile_prefix(), "/run/zfsutilities/nextsnap_")
 
     def test_pid_file_path_default(self):
-        self.assertEqual(
-            paths.get_pid_file_path(), "/run/zfsutilities/main.pid"
-        )
+        self.assertEqual(paths.get_pid_file_path(), "/run/zfsutilities/main.pid")
 
     def test_session_log_dir_default(self):
-        self.assertEqual(
-            paths.get_session_log_dir(), "/var/log/zfsutilities/sessions"
-        )
+        self.assertEqual(paths.get_session_log_dir(), "/var/log/zfsutilities/sessions")
 
     def test_log_index_path_default(self):
         self.assertEqual(
@@ -90,14 +78,10 @@ class TestPathDefaults(unittest.TestCase):
         )
 
     def test_cron_file_path_default(self):
-        self.assertEqual(
-            paths.get_cron_file_path(), "/etc/cron.d/zfsutilities"
-        )
+        self.assertEqual(paths.get_cron_file_path(), "/etc/cron.d/zfsutilities")
 
     def test_profile_lock_dir_default(self):
-        self.assertEqual(
-            paths.get_profile_lock_dir(), "/run/lock/zfs/profiles"
-        )
+        self.assertEqual(paths.get_profile_lock_dir(), "/run/lock/zfs/profiles")
 
 
 class TestPathOverrides(unittest.TestCase):
@@ -148,9 +132,7 @@ class TestPathOverrides(unittest.TestCase):
             with patch_environ(ZFSUTILITIES_SYSTEM_CONFIG_DIR=tmpdir):
                 self.assertEqual(paths.get_system_config_dir(), tmpdir)
                 legacy_map = paths.get_legacy_system_config_paths()
-                self.assertIn(
-                    os.path.join(tmpdir, "node.conf"), legacy_map
-                )
+                self.assertIn(os.path.join(tmpdir, "node.conf"), legacy_map)
 
     def test_cron_file_override(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -177,9 +159,7 @@ class TestLegacyPaths(unittest.TestCase):
 
     def test_legacy_config_path(self):
         with patch_environ(HOME="/root"):
-            self.assertEqual(
-                paths.get_legacy_config_path(), "/root/.config/zfsutilities.json"
-            )
+            self.assertEqual(paths.get_legacy_config_path(), "/root/.config/zfsutilities.json")
 
     def test_legacy_history_path(self):
         with patch_environ(HOME="/root"):
@@ -190,9 +170,7 @@ class TestLegacyPaths(unittest.TestCase):
 
     def test_legacy_profiles_dir(self):
         with patch_environ(HOME="/root"):
-            self.assertEqual(
-                paths.get_legacy_profiles_dir(), "/root/.config/profiles"
-            )
+            self.assertEqual(paths.get_legacy_profiles_dir(), "/root/.config/profiles")
 
     def test_legacy_scrub_state_path(self):
         with patch_environ(HOME="/root"):

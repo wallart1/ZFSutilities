@@ -86,9 +86,7 @@ class ColoredRunner(unittest.TextTestRunner):
         buffer=False,
         **kwargs,
     ):
-        super().__init__(
-            stream=stream, descriptions=descriptions, verbosity=verbosity, **kwargs
-        )
+        super().__init__(stream=stream, descriptions=descriptions, verbosity=verbosity, **kwargs)
         self.quiet = quiet
         self.failures_only = failures_only
         self.buffer = buffer
@@ -175,7 +173,8 @@ def main(argv=None):
     else:
         # Discover all test_*.py files
         files = sorted(
-            f for f in os.listdir(start_dir)
+            f
+            for f in os.listdir(start_dir)
             if f.startswith("test_") and f.endswith(".py") and f != "test_support.py"
         )
         suites = []
@@ -192,9 +191,7 @@ def main(argv=None):
     total_skipped = 0
 
     for name, suite in suites:
-        p, f, s = run_suite(
-            suite, name, quiet=quiet, failures_only=failures_only, buffer=buffer
-        )
+        p, f, s = run_suite(suite, name, quiet=quiet, failures_only=failures_only, buffer=buffer)
         total_passed += p
         total_failed += f
         total_skipped += s

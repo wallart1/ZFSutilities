@@ -20,7 +20,7 @@ import copy
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from feature_config import (
     _compute_destination_root,
     _reverse_checkagainst_row,
@@ -41,28 +41,28 @@ from logging_config import log_msg
 
 # Column indices in the ListStore (display order):
 # Snapshot label, Source root, Destination root, Comment.
-COL_LABEL       = 0
+COL_LABEL = 0
 COL_SOURCE_ROOT = 1
-COL_DEST_ROOT   = 2
-COL_COMMENT     = 3
+COL_DEST_ROOT = 2
+COL_COMMENT = 3
 
 # Titles shown on the user-entry column headers.
 _COLUMN_TITLES = {
-    COL_LABEL:       "Snapshot label",
+    COL_LABEL: "Snapshot label",
     COL_SOURCE_ROOT: "Source root",
-    COL_DEST_ROOT:   "Destination root",
-    COL_COMMENT:     "Comment",
+    COL_DEST_ROOT: "Destination root",
+    COL_COMMENT: "Comment",
 }
 
 # Tooltips for each column header.
 _COLUMN_TOOLTIPS = {
-    COL_LABEL:       "Snapshot label used to build snapshot names (e.g. offsite, dailybackup).",
+    COL_LABEL: "Snapshot label used to build snapshot names (e.g. offsite, dailybackup).",
     COL_SOURCE_ROOT: "Source root dataset tree whose snapshots are checked. <offsite> may appear anywhere.",
-    COL_DEST_ROOT:   (
+    COL_DEST_ROOT: (
         "Destination root dataset tree where the counterpart snapshot is expected. "
         "<offsite> expands to all offsite-candidate pools."
     ),
-    COL_COMMENT:     "Optional note about this row.",
+    COL_COMMENT: "Optional note about this row.",
 }
 
 
@@ -70,8 +70,7 @@ def _entries_from_config(app):
     """Load user checkagainst entries as 4-tuples from the JSON config."""
     data = get_checkagainst(app.config)
     return [
-        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""),
-         e.get("comment", ""))
+        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""), e.get("comment", ""))
         for e in data.get("user_entries", [])
     ]
 
@@ -80,8 +79,7 @@ def _derived_from_config(app, section):
     """Load backup_derived or offsite_derived rows as 4-tuples."""
     data = get_checkagainst(app.config)
     return [
-        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""),
-         e.get("comment", ""))
+        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""), e.get("comment", ""))
         for e in data.get(section, [])
     ]
 
@@ -89,14 +87,15 @@ def _derived_from_config(app, section):
 def _row_to_dict(row):
     """Convert a 4-tuple store row into the config row dict."""
     return {
-        "label":       row[COL_LABEL],
+        "label": row[COL_LABEL],
         "source_root": row[COL_SOURCE_ROOT],
-        "dest_root":   row[COL_DEST_ROOT],
-        "comment":     row[COL_COMMENT],
+        "dest_root": row[COL_DEST_ROOT],
+        "comment": row[COL_COMMENT],
     }
 
 
 # Page factory
+
 
 def create_checkagainst_page(app):
     """Build and return the Checkagainst configuration page widget."""
@@ -119,9 +118,9 @@ def create_checkagainst_page(app):
 
     desc = Gtk.Label(
         label="Maps dataset pairs for incremental-backup safety checks. Before deleting a\n"
-              "snapshot, the system verifies a counterpart snapshot exists in the paired dataset.\n"
-              "Use <offsite> in the Destination root column to check against all "
-              "offsite-candidate pools."
+        "snapshot, the system verifies a counterpart snapshot exists in the paired dataset.\n"
+        "Use <offsite> in the Destination root column to check against all "
+        "offsite-candidate pools."
     )
     desc.set_halign(Gtk.Align.START)
     desc.set_line_wrap(True)
@@ -139,8 +138,10 @@ def create_checkagainst_page(app):
     )
     app._ca_backup_active_chk.connect("toggled", _on_active_toggled, app)
     backup_section, backup_tv = _build_section_box(
-        "Backup-derived entries", app._ca_backup_store,
-        app._ca_backup_active_chk, "checkagainst_backup_derived_view",
+        "Backup-derived entries",
+        app._ca_backup_store,
+        app._ca_backup_active_chk,
+        "checkagainst_backup_derived_view",
     )
     outer.pack_start(backup_section, True, True, 0)
     app._ui_state.bind_treeview(backup_tv, "checkagainst_backup_derived_view")
@@ -151,8 +152,10 @@ def create_checkagainst_page(app):
     )
     app._ca_offsite_active_chk.connect("toggled", _on_active_toggled, app)
     offsite_section, offsite_tv = _build_section_box(
-        "Offsite-derived entries", app._ca_offsite_store,
-        app._ca_offsite_active_chk, "checkagainst_offsite_derived_view",
+        "Offsite-derived entries",
+        app._ca_offsite_store,
+        app._ca_offsite_active_chk,
+        "checkagainst_offsite_derived_view",
     )
     outer.pack_start(offsite_section, True, True, 0)
     app._ui_state.bind_treeview(offsite_tv, "checkagainst_offsite_derived_view")
@@ -199,8 +202,10 @@ def create_checkagainst_page(app):
 
     # Merged fss table preview (read-only)
     merged_section, merged_tv = _build_section_box(
-        "Merged fss table", app._ca_merged_store,
-        None, "checkagainst_merged_view",
+        "Merged fss table",
+        app._ca_merged_store,
+        None,
+        "checkagainst_merged_view",
     )
     outer.pack_start(merged_section, True, True, 0)
     app._ui_state.bind_treeview(merged_tv, "checkagainst_merged_view")
@@ -225,10 +230,10 @@ def create_checkagainst_page(app):
 def _column_width(col_idx):
     """Return a reasonable default width for a checkagainst column."""
     widths = {
-        COL_LABEL:       100,
+        COL_LABEL: 100,
         COL_SOURCE_ROOT: 190,
-        COL_DEST_ROOT:   190,
-        COL_COMMENT:     140,
+        COL_DEST_ROOT: 190,
+        COL_COMMENT: 140,
     }
     return widths.get(col_idx, 100)
 
@@ -293,6 +298,7 @@ def _build_section_box(title, store, checkbox, state_key):
 
 # Internal helpers
 
+
 def _load_store(store, entries):
     """Populate a ListStore with a list of 4-tuples."""
     store.clear()
@@ -320,10 +326,8 @@ def _refresh_merged_table(app):
 def _load_fss_into_store(app):
     """Load all sections from config and snapshot the saved state."""
     data = get_checkagainst(app.config)
-    app._ca_backup_active_chk.set_active(
-        data.get("backup_derived_active", True))
-    app._ca_offsite_active_chk.set_active(
-        data.get("offsite_derived_active", True))
+    app._ca_backup_active_chk.set_active(data.get("backup_derived_active", True))
+    app._ca_offsite_active_chk.set_active(data.get("offsite_derived_active", True))
 
     _load_store(app._ca_backup_store, _derived_from_config(app, "backup_derived"))
     _load_store(app._ca_offsite_store, _derived_from_config(app, "offsite_derived"))
@@ -346,20 +350,14 @@ def _full_dict_from_ui(app):
     return {
         "backup_derived_active": app._ca_backup_active_chk.get_active(),
         "offsite_derived_active": app._ca_offsite_active_chk.get_active(),
-        "backup_derived": [
-            _row_to_dict(row) for row in app._ca_backup_store
-        ],
-        "offsite_derived": [
-            _row_to_dict(row) for row in app._ca_offsite_store
-        ],
-        "user_entries": [
-            _row_to_dict(row) for row in app._ca_store
-        ],
+        "backup_derived": [_row_to_dict(row) for row in app._ca_backup_store],
+        "offsite_derived": [_row_to_dict(row) for row in app._ca_offsite_store],
+        "user_entries": [_row_to_dict(row) for row in app._ca_store],
     }
 
 
 def _is_ca_dirty(app):
-    if not hasattr(app, '_ca_original_full'):
+    if not hasattr(app, "_ca_original_full"):
         return False
     return _full_dict_from_ui(app) != app._ca_original_full
 
@@ -382,9 +380,7 @@ def _update_ca_status(app):
     errors.extend(_validate_rows(_store_to_entries(app._ca_store), "User"))
 
     if errors:
-        app._ca_status_label.set_markup(
-            "<span foreground='red'>" + "\n".join(errors) + "</span>"
-        )
+        app._ca_status_label.set_markup("<span foreground='red'>" + "\n".join(errors) + "</span>")
     elif _is_ca_dirty(app):
         app._ca_status_label.set_markup("<span foreground='orange'>Unsaved changes.</span>")
     else:
@@ -409,9 +405,13 @@ def _on_cell_edited(renderer, path, new_text, app, col_idx):
 def _on_editing_started(renderer, editable, path, treeview, col_idx):
     """Connect key-press on the editable to handle Tab/Shift+Tab."""
     editable.connect(
-        "key-press-event", handle_editing_key_press,
-        treeview, path, col_idx,
-        [COL_LABEL, COL_SOURCE_ROOT, COL_DEST_ROOT, COL_COMMENT])
+        "key-press-event",
+        handle_editing_key_press,
+        treeview,
+        path,
+        col_idx,
+        [COL_LABEL, COL_SOURCE_ROOT, COL_DEST_ROOT, COL_COMMENT],
+    )
 
 
 def _on_ca_add(btn, app):
@@ -452,12 +452,13 @@ def _on_ca_save(btn, app):
 
 
 def _on_ca_revert(btn, app):
-    if hasattr(app, '_ca_original_full'):
+    if hasattr(app, "_ca_original_full"):
         app.config["checkagainst"] = copy.deepcopy(app._ca_original_full)
     _load_fss_into_store(app)
 
 
 # Action handlers
+
 
 def on_checkagainst_add(app):
     """Add a new row to the user entries table."""
@@ -487,16 +488,30 @@ def on_checkagainst_get_entries(app):
     data["offsite_derived"] = offsite_derived
     app.config["checkagainst"] = data
 
-    _load_store(app._ca_backup_store, [
-        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""),
-         e.get("comment", ""))
-        for e in backup_derived
-    ])
-    _load_store(app._ca_offsite_store, [
-        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""),
-         e.get("comment", ""))
-        for e in offsite_derived
-    ])
+    _load_store(
+        app._ca_backup_store,
+        [
+            (
+                e.get("label", ""),
+                e.get("source_root", ""),
+                e.get("dest_root", ""),
+                e.get("comment", ""),
+            )
+            for e in backup_derived
+        ],
+    )
+    _load_store(
+        app._ca_offsite_store,
+        [
+            (
+                e.get("label", ""),
+                e.get("source_root", ""),
+                e.get("dest_root", ""),
+                e.get("comment", ""),
+            )
+            for e in offsite_derived
+        ],
+    )
 
     log_msg(
         f"INFO: Derived {len(backup_derived)} backup and {len(offsite_derived)} "
@@ -624,9 +639,7 @@ def _show_add_pair_assistant(app):
             reverse_text = f"{reverse['source_root']} → {reverse['dest_root']}"
         except (ValueError, KeyError, TypeError):
             reverse_text = "(unable to compute reverse)"
-        preview_lbl.set_markup(
-            f"<b>Forward:</b> {forward}\n<b>Reverse:</b> {reverse_text}"
-        )
+        preview_lbl.set_markup(f"<b>Forward:</b> {forward}\n<b>Reverse:</b> {reverse_text}")
 
     label_entry.connect("changed", _update_preview)
     source_entry.connect("changed", _update_preview)
@@ -676,23 +689,24 @@ def _show_add_pair_assistant(app):
 
         forward, reverse = _build_pair_rows(source, dest, label, comment)
 
-        app._ca_store.append([
-            forward["label"],
-            forward["source_root"],
-            forward["dest_root"],
-            forward["comment"],
-        ])
-        app._ca_store.append([
-            reverse["label"],
-            reverse["source_root"],
-            reverse["dest_root"],
-            reverse["comment"],
-        ])
-        _update_ca_status(app)
-        log_msg(
-            f"INFO: Added checkagainst pair for {source} ↔ {dest} "
-            f"(label {label})"
+        app._ca_store.append(
+            [
+                forward["label"],
+                forward["source_root"],
+                forward["dest_root"],
+                forward["comment"],
+            ]
         )
+        app._ca_store.append(
+            [
+                reverse["label"],
+                reverse["source_root"],
+                reverse["dest_root"],
+                reverse["comment"],
+            ]
+        )
+        _update_ca_status(app)
+        log_msg(f"INFO: Added checkagainst pair for {source} ↔ {dest} (label {label})")
         break
 
     dlg.destroy()
@@ -706,13 +720,10 @@ def on_checkagainst_add_pair(app):
 def check_checkagainst_dirty(app):
     """Compare current UI state to last-saved state; style Save button accordingly."""
     dirty = _is_ca_dirty(app)
-    btn = getattr(app, '_ca_save_button', None)
+    btn = getattr(app, "_ca_save_button", None)
     if btn is None:
         return
     if dirty:
         set_button_markup(btn, '<span foreground="red">Save</span>')
     else:
-        set_button_markup(btn, 'Save')
-
-
-
+        set_button_markup(btn, "Save")

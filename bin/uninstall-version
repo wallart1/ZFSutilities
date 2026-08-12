@@ -18,7 +18,6 @@ set -euo pipefail
 source_helper rootcheck
 rootcheck
 
-MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
 VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
 
 # die is provided by bashinit (sourced above).

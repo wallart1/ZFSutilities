@@ -117,15 +117,15 @@ function buildfsarray {
     # remove the fs from the fsarray.
     for (( i=0; i<${#fsarray[@]}; i++ )); do     # Process includes
         local fs=${fsarray[i]}
-        if [[ ${#includes[@]} < 1 ]]; then      # If no includes were specified, all datasets are
+        if [[ ${#includes[@]} -lt 1 ]]; then      # If no includes were specified, all datasets are
                                                 # included.
             break
         fi
         # If includes were specified, and any are in the fs name, then include the fs.
         # Otherwise, remove the fs from the array.
-        if [[ ${#includes[@]} > 0 ]]; then
+        if [[ ${#includes[@]} -gt 0 ]]; then
             local include
-            for include in ${includes[@]}; do
+            for include in "${includes[@]}"; do
                 if [[ ${include:0:1} = '=' ]]; then     # Include string must match the fs name
                                                         # exactly.
                     local anywhereinfs=''
@@ -145,14 +145,14 @@ function buildfsarray {
     done
 
     # If an fs is excluded, remove it from the fsarray.
-    if [[ ${#excludes[@]} < 1 ]]; then
+    if [[ ${#excludes[@]} -lt 1 ]]; then
         true
     else
         for (( i=0; i<${#fsarray[@]}; i++)); do     # Process excludes
             fs=${fsarray[i]}
             # See if fs is in the excludes list
             local exclude
-            for exclude in ${excludes[@]}; do       # Is this fs excluded?.
+            for exclude in "${excludes[@]}"; do       # Is this fs excluded?.
                 if [[ ${exclude:0:1} = '=' ]]; then # Exclude string must begin at the beginning
                                                     # of the fs name.
                     anywhereinfs=''
@@ -219,5 +219,7 @@ function buildfsarray {
             exit 8
         fi
     fi
+# shellcheck disable=SC2034
+# Global output consumed by callers of buildfsarray.
 fsarraylen=${#fsarray[@]}
 }

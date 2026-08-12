@@ -8,7 +8,6 @@ from test_support import temp_config_dir
 
 
 class TestGenerateCronLine(unittest.TestCase):
-
     def test_basic(self):
         profile = {
             "profile_name": "root-backup-daily",
@@ -47,7 +46,6 @@ class TestGenerateCronLine(unittest.TestCase):
 
 
 class TestInterpretCron(unittest.TestCase):
-
     def test_every_minute(self):
         result = cron_manager.interpret_cron("*", "*", "*", "*", "*")
         self.assertIn("Every minute", result)
@@ -87,12 +85,19 @@ class TestInterpretCron(unittest.TestCase):
 
 
 class TestWriteCronFile(unittest.TestCase):
-
     def test_writes_file(self):
         with temp_config_dir():
             profiles = [
-                {"profile_name": "p1", "active": True, "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"}},
-                {"profile_name": "p2", "active": False, "cron": {"minute": "0", "hour": "3", "day": "*", "month": "*", "weekday": "*"}},
+                {
+                    "profile_name": "p1",
+                    "active": True,
+                    "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+                },
+                {
+                    "profile_name": "p2",
+                    "active": False,
+                    "cron": {"minute": "0", "hour": "3", "day": "*", "month": "*", "weekday": "*"},
+                },
             ]
             cron_manager.write_cron_file(profiles, "/runner.py")
             self.assertTrue(os.path.exists(cron_manager.CRON_FILE))
@@ -108,7 +113,11 @@ class TestWriteCronFile(unittest.TestCase):
     def test_mailto_appears_before_cron_lines(self):
         with temp_config_dir():
             profiles = [
-                {"profile_name": "p1", "active": True, "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"}},
+                {
+                    "profile_name": "p1",
+                    "active": True,
+                    "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+                },
             ]
             cron_manager.write_cron_file(profiles, "/runner.py")
             with open(cron_manager.CRON_FILE) as f:
@@ -125,7 +134,11 @@ class TestWriteCronFile(unittest.TestCase):
     def test_write_cron_file_creates_lock_directory(self):
         with temp_config_dir():
             profiles = [
-                {"profile_name": "p1", "active": True, "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"}},
+                {
+                    "profile_name": "p1",
+                    "active": True,
+                    "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+                },
             ]
             lock_dir = cron_manager.PROFILE_LOCK_DIR
             self.assertFalse(os.path.exists(lock_dir))
@@ -134,7 +147,6 @@ class TestWriteCronFile(unittest.TestCase):
 
 
 class TestNextRunTimes(unittest.TestCase):
-
     def test_every_minute(self):
         times = cron_manager.next_run_times("*", "*", "*", "*", "*", count=3)
         self.assertEqual(len(times), 3)
@@ -154,7 +166,6 @@ class TestNextRunTimes(unittest.TestCase):
 
 
 class TestFormatNextRuns(unittest.TestCase):
-
     def test_formats_runs(self):
         text = cron_manager.format_next_runs("0", "2", "*", "*", "*", count=2)
         self.assertIn("Next runs:", text)
@@ -166,7 +177,6 @@ class TestFormatNextRuns(unittest.TestCase):
 
 
 class TestWeekdayOrdinals(unittest.TestCase):
-
     def test_parse_weekday_no_ordinal(self):
         self.assertEqual(cron_manager._parse_weekday("6"), ("6", []))
 
@@ -187,9 +197,7 @@ class TestWeekdayOrdinals(unittest.TestCase):
         self.assertEqual(cron_manager._format_ordinal_specs([(1, 1)]), "first")
 
     def test_format_ordinal_specs_range(self):
-        self.assertEqual(
-            cron_manager._format_ordinal_specs([(3, 5)]), "third through fifth"
-        )
+        self.assertEqual(cron_manager._format_ordinal_specs([(3, 5)]), "third through fifth")
 
     def test_format_ordinal_specs_list_with_last(self):
         self.assertEqual(
@@ -239,6 +247,7 @@ class TestWeekdayOrdinals(unittest.TestCase):
             self.assertEqual(t.weekday(), 5)
             # Adding 7 days should cross into the next month
             from datetime import timedelta
+
             self.assertNotEqual((t + timedelta(days=7)).month, t.month)
 
     def test_next_run_fifth_saturday_may_skip_months(self):

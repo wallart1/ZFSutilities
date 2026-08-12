@@ -31,11 +31,8 @@ fi
 # Unmount /mnt/ZFSkeys if we mounted it. If udisksd mounted it, unmount it too
 # so the device can be removed safely.
 if mountpoint -q /mnt/ZFSkeys 2>/dev/null; then
-    source=$(findmnt -n -o SOURCE /mnt/ZFSkeys 2>/dev/null || true)
     umount /mnt/ZFSkeys
     echo "Unmounted /mnt/ZFSkeys"
-else
-    source=""
 fi
 
 # Close only the LUKS mapper we opened ourselves. udisksd may have used a

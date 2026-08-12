@@ -22,7 +22,7 @@ zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health "$pool"
 zfs get -o name,property,value recordsize "$1"
 
 sortbys=('used' 'usedds' 'usedsnap' 'written' 'quota' 'refer' 'refquota' 'reservation')
-for sortby in ${sortbys[@]}; do
+for sortby in "${sortbys[@]}"; do
     echo -e "\nSorted by:" $sequence $sortby
     sortby="$sortoption $sortby"
     if [[ $sequence = 'largest' ]]; then

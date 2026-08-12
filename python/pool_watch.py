@@ -4,7 +4,7 @@ PoolWatchWindow — independent per-pool dataset watch window with auto-refresh.
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     _ensure_treeview_scrolling,
@@ -150,9 +150,7 @@ class PoolWatchWindow(Gtk.Window):
         self.auto_label.set_markup(
             f"  <small><i>Auto-refresh every {self.REFRESH_INTERVAL}s</i></small>"
         )
-        self.timer_id = GLib.timeout_add_seconds(
-            self.REFRESH_INTERVAL, self._timer_tick
-        )
+        self.timer_id = GLib.timeout_add_seconds(self.REFRESH_INTERVAL, self._timer_tick)
 
     def _stop_timer(self):
         """Stop the auto-refresh timer."""

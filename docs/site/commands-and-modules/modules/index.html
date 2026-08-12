@@ -2362,23 +2362,9 @@ setx<span class="w">       </span><span class="c1"># enable tracing with custom 
 <p>Sets <code>PS4</code> to <code>&gt;${BASH_SOURCE}:${LINENO}--&gt;</code> for informative trace output.
 Sends trace output to stderr via <code>BASH_XTRACEFD=2</code>.</p>
 <p><strong>Arguments:</strong> none.</p>
-<p><strong>Globals:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Role</th>
-<th>Reference</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>$bashrestorex</code></td>
-<td>Set by <code>setx</code> to the command needed to restore the original <code>set -x</code> state</td>
-<td>—</td>
-</tr>
-</tbody>
-</table>
+<p><strong>Globals:</strong> none.</p>
+<p><code>setx</code> does not preserve or restore the previous <code>set -x</code> state; use
+<code>bashrestorex</code> explicitly when tracing should stop.</p>
 <p><strong>Called modules:</strong> none.</p>
 <p><strong>Data structures consumed / produced:</strong> none.</p>
 <p><strong>Return codes:</strong> <code>0</code> on success.</p>
@@ -4693,7 +4679,7 @@ steps.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.0
+      ZFS Utilities v0.82.1
     </div>
   
   
@@ -4718,7 +4704,7 @@ steps.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

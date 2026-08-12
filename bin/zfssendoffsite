@@ -51,9 +51,13 @@ label='@offsite'
 nextsnap=$(zfssnapbuild $label)
 applyholds='Y'          # Put holds on the source and destination snapshots to prevent
                         # accidental deletion.
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfs-send-receive helper.
 doincrementals='Y'      # "Y" = Attempt to do incremental copies. Fall back to full copies if
                         # necessary.
+# shellcheck disable=SC2034
 dointermediates='N'     # "N" = Send just the most recent snapshot.
+# shellcheck disable=SC2034
 receive_F_option='F'    # Roll back changes on destination since most recent common snapshot.
                         # This helps ensure a faithfull backup.
 
@@ -62,8 +66,8 @@ onlineoffsitepool=$(findoffsitepool)
 
 if [[ $onlineoffsitepool = '' ]]; then
     log_msg "FATAL: No offsite pools are currently online." \
-        "\n\tLooked for: ${offsitepools[@]}." \
-        "\n\tFound: ${onlinepools[@]}."
+        "\n\tLooked for: ${offsitepools[*]}." \
+        "\n\tFound: ${onlinepools[*]}."
     exit 8
 else
     log_msg "INFO: Will be sending to pool $onlineoffsitepool." \
@@ -139,7 +143,10 @@ if [[ $step4 = 'Y' ]]; then
     nextsnap=$nextsnap_save
     sourcefs="fivebays"
     destfs="$onlineoffsitepool"
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfs-send-receive helper.
     includes=('threeamigos/proxmox' 'NVME1/proxmox')
+    # shellcheck disable=SC2034
     excludes=()
     log_msg "INFO: ***  Step 4: Sending $sourcefs to $destfs  ***"
     send-receive

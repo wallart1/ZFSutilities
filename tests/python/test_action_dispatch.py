@@ -19,15 +19,16 @@ with mock_gtk():
 class TestCollectScrubConfig(unittest.TestCase):
     """_collect_scrub_config() gathers the current scrub-manager settings."""
 
-    def _make_app(self, selected=None, pending=None, active=None, paused=None,
-                  target=2):
+    def _make_app(self, selected=None, pending=None, active=None, paused=None, target=2):
         app = MagicMock()
-        app.config = {"scrub_manager": {
-            "simultaneous": 2,
-            "refresh_seconds": 30,
-            "system_scrub_weekly": True,
-            "system_scrub_monthly": False,
-        }}
+        app.config = {
+            "scrub_manager": {
+                "simultaneous": 2,
+                "refresh_seconds": 30,
+                "system_scrub_weekly": True,
+                "system_scrub_monthly": False,
+            }
+        }
         app.scrub_view = MagicMock()
         self._selected = selected or []
 
@@ -41,8 +42,7 @@ class TestCollectScrubConfig(unittest.TestCase):
 
     def test_returns_selected_pools_when_rows_selected(self):
         app = self._make_app(selected=["tank", "backup"])
-        with patch("pools_page.get_selected_pool_names",
-                   return_value=["tank", "backup"]):
+        with patch("pools_page.get_selected_pool_names", return_value=["tank", "backup"]):
             cfg = action_dispatch._collect_scrub_config(app)
         self.assertEqual(cfg["pools"], ["tank", "backup"])
         self.assertEqual(cfg["simultaneous"], 2)
@@ -52,16 +52,14 @@ class TestCollectScrubConfig(unittest.TestCase):
 
     def test_falls_back_to_queue_state_when_nothing_selected(self):
         app = self._make_app(pending=["tank"], active=["backup"], paused=["archive"])
-        with patch("pools_page.get_selected_pool_names",
-                          return_value=[]):
+        with patch("pools_page.get_selected_pool_names", return_value=[]):
             cfg = action_dispatch._collect_scrub_config(app)
         self.assertEqual(cfg["pools"], ["archive", "backup", "tank"])
 
     def test_defaults_when_scrub_manager_config_partial(self):
         app = self._make_app(target=1)
         app.config = {"scrub_manager": {}}
-        with patch("pools_page.get_selected_pool_names",
-                          return_value=[]):
+        with patch("pools_page.get_selected_pool_names", return_value=[]):
             cfg = action_dispatch._collect_scrub_config(app)
         self.assertEqual(cfg["simultaneous"], 1)
         self.assertEqual(cfg["refresh_seconds"], 10)
@@ -74,16 +72,16 @@ class TestPoolsAddProfileHandler(unittest.TestCase):
 
     def test_handler_creates_scrub_profile(self):
         app = MagicMock()
-        app.config = {"scrub_manager": {
-            "simultaneous": 1,
-            "refresh_seconds": 10,
-            "system_scrub_weekly": False,
-            "system_scrub_monthly": False,
-        }}
+        app.config = {
+            "scrub_manager": {
+                "simultaneous": 1,
+                "refresh_seconds": 10,
+                "system_scrub_weekly": False,
+                "system_scrub_monthly": False,
+            }
+        }
         app.scrub_view = MagicMock()
-        app.scrub_view.get_selection.return_value.get_selected_rows.return_value = (
-            MagicMock(), []
-        )
+        app.scrub_view.get_selection.return_value.get_selected_rows.return_value = (MagicMock(), [])
         app.scrub_queue = MagicMock()
         app.scrub_queue.pending = {"tank"}
         app.scrub_queue.active = set()

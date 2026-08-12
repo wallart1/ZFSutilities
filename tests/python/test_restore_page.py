@@ -238,18 +238,24 @@ class TestRestoreRunDialog(unittest.TestCase):
         dialog_mock = MagicMock()
         dialog_mock.run.return_value = rp.Gtk.ResponseType.OK
 
-        with patch.object(rp.Gtk, "MessageDialog", return_value=dialog_mock), \
-             patch.object(rp, "collect_restore_config", return_value={
-                 "source": "backuppool/threeamigos/data",
-                 "dest": "threeamigos/data",
-                 "auto_dest": False,
-                 "do_part1": True,
-                 "do_part2": False,
-                 "variables": {},
-                 "pause_scrubs": False,
-             }), \
-             patch.object(rp, "build_restore_command") as mock_build, \
-             patch.object(rp, "attach_step_scrub_callbacks"):
+        with (
+            patch.object(rp.Gtk, "MessageDialog", return_value=dialog_mock),
+            patch.object(
+                rp,
+                "collect_restore_config",
+                return_value={
+                    "source": "backuppool/threeamigos/data",
+                    "dest": "threeamigos/data",
+                    "auto_dest": False,
+                    "do_part1": True,
+                    "do_part2": False,
+                    "variables": {},
+                    "pause_scrubs": False,
+                },
+            ),
+            patch.object(rp, "build_restore_command") as mock_build,
+            patch.object(rp, "attach_step_scrub_callbacks"),
+        ):
             mock_build.return_value = MagicMock()
             with patch.object(rp, "log_msg") as mock_log:
                 rp.on_restore_run(app, app.ctx)

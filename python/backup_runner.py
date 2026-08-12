@@ -30,7 +30,7 @@ _SESSION_LOG_SIZE_CHECK_INTERVAL = 5  # seconds
 # Regex: \[\s*[\d.]+\s*[kKMGTP]?i?B/s\]
 # Purpose: Match pv progress output rate fields like [28.1MiB/s] or [ 148MiB/s].
 # Matches: [28.1MiB/s], [0.00  B/s], [1.5GiB/s]
-_PV_RATE_RE = re.compile(r'\[\s*[\d.]+\s*[kKMGTP]?i?B/s\]')
+_PV_RATE_RE = re.compile(r"\[\s*[\d.]+\s*[kKMGTP]?i?B/s\]")
 
 # Regex: received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds
 # Purpose: Match the final summary line emitted by `zfs receive` on stderr,
@@ -41,7 +41,7 @@ _PV_RATE_RE = re.compile(r'\[\s*[\d.]+\s*[kKMGTP]?i?B/s\]')
 #   "received 312B stream in 0.25 seconds (1.20K/sec)" -> match
 #   "received 1.23GiB stream in 45.67 seconds" -> match
 #   "sending tank/data@snap" -> no match
-_ZFS_RECEIVED_RE = re.compile(r'received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds')
+_ZFS_RECEIVED_RE = re.compile(r"received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds")
 
 
 # Common rsync exit-code meanings used to explain a failed step.
@@ -120,10 +120,7 @@ def _diagnose_rsync_failure(rc, stderr_lines):
         if "timeout" in text:
             return "Timeout waiting for data from the remote host"
         if rc == 255:
-            return (
-                "SSH failed to start — check host reachability and SSH "
-                "configuration"
-            )
+            return "SSH failed to start — check host reachability and SSH configuration"
 
     # Destination disk full.
     if "no space left" in text or "disk full" in text:
@@ -170,8 +167,9 @@ def _truncate_rsync_log():
 class BackupRunner:
     """Runs a sequence of backup steps asynchronously."""
 
-    def __init__(self, log_func, set_stdin_enabled_func, progress_func=None,
-                 label="Backup", on_start=None):
+    def __init__(
+        self, log_func, set_stdin_enabled_func, progress_func=None, label="Backup", on_start=None
+    ):
         self.log = log_func
         self.set_stdin_enabled = set_stdin_enabled_func
         self.progress = progress_func
@@ -246,8 +244,7 @@ class BackupRunner:
         """Append a raw subprocess line to the session log file."""
         session_log.write_raw_line(self._session_log_file, line)
 
-    def _write_session_trailer(self, rc=None, cancelled=False,
-                                bytes_transferred=0):
+    def _write_session_trailer(self, rc=None, cancelled=False, bytes_transferred=0):
         session_log.write_session_trailer(
             self._session_log_file,
             self._session_start_time,
@@ -322,7 +319,7 @@ class BackupRunner:
         self.running = False
         if self.process and self.process.poll() is None:
             self.process.terminate()
-        if (not self._is_finally and self.current_step < len(self.steps)):
+        if not self._is_finally and self.current_step < len(self.steps):
             step = self.steps[self.current_step]
             if step.post_callback is not None:
                 try:
@@ -392,13 +389,19 @@ class BackupRunner:
             # log file.
             if is_rsync:
                 self.process = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    stdin=slave_fd, env=child_env,
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=slave_fd,
+                    env=child_env,
                 )
             else:
                 self.process = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    stdin=slave_fd, env=child_env,
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=slave_fd,
+                    env=child_env,
                 )
         except (OSError, FileNotFoundError) as e:
             os.close(master_fd)
@@ -419,7 +422,7 @@ class BackupRunner:
             _ensure_rsync_log_dir()
             try:
                 self._rsync_log_fh = open(RSYNC_LOG_FILE, "a")  # noqa: SIM115
-                self._rsync_log_fh.write(f"\n{'='*60}\n{desc}\n{'='*60}\n")
+                self._rsync_log_fh.write(f"\n{'=' * 60}\n{desc}\n{'=' * 60}\n")
             except OSError:
                 self._rsync_log_fh = None
 
@@ -427,18 +430,24 @@ class BackupRunner:
             out_cb = self._on_rsync_stdout
             err_cb = self._on_rsync_stderr
             self._stdout_source = GLib.io_add_watch(
-                self.process.stdout.fileno(), GLib.PRIORITY_DEFAULT,
-                GLib.IOCondition.IN | GLib.IOCondition.HUP, out_cb,
+                self.process.stdout.fileno(),
+                GLib.PRIORITY_DEFAULT,
+                GLib.IOCondition.IN | GLib.IOCondition.HUP,
+                out_cb,
             )
             self._stderr_source = GLib.io_add_watch(
-                self.process.stderr.fileno(), GLib.PRIORITY_DEFAULT,
-                GLib.IOCondition.IN | GLib.IOCondition.HUP, err_cb,
+                self.process.stderr.fileno(),
+                GLib.PRIORITY_DEFAULT,
+                GLib.IOCondition.IN | GLib.IOCondition.HUP,
+                err_cb,
             )
         else:
             # Merged output: everything arrives via stdout.
             self._stdout_source = GLib.io_add_watch(
-                self.process.stdout.fileno(), GLib.PRIORITY_DEFAULT,
-                GLib.IOCondition.IN | GLib.IOCondition.HUP, self._on_stderr,
+                self.process.stdout.fileno(),
+                GLib.PRIORITY_DEFAULT,
+                GLib.IOCondition.IN | GLib.IOCondition.HUP,
+                self._on_stderr,
             )
         GLib.timeout_add(250, self._check_process)
         return True
@@ -493,9 +502,7 @@ class BackupRunner:
                     for line in data.decode("utf-8", errors="replace").splitlines():
                         received_match = _ZFS_RECEIVED_RE.search(line)
                         if received_match:
-                            self._total_bytes_received += _parse_human_size(
-                                received_match.group(1)
-                            )
+                            self._total_bytes_received += _parse_human_size(received_match.group(1))
                         if "Waiting for lock" in line:
                             self._in_lock_wait = True
                         elif "Lock is now available" in line or "Wait interrupted" in line:
@@ -517,7 +524,7 @@ class BackupRunner:
                     # Regex: [\r\n]+
                     # Purpose: Split raw byte stream into logical lines, handling mixed \r\n, \n, \r.
                     # Example: "line1\r\nline2\nline3" -> ["line1", "line2", "line3"]
-                    for segment in re.split(r'[\r\n]+', text):
+                    for segment in re.split(r"[\r\n]+", text):
                         segment = segment.strip()
                         if not segment:
                             continue
@@ -531,9 +538,7 @@ class BackupRunner:
                             # Group 1: dataset name  e.g. "threeamigos/proxmox"
                             # Example: "INFO: Processing threeamigos/proxmox. " -> match
                             #          "INFO: sending threeamigos/proxmox@snap" -> no match
-                            processing_match = re.search(
-                                r'INFO: Processing\s+(.+?)\.\s*$', segment
-                            )
+                            processing_match = re.search(r"INFO: Processing\s+(.+?)\.\s*$", segment)
                             if processing_match:
                                 self._current_pv_text = ""
                                 self._update_progress(
@@ -546,7 +551,9 @@ class BackupRunner:
                                 )
                             if "Waiting for lock" in segment:
                                 self._in_lock_wait = True
-                            elif "Lock is now available" in segment or "Wait interrupted" in segment:
+                            elif (
+                                "Lock is now available" in segment or "Wait interrupted" in segment
+                            ):
                                 self._in_lock_wait = False
                             self.log(segment)
                             self._write_raw_line(segment)
@@ -576,7 +583,7 @@ class BackupRunner:
             try:
                 data = os.read(fd, 8192)
                 if data:
-                    desc = getattr(self, '_current_desc', 'rsync')
+                    desc = getattr(self, "_current_desc", "rsync")
                     for line in data.decode("utf-8", errors="replace").splitlines():
                         stripped = line.strip()
                         if stripped:
@@ -610,7 +617,7 @@ class BackupRunner:
                         except Exception as exc:
                             self._log(f"WARN: Post-step callback failed: {exc}")
 
-                if getattr(self, '_is_finally', False):
+                if getattr(self, "_is_finally", False):
                     if rc != 0:
                         self._log(f"WARN: Post-backup script exited with rc={rc}")
                     self._cleanup_io()
@@ -629,9 +636,7 @@ class BackupRunner:
                 if rc != 0:
                     self._log(f"WARN: Step exited with rc={rc}")
                     if step.is_rsync:
-                        diagnosis = _diagnose_rsync_failure(
-                            rc, self._current_rsync_stderr
-                        )
+                        diagnosis = _diagnose_rsync_failure(rc, self._current_rsync_stderr)
                         if diagnosis:
                             self._log(f"WARN: {desc} failed: {diagnosis}")
                             self._current_rsync_stderr = []
@@ -664,18 +669,13 @@ class BackupRunner:
                 self._cleanup_io()
                 self.set_stdin_enabled(False)
 
-                if (
-                    self._step_success_callback is not None
-                    and self.current_step < len(self.steps)
-                ):
+                if self._step_success_callback is not None and self.current_step < len(self.steps):
                     step = self.steps[self.current_step]
                     if step.metadata is not None:
                         try:
                             self._step_success_callback(step.metadata)
                         except Exception as exc:
-                            self._log(
-                                f"WARN: Checkagainst seeding failed: {exc}"
-                            )
+                            self._log(f"WARN: Checkagainst seeding failed: {exc}")
 
                 self.current_step += 1
                 GLib.idle_add(self._run_next_step)
@@ -694,9 +694,7 @@ class BackupRunner:
         if self.process is None:
             return
         is_rsync = (
-            self.steps[self.current_step].is_rsync
-            if self.current_step < len(self.steps)
-            else False
+            self.steps[self.current_step].is_rsync if self.current_step < len(self.steps) else False
         )
         for pipe, is_err in [(self.process.stdout, False), (self.process.stderr, True)]:
             if pipe is None or pipe.closed:
@@ -788,8 +786,7 @@ class BackupRunner:
             self._log(f"WARN: Could not add history entry: {exc}")
 
         try:
-            self._write_session_trailer(rc=rc,
-                                         bytes_transferred=self._total_bytes_received)
+            self._write_session_trailer(rc=rc, bytes_transferred=self._total_bytes_received)
         except Exception as exc:
             self._log(f"WARN: Could not write session trailer: {exc}")
 

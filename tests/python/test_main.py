@@ -56,11 +56,20 @@ class TestMainSingleInstance(unittest.TestCase):
 
         return MagicMock(side_effect=constructor)
 
-    def _run_main(self, argv, app_class=None, euid=0,
-                  alive_pids=None, our_pids=None, pid_states=None,
-                  terminate_ok=True, terminate_mock=None,
-                  matching_pids=None, has_visible_window=True,
-                  is_instance_stuck=False):
+    def _run_main(
+        self,
+        argv,
+        app_class=None,
+        euid=0,
+        alive_pids=None,
+        our_pids=None,
+        pid_states=None,
+        terminate_ok=True,
+        terminate_mock=None,
+        matching_pids=None,
+        has_visible_window=True,
+        is_instance_stuck=False,
+    ):
         """Run main.main() under controlled conditions.
 
         Returns a dict with the application class mock, the execvp mock, and
@@ -84,27 +93,30 @@ class TestMainSingleInstance(unittest.TestCase):
         def fake_execvp(program, args):
             raise _ExecvpCalled(program, args)
 
-        terminate_patch = patch.object(
-            main_module, "_terminate_process",
-            return_value=terminate_ok
-        )
+        terminate_patch = patch.object(main_module, "_terminate_process", return_value=terminate_ok)
         if terminate_mock is not None:
-            terminate_patch = patch.object(
-                main_module, "_terminate_process", terminate_mock
-            )
+            terminate_patch = patch.object(main_module, "_terminate_process", terminate_mock)
 
-        with patch.object(main_module.os, "geteuid", return_value=euid), \
-             patch.object(main_module.os, "execvp", side_effect=fake_execvp) as mock_execvp, \
-             patch.object(main_module, "_is_pid_alive", side_effect=fake_is_pid_alive), \
-             patch.object(main_module, "_is_zfsutilities_process", side_effect=fake_is_zfsutilities_process), \
-             patch.object(main_module, "_pid_state", side_effect=fake_pid_state), \
-             terminate_patch as mock_term, \
-             patch.object(main_module, "_find_matching_pids", side_effect=[matching_pids, []] if matching_pids else [matching_pids]), \
-             patch.object(main_module, "_has_visible_window", return_value=has_visible_window), \
-             patch.object(main_module, "_show_wait_dialog", MagicMock()), \
-             patch.object(main_module, "_pump_events_for", MagicMock()), \
-             patch.object(main_module, "time", MagicMock()), \
-             patch.object(main_module, "ZFSUtilitiesApp", app_class):
+        with (
+            patch.object(main_module.os, "geteuid", return_value=euid),
+            patch.object(main_module.os, "execvp", side_effect=fake_execvp) as mock_execvp,
+            patch.object(main_module, "_is_pid_alive", side_effect=fake_is_pid_alive),
+            patch.object(
+                main_module, "_is_zfsutilities_process", side_effect=fake_is_zfsutilities_process
+            ),
+            patch.object(main_module, "_pid_state", side_effect=fake_pid_state),
+            terminate_patch as mock_term,
+            patch.object(
+                main_module,
+                "_find_matching_pids",
+                side_effect=[matching_pids, []] if matching_pids else [matching_pids],
+            ),
+            patch.object(main_module, "_has_visible_window", return_value=has_visible_window),
+            patch.object(main_module, "_show_wait_dialog", MagicMock()),
+            patch.object(main_module, "_pump_events_for", MagicMock()),
+            patch.object(main_module, "time", MagicMock()),
+            patch.object(main_module, "ZFSUtilitiesApp", app_class),
+        ):
             with capture_logs():
                 with patch.object(sys, "argv", argv):
                     try:
@@ -124,8 +136,7 @@ class TestMainSingleInstance(unittest.TestCase):
         app = self._make_app(remote=False)
         app_class = self._make_app_class(app)
         result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids=set(), our_pids=set(), pid_states={}
+            ["main.py"], app_class, alive_pids=set(), our_pids=set(), pid_states={}
         )
         result["app_class"].assert_called_once()
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
@@ -138,8 +149,7 @@ class TestMainSingleInstance(unittest.TestCase):
         app = self._make_app(remote=False)
         app_class = self._make_app_class(app)
         result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids=set(), our_pids=set(), pid_states={}
+            ["main.py"], app_class, alive_pids=set(), our_pids=set(), pid_states={}
         )
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
@@ -150,8 +160,7 @@ class TestMainSingleInstance(unittest.TestCase):
         app = self._make_app(remote=False)
         app_class = self._make_app_class(app)
         result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids={1234}, our_pids=set(), pid_states={}
+            ["main.py"], app_class, alive_pids={1234}, our_pids=set(), pid_states={}
         )
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
@@ -162,8 +171,7 @@ class TestMainSingleInstance(unittest.TestCase):
         app = self._make_app(remote=False)
         app_class = self._make_app_class(app)
         result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids={1234}, our_pids={1234}, pid_states={1234: "Z"}
+            ["main.py"], app_class, alive_pids={1234}, our_pids={1234}, pid_states={1234: "Z"}
         )
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
@@ -174,8 +182,7 @@ class TestMainSingleInstance(unittest.TestCase):
         app = self._make_app(remote=False)
         app_class = self._make_app_class(app)
         result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids={1234}, our_pids={1234}, pid_states={1234: "T"}
+            ["main.py"], app_class, alive_pids={1234}, our_pids={1234}, pid_states={1234: "T"}
         )
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
         self.assertEqual(flags, main_module.Gio.ApplicationFlags.REPLACE)
@@ -187,9 +194,12 @@ class TestMainSingleInstance(unittest.TestCase):
         app_class = self._make_app_class(app)
         terminate_mock = MagicMock(return_value=True)
         result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids={1234}, our_pids={1234}, pid_states={1234: "S"},
-            terminate_mock=terminate_mock
+            ["main.py"],
+            app_class,
+            alive_pids={1234},
+            our_pids={1234},
+            pid_states={1234: "S"},
+            terminate_mock=terminate_mock,
         )
         terminate_mock.assert_called_once_with(1234, timeout=5.0, sleep_fn=ANY)
         result["app_class"].assert_called_once()
@@ -204,9 +214,12 @@ class TestMainSingleInstance(unittest.TestCase):
         app_class = self._make_app_class(app)
         terminate_mock = MagicMock(return_value=True)
         result = self._run_main(
-            ["main.py", "--replace"], app_class,
-            alive_pids={1234}, our_pids={1234}, pid_states={1234: "S"},
-            terminate_mock=terminate_mock
+            ["main.py", "--replace"],
+            app_class,
+            alive_pids={1234},
+            our_pids={1234},
+            pid_states={1234: "S"},
+            terminate_mock=terminate_mock,
         )
         terminate_mock.assert_called_once_with(1234, timeout=5.0, sleep_fn=ANY)
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
@@ -218,10 +231,13 @@ class TestMainSingleInstance(unittest.TestCase):
         app_class = self._make_app_class(app)
         terminate_mock = MagicMock(return_value=True)
         result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids=set(), our_pids=set(), pid_states={},
+            ["main.py"],
+            app_class,
+            alive_pids=set(),
+            our_pids=set(),
+            pid_states={},
             terminate_mock=terminate_mock,
-            matching_pids=[5678, 5679]
+            matching_pids=[5678, 5679],
         )
         self.assertEqual(terminate_mock.call_count, 2)
         terminate_mock.assert_any_call(5678, timeout=5.0, sleep_fn=ANY)
@@ -233,8 +249,7 @@ class TestMainSingleInstance(unittest.TestCase):
         app = self._make_app(remote=False)
         app_class = self._make_app_class(app)
         result = self._run_main(
-            ["main.py", "--replace"], app_class,
-            alive_pids=set(), our_pids=set(), pid_states={}
+            ["main.py", "--replace"], app_class, alive_pids=set(), our_pids=set(), pid_states={}
         )
         result["app_class"].assert_called_once()
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
@@ -249,10 +264,13 @@ class TestMainSingleInstance(unittest.TestCase):
         app_class = self._make_app_class(first_app, second_app)
         terminate_mock = MagicMock(return_value=True)
         self._run_main(
-            ["main.py"], app_class,
-            alive_pids=set(), our_pids=set(), pid_states={},
+            ["main.py"],
+            app_class,
+            alive_pids=set(),
+            our_pids=set(),
+            pid_states={},
             terminate_mock=terminate_mock,
-            matching_pids=[5678]
+            matching_pids=[5678],
         )
         # First register is remote, then a fresh app is created and succeeds.
         self.assertEqual(app_class.call_count, 2)
@@ -265,10 +283,13 @@ class TestMainSingleInstance(unittest.TestCase):
         app_class = self._make_app_class(first_app, second_app)
         terminate_mock = MagicMock(return_value=True)
         self._run_main(
-            ["main.py"], app_class,
-            alive_pids=set(), our_pids=set(), pid_states={},
+            ["main.py"],
+            app_class,
+            alive_pids=set(),
+            our_pids=set(),
+            pid_states={},
             terminate_mock=terminate_mock,
-            matching_pids=[5678]
+            matching_pids=[5678],
         )
         self.assertEqual(app_class.call_count, 2)
         terminate_mock.assert_called_once_with(5678, timeout=5.0, sleep_fn=ANY)
@@ -286,18 +307,12 @@ class TestMainSingleInstance(unittest.TestCase):
 
         app.run.side_effect = mark_run_called
         app_class = self._make_app_class(app)
-        self._run_main(
-            ["main.py"], app_class,
-            alive_pids=set(), our_pids=set(), pid_states={}
-        )
+        self._run_main(["main.py"], app_class, alive_pids=set(), our_pids=set(), pid_states={})
         app.run.assert_called_once()
         self.assertFalse(os.path.exists(self._pid_path))
 
     def test_replace_passed_through_pkexec(self):
-        result = self._run_main(
-            ["main.py", "--replace"],
-            euid=1000
-        )
+        result = self._run_main(["main.py", "--replace"], euid=1000)
         self.assertTrue(result["execvp_called"])
         result["app_class"].assert_not_called()
         result["terminate"].assert_not_called()
@@ -321,9 +336,10 @@ class TestPidHelpers(unittest.TestCase):
         self.assertIsNone(reason)
 
     def test_pid_state_parses_running_state(self):
-        with patch.object(main_module.os, "getpid", return_value=1), \
-             patch("builtins.open", mock_open(
-                 read_data=b"1 (systemd) S 0 1 1 0 -1 4194560 ...")):
+        with (
+            patch.object(main_module.os, "getpid", return_value=1),
+            patch("builtins.open", mock_open(read_data=b"1 (systemd) S 0 1 1 0 -1 4194560 ...")),
+        ):
             self.assertEqual(main_module._pid_state(1), "S")
 
     def test_terminate_process_sends_sigterm_then_sigkill(self):
@@ -339,16 +355,20 @@ class TestPidHelpers(unittest.TestCase):
         def fake_is_alive(pid):
             return alive[pid]
 
-        with patch.object(main_module, "_is_pid_alive", side_effect=fake_is_alive), \
-             patch.object(main_module.os, "kill", side_effect=fake_kill), \
-             patch.object(main_module.time, "sleep"):
+        with (
+            patch.object(main_module, "_is_pid_alive", side_effect=fake_is_alive),
+            patch.object(main_module.os, "kill", side_effect=fake_kill),
+            patch.object(main_module.time, "sleep"),
+        ):
             result = main_module._terminate_process(42, timeout=0.0)
         self.assertTrue(result)
         self.assertFalse(alive[42])
 
     def test_terminate_process_already_dead(self):
-        with patch.object(main_module, "_is_pid_alive", return_value=False), \
-             patch.object(main_module.os, "kill") as mock_kill:
+        with (
+            patch.object(main_module, "_is_pid_alive", return_value=False),
+            patch.object(main_module.os, "kill") as mock_kill,
+        ):
             result = main_module._terminate_process(42)
         self.assertTrue(result)
         mock_kill.assert_not_called()
@@ -360,12 +380,16 @@ class TestPidHelpers(unittest.TestCase):
 
         def fake_open(path, mode):
             if "1234" in path:
-                return mock_open(read_data=b"/usr/bin/python3\x00/path/zfsutilities_gui.py\x00")(path, mode)
+                return mock_open(read_data=b"/usr/bin/python3\x00/path/zfsutilities_gui.py\x00")(
+                    path, mode
+                )
             raise FileNotFoundError(path)
 
-        with patch.object(main_module.os, "scandir", return_value=[fake_entry]), \
-             patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"), \
-             patch("builtins.open", side_effect=fake_open):
+        with (
+            patch.object(main_module.os, "scandir", return_value=[fake_entry]),
+            patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"),
+            patch("builtins.open", side_effect=fake_open),
+        ):
             pids = main_module._find_matching_pids(exclude_pid=9999)
         self.assertEqual(pids, [1234])
 
@@ -381,9 +405,11 @@ class TestPidHelpers(unittest.TestCase):
                 )(path, mode)
             raise FileNotFoundError(path)
 
-        with patch.object(main_module.os, "scandir", return_value=[fake_entry]), \
-             patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"), \
-             patch("builtins.open", side_effect=fake_open):
+        with (
+            patch.object(main_module.os, "scandir", return_value=[fake_entry]),
+            patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"),
+            patch("builtins.open", side_effect=fake_open),
+        ):
             pids = main_module._find_matching_pids(exclude_pid=9999)
         self.assertEqual(pids, [1234])
 
@@ -394,14 +420,16 @@ class TestPidHelpers(unittest.TestCase):
 
         def fake_open(path, mode):
             if "1234" in path:
-                return mock_open(
-                    read_data=b"/usr/bin/python3\x00/home/dan/ZFSutilities GUI\x00"
-                )(path, mode)
+                return mock_open(read_data=b"/usr/bin/python3\x00/home/dan/ZFSutilities GUI\x00")(
+                    path, mode
+                )
             raise FileNotFoundError(path)
 
-        with patch.object(main_module.os, "scandir", return_value=[fake_entry]), \
-             patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"), \
-             patch("builtins.open", side_effect=fake_open):
+        with (
+            patch.object(main_module.os, "scandir", return_value=[fake_entry]),
+            patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"),
+            patch("builtins.open", side_effect=fake_open),
+        ):
             pids = main_module._find_matching_pids(exclude_pid=9999)
         self.assertEqual(pids, [1234])
 
@@ -410,8 +438,10 @@ class TestPidHelpers(unittest.TestCase):
         fake_entry.name = "1234"
         fake_entry.stat.return_value.st_uid = 1000
 
-        with patch.object(main_module.os, "scandir", return_value=[fake_entry]), \
-             patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"):
+        with (
+            patch.object(main_module.os, "scandir", return_value=[fake_entry]),
+            patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"),
+        ):
             pids = main_module._find_matching_pids()
         self.assertEqual(pids, [])
 
@@ -420,8 +450,10 @@ class TestPidHelpers(unittest.TestCase):
         fake_entry.name = str(os.getpid())
         fake_entry.stat.return_value.st_uid = 0
 
-        with patch.object(main_module.os, "scandir", return_value=[fake_entry]), \
-             patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"):
+        with (
+            patch.object(main_module.os, "scandir", return_value=[fake_entry]),
+            patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"),
+        ):
             pids = main_module._find_matching_pids(exclude_pid=os.getpid())
         self.assertEqual(pids, [])
 
@@ -430,8 +462,10 @@ class TestPidHelpers(unittest.TestCase):
         fake_entry.name = "1234"
         fake_entry.stat.return_value.st_uid = 0
 
-        with patch.object(main_module.os, "scandir", return_value=[fake_entry]), \
-             patch.object(main_module, "_get_process_exe", return_value="/usr/bin/sudo"):
+        with (
+            patch.object(main_module.os, "scandir", return_value=[fake_entry]),
+            patch.object(main_module, "_get_process_exe", return_value="/usr/bin/sudo"),
+        ):
             pids = main_module._find_matching_pids(exclude_pid=9999)
         self.assertEqual(pids, [])
 
@@ -445,16 +479,20 @@ class TestPidHelpers(unittest.TestCase):
 
         def fake_open(path, mode):
             if "1000" in path or "500" in path:
-                return mock_open(read_data=b"/usr/bin/python3\x00/path/zfsutilities_gui.py\x00")(path, mode)
+                return mock_open(read_data=b"/usr/bin/python3\x00/path/zfsutilities_gui.py\x00")(
+                    path, mode
+                )
             raise FileNotFoundError(path)
 
         def fake_ppid(pid):
             return 500 if pid == 1000 else 1
 
-        with patch.object(main_module.os, "scandir", return_value=[fake_child, fake_parent]), \
-             patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"), \
-             patch.object(main_module, "_get_ppid", side_effect=fake_ppid), \
-             patch("builtins.open", side_effect=fake_open):
+        with (
+            patch.object(main_module.os, "scandir", return_value=[fake_child, fake_parent]),
+            patch.object(main_module, "_get_process_exe", return_value="/usr/bin/python3"),
+            patch.object(main_module, "_get_ppid", side_effect=fake_ppid),
+            patch("builtins.open", side_effect=fake_open),
+        ):
             pids = main_module._find_matching_pids(exclude_pid=1000)
         self.assertEqual(pids, [])
 
@@ -495,11 +533,20 @@ class TestMainStuckInstance(unittest.TestCase):
 
         return MagicMock(side_effect=constructor)
 
-    def _run_main(self, argv, app_class=None, euid=0,
-                  alive_pids=None, our_pids=None, pid_states=None,
-                  terminate_ok=True, terminate_mock=None,
-                  has_visible_window=False, is_instance_stuck=True,
-                  matching_pids=None):
+    def _run_main(
+        self,
+        argv,
+        app_class=None,
+        euid=0,
+        alive_pids=None,
+        our_pids=None,
+        pid_states=None,
+        terminate_ok=True,
+        terminate_mock=None,
+        has_visible_window=False,
+        is_instance_stuck=True,
+        matching_pids=None,
+    ):
         app_class = app_class or self._make_app_class()
         alive_pids = alive_pids or set()
         our_pids = our_pids or set()
@@ -515,27 +562,30 @@ class TestMainStuckInstance(unittest.TestCase):
         def fake_pid_state(pid):
             return pid_states.get(pid)
 
-        terminate_patch = patch.object(
-            main_module, "_terminate_process",
-            return_value=terminate_ok
-        )
+        terminate_patch = patch.object(main_module, "_terminate_process", return_value=terminate_ok)
         if terminate_mock is not None:
-            terminate_patch = patch.object(
-                main_module, "_terminate_process", terminate_mock
-            )
+            terminate_patch = patch.object(main_module, "_terminate_process", terminate_mock)
 
-        with patch.object(main_module.os, "geteuid", return_value=euid), \
-             patch.object(main_module.os, "execvp", MagicMock()), \
-             patch.object(main_module, "_is_pid_alive", side_effect=fake_is_pid_alive), \
-             patch.object(main_module, "_is_zfsutilities_process", side_effect=fake_is_zfsutilities_process), \
-             patch.object(main_module, "_pid_state", side_effect=fake_pid_state), \
-             patch.object(main_module, "_has_visible_window", return_value=has_visible_window), \
-             patch.object(main_module, "_find_matching_pids", side_effect=[matching_pids, []] if matching_pids else [matching_pids]), \
-             patch.object(main_module, "_show_wait_dialog", MagicMock()), \
-             patch.object(main_module, "_pump_events_for", MagicMock()), \
-             terminate_patch as mock_term, \
-             patch.object(main_module, "time", MagicMock()), \
-             patch.object(main_module, "ZFSUtilitiesApp", app_class):
+        with (
+            patch.object(main_module.os, "geteuid", return_value=euid),
+            patch.object(main_module.os, "execvp", MagicMock()),
+            patch.object(main_module, "_is_pid_alive", side_effect=fake_is_pid_alive),
+            patch.object(
+                main_module, "_is_zfsutilities_process", side_effect=fake_is_zfsutilities_process
+            ),
+            patch.object(main_module, "_pid_state", side_effect=fake_pid_state),
+            patch.object(main_module, "_has_visible_window", return_value=has_visible_window),
+            patch.object(
+                main_module,
+                "_find_matching_pids",
+                side_effect=[matching_pids, []] if matching_pids else [matching_pids],
+            ),
+            patch.object(main_module, "_show_wait_dialog", MagicMock()),
+            patch.object(main_module, "_pump_events_for", MagicMock()),
+            terminate_patch as mock_term,
+            patch.object(main_module, "time", MagicMock()),
+            patch.object(main_module, "ZFSUtilitiesApp", app_class),
+        ):
             with capture_logs():
                 with patch.object(sys, "argv", argv):
                     main_module.main()
@@ -550,10 +600,14 @@ class TestMainStuckInstance(unittest.TestCase):
         app_class = self._make_app_class(app)
         terminate_mock = MagicMock(return_value=True)
         result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids={1234}, our_pids={1234}, pid_states={1234: "S"},
+            ["main.py"],
+            app_class,
+            alive_pids={1234},
+            our_pids={1234},
+            pid_states={1234: "S"},
             terminate_mock=terminate_mock,
-            has_visible_window=False, is_instance_stuck=True,
+            has_visible_window=False,
+            is_instance_stuck=True,
         )
         terminate_mock.assert_called_once_with(1234, timeout=5.0, sleep_fn=ANY)
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
@@ -565,11 +619,15 @@ class TestMainStuckInstance(unittest.TestCase):
         app_class = self._make_app_class(app)
         terminate_mock = MagicMock(return_value=True)
         result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids=set(), our_pids=set(), pid_states={},
+            ["main.py"],
+            app_class,
+            alive_pids=set(),
+            our_pids=set(),
+            pid_states={},
             terminate_mock=terminate_mock,
             matching_pids=[5678],
-            has_visible_window=False, is_instance_stuck=True,
+            has_visible_window=False,
+            is_instance_stuck=True,
         )
         terminate_mock.assert_called_once_with(5678, timeout=5.0, sleep_fn=ANY)
         flags = result["app_class"].call_args.kwargs.get("flags", 0)
@@ -581,10 +639,14 @@ class TestMainStuckInstance(unittest.TestCase):
         app_class = self._make_app_class(app)
         terminate_mock = MagicMock(return_value=True)
         result = self._run_main(
-            ["main.py"], app_class,
-            alive_pids={1234}, our_pids={1234}, pid_states={1234: "S"},
+            ["main.py"],
+            app_class,
+            alive_pids={1234},
+            our_pids={1234},
+            pid_states={1234: "S"},
             terminate_mock=terminate_mock,
-            has_visible_window=True, is_instance_stuck=False,
+            has_visible_window=True,
+            is_instance_stuck=False,
         )
         terminate_mock.assert_called_once_with(1234, timeout=5.0, sleep_fn=ANY)
         result["app_class"].assert_called_once()
@@ -598,56 +660,70 @@ class TestWindowHelpers(unittest.TestCase):
 
     def test_is_window_visible_viewable_large_window(self):
         xwininfo_output = (
-            "xwininfo: Window id: 0x4e00001 \"test\"\n\n"
+            'xwininfo: Window id: 0x4e00001 "test"\n\n'
             "  Width: 800\n"
             "  Height: 600\n"
             "  Map State: IsViewable\n"
         )
-        with patch.object(main_module.subprocess, "run", return_value=MagicMock(
-            returncode=0, stdout=xwininfo_output, stderr=""
-        )):
+        with patch.object(
+            main_module.subprocess,
+            "run",
+            return_value=MagicMock(returncode=0, stdout=xwininfo_output, stderr=""),
+        ):
             self.assertTrue(main_module._is_window_visible("0x4e00001"))
 
     def test_is_window_visible_unmapped_small_window(self):
         xwininfo_output = (
-            "xwininfo: Window id: 0x4e00001 \"test\"\n\n"
+            'xwininfo: Window id: 0x4e00001 "test"\n\n'
             "  Width: 10\n"
             "  Height: 10\n"
             "  Map State: IsUnMapped\n"
         )
-        with patch.object(main_module.subprocess, "run", return_value=MagicMock(
-            returncode=0, stdout=xwininfo_output, stderr=""
-        )):
+        with patch.object(
+            main_module.subprocess,
+            "run",
+            return_value=MagicMock(returncode=0, stdout=xwininfo_output, stderr=""),
+        ):
             self.assertFalse(main_module._is_window_visible("0x4e00001"))
 
     def test_is_window_visible_command_fails(self):
-        with patch.object(main_module.subprocess, "run", return_value=MagicMock(
-            returncode=1, stdout="", stderr=""
-        )):
+        with patch.object(
+            main_module.subprocess,
+            "run",
+            return_value=MagicMock(returncode=1, stdout="", stderr=""),
+        ):
             self.assertFalse(main_module._is_window_visible("0x4e00001"))
 
     def test_get_x11_windows_for_pid_parses_ids(self):
-        with patch.object(main_module.subprocess, "run", return_value=MagicMock(
-            returncode=0, stdout="12345\n67890\n", stderr=""
-        )):
+        with patch.object(
+            main_module.subprocess,
+            "run",
+            return_value=MagicMock(returncode=0, stdout="12345\n67890\n", stderr=""),
+        ):
             windows = main_module._get_x11_windows_for_pid(42)
         self.assertEqual(windows, ["12345", "67890"])
 
     def test_get_x11_windows_for_pid_failure_returns_empty(self):
-        with patch.object(main_module.subprocess, "run", return_value=MagicMock(
-            returncode=1, stdout="", stderr=""
-        )):
+        with patch.object(
+            main_module.subprocess,
+            "run",
+            return_value=MagicMock(returncode=1, stdout="", stderr=""),
+        ):
             windows = main_module._get_x11_windows_for_pid(42)
         self.assertEqual(windows, [])
 
     def test_has_visible_window_true(self):
-        with patch.object(main_module, "_get_x11_windows_for_pid", return_value=["1", "2"]), \
-             patch.object(main_module, "_is_window_visible", side_effect=[False, True]):
+        with (
+            patch.object(main_module, "_get_x11_windows_for_pid", return_value=["1", "2"]),
+            patch.object(main_module, "_is_window_visible", side_effect=[False, True]),
+        ):
             self.assertTrue(main_module._has_visible_window(42))
 
     def test_has_visible_window_false(self):
-        with patch.object(main_module, "_get_x11_windows_for_pid", return_value=["1"]), \
-             patch.object(main_module, "_is_window_visible", return_value=False):
+        with (
+            patch.object(main_module, "_get_x11_windows_for_pid", return_value=["1"]),
+            patch.object(main_module, "_is_window_visible", return_value=False),
+        ):
             self.assertFalse(main_module._has_visible_window(42))
 
 
@@ -656,25 +732,23 @@ class TestDoActivate(unittest.TestCase):
 
     def _make_app(self):
         """Return an app instance with __init__ bypassed."""
-        with patch.object(
-            main_module.ZFSUtilitiesApp, "__init__", lambda self, flags=0: None
-        ):
+        with patch.object(main_module.ZFSUtilitiesApp, "__init__", lambda self, flags=0: None):
             app = main_module.ZFSUtilitiesApp()
             app._main_window = None
             return app
 
     @patch("zfsutilities_gui.ZFSUtilitiesWindow")
     @patch("dashboard_page.refresh_dashboard_page")
-    def test_creates_window_and_triggers_dashboard_refresh(
-        self, mock_refresh, mock_window_cls
-    ):
+    def test_creates_window_and_triggers_dashboard_refresh(self, mock_refresh, mock_window_cls):
         app = self._make_app()
         mock_window = MagicMock()
         mock_window_cls.return_value = mock_window
 
-        with patch.object(main_module.Gtk, "CssProvider", return_value=MagicMock()), \
-             patch.object(main_module.Gtk.StyleContext, "add_provider_for_screen"), \
-             patch.object(main_module.Gdk.Screen, "get_default", return_value=MagicMock()):
+        with (
+            patch.object(main_module.Gtk, "CssProvider", return_value=MagicMock()),
+            patch.object(main_module.Gtk.StyleContext, "add_provider_for_screen"),
+            patch.object(main_module.Gdk.Screen, "get_default", return_value=MagicMock()),
+        ):
             app.do_activate()
 
         mock_window.show_all.assert_called_once()
@@ -690,8 +764,10 @@ class TestDoActivate(unittest.TestCase):
         existing.get_window.return_value = gdk_window
         app._main_window = existing
 
-        with patch("zfsutilities_gui.ZFSUtilitiesWindow") as mock_window_cls, \
-             patch("dashboard_page.refresh_dashboard_page") as mock_refresh:
+        with (
+            patch("zfsutilities_gui.ZFSUtilitiesWindow") as mock_window_cls,
+            patch("dashboard_page.refresh_dashboard_page") as mock_refresh,
+        ):
             app.do_activate()
 
         existing.present.assert_called_once()
@@ -705,19 +781,16 @@ class TestWaitDialogHelpers(unittest.TestCase):
 
     def test_show_wait_dialog_creates_modal_info_dialog(self):
         dialog = MagicMock()
-        with patch.object(
-            main_module.Gtk, "MessageDialog", return_value=dialog
-        ) as mock_dialog, patch.object(main_module, "_pump_events_for"):
+        with (
+            patch.object(main_module.Gtk, "MessageDialog", return_value=dialog) as mock_dialog,
+            patch.object(main_module, "_pump_events_for"),
+        ):
             result = main_module._show_wait_dialog("Please wait...")
         self.assertEqual(result, dialog)
         mock_dialog.assert_called_once()
         kwargs = mock_dialog.call_args.kwargs
-        self.assertEqual(
-            kwargs.get("message_type"), main_module.Gtk.MessageType.INFO
-        )
-        self.assertEqual(
-            kwargs.get("buttons"), main_module.Gtk.ButtonsType.NONE
-        )
+        self.assertEqual(kwargs.get("message_type"), main_module.Gtk.MessageType.INFO)
+        self.assertEqual(kwargs.get("buttons"), main_module.Gtk.ButtonsType.NONE)
         self.assertEqual(kwargs.get("text"), "Please wait...")
         dialog.set_title.assert_called_once_with("ZFS Utilities")
         dialog.set_deletable.assert_called_once_with(False)
@@ -739,11 +812,10 @@ class TestWaitDialogHelpers(unittest.TestCase):
         with patch.object(main_module, "time") as mock_time:
             mock_time.time.side_effect = fake_time
             mock_time.sleep = MagicMock()
-            with patch.object(
-                main_module.Gtk, "events_pending", side_effect=fake_pending
-            ), patch.object(
-                main_module.Gtk, "main_iteration_do"
-            ) as mock_iter:
+            with (
+                patch.object(main_module.Gtk, "events_pending", side_effect=fake_pending),
+                patch.object(main_module.Gtk, "main_iteration_do") as mock_iter,
+            ):
                 main_module._pump_events_for(0.1)
         self.assertEqual(mock_iter.call_count, 2)
         self.assertGreater(mock_time.sleep.call_count, 0)

@@ -12,17 +12,13 @@ if PYTHON_SRC not in sys.path:
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 from gui_helpers import build_full_dataset_name, on_row_expanded
 from zfs_repository import ZfsRepository
 
-SNAPSHOT_CMD = (
-    "zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones -d 1"
-)
-DATASET_CMD = (
-    "zfs list -H -o name,creation,type,used,avail,refer,origin,clones -r -d 1"
-)
+SNAPSHOT_CMD = "zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones -d 1"
+DATASET_CMD = "zfs list -H -o name,creation,type,used,avail,refer,origin,clones -r -d 1"
 
 
 def _make_repo(stdout_map):
@@ -32,9 +28,7 @@ def _make_repo(stdout_map):
     def _run(cmd, check=True, timeout=None):
         cmd_str = " ".join(cmd)
         stdout = stdout_map.get(cmd_str, "")
-        return subprocess.CompletedProcess(
-            args=cmd, returncode=0, stdout=stdout, stderr=""
-        )
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
 
     repo._run = _run
     return repo
@@ -56,15 +50,17 @@ class TestDatasetRowExpansion(unittest.TestCase):
         self.assertEqual(build_full_dataset_name(store, ds), "threeamigos/proxmox")
 
     def test_expansion_loads_snapshots_and_subdatasets(self):
-        repo = _make_repo({
-            f"{SNAPSHOT_CMD} threeamigos/proxmox": (
-                "threeamigos/proxmox@snap1\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
-            ),
-            f"{DATASET_CMD} threeamigos/proxmox": (
-                "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
-                "threeamigos/proxmox/vm-100\t2025-01-01\tvolume\t5G\t-\t5G\t-\t-\n"
-            ),
-        })
+        repo = _make_repo(
+            {
+                f"{SNAPSHOT_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox@snap1\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
+                ),
+                f"{DATASET_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
+                    "threeamigos/proxmox/vm-100\t2025-01-01\tvolume\t5G\t-\t5G\t-\t-\n"
+                ),
+            }
+        )
         store, view, ds = self._tree_with_dataset()
         view._zfs_repo = repo
         on_row_expanded(view, ds, store.get_path(ds))
@@ -75,23 +71,28 @@ class TestDatasetRowExpansion(unittest.TestCase):
             children.append((store.get_value(child, 0), store.get_value(child, 2)))
             child = store.iter_next(child)
 
-        self.assertEqual(children, [
-            ("@snap1", "snapshot"),
-            ("vm-100", "volume"),
-        ])
+        self.assertEqual(
+            children,
+            [
+                ("@snap1", "snapshot"),
+                ("vm-100", "volume"),
+            ],
+        )
 
     def test_expansion_loads_only_exact_dataset_snapshots(self):
-        repo = _make_repo({
-            f"{SNAPSHOT_CMD} threeamigos/proxmox": (
-                "threeamigos/proxmox@snap1\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
-                # depth=1 also returns snapshots of direct children, which must be filtered out
-                "threeamigos/proxmox/sub@snap2\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
-            ),
-            f"{DATASET_CMD} threeamigos/proxmox": (
-                "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
-                "threeamigos/proxmox/sub\t2025-01-01\tfilesystem\t1G\t-\t1G\t-\t-\n"
-            ),
-        })
+        repo = _make_repo(
+            {
+                f"{SNAPSHOT_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox@snap1\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
+                    # depth=1 also returns snapshots of direct children, which must be filtered out
+                    "threeamigos/proxmox/sub@snap2\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
+                ),
+                f"{DATASET_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
+                    "threeamigos/proxmox/sub\t2025-01-01\tfilesystem\t1G\t-\t1G\t-\t-\n"
+                ),
+            }
+        )
         store, view, ds = self._tree_with_dataset()
         view._zfs_repo = repo
         on_row_expanded(view, ds, store.get_path(ds))
@@ -108,12 +109,14 @@ class TestDatasetRowExpansion(unittest.TestCase):
         self.assertNotIn(("@snap2", "snapshot"), children)
 
     def test_expansion_shows_empty_placeholder_when_no_children(self):
-        repo = _make_repo({
-            f"{SNAPSHOT_CMD} threeamigos/proxmox": "",
-            f"{DATASET_CMD} threeamigos/proxmox": (
-                "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
-            ),
-        })
+        repo = _make_repo(
+            {
+                f"{SNAPSHOT_CMD} threeamigos/proxmox": "",
+                f"{DATASET_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
+                ),
+            }
+        )
         store, view, ds = self._tree_with_dataset()
         view._zfs_repo = repo
         on_row_expanded(view, ds, store.get_path(ds))
@@ -128,16 +131,18 @@ class TestDatasetRowExpansion(unittest.TestCase):
 
     def test_expansion_filters_child_snapshots_at_depth_one(self):
         """depth=1 returns child snapshots; only the target dataset's are shown."""
-        repo = _make_repo({
-            f"{SNAPSHOT_CMD} threeamigos/proxmox": (
-                "threeamigos/proxmox@snap1\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
-                "threeamigos/proxmox/sub@snap2\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
-                "threeamigos/proxmox/sub/deeper@snap3\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
-            ),
-            f"{DATASET_CMD} threeamigos/proxmox": (
-                "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
-            ),
-        })
+        repo = _make_repo(
+            {
+                f"{SNAPSHOT_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox@snap1\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
+                    "threeamigos/proxmox/sub@snap2\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
+                    "threeamigos/proxmox/sub/deeper@snap3\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
+                ),
+                f"{DATASET_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
+                ),
+            }
+        )
         store, view, ds = self._tree_with_dataset()
         view._zfs_repo = repo
         on_row_expanded(view, ds, store.get_path(ds))
@@ -154,10 +159,12 @@ class TestDatasetRowExpansion(unittest.TestCase):
 
     def test_expansion_uses_view_repository(self):
         """The repo attached to the view is used, not the module default."""
-        repo = _make_repo({
-            f"{SNAPSHOT_CMD} threeamigos/proxmox": "",
-            f"{DATASET_CMD} threeamigos/proxmox": "",
-        })
+        repo = _make_repo(
+            {
+                f"{SNAPSHOT_CMD} threeamigos/proxmox": "",
+                f"{DATASET_CMD} threeamigos/proxmox": "",
+            }
+        )
         store, view, ds = self._tree_with_dataset()
         view._zfs_repo = repo
         on_row_expanded(view, ds, store.get_path(ds))

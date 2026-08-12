@@ -14,7 +14,6 @@ from test_support import (
 
 
 class TestLoadConfig(unittest.TestCase):
-
     def test_load_config_returns_defaults_when_missing(self):
         with temp_config_dir():
             config = backup_config.load_config()
@@ -24,7 +23,12 @@ class TestLoadConfig(unittest.TestCase):
 
     def test_load_config_reads_existing_file(self):
         with temp_config_dir():
-            write_config({"backup": {"variables": {"label": "custom"}}, "config_version": backup_config.CONFIG_VERSION})
+            write_config(
+                {
+                    "backup": {"variables": {"label": "custom"}},
+                    "config_version": backup_config.CONFIG_VERSION,
+                }
+            )
             config = backup_config.load_config()
             self.assertEqual(config["backup"]["variables"]["label"], "custom")
 
@@ -44,7 +48,6 @@ class TestLoadConfig(unittest.TestCase):
 
 
 class TestSaveConfig(unittest.TestCase):
-
     def test_save_config_writes_file(self):
         with temp_config_dir():
             backup_config.save_config({"foo": "bar"})
@@ -54,7 +57,6 @@ class TestSaveConfig(unittest.TestCase):
 
 
 class TestSnapshotNameGeneration(unittest.TestCase):
-
     def test_daily_bucket_weekday(self):
         with patch_environ():
             name = backup_config._build_snapshot_name("dailybackup")
@@ -68,7 +70,10 @@ class TestSnapshotNameGeneration(unittest.TestCase):
     def test_snapfile_roundtrip(self):
         with temp_config_dir():
             backup_config.save_snapshot_name("@test-2025-01-01T00:00-04:00-d")
-            self.assertEqual(backup_config._read_snapfile(backup_config.SNAPFILE), "@test-2025-01-01T00:00-04:00-d")
+            self.assertEqual(
+                backup_config._read_snapfile(backup_config.SNAPFILE),
+                "@test-2025-01-01T00:00-04:00-d",
+            )
             backup_config.remove_snapfile()
             self.assertIsNone(backup_config._read_snapfile(backup_config.SNAPFILE))
 
@@ -89,11 +94,11 @@ class TestShimReExports(unittest.TestCase):
 
     def test_config_version_matches_core(self):
         import config_migrations
+
         self.assertEqual(backup_config.CONFIG_VERSION, config_migrations.CONFIG_VERSION)
 
 
 class TestMsgLevelHelpers(unittest.TestCase):
-
     def test_get_msg_level_defaults_to_info(self):
         config = {}
         self.assertEqual(backup_config.get_msg_level(config), "INFO")
@@ -105,7 +110,6 @@ class TestMsgLevelHelpers(unittest.TestCase):
 
 
 class TestUiState(unittest.TestCase):
-
     def test_get_ui_state_returns_defaults(self):
         config = {}
         state = backup_config.get_ui_state(config)
@@ -120,7 +124,6 @@ class TestUiState(unittest.TestCase):
 
 
 class TestLogRetention(unittest.TestCase):
-
     def test_get_log_retention_days_default(self):
         config = {}
         self.assertEqual(backup_config.get_log_retention_days(config), 30)
@@ -134,6 +137,7 @@ class TestLogRetention(unittest.TestCase):
     def test_prune_old_logs_removes_stale(self):
         import tempfile
         import time
+
         with tempfile.TemporaryDirectory() as tmpdir:
             old_file = os.path.join(tmpdir, "old.log")
             new_file = os.path.join(tmpdir, "new.log")
@@ -145,6 +149,7 @@ class TestLogRetention(unittest.TestCase):
             os.utime(old_file, (time.time() - 864000, time.time() - 864000))
             # Monkey-patch SESSION_LOG_DIR
             import config_core
+
             orig_dir = config_core.SESSION_LOG_DIR
             backup_config.SESSION_LOG_DIR = tmpdir
             config_core.SESSION_LOG_DIR = tmpdir
@@ -159,7 +164,6 @@ class TestLogRetention(unittest.TestCase):
 
 
 class TestBackupConfig(unittest.TestCase):
-
     def test_get_backup_config_merges_defaults(self):
         config = {"backup": {"variables": {"label": "special"}}}
         backup = backup_config.get_backup_config(config)
@@ -182,7 +186,6 @@ class TestBackupConfig(unittest.TestCase):
 
 
 class TestOffsiteConfig(unittest.TestCase):
-
     def test_get_offsite_config_merges_defaults(self):
         config = {}
         offsite = backup_config.get_offsite_config(config)
@@ -197,7 +200,6 @@ class TestOffsiteConfig(unittest.TestCase):
 
 
 class TestRestoreConfig(unittest.TestCase):
-
     def test_get_restore_config_defaults(self):
         config = {}
         restore = backup_config.get_restore_config(config)
@@ -207,7 +209,6 @@ class TestRestoreConfig(unittest.TestCase):
 
 
 class TestPoolsAndCheckagainst(unittest.TestCase):
-
     def test_get_pools_creates_empty_list(self):
         config = {}
         self.assertEqual(backup_config.get_pools(config), [])
@@ -235,7 +236,6 @@ class TestPoolsAndCheckagainst(unittest.TestCase):
 
 
 class TestRetentionConfig(unittest.TestCase):
-
     def test_get_all_retention_creates_default(self):
         config = {}
         retention = backup_config.get_all_retention(config)
@@ -260,7 +260,6 @@ class TestRetentionConfig(unittest.TestCase):
 
 
 class TestDeepCopy(unittest.TestCase):
-
     def test_deep_copy_dict(self):
         original = {"a": [1, 2, {"b": 3}]}
         copy = backup_config._deep_copy(original)

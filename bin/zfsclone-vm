@@ -88,7 +88,6 @@ if is_single_node; then
     # Parse ZFS-backed disk lines (format: scsiN: <storage>:vm-VMID-disk-N,...)
     declare -a sn_disk_keys=()
     declare -A sn_disk_zvols=()
-    declare -A sn_disk_storage=()
     declare -A sn_disk_nums=()
 
     while IFS= read -r line; do
@@ -102,7 +101,6 @@ if is_single_node; then
             if [[ -n "$zvol" ]]; then
                 sn_disk_keys+=("$key")
                 sn_disk_zvols["$key"]="$zvol"
-                sn_disk_storage["$key"]="$storage"
                 sn_disk_nums["$key"]="$disknum"
             fi
         fi

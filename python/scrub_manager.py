@@ -27,6 +27,7 @@ from zfs_repository import get_default_repository
 # Scrub state enum + info dataclass
 # ---------------------------------------------------------------------------
 
+
 class ScrubState(Enum):
     NONE = "none"
     PENDING = "pending"
@@ -53,19 +54,13 @@ class ScrubInfo:
 # ---------------------------------------------------------------------------
 
 _SCAN_NONE_RE = re.compile(r"scan:\s*none\s*requested", re.IGNORECASE)
-_SCAN_PROGRESS_RE = re.compile(
-    r"scan:\s*scrub\s+in\s+progress\s+since\s+(.+)$", re.MULTILINE
-)
-_SCAN_PAUSED_RE = re.compile(
-    r"scan:\s*scrub\s+paused\s+since\s+(.+)$", re.MULTILINE
-)
+_SCAN_PROGRESS_RE = re.compile(r"scan:\s*scrub\s+in\s+progress\s+since\s+(.+)$", re.MULTILINE)
+_SCAN_PAUSED_RE = re.compile(r"scan:\s*scrub\s+paused\s+since\s+(.+)$", re.MULTILINE)
 _SCAN_FINISHED_RE = re.compile(
     r"scan:\s*scrub\s+repaired\s+\S+\s+in\s+(.+?)\s+with\s+(\d+)\s+errors?\s+on\s+(.+)$",
     re.MULTILINE,
 )
-_SCAN_CANCELED_RE = re.compile(
-    r"scan:\s*scrub\s+canceled\s+on\s+(.+)$", re.MULTILINE
-)
+_SCAN_CANCELED_RE = re.compile(r"scan:\s*scrub\s+canceled\s+on\s+(.+)$", re.MULTILINE)
 _SCAN_PERCENT_RE = re.compile(r"(\d+\.?\d*)%\s+done")
 _SCAN_RESILVER_RE = re.compile(
     r"scan:\s*resilvered\s+\S+\s+in\s+(.+?)\s+with\s+(\d+)\s+errors?\s+on\s+(.+)$",
@@ -84,6 +79,7 @@ _SCAN_REMAINING_RE = re.compile(
 # ---------------------------------------------------------------------------
 # Low-level zpool status parsing
 # ---------------------------------------------------------------------------
+
 
 def parse_scrub_status(raw: str) -> ScrubInfo:
     """Parse zpool status text and return ScrubInfo."""
@@ -120,10 +116,7 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
         info.remaining_seconds = _extract_remaining_seconds(raw)
         if info.remaining_seconds is not None:
             info.eta = datetime.now() + timedelta(seconds=info.remaining_seconds)
-        scan_lines = [
-            line for line in scan_lines
-            if not _STALE_PAUSED_RE.match(line)
-        ]
+        scan_lines = [line for line in scan_lines if not _STALE_PAUSED_RE.match(line)]
         info.scan_line = " ".join(scan_lines)
         return info
 
@@ -185,12 +178,7 @@ def _extract_remaining_seconds(raw: str) -> int | None:
         hours = int(hours_str)
         minutes = int(minutes_str)
         seconds = int(seconds_str)
-        return (
-            (days * 24 * 3600)
-            + (hours * 3600)
-            + (minutes * 60)
-            + seconds
-        )
+        return (days * 24 * 3600) + (hours * 3600) + (minutes * 60) + seconds
     except (ValueError, TypeError):
         return None
 
@@ -360,8 +348,9 @@ def _emit(log_func, msg):
         log_func(msg, caller_file=caller_file, caller_line=caller_line)
 
 
-def _wait_for_scrub_state(pool_name: str, desired_state: ScrubState,
-                          repo=None, timeout: float = 5.0) -> ScrubInfo:
+def _wait_for_scrub_state(
+    pool_name: str, desired_state: ScrubState, repo=None, timeout: float = 5.0
+) -> ScrubInfo:
     """Poll *pool_name* until its scrub state reaches *desired_state*.
 
     Returns the last ScrubInfo observed.  The poll is bounded by *timeout*
@@ -378,9 +367,9 @@ def _wait_for_scrub_state(pool_name: str, desired_state: ScrubState,
     return get_pool_scrub_info(pool_name, repo=repo)
 
 
-def pause_scrubs_for_pools(pool_names: list[str], repo=None,
-                           dry_run: bool = False,
-                           log_func: Callable | None = None) -> list[str]:
+def pause_scrubs_for_pools(
+    pool_names: list[str], repo=None, dry_run: bool = False, log_func: Callable | None = None
+) -> list[str]:
     """Pause any running scrubs on *pool_names* and mark them user-paused.
 
     Returns the list of pools whose scrubs were actually paused (only pools
@@ -406,11 +395,7 @@ def pause_scrubs_for_pools(pool_names: list[str], repo=None,
             _emit(_log, f"DEBUG: Pool '{name}' is not online; skipping scrub pause")
             continue
         if info.state != ScrubState.SCANNING:
-            _emit(
-                _log,
-                f"DEBUG: Scrub on '{name}' is {info.state.value}; "
-                f"not pausing"
-            )
+            _emit(_log, f"DEBUG: Scrub on '{name}' is {info.state.value}; not pausing")
             continue
         if dry_run:
             _emit(_log, f"INFO: Dry-run: would pause scrub on '{name}'")
@@ -430,7 +415,7 @@ def pause_scrubs_for_pools(pool_names: list[str], repo=None,
                         f"WARN: Scrub on '{name}' did not pause "
                         f"(state: {info_after.state.value}); "
                         f"scan line: {info_after.scan_line!r}; "
-                        f"raw status:\n{raw}"
+                        f"raw status:\n{raw}",
                     )
             else:
                 _emit(_log, f"WARN: Failed to pause scrub on '{name}'")
@@ -451,9 +436,9 @@ def pause_scrubs_for_pools(pool_names: list[str], repo=None,
     return paused
 
 
-def resume_scrubs_for_pools(pool_names: list[str], repo=None,
-                            dry_run: bool = False,
-                            log_func: Callable | None = None) -> None:
+def resume_scrubs_for_pools(
+    pool_names: list[str], repo=None, dry_run: bool = False, log_func: Callable | None = None
+) -> None:
     """Resume scrubs that were paused by pause_scrubs_for_pools().
 
     Pools that are no longer paused (e.g., externally resumed, finished, or
@@ -488,9 +473,7 @@ def resume_scrubs_for_pools(pool_names: list[str], repo=None,
                 resumed.append(name)
             else:
                 _emit(
-                    _log,
-                    f"DEBUG: Dry-run: scrub on '{name}' is {info.state.value}; "
-                    f"not resuming"
+                    _log, f"DEBUG: Dry-run: scrub on '{name}' is {info.state.value}; not resuming"
                 )
             continue
         if info.state == ScrubState.PAUSED:
@@ -508,29 +491,23 @@ def resume_scrubs_for_pools(pool_names: list[str], repo=None,
                             f"WARN: Scrub on '{name}' did not resume "
                             f"(state: {info_after.state.value}); "
                             f"scan line: {info_after.scan_line!r}; "
-                            f"raw status:\n{raw}"
+                            f"raw status:\n{raw}",
                         )
                 else:
                     _emit(_log, f"WARN: Failed to resume scrub on '{name}'")
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
                 _emit(_log, f"WARN: cannot resume scrub on '{name}': {exc}")
         elif info.state == ScrubState.SCANNING:
-            _emit(
-                _log,
-                f"INFO: Scrub on '{name}' is already running; no resume needed"
-            )
+            _emit(_log, f"INFO: Scrub on '{name}' is already running; no resume needed")
             already_running.append(name)
         elif info.state in (ScrubState.FINISHED, ScrubState.NONE):
-            _emit(
-                _log,
-                f"INFO: Scrub on '{name}' finished while paused; no resume needed"
-            )
+            _emit(_log, f"INFO: Scrub on '{name}' finished while paused; no resume needed")
             finished_while_paused.append(name)
         else:
             _emit(
                 _log,
                 f"WARN: Scrub on '{name}' is in unexpected state "
-                f"{info.state.value}; leaving it alone"
+                f"{info.state.value}; leaving it alone",
             )
             offline_or_unknown.append(name)
 
@@ -553,14 +530,19 @@ def resume_scrubs_for_pools(pool_names: list[str], repo=None,
             _emit(
                 _log,
                 "INFO: No paused scrubs required resuming "
-                f"(handled: {', '.join(sorted(already_running + finished_while_paused))})"
+                f"(handled: {', '.join(sorted(already_running + finished_while_paused))})",
             )
         queue._save()
 
 
-def attach_step_scrub_callbacks(step, source: str, dest: str,
-                                enabled: bool, dry_run: bool = False,
-                                log_func: Callable | None = None) -> None:
+def attach_step_scrub_callbacks(
+    step,
+    source: str,
+    dest: str,
+    enabled: bool,
+    dry_run: bool = False,
+    log_func: Callable | None = None,
+) -> None:
     """Attach pre/post callbacks to a BashStep to pause/resume scrubs.
 
     The callbacks pause scrubs on the pools referenced by *source* and *dest*
@@ -574,9 +556,7 @@ def attach_step_scrub_callbacks(step, source: str, dest: str,
     """
     if not enabled:
         return
-    pools = sorted(
-        {p for p in (_pool_from_dataset(source), _pool_from_dataset(dest)) if p}
-    )
+    pools = sorted({p for p in (_pool_from_dataset(source), _pool_from_dataset(dest)) if p})
     if not pools:
         return
 
@@ -584,15 +564,12 @@ def attach_step_scrub_callbacks(step, source: str, dest: str,
 
     def pre_callback():
         nonlocal paused_pools
-        paused_pools = pause_scrubs_for_pools(
-            pools, dry_run=dry_run, log_func=log_func
-        )
+        paused_pools = pause_scrubs_for_pools(pools, dry_run=dry_run, log_func=log_func)
 
     def post_callback():
         nonlocal paused_pools
         if paused_pools:
-            resume_scrubs_for_pools(paused_pools, dry_run=dry_run,
-                                    log_func=log_func)
+            resume_scrubs_for_pools(paused_pools, dry_run=dry_run, log_func=log_func)
             paused_pools = []
 
     step.pre_callback = pre_callback
@@ -602,6 +579,7 @@ def attach_step_scrub_callbacks(step, source: str, dest: str,
 # ---------------------------------------------------------------------------
 # ScrubQueue — manages pending / active / paused / finished buckets
 # ---------------------------------------------------------------------------
+
 
 class ScrubQueue:
     """Manages a queue of pool scrubs with a concurrency target.
@@ -621,14 +599,17 @@ class ScrubQueue:
         self.target = max(1, int(data.get("target", 1)))
 
     def _save(self):
-        feature_config.save_scrub_state({
-            "pending": sorted(self.pending),
-            "active": sorted(self.active),
-            "paused": sorted(self.paused),
-            "finished": sorted(self.finished),
-            "paused_by_user": sorted(self.paused_by_user),
-            "target": self.target,
-        }, locked=self._save_locked)
+        feature_config.save_scrub_state(
+            {
+                "pending": sorted(self.pending),
+                "active": sorted(self.active),
+                "paused": sorted(self.paused),
+                "finished": sorted(self.finished),
+                "paused_by_user": sorted(self.paused_by_user),
+                "target": self.target,
+            },
+            locked=self._save_locked,
+        )
 
     # -- Public API --
 
@@ -850,7 +831,7 @@ class ScrubQueue:
 
         elif active_count > self.target:
             # Pause newest active scrubs
-            to_pause = sorted(self.active)[self.target:]
+            to_pause = sorted(self.active)[self.target :]
             for candidate in to_pause:
                 info = states.get(candidate)
                 if info and info.state == ScrubState.SCANNING:
@@ -884,8 +865,7 @@ class ScrubQueue:
         if self._changed_since_save():
             self._save()
 
-    def __init__(self, target: int = 1, *, load_locked: bool = True,
-                 save_locked: bool = True):
+    def __init__(self, target: int = 1, *, load_locked: bool = True, save_locked: bool = True):
         self.pending: set[str] = set()
         self.active: set[str] = set()
         self.paused: set[str] = set()
@@ -941,6 +921,7 @@ class ScrubQueue:
 # ---------------------------------------------------------------------------
 # System scrub schedule helpers (systemd timers)
 # ---------------------------------------------------------------------------
+
 
 def set_system_scrub_enabled(pool_name: str, weekly: bool, monthly: bool) -> bool:
     """Enable or disable systemd scrub timers for a pool. Returns True on success."""

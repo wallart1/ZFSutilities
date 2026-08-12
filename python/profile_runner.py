@@ -71,15 +71,11 @@ PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zf
 
 # How long to wait for an already-running instance of the same profile before
 # giving up. Overridable via environment so no host-specific value is hard-coded.
-PROFILE_LOCK_TIMEOUT = float(
-    os.environ.get("ZFSUTILITIES_PROFILE_LOCK_TIMEOUT", "600.0")
-)
+PROFILE_LOCK_TIMEOUT = float(os.environ.get("ZFSUTILITIES_PROFILE_LOCK_TIMEOUT", "600.0"))
 
 # How long bash ZFS steps invoked by this runner should wait for a dataset lock
 # in headless mode before aborting.
-HEADLESS_LOCK_WAIT_SECONDS = int(
-    os.environ.get("ZFSUTILITIES_HEADLESS_LOCK_WAIT_SECONDS", "600")
-)
+HEADLESS_LOCK_WAIT_SECONDS = int(os.environ.get("ZFSUTILITIES_HEADLESS_LOCK_WAIT_SECONDS", "600"))
 
 # Regex: received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds
 # Purpose: Match the final summary line emitted by `zfs receive` on stderr,

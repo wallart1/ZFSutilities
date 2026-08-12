@@ -229,12 +229,13 @@ from test_support import temp_config_dir, capture_logs
 
 import config_core
 
-class TestMyFeature(unittest.TestCase):
 
+class TestMyFeature(unittest.TestCase):
     def test_loads_default(self):
         with temp_config_dir():
             cfg = config_core.load_config()
             self.assertIn("pools", cfg)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -261,12 +262,8 @@ The `MockSubprocess` class tracks every call and returns canned output:
 from test_support import mock_subprocess
 
 with mock_subprocess() as m:
-    m.add_zpool_list([
-        {"name": "tank", "health": "ONLINE"}
-    ])
-    m.add_zfs_list([
-        {"name": "tank/data", "used": "10G"}
-    ])
+    m.add_zpool_list([{"name": "tank", "health": "ONLINE"}])
+    m.add_zfs_list([{"name": "tank/data", "used": "10G"}])
     # ... code that calls subprocess.run(...) ...
     self.assertEqual(len(m.calls), 2)
 ```

@@ -39,6 +39,8 @@ exit "${1:-8}"
 EOF
 
     (
+        # shellcheck disable=SC2034
+        # Intentionally set for sourced zfsfullcopy helper.
         ZFSFULLCOPY_STATE="$_state_dir"
         mydir="$_mock_bin"
         # shellcheck source=/dev/null

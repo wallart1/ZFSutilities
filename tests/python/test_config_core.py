@@ -40,7 +40,13 @@ class TestLoadConfig(unittest.TestCase):
         with temp_config_dir():
             path = config_core.CONFIG_PATH
             with open(path, "w") as f:
-                json.dump({"backup": {"variables": {"label": "custom"}}, "config_version": config_core.CONFIG_VERSION}, f)
+                json.dump(
+                    {
+                        "backup": {"variables": {"label": "custom"}},
+                        "config_version": config_core.CONFIG_VERSION,
+                    },
+                    f,
+                )
             cfg = config_core.load_config()
             self.assertEqual(cfg["backup"]["variables"]["label"], "custom")
 
@@ -78,7 +84,9 @@ class TestProfilesDir(unittest.TestCase):
     def test_profiles_dir_derived_from_config_path(self):
         with temp_config_dir():
             profiles_dir = config_core.get_profiles_dir()
-            self.assertEqual(profiles_dir, os.path.join(os.path.dirname(config_core.CONFIG_PATH), "profiles"))
+            self.assertEqual(
+                profiles_dir, os.path.join(os.path.dirname(config_core.CONFIG_PATH), "profiles")
+            )
             self.assertTrue(os.path.isdir(profiles_dir))
 
 
@@ -149,7 +157,10 @@ class TestHistoryRetention(unittest.TestCase):
 
     def test_get_history_retention_days_default(self):
         config = {}
-        self.assertEqual(config_core.get_history_retention_days(config), config_core.DEFAULT_HISTORY_RETENTION_DAYS)
+        self.assertEqual(
+            config_core.get_history_retention_days(config),
+            config_core.DEFAULT_HISTORY_RETENTION_DAYS,
+        )
 
     def test_save_history_retention_days(self):
         with temp_config_dir():
@@ -218,6 +229,7 @@ class TestConfigLocking(unittest.TestCase):
     def test_save_config_acquires_write_lock(self):
         with temp_config_dir():
             import file_locking
+
             lock_path = file_locking.CONFIG_LOCK_PATH
             config_core.save_config({"test": "data"})
             self.assertTrue(os.path.exists(lock_path))
@@ -225,6 +237,7 @@ class TestConfigLocking(unittest.TestCase):
     def test_load_config_acquires_read_lock(self):
         with temp_config_dir():
             import file_locking
+
             config_core.save_config({"test": "data"})
             lock_path = file_locking.CONFIG_LOCK_PATH
             config_core.load_config()

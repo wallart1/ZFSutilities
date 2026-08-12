@@ -11,7 +11,6 @@ import file_locking
 
 
 class TestParseHumanSize(unittest.TestCase):
-
     def test_bytes(self):
         self.assertEqual(backup_history._parse_human_size("312B"), 312)
 
@@ -22,24 +21,22 @@ class TestParseHumanSize(unittest.TestCase):
         self.assertEqual(backup_history._parse_human_size("1KB"), 1000)
 
     def test_mib(self):
-        self.assertEqual(backup_history._parse_human_size("1.5MiB"), int(1.5 * 1024 ** 2))
+        self.assertEqual(backup_history._parse_human_size("1.5MiB"), int(1.5 * 1024**2))
 
     def test_gb(self):
-        self.assertEqual(backup_history._parse_human_size("2GB"), 2 * 1000 ** 3)
+        self.assertEqual(backup_history._parse_human_size("2GB"), 2 * 1000**3)
 
     def test_gib(self):
-        self.assertEqual(backup_history._parse_human_size("2GiB"), 2 * 1024 ** 3)
+        self.assertEqual(backup_history._parse_human_size("2GiB"), 2 * 1024**3)
 
     def test_tb(self):
-        self.assertEqual(backup_history._parse_human_size("3TB"), 3 * 1000 ** 4)
+        self.assertEqual(backup_history._parse_human_size("3TB"), 3 * 1000**4)
 
     def test_bare_m(self):
-        self.assertEqual(backup_history._parse_human_size("319M"), 319 * 1000 ** 2)
+        self.assertEqual(backup_history._parse_human_size("319M"), 319 * 1000**2)
 
     def test_bare_g_with_decimal(self):
-        self.assertEqual(
-            backup_history._parse_human_size("11.2G"), int(11.2 * 1000 ** 3)
-        )
+        self.assertEqual(backup_history._parse_human_size("11.2G"), int(11.2 * 1000**3))
 
     def test_bare_k_with_decimal(self):
         self.assertEqual(backup_history._parse_human_size("5.2K"), 5200)
@@ -51,7 +48,6 @@ class TestParseHumanSize(unittest.TestCase):
 
 
 class TestFormatDuration(unittest.TestCase):
-
     def test_zero(self):
         self.assertEqual(backup_history.format_duration(0), "00:00:00")
 
@@ -72,17 +68,12 @@ class TestFormatDuration(unittest.TestCase):
 
 
 class TestLoadHistory(unittest.TestCase):
-
     def setUp(self):
         self._orig_path = backup_history.HISTORY_PATH
         self._orig_lock = file_locking.HISTORY_LOCK_PATH
         self._tmp_dir = tempfile.TemporaryDirectory()
-        backup_history.HISTORY_PATH = os.path.join(
-            self._tmp_dir.name, "test-history.json"
-        )
-        file_locking.HISTORY_LOCK_PATH = os.path.join(
-            self._tmp_dir.name, ".history.lock"
-        )
+        backup_history.HISTORY_PATH = os.path.join(self._tmp_dir.name, "test-history.json")
+        file_locking.HISTORY_LOCK_PATH = os.path.join(self._tmp_dir.name, ".history.lock")
 
     def tearDown(self):
         backup_history.HISTORY_PATH = self._orig_path
@@ -99,7 +90,6 @@ class TestLoadHistory(unittest.TestCase):
 
 
 class TestPruneHistory(unittest.TestCase):
-
     def _make_entry(self, days_ago):
         ts = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
         return {"timestamp": ts, "type": "backup", "name": "Daily"}
@@ -135,7 +125,6 @@ class TestPruneHistory(unittest.TestCase):
 
 
 class TestSuccessRate(unittest.TestCase):
-
     def _make_entry(self, result, days_ago=0):
         ts = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
         return {"timestamp": ts, "type": "backup", "result": result}
@@ -168,17 +157,12 @@ class TestSuccessRate(unittest.TestCase):
 
 
 class TestAddHistoryEntry(unittest.TestCase):
-
     def setUp(self):
         self._orig_path = backup_history.HISTORY_PATH
         self._orig_lock = file_locking.HISTORY_LOCK_PATH
         self._tmp_dir = tempfile.TemporaryDirectory()
-        backup_history.HISTORY_PATH = os.path.join(
-            self._tmp_dir.name, "test-history.json"
-        )
-        file_locking.HISTORY_LOCK_PATH = os.path.join(
-            self._tmp_dir.name, ".history.lock"
-        )
+        backup_history.HISTORY_PATH = os.path.join(self._tmp_dir.name, "test-history.json")
+        file_locking.HISTORY_LOCK_PATH = os.path.join(self._tmp_dir.name, ".history.lock")
 
     def tearDown(self):
         backup_history.HISTORY_PATH = self._orig_path
@@ -233,9 +217,7 @@ class TestHistoryLocking(unittest.TestCase):
         tmpdir = tempfile.TemporaryDirectory()
         try:
             backup_history.HISTORY_PATH = os.path.join(tmpdir.name, "history.json")
-            file_locking.HISTORY_LOCK_PATH = os.path.join(
-                tmpdir.name, ".history.lock"
-            )
+            file_locking.HISTORY_LOCK_PATH = os.path.join(tmpdir.name, ".history.lock")
             entry = backup_history.build_entry(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 run_type="backup",
@@ -259,9 +241,7 @@ class TestHistoryLocking(unittest.TestCase):
         tmpdir = tempfile.TemporaryDirectory()
         try:
             backup_history.HISTORY_PATH = os.path.join(tmpdir.name, "history.json")
-            file_locking.HISTORY_LOCK_PATH = os.path.join(
-                tmpdir.name, ".history.lock"
-            )
+            file_locking.HISTORY_LOCK_PATH = os.path.join(tmpdir.name, ".history.lock")
 
             def add_one(name):
                 entry = backup_history.build_entry(
@@ -273,10 +253,7 @@ class TestHistoryLocking(unittest.TestCase):
                 )
                 backup_history.add_history_entry(entry)
 
-            procs = [
-                multiprocessing.Process(target=add_one, args=(f"run-{i}",))
-                for i in range(4)
-            ]
+            procs = [multiprocessing.Process(target=add_one, args=(f"run-{i}",)) for i in range(4)]
             for p in procs:
                 p.start()
             for p in procs:
@@ -294,7 +271,6 @@ class TestHistoryLocking(unittest.TestCase):
 
 
 class TestBuildEntry(unittest.TestCase):
-
     def test_schema(self):
         entry = backup_history.build_entry(
             timestamp="2026-05-20T12:00:00",

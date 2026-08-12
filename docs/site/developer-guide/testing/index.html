@@ -2548,12 +2548,13 @@ the bash harness format.</p>
 
 <span class="kn">import</span> <span class="nn">config_core</span>
 
-<span class="k">class</span> <span class="nc">TestMyFeature</span><span class="p">(</span><span class="n">unittest</span><span class="o">.</span><span class="n">TestCase</span><span class="p">):</span>
 
+<span class="k">class</span> <span class="nc">TestMyFeature</span><span class="p">(</span><span class="n">unittest</span><span class="o">.</span><span class="n">TestCase</span><span class="p">):</span>
     <span class="k">def</span> <span class="nf">test_loads_default</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">with</span> <span class="n">temp_config_dir</span><span class="p">():</span>
             <span class="n">cfg</span> <span class="o">=</span> <span class="n">config_core</span><span class="o">.</span><span class="n">load_config</span><span class="p">()</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">assertIn</span><span class="p">(</span><span class="s2">&quot;pools&quot;</span><span class="p">,</span> <span class="n">cfg</span><span class="p">)</span>
+
 
 <span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
     <span class="n">unittest</span><span class="o">.</span><span class="n">main</span><span class="p">()</span>
@@ -2599,12 +2600,8 @@ the bash harness format.</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">test_support</span> <span class="kn">import</span> <span class="n">mock_subprocess</span>
 
 <span class="k">with</span> <span class="n">mock_subprocess</span><span class="p">()</span> <span class="k">as</span> <span class="n">m</span><span class="p">:</span>
-    <span class="n">m</span><span class="o">.</span><span class="n">add_zpool_list</span><span class="p">([</span>
-        <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;tank&quot;</span><span class="p">,</span> <span class="s2">&quot;health&quot;</span><span class="p">:</span> <span class="s2">&quot;ONLINE&quot;</span><span class="p">}</span>
-    <span class="p">])</span>
-    <span class="n">m</span><span class="o">.</span><span class="n">add_zfs_list</span><span class="p">([</span>
-        <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;tank/data&quot;</span><span class="p">,</span> <span class="s2">&quot;used&quot;</span><span class="p">:</span> <span class="s2">&quot;10G&quot;</span><span class="p">}</span>
-    <span class="p">])</span>
+    <span class="n">m</span><span class="o">.</span><span class="n">add_zpool_list</span><span class="p">([{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;tank&quot;</span><span class="p">,</span> <span class="s2">&quot;health&quot;</span><span class="p">:</span> <span class="s2">&quot;ONLINE&quot;</span><span class="p">}])</span>
+    <span class="n">m</span><span class="o">.</span><span class="n">add_zfs_list</span><span class="p">([{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;tank/data&quot;</span><span class="p">,</span> <span class="s2">&quot;used&quot;</span><span class="p">:</span> <span class="s2">&quot;10G&quot;</span><span class="p">}])</span>
     <span class="c1"># ... code that calls subprocess.run(...) ...</span>
     <span class="bp">self</span><span class="o">.</span><span class="n">assertEqual</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">m</span><span class="o">.</span><span class="n">calls</span><span class="p">),</span> <span class="mi">2</span><span class="p">)</span>
 </code></pre></div>
@@ -2788,7 +2785,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.0
+      ZFS Utilities v0.82.1
     </div>
   
   
@@ -2813,7 +2810,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

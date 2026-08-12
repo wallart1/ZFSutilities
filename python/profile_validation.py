@@ -39,13 +39,9 @@ def _matches_filter(dataset, pattern):
 
 def _matches_filters(dataset, includes, excludes):
     """Return True if *dataset* is included and not excluded."""
-    if includes and not any(
-        _matches_filter(dataset, inc) for inc in includes
-    ):
+    if includes and not any(_matches_filter(dataset, inc) for inc in includes):
         return False
-    return not (excludes and any(
-        _matches_filter(dataset, exc) for exc in excludes
-    ))
+    return not (excludes and any(_matches_filter(dataset, exc) for exc in excludes))
 
 
 def _is_under(dataset, parent):
@@ -106,16 +102,18 @@ def _extract_steps(cfg, profile_type, profile_name, label):
         # filters do not matter for overlap detection.
         includes = list(dict.fromkeys(global_includes + step_includes))
         excludes = list(dict.fromkeys(global_excludes + step_excludes))
-        steps.append({
-            "profile_type": profile_type,
-            "profile_name": profile_name,
-            "source": str(step.get("source", "")).strip(),
-            "dest": str(step.get("dest", "")).strip(),
-            "includes": includes,
-            "excludes": excludes,
-            "active": True,
-            "label": label,
-        })
+        steps.append(
+            {
+                "profile_type": profile_type,
+                "profile_name": profile_name,
+                "source": str(step.get("source", "")).strip(),
+                "dest": str(step.get("dest", "")).strip(),
+                "includes": includes,
+                "excludes": excludes,
+                "active": True,
+                "label": label,
+            }
+        )
     return steps
 
 
@@ -142,12 +140,8 @@ def validate_effective_steps(items):
         scope misalignment was detected.
     """
     warnings = []
-    backup_steps = [
-        i for i in items if i.get("profile_type") == "backup"
-    ]
-    offsite_steps = [
-        i for i in items if i.get("profile_type") == "offsite"
-    ]
+    backup_steps = [i for i in items if i.get("profile_type") == "backup"]
+    offsite_steps = [i for i in items if i.get("profile_type") == "offsite"]
 
     for bstep in backup_steps:
         source_b = bstep["source"]
@@ -157,9 +151,7 @@ def validate_effective_steps(items):
 
         # If the backup step itself would not snapshot the source root, the
         # root cannot be the cause of a rollback.
-        if not _matches_filters(
-            source_b, bstep["includes"], bstep["excludes"]
-        ):
+        if not _matches_filters(source_b, bstep["includes"], bstep["excludes"]):
             continue
 
         dest_dataset = _destination_dataset(source_b, dest_b)
@@ -194,13 +186,15 @@ def validate_gui_settings(backup_cfg, offsite_cfg):
         List of warning strings.
     """
     items = []
-    items.extend(_extract_steps(
-        backup_cfg, "backup", "current backup settings",
-        backup_cfg.get("variables", {}).get("label", "dailybackup")
-    ))
-    items.extend(_extract_steps(
-        offsite_cfg, "offsite", "current offsite settings", "offsite"
-    ))
+    items.extend(
+        _extract_steps(
+            backup_cfg,
+            "backup",
+            "current backup settings",
+            backup_cfg.get("variables", {}).get("label", "dailybackup"),
+        )
+    )
+    items.extend(_extract_steps(offsite_cfg, "offsite", "current offsite settings", "offsite"))
     return validate_effective_steps(items)
 
 

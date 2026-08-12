@@ -154,9 +154,7 @@ class TestMaybeTruncateSessionLog(unittest.TestCase):
             path = os.path.join(tmpdir, "small.log")
             open(path, "a").close()
             last = time.time()
-            truncated, new_last = sl.maybe_truncate_session_log(
-                path, last, interval=60
-            )
+            truncated, new_last = sl.maybe_truncate_session_log(path, last, interval=60)
             self.assertFalse(truncated)
             self.assertEqual(new_last, last)
 
@@ -172,21 +170,15 @@ class TestMaybeTruncateSessionLog(unittest.TestCase):
             idx.set_status(path, status="Running")
             idx.save()
 
-            with patch.object(
-                logging_config, "_get_session_log_cap", return_value=(100, 40, 40)
-            ):
-                truncated, _ = sl.maybe_truncate_session_log(
-                    path, 0.0, interval=0
-                )
+            with patch.object(logging_config, "_get_session_log_cap", return_value=(100, 40, 40)):
+                truncated, _ = sl.maybe_truncate_session_log(path, 0.0, interval=0)
             self.assertTrue(truncated)
             self.assertLess(os.path.getsize(path), 250)
             idx = log_index.LogIndex.load()
             self.assertIsNone(idx.get(path))
 
     def test_noop_when_no_file(self):
-        truncated, new_last = sl.maybe_truncate_session_log(
-            None, 0.0, interval=0
-        )
+        truncated, new_last = sl.maybe_truncate_session_log(None, 0.0, interval=0)
         self.assertFalse(truncated)
         self.assertEqual(new_last, 0.0)
 

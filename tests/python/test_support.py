@@ -38,6 +38,7 @@ def try_load_mkdocs_yml():
     """Parse mkdocs.yml and return the config dict, or None if pyyaml missing."""
     try:
         import yaml
+
         with open(MKDOCS_YML) as f:
             return yaml.safe_load(f)
     except ImportError:
@@ -125,6 +126,7 @@ def check_pyyaml():
     """Return True if pyyaml is installed, else raise SkipTest with install instructions."""
     try:
         import yaml  # noqa: F401
+
         return True
     except ImportError:
         raise unittest.SkipTest(
@@ -165,6 +167,7 @@ STARTDOCSERVER_PATH = os.path.join(REPO_ROOT, "startdocserver")
 # ---------------------------------------------------------------------------
 # Config isolation
 # ---------------------------------------------------------------------------
+
 
 @contextlib.contextmanager
 def temp_config_dir():
@@ -214,6 +217,7 @@ def temp_config_dir():
         orig_session_log_dir = backup_config.SESSION_LOG_DIR
         orig_core_session_log_dir = config_core.SESSION_LOG_DIR
         import session_log as _session_log_module
+
         orig_session_log_session_log_dir = _session_log_module.SESSION_LOG_DIR
         orig_log_index_session_log_dir = log_index.SESSION_LOG_DIR
         orig_cron_file = cron_manager.CRON_FILE
@@ -231,6 +235,7 @@ def temp_config_dir():
         orig_log_index_lock = file_locking.LOG_INDEX_LOCK_PATH
         orig_scrub_state_lock = file_locking.SCRUB_STATE_LOCK_PATH
         import profile_runner
+
         orig_profile_lock_dir = profile_runner.PROFILE_LOCK_DIR
 
         session_log_dir = paths.get_session_log_dir()
@@ -291,6 +296,7 @@ def temp_config_dir():
 def temp_lock_dir():
     """Route zfs_lock_manager lock files to a temporary directory."""
     import zfs_lock_manager
+
     with tempfile.TemporaryDirectory() as tmpdir:
         orig_dir = zfs_lock_manager.ZFSLOCK_DIR
         orig_locks = zfs_lock_manager.ZFSLOCK_LOCKS_DIR
@@ -322,6 +328,7 @@ def read_config():
 # Environment patching
 # ---------------------------------------------------------------------------
 
+
 @contextlib.contextmanager
 def patch_environ(**kwargs):
     """Temporarily set environment variables."""
@@ -344,6 +351,7 @@ def patch_environ(**kwargs):
 # ---------------------------------------------------------------------------
 # Subprocess mocking
 # ---------------------------------------------------------------------------
+
 
 class MockSubprocess:
     """State container for mocked subprocess.run calls."""
@@ -392,15 +400,17 @@ class MockSubprocess:
         # zpool list
         if cmd_parts and cmd_parts[0] == "zpool" and "list" in cmd_str:
             stdout = "\n".join(
-                "\t".join([
-                    p['name'],
-                    p.get('health', 'ONLINE'),
-                    p.get('size', '1T'),
-                    p.get('alloc', '100G'),
-                    p.get('free', '900G'),
-                    p.get('cap', '10%'),
-                    p.get('ckpoint', '-'),
-                ])
+                "\t".join(
+                    [
+                        p["name"],
+                        p.get("health", "ONLINE"),
+                        p.get("size", "1T"),
+                        p.get("alloc", "100G"),
+                        p.get("free", "900G"),
+                        p.get("cap", "10%"),
+                        p.get("ckpoint", "-"),
+                    ]
+                )
                 for p in self._zpool_list
             )
             return self._completed(stdout)
@@ -432,9 +442,8 @@ class MockSubprocess:
     @staticmethod
     def _completed(stdout, stderr="", rc=0):
         import subprocess
-        return subprocess.CompletedProcess(
-            args=[], returncode=rc, stdout=stdout, stderr=stderr
-        )
+
+        return subprocess.CompletedProcess(args=[], returncode=rc, stdout=stdout, stderr=stderr)
 
     def popen(self, cmd, **kwargs):
         """Popen-compatible entry point used by streaming runners."""
@@ -459,15 +468,14 @@ class _MockPopen:
 def mock_subprocess():
     """Patch subprocess.run and subprocess.Popen with a MockSubprocess instance."""
     m = MockSubprocess()
-    with patch("subprocess.run", side_effect=m.run), patch(
-        "subprocess.Popen", side_effect=m.popen
-    ):
+    with patch("subprocess.run", side_effect=m.run), patch("subprocess.Popen", side_effect=m.popen):
         yield m
 
 
 # ---------------------------------------------------------------------------
 # Log capture
 # ---------------------------------------------------------------------------
+
 
 @contextlib.contextmanager
 def capture_logs():
@@ -501,6 +509,7 @@ def capture_stderr():
 # GTK mocking
 # ---------------------------------------------------------------------------
 
+
 @contextlib.contextmanager
 def mock_gtk():
     """Patch gi.repository so GUI modules can be imported without a display."""
@@ -516,8 +525,10 @@ def mock_gtk():
     class FakeWindow:
         def __init__(self, *args, **kwargs):
             pass
+
         def __getattr__(self, name):
             return MagicMock()
+
     gtk_mock.Window = FakeWindow
     gtk_mock.Box = MagicMock()
     gtk_mock.Label = MagicMock()

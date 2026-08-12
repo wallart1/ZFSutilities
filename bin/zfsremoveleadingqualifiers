@@ -42,7 +42,6 @@ remove_leading_qualifiers() {
     local i="$1" \
         j \
         dataset="$2" \
-        result \
         num="$1" \
         ds="$2"
 

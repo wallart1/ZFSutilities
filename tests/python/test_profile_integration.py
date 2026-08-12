@@ -46,7 +46,7 @@ def _extract_cleanup_pool(script):
     if m:
         return m.group(1)
     # Loop: for pool in "tank" "archive"; do cleanup "$pool" ...
-    m = re.search(r'for pool in ([^;]+); do', script)
+    m = re.search(r"for pool in ([^;]+); do", script)
     if m:
         first = m.group(1).split()[0]
         return first.strip('"')
@@ -211,8 +211,7 @@ class TestConcurrentProfiles(unittest.TestCase):
             f"lock files in {lock_dir}: {lock_files}"
         )
 
-    def _run_two_profiles(self, profile_a, profile_b, runner_a, runner_b,
-                          wait_dataset=None):
+    def _run_two_profiles(self, profile_a, profile_b, runner_a, runner_b, wait_dataset=None):
         """Run two profiles in separate processes and return (rc_a, rc_b).
 
         If *wait_dataset* is set, process B is not started until process A has
@@ -266,7 +265,8 @@ class TestConcurrentProfiles(unittest.TestCase):
             profile_b = _backup_profile("tank/b", "backup/b")
 
             rc_a, rc_b = self._run_two_profiles(
-                profile_a, profile_b,
+                profile_a,
+                profile_b,
                 "run_backup_profile",
                 "run_backup_profile",
             )
@@ -279,15 +279,12 @@ class TestConcurrentProfiles(unittest.TestCase):
         with temp_config_dir(), temp_lock_dir():
             # Use different labels so snapshot-name generation does not
             # serialize the two profiles before the dataset lock test.
-            profile_a = _backup_profile(
-                "tank/share", "backup/share", label="dailybackup"
-            )
-            profile_b = _backup_profile(
-                "tank/share", "backup/share", label="weeklybackup"
-            )
+            profile_a = _backup_profile("tank/share", "backup/share", label="dailybackup")
+            profile_b = _backup_profile("tank/share", "backup/share", label="weeklybackup")
 
             rc_a, rc_b = self._run_two_profiles(
-                profile_a, profile_b,
+                profile_a,
+                profile_b,
                 "run_backup_profile",
                 "run_backup_profile",
                 wait_dataset="tank/share",
@@ -295,11 +292,13 @@ class TestConcurrentProfiles(unittest.TestCase):
 
         # Exactly one should succeed; the other must fail safely.
         self.assertIn(
-            0, (rc_a, rc_b),
+            0,
+            (rc_a, rc_b),
             f"expected one profile to succeed; rc_a={rc_a}, rc_b={rc_b}",
         )
         self.assertNotEqual(
-            rc_a, rc_b,
+            rc_a,
+            rc_b,
             f"expected one profile to fail; rc_a={rc_a}, rc_b={rc_b}",
         )
 
@@ -314,7 +313,8 @@ class TestConcurrentProfiles(unittest.TestCase):
             profile_prune = _retention_profile("tank")
 
             rc_backup, rc_prune = self._run_two_profiles(
-                profile_backup, profile_prune,
+                profile_backup,
+                profile_prune,
                 "run_backup_profile",
                 "run_retention_profile",
                 wait_dataset="tank/share",

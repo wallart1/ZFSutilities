@@ -113,7 +113,7 @@ TOTAL=0
 if [[ ! -f "$CONF" ]]; then
     echo "No encrypted LUNs config at $CONF — nothing to load"
 else
-    while IFS=: read -r name device target; do
+    while IFS=: read -r name device _target; do
         [[ -z "$name" || "$name" == \#* ]] && continue
         dataset="${device#/dev/zvol/}"
         TOTAL=$((TOTAL + 1))

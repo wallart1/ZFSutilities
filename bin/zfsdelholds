@@ -45,8 +45,8 @@ function delholds {
         for ((i=0; i<${#snaparray[@]}; i++)); do  # Remove the snaps that don't match the substring.
             snapsnap=${snaparray[$i]#*@}  # Get part after @
             l=${#zfsdelholds_match}
-            if [[ ${snapsnap:0:$l} != $zfsdelholds_match ]]; then
-                unset snaparray[$i]
+            if [[ ${snapsnap:0:$l} != "$zfsdelholds_match" ]]; then
+                unset 'snaparray[$i]'
             fi
         done
         # Re-index the array to remove gaps

@@ -65,6 +65,8 @@ function _mass_delete_ignore_retention {
     local pool fs snap
     local all_snaps=()
     for pool in "$@"; do
+        # shellcheck disable=SC2034
+        # Intentionally set for sourced buildfsarray helper.
         sourcefs="$pool"
         buildfsarray "$pool"
         for fs in "${fsarray[@]}"; do
@@ -167,6 +169,8 @@ function _list_and_approve {
             releaseholds_tags=('offsite-*')
         fi
     fi
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced delsnap helper.
     autoproceed='Y'
     for snap in "$@"; do
         if ! delsnap "$snap" 0 "$release_arg" 'nocheckagainst'; then

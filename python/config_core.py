@@ -107,7 +107,7 @@ def save_config(config):
     """Write config dict to CONFIG_PATH. Raises OSError on permission failure."""
     config_dir = os.path.dirname(CONFIG_PATH)
     os.makedirs(config_dir, exist_ok=True)
-    with config_lock_write(), open(CONFIG_PATH, 'w') as f:
+    with config_lock_write(), open(CONFIG_PATH, "w") as f:
         json.dump(config, f, indent=2)
 
 
@@ -184,8 +184,8 @@ def save_ui_state(config, state_dict):
 DEFAULT_LOG_RETENTION_DAYS = 30
 DEFAULT_HISTORY_RETENTION_DAYS = 90
 DEFAULT_SESSION_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
-DEFAULT_SESSION_LOG_TAIL_BYTES = 1 * 1024 * 1024   # 1 MB
-DEFAULT_SESSION_LOG_START_BYTES = 64 * 1024        # 64 KB
+DEFAULT_SESSION_LOG_TAIL_BYTES = 1 * 1024 * 1024  # 1 MB
+DEFAULT_SESSION_LOG_START_BYTES = 64 * 1024  # 64 KB
 SESSION_LOG_DIR = get_session_log_dir()
 
 

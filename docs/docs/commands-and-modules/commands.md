@@ -1523,23 +1523,18 @@ Returns an empty string if the size cannot be determined.
 Lists all snapshot holds in a subtree.
 
 ```bash
-zfsholds <subtree> [depth]
+zfsholds <subtree>
 ```
 
 **Arguments:**
 
-| Argument | Description                               |
-| -------- | ----------------------------------------- |
-| `$1`     | Subtree to inspect                        |
-| `$2`     | Optional depth limit (overrides `$depth`) |
+| Argument | Description        |
+| -------- | ------------------ |
+| `$1`     | Subtree to inspect |
 
-**Globals:**
+**Globals:** none.
 
-| Variable | Role                    | Reference                                                                          |
-| -------- | ----------------------- | ---------------------------------------------------------------------------------- |
-| `$depth` | Default recursion depth | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
-
-See also: [`zfsshowholds`](#zfsshowholds) for a simpler version without depth support.
+See also: [`zfsshowholds`](#zfsshowholds) for a simpler version.
 
 **Called modules:** none.
 
@@ -2496,8 +2491,7 @@ zfsshowholds <dataset>
 
 **Globals:** none.
 
-Simple wrapper around `zfs list ... | xargs zfs holds`. For depth control,
-use [`zfsholds`](#zfsholds) instead.
+Simple wrapper around `zfs list ... | xargs zfs holds`.
 
 **Called modules:** none.
 
@@ -2505,7 +2499,7 @@ use [`zfsholds`](#zfsholds) instead.
 
 **Internal flow:**
 
-Simple wrapper: `zfs list -rt snapshot <dataset> | xargs zfs holds -H`. For depth control see [`zfsholds`](#zfsholds).
+Simple wrapper: `zfs list -rt snapshot <dataset> | xargs zfs holds -H`.
 
 
 **Return codes:**

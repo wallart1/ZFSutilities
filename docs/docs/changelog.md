@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.82.1
+
+*Released 2026-08-11*
+
+### Added
+
+- **ShellCheck configuration** — Added `.shellcheckrc` at the repository root and
+  documented the ShellCheck policy in
+  `docs/docs/developer-guide/coding-policies.md`.
+
+### Changed
+
+- **Bash lint cleanup** — Fixed ShellCheck warnings across `bin/`, `lib/`, and
+  `tests/` including quoting, array handling, unused variables, `local`
+  declarations, redirect syntax, and control-flow issues.
+
+- **Python formatting** — Reformatted the entire `python/` and `tests/python/`
+  trees to match the project's configured style.
+
+- **`bashsetx`** — The `setx` function no longer computes or exports
+  `$bashrestorex`; callers should invoke `bashrestorex` explicitly when tracing
+  should stop.
+
+- **`zfsholds`** — Removed the unused `[depth]` positional argument and `$depth`
+  global. The command now takes only the subtree to inspect.
+
+- **`new-vm-disk`** — The `--encrypted=<keyfile>` form still enables encryption
+  but the `<keyfile>` value is no longer captured (it was previously assigned to
+  an unused variable).
+
+### Tests
+
+- Added `tests/test-test-lib` to verify that `test_pass`, `test_fail`, and
+  `test_skip` do not double-increment the suite counters.
+
+### Documentation
+
+- Updated `docs/docs/commands-and-modules/modules.md` to remove the stale
+  `$bashrestorex` global from the `bashsetx` section.
+
+- Updated `docs/docs/commands-and-modules/commands.md` to remove the unused
+  `[depth]` argument from `zfsholds` and to drop depth-control references in
+  `zfsshowholds`.
+
 ## 0.82.0
 
 *Released 2026-08-11*

@@ -98,7 +98,8 @@ cmd_status() {
     # Clean up stale locks first
     zfslock_cleanup_stale 2>/dev/null
 
-    local lockfile=$(_zfslock_file "$dataset")
+    local lockfile
+    lockfile=$(_zfslock_file "$dataset")
 
     if [[ -f "$lockfile" ]]; then
         local type pid script acquired description
@@ -138,23 +139,30 @@ cmd_status() {
         local ancestor_locks=0
         while [[ "$parent" == */* ]]; do
             parent="${parent%/*}"
-            local parent_lock=$(_zfslock_file "$parent")
+            local parent_lock
+            parent_lock=$(_zfslock_file "$parent")
             if [[ -f "$parent_lock" ]]; then
-                local p_type=$(_zfslock_read_field "$parent_lock" "type")
-                local p_script=$(_zfslock_read_field "$parent_lock" "script")
+                local p_type
+                p_type=$(_zfslock_read_field "$parent_lock" "type")
+                local p_script
+                p_script=$(_zfslock_read_field "$parent_lock" "script")
                 echo "  Ancestor lock: $parent (type=$p_type, script=$p_script)"
                 ((ancestor_locks++))
             fi
         done
 
         # Check descendants
-        local dataset_encoded=$(_zfslock_encode "$dataset")
+        local dataset_encoded
+        dataset_encoded=$(_zfslock_encode "$dataset")
         local descendant_locks=0
         for desc_lock in "$ZFSLOCK_LOCKS_DIR"/"${dataset_encoded}%2F"*.lock ; do
             [[ -f "$desc_lock" ]] || continue
-            local d_dataset=$(_zfslock_read_field "$desc_lock" "dataset")
-            local d_type=$(_zfslock_read_field "$desc_lock" "type")
-            local d_script=$(_zfslock_read_field "$desc_lock" "script")
+            local d_dataset
+            d_dataset=$(_zfslock_read_field "$desc_lock" "dataset")
+            local d_type
+            d_type=$(_zfslock_read_field "$desc_lock" "type")
+            local d_script
+            d_script=$(_zfslock_read_field "$desc_lock" "script")
             echo "  Descendant lock: $d_dataset (type=$d_type, script=$d_script)"
             ((descendant_locks++))
         done
@@ -174,8 +182,10 @@ cmd_status() {
             if zfslock_check "$dataset" "$check_type" 2>/dev/null; then
                 echo "  Type '$check_type': available"
             else
-                local conflict_dataset=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "dataset")
-                local conflict_type=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "type")
+                local conflict_dataset
+                conflict_dataset=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "dataset")
+                local conflict_type
+                conflict_type=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "type")
                 echo "  Type '$check_type': BLOCKED by $conflict_dataset ($conflict_type)"
             fi
         done
@@ -348,10 +358,14 @@ cmd_wait() {
             return 0
         fi
 
-        local conflict_dataset=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "dataset")
-        local conflict_type=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "type")
-        local conflict_script=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "script")
-        local conflict_pid=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "pid")
+        local conflict_dataset
+        conflict_dataset=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "dataset")
+        local conflict_type
+        conflict_type=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "type")
+        local conflict_script
+        conflict_script=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "script")
+        local conflict_pid
+        conflict_pid=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "pid")
 
         echo "[$attempts] Blocked by: $conflict_dataset ($conflict_type) - $conflict_script (PID $conflict_pid)"
         echo "    Retrying in $_wait_interval seconds..."

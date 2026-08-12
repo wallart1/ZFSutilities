@@ -24,11 +24,9 @@ systemctl daemon-reload
 zfs load-key -a
 zfs mount -a
 if umount /mnt/ZFSkeys; then
-    if ! cryptsetup luksClose \
-            $(lsblk -l -p -o NAME,LABEL,TYPE \
+    if ! cryptsetup luksClose "$(lsblk -l -p -o NAME,LABEL,TYPE \
             | grep ZFSkeys \
-            | awk '{print $1}' \
-            ); then
+            | awk '{print $1}')"; then
         log_msg "FATAL: Unable to lock ZFSkeys."
         exit 8
     fi

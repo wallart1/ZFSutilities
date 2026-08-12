@@ -35,6 +35,7 @@ class TestShowBigStuff(unittest.TestCase):
     def _import_under_mock(self):
         with mock_gtk():
             import dataset_actions as da
+
             return da
 
     def test_warns_when_not_exactly_one_pool(self):
@@ -42,13 +43,13 @@ class TestShowBigStuff(unittest.TestCase):
         app = _make_show_big_stuff_app()
         app.datasets_view = MagicMock()
 
-        with patch.object(da, "get_tree_selection_items", return_value=[]), \
-             patch.object(da, "log_msg") as mock_log:
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[]),
+            patch.object(da, "log_msg") as mock_log,
+        ):
             da.on_datasets_show_big_stuff(app)
 
-        mock_log.assert_called_once_with(
-            "WARN: Select exactly one pool to show big stuff"
-        )
+        mock_log.assert_called_once_with("WARN: Select exactly one pool to show big stuff")
         app.dataset_runner.set_steps.assert_not_called()
 
     def test_builds_bash_step_for_selected_pool(self):
@@ -57,8 +58,7 @@ class TestShowBigStuff(unittest.TestCase):
         app.datasets_view = MagicMock()
 
         with patch.object(
-            da, "get_tree_selection_items",
-            return_value=[{"type": "pool", "name": "tank"}]
+            da, "get_tree_selection_items", return_value=[{"type": "pool", "name": "tank"}]
         ):
             da.on_datasets_show_big_stuff(app)
 
@@ -82,8 +82,7 @@ class TestShowBigStuff(unittest.TestCase):
         app.datasets_view = MagicMock()
 
         with patch.object(
-            da, "get_tree_selection_items",
-            return_value=[{"type": "pool", "name": "tank"}]
+            da, "get_tree_selection_items", return_value=[{"type": "pool", "name": "tank"}]
         ):
             da.on_datasets_show_big_stuff(app)
 
@@ -94,10 +93,12 @@ class TestShowBigStuff(unittest.TestCase):
         app = _make_show_big_stuff_app(runner=None)
         app.datasets_view = MagicMock()
 
-        with patch.object(
-            da, "get_tree_selection_items",
-            return_value=[{"type": "pool", "name": "tank"}]
-        ), patch.object(da, "log_msg") as mock_log:
+        with (
+            patch.object(
+                da, "get_tree_selection_items", return_value=[{"type": "pool", "name": "tank"}]
+            ),
+            patch.object(da, "log_msg") as mock_log,
+        ):
             da.on_datasets_show_big_stuff(app)
 
         mock_log.assert_called_once_with("WARN: Dataset runner not available")
@@ -109,10 +110,12 @@ class TestShowBigStuff(unittest.TestCase):
         app = _make_show_big_stuff_app(runner=runner)
         app.datasets_view = MagicMock()
 
-        with patch.object(
-            da, "get_tree_selection_items",
-            return_value=[{"type": "pool", "name": "tank"}]
-        ), patch.object(da, "log_msg") as mock_log:
+        with (
+            patch.object(
+                da, "get_tree_selection_items", return_value=[{"type": "pool", "name": "tank"}]
+            ),
+            patch.object(da, "log_msg") as mock_log,
+        ):
             da.on_datasets_show_big_stuff(app)
 
         mock_log.assert_called_once_with("WARN: A dataset action is already running")
@@ -176,6 +179,7 @@ class TestDeleteDatasetsRunner(unittest.TestCase):
     def _import_under_mock(self):
         with mock_gtk():
             import dataset_actions as da
+
             return da
 
     def test_builds_bash_steps_per_dataset(self):
@@ -291,10 +295,12 @@ class TestDeleteDatasetsRunner(unittest.TestCase):
             da._delete_datasets(app, datasets)
             zlm_mock = da.zlm
 
-        zlm_mock.check.assert_has_calls([
-            call("tank/vm-100", "x"),
-            call("tank/vm-200", "x"),
-        ])
+        zlm_mock.check.assert_has_calls(
+            [
+                call("tank/vm-100", "x"),
+                call("tank/vm-200", "x"),
+            ]
+        )
 
     def test_aborts_when_dataset_locked(self):
         da = self._import_under_mock()

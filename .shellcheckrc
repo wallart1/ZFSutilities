@@ -1,0 +1,11 @@
+# ShellCheck configuration for ZFS Utilities.
+# This project uses dynamic sourcing helpers (find_zfsutility_script,
+# source_helper) and globals set by sourced libraries (bashinit, node-lib.sh,
+# zfsbuildfsarray, etc.).  The rules below are disabled project-wide because
+# they are false positives for these intentional patterns.
+
+shell=bash
+disable=SC1090,SC2154
+
+# bin/watchall is a Python utility; do not run ShellCheck on it.
+exclude-path=bin/watchall

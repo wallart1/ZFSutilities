@@ -193,11 +193,10 @@ Sends trace output to stderr via `BASH_XTRACEFD=2`.
 
 **Arguments:** none.
 
-**Globals:**
+**Globals:** none.
 
-| Variable      | Role                                              | Reference |
-| ------------- | ------------------------------------------------- | --------- |
-| `$bashrestorex`| Set by `setx` to the command needed to restore the original `set -x` state | —         |
+`setx` does not preserve or restore the previous `set -x` state; use
+`bashrestorex` explicitly when tracing should stop.
 
 **Called modules:** none.
 

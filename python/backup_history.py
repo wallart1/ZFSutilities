@@ -36,18 +36,24 @@ _HUMAN_SIZE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([kKMGTPE]?(?:i?B)?)$")
 # zfs receive output (which may use either convention).
 _SIZE_MULTIPLIERS = {
     "B": 1,
-    "K": 1000, "KB": 1000,
+    "K": 1000,
+    "KB": 1000,
     "KiB": 1024,
-    "M": 1000 ** 2, "MB": 1000 ** 2,
-    "MiB": 1024 ** 2,
-    "G": 1000 ** 3, "GB": 1000 ** 3,
-    "GiB": 1024 ** 3,
-    "T": 1000 ** 4, "TB": 1000 ** 4,
-    "TiB": 1024 ** 4,
-    "P": 1000 ** 5, "PB": 1000 ** 5,
-    "PiB": 1024 ** 5,
-    "E": 1000 ** 6, "EB": 1000 ** 6,
-    "EiB": 1024 ** 6,
+    "M": 1000**2,
+    "MB": 1000**2,
+    "MiB": 1024**2,
+    "G": 1000**3,
+    "GB": 1000**3,
+    "GiB": 1024**3,
+    "T": 1000**4,
+    "TB": 1000**4,
+    "TiB": 1024**4,
+    "P": 1000**5,
+    "PB": 1000**5,
+    "PiB": 1024**5,
+    "E": 1000**6,
+    "EB": 1000**6,
+    "EiB": 1024**6,
 }
 
 
@@ -67,11 +73,11 @@ def _parse_human_size(size_str):
         return 0
     value = float(m.group(1))
     unit = m.group(2)
-    if not unit or unit == 'B':
+    if not unit or unit == "B":
         multiplier = 1
-    elif unit in ('k', 'K', 'M', 'G', 'T', 'P', 'E'):
+    elif unit in ("k", "K", "M", "G", "T", "P", "E"):
         # Bare SI suffixes from zfs receive (e.g. "319M", "11.2G")
-        multiplier = _SIZE_MULTIPLIERS.get(unit.upper() + 'B', 1)
+        multiplier = _SIZE_MULTIPLIERS.get(unit.upper() + "B", 1)
     else:
         multiplier = _SIZE_MULTIPLIERS.get(unit, 1)
     return int(value * multiplier)
@@ -197,9 +203,7 @@ def get_success_rate(entries, days):
     total = len(pruned)
     if total == 0:
         return 0, 0, 0
-    success = sum(
-        1 for e in pruned if e.get("result") == "success"
-    )
+    success = sum(1 for e in pruned if e.get("result") == "success")
     percent = int((success / total) * 100)
     return success, total, percent
 
@@ -209,8 +213,7 @@ def get_recent_entries(entries, limit):
     return entries[:limit]
 
 
-def build_entry(timestamp, run_type, name, duration, result,
-                bytes_transferred=0, log_file=None):
+def build_entry(timestamp, run_type, name, duration, result, bytes_transferred=0, log_file=None):
     """Construct a standard history entry dict.
 
     All callers should use this helper to ensure a consistent schema.

@@ -10,7 +10,7 @@ from datetime import datetime
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 import zfs_lock_manager as zlm
 from backup_config import log_msg
 from command_builders import BashStep
@@ -28,6 +28,7 @@ from gui_helpers import (
 # ---------------------------------------------------------------------------
 # Local helpers
 # ---------------------------------------------------------------------------
+
 
 def _repo(app):
     """Return the ZFS repository from the application context."""
@@ -48,10 +49,15 @@ def _unique_parent_datasets(snapshot_items: list) -> list:
 
 def _input_dialog(parent, title, widgets, default=""):
     """Show a dialog with extra *widgets* and a single text entry."""
-    dialog = create_dialog(title, parent, [
-        (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
-        (Gtk.STOCK_OK, Gtk.ResponseType.OK),
-    ], default_response=Gtk.ResponseType.OK)
+    dialog = create_dialog(
+        title,
+        parent,
+        [
+            (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
+            (Gtk.STOCK_OK, Gtk.ResponseType.OK),
+        ],
+        default_response=Gtk.ResponseType.OK,
+    )
     content = dialog.get_content_area()
     for w in widgets:
         content.add(w)
@@ -70,7 +76,8 @@ def _input_dialog(parent, title, widgets, default=""):
 def _confirm_yes_no(parent, primary, secondary):
     """Show a YES/NO warning dialog; return True if YES was clicked."""
     dialog = Gtk.MessageDialog(
-        transient_for=parent, modal=True,
+        transient_for=parent,
+        modal=True,
         message_type=Gtk.MessageType.WARNING,
         buttons=Gtk.ButtonsType.YES_NO,
         text=primary,
@@ -84,6 +91,7 @@ def _confirm_yes_no(parent, primary, secondary):
 # ---------------------------------------------------------------------------
 # Action handlers
 # ---------------------------------------------------------------------------
+
 
 def on_datasets_snapshot(app):
     """Create a snapshot on the selected dataset."""
@@ -101,7 +109,8 @@ def on_datasets_snapshot(app):
     ds_label.set_halign(Gtk.Align.START)
     ds_label.set_selectable(True)
     response, snap_name = _input_dialog(
-        app, "Create Snapshot",
+        app,
+        "Create Snapshot",
         [ds_label, Gtk.Label(label="Snapshot name (without @):")],
         suggested,
     )
@@ -161,9 +170,7 @@ def _delete_datasets(app, datasets):
 
         for snap in ds_info["snapshots"]:
             try:
-                ds_info["holds"].extend(
-                    f"{hold.tag} on {snap}" for hold in repo.list_holds(snap)
-                )
+                ds_info["holds"].extend(f"{hold.tag} on {snap}" for hold in repo.list_holds(snap))
             except subprocess.CalledProcessError:
                 pass
 
@@ -210,10 +217,14 @@ def _delete_datasets(app, datasets):
 
     body = "\n".join(lines)
 
-    dialog = create_dialog("Destroy Dataset(s)", app, [
-        (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
-        ("Destroy", Gtk.ResponseType.OK),
-    ])
+    dialog = create_dialog(
+        "Destroy Dataset(s)",
+        app,
+        [
+            (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
+            ("Destroy", Gtk.ResponseType.OK),
+        ],
+    )
     content = dialog.get_content_area()
     header = Gtk.Label()
     header.set_markup(
@@ -247,12 +258,14 @@ def _delete_datasets(app, datasets):
             f'mydir="{parent_dir}"; source "$mydir/zfsdelfs"; '
             f'delfs "{ds_name}"'
         )
-        steps.append(BashStep(
-            ["bash", "-c", bash_cmd],
-            f"Destroy {ds_name}",
-            is_rsync=False,
-            fatal=False,
-        ))
+        steps.append(
+            BashStep(
+                ["bash", "-c", bash_cmd],
+                f"Destroy {ds_name}",
+                is_rsync=False,
+                fatal=False,
+            )
+        )
 
     def _on_delete_complete(cancelled=False):
         refresh_datasets_page(app)
@@ -274,16 +287,14 @@ def _delete_snapshots(app, snaps):
             pass
 
     if held:
-        log_msg(
-            f"WARN: Cannot delete: {', '.join(held)} still have holds. "
-            "Delete the holds first."
-        )
+        log_msg(f"WARN: Cannot delete: {', '.join(held)} still have holds. Delete the holds first.")
         return
 
     snap_names = [f"{s['dataset']}@{s['name']}" for s in snaps]
     display = "\n  ".join(snap_names)
-    if not _confirm_yes_no(app, f"Delete {len(snap_names)} snapshot(s)?",
-                           f"  {display}\n\nThis cannot be undone."):
+    if not _confirm_yes_no(
+        app, f"Delete {len(snap_names)} snapshot(s)?", f"  {display}\n\nThis cannot be undone."
+    ):
         return
 
     parents = _unique_parent_datasets(snaps)
@@ -307,9 +318,7 @@ def _delete_snapshots(app, snaps):
 def _release_holds(app, holds):
     """Release selected holds."""
     repo = _repo(app)
-    names = "\n  ".join(
-        f"{h['tag']} on {h['dataset']}@{h['snapshot']}" for h in holds
-    )
+    names = "\n  ".join(f"{h['tag']} on {h['dataset']}@{h['snapshot']}" for h in holds)
     if not _confirm_yes_no(app, f"Release {len(holds)} hold(s)?", f"  {names}"):
         return
 
@@ -365,9 +374,11 @@ def on_datasets_rollback(app):
 
     s = snaps[0]
     full = f"{s['dataset']}@{s['name']}"
-    detail = (f"This will revert {s['dataset']} to snapshot {s['name']}.\n\n"
-              "All data written after this snapshot will be LOST.\n"
-              "Newer snapshots will be destroyed.")
+    detail = (
+        f"This will revert {s['dataset']} to snapshot {s['name']}.\n\n"
+        "All data written after this snapshot will be LOST.\n"
+        "Newer snapshots will be destroyed."
+    )
     if not _confirm_yes_no(app, f"Rollback to {s['name']}?", detail):
         return
 
@@ -393,7 +404,7 @@ def on_datasets_show_big_stuff(app):
 
     pool = pool_items[0]["name"]
 
-    runner = getattr(app, 'dataset_runner', None)
+    runner = getattr(app, "dataset_runner", None)
     if runner is None:
         log_msg("WARN: Dataset runner not available")
         return
@@ -404,9 +415,7 @@ def on_datasets_show_big_stuff(app):
     parent_dir = app.parent_dir
     pool_quoted = shlex.quote(pool)
     bash_cmd = (
-        f'source ~/bashinit; bashinit; '
-        f'mydir="{parent_dir}"; '
-        f'"$mydir/zfsshowbigstuff" {pool_quoted}'
+        f'source ~/bashinit; bashinit; mydir="{parent_dir}"; "$mydir/zfsshowbigstuff" {pool_quoted}'
     )
     step = BashStep(
         ["bash", "-c", bash_cmd],
@@ -484,17 +493,19 @@ def on_datasets_unmount_snapshot(app):
             f"{full_snap} is currently in use by:\n\n{proc_list}\n\n"
             "Please close the listed application(s), then try unmounting again."
         )
-        dialog = Gtk.MessageDialog(transient_for=app, modal=True,
-                                   message_type=Gtk.MessageType.WARNING,
-                                   buttons=Gtk.ButtonsType.OK, text="Snapshot is busy")
+        dialog = Gtk.MessageDialog(
+            transient_for=app,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK,
+            text="Snapshot is busy",
+        )
         dialog.format_secondary_text(detail)
         dialog.run()
         dialog.destroy()
         return
 
-    result = subprocess.run(
-        ["sudo", "umount", path], capture_output=True, text=True, check=False
-    )
+    result = subprocess.run(["sudo", "umount", path], capture_output=True, text=True, check=False)
     if result.returncode == 0:
         log_msg(f"INFO: Unmounted snapshot {full_snap}")
         update_ds_button_sensitivity(app)

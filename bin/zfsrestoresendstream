@@ -47,7 +47,8 @@ function restoresendstream {
 #    printf '\t%s\n' "${files[@]}"
     for file in "${files[@]}"; do
         # Get the text after the last '/'. Then get the text before the '.'.
-        local destfile=$(echo $file | awk -F'/' '{print $NF}' | awk -F'.' '{print $1}')
+        local destfile
+        destfile=$(echo $file | awk -F'/' '{print $NF}' | awk -F'.' '{print $1}')
         local fulldestfs="$destfs"'/'"$destfile"
         log_msg "INFO: \tRestore $file to $fulldestfs."
     done
@@ -57,7 +58,8 @@ function restoresendstream {
 
     for file in "${files[@]}"; do
         # Get the text after the last '/'. Then get the text before the '.'.
-        local destfile=$(echo $file | awk -F'/' '{print $NF}' | awk -F'.' '{print $1}')
+        local destfile
+        destfile=$(echo $file | awk -F'/' '{print $NF}' | awk -F'.' '{print $1}')
         local fulldestfs="$destfs"'/'"$destfile"
         log_msg "INFO: cat $file | zfs receive -v $fulldestfs"
         if [[ $autoproceed != 'Y' ]]; then

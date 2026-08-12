@@ -25,17 +25,29 @@ function send {
     log_msg "INFO: Next snap: $nextsnap"
     if [[ $autoproceed != 'Y' ]]; then read -p 'Press enter to continue.'; fi
 
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfs-send-receive helper.
     sourcefs="notgiven"
+    # shellcheck disable=SC2034
     sourcefsremovequalifiers='0'
+    # shellcheck disable=SC2034
     destfs="notgiven"
+    # shellcheck disable=SC2034
     includes=()
+    # shellcheck disable=SC2034
     excludes=()
+    # shellcheck disable=SC2034
     depth=''
+    # shellcheck disable=SC2034
     doincrementals='Y'      # Whether to do full copies (N) or incrementals (Y).
         # NOTE: If you need a full copy AND all the snapshots, use the zfsrestore script.
+    # shellcheck disable=SC2034
     dointermediates='N'     # If $doincrementals = 'N', this has no effect.
+    # shellcheck disable=SC2034
     force='N'               # Whether full copy is done even if one was already done.
+    # shellcheck disable=SC2034
     releaseholds='N'        # If $doincrementals = 'Y', this has no effect.
+    # shellcheck disable=SC2034
     receive_F_option=''     # "F" = Roll back modifications on destination.
 
     if [[ $1 != '' ]]; then overrides $1; fi

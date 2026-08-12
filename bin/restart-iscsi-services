@@ -126,7 +126,7 @@ main() {
     echo ""
     echo "Encrypted LUN status:"
     if [[ -f "$CONF" ]]; then
-        while IFS=: read -r name device target; do
+        while IFS=: read -r name device _target; do
             [[ -z "$name" || "$name" == \#* ]] && continue
             if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
                 echo "  ✓ $name configured"

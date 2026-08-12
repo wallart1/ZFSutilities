@@ -1,3 +1,4 @@
+#!/usr/bin/bash
 # /usr/local/lib/two-node-lib.sh
 #
 # Deprecated compatibility wrapper for old scripts that source

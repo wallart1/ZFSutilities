@@ -10,7 +10,7 @@ import re
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from backup_history import format_duration, get_success_rate, load_history
 from backup_runner import _PV_RATE_RE
 from config_core import (
@@ -77,6 +77,7 @@ def _update_logs_status_label(app, text):
         label.set_text("")
         label.hide()
 
+
 # Regex: ^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(\w+)_(.+)\.log$
 # Purpose: Parse session log filenames into (date, time, type, name).
 # Supports both new format (type first) and legacy format (gui first).
@@ -106,9 +107,7 @@ _CHUNK_READ_BYTES = 256 * 1024  # 256 KB per "Show More" click
 #   "# END: cancelled, duration=45.0s" -> match
 #   "# END: rc=1, duration=9.0s" -> match
 #   "2026-05-20 21:55:15  INFO: done" -> no match
-_TRAILER_RE = re.compile(
-    r"# END: (?:rc=(\d+)|cancelled), duration=([\d.]+)s(?:, bytes=(\d+))?"
-)
+_TRAILER_RE = re.compile(r"# END: (?:rc=(\d+)|cancelled), duration=([\d.]+)s(?:, bytes=(\d+))?")
 
 
 def _filter_log_text(text, min_level):
@@ -138,7 +137,7 @@ def _parse_log_filename(name):
 
 def _format_size(size):
     """Format byte size human-readably."""
-    for unit in ('B', 'KB', 'MB', 'GB'):
+    for unit in ("B", "KB", "MB", "GB"):
         if size < 1024:
             return f"{size:.1f} {unit}"
         size /= 1024
@@ -191,8 +190,9 @@ def _scan_logs(app):
             if highest in ("WARN", "FATAL"):
                 status = highest.title()
 
-        rows.append((dt, log_type, log_name, status, _format_size(size),
-                     duration_str, bytes_str, path))
+        rows.append(
+            (dt, log_type, log_name, status, _format_size(size), duration_str, bytes_str, path)
+        )
 
     index.remove_missing(current_paths)
     index.save()
@@ -322,12 +322,8 @@ def create_logs_page(app):
     app.logs_short_prefix = True
     app._logs_short_prefix_toggle = Gtk.ToggleButton(label="Short prefix")
     app._logs_short_prefix_toggle.set_active(True)
-    app._logs_short_prefix_toggle.set_tooltip_text(
-        "Show only date and time in the log viewer"
-    )
-    app._logs_short_prefix_toggle.connect(
-        "toggled", _on_logs_short_prefix_toggled, app
-    )
+    app._logs_short_prefix_toggle.set_tooltip_text("Show only date and time in the log viewer")
+    app._logs_short_prefix_toggle.connect("toggled", _on_logs_short_prefix_toggled, app)
 
     viewer_toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     viewer_toolbar.pack_start(Gtk.Label(label="Level:"), False, False, 0)
@@ -344,9 +340,7 @@ def create_logs_page(app):
     app._logs_popout_toggle.set_image(
         Gtk.Image.new_from_icon_name("window-new", Gtk.IconSize.BUTTON)
     )
-    app._logs_popout_toggle.set_tooltip_text(
-        "Pop out log viewer into a separate window"
-    )
+    app._logs_popout_toggle.set_tooltip_text("Pop out log viewer into a separate window")
     app._logs_popout_toggle.connect(
         "toggled", _on_logs_popout_toggled, app, viewer_box, viewer_frame
     )
@@ -387,9 +381,7 @@ def create_logs_page(app):
     app.logs_load_full_btn.set_tooltip_text(
         "Load the entire log file (may be slow for very large files)"
     )
-    app.logs_load_full_btn.connect(
-        "clicked", lambda _b: _on_load_full_log_clicked(app)
-    )
+    app.logs_load_full_btn.connect("clicked", lambda _b: _on_load_full_log_clicked(app))
     viewer_box.pack_start(app.logs_load_full_btn, False, False, 0)
 
     # Track current file and read offset for chunked loading
@@ -416,9 +408,7 @@ def create_logs_page(app):
 
     # Watch the sessions directory for async updates
     dir_file = Gio.File.new_for_path(SESSION_LOG_DIR)
-    app._logs_file_monitor = dir_file.monitor_directory(
-        Gio.FileMonitorFlags.NONE, None
-    )
+    app._logs_file_monitor = dir_file.monitor_directory(Gio.FileMonitorFlags.NONE, None)
     app._logs_file_monitor.connect("changed", _on_dir_changed, app)
 
     scrolled = Gtk.ScrolledWindow()
@@ -564,6 +554,7 @@ def _tail_log_file(app):
                     entry = index.update(path)
                 else:
                     from log_index import update_entry_incrementally
+
                     update_entry_incrementally(entry, path)
                     index._set(path, entry)
                 index.save()
@@ -581,17 +572,11 @@ def _tail_log_file(app):
                     drop_target = (current_chars + new_chars) // 2
                     drop_end = buf.get_iter_at_offset(drop_target)
                     buf.delete(buf.get_start_iter(), drop_end)
-                    log_msg(
-                        "WARN: Log viewer buffer truncated to prevent "
-                        "excessive memory use"
-                    )
+                    log_msg("WARN: Log viewer buffer truncated to prevent excessive memory use")
 
                 # Only auto-scroll if the user is already near the bottom
                 vadj = app.logs_text_scroll.get_vadjustment()
-                at_bottom = (
-                    vadj.get_value()
-                    >= vadj.get_upper() - vadj.get_page_size() - 5
-                )
+                at_bottom = vadj.get_value() >= vadj.get_upper() - vadj.get_page_size() - 5
 
                 end_iter = buf.get_end_iter()
                 buf.insert(end_iter, filtered)
@@ -767,9 +752,7 @@ def _on_selection_changed(selection, app):
     # If the same file is already loaded, just restart tailing when running
     if path == app._logs_current_path:
         if status == "Running":
-            app._logs_tail_timer = GLib.timeout_add_seconds(
-                1, _tail_log_file, app
-            )
+            app._logs_tail_timer = GLib.timeout_add_seconds(1, _tail_log_file, app)
         return
 
     app._logs_current_path = path
@@ -921,7 +904,8 @@ def _on_delete_selected(app):
         preview += f" and {count - 3} more"
 
     dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
+        transient_for=app,
+        modal=True,
         message_type=Gtk.MessageType.QUESTION,
         buttons=Gtk.ButtonsType.YES_NO,
         text=f"Delete {count} selected log files?",

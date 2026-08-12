@@ -25,8 +25,7 @@ class TestShowAddProfileDialog(unittest.TestCase):
         app.schedule_store = MagicMock()
         return app
 
-    def _run_add_dialog(self, app, response, name_text,
-                        duplicate_response=None, **patches):
+    def _run_add_dialog(self, app, response, name_text, duplicate_response=None, **patches):
         """Patch create_dialog/Entry and call show_add_profile_dialog."""
         dialog = MagicMock()
         dialog.run.return_value = response
@@ -40,11 +39,18 @@ class TestShowAddProfileDialog(unittest.TestCase):
         defaults = {
             "create_dialog": patch.object(profile_dialogs, "create_dialog", return_value=dialog),
             "Entry": patch.object(profile_dialogs.Gtk, "Entry", return_value=entry),
-            "MessageDialog": patch.object(profile_dialogs.Gtk, "MessageDialog", return_value=confirm_dialog),
+            "MessageDialog": patch.object(
+                profile_dialogs.Gtk, "MessageDialog", return_value=confirm_dialog
+            ),
             "get_user": patch.object(profile_dialogs, "get_user", return_value="root"),
         }
         defaults.update(patches)
-        with defaults["create_dialog"], defaults["Entry"], defaults["MessageDialog"], defaults["get_user"]:
+        with (
+            defaults["create_dialog"],
+            defaults["Entry"],
+            defaults["MessageDialog"],
+            defaults["get_user"],
+        ):
             profile_dialogs.show_add_profile_dialog(app, "backup", {"key": "value"})
         return dialog, entry, confirm_dialog
 
@@ -52,18 +58,22 @@ class TestShowAddProfileDialog(unittest.TestCase):
         app = self._make_app()
         on_success = MagicMock()
 
-        with patch.object(profile_dialogs, "create_profile", return_value={
-            "profile_name": "root-backup-nightly",
-        }) as mock_create, \
-             patch.object(profile_dialogs, "profile_exists", return_value=False), \
-             patch.object(schedule_page, "_refresh_profile_list") as mock_refresh:
+        with (
+            patch.object(
+                profile_dialogs,
+                "create_profile",
+                return_value={
+                    "profile_name": "root-backup-nightly",
+                },
+            ) as mock_create,
+            patch.object(profile_dialogs, "profile_exists", return_value=False),
+            patch.object(schedule_page, "_refresh_profile_list") as mock_refresh,
+        ):
             _dialog, _, _ = self._run_add_dialog(
                 app, profile_dialogs.Gtk.ResponseType.OK, "nightly"
             )
 
-        mock_create.assert_called_once_with(
-            "backup", "nightly", {"key": "value"}, dry_run=False
-        )
+        mock_create.assert_called_once_with("backup", "nightly", {"key": "value"}, dry_run=False)
         on_success.assert_not_called()  # no callback passed in helper
         mock_refresh.assert_called_once_with(app)
 
@@ -71,18 +81,26 @@ class TestShowAddProfileDialog(unittest.TestCase):
         app = self._make_app()
         on_success = MagicMock()
 
-        with patch.object(profile_dialogs, "create_profile", return_value={
-            "profile_name": "root-backup-nightly",
-        }), \
-             patch.object(profile_dialogs, "profile_exists", return_value=False), \
-             patch.object(schedule_page, "_refresh_profile_list"):
+        with (
+            patch.object(
+                profile_dialogs,
+                "create_profile",
+                return_value={
+                    "profile_name": "root-backup-nightly",
+                },
+            ),
+            patch.object(profile_dialogs, "profile_exists", return_value=False),
+            patch.object(schedule_page, "_refresh_profile_list"),
+        ):
             dialog = MagicMock()
             dialog.run.return_value = profile_dialogs.Gtk.ResponseType.OK
             entry = MagicMock()
             entry.get_text.return_value = "nightly"
-            with patch.object(profile_dialogs, "create_dialog", return_value=dialog), \
-                 patch.object(profile_dialogs.Gtk, "Entry", return_value=entry), \
-                 patch.object(profile_dialogs.Gtk, "MessageDialog", return_value=MagicMock()):
+            with (
+                patch.object(profile_dialogs, "create_dialog", return_value=dialog),
+                patch.object(profile_dialogs.Gtk, "Entry", return_value=entry),
+                patch.object(profile_dialogs.Gtk, "MessageDialog", return_value=MagicMock()),
+            ):
                 profile_dialogs.show_add_profile_dialog(
                     app, "backup", {"key": "value"}, on_success=on_success
                 )
@@ -97,8 +115,10 @@ class TestShowAddProfileDialog(unittest.TestCase):
 
     def test_rejects_empty_name(self):
         app = self._make_app()
-        with patch.object(profile_dialogs, "create_profile") as mock_create, \
-             patch.object(profile_dialogs.Gtk, "MessageDialog") as mock_error:
+        with (
+            patch.object(profile_dialogs, "create_profile") as mock_create,
+            patch.object(profile_dialogs.Gtk, "MessageDialog") as mock_error,
+        ):
             self._run_add_dialog(app, profile_dialogs.Gtk.ResponseType.OK, "")
         mock_create.assert_not_called()
         mock_error.assert_not_called()
@@ -106,18 +126,24 @@ class TestShowAddProfileDialog(unittest.TestCase):
     def test_rejects_invalid_characters(self):
         app = self._make_app()
         with patch.object(profile_dialogs, "create_profile") as mock_create:
-            dialog, _, _ = self._run_add_dialog(app, profile_dialogs.Gtk.ResponseType.OK, "my profile")
+            dialog, _, _ = self._run_add_dialog(
+                app, profile_dialogs.Gtk.ResponseType.OK, "my profile"
+            )
         mock_create.assert_not_called()
         # Error dialog was shown
         self.assertEqual(dialog.destroy.call_count, 1)
 
     def test_duplicate_profile_no_overwrite(self):
         app = self._make_app()
-        with patch.object(profile_dialogs, "create_profile") as mock_create, \
-             patch.object(profile_dialogs, "update_profile") as mock_update, \
-             patch.object(profile_dialogs, "profile_exists", return_value=True):
+        with (
+            patch.object(profile_dialogs, "create_profile") as mock_create,
+            patch.object(profile_dialogs, "update_profile") as mock_update,
+            patch.object(profile_dialogs, "profile_exists", return_value=True),
+        ):
             dialog, _, confirm = self._run_add_dialog(
-                app, profile_dialogs.Gtk.ResponseType.OK, "daily",
+                app,
+                profile_dialogs.Gtk.ResponseType.OK,
+                "daily",
                 duplicate_response=profile_dialogs.Gtk.ResponseType.NO,
             )
         mock_create.assert_not_called()
@@ -127,27 +153,33 @@ class TestShowAddProfileDialog(unittest.TestCase):
 
     def test_duplicate_profile_overwrites(self):
         app = self._make_app()
-        with patch.object(profile_dialogs, "create_profile") as mock_create, \
-             patch.object(profile_dialogs, "update_profile", return_value={
-                 "profile_name": "root-backup-daily"
-             }) as mock_update, \
-             patch.object(profile_dialogs, "profile_exists", return_value=True), \
-             patch.object(schedule_page, "_refresh_profile_list") as mock_refresh:
+        with (
+            patch.object(profile_dialogs, "create_profile") as mock_create,
+            patch.object(
+                profile_dialogs,
+                "update_profile",
+                return_value={"profile_name": "root-backup-daily"},
+            ) as mock_update,
+            patch.object(profile_dialogs, "profile_exists", return_value=True),
+            patch.object(schedule_page, "_refresh_profile_list") as mock_refresh,
+        ):
             _dialog, _, confirm = self._run_add_dialog(
-                app, profile_dialogs.Gtk.ResponseType.OK, "daily",
+                app,
+                profile_dialogs.Gtk.ResponseType.OK,
+                "daily",
                 duplicate_response=profile_dialogs.Gtk.ResponseType.YES,
             )
         mock_create.assert_not_called()
-        mock_update.assert_called_once_with(
-            "backup", "daily", {"key": "value"}, dry_run=False
-        )
+        mock_update.assert_called_once_with("backup", "daily", {"key": "value"}, dry_run=False)
         confirm.destroy.assert_called_once()
         mock_refresh.assert_called_once_with(app)
 
     def test_shows_error_on_create_exception(self):
         app = self._make_app()
-        with patch.object(profile_dialogs, "create_profile", side_effect=ValueError("boom")), \
-             patch.object(profile_dialogs, "profile_exists", return_value=False):
+        with (
+            patch.object(profile_dialogs, "create_profile", side_effect=ValueError("boom")),
+            patch.object(profile_dialogs, "profile_exists", return_value=False),
+        ):
             dialog, _, _ = self._run_add_dialog(app, profile_dialogs.Gtk.ResponseType.OK, "bad")
         self.assertEqual(dialog.destroy.call_count, 1)
 
@@ -172,8 +204,12 @@ class TestShowRecallProfileDialog(unittest.TestCase):
         app = self._make_app()
         on_select = MagicMock()
 
-        with patch.object(profile_dialogs, "list_profiles", return_value=[]), \
-             patch.object(profile_dialogs.Gtk, "MessageDialog", return_value=MagicMock()) as mock_error:
+        with (
+            patch.object(profile_dialogs, "list_profiles", return_value=[]),
+            patch.object(
+                profile_dialogs.Gtk, "MessageDialog", return_value=MagicMock()
+            ) as mock_error,
+        ):
             profile_dialogs.show_recall_profile_dialog(app, "backup", on_select)
 
         mock_error.assert_called_once()
@@ -190,10 +226,12 @@ class TestShowRecallProfileDialog(unittest.TestCase):
         dialog = MagicMock()
         dialog.run.return_value = profile_dialogs.Gtk.ResponseType.OK
 
-        with patch.object(profile_dialogs, "list_profiles", return_value=profiles), \
-             patch.object(profile_dialogs, "load_profile", return_value=loaded) as mock_load, \
-             patch.object(profile_dialogs, "create_dialog", return_value=dialog), \
-             patch.object(profile_dialogs.Gtk, "TreeView", return_value=view):
+        with (
+            patch.object(profile_dialogs, "list_profiles", return_value=profiles),
+            patch.object(profile_dialogs, "load_profile", return_value=loaded) as mock_load,
+            patch.object(profile_dialogs, "create_dialog", return_value=dialog),
+            patch.object(profile_dialogs.Gtk, "TreeView", return_value=view),
+        ):
             profile_dialogs.show_recall_profile_dialog(app, "backup", on_select)
 
         mock_load.assert_called_once_with("root-backup-daily")
@@ -208,14 +246,14 @@ class TestShowRecallProfileDialog(unittest.TestCase):
         dialog = MagicMock()
         dialog.run.return_value = profile_dialogs.Gtk.ResponseType.CANCEL
 
-        with patch.object(profile_dialogs, "list_profiles", return_value=profiles), \
-             patch.object(profile_dialogs, "create_dialog", return_value=dialog), \
-             patch.object(profile_dialogs.Gtk, "TreeView", return_value=MagicMock()):
+        with (
+            patch.object(profile_dialogs, "list_profiles", return_value=profiles),
+            patch.object(profile_dialogs, "create_dialog", return_value=dialog),
+            patch.object(profile_dialogs.Gtk, "TreeView", return_value=MagicMock()),
+        ):
             profile_dialogs.show_recall_profile_dialog(app, "backup", on_select)
 
         on_select.assert_not_called()
-
-
 
 
 class TestProfileScopeWarnings(unittest.TestCase):
@@ -228,9 +266,11 @@ class TestProfileScopeWarnings(unittest.TestCase):
         app = self._make_app()
         profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
 
-        with patch.object(profile_dialogs, "list_profiles", return_value=[]), \
-             patch.object(profile_dialogs, "validate_profiles", return_value=[]), \
-             patch.object(profile_dialogs, "show_warning_dialog") as mock_warn:
+        with (
+            patch.object(profile_dialogs, "list_profiles", return_value=[]),
+            patch.object(profile_dialogs, "validate_profiles", return_value=[]),
+            patch.object(profile_dialogs, "show_warning_dialog") as mock_warn,
+        ):
             profile_dialogs._show_profile_scope_warnings(app, profile)
 
         mock_warn.assert_not_called()
@@ -239,12 +279,15 @@ class TestProfileScopeWarnings(unittest.TestCase):
         app = self._make_app()
         profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
 
-        with patch.object(profile_dialogs, "list_profiles", return_value=[]), \
-             patch.object(
-                 profile_dialogs, "validate_profiles",
-                 return_value=["root-backup-daily scope mismatch"]
-             ), \
-             patch.object(profile_dialogs, "show_warning_dialog") as mock_warn:
+        with (
+            patch.object(profile_dialogs, "list_profiles", return_value=[]),
+            patch.object(
+                profile_dialogs,
+                "validate_profiles",
+                return_value=["root-backup-daily scope mismatch"],
+            ),
+            patch.object(profile_dialogs, "show_warning_dialog") as mock_warn,
+        ):
             profile_dialogs._show_profile_scope_warnings(app, profile)
 
         mock_warn.assert_called_once()
@@ -254,12 +297,15 @@ class TestProfileScopeWarnings(unittest.TestCase):
         app = self._make_app()
         profile = {"profile_name": "root-backup-daily", "tab_type": "backup"}
 
-        with patch.object(profile_dialogs, "list_profiles", return_value=[]), \
-             patch.object(
-                 profile_dialogs, "validate_profiles",
-                 return_value=["root-offsite-offsite scope mismatch"]
-             ), \
-             patch.object(profile_dialogs, "show_warning_dialog") as mock_warn:
+        with (
+            patch.object(profile_dialogs, "list_profiles", return_value=[]),
+            patch.object(
+                profile_dialogs,
+                "validate_profiles",
+                return_value=["root-offsite-offsite scope mismatch"],
+            ),
+            patch.object(profile_dialogs, "show_warning_dialog") as mock_warn,
+        ):
             profile_dialogs._show_profile_scope_warnings(app, profile)
 
         mock_warn.assert_not_called()

@@ -12,11 +12,6 @@ unset _local_bashinit
 
 
 function holds {
-    if [[ $2 = '' ]]; then
-        unset depth
-    else
-        depth="-d$2"
-    fi
     log_msg 'INFO: Snapshot holds for' "$1"'.'
     zfs list -Hrt snapshot -o name "$1" | xargs -r -n1 zfs holds -H
 }

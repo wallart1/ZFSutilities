@@ -14,9 +14,9 @@ from unittest.mock import MagicMock, patch
 @contextmanager
 def _patch_log_dirs(tmpdir):
     """Patch session_log and log_index to use tmpdir as SESSION_LOG_DIR."""
-    with patch("session_log.SESSION_LOG_DIR", tmpdir), \
-            patch("log_index.SESSION_LOG_DIR", tmpdir):
+    with patch("session_log.SESSION_LOG_DIR", tmpdir), patch("log_index.SESSION_LOG_DIR", tmpdir):
         yield
+
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
@@ -140,7 +140,7 @@ class TestReceivedByteCounting(unittest.TestCase):
         runner._total_bytes_received = 0
         with patch("os.read", return_value=b"received 2GiB stream in 5.00 seconds"):
             runner._on_stderr(0, br.GLib.IOCondition.IN)
-        self.assertEqual(runner._total_bytes_received, 2 * 1024 ** 3)
+        self.assertEqual(runner._total_bytes_received, 2 * 1024**3)
 
     def test_on_stderr_parses_bare_m_size(self):
         """Bare 'M' suffix from zfs receive must be counted (regression)."""
@@ -148,7 +148,7 @@ class TestReceivedByteCounting(unittest.TestCase):
         runner._total_bytes_received = 0
         with patch("os.read", return_value=b"received 319M stream in 8.46 seconds"):
             runner._on_stderr(0, br.GLib.IOCondition.IN)
-        self.assertEqual(runner._total_bytes_received, 319 * 1000 ** 2)
+        self.assertEqual(runner._total_bytes_received, 319 * 1000**2)
 
     def test_on_stdout_parses_received_line(self):
         runner = self._runner()
@@ -334,8 +334,7 @@ class TestAbortHandling(unittest.TestCase):
         runner = self._runner()
         runner.running = True
         post = MagicMock()
-        runner.steps = [BashStep([], "step1", is_rsync=False, fatal=False,
-                                 post_callback=post)]
+        runner.steps = [BashStep([], "step1", is_rsync=False, fatal=False, post_callback=post)]
         runner.current_step = 0
         runner._finally_step = None
         runner._session_start_time = time.time()
@@ -388,9 +387,7 @@ class TestAbortHandling(unittest.TestCase):
         runner.running = True
         runner.current_step = 0
         runner._session_start_time = time.time()
-        runner.steps = [
-            BashStep([], "Pre-backup command", is_rsync=False, fatal=True)
-        ]
+        runner.steps = [BashStep([], "Pre-backup command", is_rsync=False, fatal=True)]
         runner._on_complete = MagicMock()
         fake_process = MagicMock()
         fake_process.poll.return_value = 1
@@ -403,9 +400,7 @@ class TestAbortHandling(unittest.TestCase):
         with patch.object(runner, "_log") as mock_log:
             runner._check_process()
 
-        mock_log.assert_any_call(
-            "FATAL: Aborting backup because step failed"
-        )
+        mock_log.assert_any_call("FATAL: Aborting backup because step failed")
 
 
 class TestFinishProgress(unittest.TestCase):
@@ -496,6 +491,7 @@ class TestSessionTrailer(unittest.TestCase):
             runner._write_session_trailer(rc=0, bytes_transferred=1234)
 
             import log_index as li
+
             index = li.LogIndex.load()
             entry = index.get(runner._session_log_file)
 
@@ -512,6 +508,7 @@ class TestSessionTrailer(unittest.TestCase):
             runner._write_session_trailer(rc=1)
 
             import log_index as li
+
             index = li.LogIndex.load()
             entry = index.get(runner._session_log_file)
 
@@ -526,6 +523,7 @@ class TestSessionTrailer(unittest.TestCase):
             runner._write_session_trailer(rc=None, cancelled=True)
 
             import log_index as li
+
             index = li.LogIndex.load()
             entry = index.get(runner._session_log_file)
 
@@ -543,6 +541,7 @@ class TestSessionLogReuse(unittest.TestCase):
     @patch("session_log.datetime")
     def test_finish_resets_session_log_file(self, mock_datetime, _mock_add):
         from datetime import datetime as _datetime
+
         call_times = [
             _datetime(2026, 6, 27, 22, 22, 41),
             _datetime(2026, 6, 27, 22, 26, 35),
@@ -581,6 +580,7 @@ class TestSessionLogReuse(unittest.TestCase):
     @patch("session_log.datetime")
     def test_cancel_clears_session_log_file(self, mock_datetime):
         from datetime import datetime as _datetime
+
         mock_datetime.now.side_effect = [
             _datetime(2026, 6, 27, 22, 30, 0),
             _datetime(2026, 6, 27, 22, 30, 0),
@@ -648,9 +648,7 @@ class TestStepCallbacks(unittest.TestCase):
         runner.running = True
         pre = MagicMock()
         post = MagicMock()
-        runner.steps = [
-            BashStep([], "step", pre_callback=pre, post_callback=post)
-        ]
+        runner.steps = [BashStep([], "step", pre_callback=pre, post_callback=post)]
         with patch.object(runner, "_spawn_process", return_value=False):
             runner._run_next_step()
         pre.assert_called_once_with()
@@ -694,10 +692,17 @@ class TestStdoutStderrMerging(unittest.TestCase):
     @patch("backup_runner.GLib.io_add_watch")
     @patch("backup_runner.GLib.timeout_add")
     @patch("backup_runner.subprocess.Popen")
-    def test_non_rsync_merges_stderr_into_stdout(self, mock_popen, _mock_timeout,
-                                                  mock_io_add_watch, _mock_set_blocking,
-                                                  _mock_tcsetattr, _mock_tcgetattr,
-                                                  _mock_openpty, _mock_close):
+    def test_non_rsync_merges_stderr_into_stdout(
+        self,
+        mock_popen,
+        _mock_timeout,
+        mock_io_add_watch,
+        _mock_set_blocking,
+        _mock_tcsetattr,
+        _mock_tcgetattr,
+        _mock_openpty,
+        _mock_close,
+    ):
         fake_process = MagicMock()
         fake_process.stdout.fileno.return_value = 3
         fake_process.stderr = None
@@ -730,10 +735,17 @@ class TestStdoutStderrMerging(unittest.TestCase):
     @patch("backup_runner.GLib.io_add_watch")
     @patch("backup_runner.GLib.timeout_add")
     @patch("backup_runner.subprocess.Popen")
-    def test_rsync_keeps_separate_stdout_and_stderr(self, mock_popen, _mock_timeout,
-                                                     mock_io_add_watch, _mock_set_blocking,
-                                                     _mock_tcsetattr, _mock_tcgetattr,
-                                                     _mock_openpty, _mock_close):
+    def test_rsync_keeps_separate_stdout_and_stderr(
+        self,
+        mock_popen,
+        _mock_timeout,
+        mock_io_add_watch,
+        _mock_set_blocking,
+        _mock_tcsetattr,
+        _mock_tcgetattr,
+        _mock_openpty,
+        _mock_close,
+    ):
         fake_process = MagicMock()
         fake_process.stdout.fileno.return_value = 3
         fake_process.stderr.fileno.return_value = 4
@@ -758,9 +770,12 @@ class TestStdoutStderrMerging(unittest.TestCase):
         """Regression: lines from the merged stream keep their original order."""
         runner = self._runner()
         runner._total_bytes_received = 0
-        with patch("os.read", return_value=b"separator\nINFO: Processing ds.\nreceived 1GiB stream in 1.00 seconds"):
+        with patch(
+            "os.read",
+            return_value=b"separator\nINFO: Processing ds.\nreceived 1GiB stream in 1.00 seconds",
+        ):
             runner._on_stderr(0, br.GLib.IOCondition.IN)
-        self.assertEqual(runner._total_bytes_received, 1024 ** 3)
+        self.assertEqual(runner._total_bytes_received, 1024**3)
 
 
 class TestRsyncLogDailyRotation(unittest.TestCase):
@@ -769,8 +784,9 @@ class TestRsyncLogDailyRotation(unittest.TestCase):
     def _patch_rsync_log(self, tmpdir):
         log_dir = os.path.join(tmpdir, "rsync-logs")
         log_file = os.path.join(log_dir, "rsync-backup.log")
-        return patch("backup_runner.RSYNC_LOG_DIR", log_dir), \
-               patch("backup_runner.RSYNC_LOG_FILE", log_file)
+        return patch("backup_runner.RSYNC_LOG_DIR", log_dir), patch(
+            "backup_runner.RSYNC_LOG_FILE", log_file
+        )
 
     def test_noop_when_file_mtime_is_today(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -839,8 +855,10 @@ class TestSourceCleanup(unittest.TestCase):
         ctx = MagicMock()
         ctx.find_source_by_id.side_effect = lambda sid: None if sid == 111 else MagicMock()
 
-        with patch.object(br.GLib, "MainContext") as mock_mc, \
-             patch.object(br.GLib, "source_remove") as mock_remove:
+        with (
+            patch.object(br.GLib, "MainContext") as mock_mc,
+            patch.object(br.GLib, "source_remove") as mock_remove,
+        ):
             mock_mc.default.return_value = ctx
             runner._cleanup_io()
 
@@ -915,29 +933,23 @@ class TestRunnerRobustness(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
             runner.prepare_session_log()
-            with patch.object(runner, "_spawn_process",
-                              side_effect=RuntimeError("spawn exploded")):
+            with patch.object(runner, "_spawn_process", side_effect=RuntimeError("spawn exploded")):
                 runner._run_next_step()
 
         self.assertFalse(runner.running)
 
     @patch("backup_runner.restore_session_log")
     @patch("backup_runner.add_history_entry")
-    def test_finish_recovers_from_cleanup_exceptions(self, mock_add,
-                                                       _mock_restore):
+    def test_finish_recovers_from_cleanup_exceptions(self, mock_add, _mock_restore):
         """If cleanup steps in _finish raise, the runner still completes."""
         runner = self._runner()
         runner.label = "Backup"
         runner._session_start_time = time.time()
         runner._total_bytes_received = 1234
-        runner._on_complete = MagicMock(
-            side_effect=RuntimeError("complete exploded"))
-        runner.set_stdin_enabled = MagicMock(
-            side_effect=RuntimeError("stdin exploded"))
-        runner.progress = MagicMock(
-            side_effect=RuntimeError("progress exploded"))
-        runner._write_session_trailer = MagicMock(
-            side_effect=RuntimeError("trailer exploded"))
+        runner._on_complete = MagicMock(side_effect=RuntimeError("complete exploded"))
+        runner.set_stdin_enabled = MagicMock(side_effect=RuntimeError("stdin exploded"))
+        runner.progress = MagicMock(side_effect=RuntimeError("progress exploded"))
+        runner._write_session_trailer = MagicMock(side_effect=RuntimeError("trailer exploded"))
         mock_add.side_effect = RuntimeError("history exploded")
 
         with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
@@ -1039,45 +1051,66 @@ class TestRsyncFailureDiagnosis(unittest.TestCase):
         self.assertEqual(br._diagnose_rsync_failure(0, []), "")
 
     def test_partial_transfer(self):
-        diagnosis = br._diagnose_rsync_failure(23, [
-            "rsync: send_files failed to open \"foo\": Permission denied (13)",
-        ])
+        diagnosis = br._diagnose_rsync_failure(
+            23,
+            [
+                'rsync: send_files failed to open "foo": Permission denied (13)',
+            ],
+        )
         self.assertIn("Partial transfer due to error", diagnosis)
 
     def test_vanished_source_files(self):
-        diagnosis = br._diagnose_rsync_failure(24, [
-            "file has vanished: \"/src/foo\"",
-        ])
+        diagnosis = br._diagnose_rsync_failure(
+            24,
+            [
+                'file has vanished: "/src/foo"',
+            ],
+        )
         self.assertIn("vanished", diagnosis.lower())
 
     def test_connection_refused(self):
-        diagnosis = br._diagnose_rsync_failure(255, [
-            "ssh: connect to host tweety port 22: Connection refused",
-        ])
+        diagnosis = br._diagnose_rsync_failure(
+            255,
+            [
+                "ssh: connect to host tweety port 22: Connection refused",
+            ],
+        )
         self.assertIn("connection refused", diagnosis.lower())
 
     def test_no_route_to_host(self):
-        diagnosis = br._diagnose_rsync_failure(255, [
-            "ssh: connect to host tweety port 22: No route to host",
-        ])
+        diagnosis = br._diagnose_rsync_failure(
+            255,
+            [
+                "ssh: connect to host tweety port 22: No route to host",
+            ],
+        )
         self.assertIn("reachable", diagnosis.lower())
 
     def test_permission_denied(self):
-        diagnosis = br._diagnose_rsync_failure(255, [
-            "root@tweety: Permission denied (publickey).",
-        ])
+        diagnosis = br._diagnose_rsync_failure(
+            255,
+            [
+                "root@tweety: Permission denied (publickey).",
+            ],
+        )
         self.assertIn("permission denied", diagnosis.lower())
 
     def test_timeout(self):
-        diagnosis = br._diagnose_rsync_failure(30, [
-            "rsync error: timeout in data send/receive (code 30)",
-        ])
+        diagnosis = br._diagnose_rsync_failure(
+            30,
+            [
+                "rsync error: timeout in data send/receive (code 30)",
+            ],
+        )
         self.assertIn("timeout", diagnosis.lower())
 
     def test_no_space_left(self):
-        diagnosis = br._diagnose_rsync_failure(11, [
-            "rsync: write failed on \"/dst/foo\": No space left on device (28)",
-        ])
+        diagnosis = br._diagnose_rsync_failure(
+            11,
+            [
+                'rsync: write failed on "/dst/foo": No space left on device (28)',
+            ],
+        )
         self.assertIn("no space left", diagnosis.lower())
 
     def test_unknown_exit_code(self):
@@ -1092,9 +1125,7 @@ class TestRsyncFailureDiagnosis(unittest.TestCase):
         runner.running = True
         runner.current_step = 0
         runner._session_start_time = time.time()
-        runner.steps = [
-            BashStep([], "rsync pull", is_rsync=True, fatal=False)
-        ]
+        runner.steps = [BashStep([], "rsync pull", is_rsync=True, fatal=False)]
         runner._current_rsync_stderr = [
             "ssh: connect to host tweety port 22: Connection refused",
         ]

@@ -204,7 +204,7 @@ PAGE_SPECS = {
             ("Refresh", "view-refresh", None),
             ("Expand Selected", "zoom-in", "_ds_expand_selected_btn"),
             ("Collapse All", "list-remove", None),
-            (None, None, None),                       # spacer
+            (None, None, None),  # spacer
             ("Show Big Stuff", "zoom-fit-best", "_ds_showbigstuff_btn"),
         ],
         "post_setup": update_ds_button_sensitivity,
@@ -261,6 +261,7 @@ PAGE_SPECS = {
 def _collect_scrub_config(app):
     """Gather current scrub settings for profile creation."""
     from pools_page import get_selected_pool_names
+
     selected = get_selected_pool_names(app.scrub_view)
     if not selected:
         queue = app.scrub_queue
@@ -357,8 +358,10 @@ ACTION_HANDLERS = {
         "Save Config": _ctx_handler(on_backup_save),
         "Revert Config": _ctx_handler(on_backup_revert),
         "Add Profile to Schedule": lambda app: show_add_profile_dialog(
-            app, "backup", collect_backup_config(app),
-            dry_run=getattr(app, '_dry_run_active', False)
+            app,
+            "backup",
+            collect_backup_config(app),
+            dry_run=getattr(app, "_dry_run_active", False),
         ),
         "Recall Profile": lambda app: show_recall_profile_dialog(
             app, "backup", lambda p: load_backup_config(app, p["config"])
@@ -372,8 +375,10 @@ ACTION_HANDLERS = {
         "Save Config": _ctx_handler(on_offsite_save),
         "Revert Config": _ctx_handler(on_offsite_revert),
         "Add Profile to Schedule": lambda app: show_add_profile_dialog(
-            app, "offsite", collect_offsite_config(app),
-            dry_run=getattr(app, '_dry_run_active', False)
+            app,
+            "offsite",
+            collect_offsite_config(app),
+            dry_run=getattr(app, "_dry_run_active", False),
         ),
         "Recall Profile": lambda app: show_recall_profile_dialog(
             app, "offsite", lambda p: load_offsite_config(app, p["config"])
@@ -385,8 +390,10 @@ ACTION_HANDLERS = {
         "Save Config": _ctx_handler(on_restore_save),
         "Revert Config": _ctx_handler(on_restore_revert),
         "Add Profile to Schedule": lambda app: show_add_profile_dialog(
-            app, "restore", collect_restore_config(app),
-            dry_run=getattr(app, '_dry_run_active', False)
+            app,
+            "restore",
+            collect_restore_config(app),
+            dry_run=getattr(app, "_dry_run_active", False),
         ),
         "Recall Profile": lambda app: show_recall_profile_dialog(
             app, "restore", lambda p: load_restore_config(app, p["config"])
@@ -456,8 +463,10 @@ ACTION_HANDLERS = {
         "Save": _handler_retention_save,
         "Revert": _handler_retention_revert,
         "Add Profile to Schedule": lambda app: show_add_profile_dialog(
-            app, "retention", collect_retention_profile_config(app),
-            dry_run=getattr(app, '_dry_run_active', False)
+            app,
+            "retention",
+            collect_retention_profile_config(app),
+            dry_run=getattr(app, "_dry_run_active", False),
         ),
         "Recall Profile": lambda app: show_recall_profile_dialog(
             app, "retention", lambda p: load_retention_profile_config(app, p["config"])

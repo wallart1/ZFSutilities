@@ -12,7 +12,6 @@ from test_support import capture_logs, temp_config_dir
 
 
 class TestProfileLockHelpers(unittest.TestCase):
-
     def setUp(self):
         self.lock_dir = tempfile.mkdtemp()
         self.orig_dir = profile_runner.PROFILE_LOCK_DIR
@@ -53,6 +52,7 @@ class TestProfileLockHelpers(unittest.TestCase):
         try:
             with open(lock_path) as f:
                 import json
+
                 data = json.load(f)
             self.assertEqual(data["profile"], "daily")
             self.assertEqual(data["pid"], os.getpid())
@@ -68,6 +68,7 @@ class TestProfileLockHelpers(unittest.TestCase):
         try:
             with open(lock_path) as f:
                 import json
+
                 data = json.load(f)
             self.assertEqual(data["log_file"], "/var/log/test.log")
         finally:
@@ -124,7 +125,6 @@ class TestProfileLockHelpers(unittest.TestCase):
 
 
 class TestMainDuplicateInvocation(unittest.TestCase):
-
     def setUp(self):
         self.lock_dir = tempfile.mkdtemp()
         self.orig_dir = profile_runner.PROFILE_LOCK_DIR
@@ -142,14 +142,14 @@ class TestMainDuplicateInvocation(unittest.TestCase):
         self.assertIsNotNone(fd)
         try:
             with tempfile.TemporaryDirectory() as session_dir:
-                with patch.object(profile_runner.sys, "argv", ["profile_runner.py", "run", "Daily"]):
+                with patch.object(
+                    profile_runner.sys, "argv", ["profile_runner.py", "run", "Daily"]
+                ):
                     with patch("profile_runner.load_profile", return_value=profile):
                         with patch("session_log.SESSION_LOG_DIR", session_dir):
                             with patch("profile_runner.load_config", return_value={}):
                                 with patch("profile_runner.prune_old_logs"):
-                                    with patch.object(
-                                        profile_runner, "PROFILE_LOCK_TIMEOUT", 0.0
-                                    ):
+                                    with patch.object(profile_runner, "PROFILE_LOCK_TIMEOUT", 0.0):
                                         with capture_logs() as logs:
                                             with self.assertRaises(SystemExit) as cm:
                                                 profile_runner.main()
@@ -171,7 +171,9 @@ class TestMainDuplicateInvocation(unittest.TestCase):
                 with patch("profile_runner.load_profile", return_value=profile):
                     with patch("profile_runner.load_config", return_value={}):
                         with patch("profile_runner.prune_old_logs"):
-                            with patch("profile_runner.run_backup_profile", return_value=0) as mock_run:
+                            with patch(
+                                "profile_runner.run_backup_profile", return_value=0
+                            ) as mock_run:
                                 with patch("profile_runner.add_history_entry"):
                                     with patch("session_log.write_session_trailer"):
                                         with patch("profile_runner.sys.exit") as mock_exit:

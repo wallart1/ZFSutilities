@@ -43,11 +43,13 @@ class TestEnvironmentOverrides(unittest.TestCase):
                 # Reloading the module is the simplest way to verify the
                 # environment-variable resolution at import time.
                 import importlib
+
                 mod = importlib.reload(fl)
                 self.assertEqual(mod.CONFIG_LOCK_PATH, path)
             finally:
                 del os.environ["ZFSUTILITIES_CONFIG_LOCK_PATH"]
                 import importlib
+
                 importlib.reload(fl)
 
 
@@ -57,6 +59,7 @@ class TestFileLockExclusivity(unittest.TestCase):
     def _acquire_and_hold(self, lock_path, queue):
         """Helper process: acquire exclusive lock and signal, then wait."""
         import fcntl
+
         fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
         fcntl.flock(fd, fcntl.LOCK_EX)
         queue.put("held")
@@ -69,9 +72,7 @@ class TestFileLockExclusivity(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             lock_path = os.path.join(tmpdir, "test.lock")
             queue = multiprocessing.Queue()
-            proc = multiprocessing.Process(
-                target=self._acquire_and_hold, args=(lock_path, queue)
-            )
+            proc = multiprocessing.Process(target=self._acquire_and_hold, args=(lock_path, queue))
             proc.start()
             try:
                 self.assertEqual(queue.get(timeout=5), "held")
@@ -93,6 +94,7 @@ class TestSharedLocksAllowConcurrentReaders(unittest.TestCase):
 
     def _hold_shared_lock(self, lock_path, queue):
         import fcntl
+
         fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
         fcntl.flock(fd, fcntl.LOCK_SH)
         queue.put("held")
@@ -104,9 +106,7 @@ class TestSharedLocksAllowConcurrentReaders(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             lock_path = os.path.join(tmpdir, "test.lock")
             queue = multiprocessing.Queue()
-            proc = multiprocessing.Process(
-                target=self._hold_shared_lock, args=(lock_path, queue)
-            )
+            proc = multiprocessing.Process(target=self._hold_shared_lock, args=(lock_path, queue))
             proc.start()
             try:
                 self.assertEqual(queue.get(timeout=5), "held")
@@ -126,11 +126,10 @@ class TestConvenienceContextManagers(unittest.TestCase):
 
     def test_config_lock_write_creates_lock_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            os.environ["ZFSUTILITIES_CONFIG_LOCK_PATH"] = os.path.join(
-                tmpdir, "config.lock"
-            )
+            os.environ["ZFSUTILITIES_CONFIG_LOCK_PATH"] = os.path.join(tmpdir, "config.lock")
             try:
                 import importlib
+
                 mod = importlib.reload(fl)
                 self.assertFalse(os.path.exists(mod.CONFIG_LOCK_PATH))
                 with mod.config_lock_write():
@@ -138,15 +137,15 @@ class TestConvenienceContextManagers(unittest.TestCase):
             finally:
                 del os.environ["ZFSUTILITIES_CONFIG_LOCK_PATH"]
                 import importlib
+
                 importlib.reload(fl)
 
     def test_history_lock_read_creates_lock_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            os.environ["ZFSUTILITIES_HISTORY_LOCK_PATH"] = os.path.join(
-                tmpdir, "history.lock"
-            )
+            os.environ["ZFSUTILITIES_HISTORY_LOCK_PATH"] = os.path.join(tmpdir, "history.lock")
             try:
                 import importlib
+
                 mod = importlib.reload(fl)
                 self.assertFalse(os.path.exists(mod.HISTORY_LOCK_PATH))
                 with mod.history_lock_read():
@@ -154,6 +153,7 @@ class TestConvenienceContextManagers(unittest.TestCase):
             finally:
                 del os.environ["ZFSUTILITIES_HISTORY_LOCK_PATH"]
                 import importlib
+
                 importlib.reload(fl)
 
 

@@ -97,6 +97,7 @@ function send-receive {
 
         # When resuming via -t <token>, the token already encodes the snapshot,
         # so do not append "$fs$nextsnap" as an extra positional argument.
+        # shellcheck disable=SC2206
         local -a send_cmd=(zfs send $sendopts)
         [[ "$sendopts" != *"-t"* ]] && send_cmd+=("$fs$nextsnap")
 
@@ -141,7 +142,8 @@ function send-receive {
     check_space_available() {
         local datatosend="$1" dest_pool="$2"
         [[ $datatosend -le 0 ]] && return 0
-        local dest_avail=$(zfs get -Hp -o value available "$dest_pool" 2>/dev/null)
+        local dest_avail
+        dest_avail=$(zfs get -Hp -o value available "$dest_pool" 2>/dev/null)
         # Regex: ^[0-9]+$
         # Purpose: Validate that dest_avail is a non-negative integer.
         # Examples: "12345678" -> match; "-1" -> no match; "" -> no match.
@@ -237,7 +239,9 @@ function send-receive {
             local rollback_incremental
             [[ $dointermediates = "Y" ]] && rollback_incremental="-I $commsnap" || rollback_incremental="-i $commsnap"
             # awk '/^size/ {print $2}'  —  Extract byte size from incremental rollback dry-run.
-            local rollback_datatosend=$(zfs send -nPc $rollback_incremental $fs$nextsnap 2>/dev/null | awk '/^size/ {print $2}') _sz="(unknown)"
+            local rollback_datatosend
+            rollback_datatosend=$(zfs send -nPc $rollback_incremental $fs$nextsnap 2>/dev/null | awk '/^size/ {print $2}')
+            local _sz="(unknown)"
             [[ -n "$rollback_datatosend" && "$rollback_datatosend" -gt 0 ]] && _sz=$(echo "$rollback_datatosend" | numfmt --to=iec-i)
             log_msg "INFO: A common snapshot between $fs and $destfs_restorefs was found.\n\tHowever, the destination snapshot is not the most recent one.\n\tThis will roll back snapshot(s) and changes on the destination since the common snapshot, bypassing any holds.\n\tThe common snap is: $commsnap.\n\tApproximate transfer size: $_sz.\n\tThe snapshots to be rolled back are:"
             for snap in "${snaparray_d[@]}"; do echo -e "\t\t$snap"; done
@@ -344,7 +348,6 @@ function send-receive {
     [[ "$(declare -p excludes 2>/dev/null)" =~ ^declare\ -[aA] ]] || excludes=()
     [[ $force = "" ]] && force="N"
     [[ $allow_destructive = "" ]] && allow_destructive="N"
-    [[ $force = "Y" ]] && forceit="f" || forceit=""
     [[ $receive_F_option != 'F' ]] && receive_F_option=''
     [[ $receive_s_option != 's' ]] && receive_s_option=''
     [[ $resumablethreshold = '' ]] && resumablethreshold=$(( 50 * 1000 * 1000 * 1000))
@@ -359,7 +362,8 @@ function send-receive {
     zfslock_init
 
     for (( i=0; i<${#fsarray[@]}; i++)); do
-        local _origin=$(zfs list -H -o origin "${fsarray[$i]}" 2>/dev/null)
+        local _origin
+        _origin=$(zfs list -H -o origin "${fsarray[$i]}" 2>/dev/null)
         [[ "$_origin" != "-" && -n "$_origin" ]] && log_msg "VERB: Dataset ${fsarray[$i]} is a ZFS clone. It will be backed up as a regular dataset."
     done
 
@@ -401,7 +405,8 @@ function send-receive {
         lock_dest="$ZFSLOCK_ID"
 
         if [[ "$nextsnap" == 'notneeded' ]]; then
-            local _newest_snap=$(zfs list -t snap -o name -S createtxg -H -d1 "$fs" 2>/dev/null | head -1)
+            local _newest_snap
+            _newest_snap=$(zfs list -t snap -o name -S createtxg -H -d1 "$fs" 2>/dev/null | head -1)
             [[ -z "$_newest_snap" ]] && { log_msg "WARN: No snapshots found on $fs (nextsnap=notneeded). Skipping."; zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue; }
             nextsnap="@${_newest_snap##*@}"
         elif ! zfs list -t snapshot "$fs""$nextsnap" > /dev/null 2>&1; then

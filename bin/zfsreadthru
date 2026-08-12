@@ -36,7 +36,8 @@ function editsize {
     # Input string
     local input="$1"
     # Extract the number with its unit
-    local size=$(echo "$input" | grep -o '[0-9]\+\(\.[0-9]\+\)\?[KMGTPEZY]')
+    local size
+    size=$(echo "$input" | grep -o '[0-9]\+\(\.[0-9]\+\)\?[KMGTPEZY]')
     # Handle cases where grep finds no match
     if [[ -z "$size" ]]; then
         log_msg "FATAL: Unable to find <size> in the input: $input."
@@ -44,8 +45,10 @@ function editsize {
     fi
     # Separate the number from its unit and round
     # Note: awk will correctly handle integers like "385G" as a number
-    local number=$(echo "$size" | awk '{print int($1 + 0.5)}')
-    local unit=$(echo "$size" | grep -o '[KMGTPEZY]')
+    local number
+    number=$(echo "$size" | awk '{print int($1 + 0.5)}')
+    local unit
+    unit=$(echo "$size" | grep -o '[KMGTPEZY]')
     # Combine the rounded number and the unit
     local rounded_size="${number}${unit}"
     # Output the result
@@ -55,23 +58,34 @@ function editsize {
 autoproceed='N'
 if [[ $1 != '' ]]; then sourcefs=$1; fi
 if [[ $sourcefs = '' ]]; then log_msg 'FATAL: A dataset must be given as $1 or $sourcefs.'; exit 8; fi
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfsbuildfsarray helper.
 depth=''
+# shellcheck disable=SC2034
 includes=()
+# shellcheck disable=SC2034
 excludes=()
+# shellcheck disable=SC2034
 startwith=''
+# shellcheck disable=SC2034
 endwith=''
+# shellcheck disable=SC2034
 buildfsarraytype='snapshot'
+# shellcheck disable=SC2034
 sortby='creation'
+# shellcheck disable=SC2034
 bottomup='N'
 
 if [[ "$2" != '' ]]; then overrides "$2"; fi
+# shellcheck disable=SC2034
 if [[ "$3" != '' ]]; then startwith="$3"; fi
+# shellcheck disable=SC2034
 if [[ "$4" != '' ]]; then endwith="$4"; fi
 
 buildfsarray "$sourcefs"
 
 log_msg 'INFO: About to read the following:'
-for fs in ${fsarray[@]}; do
+for fs in "${fsarray[@]}"; do
     log_msg "INFO: $fs"
 done
 if [[ $autoproceed != 'Y' ]]; then
@@ -83,10 +97,6 @@ lastsnap=${fsarray[fsarraylen-1]}
 
 # Part 1: Full read-through to $firstsnap/oldest snapshot.
 log_msg 'INFO: Part one: Full read-through to then $firstsnap/oldest snapshot.'
-force='Y'                       # Do full copy even if common snapshots are found.
-doincrementals='N'              # 'N' means do full copies.
-dointermediates='N'             # Don't try to do any other shapshots.
-nextsnap=$nextsnapsave          # Just in case it gets clobbered.
 
 size=$(sudo zfs send -wnvc $firstsnap 2>/dev/null | tail -1 | awk '{print $5}')
 edited_size=$(editsize $size)
@@ -105,10 +115,6 @@ fi
 # Part 2: Read-through to $lastsnap/newest snapshot.
 autoproceed='Y'
 log_msg 'INFO: Part two: Read-through from the above snapshot to the $lastsnap/newest snapshot.'
-force='N'
-releaseholds='N'
-doincrementals='Y'              # Do incremental copies.
-dointermediates='Y'             # Do intermediate snapshots.
 
 size=$(sudo zfs send -wnvc -I $firstsnap $lastsnap 2>/dev/null | tail -1 | awk '{print $5}')
 edited_size=$(editsize $size)

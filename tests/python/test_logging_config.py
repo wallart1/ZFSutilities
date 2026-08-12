@@ -164,8 +164,10 @@ class TestLogMsg(unittest.TestCase):
             os.environ["ZFSUTILITIES_LOG_FILE"] = env_path
             log_msg("INFO: runner-local message", session_log_file=explicit_path)
             self.assertTrue(
-                any("runner-local message" in m for m in
-                    [call[0][0] for call in sink.call_args_list])
+                any(
+                    "runner-local message" in m
+                    for m in [call[0][0] for call in sink.call_args_list]
+                )
             )
             with open(explicit_path) as fh:
                 self.assertIn("runner-local message", fh.read())
@@ -206,7 +208,6 @@ class TestLogMsg(unittest.TestCase):
 
 
 class TestParseMsgLevel(unittest.TestCase):
-
     def test_parses_timestamped_line(self):
         line = "2026-06-21 13:00:00  /path/file:10: WARN: something"
         self.assertEqual(parse_msg_level(line), "WARN")
@@ -237,11 +238,8 @@ class TestParseMsgLevel(unittest.TestCase):
 
 
 class TestFormatLogLineShort(unittest.TestCase):
-
     def test_strips_single_file_line_prefix(self):
-        result = format_log_line_short(
-            "2026-06-21 13:00:00", "/path/file:10: INFO: hello"
-        )
+        result = format_log_line_short("2026-06-21 13:00:00", "/path/file:10: INFO: hello")
         self.assertEqual(result, "2026-06-21 13:00:00  INFO: hello")
 
     def test_strips_nested_file_line_prefixes(self):
@@ -254,53 +252,37 @@ class TestFormatLogLineShort(unittest.TestCase):
         self.assertEqual(result, "2026-06-21 13:00:00  VERB: details")
 
     def test_leaves_raw_messages_unchanged(self):
-        result = format_log_line_short(
-            "2026-06-21 13:00:00", "raw subprocess output"
-        )
+        result = format_log_line_short("2026-06-21 13:00:00", "raw subprocess output")
         self.assertEqual(result, "2026-06-21 13:00:00  raw subprocess output")
 
     def test_leaves_zfsutilities_prefix_unchanged(self):
-        result = format_log_line_short(
-            "2026-06-21 13:00:00", "zfsutilities: marker text"
-        )
+        result = format_log_line_short("2026-06-21 13:00:00", "zfsutilities: marker text")
         self.assertEqual(result, "2026-06-21 13:00:00  zfsutilities: marker text")
 
 
 class TestFormatLogTextShort(unittest.TestCase):
-
     def test_strips_prefixes_from_timestamped_lines(self):
-        text = (
-            "2026-06-21 10:00:00  /a:1: INFO: one\n"
-            "2026-06-21 10:00:01  /b:2: WARN: two\n"
-        )
+        text = "2026-06-21 10:00:00  /a:1: INFO: one\n2026-06-21 10:00:01  /b:2: WARN: two\n"
         result = format_log_text_short(text)
         self.assertEqual(
             result,
-            "2026-06-21 10:00:00  INFO: one\n"
-            "2026-06-21 10:00:01  WARN: two\n",
+            "2026-06-21 10:00:00  INFO: one\n2026-06-21 10:00:01  WARN: two\n",
         )
 
     def test_preserves_raw_lines_without_prefix(self):
-        text = (
-            "2026-06-21 10:00:00  /a:1: INFO: one\n"
-            "2026-06-21 10:00:01  raw subprocess output\n"
-        )
+        text = "2026-06-21 10:00:00  /a:1: INFO: one\n2026-06-21 10:00:01  raw subprocess output\n"
         result = format_log_text_short(text)
         self.assertIn("2026-06-21 10:00:01  raw subprocess output", result)
         self.assertIn("2026-06-21 10:00:00  INFO: one", result)
 
     def test_preserves_end_trailer(self):
-        text = (
-            "2026-06-21 10:00:00  /a:1: INFO: one\n"
-            "# END: rc=0, duration=1.0s\n"
-        )
+        text = "2026-06-21 10:00:00  /a:1: INFO: one\n# END: rc=0, duration=1.0s\n"
         result = format_log_text_short(text)
         self.assertIn("2026-06-21 10:00:00  INFO: one", result)
         self.assertIn("# END: rc=0, duration=1.0s", result)
 
 
 class TestViewerShouldShow(unittest.TestCase):
-
     def test_none_level_always_visible(self):
         for level in MSG_LEVELS:
             self.assertTrue(viewer_should_show(NONE_LEVEL, level))
@@ -338,9 +320,12 @@ class TestTruncateSessionLog(unittest.TestCase):
             f.write("TAIL\n")
         try:
             custom_max = 500
-            with patch("config_core.load_config", return_value={
-                "session_log_max_bytes": custom_max,
-            }):
+            with patch(
+                "config_core.load_config",
+                return_value={
+                    "session_log_max_bytes": custom_max,
+                },
+            ):
                 self.assertTrue(truncate_session_log(path))
             with open(path) as fh:
                 content = fh.read()

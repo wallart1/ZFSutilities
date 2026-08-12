@@ -15,20 +15,24 @@ unset _local_bashinit
 
 log_msg "FATAL: WIP!"
 exit 8
-
 source_helper rootcheck
 source_helper zfsbuildfsarray
 rootcheck
 
 autoproceed='N'
-releaseholds='N'
 
 command="$1"
 sourcefs="$2"
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfsbuildfsarray helper.
 buildfsarraytype="$3"   # Types of datasets to pull. 'filesystem,volume,snapshot' or subset
+# shellcheck disable=SC2034
 depth=''
+# shellcheck disable=SC2034
 includes=()
+# shellcheck disable=SC2034
 excludes=()
+# shellcheck disable=SC2034
 startwith=''
 
 log_msg "INFO: Command:   $command"
@@ -37,9 +41,9 @@ read -p 'Press enter to continue.'
 
 buildfsarray $sourcefs 'bottomup'
 
-if [[ ${#fsarray[@]} -gt 0 ]] then
+if [[ ${#fsarray[@]} -gt 0 ]]; then
     log_msg 'INFO: Commands to be issued.'
-    for fs in ${fsarray[@]}; do
+    for fs in "${fsarray[@]}"; do
         echo "$command $fs"
     done
     
@@ -47,7 +51,7 @@ if [[ ${#fsarray[@]} -gt 0 ]] then
         read -p 'Press enter to proceed.'
     fi
 
-    for fs in ${fsarray[@]}; do
+    for fs in "${fsarray[@]}"; do
         eval "$command $fs"
     done
 else

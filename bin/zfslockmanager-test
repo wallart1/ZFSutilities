@@ -30,7 +30,6 @@ TESTS_FAILED=0
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
 # Test helper functions
@@ -64,9 +63,12 @@ test_basic_acquire_release() {
 
     # Test 2: Verify lock file contents
     test_start "Lock file contains correct data"
-    local lock_dataset=$(_zfslock_read_field "$lock1" "dataset")
-    local lock_type=$(_zfslock_read_field "$lock1" "type")
-    local lock_pid=$(_zfslock_read_field "$lock1" "pid")
+    local lock_dataset
+    lock_dataset=$(_zfslock_read_field "$lock1" "dataset")
+    local lock_type
+    lock_type=$(_zfslock_read_field "$lock1" "type")
+    local lock_pid
+    lock_pid=$(_zfslock_read_field "$lock1" "pid")
     if [[ "$lock_dataset" == "test/dataset" && "$lock_type" == "w" && "$lock_pid" == "$$" ]]; then
         test_pass
     else
@@ -113,7 +115,6 @@ test_same_dataset_conflicts() {
 
     # Now test with read lock
     zfslock_acquire "test/data" "r" "holding read lock"
-    local read_lock="$ZFSLOCK_ID"
 
     test_start "Read does NOT conflict with existing Read"
     if zfslock_acquire "test/data2" "r" "first read on data2"; then
@@ -301,12 +302,14 @@ test_zfslockctl() {
 
     # Test: list command
     test_start "zfslockctl list shows locks"
-    local list_output=$($mydir/zfslockctl list 2>/dev/null)
+    local list_output
+    list_output=$($mydir/zfslockctl list 2>/dev/null)
     [[ "$list_output" == *"test/ctl1"* && "$list_output" == *"test/ctl2"* ]] && test_pass || test_fail "List output should contain test locks"
 
     # Test: status command
     test_start "zfslockctl status shows lock details"
-    local status_output=$($mydir/zfslockctl status "test/ctl1" 2>/dev/null)
+    local status_output
+    status_output=$($mydir/zfslockctl status "test/ctl1" 2>/dev/null)
     [[ "$status_output" == *"LOCKED"* && "$status_output" == *"write"* ]] && test_pass || test_fail "Status should show locked and type"
 
     # Test: status on unlocked dataset
@@ -316,7 +319,8 @@ test_zfslockctl() {
 
     # Test: cleanup command
     test_start "zfslockctl cleanup runs"
-    local cleanup_output=$($mydir/zfslockctl cleanup 2>/dev/null)
+    local cleanup_output
+    cleanup_output=$($mydir/zfslockctl cleanup 2>/dev/null)
     [[ "$cleanup_output" == *"Cleanup complete"* ]] && test_pass || test_fail "Cleanup should report completion"
 
     zfslock_release_all
@@ -347,7 +351,8 @@ test_noninteractive_abort() {
     local sleep_pid
     sleep 5 &
     sleep_pid=$!
-    local lockfile=$(_zfslock_file "test/noninteractive")
+    local lockfile
+    lockfile=$(_zfslock_file "test/noninteractive")
     printf '{"dataset":"test/noninteractive","type":"w","pid":%s,"script":"sleep",\
 "acquired":"2026-01-01T00:00:00-05:00","description":"bg"}\n' \
         "$sleep_pid" > "$lockfile"
@@ -389,7 +394,8 @@ test_retry_option() {
     local sleep_pid
     sleep 3 &
     sleep_pid=$!
-    local lockfile=$(_zfslock_file "test/retry")
+    local lockfile
+    lockfile=$(_zfslock_file "test/retry")
     printf '{"dataset":"test/retry","type":"w","pid":%s,"script":"sleep",\
 "acquired":"2026-01-01T00:00:00-05:00","description":"bg"}\n' \
         "$sleep_pid" > "$lockfile"
@@ -424,7 +430,8 @@ test_conflict_message() {
     local sleep_pid
     sleep 5 &
     sleep_pid=$!
-    local lockfile=$(_zfslock_file "test/message")
+    local lockfile
+    lockfile=$(_zfslock_file "test/message")
     printf '{"dataset":"test/message","type":"w","pid":%s,"script":"sleep",\
 "acquired":"2026-01-01T00:00:00-05:00","description":"bg"}\n' \
         "$sleep_pid" > "$lockfile"
@@ -461,7 +468,8 @@ test_wait_interval_minimum() {
     local sleep_pid
     sleep 2 &
     sleep_pid=$!
-    local lockfile=$(_zfslock_file "test/zerowait")
+    local lockfile
+    lockfile=$(_zfslock_file "test/zerowait")
     printf '{"dataset":"test/zerowait","type":"w","pid":%s,"script":"sleep",\
 "acquired":"2026-01-01T00:00:00-05:00","description":"bg"}\n' \
         "$sleep_pid" > "$lockfile"

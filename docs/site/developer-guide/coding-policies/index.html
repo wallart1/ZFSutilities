@@ -2196,9 +2196,7 @@ written.</p>
   brackets, or braces over backslashes.</li>
 <li>
 <p><strong>Binary operators</strong>: Break <strong>before</strong> the operator for readability:</p>
-<div class="highlight"><pre><span></span><code><span class="n">total</span> <span class="o">=</span> <span class="p">(</span><span class="n">first_variable</span>
-         <span class="o">+</span> <span class="n">second_variable</span>
-         <span class="o">-</span> <span class="n">third_variable</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="n">total</span> <span class="o">=</span> <span class="n">first_variable</span> <span class="o">+</span> <span class="n">second_variable</span> <span class="o">-</span> <span class="n">third_variable</span>
 </code></pre></div>
 </li>
 </ul>
@@ -2247,6 +2245,7 @@ output:</p>
     <span class="n">target</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">target</span>
 
+
 <span class="c1"># Correct</span>
 <span class="k">def</span> <span class="nf">append_to</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="k">if</span> <span class="n">target</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -2271,6 +2270,26 @@ Configuration lives in <code>pyproject.toml</code> at the repository root:</p>
 conflict with project conventions (for example, naive datetimes are used
 deliberately throughout the GUI and tests, and broad exception handling is kept
 for callbacks, cleanup, and worker threads).</p>
+<p>The Bash code base is checked with <strong><a href="https://www.shellcheck.net/">ShellCheck</a></strong>.
+Configuration lives in <code>.shellcheckrc</code> at the repository root.  A few rules are
+disabled project-wide because they are false positives for the project's
+dynamic-sourcing pattern:</p>
+<ul>
+<li><code>SC1090</code> — ShellCheck cannot follow sources resolved at runtime by helpers
+  such as <code>find_zfsutility_script</code> and <code>source_helper</code>.</li>
+<li><code>SC2154</code> — Globals such as <code>mydir</code> and <code>fsarray</code> are assigned by sourced
+  libraries (<code>bashinit</code>, <code>node-lib.sh</code>, <code>zfsbuildfsarray</code>, etc.).</li>
+</ul>
+<p>Run ShellCheck from the repository root on the bash modules and tests
+(<code>bin/watchall</code> is a Python script and is excluded by <code>.shellcheckrc</code>):</p>
+<div class="highlight"><pre><span></span><code>shellcheck<span class="w"> </span>-S<span class="w"> </span>warning<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="k">$(</span>find<span class="w"> </span>bin<span class="w"> </span>-maxdepth<span class="w"> </span><span class="m">1</span><span class="w"> </span>-type<span class="w"> </span>f<span class="w"> </span>!<span class="w"> </span>-name<span class="w"> </span>watchall<span class="k">)</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>lib/*<span class="w"> </span>tests/test-*<span class="w"> </span>tests/integration/*
+</code></pre></div>
+<p>When a warning cannot be avoided without changing behavior (for example, a
+global set intentionally for a sourced helper, or intentional word splitting of
+a shell option string), suppress it with a per-line
+<code># shellcheck disable=SCXXXX</code> comment that explains why.</p>
 
 
 
@@ -2306,7 +2325,7 @@ for callbacks, cleanup, and worker threads).</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.0
+      ZFS Utilities v0.82.1
     </div>
   
   
@@ -2331,7 +2350,7 @@ for callbacks, cleanup, and worker threads).</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

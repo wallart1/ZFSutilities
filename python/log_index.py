@@ -19,12 +19,11 @@ def index_file():
     """Return the path to the persistent log index file."""
     return os.path.join(SESSION_LOG_DIR, ".log_index.json")
 
+
 # Regex: # END: (?:rc=(\d+)|cancelled), duration=([\d.]+)s(?:, bytes=(\d+))?
 # Purpose: Parse the structured trailer written by BackupRunner and
 #          profile_runner to extract result code, duration, and bytes.
-_TRAILER_RE = re.compile(
-    r"# END: (?:rc=(\d+)|cancelled), duration=([\d.]+)s(?:, bytes=(\d+))?"
-)
+_TRAILER_RE = re.compile(r"# END: (?:rc=(\d+)|cancelled), duration=([\d.]+)s(?:, bytes=(\d+))?")
 
 _MSG_PRIORITY = {level: i for i, level in enumerate(MSG_LEVELS)}
 
@@ -54,9 +53,7 @@ def _save_index_data(data):
     if not os.path.isdir(SESSION_LOG_DIR):
         return
     final_path = index_file()
-    tmp_fd, tmp_path = tempfile.mkstemp(
-        dir=SESSION_LOG_DIR, prefix=".log_index_", suffix=".json"
-    )
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=SESSION_LOG_DIR, prefix=".log_index_", suffix=".json")
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)

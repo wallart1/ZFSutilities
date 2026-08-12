@@ -1,4 +1,9 @@
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfsretain helper.
 bktname[0]='d';     bktretain[0]=3; minage[0]=0     # Daily snapshots
+# shellcheck disable=SC2034
 bktname[1]='w';     bktretain[1]=2; minage[1]=0     # Weekly snapshots
+# shellcheck disable=SC2034
 bktname[2]='m';     bktretain[2]=2; minage[2]=0     # Monthly snapshots
+# shellcheck disable=SC2034
 bktname[3]='s';     bktretain[3]=4; minage[3]=65    # 4 Offsite snapshots; minage=65 means do not delete before 65 days old

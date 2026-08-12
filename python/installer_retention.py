@@ -91,9 +91,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     try:
-        ensure_default_retention_profile(
-            config_path=args.config_path, new_install=args.new_install
-        )
+        ensure_default_retention_profile(config_path=args.config_path, new_install=args.new_install)
     except OSError:
         return 1
     return 0

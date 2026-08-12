@@ -8,7 +8,6 @@ import legacy_retention
 
 
 class TestParseLegacyRetentionFile(unittest.TestCase):
-
     def test_parses_valid_file(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".pol", delete=False) as f:
             f.write("bktname[0]='d'; bktretain[0]=3; minage[0]=0\n")
@@ -52,7 +51,6 @@ class TestParseLegacyRetentionFile(unittest.TestCase):
 
 
 class TestScanLegacyRetention(unittest.TestCase):
-
     def test_imports_missing_pool(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with open(os.path.join(tmpdir, "zfsretainpol-tank"), "w") as f:

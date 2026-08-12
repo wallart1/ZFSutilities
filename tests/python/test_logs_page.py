@@ -12,14 +12,14 @@ from unittest.mock import MagicMock, patch
 @contextmanager
 def _patch_log_dir(tmpdir):
     """Patch both logs_page and log_index to use tmpdir as SESSION_LOG_DIR."""
-    with patch("logs_page.SESSION_LOG_DIR", tmpdir), \
-            patch("log_index.SESSION_LOG_DIR", tmpdir):
+    with patch("logs_page.SESSION_LOG_DIR", tmpdir), patch("log_index.SESSION_LOG_DIR", tmpdir):
         yield
 
 
 def _make_scan_app():
     """Return a minimal mocked app for _scan_logs()."""
     return type("App", (), {})()
+
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
@@ -33,7 +33,6 @@ with mock_gtk():
 
 
 class TestFilterLogText(unittest.TestCase):
-
     def test_shows_all_at_debug(self):
         text = (
             "2026-06-21 10:00:00  /a:1: DEBUG: d\n"
@@ -71,7 +70,6 @@ class TestFilterLogText(unittest.TestCase):
 
 
 class TestSelectLogByPath(unittest.TestCase):
-
     def _make_app(self, rows):
         app = MagicMock()
         store = MagicMock()
@@ -106,7 +104,8 @@ class TestSelectLogByPath(unittest.TestCase):
     def _next_fn(self, rows):
         def next_fn(current):
             idx = current["idx"] + 1
-            return ({"idx": idx} if idx < len(rows) else None)
+            return {"idx": idx} if idx < len(rows) else None
+
         return next_fn
 
     @patch("logs_page._sync_log_list")
@@ -143,7 +142,6 @@ class TestSelectLogByPath(unittest.TestCase):
 
 
 class TestDeleteSelectedLogs(unittest.TestCase):
-
     def _make_app(self, paths):
         """Return a mocked app and selection for the given log paths."""
         app = MagicMock()
@@ -154,9 +152,7 @@ class TestDeleteSelectedLogs(unittest.TestCase):
 
         model = MagicMock()
         iters = [{"path": p} for p in paths]
-        model.get_iter.side_effect = lambda p: next(
-            (it for it in iters if it["path"] == p), None
-        )
+        model.get_iter.side_effect = lambda p: next((it for it in iters if it["path"] == p), None)
         model.get_value.side_effect = lambda it, col: it["path"]
         selection.get_selected_rows.return_value = (model, paths)
         return app, selection, model
@@ -230,7 +226,6 @@ class TestDeleteSelectedLogs(unittest.TestCase):
 
 
 class TestLogsSelectionChanged(unittest.TestCase):
-
     def test_disables_button_when_nothing_selected(self):
         app = MagicMock()
         button = MagicMock()
@@ -262,7 +257,6 @@ class TestLogsSelectionChanged(unittest.TestCase):
 
 
 class TestSyncLogListPreservesSelection(unittest.TestCase):
-
     def test_reselects_existing_paths(self):
         app = MagicMock()
         selection = MagicMock()
@@ -278,9 +272,7 @@ class TestSyncLogListPreservesSelection(unittest.TestCase):
         iters = [{"path": r[lp.COL_PATH]} for r in rows]
         store.get_iter_first.side_effect = self._iter_first(iters)
         store.iter_next.side_effect = self._iter_next(iters)
-        store.get_iter.side_effect = lambda p: next(
-            (it for it in iters if it["path"] == p), None
-        )
+        store.get_iter.side_effect = lambda p: next((it for it in iters if it["path"] == p), None)
         store.get_value.side_effect = lambda it, col: it["path"]
         app.logs_store = store
 
@@ -290,21 +282,20 @@ class TestSyncLogListPreservesSelection(unittest.TestCase):
             with patch("logs_page._update_success_rate_label"):
                 lp._sync_log_list(app)
 
-        selected_paths = {
-            call[0][0]["path"]
-            for call in selection.select_iter.call_args_list
-        }
+        selected_paths = {call[0][0]["path"] for call in selection.select_iter.call_args_list}
         self.assertEqual(selected_paths, {"/a.log", "/c.log"})
 
     def _iter_first(self, iters):
         def first():
             return iters[0] if iters else None
+
         return first
 
     def _iter_next(self, iters):
         def next_fn(current):
             idx = iters.index(current) + 1
             return iters[idx] if idx < len(iters) else None
+
         return next_fn
 
 
@@ -341,7 +332,9 @@ class TestLoadLogIntoViewer(unittest.TestCase):
             path = os.path.join(tmpdir, "large.log")
             with open(path, "w") as fh:
                 fh.write("START\n")
-                fh.writelines(f"line {i} padding to make the file large enough\n" for i in range(50000))
+                fh.writelines(
+                    f"line {i} padding to make the file large enough\n" for i in range(50000)
+                )
                 fh.write("END\n")
             size = os.path.getsize(path)
             self.assertGreater(size, lp.MAX_VIEWER_FULL_READ_BYTES)
@@ -431,7 +424,9 @@ class TestLoadFullLogClicked(unittest.TestCase):
             path = os.path.join(tmpdir, "large.log")
             with open(path, "w") as fh:
                 fh.write("START\n")
-                fh.writelines(f"line {i} padding to make the file large enough\n" for i in range(50000))
+                fh.writelines(
+                    f"line {i} padding to make the file large enough\n" for i in range(50000)
+                )
                 fh.write("END\n")
             app = MagicMock()
             app._logs_current_path = path
@@ -448,7 +443,6 @@ class TestLoadFullLogClicked(unittest.TestCase):
 
 
 class TestLogsLevelChanged(unittest.TestCase):
-
     def test_changes_level_and_reloads(self):
         app = MagicMock()
         app.logs_viewer_level = "DEBUG"
@@ -474,7 +468,6 @@ class TestLogsLevelChanged(unittest.TestCase):
 
 
 class TestLogsShortPrefix(unittest.TestCase):
-
     def _make_app(self, path, short_prefix=True):
         app = MagicMock()
         app._logs_current_path = path
@@ -526,7 +519,6 @@ class TestLogsShortPrefix(unittest.TestCase):
 
 
 class TestScanLogStatus(unittest.TestCase):
-
     def _write_log(self, tmpdir, name, content):
         path = os.path.join(tmpdir, name)
         with open(path, "w") as fh:
@@ -536,7 +528,8 @@ class TestScanLogStatus(unittest.TestCase):
     def test_rc0_no_warnings_shows_done(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_log(
-                tmpdir, "2026-06-22_07-00-00_backup_profile-x.log",
+                tmpdir,
+                "2026-06-22_07-00-00_backup_profile-x.log",
                 "2026-06-22 07:00:00  /a:1: INFO: ok\n# END: rc=0, duration=1.0s\n",
             )
             with _patch_log_dir(tmpdir):
@@ -547,9 +540,9 @@ class TestScanLogStatus(unittest.TestCase):
     def test_rc0_with_warn_shows_warn(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_log(
-                tmpdir, "2026-06-22_07-00-00_backup_profile-x.log",
-                "2026-06-22 07:00:00  /a:1: WARN: host down\n"
-                "# END: rc=0, duration=1.0s\n",
+                tmpdir,
+                "2026-06-22_07-00-00_backup_profile-x.log",
+                "2026-06-22 07:00:00  /a:1: WARN: host down\n# END: rc=0, duration=1.0s\n",
             )
             with _patch_log_dir(tmpdir):
                 rows = lp._scan_logs(_make_scan_app())
@@ -558,7 +551,8 @@ class TestScanLogStatus(unittest.TestCase):
     def test_rc255_with_warn_shows_warn(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_log(
-                tmpdir, "2026-06-22_07-00-00_backup_profile-x.log",
+                tmpdir,
+                "2026-06-22_07-00-00_backup_profile-x.log",
                 "2026-06-22 07:00:00  /a:1: WARN: step exited with rc=255\n"
                 "# END: rc=255, duration=1.0s\n",
             )
@@ -569,9 +563,9 @@ class TestScanLogStatus(unittest.TestCase):
     def test_rc255_no_warnings_shows_failed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_log(
-                tmpdir, "2026-06-22_07-00-00_backup_profile-x.log",
-                "2026-06-22 07:00:00  /a:1: INFO: ok\n"
-                "# END: rc=255, duration=1.0s\n",
+                tmpdir,
+                "2026-06-22_07-00-00_backup_profile-x.log",
+                "2026-06-22 07:00:00  /a:1: INFO: ok\n# END: rc=255, duration=1.0s\n",
             )
             with _patch_log_dir(tmpdir):
                 rows = lp._scan_logs(_make_scan_app())
@@ -580,9 +574,9 @@ class TestScanLogStatus(unittest.TestCase):
     def test_rc1_with_fatal_shows_fatal(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_log(
-                tmpdir, "2026-06-22_07-00-00_backup_profile-x.log",
-                "2026-06-22 07:00:00  /a:1: FATAL: abort\n"
-                "# END: rc=1, duration=1.0s\n",
+                tmpdir,
+                "2026-06-22_07-00-00_backup_profile-x.log",
+                "2026-06-22 07:00:00  /a:1: FATAL: abort\n# END: rc=1, duration=1.0s\n",
             )
             with _patch_log_dir(tmpdir):
                 rows = lp._scan_logs(_make_scan_app())
@@ -591,9 +585,9 @@ class TestScanLogStatus(unittest.TestCase):
     def test_cancelled_unchanged(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_log(
-                tmpdir, "2026-06-22_07-00-00_backup_profile-x.log",
-                "2026-06-22 07:00:00  /a:1: INFO: ok\n"
-                "# END: cancelled, duration=1.0s\n",
+                tmpdir,
+                "2026-06-22_07-00-00_backup_profile-x.log",
+                "2026-06-22 07:00:00  /a:1: INFO: ok\n# END: cancelled, duration=1.0s\n",
             )
             with _patch_log_dir(tmpdir):
                 rows = lp._scan_logs(_make_scan_app())
@@ -602,7 +596,8 @@ class TestScanLogStatus(unittest.TestCase):
     def test_running_unchanged(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_log(
-                tmpdir, "2026-06-22_07-00-00_backup_profile-x.log",
+                tmpdir,
+                "2026-06-22_07-00-00_backup_profile-x.log",
                 "2026-06-22 07:00:00  /a:1: WARN: something\n",
             )
             with _patch_log_dir(tmpdir):
@@ -612,7 +607,8 @@ class TestScanLogStatus(unittest.TestCase):
     def test_both_warn_and_fatal_shows_fatal(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_log(
-                tmpdir, "2026-06-22_07-00-00_backup_profile-x.log",
+                tmpdir,
+                "2026-06-22_07-00-00_backup_profile-x.log",
                 "2026-06-22 07:00:00  /a:1: WARN: host down\n"
                 "2026-06-22 07:00:01  /a:1: FATAL: abort\n"
                 "# END: rc=255, duration=1.0s\n",
@@ -624,7 +620,8 @@ class TestScanLogStatus(unittest.TestCase):
     def test_info_level_uses_trailer_status(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_log(
-                tmpdir, "2026-06-22_07-00-00_backup_profile-x.log",
+                tmpdir,
+                "2026-06-22_07-00-00_backup_profile-x.log",
                 "2026-06-22 07:00:00  /a:1: DEBUG: detail\n"
                 "2026-06-22 07:00:01  /a:1: VERB: detail\n"
                 "2026-06-22 07:00:02  /a:1: INFO: ok\n"
@@ -648,7 +645,6 @@ class TestScanLogStatus(unittest.TestCase):
 
 
 class TestLogIndexIntegration(unittest.TestCase):
-
     def test_scan_logs_creates_persistent_index(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_profile-x.log")
@@ -704,6 +700,7 @@ class TestLogIndexIntegration(unittest.TestCase):
                         lp._on_delete_selected(app)
 
                 import log_index as li
+
                 index = li.LogIndex.load()
                 self.assertIsNone(index.get(path))
 
@@ -762,8 +759,7 @@ class TestCreateLogsPage(unittest.TestCase):
 
         # Only the column header labels are passed to TreeViewColumn.set_widget().
         set_widgets = [
-            call[0][0]
-            for call in lp.Gtk.TreeViewColumn.return_value.set_widget.call_args_list
+            call[0][0] for call in lp.Gtk.TreeViewColumn.return_value.set_widget.call_args_list
         ]
         self.assertEqual(len(set_widgets), len(expected))
 
@@ -853,9 +849,7 @@ class TestLogViewerStatusLabel(unittest.TestCase):
         with patch("logs_page._load_log_into_viewer"):
             lp._on_selection_changed(selection, app)
 
-        app.logs_status_label.set_text.assert_called_with(
-            "0:00:01 [10MiB/s] 10% ETA"
-        )
+        app.logs_status_label.set_text.assert_called_with("0:00:01 [10MiB/s] 10% ETA")
         app.logs_status_label.show.assert_called_once()
 
     def test_selection_changed_hides_status_for_finished_log(self):

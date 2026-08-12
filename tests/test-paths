@@ -97,7 +97,7 @@ test_paths_bashinit_respects_log_dir_override() {
     tmpdir=$(mktemp -d)
     local session_dir
     session_dir=$(
-        cd "$tmpdir"
+        cd "$tmpdir" || exit
         export ZFSUTILITIES_LOG_DIR="$tmpdir/custom-log"
         # Unset derived variables so paths.sh recomposes them.
         unset ZFSUTILITIES_SESSION_LOG_DIR

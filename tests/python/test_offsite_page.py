@@ -23,6 +23,7 @@ def _import_offsite_page():
     sys.modules.pop("offsite_page", None)
     with mock_gtk():
         import offsite_page
+
         return offsite_page
 
 
@@ -43,21 +44,23 @@ class TestDoDetectOffsitePool(unittest.TestCase):
         result = op.do_detect_offsite_pool(app)
 
         self.assertIsNone(result)
-        app.offsite_detected_label.set_text.assert_called_once_with(
-            "(no candidates configured)"
-        )
+        app.offsite_detected_label.set_text.assert_called_once_with("(no candidates configured)")
 
     def test_detects_online_candidate(self):
         op = _import_offsite_page()
-        app = self._make_app([
-            {"name": "z40tb", "offsite_candidate": True},
-            {"name": "z22tb", "offsite_candidate": True},
-        ])
+        app = self._make_app(
+            [
+                {"name": "z40tb", "offsite_candidate": True},
+                {"name": "z22tb", "offsite_candidate": True},
+            ]
+        )
         with mock_subprocess() as m:
-            m.add_zpool_list([
-                {"name": "z40tb", "health": "ONLINE"},
-                {"name": "z22tb", "health": "OFFLINE"},
-            ])
+            m.add_zpool_list(
+                [
+                    {"name": "z40tb", "health": "ONLINE"},
+                    {"name": "z22tb", "health": "OFFLINE"},
+                ]
+            )
             result = op.do_detect_offsite_pool(app)
 
         self.assertEqual(result, "z40tb")
@@ -67,13 +70,17 @@ class TestDoDetectOffsitePool(unittest.TestCase):
 
     def test_all_candidates_offline(self):
         op = _import_offsite_page()
-        app = self._make_app([
-            {"name": "z40tb", "offsite_candidate": True},
-        ])
+        app = self._make_app(
+            [
+                {"name": "z40tb", "offsite_candidate": True},
+            ]
+        )
         with mock_subprocess() as m:
-            m.add_zpool_list([
-                {"name": "z40tb", "health": "OFFLINE"},
-            ])
+            m.add_zpool_list(
+                [
+                    {"name": "z40tb", "health": "OFFLINE"},
+                ]
+            )
             result = op.do_detect_offsite_pool(app)
 
         self.assertIsNone(result)
@@ -89,9 +96,7 @@ class TestDoDetectOffsitePool(unittest.TestCase):
 
         result = op.do_detect_offsite_pool(app)
         self.assertIsNone(result)
-        app.offsite_detected_label.set_text.assert_called_once_with(
-            "(no candidates configured)"
-        )
+        app.offsite_detected_label.set_text.assert_called_once_with("(no candidates configured)")
 
         app.offsite_detected_label.reset_mock()
         app.ctx.config["pools"] = [
@@ -120,20 +125,24 @@ class TestCollectOffsiteConfig(unittest.TestCase):
             "doincrementals": MagicMock(get_text=MagicMock(return_value="N")),
         }
         store = MagicMock()
-        store.__iter__ = lambda _s: iter([
-            [True, "tank/src", "<offsite>/dst", "", ""],
-        ])
+        store.__iter__ = lambda _s: iter(
+            [
+                [True, "tank/src", "<offsite>/dst", "", ""],
+            ]
+        )
         app.offsite_step_store = store
         return app
 
     def test_candidates_not_persisted(self):
         op = _import_offsite_page()
         op.Gtk.ComboBoxText = _FakeComboBoxText
-        app = self._make_app([
-            {"name": "tank", "offsite_candidate": False},
-            {"name": "z40tb", "offsite_candidate": True},
-            {"name": "z22tb", "offsite_candidate": True},
-        ])
+        app = self._make_app(
+            [
+                {"name": "tank", "offsite_candidate": False},
+                {"name": "z40tb", "offsite_candidate": True},
+                {"name": "z22tb", "offsite_candidate": True},
+            ]
+        )
 
         cfg = op.collect_offsite_config(app)
 
@@ -142,9 +151,11 @@ class TestCollectOffsiteConfig(unittest.TestCase):
     def test_no_candidates_not_persisted(self):
         op = _import_offsite_page()
         op.Gtk.ComboBoxText = _FakeComboBoxText
-        app = self._make_app([
-            {"name": "tank", "offsite_candidate": False},
-        ])
+        app = self._make_app(
+            [
+                {"name": "tank", "offsite_candidate": False},
+            ]
+        )
 
         cfg = op.collect_offsite_config(app)
 
@@ -185,21 +196,23 @@ class TestLoadOffsiteConfig(unittest.TestCase):
 
         op.load_offsite_config(app, {"variables": {}, "steps": []})
 
-        app.offsite_detected_label.set_text.assert_called_once_with(
-            "(no candidates configured)"
-        )
+        app.offsite_detected_label.set_text.assert_called_once_with("(no candidates configured)")
 
     def test_does_not_use_offsite_pools_entry(self):
         op = _import_offsite_page()
         op.Gtk.ComboBoxText = _FakeComboBoxText
-        app = self._make_app([
-            {"name": "z40tb", "offsite_candidate": True},
-        ])
+        app = self._make_app(
+            [
+                {"name": "z40tb", "offsite_candidate": True},
+            ]
+        )
 
         with mock_subprocess() as m:
-            m.add_zpool_list([
-                {"name": "z40tb", "health": "ONLINE"},
-            ])
+            m.add_zpool_list(
+                [
+                    {"name": "z40tb", "health": "ONLINE"},
+                ]
+            )
             op.load_offsite_config(
                 app,
                 {
@@ -245,9 +258,7 @@ class TestOffsitePageFrames(unittest.TestCase):
 
     @patch("offsite_page._do_generate_snap")
     @patch("offsite_page.do_detect_offsite_pool")
-    def test_snapshot_frame_above_send_receive_steps(
-        self, _mock_detect, _mock_gen
-    ):
+    def test_snapshot_frame_above_send_receive_steps(self, _mock_detect, _mock_gen):
         """Snapshot frame is before Send/Receive Steps; Advanced is after them."""
         op = _import_offsite_page()
         op.Gtk.ComboBoxText = _FakeComboBoxText
@@ -258,9 +269,7 @@ class TestOffsitePageFrames(unittest.TestCase):
         op.Gtk.Expander.side_effect = expanders
 
         boxes = []
-        op.Gtk.Box.side_effect = lambda *a, **k: (
-            boxes.append(MagicMock()) or boxes[-1]
-        )
+        op.Gtk.Box.side_effect = lambda *a, **k: boxes.append(MagicMock()) or boxes[-1]
 
         app = MagicMock()
         app.ctx = MagicMock()
@@ -280,8 +289,14 @@ class TestOffsitePageFrames(unittest.TestCase):
         packed = [call[0][0] for call in outer_box.pack_start.call_args_list]
         self.assertEqual(
             packed,
-            [op.Gtk.Label.return_value, op.Gtk.Separator.return_value,
-             pool_frame, snap_frame, sr_frame, adv_expander],
+            [
+                op.Gtk.Label.return_value,
+                op.Gtk.Separator.return_value,
+                pool_frame,
+                snap_frame,
+                sr_frame,
+                adv_expander,
+            ],
         )
 
 
@@ -313,13 +328,19 @@ class TestOffsiteRunDialog(unittest.TestCase):
         ]
 
         app = self._make_app()
-        with patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock), \
-             patch.object(op, "do_detect_offsite_pool", return_value="z40tb"), \
-             patch.object(op, "_do_generate_snap") as mock_generate, \
-             patch.object(op, "collect_offsite_config", return_value={
-                 "steps": [],
-                 "variables": {},
-             }):
+        with (
+            patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock),
+            patch.object(op, "do_detect_offsite_pool", return_value="z40tb"),
+            patch.object(op, "_do_generate_snap") as mock_generate,
+            patch.object(
+                op,
+                "collect_offsite_config",
+                return_value={
+                    "steps": [],
+                    "variables": {},
+                },
+            ),
+        ):
             op.on_offsite_run(app, app.ctx)
 
         mock_generate.assert_called_once_with(app)
@@ -335,9 +356,11 @@ class TestOffsiteRunDialog(unittest.TestCase):
         ]
 
         app = self._make_app()
-        with patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock), \
-             patch.object(op, "do_detect_offsite_pool", return_value="z40tb"), \
-             patch.object(op, "_do_generate_snap") as mock_generate:
+        with (
+            patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock),
+            patch.object(op, "do_detect_offsite_pool", return_value="z40tb"),
+            patch.object(op, "_do_generate_snap") as mock_generate,
+        ):
             op.on_offsite_run(app, app.ctx)
 
         mock_generate.assert_not_called()
@@ -354,15 +377,27 @@ class TestOffsiteRunDialog(unittest.TestCase):
         app = self._make_app()
         app.backup_runner.running = True
 
-        with patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock), \
-             patch.object(op, "do_detect_offsite_pool", return_value="z40tb"), \
-             patch.object(op, "collect_offsite_config", return_value={
-                 "steps": [
-                     {"active": True, "source": "fivebays/a",
-                      "dest": "<offsite>/a", "includes": "", "excludes": ""},
-                 ],
-                 "variables": {},
-             }), patch.object(op, "log_msg") as mock_log:
+        with (
+            patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock),
+            patch.object(op, "do_detect_offsite_pool", return_value="z40tb"),
+            patch.object(
+                op,
+                "collect_offsite_config",
+                return_value={
+                    "steps": [
+                        {
+                            "active": True,
+                            "source": "fivebays/a",
+                            "dest": "<offsite>/a",
+                            "includes": "",
+                            "excludes": "",
+                        },
+                    ],
+                    "variables": {},
+                },
+            ),
+            patch.object(op, "log_msg") as mock_log,
+        ):
             op.on_offsite_run(app, app.ctx)
 
         app.offsite_runner.prepare_session_log.assert_called_once()
@@ -382,15 +417,27 @@ class TestOffsiteRunDialog(unittest.TestCase):
         app = self._make_app()
         app.restore_runner.running = True
 
-        with patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock), \
-             patch.object(op, "do_detect_offsite_pool", return_value="z40tb"), \
-             patch.object(op, "collect_offsite_config", return_value={
-                 "steps": [
-                     {"active": True, "source": "fivebays/a",
-                      "dest": "<offsite>/a", "includes": "", "excludes": ""},
-                 ],
-                 "variables": {},
-             }), patch.object(op, "log_msg") as mock_log:
+        with (
+            patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock),
+            patch.object(op, "do_detect_offsite_pool", return_value="z40tb"),
+            patch.object(
+                op,
+                "collect_offsite_config",
+                return_value={
+                    "steps": [
+                        {
+                            "active": True,
+                            "source": "fivebays/a",
+                            "dest": "<offsite>/a",
+                            "includes": "",
+                            "excludes": "",
+                        },
+                    ],
+                    "variables": {},
+                },
+            ),
+            patch.object(op, "log_msg") as mock_log,
+        ):
             op.on_offsite_run(app, app.ctx)
 
         app.offsite_runner.prepare_session_log.assert_called_once()
@@ -398,8 +445,6 @@ class TestOffsiteRunDialog(unittest.TestCase):
         app.offsite_runner.start.assert_called_once()
         for call in mock_log.call_args_list:
             self.assertNotIn("restore", call[0][0].lower())
-
-
 
 
 class _FakeDirtyTracker:
@@ -422,8 +467,10 @@ class TestOffsiteRevert(unittest.TestCase):
         app.ctx = MagicMock()
         app._offsite_tracker = _FakeDirtyTracker(saved_cfg)
 
-        with patch.object(op, "load_offsite_config") as mock_load, \
-             patch.object(op, "log_msg") as mock_log:
+        with (
+            patch.object(op, "load_offsite_config") as mock_load,
+            patch.object(op, "log_msg") as mock_log,
+        ):
             op.on_offsite_revert(app, app.ctx)
 
         mock_load.assert_called_once_with(app, saved_cfg)
@@ -439,8 +486,10 @@ class TestOffsiteRevert(unittest.TestCase):
         app = _NoTrackerApp()
         app.ctx = MagicMock()
 
-        with patch.object(op, "load_offsite_config") as mock_load, \
-             patch.object(op, "log_msg") as mock_log:
+        with (
+            patch.object(op, "load_offsite_config") as mock_load,
+            patch.object(op, "log_msg") as mock_log,
+        ):
             op.on_offsite_revert(app, app.ctx)
 
         mock_load.assert_not_called()
@@ -461,11 +510,13 @@ class TestOffsiteSaveValidation(unittest.TestCase):
     def test_save_without_warnings(self):
         op = _import_offsite_page()
         app = self._make_app()
-        with patch.object(op, "collect_offsite_config", return_value={"steps": []}), \
-             patch.object(op, "get_backup_config", return_value={"steps": []}), \
-             patch.object(op, "validate_gui_settings", return_value=[]), \
-             patch.object(op, "show_warning_dialog") as mock_warn, \
-             patch.object(op, "save_offsite_config") as mock_save:
+        with (
+            patch.object(op, "collect_offsite_config", return_value={"steps": []}),
+            patch.object(op, "get_backup_config", return_value={"steps": []}),
+            patch.object(op, "validate_gui_settings", return_value=[]),
+            patch.object(op, "show_warning_dialog") as mock_warn,
+            patch.object(op, "save_offsite_config") as mock_save,
+        ):
             op.on_offsite_save(app, app.ctx)
 
         mock_warn.assert_not_called()
@@ -474,11 +525,13 @@ class TestOffsiteSaveValidation(unittest.TestCase):
     def test_save_shows_warning_on_scope_mismatch(self):
         op = _import_offsite_page()
         app = self._make_app()
-        with patch.object(op, "collect_offsite_config", return_value={"steps": []}), \
-             patch.object(op, "get_backup_config", return_value={"steps": []}), \
-             patch.object(op, "validate_gui_settings", return_value=["mismatch"]), \
-             patch.object(op, "show_warning_dialog") as mock_warn, \
-             patch.object(op, "save_offsite_config") as mock_save:
+        with (
+            patch.object(op, "collect_offsite_config", return_value={"steps": []}),
+            patch.object(op, "get_backup_config", return_value={"steps": []}),
+            patch.object(op, "validate_gui_settings", return_value=["mismatch"]),
+            patch.object(op, "show_warning_dialog") as mock_warn,
+            patch.object(op, "save_offsite_config") as mock_save,
+        ):
             op.on_offsite_save(app, app.ctx)
 
         mock_warn.assert_called_once()

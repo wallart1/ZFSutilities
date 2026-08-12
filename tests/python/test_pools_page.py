@@ -30,8 +30,7 @@ def _import_pools_page():
 class TestRefreshPoolsPage(unittest.TestCase):
     """refresh_pools_page() populates the pool store including offsite flags."""
 
-    def _make_app(self, known_pools, online_pools=None, errors_by_pool=None,
-                  importable_names=None):
+    def _make_app(self, known_pools, online_pools=None, errors_by_pool=None, importable_names=None):
         app = MagicMock()
         app.config = {"pools": known_pools}
         app.known_pools = list(known_pools)

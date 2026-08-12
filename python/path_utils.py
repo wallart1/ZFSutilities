@@ -11,9 +11,7 @@ import subprocess
 
 # Base directory for versioned deployments.  Overridable for tests and for
 # non-standard installations.
-_DEPLOYMENT_BASE = os.environ.get(
-    "ZFSUTILITIES_VERSION_BASE", "/usr/local/lib/zfsutilities"
-)
+_DEPLOYMENT_BASE = os.environ.get("ZFSUTILITIES_VERSION_BASE", "/usr/local/lib/zfsutilities")
 
 # Remote deployment paths.  Overridable for tests and non-standard installs.
 _REMOTE_BIN = os.environ.get(
@@ -83,9 +81,7 @@ def is_deployed_layout(script_dir=None):
     """Return ``True`` if *script_dir* lives inside a versioned deployment."""
     if script_dir is None:
         script_dir = get_script_dir(depth=2)
-    return f"{_DEPLOYMENT_BASE}{os.sep}versions{os.sep}" in os.path.realpath(
-        script_dir
-    )
+    return f"{_DEPLOYMENT_BASE}{os.sep}versions{os.sep}" in os.path.realpath(script_dir)
 
 
 def _version_base(script_dir=None):

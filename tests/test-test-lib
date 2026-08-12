@@ -1,0 +1,47 @@
+#!/usr/bin/bash
+# test-test-lib — Verify test-lib.sh reporting helpers.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+
+test_pass_counter_is_idempotent() {
+    test_start "pass counter is idempotent"
+    local result
+    result=$(
+        TESTS_PASSED=0
+        { test_pass; test_pass; } >/dev/null 2>&1
+        echo "$TESTS_PASSED"
+    )
+    assert_equals "1" "$result"
+}
+
+
+test_fail_counter_is_idempotent() {
+    test_start "fail counter is idempotent"
+    local result
+    result=$(
+        TESTS_FAILED=0
+        { test_fail "first"; test_fail "second"; } >/dev/null 2>&1
+        echo "$TESTS_FAILED"
+    )
+    assert_equals "1" "$result"
+}
+
+
+test_skip_counter_is_idempotent() {
+    test_start "skip counter is idempotent"
+    local result
+    result=$(
+        TESTS_SKIPPED=0
+        { test_skip "first"; test_skip "second"; } >/dev/null 2>&1
+        echo "$TESTS_SKIPPED"
+    )
+    assert_equals "1" "$result"
+}
+
+
+test_pass_counter_is_idempotent
+test_fail_counter_is_idempotent
+test_skip_counter_is_idempotent
+
+test_summary

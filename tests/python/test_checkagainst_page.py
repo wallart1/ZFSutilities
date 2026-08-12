@@ -20,6 +20,7 @@ with mock_gtk():
 
 class _FakeStore:
     """Minimal ListStore stand-in."""
+
     def __init__(self, rows=None):
         self._rows = [list(r) for r in (rows or [])]
 
@@ -59,18 +60,30 @@ class TestEntriesFromToConfig(unittest.TestCase):
 
     def test_entries_from_config_defaults(self):
         app = MagicMock()
-        app.config = {"checkagainst": {"user_entries": [
-            {"source_root": "tank/a", "dest_root": "backup/a"},
-        ]}}
+        app.config = {
+            "checkagainst": {
+                "user_entries": [
+                    {"source_root": "tank/a", "dest_root": "backup/a"},
+                ]
+            }
+        }
         entries = cap._entries_from_config(app)
         self.assertEqual(entries, [("", "tank/a", "backup/a", "")])
 
     def test_entries_from_config_reads_comment(self):
         app = MagicMock()
-        app.config = {"checkagainst": {"user_entries": [
-            {"source_root": "tank/a", "dest_root": "backup/a",
-             "label": "offsite", "comment": "kept for parity"},
-        ]}}
+        app.config = {
+            "checkagainst": {
+                "user_entries": [
+                    {
+                        "source_root": "tank/a",
+                        "dest_root": "backup/a",
+                        "label": "offsite",
+                        "comment": "kept for parity",
+                    },
+                ]
+            }
+        }
         entries = cap._entries_from_config(app)
         self.assertEqual(entries, [("offsite", "tank/a", "backup/a", "kept for parity")])
 
@@ -86,14 +99,28 @@ class TestEntriesFromToConfig(unittest.TestCase):
         data = cap._full_dict_from_ui(app)
         self.assertTrue(data["backup_derived_active"])
         self.assertFalse(data["offsite_derived_active"])
-        self.assertEqual(data["backup_derived"], [
-            {"label": "dailybackup", "source_root": "src/a", "dest_root": "dst/a",
-             "comment": ""},
-        ])
-        self.assertEqual(data["user_entries"], [
-            {"label": "offsite", "source_root": "tank/a", "dest_root": "backup/a",
-             "comment": "note"},
-        ])
+        self.assertEqual(
+            data["backup_derived"],
+            [
+                {
+                    "label": "dailybackup",
+                    "source_root": "src/a",
+                    "dest_root": "dst/a",
+                    "comment": "",
+                },
+            ],
+        )
+        self.assertEqual(
+            data["user_entries"],
+            [
+                {
+                    "label": "offsite",
+                    "source_root": "tank/a",
+                    "dest_root": "backup/a",
+                    "comment": "note",
+                },
+            ],
+        )
 
     def test_save_full_checkagainst(self):
         with temp_config_dir():
@@ -106,10 +133,17 @@ class TestEntriesFromToConfig(unittest.TestCase):
             app._ca_offsite_active_chk = _make_checkbox(True)
 
             cap.on_checkagainst_save(app)
-            self.assertEqual(app.config["checkagainst"]["user_entries"], [
-                {"label": "offsite", "source_root": "tank/a", "dest_root": "backup/a",
-                 "comment": ""},
-            ])
+            self.assertEqual(
+                app.config["checkagainst"]["user_entries"],
+                [
+                    {
+                        "label": "offsite",
+                        "source_root": "tank/a",
+                        "dest_root": "backup/a",
+                        "comment": "",
+                    },
+                ],
+            )
 
 
 class TestDirtyTracking(unittest.TestCase):
@@ -122,8 +156,15 @@ class TestDirtyTracking(unittest.TestCase):
     def tearDown(self):
         self._p.stop()
 
-    def _make_app(self, user_rows, original_user_rows, backup_derived=None,
-                  offsite_derived=None, backup_active=True, offsite_active=True):
+    def _make_app(
+        self,
+        user_rows,
+        original_user_rows,
+        backup_derived=None,
+        offsite_derived=None,
+        backup_active=True,
+        offsite_active=True,
+    ):
         app = MagicMock()
         app._ca_store = _FakeStore(user_rows)
         app._ca_backup_store = _FakeStore(backup_derived or [])
@@ -137,18 +178,15 @@ class TestDirtyTracking(unittest.TestCase):
             "backup_derived_active": backup_active,
             "offsite_derived_active": offsite_active,
             "backup_derived": [
-                {"label": r[0], "source_root": r[1], "dest_root": r[2],
-                 "comment": r[3]}
+                {"label": r[0], "source_root": r[1], "dest_root": r[2], "comment": r[3]}
                 for r in (backup_derived or [])
             ],
             "offsite_derived": [
-                {"label": r[0], "source_root": r[1], "dest_root": r[2],
-                 "comment": r[3]}
+                {"label": r[0], "source_root": r[1], "dest_root": r[2], "comment": r[3]}
                 for r in (offsite_derived or [])
             ],
             "user_entries": [
-                {"label": r[0], "source_root": r[1], "dest_root": r[2],
-                 "comment": r[3]}
+                {"label": r[0], "source_root": r[1], "dest_root": r[2], "comment": r[3]}
                 for r in original_user_rows
             ],
         }
@@ -188,6 +226,7 @@ class TestDirtyTracking(unittest.TestCase):
     def test_is_checkagainst_dirty_false_without_original(self):
         class NoOriginalApp:
             pass
+
         app = NoOriginalApp()
         self.assertFalse(cap._is_ca_dirty(app))
 
@@ -197,9 +236,11 @@ class TestLoadNormalization(unittest.TestCase):
 
     def test_load_does_not_create_false_dirty_state(self):
         app = MagicMock()
-        app.config = {"checkagainst": {
-            "user_entries": [{"source_root": "tank/a", "label": "offsite"}],
-        }}
+        app.config = {
+            "checkagainst": {
+                "user_entries": [{"source_root": "tank/a", "label": "offsite"}],
+            }
+        }
         app._ca_backup_store = _FakeStore()
         app._ca_offsite_store = _FakeStore()
         app._ca_store = _FakeStore()
@@ -241,8 +282,7 @@ class TestStatusUpdate(unittest.TestCase):
             "backup_derived": [],
             "offsite_derived": [],
             "user_entries": [
-                {"label": r[0], "source_root": r[1], "dest_root": r[2],
-                 "comment": r[3]}
+                {"label": r[0], "source_root": r[1], "dest_root": r[2], "comment": r[3]}
                 for r in original_rows
             ],
         }
@@ -296,8 +336,7 @@ class TestActionHandlers(unittest.TestCase):
             "backup_derived": [],
             "offsite_derived": [],
             "user_entries": [
-                {"label": r[0], "source_root": r[1], "dest_root": r[2],
-                 "comment": r[3]}
+                {"label": r[0], "source_root": r[1], "dest_root": r[2], "comment": r[3]}
                 for r in (original_user_rows or (user_rows or []))
             ],
         }
@@ -317,10 +356,12 @@ class TestActionHandlers(unittest.TestCase):
         self.assertEqual(app._ca_store[0], ["offsite", "", "", ""])
 
     def test_on_ca_add_appends_at_end(self):
-        app = self._make_app([
-            ("daily", "alpha", "backup/alpha", ""),
-            ("daily", "bravo", "backup/bravo", ""),
-        ])
+        app = self._make_app(
+            [
+                ("daily", "alpha", "backup/alpha", ""),
+                ("daily", "bravo", "backup/bravo", ""),
+            ]
+        )
         cap.on_checkagainst_add(app)
         self.assertEqual(len(app._ca_store), 3)
         self.assertEqual(app._ca_store[2], ["offsite", "", "", ""])
@@ -341,10 +382,17 @@ class TestActionHandlers(unittest.TestCase):
         with temp_config_dir():
             app = self._make_app([("offsite", "tank/a", "backup/a", "")])
             cap.on_checkagainst_save(app)
-            self.assertEqual(app.config["checkagainst"]["user_entries"], [
-                {"label": "offsite", "source_root": "tank/a", "dest_root": "backup/a",
-                 "comment": ""},
-            ])
+            self.assertEqual(
+                app.config["checkagainst"]["user_entries"],
+                [
+                    {
+                        "label": "offsite",
+                        "source_root": "tank/a",
+                        "dest_root": "backup/a",
+                        "comment": "",
+                    },
+                ],
+            )
             self.assertEqual(
                 app._ca_original_full,
                 app.config["checkagainst"],
@@ -399,10 +447,8 @@ class TestActionHandlers(unittest.TestCase):
             cap.on_checkagainst_get_entries(app)
 
         self.assertEqual(len(app._ca_backup_store), 2)
-        self.assertEqual(app._ca_backup_store[0],
-                         ["dailybackup", "poolA/a", "poolB/poolA/a", ""])
-        self.assertEqual(app._ca_backup_store[1],
-                         ["dailybackup", "poolB/poolA/a", "poolA/a", ""])
+        self.assertEqual(app._ca_backup_store[0], ["dailybackup", "poolA/a", "poolB/poolA/a", ""])
+        self.assertEqual(app._ca_backup_store[1], ["dailybackup", "poolB/poolA/a", "poolA/a", ""])
         self.assertEqual(len(app._ca_offsite_store), 0)
         mock_log.assert_called_once()
 
@@ -417,8 +463,14 @@ class TestMergedPreview(unittest.TestCase):
     def tearDown(self):
         self._p.stop()
 
-    def _make_app(self, backup_derived=None, offsite_derived=None,
-                  user_entries=None, backup_active=True, offsite_active=True):
+    def _make_app(
+        self,
+        backup_derived=None,
+        offsite_derived=None,
+        user_entries=None,
+        backup_active=True,
+        offsite_active=True,
+    ):
         app = MagicMock()
         app._ca_backup_store = _FakeStore(backup_derived or [])
         app._ca_offsite_store = _FakeStore(offsite_derived or [])
@@ -432,18 +484,15 @@ class TestMergedPreview(unittest.TestCase):
             "backup_derived_active": backup_active,
             "offsite_derived_active": offsite_active,
             "backup_derived": [
-                {"label": r[0], "source_root": r[1], "dest_root": r[2],
-                 "comment": r[3]}
+                {"label": r[0], "source_root": r[1], "dest_root": r[2], "comment": r[3]}
                 for r in (backup_derived or [])
             ],
             "offsite_derived": [
-                {"label": r[0], "source_root": r[1], "dest_root": r[2],
-                 "comment": r[3]}
+                {"label": r[0], "source_root": r[1], "dest_root": r[2], "comment": r[3]}
                 for r in (offsite_derived or [])
             ],
             "user_entries": [
-                {"label": r[0], "source_root": r[1], "dest_root": r[2],
-                 "comment": r[3]}
+                {"label": r[0], "source_root": r[1], "dest_root": r[2], "comment": r[3]}
                 for r in (user_entries or [])
             ],
         }
@@ -490,8 +539,10 @@ class TestMergedPreview(unittest.TestCase):
 
     def test_merged_table_filters_empty_rows(self):
         app = self._make_app(
-            user_entries=[("offsite", "", "poolB/poolA/a", ""),
-                          ("offsite", "poolA/a", "poolB/poolA/a", "")],
+            user_entries=[
+                ("offsite", "", "poolB/poolA/a", ""),
+                ("offsite", "poolA/a", "poolB/poolA/a", ""),
+            ],
         )
         cap._refresh_merged_table(app)
         rows = [tuple(r) for r in app._ca_merged_store]
@@ -512,8 +563,10 @@ class TestPageConstruction(unittest.TestCase):
 
     def test_liststore_has_four_string_columns(self):
         app = self._make_app()
-        with patch.object(cap.Gtk, "ListStore") as mock_liststore, \
-             patch.object(cap, "set_button_markup"):
+        with (
+            patch.object(cap.Gtk, "ListStore") as mock_liststore,
+            patch.object(cap, "set_button_markup"),
+        ):
             cap.create_checkagainst_page(app)
         self.assertEqual(mock_liststore.call_count, 4)
         mock_liststore.assert_called_with(str, str, str, str)
@@ -527,14 +580,15 @@ class TestPageConstruction(unittest.TestCase):
             tv_mocks.append(m)
             return m
 
-        with patch.object(cap.Gtk, "TreeView", side_effect=_make_treeview), \
-             patch.object(cap, "set_button_markup"):
+        with (
+            patch.object(cap.Gtk, "TreeView", side_effect=_make_treeview),
+            patch.object(cap, "set_button_markup"),
+        ):
             cap.create_checkagainst_page(app)
 
         # The user-entry TreeView is the only editable/reorderable one.
         self.assertTrue(
-            any(m.set_reorderable.call_args == ((True,), {})
-                for m in tv_mocks),
+            any(m.set_reorderable.call_args == ((True,), {}) for m in tv_mocks),
             "Expected one TreeView to be set reorderable=True",
         )
 
@@ -555,8 +609,10 @@ class TestPageConstruction(unittest.TestCase):
             titles.append(title)
             return MagicMock()
 
-        with patch.object(cap.Gtk, "TreeViewColumn", side_effect=_record_column), \
-             patch.object(cap, "set_button_markup"):
+        with (
+            patch.object(cap.Gtk, "TreeViewColumn", side_effect=_record_column),
+            patch.object(cap, "set_button_markup"),
+        ):
             cap.create_checkagainst_page(app)
         self.assertIn("Comment", titles)
         self.assertEqual(len(titles), 16)  # 4 columns x 4 treeviews
@@ -564,13 +620,20 @@ class TestPageConstruction(unittest.TestCase):
     def test_page_is_wrapped_in_scrolled_window(self):
         app = self._make_app()
         page_sw = MagicMock()
-        sw_iter = iter([
-            page_sw,
-            MagicMock(), MagicMock(), MagicMock(), MagicMock(),
-        ])
+        sw_iter = iter(
+            [
+                page_sw,
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+            ]
+        )
 
-        with patch.object(cap.Gtk, "ScrolledWindow", side_effect=lambda: next(sw_iter)), \
-             patch.object(cap, "set_button_markup"):
+        with (
+            patch.object(cap.Gtk, "ScrolledWindow", side_effect=lambda: next(sw_iter)),
+            patch.object(cap, "set_button_markup"),
+        ):
             result = cap.create_checkagainst_page(app)
 
         self.assertIs(result, page_sw)
@@ -584,8 +647,7 @@ class TestColumnTooltips(unittest.TestCase):
     """Each column header has an explanatory tooltip."""
 
     def test_all_columns_have_tooltips(self):
-        for col_idx in (cap.COL_LABEL, cap.COL_SOURCE_ROOT, cap.COL_DEST_ROOT,
-                        cap.COL_COMMENT):
+        for col_idx in (cap.COL_LABEL, cap.COL_SOURCE_ROOT, cap.COL_DEST_ROOT, cap.COL_COMMENT):
             tooltip = cap._COLUMN_TOOLTIPS.get(col_idx, "")
             self.assertTrue(
                 isinstance(tooltip, str) and len(tooltip) > 0,
@@ -614,8 +676,12 @@ class TestCellEdit(unittest.TestCase):
             "backup_derived": [],
             "offsite_derived": [],
             "user_entries": [
-                {"label": "offsite", "source_root": "tank/a", "dest_root": "backup/a",
-                 "comment": ""},
+                {
+                    "label": "offsite",
+                    "source_root": "tank/a",
+                    "dest_root": "backup/a",
+                    "comment": "",
+                },
             ],
         }
         app._ca_save_button = MagicMock()
@@ -641,8 +707,7 @@ class TestSaveButtonStyling(unittest.TestCase):
             "backup_derived": [],
             "offsite_derived": [],
             "user_entries": [
-                {"label": r[0], "source_root": r[1], "dest_root": r[2],
-                 "comment": r[3]}
+                {"label": r[0], "source_root": r[1], "dest_root": r[2], "comment": r[3]}
                 for r in original
             ],
         }
@@ -676,44 +741,56 @@ class TestSetButtonMarkup(unittest.TestCase):
 
     def test_finds_label_in_box(self):
         with patch.object(gui_helpers, "Gtk") as mock_gtk:
+
             class FakeLabel:
                 def __init__(self):
                     self.markup = None
+
                 def set_markup(self, markup):
                     self.markup = markup
+
             mock_gtk.Label = FakeLabel
 
             class FakeBox:
                 def __init__(self):
                     self.label = FakeLabel()
+
                 def get_children(self):
                     return [self.label]
+
             box = FakeBox()
             self.assertTrue(cap.set_button_markup(box, "<b>Save</b>"))
             self.assertEqual(box.label.markup, "<b>Save</b>")
 
     def test_finds_label_via_get_child(self):
         with patch.object(gui_helpers, "Gtk") as mock_gtk:
+
             class FakeLabel:
                 def __init__(self):
                     self.markup = None
+
                 def set_markup(self, markup):
                     self.markup = markup
+
             mock_gtk.Label = FakeLabel
 
             class FakeContainer:
                 def __init__(self):
                     self.label = FakeLabel()
+
                 def get_child(self):
                     return self.label
+
             container = FakeContainer()
             self.assertTrue(cap.set_button_markup(container, "Save"))
             self.assertEqual(container.label.markup, "Save")
 
     def test_returns_false_when_no_label_found(self):
         with patch.object(gui_helpers, "Gtk") as mock_gtk:
+
             class NotALabel:
                 pass
+
             mock_gtk.Label = NotALabel
             widget = MagicMock()
             widget.get_children.return_value = []
@@ -747,8 +824,7 @@ class TestStatusUpdateEmptyFields(unittest.TestCase):
             "backup_derived": [],
             "offsite_derived": [],
             "user_entries": [
-                {"label": r[0], "source_root": r[1], "dest_root": r[2],
-                 "comment": r[3]}
+                {"label": r[0], "source_root": r[1], "dest_root": r[2], "comment": r[3]}
                 for r in original_rows
             ],
         }
@@ -807,20 +883,22 @@ class TestTabNavigationWiring(unittest.TestCase):
             renderers.append(r)
             return r
 
-        with patch.object(cap.Gtk, "CellRendererText", side_effect=_make_renderer), \
-             patch.object(cap, "set_button_markup"):
+        with (
+            patch.object(cap.Gtk, "CellRendererText", side_effect=_make_renderer),
+            patch.object(cap, "set_button_markup"),
+        ):
             cap.create_checkagainst_page(app)
 
         editable_renderers = [r for r in renderers if True in r._editable_calls]
         self.assertEqual(len(editable_renderers), 4)
-        expected_cols = [cap.COL_LABEL, cap.COL_SOURCE_ROOT, cap.COL_DEST_ROOT,
-                         cap.COL_COMMENT]
+        expected_cols = [cap.COL_LABEL, cap.COL_SOURCE_ROOT, cap.COL_DEST_ROOT, cap.COL_COMMENT]
         for idx, renderer in enumerate(editable_renderers):
-            editing_connections = [
-                c for c in renderer._connections if c[0] == "editing-started"
-            ]
-            self.assertEqual(len(editing_connections), 1,
-                             f"Renderer {idx} should have one editing-started connection")
+            editing_connections = [c for c in renderer._connections if c[0] == "editing-started"]
+            self.assertEqual(
+                len(editing_connections),
+                1,
+                f"Renderer {idx} should have one editing-started connection",
+            )
             _signal, handler, args = editing_connections[0]
             self.assertIs(handler, cap._on_editing_started)
             self.assertEqual(args[1], expected_cols[idx])
@@ -847,15 +925,15 @@ class TestTabNavigationWiring(unittest.TestCase):
             renderers.append(r)
             return r
 
-        with patch.object(cap.Gtk, "CellRendererText", side_effect=_make_renderer), \
-             patch.object(cap, "set_button_markup"):
+        with (
+            patch.object(cap.Gtk, "CellRendererText", side_effect=_make_renderer),
+            patch.object(cap, "set_button_markup"),
+        ):
             cap.create_checkagainst_page(app)
 
         editable_renderers = [r for r in renderers if True in r._editable_calls]
         renderer = editable_renderers[0]
-        editing_connections = [
-            c for c in renderer._connections if c[0] == "editing-started"
-        ]
+        editing_connections = [c for c in renderer._connections if c[0] == "editing-started"]
         self.assertEqual(len(editing_connections), 1)
         _signal, handler, args = editing_connections[0]
         editable = MagicMock()
@@ -872,9 +950,15 @@ class TestTabNavigationWiring(unittest.TestCase):
         self.assertEqual(conn_args[2], treeview)
         self.assertEqual(conn_args[3], "0")
         self.assertEqual(conn_args[4], col_idx)
-        self.assertEqual(conn_args[5], [
-            cap.COL_LABEL, cap.COL_SOURCE_ROOT, cap.COL_DEST_ROOT, cap.COL_COMMENT,
-        ])
+        self.assertEqual(
+            conn_args[5],
+            [
+                cap.COL_LABEL,
+                cap.COL_SOURCE_ROOT,
+                cap.COL_DEST_ROOT,
+                cap.COL_COMMENT,
+            ],
+        )
 
 
 class TestActionHandlersEmptyFields(unittest.TestCase):
@@ -940,18 +1024,24 @@ class TestBuildPairRows(unittest.TestCase):
             "dailybackup",
             "manual",
         )
-        self.assertEqual(forward, {
-            "label": "dailybackup",
-            "source_root": "threeamigos/proxmox",
-            "dest_root": "fivebays/threeamigos/proxmox",
-            "comment": "manual",
-        })
-        self.assertEqual(reverse, {
-            "label": "dailybackup",
-            "source_root": "fivebays/threeamigos/proxmox",
-            "dest_root": "threeamigos/proxmox",
-            "comment": "manual",
-        })
+        self.assertEqual(
+            forward,
+            {
+                "label": "dailybackup",
+                "source_root": "threeamigos/proxmox",
+                "dest_root": "fivebays/threeamigos/proxmox",
+                "comment": "manual",
+            },
+        )
+        self.assertEqual(
+            reverse,
+            {
+                "label": "dailybackup",
+                "source_root": "fivebays/threeamigos/proxmox",
+                "dest_root": "threeamigos/proxmox",
+                "comment": "manual",
+            },
+        )
 
     def test_build_pair_rows_common_suffix(self):
         forward, reverse = cap._build_pair_rows(
@@ -960,18 +1050,24 @@ class TestBuildPairRows(unittest.TestCase):
             "dailybackup",
             "",
         )
-        self.assertEqual(forward, {
-            "label": "dailybackup",
-            "source_root": "threeamigos/proxmox",
-            "dest_root": "fivebays/threeamigos/proxmox",
-            "comment": "",
-        })
-        self.assertEqual(reverse, {
-            "label": "dailybackup",
-            "source_root": "fivebays/threeamigos/proxmox",
-            "dest_root": "threeamigos/proxmox",
-            "comment": "",
-        })
+        self.assertEqual(
+            forward,
+            {
+                "label": "dailybackup",
+                "source_root": "threeamigos/proxmox",
+                "dest_root": "fivebays/threeamigos/proxmox",
+                "comment": "",
+            },
+        )
+        self.assertEqual(
+            reverse,
+            {
+                "label": "dailybackup",
+                "source_root": "fivebays/threeamigos/proxmox",
+                "dest_root": "threeamigos/proxmox",
+                "comment": "",
+            },
+        )
 
 
 class TestAddPairAssistant(unittest.TestCase):
@@ -993,19 +1089,26 @@ class TestAddPairAssistant(unittest.TestCase):
         label_entry, source_entry, dest_entry, comment_entry = [
             self._make_fake_entry(t) for t in entries_text
         ]
-        entry_iter = iter([
-            label_entry, source_entry, dest_entry, comment_entry,
-        ])
+        entry_iter = iter(
+            [
+                label_entry,
+                source_entry,
+                dest_entry,
+                comment_entry,
+            ]
+        )
 
         fake_dlg = MagicMock()
         fake_dlg.run.side_effect = responses
         fake_content = MagicMock()
         fake_dlg.get_content_area.return_value = fake_content
 
-        with patch.object(cap.Gtk, "Dialog", return_value=fake_dlg), \
-             patch.object(cap.Gtk, "Entry", side_effect=lambda: next(entry_iter)), \
-             patch.object(cap, "_update_ca_status") as mock_update, \
-             patch.object(cap, "log_msg") as mock_log:
+        with (
+            patch.object(cap.Gtk, "Dialog", return_value=fake_dlg),
+            patch.object(cap.Gtk, "Entry", side_effect=lambda: next(entry_iter)),
+            patch.object(cap, "_update_ca_status") as mock_update,
+            patch.object(cap, "log_msg") as mock_log,
+        ):
             cap.on_checkagainst_add_pair(app)
 
         return fake_dlg, fake_content, mock_update, mock_log
@@ -1021,17 +1124,18 @@ class TestAddPairAssistant(unittest.TestCase):
         fake_dlg, _content, mock_update, mock_log = self._run_assistant(
             app,
             responses=[cap.Gtk.ResponseType.OK],
-            entries_text=("dailybackup", "threeamigos/proxmox",
-                          "fivebays", "manual"),
+            entries_text=("dailybackup", "threeamigos/proxmox", "fivebays", "manual"),
         )
         fake_dlg.show_all.assert_called_once()
         self.assertEqual(len(app._ca_store), 2)
-        self.assertEqual(app._ca_store[0],
-                         ["dailybackup", "threeamigos/proxmox",
-                          "fivebays/threeamigos/proxmox", "manual"])
-        self.assertEqual(app._ca_store[1],
-                         ["dailybackup", "fivebays/threeamigos/proxmox",
-                          "threeamigos/proxmox", "manual"])
+        self.assertEqual(
+            app._ca_store[0],
+            ["dailybackup", "threeamigos/proxmox", "fivebays/threeamigos/proxmox", "manual"],
+        )
+        self.assertEqual(
+            app._ca_store[1],
+            ["dailybackup", "fivebays/threeamigos/proxmox", "threeamigos/proxmox", "manual"],
+        )
         mock_update.assert_called_once_with(app)
         mock_log.assert_called_once()
         fake_dlg.destroy.assert_called_once()
@@ -1041,16 +1145,15 @@ class TestAddPairAssistant(unittest.TestCase):
         self._run_assistant(
             app,
             responses=[cap.Gtk.ResponseType.OK],
-            entries_text=("offsite", "fivebays/threeamigos/proxmox",
-                          "threeamigos/proxmox", ""),
+            entries_text=("offsite", "fivebays/threeamigos/proxmox", "threeamigos/proxmox", ""),
         )
         self.assertEqual(len(app._ca_store), 2)
-        self.assertEqual(app._ca_store[0],
-                         ["offsite", "fivebays/threeamigos/proxmox",
-                          "threeamigos/proxmox", ""])
-        self.assertEqual(app._ca_store[1],
-                         ["offsite", "threeamigos/proxmox",
-                          "fivebays/threeamigos/proxmox", ""])
+        self.assertEqual(
+            app._ca_store[0], ["offsite", "fivebays/threeamigos/proxmox", "threeamigos/proxmox", ""]
+        )
+        self.assertEqual(
+            app._ca_store[1], ["offsite", "threeamigos/proxmox", "fivebays/threeamigos/proxmox", ""]
+        )
 
     def test_add_pair_rejects_empty_source(self):
         app = self._make_app()
@@ -1073,8 +1176,7 @@ class TestAddPairAssistant(unittest.TestCase):
         fake_dlg, _content, mock_update, mock_log = self._run_assistant(
             app,
             responses=[cap.Gtk.ResponseType.CANCEL],
-            entries_text=("offsite", "threeamigos/proxmox",
-                          "fivebays", ""),
+            entries_text=("offsite", "threeamigos/proxmox", "fivebays", ""),
         )
         self.assertEqual(len(app._ca_store), 0)
         mock_update.assert_not_called()

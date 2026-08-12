@@ -14,7 +14,6 @@ with mock_gtk():
 
 
 class TestScanFile(unittest.TestCase):
-
     def _write(self, tmpdir, name, content, mtime=None):
         path = os.path.join(tmpdir, name)
         with open(path, "w", encoding="utf-8") as fh:
@@ -101,7 +100,6 @@ class TestScanFile(unittest.TestCase):
 
 
 class TestUpdateEntryIncrementally(unittest.TestCase):
-
     def test_reads_only_new_bytes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_x.log")
@@ -154,10 +152,7 @@ class TestUpdateEntryIncrementally(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_x.log")
             with open(path, "w", encoding="utf-8") as fh:
-                fh.write(
-                    "2026-06-22 07:00:00  /a:1: INFO: ok\n"
-                    "# END: rc=0, duration=1.0s\n"
-                )
+                fh.write("2026-06-22 07:00:00  /a:1: INFO: ok\n# END: rc=0, duration=1.0s\n")
 
             with patch("log_index.SESSION_LOG_DIR", tmpdir):
                 entry = li.scan_file(path)
@@ -204,13 +199,10 @@ class TestUpdateEntryIncrementally(unittest.TestCase):
 
 
 class TestLogIndex(unittest.TestCase):
-
     def setUp(self):
         self._orig_lock = file_locking.LOG_INDEX_LOCK_PATH
         self._lock_tmp = tempfile.TemporaryDirectory()
-        file_locking.LOG_INDEX_LOCK_PATH = os.path.join(
-            self._lock_tmp.name, ".log_index.lock"
-        )
+        file_locking.LOG_INDEX_LOCK_PATH = os.path.join(self._lock_tmp.name, ".log_index.lock")
 
     def tearDown(self):
         file_locking.LOG_INDEX_LOCK_PATH = self._orig_lock
@@ -323,9 +315,7 @@ class TestLogIndex(unittest.TestCase):
                 index._data = {"foo.log": {}}
                 index._dirty = False
                 index.save()
-                self.assertFalse(
-                    os.path.exists(os.path.join(tmpdir, ".log_index.json"))
-                )
+                self.assertFalse(os.path.exists(os.path.join(tmpdir, ".log_index.json")))
 
     def test_save_is_noop_when_session_log_dir_missing(self):
         missing_dir = "/nonexistent/zfsutilities/sessions"
@@ -356,7 +346,9 @@ class TestLogIndex(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "big.log")
             with open(path, "w", encoding="utf-8") as fh:
-                fh.writelines(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n" for i in range(200))
+                fh.writelines(
+                    f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n" for i in range(200)
+                )
                 fh.write("2026-06-22 07:03:20  /a:1: WARN: near end\n")
                 fh.write("# END: rc=0, duration=123.4s, bytes=1073741824\n")
 
@@ -373,7 +365,9 @@ class TestLogIndex(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "big_running.log")
             with open(path, "w", encoding="utf-8") as fh:
-                fh.writelines(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n" for i in range(200))
+                fh.writelines(
+                    f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n" for i in range(200)
+                )
 
             with patch("log_index.SESSION_LOG_DIR", tmpdir):
                 entry = li.scan_file(path, max_tail_bytes=200)
@@ -385,7 +379,9 @@ class TestLogIndex(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "big.log")
             with open(path, "w", encoding="utf-8") as fh:
-                fh.writelines(f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n" for i in range(200))
+                fh.writelines(
+                    f"2026-06-22 07:00:{i:02d}  /a:1: INFO: line {i}\n" for i in range(200)
+                )
                 fh.write("2026-06-22 07:03:20  /a:1: FATAL: near end\n")
                 fh.write("# END: rc=1, duration=1.0s\n")
 
@@ -429,7 +425,6 @@ class TestLogIndex(unittest.TestCase):
 
 
 class TestParseLines(unittest.TestCase):
-
     def test_empty_text_returns_no_lines(self):
         lines, consumed = li._parse_lines("")
         self.assertEqual(lines, [])

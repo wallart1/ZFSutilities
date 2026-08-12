@@ -79,7 +79,8 @@ zfssnapbuild() {
     if [[ $1 != "" ]];              then local label=$1; fi
     if [[ $label = "" ]];           then local label="@dailybackup"; fi
     if [[ ${label:0:1} != '@' ]];   then local label='@'$label; fi
-    local currdate=$(date -Iminutes)
+    local currdate
+    currdate=$(date -Iminutes)
     if [[ $bucket = "" ]]; then
         # Determine backup bucket: d=daily, w=weekly, m=monthly
         # Monthly takes precedence if the 1st falls on a Sunday.
@@ -104,6 +105,6 @@ zfssnapbuild() {
     echo "$nextsnap"
 }
 function removesnapfile {
-    rm -f $(buildsnapfilename)
+    rm -f "$(buildsnapfilename)"
 }
 

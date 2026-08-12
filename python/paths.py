@@ -21,6 +21,7 @@ def _env_or_default(env_var: str, default: str) -> str:
 # Base directories
 # ---------------------------------------------------------------------------
 
+
 def get_system_config_dir() -> str:
     """Return the system administrator configuration directory."""
     return _env_or_default("ZFSUTILITIES_SYSTEM_CONFIG_DIR", "/etc/zfsutilities")
@@ -59,6 +60,7 @@ def get_lock_dir() -> str:
 # ---------------------------------------------------------------------------
 # Derived file paths
 # ---------------------------------------------------------------------------
+
 
 def get_config_path() -> str:
     """Return the path to the main JSON configuration file."""
@@ -123,9 +125,7 @@ def get_log_index_path() -> str:
 
 def get_cron_file_path() -> str:
     """Return the path to the cron drop-in file."""
-    return _env_or_default(
-        "ZFSUTILITIES_CRON_FILE", "/etc/cron.d/zfsutilities"
-    )
+    return _env_or_default("ZFSUTILITIES_CRON_FILE", "/etc/cron.d/zfsutilities")
 
 
 def get_profile_lock_dir() -> str:
@@ -136,6 +136,7 @@ def get_profile_lock_dir() -> str:
 # ---------------------------------------------------------------------------
 # Legacy paths (for migration/rollback compatibility)
 # ---------------------------------------------------------------------------
+
 
 def _legacy_config_home() -> str:
     """Return the legacy per-user config directory under ``~/.config``."""
@@ -165,9 +166,7 @@ def get_legacy_scrub_state_path() -> str:
 def get_legacy_snapfile_path(label: str = "dailybackup") -> str:
     """Return the legacy saved next-snapshot path for *label*."""
     suffix = "offsite" if label == "offsite" else ""
-    name = "zfsutilities_{}nextsnap".format(
-        "offsite_" if suffix else ""
-    )
+    name = "zfsutilities_{}nextsnap".format("offsite_" if suffix else "")
     return os.path.join(_legacy_config_home(), name)
 
 
@@ -181,6 +180,8 @@ def get_legacy_system_config_paths() -> dict[str, str]:
     return {
         os.path.join(get_system_config_dir(), "node.conf"): "/etc/zfsutilities-node.conf",
         os.path.join(get_system_config_dir(), "deploy.conf"): "/etc/zfsutilities-deploy.conf",
-        os.path.join(get_system_config_dir(), "iscsi-encrypted-luns.conf"): "/etc/iscsi-encrypted-luns.conf",
+        os.path.join(
+            get_system_config_dir(), "iscsi-encrypted-luns.conf"
+        ): "/etc/iscsi-encrypted-luns.conf",
         os.path.join(get_system_config_dir(), "two-node.conf"): "/etc/two-node.conf",
     }

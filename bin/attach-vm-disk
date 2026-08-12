@@ -144,7 +144,6 @@ if is_two_node; then
         log_msg "FATAL: Failed to map pool to target: $POOL"
         exit 1
     }
-    TARGET_SHORT="${TARGET##*:}"
 
     echo ""
     echo "Ensuring iSCSI infrastructure on $STORAGE_HOST..."

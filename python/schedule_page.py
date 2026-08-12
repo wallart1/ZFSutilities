@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 import cron_manager
 from backup_runner import _PV_RATE_RE
 from cron_manager import (
@@ -57,8 +57,11 @@ _NEXT_RUN_CACHE: dict[tuple[frozenset, datetime], tuple[str, str]] = {}
 def _interactive_runner_active(app):
     """Return True if any interactive GUI runner is currently running."""
     for name in (
-        "backup_runner", "offsite_runner", "restore_runner",
-        "retention_runner", "dataset_runner",
+        "backup_runner",
+        "offsite_runner",
+        "restore_runner",
+        "retention_runner",
+        "dataset_runner",
     ):
         runner = getattr(app, name, None)
         if runner is not None and getattr(runner, "running", False) is True:
@@ -96,13 +99,12 @@ def create_schedule_page(app):
 
     desc = Gtk.Label(
         label="Manage scheduled profiles. Profiles are created from the Backup, "
-              "Offsite, Restore, or Retention tabs. Enable a profile and set its "
-              "cron schedule below."
+        "Offsite, Restore, or Retention tabs. Enable a profile and set its "
+        "cron schedule below."
     )
     desc.set_halign(Gtk.Align.START)
     desc.set_line_wrap(True)
     outer.pack_start(desc, False, False, 0)
-
 
     app.schedule_store = Gtk.ListStore(bool, str, str, str, str, str)
     app.schedule_view = Gtk.TreeView(model=app.schedule_store)
@@ -112,8 +114,7 @@ def create_schedule_page(app):
     toggle_r = Gtk.CellRendererToggle()
     toggle_r.connect("toggled", _on_active_toggled, app)
     col_active = Gtk.TreeViewColumn("Active", toggle_r, active=COL_ACTIVE)
-    configure_treeview_column(col_active, width=ACTIVE_COLUMN_WIDTH,
-                              min_width=ACTIVE_COLUMN_WIDTH)
+    configure_treeview_column(col_active, width=ACTIVE_COLUMN_WIDTH, min_width=ACTIVE_COLUMN_WIDTH)
     app.schedule_view.append_column(col_active)
 
     for col_idx, title_text, width in [
@@ -179,17 +180,19 @@ def create_schedule_page(app):
     app.schedule_detail_box.pack_start(cron_frame, False, False, 0)
 
     cron_fields = [
-        ("minute", "Minute (0-59 or *)",
-         "0-59, *, lists (1,15,30), ranges (9-17), steps (*/5)", 0),
-        ("hour", "Hour (0-23 or *)",
-         "0-23, *, lists, ranges, steps", 1),
-        ("day", "Day of Month (1-31 or *)",
-         "1-31, *, lists, ranges, steps", 2),
-        ("month", "Month (1-12 or *)",
-         "1-12, *, lists, ranges, steps", 3),
-        ("weekday", "Day of Week (0-7 or *)",
-         ("0=Sun, 1=Mon, ..., 7=Sun; lists, ranges, steps; "
-         "ordinals 6#1 (first Sat) through 6#5, 6#L (last)"), 4),
+        ("minute", "Minute (0-59 or *)", "0-59, *, lists (1,15,30), ranges (9-17), steps (*/5)", 0),
+        ("hour", "Hour (0-23 or *)", "0-23, *, lists, ranges, steps", 1),
+        ("day", "Day of Month (1-31 or *)", "1-31, *, lists, ranges, steps", 2),
+        ("month", "Month (1-12 or *)", "1-12, *, lists, ranges, steps", 3),
+        (
+            "weekday",
+            "Day of Week (0-7 or *)",
+            (
+                "0=Sun, 1=Mon, ..., 7=Sun; lists, ranges, steps; "
+                "ordinals 6#1 (first Sat) through 6#5, 6#L (last)"
+            ),
+            4,
+        ),
     ]
     app.schedule_cron_entries = {}
     for key, label_text, tooltip, row in cron_fields:
@@ -235,9 +238,7 @@ def create_schedule_page(app):
     enable_textview_copy(app.schedule_summary_textview)
 
     app.schedule_summary_scrolled = Gtk.ScrolledWindow()
-    app.schedule_summary_scrolled.set_policy(
-        Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC
-    )
+    app.schedule_summary_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
     app.schedule_summary_scrolled.set_min_content_height(180)
     app.schedule_summary_scrolled.add(app.schedule_summary_textview)
     sum_exp.add(app.schedule_summary_scrolled)
@@ -264,8 +265,7 @@ def _format_cron(cron):
 def collect_schedule_config(app):
     """Collect current cron entry values into a dict."""
     return {
-        key: entry.get_text().strip() or "*"
-        for key, entry in app.schedule_cron_entries.items()
+        key: entry.get_text().strip() or "*" for key, entry in app.schedule_cron_entries.items()
     }
 
 
@@ -286,9 +286,12 @@ def _next_run_strings(cron):
         return cached
 
     times = next_run_times(
-        cron.get("minute", "*"), cron.get("hour", "*"),
-        cron.get("day", "*"), cron.get("month", "*"),
-        cron.get("weekday", "*"), count=1,
+        cron.get("minute", "*"),
+        cron.get("hour", "*"),
+        cron.get("day", "*"),
+        cron.get("month", "*"),
+        cron.get("weekday", "*"),
+        count=1,
     )
     if not times:
         result = (
@@ -346,18 +349,12 @@ def _profile_name_from_cron_line(line):
 def _check_cron_consistency(app):
     """Warn if /etc/cron.d/zfsutilities does not match active profiles."""
     profiles = list_profiles()
-    active_names = {
-        p["profile_name"]
-        for p in profiles
-        if p.get("active", False)
-    }
+    active_names = {p["profile_name"] for p in profiles if p.get("active", False)}
 
     cron_file = cron_manager.CRON_FILE
     if not os.path.isfile(cron_file):
         if active_names:
-            log_msg(
-                "WARN: Cron file does not exist; active profiles are not scheduled"
-            )
+            log_msg("WARN: Cron file does not exist; active profiles are not scheduled")
         return
 
     actual_names = set()
@@ -384,9 +381,7 @@ def _check_cron_consistency(app):
         for name in sorted(missing):
             log_msg(f"WARN: Active profile missing from crontab: {name}")
         for name in sorted(extra):
-            log_msg(
-                f"WARN: Crontab contains profile not marked active: {name}"
-            )
+            log_msg(f"WARN: Crontab contains profile not marked active: {name}")
 
 
 def _build_schedule_rows(profiles):
@@ -400,14 +395,16 @@ def _build_schedule_rows(profiles):
         cron = profile.get("cron", {})
         sched = _format_cron(cron)
         next_run, next_run_sort = _next_run_strings(cron)
-        rows.append([
-            profile.get("active", False),
-            profile["profile_name"],
-            profile.get("tab_type", ""),
-            sched,
-            next_run,
-            next_run_sort,
-        ])
+        rows.append(
+            [
+                profile.get("active", False),
+                profile["profile_name"],
+                profile.get("tab_type", ""),
+                sched,
+                next_run,
+                next_run_sort,
+            ]
+        )
     return rows
 
 
@@ -615,6 +612,7 @@ def _on_selection_changed(selection, app):
     _update_interpretation(app)
 
     import json
+
     cfg = profile.get("config", {})
     dry_run = profile.get("dry_run", False)
     summary = f"Dry run: {'Yes' if dry_run else 'No'}\n\n{json.dumps(cfg, indent=2)}"
@@ -642,7 +640,7 @@ def _on_selection_changed(selection, app):
 
 
 def _on_cron_entry_changed(entry, app):
-    if getattr(app, '_schedule_ignore_changes', False):
+    if getattr(app, "_schedule_ignore_changes", False):
         return
 
     _update_interpretation(app)
@@ -734,8 +732,7 @@ def _on_profile_finished(pid, status, user_data):
     running = getattr(app, "_running_profiles", None)
     if running is not None:
         running.discard(profile_name)
-    if running is not None and not running \
-            and not _interactive_runner_active(app):
+    if running is not None and not running and not _interactive_runner_active(app):
         app._update_progress(None, "")
     log_msg(f"INFO: Profile finished: {profile_name}")
     app.update_action_buttons("schedule")
@@ -768,17 +765,27 @@ def _run_profile_now(app, profile_name):
         os.set_blocking(process.stdout.fileno(), False)
         os.set_blocking(process.stderr.fileno(), False)
         GLib.io_add_watch(
-            process.stdout.fileno(), GLib.PRIORITY_DEFAULT,
+            process.stdout.fileno(),
+            GLib.PRIORITY_DEFAULT,
             GLib.IOCondition.IN | GLib.IOCondition.HUP,
-            _log_profile_line, app, profile_name, prefix,
+            _log_profile_line,
+            app,
+            profile_name,
+            prefix,
         )
         GLib.io_add_watch(
-            process.stderr.fileno(), GLib.PRIORITY_DEFAULT,
+            process.stderr.fileno(),
+            GLib.PRIORITY_DEFAULT,
             GLib.IOCondition.IN | GLib.IOCondition.HUP,
-            _log_profile_line, app, profile_name, prefix,
+            _log_profile_line,
+            app,
+            profile_name,
+            prefix,
         )
         GLib.child_watch_add(
-            GLib.PRIORITY_DEFAULT, process.pid, _on_profile_finished,
+            GLib.PRIORITY_DEFAULT,
+            process.pid,
+            _on_profile_finished,
             (app, profile_name, process),
         )
     except (OSError, ValueError, TypeError) as exc:
@@ -823,9 +830,7 @@ def on_schedule_save(app):
 
         tree_iter = _find_iter_by_name(app, profile_name)
         if tree_iter is not None:
-            app.schedule_store.set_value(
-                tree_iter, COL_ACTIVE, profile.get("active", False)
-            )
+            app.schedule_store.set_value(tree_iter, COL_ACTIVE, profile.get("active", False))
             app.schedule_store.set_value(
                 tree_iter, COL_SCHEDULE, _format_cron(profile.get("cron", {}))
             )
@@ -846,9 +851,7 @@ def on_schedule_revert(app):
                 continue
             tree_iter = _find_iter_by_name(app, profile_name)
             if tree_iter is not None:
-                app.schedule_store.set_value(
-                    tree_iter, COL_ACTIVE, profile.get("active", False)
-                )
+                app.schedule_store.set_value(tree_iter, COL_ACTIVE, profile.get("active", False))
                 app.schedule_store.set_value(
                     tree_iter, COL_SCHEDULE, _format_cron(profile.get("cron", {}))
                 )
@@ -903,7 +906,8 @@ def on_schedule_delete(app):
     profile_name = model.get_value(tree_iter, COL_NAME)
 
     dlg = Gtk.MessageDialog(
-        transient_for=app, modal=True,
+        transient_for=app,
+        modal=True,
         message_type=Gtk.MessageType.QUESTION,
         buttons=Gtk.ButtonsType.YES_NO,
         text=f"Delete profile '{profile_name}'?",

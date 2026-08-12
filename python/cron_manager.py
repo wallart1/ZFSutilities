@@ -19,15 +19,13 @@ CRON_FILE = get_cron_file_path()
 CRON_LOG_FILE = os.path.join(os.path.dirname(SESSION_LOG_DIR), "cron.log")
 
 # Directory for per-profile advisory locks. Override for testing.
-PROFILE_LOCK_DIR = os.environ.get(
-    "ZFSUTILITIES_PROFILE_LOCK_DIR", get_profile_lock_dir()
-)
+PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", get_profile_lock_dir())
 
 _HEADER = (
     "# /etc/cron.d/zfsutilities\n"
     "# Drop-in crontab for ZFS Utilities scheduled profiles.\n"
     "# DO NOT EDIT MANUALLY — this file is managed by zfsutilities_gui.py\n"
-    "MAILTO=\"\"\n"
+    'MAILTO=""\n'
     "SHELL=/bin/sh\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n"
     "\n"
@@ -80,10 +78,10 @@ def generate_cron_line(profile, runner_path):
     # already running, so a cron-level flock wrapper is not needed. Redirect
     # stdout/stderr to a persistent cron log so pre-log errors are visible.
     return (
-        f'{minute} {hour} {day} {month} {weekday} '
-        f'root mkdir -p {shlex_quote(os.path.dirname(CRON_LOG_FILE))} '
-        f'{shlex_quote(PROFILE_LOCK_DIR)} && '
-        f'{inner} >> {shlex_quote(CRON_LOG_FILE)} 2>&1'
+        f"{minute} {hour} {day} {month} {weekday} "
+        f"root mkdir -p {shlex_quote(os.path.dirname(CRON_LOG_FILE))} "
+        f"{shlex_quote(PROFILE_LOCK_DIR)} && "
+        f"{inner} >> {shlex_quote(CRON_LOG_FILE)} 2>&1"
     )
 
 
@@ -97,20 +95,39 @@ def shlex_quote(s):
 # ---------------------------------------------------------------------------
 
 _WEEKDAYS = {
-    0: "Sunday", 1: "Monday", 2: "Tuesday", 3: "Wednesday",
-    4: "Thursday", 5: "Friday", 6: "Saturday", 7: "Sunday",
+    0: "Sunday",
+    1: "Monday",
+    2: "Tuesday",
+    3: "Wednesday",
+    4: "Thursday",
+    5: "Friday",
+    6: "Saturday",
+    7: "Sunday",
 }
 
 _MONTHS = {
-    1: "January", 2: "February", 3: "March", 4: "April",
-    5: "May", 6: "June", 7: "July", 8: "August",
-    9: "September", 10: "October", 11: "November", 12: "December",
+    1: "January",
+    2: "February",
+    3: "March",
+    4: "April",
+    5: "May",
+    6: "June",
+    7: "July",
+    8: "August",
+    9: "September",
+    10: "October",
+    11: "November",
+    12: "December",
 }
 
 
 _ORDINAL_NAMES = {
-    1: "first", 2: "second", 3: "third", 4: "fourth",
-    5: "fifth", 6: "sixth",
+    1: "first",
+    2: "second",
+    3: "third",
+    4: "fourth",
+    5: "fifth",
+    6: "sixth",
 }
 
 
@@ -136,9 +153,7 @@ def _parse_weekday(value):
     base, suffix = value.split("#", 1)
     base = base.strip()
     if not base.isdigit() or not 0 <= int(base) <= 7:
-        raise ValueError(
-            f"Weekday ordinal requires a single weekday digit before '#': {value}"
-        )
+        raise ValueError(f"Weekday ordinal requires a single weekday digit before '#': {value}")
 
     specs = []
     for part in suffix.split(","):
@@ -187,14 +202,17 @@ def _match_weekday_ordinal(date, weekday, specs):
 
 def _format_ordinal_specs(specs):
     """Convert ordinal specs into a human-readable phrase."""
+
     def fmt(spec):
         if spec == "L":
             return "last"
         start, end = spec
         if start == end:
             return _ORDINAL_NAMES.get(start, f"{start}th")
-        return f"{_ORDINAL_NAMES.get(start, f'{start}th')} through " \
-               f"{_ORDINAL_NAMES.get(end, f'{end}th')}"
+        return (
+            f"{_ORDINAL_NAMES.get(start, f'{start}th')} through "
+            f"{_ORDINAL_NAMES.get(end, f'{end}th')}"
+        )
 
     parts = [fmt(spec) for spec in specs]
     if len(parts) == 1:
@@ -339,11 +357,8 @@ def _interpret_day_of_week(value):
             return f"on weekdays {value}"
         name = _WEEKDAYS.get(int(base), base)
         ordinal_phrase = _format_ordinal_specs(specs)
-        single_spec = (
-            len(specs) == 1 and (
-                (isinstance(specs[0], tuple) and specs[0][0] == specs[0][1]) or
-                specs[0] == "L"
-            )
+        single_spec = len(specs) == 1 and (
+            (isinstance(specs[0], tuple) and specs[0][0] == specs[0][1]) or specs[0] == "L"
         )
         if single_spec:
             return f"on the {ordinal_phrase} {name} of the month"

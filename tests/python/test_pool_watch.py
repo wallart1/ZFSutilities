@@ -28,8 +28,10 @@ class TestPoolWatchWindow(unittest.TestCase):
 
     def test_init_builds_ui_and_starts_timer(self):
         parent = self._make_parent()
-        with patch.object(PoolWatchWindow, "refresh") as mock_refresh, \
-             patch.object(PoolWatchWindow, "_start_timer") as mock_start:
+        with (
+            patch.object(PoolWatchWindow, "refresh") as mock_refresh,
+            patch.object(PoolWatchWindow, "_start_timer") as mock_start,
+        ):
             win = PoolWatchWindow("tank", parent)
         self.assertEqual(win.pool_name, "tank")
         self.assertIs(win.parent_window, parent)
@@ -40,8 +42,10 @@ class TestPoolWatchWindow(unittest.TestCase):
 
     def test_refresh_clears_and_seeds_store(self):
         parent = self._make_parent()
-        with patch.object(PoolWatchWindow, "_start_timer"), \
-             patch.object(PoolWatchWindow, "refresh"):
+        with (
+            patch.object(PoolWatchWindow, "_start_timer"),
+            patch.object(PoolWatchWindow, "refresh"),
+        ):
             win = PoolWatchWindow("tank", parent)
 
         # Replace mocked store with a fake to inspect behavior
@@ -53,8 +57,10 @@ class TestPoolWatchWindow(unittest.TestCase):
         win.view = MagicMock()
 
         # Call real refresh, bypassing expansion helpers that need a real store
-        with patch.object(pool_watch, "get_expanded_rows", return_value=set()), \
-             patch.object(pool_watch, "restore_expanded_rows"):
+        with (
+            patch.object(pool_watch, "get_expanded_rows", return_value=set()),
+            patch.object(pool_watch, "restore_expanded_rows"),
+        ):
             PoolWatchWindow.refresh(win)
 
         store.clear.assert_called_once()
@@ -63,12 +69,16 @@ class TestPoolWatchWindow(unittest.TestCase):
 
     def test_start_stop_timer(self):
         parent = self._make_parent()
-        with patch.object(PoolWatchWindow, "refresh"), \
-             patch.object(PoolWatchWindow, "_start_timer"):
+        with (
+            patch.object(PoolWatchWindow, "refresh"),
+            patch.object(PoolWatchWindow, "_start_timer"),
+        ):
             win = PoolWatchWindow("tank", parent)
 
         timer_id = 42
-        with patch.object(pool_watch.GLib, "timeout_add_seconds", return_value=timer_id) as mock_add:
+        with patch.object(
+            pool_watch.GLib, "timeout_add_seconds", return_value=timer_id
+        ) as mock_add:
             PoolWatchWindow._start_timer(win)
         self.assertEqual(win.timer_id, timer_id)
         mock_add.assert_called_once_with(30, win._timer_tick)
@@ -80,10 +90,12 @@ class TestPoolWatchWindow(unittest.TestCase):
 
     def test_timer_tick_refreshes(self):
         parent = self._make_parent()
-        with patch.object(PoolWatchWindow, "refresh") as mock_refresh, \
-             patch.object(PoolWatchWindow, "_start_timer"), \
-             patch.object(pool_watch, "get_expanded_rows", return_value=set()), \
-             patch.object(pool_watch, "restore_expanded_rows"):
+        with (
+            patch.object(PoolWatchWindow, "refresh") as mock_refresh,
+            patch.object(PoolWatchWindow, "_start_timer"),
+            patch.object(pool_watch, "get_expanded_rows", return_value=set()),
+            patch.object(pool_watch, "restore_expanded_rows"),
+        ):
             win = PoolWatchWindow("tank", parent)
             self.assertEqual(mock_refresh.call_count, 1)  # from __init__
             result = win._timer_tick()
@@ -92,8 +104,10 @@ class TestPoolWatchWindow(unittest.TestCase):
 
     def test_on_destroy_stops_timer_and_untracks(self):
         parent = self._make_parent()
-        with patch.object(PoolWatchWindow, "refresh"), \
-             patch.object(PoolWatchWindow, "_start_timer"):
+        with (
+            patch.object(PoolWatchWindow, "refresh"),
+            patch.object(PoolWatchWindow, "_start_timer"),
+        ):
             win = PoolWatchWindow("tank", parent)
         parent._watch_windows["tank"] = win
         win.timer_id = 7
@@ -106,8 +120,10 @@ class TestPoolWatchWindow(unittest.TestCase):
 
     def test_expand_all_and_collapse_all(self):
         parent = self._make_parent()
-        with patch.object(PoolWatchWindow, "refresh"), \
-             patch.object(PoolWatchWindow, "_start_timer"):
+        with (
+            patch.object(PoolWatchWindow, "refresh"),
+            patch.object(PoolWatchWindow, "_start_timer"),
+        ):
             win = PoolWatchWindow("tank", parent)
         win.view = MagicMock()
         win._on_expand_all(None)

@@ -7,7 +7,6 @@ from test_support import capture_logs, temp_config_dir
 
 
 class TestValidateCustomName(unittest.TestCase):
-
     def test_valid_name(self):
         profile_manager.validate_custom_name("daily_backup")
         profile_manager.validate_custom_name("backup-123")
@@ -26,7 +25,6 @@ class TestValidateCustomName(unittest.TestCase):
 
 
 class TestBuildProfileName(unittest.TestCase):
-
     def test_builds_correctly(self):
         name = profile_manager.build_profile_name("root", "backup", "daily")
         self.assertEqual(name, "root-backup-daily")
@@ -37,11 +35,12 @@ class TestBuildProfileName(unittest.TestCase):
 
 
 class TestProfileCrud(unittest.TestCase):
-
     def test_create_and_load(self):
         with temp_config_dir():
             with capture_logs() as logs:
-                profile = profile_manager.create_profile("backup", "test1", {"variables": {"label": "x"}})
+                profile = profile_manager.create_profile(
+                    "backup", "test1", {"variables": {"label": "x"}}
+                )
             self.assertEqual(profile["profile_name"], f"{profile_manager.get_user()}-backup-test1")
             loaded = profile_manager.load_profile(profile["profile_name"])
             self.assertIsNotNone(loaded)
@@ -87,9 +86,7 @@ class TestProfileCrud(unittest.TestCase):
 
     def test_dry_run_stored_true(self):
         with temp_config_dir():
-            profile = profile_manager.create_profile(
-                "backup", "dry", {}, dry_run=True
-            )
+            profile = profile_manager.create_profile("backup", "dry", {}, dry_run=True)
             self.assertTrue(profile.get("dry_run", False))
             loaded = profile_manager.load_profile(profile["profile_name"])
             self.assertTrue(loaded.get("dry_run", False))
@@ -137,7 +134,6 @@ class TestProfileCrud(unittest.TestCase):
 
 
 class TestGetUser(unittest.TestCase):
-
     def test_returns_string(self):
         user = profile_manager.get_user()
         self.assertIsInstance(user, str)

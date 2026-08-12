@@ -24,11 +24,11 @@ def get_pools(repo=None):
     try:
         return [
             {
-                'name': row.name,
-                'size': row.size,
-                'alloc': row.alloc,
-                'free': row.free,
-                'health': row.health,
+                "name": row.name,
+                "size": row.size,
+                "alloc": row.alloc,
+                "free": row.free,
+                "health": row.health,
             }
             for row in repo.list_pools()
         ]
@@ -55,8 +55,8 @@ def get_snapshot_counts(pool=None, repo=None):
 
     counts = {}
     for line in snaps:
-        if '@' in line:
-            dataset = line.split('@')[0]
+        if "@" in line:
+            dataset = line.split("@")[0]
             counts[dataset] = counts.get(dataset, 0) + 1
     return counts
 
@@ -76,12 +76,14 @@ def print_pools(pools):
     log_msg("INFO: " + "-" * 70)
 
     for pool in pools:
-        health = pool['health']
+        health = pool["health"]
         # Add indicator for non-healthy pools
-        if health != 'ONLINE':
+        if health != "ONLINE":
             health = f"** {health} **"
 
-        log_msg(f"INFO: {pool['name']:<20} {pool['size']:>8} {pool['alloc']:>8} {pool['free']:>8} {health:<10}")
+        log_msg(
+            f"INFO: {pool['name']:<20} {pool['size']:>8} {pool['alloc']:>8} {pool['free']:>8} {health:<10}"
+        )
 
     log_msg("INFO: ")
 
@@ -101,11 +103,11 @@ def print_datasets(datasets, snapshot_counts):
     log_msg("INFO: " + "-" * 70)
 
     for ds in datasets:
-        name = ds['name']
+        name = ds["name"]
         # Calculate indent based on path depth
-        depth = name.count('/')
+        depth = name.count("/")
         indent = "  " * depth
-        short_name = name.split('/')[-1] if '/' in name else name
+        short_name = name.split("/")[-1] if "/" in name else name
 
         snap_count = snapshot_counts.get(name, 0)
         snap_str = str(snap_count) if snap_count > 0 else "-"
@@ -123,10 +125,12 @@ def print_summary(pools, datasets, snapshot_counts):
     log_msg("INFO: " + "=" * 70)
 
     total_snapshots = sum(snapshot_counts.values())
-    online_pools = sum(1 for p in pools if p['health'] == 'ONLINE')
-    degraded_pools = sum(1 for p in pools if p['health'] != 'ONLINE')
+    online_pools = sum(1 for p in pools if p["health"] == "ONLINE")
+    degraded_pools = sum(1 for p in pools if p["health"] != "ONLINE")
 
-    log_msg(f"INFO:   Pools:     {len(pools)} total ({online_pools} online, {degraded_pools} degraded/offline)")
+    log_msg(
+        f"INFO:   Pools:     {len(pools)} total ({online_pools} online, {degraded_pools} degraded/offline)"
+    )
     log_msg(f"INFO:   Datasets:  {len(datasets)}")
     log_msg(f"INFO:   Snapshots: {total_snapshots}")
     log_msg("INFO: ")

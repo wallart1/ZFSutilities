@@ -28,6 +28,4 @@ class AppContext:
     parent_dir: str
     version: str
     is_new_install: bool = False
-    zfs_repository: ZfsRepository = field(
-        default_factory=lambda: ZfsRepository(sudo=True)
-    )
+    zfs_repository: ZfsRepository = field(default_factory=lambda: ZfsRepository(sudo=True))

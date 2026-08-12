@@ -267,8 +267,12 @@ scsi0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-31,size
 EOF
 
     PVE_CONF_DIR="$pve_dir"
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced expected_lun_for_zvol helper.
     STORAGE_IP="1.1.1.1"
+    # shellcheck disable=SC2034
     IQN_PREFIX="iqn.local"
+    # shellcheck disable=SC2034
     declare -A POOL_TARGET=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
@@ -296,8 +300,12 @@ scsi1: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-32,size
 EOF
 
     PVE_CONF_DIR="$pve_dir"
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced expected_lun_for_zvol helper.
     STORAGE_IP="1.1.1.1"
+    # shellcheck disable=SC2034
     IQN_PREFIX="iqn.local"
+    # shellcheck disable=SC2034
     declare -A POOL_TARGET=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
@@ -329,8 +337,12 @@ sata0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-32,size
 EOF
 
     PVE_CONF_DIR="$pve_dir"
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced expected_lun_for_zvol helper.
     STORAGE_IP="1.1.1.1"
+    # shellcheck disable=SC2034
     IQN_PREFIX="iqn.local"
+    # shellcheck disable=SC2034
     declare -A POOL_TARGET=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
@@ -405,7 +417,10 @@ EOF
 test_run_on_storage_local_forwards_heredoc() {
     test_start "run_on_storage forwards heredoc and args to local storage host"
 
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced run_on_storage / ensure_lun_on_storage helpers.
     MY_HOST="stewie"
+    # shellcheck disable=SC2034
     STORAGE_HOST="stewie"
     _bash_calls=()
 
@@ -438,7 +453,10 @@ test_read_compute_file_local() {
     printf '%s\n' "$expected" > "$tmp_dir/100.conf"
 
     MY_HOST="stewie"
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced read_compute_file helper.
     COMPUTE_HOST="stewie"
+    # shellcheck disable=SC2034
     PVE_CONF_DIR="$tmp_dir"
     actual=$(read_compute_file "$tmp_dir/100.conf")
     assert_equals "$expected" "$actual"
@@ -469,7 +487,10 @@ test_exec_on_storage_remote_forwards_command() {
 test_ensure_lun_on_storage_sends_correct_storage_script() {
     test_start "ensure_lun_on_storage forwards correct script and args"
 
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced run_on_storage / ensure_lun_on_storage helpers.
     MY_HOST="stewie"
+    # shellcheck disable=SC2034
     STORAGE_HOST="stewie"
     _bash_calls=()
     _mock_zfs_props=()

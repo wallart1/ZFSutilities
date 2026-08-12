@@ -33,7 +33,9 @@ class TestScrubControlStateChecking(unittest.TestCase):
 
     def test_start_scrub_skips_when_scanning(self):
         repo = MagicMock()
-        with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)):
+        with patch.object(
+            sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)
+        ):
             self.assertFalse(sm.start_scrub("tank", repo=repo))
         repo.start_scrub.assert_not_called()
 
@@ -58,7 +60,9 @@ class TestScrubControlStateChecking(unittest.TestCase):
     def test_pause_scrub_succeeds_when_scanning(self):
         repo = MagicMock()
         repo.pause_scrub.return_value = True
-        with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)):
+        with patch.object(
+            sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)
+        ):
             self.assertTrue(sm.pause_scrub("tank", repo=repo))
         repo.pause_scrub.assert_called_once_with("tank", timeout=30)
 
@@ -98,13 +102,17 @@ class TestScrubControlStateChecking(unittest.TestCase):
     def test_pause_scrub_returns_false_on_repo_failure(self):
         repo = MagicMock()
         repo.pause_scrub.return_value = False
-        with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)):
+        with patch.object(
+            sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)
+        ):
             self.assertFalse(sm.pause_scrub("tank", repo=repo))
 
     def test_pause_scrub_returns_false_on_exception(self):
         repo = MagicMock()
         repo.pause_scrub.side_effect = OSError("no zpool")
-        with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)):
+        with patch.object(
+            sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)
+        ):
             self.assertFalse(sm.pause_scrub("tank", repo=repo))
 
     def test_resume_scrub_succeeds_when_paused(self):
@@ -122,7 +130,9 @@ class TestScrubControlStateChecking(unittest.TestCase):
 
     def test_resume_scrub_skips_when_scanning(self):
         repo = MagicMock()
-        with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)):
+        with patch.object(
+            sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)
+        ):
             self.assertFalse(sm.resume_scrub("tank", repo=repo))
         repo.resume_scrub.assert_not_called()
 
@@ -148,7 +158,9 @@ class TestScrubControlStateChecking(unittest.TestCase):
     def test_stop_scrub_succeeds_when_scanning(self):
         repo = MagicMock()
         repo.stop_scrub.return_value = True
-        with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)):
+        with patch.object(
+            sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)
+        ):
             self.assertTrue(sm.stop_scrub("tank", repo=repo))
         repo.stop_scrub.assert_called_once_with("tank", timeout=30)
 
@@ -175,18 +187,21 @@ class TestScrubControlStateChecking(unittest.TestCase):
     def test_stop_scrub_returns_false_on_repo_failure(self):
         repo = MagicMock()
         repo.stop_scrub.return_value = False
-        with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)):
+        with patch.object(
+            sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)
+        ):
             self.assertFalse(sm.stop_scrub("tank", repo=repo))
 
     def test_stop_scrub_returns_false_on_exception(self):
         repo = MagicMock()
         repo.stop_scrub.side_effect = OSError("no zpool")
-        with patch.object(sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)):
+        with patch.object(
+            sm, "get_pool_scrub_info", return_value=self._info(sm.ScrubState.SCANNING)
+        ):
             self.assertFalse(sm.stop_scrub("tank", repo=repo))
 
 
 class TestParseScrubStatus(unittest.TestCase):
-
     def test_none_requested(self):
         raw = "  scan: none requested\n"
         info = sm.parse_scrub_status(raw)
@@ -272,6 +287,7 @@ class TestParseScrubStatus(unittest.TestCase):
 
     def test_in_progress_eta_computed(self):
         from datetime import datetime, timedelta
+
         raw = (
             "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
             "    1.23T scanned at 123M/s, 456G issued at 45M/s\n"
@@ -286,16 +302,13 @@ class TestParseScrubStatus(unittest.TestCase):
 
 
 class TestScrubQueue(unittest.TestCase):
-
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.state_path = os.path.join(self.tmpdir.name, "scrub_state.json")
         self._orig_path = feature_config.SCRUB_STATE_PATH
         self._orig_lock = file_locking.SCRUB_STATE_LOCK_PATH
         feature_config.SCRUB_STATE_PATH = self.state_path
-        file_locking.SCRUB_STATE_LOCK_PATH = os.path.join(
-            self.tmpdir.name, ".scrub_state.lock"
-        )
+        file_locking.SCRUB_STATE_LOCK_PATH = os.path.join(self.tmpdir.name, ".scrub_state.lock")
 
     def tearDown(self):
         feature_config.SCRUB_STATE_PATH = self._orig_path
@@ -480,7 +493,6 @@ class TestScrubQueue(unittest.TestCase):
 
 
 class TestParseScrubStatusMixed(unittest.TestCase):
-
     def test_scan_line_drops_stale_paused_when_scanning(self):
         """A resumed scrub can briefly emit both 'in progress' and 'paused' lines."""
         raw = (
@@ -499,7 +511,6 @@ class TestParseScrubStatusMixed(unittest.TestCase):
 
 
 class TestPoolActionsScrub(unittest.TestCase):
-
     def test_on_scrub_resume_queues_paused_pools_without_direct_resume(self):
         """on_scrub_resume moves paused pools to pending without issuing zpool scrub."""
         from test_support import mock_gtk
@@ -511,12 +522,11 @@ class TestPoolActionsScrub(unittest.TestCase):
         app = MagicMock()
         app.scrub_queue.paused = {"tank"}
 
-        with patch.object(
-            pool_actions, "get_selected_pool_names", return_value=["tank", "data"]
-        ), patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
-            with patch.object(
-                pools_page, "schedule_scrub_refresh_burst"
-            ) as mock_burst:
+        with (
+            patch.object(pool_actions, "get_selected_pool_names", return_value=["tank", "data"]),
+            patch.object(pools_page, "refresh_scrub_table") as mock_refresh,
+        ):
+            with patch.object(pools_page, "schedule_scrub_refresh_burst") as mock_burst:
                 pool_actions.on_scrub_resume(app)
 
         app.scrub_queue.resume_pools.assert_called_once_with(["tank"])
@@ -532,12 +542,11 @@ class TestPoolActionsScrub(unittest.TestCase):
             import pools_page
 
         app = MagicMock()
-        with patch.object(
-            pool_actions, "get_selected_pool_names", return_value=["tank"]
-        ), patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
-            with patch.object(
-                pools_page, "schedule_scrub_refresh_burst"
-            ) as mock_burst:
+        with (
+            patch.object(pool_actions, "get_selected_pool_names", return_value=["tank"]),
+            patch.object(pools_page, "refresh_scrub_table") as mock_refresh,
+        ):
+            with patch.object(pools_page, "schedule_scrub_refresh_burst") as mock_burst:
                 pool_actions.on_scrub_start(app)
 
         app.scrub_queue.add_pending.assert_called_once_with(["tank"])
@@ -554,9 +563,10 @@ class TestPoolActionsScrub(unittest.TestCase):
 
         app = MagicMock()
         app.scrub_queue.paused = {"tank"}
-        with patch.object(
-            pool_actions, "get_selected_pool_names", return_value=["tank"]
-        ), patch.object(pools_page, "refresh_scrub_table"):
+        with (
+            patch.object(pool_actions, "get_selected_pool_names", return_value=["tank"]),
+            patch.object(pools_page, "refresh_scrub_table"),
+        ):
             with patch.object(pools_page, "schedule_scrub_refresh_burst"):
                 pool_actions.on_scrub_start(app)
 
@@ -571,13 +581,12 @@ class TestPoolActionsScrub(unittest.TestCase):
             import pools_page
 
         app = MagicMock()
-        with patch.object(
-            pool_actions, "get_selected_pool_names", return_value=["tank"]
-        ), patch.object(pool_actions, "pause_scrub"):
+        with (
+            patch.object(pool_actions, "get_selected_pool_names", return_value=["tank"]),
+            patch.object(pool_actions, "pause_scrub"),
+        ):
             with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
-                with patch.object(
-                    pools_page, "schedule_scrub_refresh_burst"
-                ) as mock_burst:
+                with patch.object(pools_page, "schedule_scrub_refresh_burst") as mock_burst:
                     pool_actions.on_scrub_pause(app)
 
         app.scrub_queue.pause_pools.assert_called_once_with(["tank"])
@@ -594,9 +603,10 @@ class TestPoolActionsScrub(unittest.TestCase):
 
         app = MagicMock()
         app.scrub_queue.paused = set()
-        with patch.object(
-            pool_actions, "get_selected_pool_names", return_value=["tank"]
-        ), patch.object(pools_page, "refresh_scrub_table"):
+        with (
+            patch.object(pool_actions, "get_selected_pool_names", return_value=["tank"]),
+            patch.object(pools_page, "refresh_scrub_table"),
+        ):
             with patch.object(pools_page, "schedule_scrub_refresh_burst"):
                 with patch.object(
                     sm,
@@ -619,13 +629,12 @@ class TestPoolActionsScrub(unittest.TestCase):
             import pools_page
 
         app = MagicMock()
-        with patch.object(
-            pool_actions, "get_selected_pool_names", return_value=["tank"]
-        ), patch.object(pool_actions, "stop_scrub"):
+        with (
+            patch.object(pool_actions, "get_selected_pool_names", return_value=["tank"]),
+            patch.object(pool_actions, "stop_scrub"),
+        ):
             with patch.object(pools_page, "refresh_scrub_table") as mock_refresh:
-                with patch.object(
-                    pools_page, "schedule_scrub_refresh_burst"
-                ) as mock_burst:
+                with patch.object(pools_page, "schedule_scrub_refresh_burst") as mock_burst:
                     pool_actions.on_scrub_stop(app)
 
         app.scrub_queue.remove_pools.assert_called_once_with(["tank"])
@@ -634,7 +643,6 @@ class TestPoolActionsScrub(unittest.TestCase):
 
 
 class TestScheduleScrubRefreshBurst(unittest.TestCase):
-
     def test_schedules_initial_timeout(self):
         """schedule_scrub_refresh_burst schedules the first timeout."""
         from test_support import mock_gtk
@@ -684,16 +692,13 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         return_value=self._state(sm.ScrubState.PAUSED),
                     ):
-                        paused = sm.pause_scrubs_for_pools(
-                            ["src", "dst"], repo=repo, dry_run=False
-                        )
+                        paused = sm.pause_scrubs_for_pools(["src", "dst"], repo=repo, dry_run=False)
                 self.assertEqual(paused, ["src"])
                 repo.pause_scrub.assert_called_once_with("src", timeout=30)
 
@@ -714,11 +719,10 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         return_value=self._state(sm.ScrubState.PAUSED),
                     ):
                         paused = sm.pause_scrubs_for_pools(
@@ -740,12 +744,8 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
-                    paused = sm.pause_scrubs_for_pools(
-                        ["src"], repo=repo, dry_run=True
-                    )
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
+                    paused = sm.pause_scrubs_for_pools(["src"], repo=repo, dry_run=True)
                 self.assertEqual(paused, ["src"])
                 repo.pause_scrub.assert_not_called()
                 queue = sm.ScrubQueue()
@@ -762,25 +762,20 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         return_value=self._state(sm.ScrubState.SCANNING),
                     ):
-                        sm.resume_scrubs_for_pools(
-                            ["src", "dst"], repo=repo, dry_run=False
-                        )
+                        sm.resume_scrubs_for_pools(["src", "dst"], repo=repo, dry_run=False)
                 repo.resume_scrub.assert_called_once_with("src", timeout=30)
 
     def test_attach_step_scrub_callbacks_sets_callbacks(self):
         from command_builders import BashStep
 
         step = BashStep([], "send")
-        sm.attach_step_scrub_callbacks(
-            step, "src/a", "dst/b", enabled=True, dry_run=False
-        )
+        sm.attach_step_scrub_callbacks(step, "src/a", "dst/b", enabled=True, dry_run=False)
         self.assertIsNotNone(step.pre_callback)
         self.assertIsNotNone(step.post_callback)
 
@@ -788,9 +783,7 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         from command_builders import BashStep
 
         step = BashStep([], "send")
-        sm.attach_step_scrub_callbacks(
-            step, "src/a", "dst/b", enabled=False, dry_run=False
-        )
+        sm.attach_step_scrub_callbacks(step, "src/a", "dst/b", enabled=False, dry_run=False)
         self.assertIsNone(step.pre_callback)
         self.assertIsNone(step.post_callback)
 
@@ -798,9 +791,7 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         from command_builders import BashStep
 
         step = BashStep([], "send")
-        sm.attach_step_scrub_callbacks(
-            step, "host:/path", "/mnt/path", enabled=True, dry_run=False
-        )
+        sm.attach_step_scrub_callbacks(step, "host:/path", "/mnt/path", enabled=True, dry_run=False)
         self.assertIsNone(step.pre_callback)
         self.assertIsNone(step.post_callback)
 
@@ -813,31 +804,29 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         return_value=self._state(sm.ScrubState.PAUSED),
                     ):
                         paused = sm.pause_scrubs_for_pools(
-                            ["src"], repo=repo, dry_run=False,
-                            log_func=custom_log
+                            ["src"], repo=repo, dry_run=False, log_func=custom_log
                         )
                 self.assertEqual(paused, ["src"])
                 self.assertTrue(
-                    any("VERB: Pausing scrub" in call[0][0]
-                        for call in custom_log.call_args_list)
+                    any("VERB: Pausing scrub" in call[0][0] for call in custom_log.call_args_list)
                 )
                 self.assertTrue(
-                    any("VERB: Scrub paused" in call[0][0]
-                        for call in custom_log.call_args_list)
+                    any("VERB: Scrub paused" in call[0][0] for call in custom_log.call_args_list)
                 )
                 # Caller location should be passed through so log_msg can
                 # attribute the message to scrub_manager, not the wrapper.
                 self.assertTrue(
-                    any(call.kwargs.get("caller_file") is not None
-                        for call in custom_log.call_args_list)
+                    any(
+                        call.kwargs.get("caller_file") is not None
+                        for call in custom_log.call_args_list
+                    )
                 )
 
     def test_resume_scrubs_for_pools_uses_custom_log_func(self):
@@ -849,28 +838,26 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         return_value=self._state(sm.ScrubState.SCANNING),
                     ):
                         sm.resume_scrubs_for_pools(
-                            ["src"], repo=repo, dry_run=False,
-                            log_func=custom_log
+                            ["src"], repo=repo, dry_run=False, log_func=custom_log
                         )
                 self.assertTrue(
-                    any("VERB: Resuming scrub" in call[0][0]
-                        for call in custom_log.call_args_list)
+                    any("VERB: Resuming scrub" in call[0][0] for call in custom_log.call_args_list)
                 )
                 self.assertTrue(
-                    any("VERB: Scrub resumed" in call[0][0]
-                        for call in custom_log.call_args_list)
+                    any("VERB: Scrub resumed" in call[0][0] for call in custom_log.call_args_list)
                 )
                 self.assertTrue(
-                    any(call.kwargs.get("caller_file") is not None
-                        for call in custom_log.call_args_list)
+                    any(
+                        call.kwargs.get("caller_file") is not None
+                        for call in custom_log.call_args_list
+                    )
                 )
 
     def test_attach_step_scrub_callbacks_passes_log_func_to_callbacks(self):
@@ -885,21 +872,18 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         return_value=self._state(sm.ScrubState.PAUSED),
                     ):
                         sm.attach_step_scrub_callbacks(
-                            step, "src/a", "src/b",
-                            enabled=True, dry_run=False, log_func=custom_log
+                            step, "src/a", "src/b", enabled=True, dry_run=False, log_func=custom_log
                         )
                         step.pre_callback()
         self.assertTrue(
-            any("VERB: Pausing scrub" in call[0][0]
-                for call in custom_log.call_args_list)
+            any("VERB: Pausing scrub" in call[0][0] for call in custom_log.call_args_list)
         )
 
     @patch.object(sm.time, "sleep")
@@ -913,24 +897,21 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         return_value=self._state(sm.ScrubState.SCANNING),
                     ):
                         paused = sm.pause_scrubs_for_pools(
-                            ["src"], repo=repo, dry_run=False,
-                            log_func=custom_log
+                            ["src"], repo=repo, dry_run=False, log_func=custom_log
                         )
                 self.assertEqual(paused, [])
                 queue = sm.ScrubQueue()
                 self.assertNotIn("src", queue.paused)
                 self.assertNotIn("src", queue.paused_by_user)
                 self.assertTrue(
-                    any("did not pause" in call[0][0]
-                        for call in custom_log.call_args_list)
+                    any("did not pause" in call[0][0] for call in custom_log.call_args_list)
                 )
 
     @patch.object(sm.time, "sleep")
@@ -951,23 +932,20 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                 queue.paused_by_user.add("src")
                 queue._save()
 
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         return_value=self._state(sm.ScrubState.PAUSED),
                     ):
                         sm.resume_scrubs_for_pools(
-                            ["src"], repo=repo, dry_run=False,
-                            log_func=custom_log
+                            ["src"], repo=repo, dry_run=False, log_func=custom_log
                         )
                 queue = sm.ScrubQueue()
                 self.assertIn("src", queue.paused)
                 self.assertIn("src", queue.paused_by_user)
                 self.assertTrue(
-                    any("did not resume" in call[0][0]
-                        for call in custom_log.call_args_list)
+                    any("did not resume" in call[0][0] for call in custom_log.call_args_list)
                 )
 
     def test_pause_scrubs_for_pools_polls_until_paused(self):
@@ -978,19 +956,16 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         side_effect=[
                             self._state(sm.ScrubState.SCANNING),
                             self._state(sm.ScrubState.PAUSED),
                         ],
                     ):
-                        paused = sm.pause_scrubs_for_pools(
-                            ["src"], repo=repo, dry_run=False
-                        )
+                        paused = sm.pause_scrubs_for_pools(["src"], repo=repo, dry_run=False)
                 self.assertEqual(paused, ["src"])
                 repo.pause_scrub.assert_called_once_with("src", timeout=30)
                 queue = sm.ScrubQueue()
@@ -1008,21 +983,18 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         return_value=self._state(sm.ScrubState.SCANNING),
                     ):
                         paused = sm.pause_scrubs_for_pools(
-                            ["src"], repo=repo, dry_run=False,
-                            log_func=custom_log
+                            ["src"], repo=repo, dry_run=False, log_func=custom_log
                         )
                 self.assertEqual(paused, [])
                 self.assertTrue(
-                    any("did not pause" in call[0][0]
-                        for call in custom_log.call_args_list)
+                    any("did not pause" in call[0][0] for call in custom_log.call_args_list)
                 )
                 queue = sm.ScrubQueue()
                 self.assertNotIn("src", queue.paused)
@@ -1042,18 +1014,14 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                 queue.paused_by_user.add("src")
                 queue._save()
 
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     sm.resume_scrubs_for_pools(
-                        ["src"], repo=repo, dry_run=False,
-                        log_func=custom_log
+                        ["src"], repo=repo, dry_run=False, log_func=custom_log
                     )
 
                 repo.resume_scrub.assert_not_called()
                 self.assertTrue(
-                    any("already running" in call[0][0]
-                        for call in custom_log.call_args_list)
+                    any("already running" in call[0][0] for call in custom_log.call_args_list)
                 )
                 queue = sm.ScrubQueue()
                 self.assertNotIn("src", queue.paused)
@@ -1073,18 +1041,14 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
                 queue.paused_by_user.add("src")
                 queue._save()
 
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     sm.resume_scrubs_for_pools(
-                        ["src"], repo=repo, dry_run=False,
-                        log_func=custom_log
+                        ["src"], repo=repo, dry_run=False, log_func=custom_log
                     )
 
                 repo.resume_scrub.assert_not_called()
                 self.assertTrue(
-                    any("finished while paused" in call[0][0]
-                        for call in custom_log.call_args_list)
+                    any("finished while paused" in call[0][0] for call in custom_log.call_args_list)
                 )
                 queue = sm.ScrubQueue()
                 self.assertNotIn("src", queue.paused)
@@ -1098,11 +1062,10 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         with temp_config_dir() as tmpdir:
             state_path = self._state_path(tmpdir)
             with patch.object(feature_config, "SCRUB_STATE_PATH", state_path):
-                with patch.object(
-                    sm, "get_all_pool_scrub_states", return_value=states
-                ):
+                with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
                     with patch.object(
-                        sm, "get_pool_scrub_info",
+                        sm,
+                        "get_pool_scrub_info",
                         side_effect=[
                             self._state(sm.ScrubState.PAUSED),
                             self._state(sm.ScrubState.SCANNING),
@@ -1116,7 +1079,6 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
 
 
 class TestSystemScrubHelpers(unittest.TestCase):
-
     def test_set_system_scrub_enabled(self):
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")

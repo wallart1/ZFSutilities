@@ -15,15 +15,15 @@ from urllib.parse import unquote
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 try:
-    gi.require_version('WebKit2', '4.1')
+    gi.require_version("WebKit2", "4.1")
     from gi.repository import WebKit2
-    _WEBKIT_AVAILABLE = (
-        hasattr(WebKit2.WebView, 'evaluate_javascript')
-        and hasattr(WebKit2.NavigationPolicyDecision, 'get_navigation_action')
+
+    _WEBKIT_AVAILABLE = hasattr(WebKit2.WebView, "evaluate_javascript") and hasattr(
+        WebKit2.NavigationPolicyDecision, "get_navigation_action"
     )
 except (ValueError, ImportError):
     _WEBKIT_AVAILABLE = False
@@ -58,13 +58,9 @@ class _DocsServer:
     def start(self):
         """Start the server and return the base http:// URI."""
         self.port = self._find_free_port()
-        handler = functools.partial(
-            _DocsRequestHandler, directory=self.docs_dir
-        )
+        handler = functools.partial(_DocsRequestHandler, directory=self.docs_dir)
         self._httpd = ThreadingHTTPServer(("127.0.0.1", self.port), handler)
-        self._thread = threading.Thread(
-            target=self._httpd.serve_forever, daemon=True
-        )
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
         self._thread.start()
         return f"http://127.0.0.1:{self.port}"
 
@@ -153,12 +149,8 @@ class DocsViewerWindow(Gtk.Window):
             return
 
         if not self._docs_path:
-            repo_path = os.path.join(
-                os.path.dirname(script_dir), "docs", "site", "index.html"
-            )
-            deployed_path = os.path.join(
-                _DEPLOYMENT_BASE, "current", "docs", "site", "index.html"
-            )
+            repo_path = os.path.join(os.path.dirname(script_dir), "docs", "site", "index.html")
+            deployed_path = os.path.join(_DEPLOYMENT_BASE, "current", "docs", "site", "index.html")
             self._show_fallback(
                 "Documentation site not found.\n\n"
                 "path_utils.get_docs_path() checked:\n"
@@ -271,7 +263,7 @@ class DocsViewerWindow(Gtk.Window):
             "(function(){ "
             "var scheme = " + scheme_json + "; "
             "var inputs = document.querySelectorAll("
-            "'input[type=\\\"radio\\\"][name=\\\"__palette\\\"]'); "
+            '\'input[type=\\"radio\\"][name=\\"__palette\\"]\'); '
             "var chosen = null, chosenIdx = -1; "
             "for (var i = 0; i < inputs.length; i++) { "
             "if (inputs[i].getAttribute('data-md-color-scheme') === scheme) { "
@@ -320,7 +312,7 @@ class DocsViewerWindow(Gtk.Window):
         js = (
             "(function(uri, scheme){ "
             "var inputs = document.querySelectorAll("
-            "'input[type=\\\"radio\\\"][name=\\\"__palette\\\"]'); "
+            '\'input[type=\\"radio\\"][name=\\"__palette\\"]\'); '
             "for (var i = 0; i < inputs.length; i++) { "
             "if (inputs[i].getAttribute('data-md-color-scheme') === scheme) { "
             "var scope = new URL('.', uri).pathname; "
@@ -345,6 +337,7 @@ class DocsViewerWindow(Gtk.Window):
     def _js_string(value):
         """Return a JSON-encoded string safe to embed in generated JavaScript."""
         import json
+
         return json.dumps(value)
 
     def _capture_theme(self):
@@ -358,7 +351,7 @@ class DocsViewerWindow(Gtk.Window):
         js = (
             "(function(){ "
             "var inputs = document.querySelectorAll("
-            "'input[type=\\\"radio\\\"][name=\\\"__palette\\\"]'); "
+            '\'input[type=\\"radio\\"][name=\\"__palette\\"]\'); '
             "for (var i = 0; i < inputs.length; i++) { "
             "if (inputs[i].checked) { "
             "return inputs[i].getAttribute('data-md-color-scheme') || 'default'; "
@@ -367,9 +360,7 @@ class DocsViewerWindow(Gtk.Window):
             "return document.body.getAttribute('data-md-color-scheme') || 'default'; "
             "})()"
         )
-        self._webview.evaluate_javascript(
-            js, -1, None, None, None, self._on_theme_captured, None
-        )
+        self._webview.evaluate_javascript(js, -1, None, None, None, self._on_theme_captured, None)
         return True
 
     def _on_theme_captured(self, _webview, result, _user_data=None):
@@ -446,9 +437,7 @@ class DocsViewerWindow(Gtk.Window):
         toolbar.set_margin_end(5)
         toolbar.set_margin_bottom(5)
 
-        self._btn_back = self._make_tool_button(
-            "go-previous-symbolic", "Go back", self._on_back
-        )
+        self._btn_back = self._make_tool_button("go-previous-symbolic", "Go back", self._on_back)
         self._btn_forward = self._make_tool_button(
             "go-next-symbolic", "Go forward", self._on_forward
         )
@@ -492,9 +481,7 @@ class DocsViewerWindow(Gtk.Window):
             "script-message-received::themeChanged", self._on_theme_script_message
         )
 
-        self._webview = WebKit2.WebView.new_with_user_content_manager(
-            user_content_manager
-        )
+        self._webview = WebKit2.WebView.new_with_user_content_manager(user_content_manager)
 
         settings = self._webview.get_settings()
         settings.set_allow_file_access_from_file_urls(True)
@@ -525,16 +512,22 @@ class DocsViewerWindow(Gtk.Window):
         accel_group = Gtk.AccelGroup()
         self.add_accel_group(accel_group)
         accel_group.connect(
-            Gdk.KEY_plus, Gdk.ModifierType.CONTROL_MASK, Gtk.AccelFlags.VISIBLE,
-            lambda _ag, _acc, _key, _mod: self._on_zoom_in(None)
+            Gdk.KEY_plus,
+            Gdk.ModifierType.CONTROL_MASK,
+            Gtk.AccelFlags.VISIBLE,
+            lambda _ag, _acc, _key, _mod: self._on_zoom_in(None),
         )
         accel_group.connect(
-            Gdk.KEY_minus, Gdk.ModifierType.CONTROL_MASK, Gtk.AccelFlags.VISIBLE,
-            lambda _ag, _acc, _key, _mod: self._on_zoom_out(None)
+            Gdk.KEY_minus,
+            Gdk.ModifierType.CONTROL_MASK,
+            Gtk.AccelFlags.VISIBLE,
+            lambda _ag, _acc, _key, _mod: self._on_zoom_out(None),
         )
         accel_group.connect(
-            Gdk.KEY_0, Gdk.ModifierType.CONTROL_MASK, Gtk.AccelFlags.VISIBLE,
-            lambda _ag, _acc, _key, _mod: self._on_zoom_reset(None)
+            Gdk.KEY_0,
+            Gdk.ModifierType.CONTROL_MASK,
+            Gtk.AccelFlags.VISIBLE,
+            lambda _ag, _acc, _key, _mod: self._on_zoom_reset(None),
         )
 
         scrolled = Gtk.ScrolledWindow()
@@ -831,7 +824,8 @@ class DocsViewerWindow(Gtk.Window):
 def main():
     """Launch the standalone documentation viewer."""
     import gi
-    gi.require_version('Gtk', '3.0')
+
+    gi.require_version("Gtk", "3.0")
     from gi.repository import Gtk
 
     script_dir = os.path.dirname(os.path.abspath(__file__))

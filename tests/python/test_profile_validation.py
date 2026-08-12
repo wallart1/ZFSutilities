@@ -6,7 +6,6 @@ import profile_validation as pv
 
 
 class TestParseFilters(unittest.TestCase):
-
     def test_empty_string_returns_empty_list(self):
         self.assertEqual(pv._parse_filters(""), [])
         self.assertEqual(pv._parse_filters("   "), [])
@@ -16,14 +15,10 @@ class TestParseFilters(unittest.TestCase):
         self.assertEqual(pv._parse_filters(["a", "b"]), ["a", "b"])
 
     def test_string_split_with_quotes(self):
-        self.assertEqual(
-            pv._parse_filters('=NVME1 proxmox'),
-            ["=NVME1", "proxmox"]
-        )
+        self.assertEqual(pv._parse_filters("=NVME1 proxmox"), ["=NVME1", "proxmox"])
 
 
 class TestMatchesFilter(unittest.TestCase):
-
     def test_exact_match(self):
         self.assertTrue(pv._matches_filter("NVME1", "=NVME1"))
         self.assertFalse(pv._matches_filter("NVME1/proxmox", "=NVME1"))
@@ -34,45 +29,36 @@ class TestMatchesFilter(unittest.TestCase):
 
 
 class TestIsUnder(unittest.TestCase):
-
     def test_same_is_under(self):
         self.assertTrue(pv._is_under("NVME1", "NVME1"))
 
     def test_child_is_under(self):
         self.assertTrue(pv._is_under("NVME1/proxmox", "NVME1"))
-        self.assertTrue(
-            pv._is_under("NVME1/proxmox/vm-201-disk-3", "NVME1")
-        )
+        self.assertTrue(pv._is_under("NVME1/proxmox/vm-201-disk-3", "NVME1"))
 
     def test_unrelated_is_not_under(self):
         self.assertFalse(pv._is_under("threeamigos", "NVME1"))
 
 
 class TestDestinationDataset(unittest.TestCase):
-
     def test_appends_source_to_dest(self):
-        self.assertEqual(
-            pv._destination_dataset("NVME1", "fivebays"),
-            "fivebays/NVME1"
-        )
+        self.assertEqual(pv._destination_dataset("NVME1", "fivebays"), "fivebays/NVME1")
 
     def test_dest_already_suffixed(self):
         self.assertEqual(
             pv._destination_dataset("NVME1/proxmox", "fivebays/NVME1/proxmox"),
-            "fivebays/NVME1/proxmox"
+            "fivebays/NVME1/proxmox",
         )
 
     def test_partial_suffix(self):
         self.assertEqual(
             pv._destination_dataset("NVME1/proxmox", "fivebays/NVME1"),
-            "fivebays/NVME1/NVME1/proxmox"
+            "fivebays/NVME1/NVME1/proxmox",
         )
 
 
 class TestValidateEffectiveSteps(unittest.TestCase):
-
-    def _backup_step(self, source, dest, includes=None, excludes=None,
-                     profile_name="daily"):
+    def _backup_step(self, source, dest, includes=None, excludes=None, profile_name="daily"):
         return {
             "profile_type": "backup",
             "profile_name": profile_name,
@@ -84,8 +70,7 @@ class TestValidateEffectiveSteps(unittest.TestCase):
             "label": "dailybackup",
         }
 
-    def _offsite_step(self, source, dest, includes=None, excludes=None,
-                      profile_name="offsite"):
+    def _offsite_step(self, source, dest, includes=None, excludes=None, profile_name="offsite"):
         return {
             "profile_type": "offsite",
             "profile_name": profile_name,
@@ -100,9 +85,7 @@ class TestValidateEffectiveSteps(unittest.TestCase):
     def test_aligned_sources_no_warning(self):
         items = [
             self._backup_step("threeamigos/proxmox", "fivebays"),
-            self._offsite_step(
-                "threeamigos", "fivebays", includes=["proxmox"]
-            ),
+            self._offsite_step("threeamigos", "fivebays", includes=["proxmox"]),
             self._offsite_step("fivebays", "z40tb"),
         ]
         self.assertEqual(pv.validate_effective_steps(items), [])
@@ -111,9 +94,7 @@ class TestValidateEffectiveSteps(unittest.TestCase):
         """Reproduce the stewie NVME1 rollback scenario."""
         items = [
             self._backup_step("NVME1", "fivebays"),
-            self._offsite_step(
-                "NVME1", "fivebays", includes=["proxmox"]
-            ),
+            self._offsite_step("NVME1", "fivebays", includes=["proxmox"]),
             self._offsite_step("fivebays", "z40tb"),
         ]
         warnings = pv.validate_effective_steps(items)
@@ -126,9 +107,7 @@ class TestValidateEffectiveSteps(unittest.TestCase):
         items = [
             self._backup_step("NVME1", "fivebays"),
             {
-                **self._offsite_step(
-                    "NVME1", "fivebays", includes=["proxmox"]
-                ),
+                **self._offsite_step("NVME1", "fivebays", includes=["proxmox"]),
                 "active": False,
             },
             self._offsite_step("fivebays", "z40tb"),
@@ -158,9 +137,7 @@ class TestValidateEffectiveSteps(unittest.TestCase):
         """Including =NVME1 in the offsite step covers the root."""
         items = [
             self._backup_step("NVME1", "fivebays"),
-            self._offsite_step(
-                "NVME1", "fivebays", includes=["=NVME1", "proxmox"]
-            ),
+            self._offsite_step("NVME1", "fivebays", includes=["=NVME1", "proxmox"]),
             self._offsite_step("fivebays", "z40tb"),
         ]
         self.assertEqual(pv.validate_effective_steps(items), [])
@@ -168,9 +145,7 @@ class TestValidateEffectiveSteps(unittest.TestCase):
     def test_offsite_excludes_backup_root(self):
         items = [
             self._backup_step("NVME1", "fivebays"),
-            self._offsite_step(
-                "NVME1", "fivebays", includes=[], excludes=["=NVME1"]
-            ),
+            self._offsite_step("NVME1", "fivebays", includes=[], excludes=["=NVME1"]),
             self._offsite_step("fivebays", "z40tb"),
         ]
         warnings = pv.validate_effective_steps(items)
@@ -178,7 +153,6 @@ class TestValidateEffectiveSteps(unittest.TestCase):
 
 
 class TestValidateGuiSettings(unittest.TestCase):
-
     def test_gui_settings_aligned(self):
         backup_cfg = {
             "variables": {"label": "dailybackup", "includes": "", "excludes": ""},
@@ -189,10 +163,20 @@ class TestValidateGuiSettings(unittest.TestCase):
         offsite_cfg = {
             "variables": {"includes": "", "excludes": ""},
             "steps": [
-                {"active": True, "source": "threeamigos", "dest": "fivebays",
-                 "includes": "proxmox", "excludes": ""},
-                {"active": True, "source": "fivebays", "dest": "z40tb",
-                 "includes": "", "excludes": ""},
+                {
+                    "active": True,
+                    "source": "threeamigos",
+                    "dest": "fivebays",
+                    "includes": "proxmox",
+                    "excludes": "",
+                },
+                {
+                    "active": True,
+                    "source": "fivebays",
+                    "dest": "z40tb",
+                    "includes": "",
+                    "excludes": "",
+                },
             ],
         }
         self.assertEqual(pv.validate_gui_settings(backup_cfg, offsite_cfg), [])
@@ -207,10 +191,20 @@ class TestValidateGuiSettings(unittest.TestCase):
         offsite_cfg = {
             "variables": {"includes": "", "excludes": ""},
             "steps": [
-                {"active": True, "source": "NVME1", "dest": "fivebays",
-                 "includes": "proxmox", "excludes": ""},
-                {"active": True, "source": "fivebays", "dest": "z40tb",
-                 "includes": "", "excludes": ""},
+                {
+                    "active": True,
+                    "source": "NVME1",
+                    "dest": "fivebays",
+                    "includes": "proxmox",
+                    "excludes": "",
+                },
+                {
+                    "active": True,
+                    "source": "fivebays",
+                    "dest": "z40tb",
+                    "includes": "",
+                    "excludes": "",
+                },
             ],
         }
         warnings = pv.validate_gui_settings(backup_cfg, offsite_cfg)
@@ -219,7 +213,6 @@ class TestValidateGuiSettings(unittest.TestCase):
 
 
 class TestValidateProfiles(unittest.TestCase):
-
     def test_profiles_aligned(self):
         profiles = [
             {
@@ -238,10 +231,20 @@ class TestValidateProfiles(unittest.TestCase):
                 "config": {
                     "variables": {},
                     "steps": [
-                        {"active": True, "source": "threeamigos", "dest": "fivebays",
-                         "includes": "proxmox", "excludes": ""},
-                        {"active": True, "source": "fivebays", "dest": "z40tb",
-                         "includes": "", "excludes": ""},
+                        {
+                            "active": True,
+                            "source": "threeamigos",
+                            "dest": "fivebays",
+                            "includes": "proxmox",
+                            "excludes": "",
+                        },
+                        {
+                            "active": True,
+                            "source": "fivebays",
+                            "dest": "z40tb",
+                            "includes": "",
+                            "excludes": "",
+                        },
                     ],
                 },
             },
@@ -266,10 +269,20 @@ class TestValidateProfiles(unittest.TestCase):
                 "config": {
                     "variables": {},
                     "steps": [
-                        {"active": True, "source": "NVME1", "dest": "fivebays",
-                         "includes": "proxmox", "excludes": ""},
-                        {"active": True, "source": "fivebays", "dest": "z40tb",
-                         "includes": "", "excludes": ""},
+                        {
+                            "active": True,
+                            "source": "NVME1",
+                            "dest": "fivebays",
+                            "includes": "proxmox",
+                            "excludes": "",
+                        },
+                        {
+                            "active": True,
+                            "source": "fivebays",
+                            "dest": "z40tb",
+                            "includes": "",
+                            "excludes": "",
+                        },
                     ],
                 },
             },
@@ -296,8 +309,7 @@ class TestValidateProfiles(unittest.TestCase):
                 "config": {
                     "variables": {"label": "dailybackup"},
                     "send_receive_steps": [
-                        {"active": True, "source": "threeamigos/proxmox",
-                         "dest": "fivebays"},
+                        {"active": True, "source": "threeamigos/proxmox", "dest": "fivebays"},
                         {"active": True, "source": "NVME1", "dest": "fivebays"},
                     ],
                 },
@@ -308,13 +320,27 @@ class TestValidateProfiles(unittest.TestCase):
                 "config": {
                     "variables": {},
                     "steps": [
-                        {"active": True, "source": "threeamigos",
-                         "dest": "z40tb", "includes": "proxmox",
-                         "excludes": ""},
-                        {"active": True, "source": "NVME1", "dest": "z40tb",
-                         "includes": "", "excludes": ""},
-                        {"active": True, "source": "fivebays", "dest": "z40tb",
-                         "includes": "", "excludes": ""},
+                        {
+                            "active": True,
+                            "source": "threeamigos",
+                            "dest": "z40tb",
+                            "includes": "proxmox",
+                            "excludes": "",
+                        },
+                        {
+                            "active": True,
+                            "source": "NVME1",
+                            "dest": "z40tb",
+                            "includes": "",
+                            "excludes": "",
+                        },
+                        {
+                            "active": True,
+                            "source": "fivebays",
+                            "dest": "z40tb",
+                            "includes": "",
+                            "excludes": "",
+                        },
                     ],
                 },
             },

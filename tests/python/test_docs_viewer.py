@@ -22,8 +22,10 @@ class TestDocsViewerMain(unittest.TestCase):
             import docs_viewer as dv
 
             window = MagicMock()
-            with patch.object(dv, "DocsViewerWindow", return_value=window) as mock_win, \
-                 patch.object(dv.os, "geteuid", return_value=0):
+            with (
+                patch.object(dv, "DocsViewerWindow", return_value=window) as mock_win,
+                patch.object(dv.os, "geteuid", return_value=0),
+            ):
                 dv.main()
 
             mock_win.assert_called_once_with(PYTHON_SRC)
@@ -39,9 +41,11 @@ class TestDocsViewerMain(unittest.TestCase):
             import docs_viewer as dv
 
             window = MagicMock()
-            with patch.object(dv, "DocsViewerWindow", return_value=window) as mock_win, \
-                 patch.object(dv.os, "geteuid", return_value=1000), \
-                 patch.object(dv.os, "execvp") as mock_execvp:
+            with (
+                patch.object(dv, "DocsViewerWindow", return_value=window) as mock_win,
+                patch.object(dv.os, "geteuid", return_value=1000),
+                patch.object(dv.os, "execvp") as mock_execvp,
+            ):
                 dv.main()
 
             mock_execvp.assert_not_called()

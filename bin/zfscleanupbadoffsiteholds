@@ -55,7 +55,7 @@ function cleanupbadoffsiteholds {
         local holdpool=${holdtag#offsite-}
 
         # If the hold references the same pool as the snapshot, it's wrong
-        if [[ $holdpool = $snappool ]]; then
+        if [[ $holdpool = "$snappool" ]]; then
             ((count++))
             if [[ $dryrun = "dryrun" ]]; then
                 echo "Would remove: $snap  hold=$holdtag"

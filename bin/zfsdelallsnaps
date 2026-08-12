@@ -88,9 +88,11 @@ function delallsnaps {
             log_msg "INFO: About to delete the following ${#snaparray[@]} snapshots from" \
                 "$zfsdelallsnaps_fs." \
                 "\nThis will disregard system offsite-* holds and snapshot age; user holds may block individual snapshots."
-            local now=$(date +%s)
+            local now
+            now=$(date +%s)
             for snap in "${snaparray[@]}"; do
-                local snap_creation=$(zfs get -Hp -o value creation "$snap")
+                local snap_creation
+                snap_creation=$(zfs get -Hp -o value creation "$snap")
                 local age_days=$(( (now - snap_creation) / 86400 ))
                 printf "%-60s  (%d days old)\n" "$snap" "$age_days"
             done

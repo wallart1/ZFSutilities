@@ -108,7 +108,7 @@ function delsnap {
 
     if [[ $4 != 'nocheckagainst' ]]; then
         exec 3>&1  # Save stdout to fd 3
-        message=$(checkagainst "$snaptoremove" >&3)
+        checkagainst "$snaptoremove" >&3
         rc=$?
         exec 3>&-  # Close fd 3
         if [[ $rc -ne 0 ]]; then

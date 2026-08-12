@@ -15,9 +15,9 @@ DEFAULT_MSG_LEVEL = "INFO"
 # bound the disk footprint of a runaway backup/offsite job while preserving
 # enough recent output to be useful for debugging.  The maximum is read from
 # the saved configuration; these constants are the fallback defaults.
-DEFAULT_MAX_SESSION_LOG_BYTES = 10 * 1024 * 1024    # 10 MB
-DEFAULT_SESSION_LOG_TAIL_BYTES = 1 * 1024 * 1024    # 1 MB
-DEFAULT_SESSION_LOG_START_BYTES = 64 * 1024         # 64 KB
+DEFAULT_MAX_SESSION_LOG_BYTES = 10 * 1024 * 1024  # 10 MB
+DEFAULT_SESSION_LOG_TAIL_BYTES = 1 * 1024 * 1024  # 1 MB
+DEFAULT_SESSION_LOG_START_BYTES = 64 * 1024  # 64 KB
 
 
 _MSG_PRIORITY = {
@@ -99,6 +99,7 @@ def _get_session_log_cap():
             get_session_log_max_bytes,
             load_config,
         )
+
         config = load_config()
         max_bytes = get_session_log_max_bytes(config)
     except Exception:
@@ -110,10 +111,7 @@ def _get_session_log_cap():
     )
 
 
-def truncate_session_log(path,
-                         max_bytes=None,
-                         tail_bytes=None,
-                         start_bytes=None):
+def truncate_session_log(path, max_bytes=None, tail_bytes=None, start_bytes=None):
     """Truncate a session log to keep opening context plus recent tail.
 
     If the file at *path* is larger than *max_bytes*, rewrite it as:
@@ -151,7 +149,7 @@ def truncate_session_log(path,
             prefix = fh.read(start_bytes)
             last_nl = prefix.rfind(b"\n")
             if last_nl != -1:
-                prefix = prefix[:last_nl + 1]
+                prefix = prefix[: last_nl + 1]
             else:
                 prefix = b""
 
@@ -199,7 +197,7 @@ def _strip_log_prefixes(text):
     ts_match = _TIMESTAMP_RE.match(text)
     if ts_match:
         timestamp_prefix = ts_match.group(0)
-        rest = text[ts_match.end():]
+        rest = text[ts_match.end() :]
     else:
         timestamp_prefix = ""
         rest = text
@@ -247,7 +245,7 @@ def format_log_text_short(text):
         ts_match = _TIMESTAMP_RE.match(line)
         if ts_match:
             ts_prefix = ts_match.group(0)
-            rest = line[ts_match.end():]
+            rest = line[ts_match.end() :]
             rest = _FILE_LINE_PREFIX_RE.sub("", rest)
             out.append(ts_prefix + rest)
         else:
@@ -314,11 +312,7 @@ def log_msg(*parts, session_log_file=None, caller_file=None, caller_line=None):
         _gui_log_sink(full)
     else:
         _term = os.environ.get("TERM", "")
-        if (
-            hasattr(sys.stderr, "isatty")
-            and sys.stderr.isatty()
-            and _term != "dumb"
-        ):
+        if hasattr(sys.stderr, "isatty") and sys.stderr.isatty() and _term != "dumb":
             if msg.startswith("WARN:"):
                 print(f"\033[38;5;208m{full}\033[0m", file=sys.stderr)
             elif msg.startswith("FATAL:"):
@@ -328,8 +322,11 @@ def log_msg(*parts, session_log_file=None, caller_file=None, caller_line=None):
         else:
             print(full, file=sys.stderr)
 
-    log_file = session_log_file if session_log_file is not None \
+    log_file = (
+        session_log_file
+        if session_log_file is not None
         else os.environ.get("ZFSUTILITIES_LOG_FILE")
+    )
     if log_file:
         try:
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

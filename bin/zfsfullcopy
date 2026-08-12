@@ -42,10 +42,18 @@ function zfsfullcopy {
     if [[ $1 != '' ]]; then local overrides=$1; else local overrides=''; fi
 
     # ========================== Global arguments ===============================
-    if [[ $nextsnap = '' ]]; then local nextsnap=$(zfssnapbuild); fi
+    if [[ $nextsnap = '' ]]; then
+        local nextsnap
+        nextsnap=$(zfssnapbuild)
+    fi
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfs-send-receive helper.
     local depth=''
+    # shellcheck disable=SC2034
     local label=''
+    # shellcheck disable=SC2034
     local includes=()
+    # shellcheck disable=SC2034
     local excludes=()
     local nextsnapsave=$nextsnap
     local dopart1='Y'
@@ -54,13 +62,21 @@ function zfsfullcopy {
     if [[ $dopart1 = 'Y' ]]; then
         # Part 1: do a full copy using the oldest available snapshot.
         log_msg "INFO: Part one: Full copy using the oldest available snapshot."
+        # shellcheck disable=SC2034
+        # Intentionally set for sourced zfs-send-receive helper.
         local startwith=''              # Substring of fs name. All preceeding fs's will be skipped.
+        # shellcheck disable=SC2034
         local force='Y'                 # Do full copy even if common snapshots are found.
+        # shellcheck disable=SC2034
         local releaseholds='Y'          # Release matching holds before restoring.
+        # shellcheck disable=SC2034
         local releaseholds_tags=('offsite-*')
+        # shellcheck disable=SC2034
         local doincrementals='N'        # 'N' means do full copies.
+        # shellcheck disable=SC2034
         local dointermediates='N'       # Don't try to do any other shapshots.
         local nextsnap=$nextsnapsave    # Just in case it gets clobbered.
+        # shellcheck disable=SC2034
         local commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
 
         if [[ $overrides != '' ]]; then overrides "$overrides"; fi
@@ -84,12 +100,19 @@ function zfsfullcopy {
     if [[ $dopart2 = 'Y' ]]; then
         # Part 2: do the rest of the snapshots incrementally.
         log_msg "INFO: Part two: Copy the rest of the snapshots incrementally."
+        # shellcheck disable=SC2034
+        # Intentionally set for sourced zfs-send-receive helper.
         local startwith=''
+        # shellcheck disable=SC2034
         local force='N'
+        # shellcheck disable=SC2034
         local releaseholds='N'
+        # shellcheck disable=SC2034
         local doincrementals='Y'              # Do incremental rather than full copies.
+        # shellcheck disable=SC2034
         local dointermediates='Y'             # Do all the remaining snapshots.
         local nextsnap=$nextsnapsave          # Just in case it gets clobbered.
+        # shellcheck disable=SC2034
         local commsnap_mostrecent=''          # Finish by copying the remaining snapshots.
 
         if [[ $autoproceed != 'Y' ]]; then

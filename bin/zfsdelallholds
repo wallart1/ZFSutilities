@@ -44,6 +44,7 @@ function delallholds {
             release_this='Y'
         else
             for pattern in "${zfsdelallholds_patterns[@]}"; do
+                # shellcheck disable=SC2053
                 if [[ "$holdtag" == $pattern ]]; then
                     release_this='Y'
                     break
@@ -58,6 +59,8 @@ function delallholds {
     done
 
     if [[ ${#held_tags[@]} -gt 0 ]]; then
+        # shellcheck disable=SC2034
+        # Intentionally set for callers that source this helper.
         ZFS_DELALLHOLDS_REMAINING_TAGS="${held_tags[*]}"
     fi
 

@@ -19,13 +19,13 @@ from test_support import (
 
 
 class TestMkDocsYml(unittest.TestCase):
-
     def setUp(self):
         check_pyyaml()
         import yaml
+
         yaml.SafeLoader.add_constructor(
-            'tag:yaml.org,2002:python/name:pymdownx.superfences.fence_code_format',
-            lambda loader, node: 'pymdownx.superfences.fence_code_format'
+            "tag:yaml.org,2002:python/name:pymdownx.superfences.fence_code_format",
+            lambda loader, node: "pymdownx.superfences.fence_code_format",
         )
         with open(MKDOCS_YML) as f:
             self.config = yaml.safe_load(f)
@@ -60,7 +60,6 @@ class TestMkDocsYml(unittest.TestCase):
 
 
 class TestMarkdownLinks(unittest.TestCase):
-
     def test_all_internal_links_resolve(self):
         failures = []
         for root, _dirs, files in os.walk(DOCS_DIR):
@@ -122,21 +121,19 @@ class TestMarkdownLinks(unittest.TestCase):
                     if anchor.lower() not in headers:
                         rel_src = os.path.relpath(filepath, DOCS_DIR)
                         rel_tgt = os.path.relpath(resolved, DOCS_DIR)
-                        failures.append(
-                            f"{rel_src}: anchor '{anchor}' not found in {rel_tgt}"
-                        )
+                        failures.append(f"{rel_src}: anchor '{anchor}' not found in {rel_tgt}")
         if failures:
             self.fail("Broken anchors found:\n  " + "\n  ".join(failures))
 
 
 class TestMkDocsHooks(unittest.TestCase):
-
     def test_hooks_exist(self):
         check_pyyaml()
         import yaml
+
         yaml.SafeLoader.add_constructor(
-            'tag:yaml.org,2002:python/name:pymdownx.superfences.fence_code_format',
-            lambda loader, node: 'pymdownx.superfences.fence_code_format'
+            "tag:yaml.org,2002:python/name:pymdownx.superfences.fence_code_format",
+            lambda loader, node: "pymdownx.superfences.fence_code_format",
         )
         with open(MKDOCS_YML) as f:
             config = yaml.safe_load(f)
@@ -164,7 +161,6 @@ class TestMkDocsHooks(unittest.TestCase):
 
 
 class TestDocsDirectoryStructure(unittest.TestCase):
-
     def test_index_md_exists(self):
         self.assertTrue(os.path.isfile(os.path.join(DOCS_DIR, "index.md")))
 
@@ -181,12 +177,9 @@ class TestDocsDirectoryStructure(unittest.TestCase):
 
 
 class TestPythonModulesReference(unittest.TestCase):
-
     def test_all_documented_python_modules_exist(self):
         """Every module listed in python-modules.md must exist in python/."""
-        ref_path = os.path.join(
-            DOCS_DIR, "commands-and-modules", "python-modules.md"
-        )
+        ref_path = os.path.join(DOCS_DIR, "commands-and-modules", "python-modules.md")
         self.assertTrue(os.path.isfile(ref_path))
         documented = extract_python_module_names(ref_path)
         self.assertGreater(len(documented), 0)
@@ -196,9 +189,7 @@ class TestPythonModulesReference(unittest.TestCase):
             if not os.path.isfile(module_path):
                 missing.append(module)
         if missing:
-            self.fail(
-                f"Documented Python modules missing from {PYTHON_SRC}: {missing}"
-            )
+            self.fail(f"Documented Python modules missing from {PYTHON_SRC}: {missing}")
 
 
 if __name__ == "__main__":

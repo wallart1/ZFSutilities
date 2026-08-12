@@ -18,6 +18,7 @@ class TestDiagnoseDatasetBusy(unittest.TestCase):
 
     def _make_completed(self, stdout="", stderr="", rc=0):
         import subprocess
+
         return subprocess.CompletedProcess(args=[], returncode=rc, stdout=stdout, stderr=stderr)
 
     def _zfs_get_handler(self, cmd, **kwargs):
@@ -93,7 +94,9 @@ class TestDiagnoseDatasetBusy(unittest.TestCase):
             ms.set_command_handler(r"zfs get -H -o value", self._zfs_get_handler)
             ms.set_command_handler(
                 r"targetcli /backstores/block ls",
-                lambda _cmd, **_kw: self._make_completed("  | o- vm-105-disk-0  [block/vm-105-disk-0]"),
+                lambda _cmd, **_kw: self._make_completed(
+                    "  | o- vm-105-disk-0  [block/vm-105-disk-0]"
+                ),
             )
             ms.set_command_handler(
                 r"targetcli /iscsi ls",

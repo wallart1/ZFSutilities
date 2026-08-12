@@ -72,7 +72,7 @@ vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
 if [[ "$vm_status" == "running" ]]; then
     echo "VM $VMID is running. Shutting down gracefully..."
     qm shutdown "$VMID" >/dev/null 2>&1 || true
-    for i in $(seq 1 120); do
+    for _ in $(seq 1 120); do
         vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
         [[ "$vm_status" != "running" ]] && break
         sleep 1
@@ -162,7 +162,6 @@ if [[ "$by_path" == /dev/disk/by-path/* ]]; then
     fi
 elif [[ "$by_path" =~ ^([^:]+):vm-([0-9]+)-disk-([0-9]+)$ ]]; then
     # Proxmox storage reference (single-node only).
-    storage="${BASH_REMATCH[1]}"
     zvol=$(zfs list -H -t volume -o name 2>/dev/null | grep "/proxmox/vm-${BASH_REMATCH[2]}-disk-${BASH_REMATCH[3]}$" | head -1)
     [[ -n "$zvol" ]] || {
         log_msg "FATAL: No zvol found for storage reference: $by_path"
@@ -221,7 +220,7 @@ fi
 # --- Wait for device to appear at the new size ---
 echo "Waiting for EFI device $by_path at >= 4M..."
 device=""
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
     device=$(readlink -f "$by_path" 2>/dev/null)
     if [[ -b "$device" ]]; then
         dev_size=$(blockdev --getsize64 "$device" 2>/dev/null || echo 0)

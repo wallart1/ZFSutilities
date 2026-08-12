@@ -5160,7 +5160,7 @@ Returns an empty string if the size cannot be determined.</p>
 <hr />
 <h3 id="zfsholds"><code>zfsholds</code><a class="headerlink" href="#zfsholds" title="Permanent link">&para;</a></h3>
 <p>Lists all snapshot holds in a subtree.</p>
-<div class="highlight"><pre><span></span><code>zfsholds<span class="w"> </span>&lt;subtree&gt;<span class="w"> </span><span class="o">[</span>depth<span class="o">]</span>
+<div class="highlight"><pre><span></span><code>zfsholds<span class="w"> </span>&lt;subtree&gt;
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
 <table>
@@ -5175,30 +5175,10 @@ Returns an empty string if the size cannot be determined.</p>
 <td><code>$1</code></td>
 <td>Subtree to inspect</td>
 </tr>
-<tr>
-<td><code>$2</code></td>
-<td>Optional depth limit (overrides <code>$depth</code>)</td>
-</tr>
 </tbody>
 </table>
-<p><strong>Globals:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Role</th>
-<th>Reference</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>$depth</code></td>
-<td>Default recursion depth</td>
-<td><a href="../../developer-guide/global-variables/#dataset-and-snapshot-selection">Selection</a></td>
-</tr>
-</tbody>
-</table>
-<p>See also: <a href="#zfsshowholds"><code>zfsshowholds</code></a> for a simpler version without depth support.</p>
+<p><strong>Globals:</strong> none.</p>
+<p>See also: <a href="#zfsshowholds"><code>zfsshowholds</code></a> for a simpler version.</p>
 <p><strong>Called modules:</strong> none.</p>
 <p><strong>Data structures consumed / produced:</strong> none.</p>
 <p><strong>Internal flow:</strong></p>
@@ -6887,12 +6867,11 @@ multiple metrics. Also accessible from the GUI <strong>Datasets</strong> tab via
 </tbody>
 </table>
 <p><strong>Globals:</strong> none.</p>
-<p>Simple wrapper around <code>zfs list ... | xargs zfs holds</code>. For depth control,
-use <a href="#zfsholds"><code>zfsholds</code></a> instead.</p>
+<p>Simple wrapper around <code>zfs list ... | xargs zfs holds</code>.</p>
 <p><strong>Called modules:</strong> none.</p>
 <p><strong>Data structures consumed / produced:</strong> none.</p>
 <p><strong>Internal flow:</strong></p>
-<p>Simple wrapper: <code>zfs list -rt snapshot &lt;dataset&gt; | xargs zfs holds -H</code>. For depth control see <a href="#zfsholds"><code>zfsholds</code></a>.</p>
+<p>Simple wrapper: <code>zfs list -rt snapshot &lt;dataset&gt; | xargs zfs holds -H</code>.</p>
 <p><strong>Return codes:</strong></p>
 <table>
 <thead>
@@ -7515,7 +7494,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.82.0
+      ZFS Utilities v0.82.1
     </div>
   
   
@@ -7540,7 +7519,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.82.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

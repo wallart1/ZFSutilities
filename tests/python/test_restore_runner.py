@@ -84,9 +84,7 @@ class TestComputeRestoreParams(unittest.TestCase):
         self.assertEqual(destfs, "poolB")
 
     def test_multi_qualifier_mapping(self):
-        n, destfs = rr.compute_restore_params(
-            "poolB/poolA/data", "poolA/data"
-        )
+        n, destfs = rr.compute_restore_params("poolB/poolA/data", "poolA/data")
         self.assertEqual(n, 2)
         self.assertEqual(destfs, "poolA")
 

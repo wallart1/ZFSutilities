@@ -35,7 +35,7 @@ def compute_auto_destination(source, known_pools):
     Raises:
         ValueError: If no remaining qualifier matches a known pool.
     """
-    src_parts = source.strip('/').split('/')
+    src_parts = source.strip("/").split("/")
     known = set(known_pools)
 
     for n in range(1, len(src_parts) + 1):
@@ -78,8 +78,8 @@ def compute_restore_params(source, dest):
     Raises:
         ValueError: If source and dest are incompatible.
     """
-    src_parts = source.strip('/').split('/')
-    dst_parts = dest.strip('/').split('/')
+    src_parts = source.strip("/").split("/")
+    dst_parts = dest.strip("/").split("/")
     destfs = dst_parts[0]
 
     for n in range(len(src_parts) + 1):
@@ -98,9 +98,9 @@ def compute_restore_params(source, dest):
     )
 
 
-def build_restore_command(source, removequalifiers, destfs, parent_dir,
-                          advanced_vars, do_part1, do_part2,
-                          dryrun=False):
+def build_restore_command(
+    source, removequalifiers, destfs, parent_dir, advanced_vars, do_part1, do_part2, dryrun=False
+):
     """Build the bash command for a restore operation.
 
     Both parts are combined into a single bash script. After Part 1, the
@@ -143,50 +143,50 @@ def build_restore_command(source, removequalifiers, destfs, parent_dir,
     if includes:
         items = shlex.split(includes)
         arr = " ".join(f'"{i}"' for i in items)
-        adv += f'includes=({arr}); '
+        adv += f"includes=({arr}); "
     else:
-        adv += 'includes=(); '
+        adv += "includes=(); "
 
     if excludes:
         items = shlex.split(excludes)
         arr = " ".join(f'"{i}"' for i in items)
-        adv += f'excludes=({arr}); '
+        adv += f"excludes=({arr}); "
     else:
-        adv += 'excludes=(); '
+        adv += "excludes=(); "
 
     # Post-restore helper: ensure VM disk zvols are exported as iSCSI LUNs.
     ensure_func = (
-        'ensure_restored_iscsi() { '
+        "ensure_restored_iscsi() { "
         '[[ "${dryrun:-N}" == "Y" ]] && return 0; '
-        'local _fs _dest; local -a _dests=(); '
+        "local _fs _dest; local -a _dests=(); "
         'for _fs in "${fsarray[@]}"; do '
         '_dest=$(remove_leading_qualifiers "$sourcefsremovequalifiers" "$_fs"); '
         '[[ "$_dest" != "" && ${_dest:0:1} != "/" ]] && _dest="/$_dest"; '
         '_dests+=("${destfs}${_dest}"); '
-        'done; '
-        'if [[ ${#_dests[@]} -gt 0 ]]; then '
+        "done; "
+        "if [[ ${#_dests[@]} -gt 0 ]]; then "
         'log_msg "INFO: Ensuring iSCSI LUNs for restored VM disks..."; '
         '"$mydir/ensure-restored-vm-iscsi" "${_dests[@]}"; '
-        'fi; '
-        '}; '
+        "fi; "
+        "}; "
     )
 
     # Preamble — shared by both parts
     # Redirect stdout to stderr so echo output (dataset lists) stays in order
     # with log_msg output and all appears in the GUI log panel.
     preamble = (
-        f'exec 1>&2; '
+        f"exec 1>&2; "
         f'source ~/bashinit; bashinit; mydir="{parent_dir}"; '
         f'source "$mydir/zfssnapbuild"; '
         f'source "$mydir/zfs-send-receive"; '
         f'source "$mydir/zfsremoveleadingqualifiers"; '
-        f'{ensure_func}'
-        f'{_dryrun_assignments(dryrun)}'
+        f"{ensure_func}"
+        f"{_dryrun_assignments(dryrun)}"
         f'sourcefs="{source}"; '
-        f'sourcefsremovequalifiers={removequalifiers}; '
+        f"sourcefsremovequalifiers={removequalifiers}; "
         f'destfs="{destfs}"; '
         f'nextsnap="notneeded"; '
-        f'{adv}'
+        f"{adv}"
         f'fsarray_file="/tmp/zfsrestore_fsarray_$$"; '
     )
 
@@ -218,17 +218,17 @@ def build_restore_command(source, removequalifiers, destfs, parent_dir,
             # Load saved fsarray as exact-match includes
             part2_script += (
                 'if [[ -f "$fsarray_file" ]]; then '
-                'includes=(); '
+                "includes=(); "
                 'while IFS= read -r _ds; do includes+=("=$_ds"); done < "$fsarray_file"; '
                 'rm -f "$fsarray_file"; '
-                'fi; '
+                "fi; "
             )
         part2_script += (
             'send-receive "$sourcefs"; rc=$?; '
             'if [[ $rc -ne 0 ]]; then rm -f "$fsarray_file"; exit $rc; fi; '
-            'ensure_restored_iscsi; '
+            "ensure_restored_iscsi; "
             'rm -f "$fsarray_file"; '
-            'exit 0'
+            "exit 0"
         )
         parts.append(part2_script)
     else:

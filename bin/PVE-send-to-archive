@@ -33,13 +33,21 @@ subtrees=('threeamigos/proxmox')
 destinationdir='/temp/archive/proxmox'
 archivename='tari-vm-205'
 proxmoxconfig='/etc/pve/qemu-server/205.conf'
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfsbuildfsarray helper.
 includes=('vm-205')        # Put only one VM here
+# shellcheck disable=SC2034
 excludes=()
+# shellcheck disable=SC2034
 startwith=''
 
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfsbuildfsarray helper.
 for sourcefs in "${subtrees[@]}"; do
     buildfsarray
     for fs in "${fsarray[@]}"; do
+        # shellcheck disable=SC2034
+        # Intentionally set for sourced zfscommsnap helper.
         commsnap_mostrecent="Y"
         if ! snap=$(getcommonsnap $fs); then
             log_msg "FATAL: Could not get name of most recent snapshot for $fs."
@@ -69,7 +77,7 @@ for sourcefs in "${subtrees[@]}"; do
 done
 
 # Archive the Proxmox VM configuration file
-if ! mkdir -p $(dirname $destinationdir/$archivename$proxmoxconfig); then
+if ! mkdir -p "$(dirname "$destinationdir/$archivename$proxmoxconfig")"; then
     log_msg "FATAL: Could not create the VM config archive directory" \
         "$destinationdir/$archivename$proxmoxconfig."
     source "$(find_zfsutility_script bashreturn)" 8
@@ -80,5 +88,5 @@ if ! cp $proxmoxconfig $destinationdir/$archivename$proxmoxconfig; then
     source "$(find_zfsutility_script bashreturn)" 8
 fi
 
-log_msg "INFO: Archive of \n$(printf '%s\n' ${fsarray[@]}) \n$proxmoxconfig \n ... completed."
+log_msg "INFO: Archive of \n$(printf '%s\n' "${fsarray[@]}") \n$proxmoxconfig \n ... completed."
 

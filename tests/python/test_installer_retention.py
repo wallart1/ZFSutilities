@@ -18,7 +18,6 @@ from test_support import temp_config_dir
 
 
 class TestEnsureDefaultRetentionProfile(unittest.TestCase):
-
     def _read_config(self, path):
         with open(path) as f:
             return json.load(f)
@@ -26,9 +25,7 @@ class TestEnsureDefaultRetentionProfile(unittest.TestCase):
     def test_new_install_creates_default_only(self):
         """A fresh config ends up with exactly the default retention policy."""
         with temp_config_dir():
-            changed = installer_retention.ensure_default_retention_profile(
-                new_install=True
-            )
+            changed = installer_retention.ensure_default_retention_profile(new_install=True)
             self.assertTrue(changed)
             config = self._read_config(config_core.CONFIG_PATH)
             self.assertEqual(list(config["retention"].keys()), ["default"])
@@ -47,9 +44,7 @@ class TestEnsureDefaultRetentionProfile(unittest.TestCase):
             with open(path, "w") as f:
                 json.dump(initial, f)
 
-            changed = installer_retention.ensure_default_retention_profile(
-                new_install=True
-            )
+            changed = installer_retention.ensure_default_retention_profile(new_install=True)
             self.assertTrue(changed)
             config = self._read_config(path)
             self.assertIn("default", config["retention"])
@@ -69,9 +64,7 @@ class TestEnsureDefaultRetentionProfile(unittest.TestCase):
             with open(path, "w") as f:
                 json.dump(initial, f)
 
-            changed = installer_retention.ensure_default_retention_profile(
-                new_install=False
-            )
+            changed = installer_retention.ensure_default_retention_profile(new_install=False)
             self.assertFalse(changed)
             config = self._read_config(path)
             self.assertEqual(config["retention"]["tank"], custom)
@@ -83,9 +76,7 @@ class TestEnsureDefaultRetentionProfile(unittest.TestCase):
             with open(path, "w") as f:
                 json.dump({"backup": {}}, f)
 
-            changed = installer_retention.ensure_default_retention_profile(
-                new_install=False
-            )
+            changed = installer_retention.ensure_default_retention_profile(new_install=False)
             self.assertTrue(changed)
             config = self._read_config(path)
             self.assertIn("default", config["retention"])

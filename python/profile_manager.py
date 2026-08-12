@@ -24,9 +24,7 @@ def validate_custom_name(name):
     if not name:
         raise ValueError("Profile name cannot be empty")
     if not _VALID_CUSTOM_NAME_RE.match(name):
-        raise ValueError(
-            "Profile name may only contain letters, digits, hyphens, and underscores"
-        )
+        raise ValueError("Profile name may only contain letters, digits, hyphens, and underscores")
 
 
 def build_profile_name(user, tab_type, custom_name):

@@ -42,7 +42,7 @@ function scruball {
             ;;
         *)
             # Assume it's a pool list
-            poolarray=$1
+            poolarray=("$1")
             if [[ $2 != '' ]]; then overrides "$2"; fi
             ;;
     esac
@@ -82,7 +82,8 @@ function do_resume {
     # Build pool list if not provided
     if [[ ${#poolarray[@]} -eq 0 ]]; then
         readarray -t poolarray < <(zpool list -Ho name)
-        local offsitepool=$(findoffsitepool)
+        local offsitepool
+        offsitepool=$(findoffsitepool)
         # Regex: " ${poolarray[*]} " =~ " $offsitepool "
         # Purpose: Check whether the offsite pool is already present in poolarray.
         #          Spaces are padded around both sides to prevent partial matches
@@ -95,6 +96,7 @@ function do_resume {
         #          (e.g. "pool" matching against "pool2").
         # Example: poolarray=("threeamigos" "fivebays"); offsitepool="fivebays"
         #          -> match (already in list); offsitepool="z40tb" -> no match
+        # shellcheck disable=SC2076
         if [[ $offsitepool != '' ]] && [[ ! " ${poolarray[*]} " =~ " $offsitepool " ]]; then
             poolarray+=("$offsitepool")
         fi
@@ -138,13 +140,15 @@ function do_resume {
 function do_start {
     # Clear state file for new run
     mkdir -p "$(dirname "$STATEFILE")"
-    > "$STATEFILE"
+    : > "$STATEFILE"
 
     # Build pool list if not provided
     if [[ ${#poolarray[@]} -eq 0 ]]; then
         readarray -t poolarray < <(zpool list -Ho name)
-        local offsitepool=$(findoffsitepool)
+        local offsitepool
+        offsitepool=$(findoffsitepool)
         # Add offsite pool only if not already in the list
+        # shellcheck disable=SC2076
         if [[ $offsitepool != '' ]] && [[ ! " ${poolarray[*]} " =~ " $offsitepool " ]]; then
             poolarray+=("$offsitepool")
         fi

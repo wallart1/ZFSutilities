@@ -91,10 +91,14 @@ function cleanup {
         echo '--------------------------------'
 
         if [[ $pool = 'temp' ]]; then
+            # shellcheck disable=SC2034
+            # Intentionally set for sourced zfsbuildfsarray helper.
             excludes=('temp/temp')
         else
+            # shellcheck disable=SC2034
             excludes=()
         fi
+        # shellcheck disable=SC2034
         depth=''
         buildfsarray "$pool"
         log_msg "INFO: About to apply snapshot retention policies to the following datasets:"

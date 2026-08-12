@@ -15,10 +15,10 @@ from test_support import mock_gtk
 
 
 class TestScrubPageWidgets(unittest.TestCase):
-
     def test_scrub_store_schema(self):
         with mock_gtk():
             import pools_page as pp
+
             # Verify the expected column count for the scrub store
             # We can't fully instantiate the UI without a real app, but we can
             # import the module and verify constants.
@@ -27,6 +27,7 @@ class TestScrubPageWidgets(unittest.TestCase):
     def test_get_selected_pool_names(self):
         with mock_gtk():
             import pools_page as pp
+
             # Create a minimal mock treeview with multi-selection
             mock_model = MagicMock()
             mock_iter = MagicMock()
@@ -45,6 +46,7 @@ class TestScrubPageWidgets(unittest.TestCase):
     def test_flicker_free_refresh_logic(self):
         with mock_gtk():
             import pools_page as pp
+
             # The refresh_scrub_table function exists and can be called with a
             # mocked app object that has the required attributes.
             app = MagicMock()
@@ -53,7 +55,11 @@ class TestScrubPageWidgets(unittest.TestCase):
             app.scrub_store.append = MagicMock(return_value=MagicMock())
             app.scrub_queue = MagicMock()
             app.scrub_queue.summary.return_value = {
-                "active": 0, "pending": 0, "paused": 0, "finished": 0, "target": 1,
+                "active": 0,
+                "pending": 0,
+                "paused": 0,
+                "finished": 0,
+                "target": 1,
             }
             app.scrub_summary_label = MagicMock()
 
@@ -65,6 +71,7 @@ class TestScrubPageWidgets(unittest.TestCase):
     def test_last_scrub_column_uses_monospace_font(self):
         with mock_gtk():
             import pools_page as pp
+
             with patch.object(pp, "set_monospace_font") as mock_mono:
                 with patch.object(pp, "refresh_pools_page", MagicMock()):
                     with patch.object(pp, "ScrubQueue", MagicMock()):
@@ -78,6 +85,7 @@ class TestScrubPageWidgets(unittest.TestCase):
     def test_refresh_shows_canceled_scrub_date(self):
         with mock_gtk():
             import pools_page as pp
+
             app = MagicMock()
             app.scrub_store = MagicMock()
             app.scrub_store.get_iter_first.return_value = None
@@ -85,7 +93,11 @@ class TestScrubPageWidgets(unittest.TestCase):
             app.scrub_queue = MagicMock()
             app.scrub_queue.state_for_pool.return_value = sm.ScrubState.NONE
             app.scrub_queue.summary.return_value = {
-                "active": 0, "pending": 0, "paused": 0, "finished": 0, "target": 1,
+                "active": 0,
+                "pending": 0,
+                "paused": 0,
+                "finished": 0,
+                "target": 1,
             }
             app.scrub_summary_label = MagicMock()
 

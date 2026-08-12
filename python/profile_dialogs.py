@@ -2,7 +2,7 @@
 
 import gi
 
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 from gui_helpers import (
     _ensure_treeview_scrolling,
@@ -22,8 +22,7 @@ from profile_manager import (
 from profile_validation import validate_profiles
 
 
-def show_add_profile_dialog(app, tab_type, config_dict, on_success=None,
-                            dry_run=False):
+def show_add_profile_dialog(app, tab_type, config_dict, on_success=None, dry_run=False):
     """Show the Add Profile to Schedule dialog and save a profile if confirmed.
 
     Args:
@@ -33,9 +32,9 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None,
     prefix = f"{user}-{tab_type}-"
 
     dlg = create_dialog(
-        "Add Profile to Schedule", app,
-        [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
-         (Gtk.STOCK_OK, Gtk.ResponseType.OK)],
+        "Add Profile to Schedule",
+        app,
+        [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL), (Gtk.STOCK_OK, Gtk.ResponseType.OK)],
         default_response=Gtk.ResponseType.OK,
     )
     content = dlg.get_content_area()
@@ -71,40 +70,40 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None,
         return
 
     import re
+
     # Regex: ^[A-Za-z0-9_-]+$
     # Purpose: Validate that a custom profile name contains only safe filename characters.
     #          Only letters, digits, hyphens, and underscores are allowed.
     # Example: "my-backup_01" -> match
     #          "my backup"    -> no match (contains space)
     if not re.match(r"^[A-Za-z0-9_-]+$", custom_name):
-        show_error_dialog(app, "Invalid profile name.\nUse only letters, digits, hyphens, and underscores.")
+        show_error_dialog(
+            app, "Invalid profile name.\nUse only letters, digits, hyphens, and underscores."
+        )
         return
 
     full_name = prefix + custom_name
     if profile_exists(full_name):
         dlg = Gtk.MessageDialog(
-            transient_for=app, modal=True,
+            transient_for=app,
+            modal=True,
             message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.YES_NO,
             text=f"Profile '{full_name}' already exists.",
         )
-        dlg.format_secondary_text(
-            "Overwrite it with the current tab settings?"
-        )
+        dlg.format_secondary_text("Overwrite it with the current tab settings?")
         response = dlg.run()
         dlg.destroy()
         if response != Gtk.ResponseType.YES:
             return
         try:
-            profile = update_profile(tab_type, custom_name, config_dict,
-                                     dry_run=dry_run)
+            profile = update_profile(tab_type, custom_name, config_dict, dry_run=dry_run)
         except ValueError as e:
             show_error_dialog(app, str(e))
             return
     else:
         try:
-            profile = create_profile(tab_type, custom_name, config_dict,
-                                     dry_run=dry_run)
+            profile = create_profile(tab_type, custom_name, config_dict, dry_run=dry_run)
         except ValueError as e:
             show_error_dialog(app, str(e))
             return
@@ -114,6 +113,7 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None,
         on_success(profile)
     if hasattr(app, "schedule_store"):
         from schedule_page import _refresh_profile_list
+
         _refresh_profile_list(app)
 
 
@@ -130,10 +130,7 @@ def _show_profile_scope_warnings(app, profile):
     profile_name = profile.get("profile_name", "")
     relevant = [w for w in warnings if profile_name in w]
     if relevant:
-        show_warning_dialog(
-            app,
-            "Profile scope mismatch detected:\n\n" + "\n\n".join(relevant)
-        )
+        show_warning_dialog(app, "Profile scope mismatch detected:\n\n" + "\n\n".join(relevant))
 
 
 def show_recall_profile_dialog(app, tab_type, on_select):
@@ -144,9 +141,9 @@ def show_recall_profile_dialog(app, tab_type, on_select):
         return
 
     dlg = create_dialog(
-        "Recall Profile", app,
-        [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
-         ("Recall", Gtk.ResponseType.OK)],
+        "Recall Profile",
+        app,
+        [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL), ("Recall", Gtk.ResponseType.OK)],
         default_response=Gtk.ResponseType.OK,
     )
     content = dlg.get_content_area()
@@ -159,8 +156,10 @@ def show_recall_profile_dialog(app, tab_type, on_select):
     for profile in profiles:
         cron = profile.get("cron", {})
         sched = "{} {} {} {} {}".format(
-            cron.get("minute", "*"), cron.get("hour", "*"),
-            cron.get("day", "*"), cron.get("month", "*"),
+            cron.get("minute", "*"),
+            cron.get("hour", "*"),
+            cron.get("day", "*"),
+            cron.get("month", "*"),
             cron.get("weekday", "*"),
         )
         store.append([profile["profile_name"], sched])

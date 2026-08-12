@@ -21,6 +21,7 @@ if [[ $2 != '' ]]; then tag=$2; else unset tag; fi
 if [[ $autoproceed = '' ]]; then autoproceed='N'; fi
 if [[ $depth = '' ]]; then unset depth; fi   # Depth of subtree. E.g., '1'
 if [[ $includes = '' ]]; then includes=(); fi
+# shellcheck disable=SC2034
 buildfsarraytype='snapshot'     # Build an array of snapshots (ZFS dataset type)
 
 buildfsarray $sourcefs
@@ -29,12 +30,12 @@ if [[ ${#fsarray[@]} -gt 0 ]]; then
     if [[ $autoproceed != 'Y' ]]; then
         if [[ $tag = '' ]]; then msgtag='all'; else msgtag=$tag; fi
         log_msg "INFO: Will release $msgtag holds on these snapshots:"
-        for snap in ${fsarray[@]}; do
+        for snap in "${fsarray[@]}"; do
             echo $snap $tag
         done
         read -p 'Press enter to continue.'
     fi
-    for snap in ${fsarray[@]}; do
+    for snap in "${fsarray[@]}"; do
         delallholds $snap $tag
     done
 fi

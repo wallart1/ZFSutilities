@@ -14,8 +14,8 @@ import time
 
 import gi
 
-gi.require_version('Gtk', '3.0')
-gi.require_version('Gdk', '3.0')
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 from backup_config import log_msg
 from gi.repository import Gdk, Gio, Gtk
 from paths import get_pid_file_path
@@ -58,12 +58,12 @@ class ZFSUtilitiesApp(Gtk.Application):
             }
         """)
         Gtk.StyleContext.add_provider_for_screen(
-            Gdk.Screen.get_default(), css,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
 
         # Lazy import to avoid circular dependency
         from zfsutilities_gui import ZFSUtilitiesWindow
+
         window = ZFSUtilitiesWindow(application=self)
         window.show_all()
         window._check_startup_config()
@@ -72,6 +72,7 @@ class ZFSUtilitiesApp(Gtk.Application):
         # and the GTK main loop is running.  This keeps the window responsive
         # while pool/SSH data is gathered in the background.
         from dashboard_page import refresh_dashboard_page
+
         refresh_dashboard_page(window)
 
         self._main_window = window
@@ -107,7 +108,7 @@ def _get_ppid(pid):
     end = data.find(b")")
     if end == -1:
         return None
-    parts = data[end + 1:].split()
+    parts = data[end + 1 :].split()
     if len(parts) < 2:
         return None
     try:
@@ -126,7 +127,7 @@ def _pid_state(pid):
     end = data.find(b")")
     if end == -1:
         return None
-    rest = data[end + 1:].lstrip()
+    rest = data[end + 1 :].lstrip()
     if not rest:
         return None
     return rest[:1].decode("ascii", "replace")
@@ -234,9 +235,7 @@ def _pump_events_for(duration):
 
 def _terminate_with_wait(pid, timeout=5.0):
     """Terminate pid while showing and updating a transient wait dialog."""
-    wait = _show_wait_dialog(
-        "Please wait: closing the previous ZFS Utilities window..."
-    )
+    wait = _show_wait_dialog("Please wait: closing the previous ZFS Utilities window...")
     try:
         _terminate_process(pid, timeout=timeout, sleep_fn=_pump_events_for)
     finally:
@@ -299,10 +298,12 @@ def _get_display_env():
         candidates = []
         if sudo_user:
             candidates.append(f"/home/{sudo_user}/.Xauthority")
-        candidates.extend([
-            os.path.expanduser("~/.Xauthority"),
-            "/root/.Xauthority",
-        ])
+        candidates.extend(
+            [
+                os.path.expanduser("~/.Xauthority"),
+                "/root/.Xauthority",
+            ]
+        )
         for path in candidates:
             if os.path.isfile(path):
                 env["XAUTHORITY"] = path
@@ -410,20 +411,21 @@ def _read_pid_file():
 def main():
     if os.geteuid() != 0:
         # Re-launch with pkexec, preserving the X11/Wayland display environment
-        display = os.environ.get('DISPLAY', ':0')
-        xauthority = os.environ.get('XAUTHORITY', '')
-        wayland = os.environ.get('WAYLAND_DISPLAY', '')
+        display = os.environ.get("DISPLAY", ":0")
+        xauthority = os.environ.get("XAUTHORITY", "")
+        wayland = os.environ.get("WAYLAND_DISPLAY", "")
         cmd = [
-            'pkexec', 'env',
-            f'DISPLAY={display}',
+            "pkexec",
+            "env",
+            f"DISPLAY={display}",
         ]
         if xauthority:
-            cmd.append(f'XAUTHORITY={xauthority}')
+            cmd.append(f"XAUTHORITY={xauthority}")
         if wayland:
-            cmd.append(f'WAYLAND_DISPLAY={wayland}')
+            cmd.append(f"WAYLAND_DISPLAY={wayland}")
         cmd.append(sys.executable)
         cmd.extend(sys.argv)
-        os.execvp('pkexec', cmd)
+        os.execvp("pkexec", cmd)
 
     flags = Gio.ApplicationFlags.REPLACE
     pid = _read_pid_file()
@@ -462,30 +464,23 @@ def main():
             # A process we did not catch still owns the D-Bus application ID.
             # Terminate any matching processes that appeared after our first
             # scan and create a fresh application instance to retry once.
-            log_msg(
-                "INFO: another GUI instance is still registered; "
-                "retrying after cleanup"
-            )
+            log_msg("INFO: another GUI instance is still registered; retrying after cleanup")
             for matching_pid in _find_matching_pids(exclude_pid=our_pid):
                 if matching_pid == pid:
                     continue
-                log_msg(
-                    f"INFO: terminating existing GUI instance {matching_pid}"
-                )
+                log_msg(f"INFO: terminating existing GUI instance {matching_pid}")
                 _terminate_with_wait(matching_pid)
             app = ZFSUtilitiesApp(flags=flags)
             app.register(cancellable=None)
             if app.get_is_remote():
-                log_msg(
-                    "WARN: another GUI instance is still registered; "
-                    "startup aborted"
-                )
+                log_msg("WARN: another GUI instance is still registered; startup aborted")
                 return
         own_pid_file = True
         _write_pid_file(our_pid)
         app.run(None)
     except Exception:
         import traceback
+
         error_log = "/tmp/zfsutilities_gui_error.log"
         with open(error_log, "w") as f:
             traceback.print_exc(file=f)

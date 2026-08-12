@@ -601,9 +601,7 @@ class ImportablePoolCache:
                 return set(self._names)
             if not self._refreshing:
                 self._refreshing = True
-                thread = threading.Thread(
-                    target=self._refresh, args=(callback,), daemon=True
-                )
+                thread = threading.Thread(target=self._refresh, args=(callback,), daemon=True)
                 thread.start()
             return set(self._names)
 

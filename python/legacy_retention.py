@@ -24,11 +24,13 @@ def _parse_legacy_retention_file(path):
             for line in fh:
                 m = _LEGACY_RETENTION_RE.search(line)
                 if m:
-                    buckets.append({
-                        "name": m.group(1),
-                        "retain": int(m.group(2)),
-                        "minage": int(m.group(3)),
-                    })
+                    buckets.append(
+                        {
+                            "name": m.group(1),
+                            "retain": int(m.group(2)),
+                            "minage": int(m.group(3)),
+                        }
+                    )
     except OSError:
         pass
     return buckets
@@ -49,7 +51,7 @@ def scan_legacy_retention(parent_dir, retention_dict):
         for name in os.listdir(parent_dir):
             if not name.startswith("zfsretainpol-"):
                 continue
-            pool = name[len("zfsretainpol-"):]
+            pool = name[len("zfsretainpol-") :]
             if pool in retention_dict:
                 continue
             buckets = _parse_legacy_retention_file(os.path.join(parent_dir, name))

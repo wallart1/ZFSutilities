@@ -101,8 +101,7 @@ def _migrate_item(new_path, old_path, create_symlink=True):
         )
     except OSError as exc:
         log_msg(
-            f"WARN: Both {old_path} and {new_path} exist but could not back up "
-            f"legacy path: {exc}"
+            f"WARN: Both {old_path} and {new_path} exist but could not back up legacy path: {exc}"
         )
 
 

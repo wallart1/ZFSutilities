@@ -265,9 +265,7 @@ Avoid single-letter names like `l`, `O`, `I` due to visual ambiguity.
 - **Binary operators**: Break **before** the operator for readability:
 
     ```python
-    total = (first_variable
-             + second_variable
-             - third_variable)
+    total = first_variable + second_variable - third_variable
     ```
 
 ### Comments and Documentation
@@ -319,6 +317,7 @@ log_msg("DEBUG: variable =", value)
         target.append(item)
         return target
 
+
     # Correct
     def append_to(item, target=None):
         if target is None:
@@ -349,3 +348,27 @@ A small set of rules is intentionally ignored in `pyproject.toml` because they
 conflict with project conventions (for example, naive datetimes are used
 deliberately throughout the GUI and tests, and broad exception handling is kept
 for callbacks, cleanup, and worker threads).
+
+The Bash code base is checked with **[ShellCheck](https://www.shellcheck.net/)**.
+Configuration lives in `.shellcheckrc` at the repository root.  A few rules are
+disabled project-wide because they are false positives for the project's
+dynamic-sourcing pattern:
+
+- `SC1090` — ShellCheck cannot follow sources resolved at runtime by helpers
+  such as `find_zfsutility_script` and `source_helper`.
+- `SC2154` — Globals such as `mydir` and `fsarray` are assigned by sourced
+  libraries (`bashinit`, `node-lib.sh`, `zfsbuildfsarray`, etc.).
+
+Run ShellCheck from the repository root on the bash modules and tests
+(`bin/watchall` is a Python script and is excluded by `.shellcheckrc`):
+
+```bash
+shellcheck -S warning \
+    $(find bin -maxdepth 1 -type f ! -name watchall) \
+    lib/* tests/test-* tests/integration/*
+```
+
+When a warning cannot be avoided without changing behavior (for example, a
+global set intentionally for a sourced helper, or intentional word splitting of
+a shell option string), suppress it with a per-line
+`# shellcheck disable=SCXXXX` comment that explains why.

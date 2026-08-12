@@ -20,6 +20,7 @@ class TestGetScriptDir(unittest.TestCase):
 
     def test_get_script_dir_with_depth(self):
         """Larger depth values walk up the call stack."""
+
         def inner():
             return path_utils.get_script_dir(depth=2)
 
@@ -51,25 +52,19 @@ class TestFindScript(unittest.TestCase):
     def test_find_script_in_same_directory(self):
         """Script in the same directory is found first."""
         expected = self._touch("python", "profile_runner.py")
-        result = path_utils.find_script(
-            "profile_runner.py", script_dir=self.script_dir
-        )
+        result = path_utils.find_script("profile_runner.py", script_dir=self.script_dir)
         self.assertEqual(result, os.path.realpath(expected))
 
     def test_find_script_in_parent_directory(self):
         """Script in the parent directory is found when not in same dir."""
         expected = self._touch("zfsutilities_gui.py")
-        result = path_utils.find_script(
-            "zfsutilities_gui.py", script_dir=self.script_dir
-        )
+        result = path_utils.find_script("zfsutilities_gui.py", script_dir=self.script_dir)
         self.assertEqual(result, os.path.realpath(expected))
 
     def test_find_script_in_bin_directory(self):
         """Script in bin/ is found from repo root."""
         expected = self._touch("bin", "rescan-storage")
-        result = path_utils.find_script(
-            "rescan-storage", script_dir=self.script_dir
-        )
+        result = path_utils.find_script("rescan-storage", script_dir=self.script_dir)
         self.assertEqual(result, os.path.realpath(expected))
 
     def test_find_script_in_bin_directory_clone_script(self):
@@ -88,24 +83,18 @@ class TestFindScript(unittest.TestCase):
 
     def test_find_script_missing_returns_none(self):
         """Missing scripts return None."""
-        result = path_utils.find_script(
-            "does-not-exist", script_dir=self.script_dir
-        )
+        result = path_utils.find_script("does-not-exist", script_dir=self.script_dir)
         self.assertIsNone(result)
 
     def test_resolve_local_bin_uses_find_script(self):
         """resolve_local_bin delegates to find_script."""
         expected = self._touch("python", "profile_runner.py")
-        result = path_utils.resolve_local_bin(
-            "profile_runner.py", script_dir=self.script_dir
-        )
+        result = path_utils.resolve_local_bin("profile_runner.py", script_dir=self.script_dir)
         self.assertEqual(result, os.path.realpath(expected))
 
     def test_resolve_local_bin_missing_returns_none(self):
         """resolve_local_bin returns None for missing scripts."""
-        result = path_utils.resolve_local_bin(
-            "missing", script_dir=self.script_dir
-        )
+        result = path_utils.resolve_local_bin("missing", script_dir=self.script_dir)
         self.assertIsNone(result)
 
 
@@ -114,9 +103,7 @@ class TestDeployedLayout(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.deployed_script_dir = os.path.join(
-            self.tmpdir, "versions", "v1.0.0", "python"
-        )
+        self.deployed_script_dir = os.path.join(self.tmpdir, "versions", "v1.0.0", "python")
         os.makedirs(self.deployed_script_dir)
         self.repo_script_dir = os.path.join(self.tmpdir, "python")
         os.makedirs(self.repo_script_dir)
@@ -141,9 +128,7 @@ class TestDeployedLayout(unittest.TestCase):
         """Deployed layout uses current symlink path."""
         with patch.object(path_utils, "_DEPLOYMENT_BASE", self.tmpdir):
             result = path_utils.get_profile_runner_path(self.deployed_script_dir)
-            expected = os.path.join(
-                self.tmpdir, "current", "python", "profile_runner.py"
-            )
+            expected = os.path.join(self.tmpdir, "current", "python", "profile_runner.py")
             self.assertEqual(result, expected)
 
     def test_get_profile_runner_path_repo(self):
@@ -218,9 +203,7 @@ class TestGetDocsPath(unittest.TestCase):
 
     def test_get_docs_path_deployed(self):
         """Docs path is found in deployed layout."""
-        docs_path = os.path.join(
-            self.tmpdir, "current", "docs", "site", "index.html"
-        )
+        docs_path = os.path.join(self.tmpdir, "current", "docs", "site", "index.html")
         os.makedirs(os.path.dirname(docs_path))
         with open(docs_path, "w") as f:
             f.write("<html></html>\n")
@@ -251,9 +234,7 @@ class TestRemoteResolution(unittest.TestCase):
                 ),
             )
             result = path_utils.resolve_remote_bin("stewie")
-            self.assertEqual(
-                result, "/usr/local/lib/zfsutilities/versions/v1.0.0/bin"
-            )
+            self.assertEqual(result, "/usr/local/lib/zfsutilities/versions/v1.0.0/bin")
 
     def test_resolve_remote_bin_failure(self):
         """resolve_remote_bin returns None when SSH fails."""
@@ -274,9 +255,7 @@ class TestRemoteResolution(unittest.TestCase):
             def _raise(*_args, **_kwargs):
                 raise subprocess.TimeoutExpired("ssh", 15)
 
-            m.set_command_handler(
-                r"ssh.*realpath.*zfsutilities/current/bin", _raise
-            )
+            m.set_command_handler(r"ssh.*realpath.*zfsutilities/current/bin", _raise)
             result = path_utils.resolve_remote_bin("stewie")
             self.assertIsNone(result)
 
@@ -321,9 +300,7 @@ class TestEnvironmentOverrides(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.deployed_script_dir = os.path.join(
-            self.tmpdir, "versions", "v9.9.9", "python"
-        )
+        self.deployed_script_dir = os.path.join(self.tmpdir, "versions", "v9.9.9", "python")
         os.makedirs(self.deployed_script_dir)
         self.addCleanup(self._cleanup)
 
@@ -359,9 +336,7 @@ class TestEnvironmentOverrides(unittest.TestCase):
         self.assertEqual(path_utils.get_docs_path(self.deployed_script_dir), docs_path)
         self.assertEqual(
             path_utils.get_profile_runner_path(self.deployed_script_dir),
-            os.path.join(
-                self.tmpdir, "current", "python", "profile_runner.py"
-            ),
+            os.path.join(self.tmpdir, "current", "python", "profile_runner.py"),
         )
 
     def test_remote_bin_env_override(self):
@@ -380,9 +355,7 @@ class TestEnvironmentOverrides(unittest.TestCase):
                 ),
             )
             result = path_utils.resolve_remote_bin("stewie")
-            self.assertEqual(
-                result, "/opt/custom/zfsutilities/versions/v5.0.0/bin"
-            )
+            self.assertEqual(result, "/opt/custom/zfsutilities/versions/v5.0.0/bin")
 
 
 if __name__ == "__main__":
