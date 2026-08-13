@@ -170,6 +170,7 @@ def create_profile(tab_type, custom_name, config, dry_run=False):
             "condition": "",
         },
         "active": False,
+        "comment": "",
     }
     save_profile(profile)
     log_msg(f"INFO: Created profile: {profile_name}")

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.83.3
+
+*Released 2026-08-13*
+
+### Added
+
+- **Default rsync excludes for unreadable FUSE directories** — Backup pull
+  steps now automatically exclude `**/.gvfs/` and `**/.cache/doc/`. These
+  directories are owned by user-session FUSE/portal filesystems (GNOME GVFS
+  and xdg-document-portal) and are not readable by `root` over SSH, so
+  excluding them prevents harmless but noisy "Permission denied" rsync errors
+  that previously caused rsync to exit with code 23. User-supplied excludes are
+  appended after the defaults and add additional exclusions.
+- **Profile comments** — Scheduled profiles now have an optional **Comment**
+  field. The Schedule tab shows the comment in a new sortable column, allows
+  inline editing in the treeview, and provides an editable entry in the detail
+  pane. Comments are saved with the profile and survive GUI restarts. New
+  profiles are created with an empty comment by default.
+
+### Documentation
+
+- Updated the daily-backup user guide to document the new default rsync
+  excludes and added a troubleshooting section for `.gvfs` / `.cache/doc`
+  permission-denied errors.
+- Updated the GTK GUI user guide to describe the new Comment column and edit
+  field on the Schedule tab.
+
+### Tests
+
+- Added default-exclude tests to `tests/python/test_command_builders.py` and
+  updated rsync command assertions in `tests/python/test_profile_runner.py`.
+- Added `TestCommentColumn` to `tests/python/test_schedule_page.py` covering
+  comment load, edit, save, revert, and inline treeview editing.
+- Added `test_comment_defaults_to_empty_string` to
+  `tests/python/test_profile_manager.py`.
+
 ## 0.83.2
 
 *Released 2026-08-13*

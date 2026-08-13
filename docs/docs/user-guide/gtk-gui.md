@@ -782,9 +782,10 @@ The top pane lists every saved profile with columns:
 | **Profile Name** | Full name: `<user>-<tab>-<custom>` (e.g. `root-backup-daily`) |
 | **Type**         | `backup`, `offsite`, `restore`, `retention`, or `scrub`       |
 | **Schedule**     | Current cron expression (`min hour day month weekday`)        |
+| **Comment**      | Optional free-form note for the profile                       |
 | **Next Run**     | Next scheduled execution time                                 |
 
-Click any column header to sort by **Profile Name**, **Type**, or **Next Run**.
+Click any column header to sort by **Profile Name**, **Type**, **Comment**, or **Next Run**.
 Click any row to select it; use **Ctrl**/**Shift**-click to select multiple rows.
 The detail pane below populates with the first selected profile's cron settings
 (the first row in tree order when multiple rows are selected).
@@ -848,6 +849,7 @@ after recalling.
 ### Detail pane (profile selected)
 
 - **Profile / Type** — read-only name and tab type
+- **Comment** — optional free-form note; editable inline in the treeview or in this entry
 - **Cron Parameters** — six editable fields. The first five accept numbers, `*` (any value), comma-separated lists,
   ranges, and steps:
   - **Minute** — `0-59`, `*`, e.g. `1,15,30`, `9-17`, `*/5`
@@ -916,7 +918,7 @@ reference, see [crontab.guru](https://crontab.guru/).
 
 | Button     | Behavior                                                                                                                                                                 |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Save**   | Saves all pending changes (active toggles and cron parameters) and regenerates `/etc/cron.d/zfsutilities`. Turns **red** when any row or cron field has unsaved changes. |
+| **Save**   | Saves all pending changes (active toggles, comments, and cron parameters) and regenerates `/etc/cron.d/zfsutilities`. Turns **red** when any row, comment, or cron field has unsaved changes. |
 | **Revert** | Restores all pending changes to their last-saved values.                                                                                                                 |
 | **Delete** | Removes the selected profile file and its cron entry (with confirmation)                                                                                                 |
 

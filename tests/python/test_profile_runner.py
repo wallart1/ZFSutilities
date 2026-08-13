@@ -301,7 +301,8 @@ class TestRunBackupProfile(unittest.TestCase):
             bash_script = pull_calls[0][0][2]
             self.assertIn("/var/log/zfsutilities/rsync-pull.log", bash_script)
             self.assertIn("mkdir -p /var/log/zfsutilities", bash_script)
-            self.assertIn("rsync --delete --progress -rav /src /dst", bash_script)
+            self.assertIn("rsync --delete --progress -rav", bash_script)
+            self.assertIn(" /src /dst", bash_script)
             self.assertIn("2>&1", bash_script)
 
     def test_local_host_pull_step_uses_remote_log_path(self):
@@ -336,7 +337,8 @@ class TestRunBackupProfile(unittest.TestCase):
             self.assertEqual(len(pull_calls), 1)
             bash_script = pull_calls[0][0][2]
             self.assertIn("/var/log/zfsutilities/rsync-pull.log", bash_script)
-            self.assertIn("rsync --delete --progress -rav /src /dst", bash_script)
+            self.assertIn("rsync --delete --progress -rav", bash_script)
+            self.assertIn(" /src /dst", bash_script)
             self.assertIn("2>&1", bash_script)
 
     def test_pull_steps_active_false_skips_rsync(self):

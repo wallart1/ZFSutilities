@@ -84,7 +84,8 @@ class TestBuildRsyncCommand(unittest.TestCase):
         script = step.command[2]
         self.assertIn("ssh -q root@remote", script)
         self.assertIn("mkdir -p /var/log/zfsutilities", script)
-        self.assertIn("rsync --delete --progress -rav root@remote:/src /dst", script)
+        self.assertIn("rsync --delete --progress -rav", script)
+        self.assertIn("root@remote:/src /dst", script)
         self.assertIn("cat >> $_rl", script)
         self.assertIn("exit ${PIPESTATUS[0]}", script)
 
@@ -100,7 +101,8 @@ class TestBuildRsyncCommand(unittest.TestCase):
         self.assertIn("mkdir -p /var/log/zfsutilities", script)
         self.assertIn("date -r /var/log/zfsutilities/rsync-pull.log", script)
         self.assertIn(": > /var/log/zfsutilities/rsync-pull.log", script)
-        self.assertIn("rsync --delete --progress -rav /src /dst", script)
+        self.assertIn("rsync --delete --progress -rav", script)
+        self.assertIn(" /src /dst", script)
         self.assertIn(">>", script)
         self.assertIn("/var/log/zfsutilities/rsync-pull.log", script)
         self.assertIn("2>&1", script)
@@ -128,7 +130,8 @@ class TestBuildRsyncCommand(unittest.TestCase):
         )
         self.assertEqual(step.command[0], "bash")
         script = step.command[2]
-        self.assertIn("rsync --delete --progress -rav /src /dst", script)
+        self.assertIn("rsync --delete --progress -rav", script)
+        self.assertIn(" /src /dst", script)
         self.assertIn("2>&1", script)
 
     def test_local_rsync_with_remote_log_preserves_exit_code(self):
@@ -139,7 +142,8 @@ class TestBuildRsyncCommand(unittest.TestCase):
         )
         script = step.command[2]
         # rsync is the last command, so the script exits with rsync's rc.
-        self.assertIn("rsync --delete --progress -rav /src /dst", script)
+        self.assertIn("rsync --delete --progress -rav", script)
+        self.assertIn(" /src /dst", script)
         self.assertNotIn("exit ${PIPESTATUS[0]}", script)
         self.assertNotIn("exit 0", script)
 
@@ -198,7 +202,7 @@ class TestBuildRsyncCommand(unittest.TestCase):
         script = step.command[2]
         self.assertIn("rsync --delete --progress -rav", script)
         self.assertIn("--exclude=*.tmp", script)
-        self.assertIn("/src /dst", script)
+        self.assertIn(" /src /dst", script)
 
     def test_pull_rsync_with_remote_log_and_excludes(self):
         step = command_builders.build_rsync_command(
@@ -212,10 +216,25 @@ class TestBuildRsyncCommand(unittest.TestCase):
         self.assertIn("--exclude=*.tmp", script)
         self.assertIn("root@remote:/src /dst", script)
 
-    def test_empty_excludes_omitted(self):
+    def test_default_excludes_are_included(self):
+        step = command_builders.build_rsync_command("/src", "/dst")
+        self.assertIn("--exclude=**/.gvfs/", step.command)
+        self.assertIn("--exclude=**/.cache/doc/", step.command)
+
+    def test_default_excludes_are_included_with_empty_caller_excludes(self):
         step = command_builders.build_rsync_command("/src", "/dst", excludes=[])
-        for arg in step.command:
-            self.assertNotIn("--exclude", arg)
+        self.assertIn("--exclude=**/.gvfs/", step.command)
+        self.assertIn("--exclude=**/.cache/doc/", step.command)
+
+    def test_user_excludes_follow_defaults(self):
+        step = command_builders.build_rsync_command(
+            "/src", "/dst", excludes=["*.tmp"]
+        )
+        gvfs_idx = step.command.index("--exclude=**/.gvfs/")
+        cache_idx = step.command.index("--exclude=**/.cache/doc/")
+        user_idx = step.command.index("--exclude=*.tmp")
+        self.assertLess(gvfs_idx, user_idx)
+        self.assertLess(cache_idx, user_idx)
 
 
 class TestSendReceiveMetadata(unittest.TestCase):

@@ -172,6 +172,19 @@ Excludes cell is parsed with `shlex.split`. The exclude list is saved per step
 in the main JSON configuration (`backup.pull_steps[*].excludes`) as a list of
 strings.
 
+### Default Excludes
+
+A few directories that are known to be unreadable by `root` over SSH are
+excluded automatically. They are owned by user-session FUSE/portal filesystems
+and contain no data that should be backed up:
+
+- `**/.gvfs/` — GNOME Virtual File System mount point
+- `**/.cache/doc/` — xdg-document-portal cache directory
+
+These defaults are prepended to every rsync step. You can still supply your
+own exclude patterns in the **Excludes** column; they are appended after the
+defaults and add additional exclusions.
+
 ## Dry Run
 
 To simulate the entire backup without making changes:
@@ -254,6 +267,31 @@ required destination snapshot was deleted.
 full copy can take hours for large datasets. There is no way to do an
 incremental transfer without at least one common snapshot. Restoring
 destination snapshots from another backup will probably not fix this.
+
+### Permission denied on `.gvfs` or `.cache/doc`
+
+If rsync reports errors like these:
+
+```
+rsync: [sender] readlink_stat("/home/dan/.gvfs") failed: Permission denied (13)
+rsync: [sender] readlink_stat("/home/dan/.cache/doc") failed: Permission denied (13)
+```
+
+**Cause**: Those directories are GNOME/FUSE virtual filesystems owned by the
+user desktop session. They are not readable by `root` when rsync connects over
+SSH, so rsync exits with code 23.
+
+**Action**: These paths are excluded automatically by default. If you are
+running an older version, add them to the **Excludes** column for the affected
+pull step until you can upgrade:
+
+```text
+dan/.gvfs/ dan/.cache/doc/
+```
+
+A single pull-step failure is non-fatal: the backup continues with the remaining
+pull steps and send/receive steps. The overall job still returns the failing
+pull's return code, so monitoring systems can flag it.
 
 ### Remote rsync SSH failure
 

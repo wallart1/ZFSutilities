@@ -4016,12 +4016,16 @@ the scrubs and polls until they finish.</p>
 <td>Current cron expression (<code>min hour day month weekday</code>)</td>
 </tr>
 <tr>
+<td><strong>Comment</strong></td>
+<td>Optional free-form note for the profile</td>
+</tr>
+<tr>
 <td><strong>Next Run</strong></td>
 <td>Next scheduled execution time</td>
 </tr>
 </tbody>
 </table>
-<p>Click any column header to sort by <strong>Profile Name</strong>, <strong>Type</strong>, or <strong>Next Run</strong>.
+<p>Click any column header to sort by <strong>Profile Name</strong>, <strong>Type</strong>, <strong>Comment</strong>, or <strong>Next Run</strong>.
 Click any row to select it; use <strong>Ctrl</strong>/<strong>Shift</strong>-click to select multiple rows.
 The detail pane below populates with the first selected profile's cron settings
 (the first row in tree order when multiple rows are selected).</p>
@@ -4076,6 +4080,7 @@ after recalling.</p>
 <h3 id="detail-pane-profile-selected">Detail pane (profile selected)<a class="headerlink" href="#detail-pane-profile-selected" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Profile / Type</strong> — read-only name and tab type</li>
+<li><strong>Comment</strong> — optional free-form note; editable inline in the treeview or in this entry</li>
 <li><strong>Cron Parameters</strong> — six editable fields. The first five accept numbers, <code>*</code> (any value), comma-separated lists,
   ranges, and steps:</li>
 <li><strong>Minute</strong> — <code>0-59</code>, <code>*</code>, e.g. <code>1,15,30</code>, <code>9-17</code>, <code>*/5</code></li>
@@ -4208,7 +4213,7 @@ reference, see <a href="https://crontab.guru/">crontab.guru</a>.</p>
 <tbody>
 <tr>
 <td><strong>Save</strong></td>
-<td>Saves all pending changes (active toggles and cron parameters) and regenerates <code>/etc/cron.d/zfsutilities</code>. Turns <strong>red</strong> when any row or cron field has unsaved changes.</td>
+<td>Saves all pending changes (active toggles, comments, and cron parameters) and regenerates <code>/etc/cron.d/zfsutilities</code>. Turns <strong>red</strong> when any row, comment, or cron field has unsaved changes.</td>
 </tr>
 <tr>
 <td><strong>Revert</strong></td>
@@ -5235,7 +5240,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.2
+      ZFS Utilities v0.83.3
     </div>
   
   
@@ -5260,7 +5265,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.2"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.3"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

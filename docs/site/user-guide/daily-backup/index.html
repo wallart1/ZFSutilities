@@ -1015,6 +1015,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Rsync Exclude Patterns">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#default-excludes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Default Excludes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1078,6 +1095,17 @@
     <span class="md-ellipsis">
       
         "A common snapshot ... was NOT found"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#permission-denied-on-gvfs-or-cachedoc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permission denied on .gvfs or .cache/doc
       
     </span>
   </a>
@@ -2088,6 +2116,17 @@ substring syntax used elsewhere in ZFSutilities. Common examples:</p>
 Excludes cell is parsed with <code>shlex.split</code>. The exclude list is saved per step
 in the main JSON configuration (<code>backup.pull_steps[*].excludes</code>) as a list of
 strings.</p>
+<h3 id="default-excludes">Default Excludes<a class="headerlink" href="#default-excludes" title="Permanent link">&para;</a></h3>
+<p>A few directories that are known to be unreadable by <code>root</code> over SSH are
+excluded automatically. They are owned by user-session FUSE/portal filesystems
+and contain no data that should be backed up:</p>
+<ul>
+<li><code>**/.gvfs/</code> — GNOME Virtual File System mount point</li>
+<li><code>**/.cache/doc/</code> — xdg-document-portal cache directory</li>
+</ul>
+<p>These defaults are prepended to every rsync step. You can still supply your
+own exclude patterns in the <strong>Excludes</strong> column; they are appended after the
+defaults and add additional exclusions.</p>
 <h2 id="dry-run">Dry Run<a class="headerlink" href="#dry-run" title="Permanent link">&para;</a></h2>
 <p>To simulate the entire backup without making changes:</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>./zfsdailybackup<span class="w"> </span><span class="s2">&quot;dryrun=&#39;Y&#39;&quot;</span>
@@ -2153,6 +2192,22 @@ required destination snapshot was deleted.</p>
 full copy can take hours for large datasets. There is no way to do an
 incremental transfer without at least one common snapshot. Restoring
 destination snapshots from another backup will probably not fix this.</p>
+<h3 id="permission-denied-on-gvfs-or-cachedoc">Permission denied on <code>.gvfs</code> or <code>.cache/doc</code><a class="headerlink" href="#permission-denied-on-gvfs-or-cachedoc" title="Permanent link">&para;</a></h3>
+<p>If rsync reports errors like these:</p>
+<div class="highlight"><pre><span></span><code>rsync: [sender] readlink_stat(&quot;/home/dan/.gvfs&quot;) failed: Permission denied (13)
+rsync: [sender] readlink_stat(&quot;/home/dan/.cache/doc&quot;) failed: Permission denied (13)
+</code></pre></div>
+<p><strong>Cause</strong>: Those directories are GNOME/FUSE virtual filesystems owned by the
+user desktop session. They are not readable by <code>root</code> when rsync connects over
+SSH, so rsync exits with code 23.</p>
+<p><strong>Action</strong>: These paths are excluded automatically by default. If you are
+running an older version, add them to the <strong>Excludes</strong> column for the affected
+pull step until you can upgrade:</p>
+<div class="highlight"><pre><span></span><code>dan/.gvfs/ dan/.cache/doc/
+</code></pre></div>
+<p>A single pull-step failure is non-fatal: the backup continues with the remaining
+pull steps and send/receive steps. The overall job still returns the failing
+pull's return code, so monitoring systems can flag it.</p>
 <h3 id="remote-rsync-ssh-failure">Remote rsync SSH failure<a class="headerlink" href="#remote-rsync-ssh-failure" title="Permanent link">&para;</a></h3>
 <p>If the job SSHes to a remote host and the known_hosts entry is stale:</p>
 <div class="highlight"><pre><span></span><code>Host key verification failed.
@@ -2205,7 +2260,7 @@ name. Answer <code>y</code> to keep everything consistent.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.2
+      ZFS Utilities v0.83.3
     </div>
   
   
@@ -2230,7 +2285,7 @@ name. Answer <code>y</code> to keep everything consistent.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.2"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.3"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

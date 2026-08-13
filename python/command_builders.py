@@ -73,6 +73,15 @@ def _rsync_log_setup_script(log_path):
     )
 
 
+# Directories that are commonly unreadable by root because they are owned by
+# a user-session FUSE/portal filesystem (e.g. GNOME GVFS, xdg-document-portal).
+# Excluding them prevents harmless but noisy "Permission denied" rsync errors.
+DEFAULT_RSYNC_EXCLUDES = (
+    "**/.gvfs/",
+    "**/.cache/doc/",
+)
+
+
 def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
     """Build an rsync command list from source and dest strings.
 
@@ -83,11 +92,16 @@ def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
             to this file on the source host. The file is truncated the first time
             it is used each day and appended to afterwards.
         excludes: Optional iterable of rsync exclude patterns. Each item is
-            passed to rsync as ``--exclude=PATTERN``.
+            passed to rsync as ``--exclude=PATTERN``. User-supplied excludes are
+            appended after the defaults so they add additional exclusions; the
+            defaults are always applied first because they protect unreadable
+            system paths.
     """
     src_host, src_path = parse_rsync_endpoint(source)
     dst_host, dst_path = parse_rsync_endpoint(dest)
     rsync_opts = ["rsync", "--delete", "--progress", "-rav"]
+    for pattern in DEFAULT_RSYNC_EXCLUDES:
+        rsync_opts.append(f"--exclude={pattern}")
     if excludes:
         for pattern in excludes:
             rsync_opts.append(f"--exclude={pattern}")

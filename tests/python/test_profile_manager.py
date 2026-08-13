@@ -93,6 +93,14 @@ class TestProfileCrud(unittest.TestCase):
             self.assertIn("condition", loaded["cron"])
             self.assertEqual(loaded["cron"]["condition"], "")
 
+    def test_comment_defaults_to_empty_string(self):
+        with temp_config_dir():
+            profile = profile_manager.create_profile("backup", "comment", {})
+            self.assertIn("comment", profile)
+            self.assertEqual(profile["comment"], "")
+            loaded = profile_manager.load_profile(profile["profile_name"])
+            self.assertEqual(loaded["comment"], "")
+
     def test_dry_run_stored_true(self):
         with temp_config_dir():
             profile = profile_manager.create_profile("backup", "dry", {}, dry_run=True)

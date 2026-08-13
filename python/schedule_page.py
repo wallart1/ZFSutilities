@@ -45,8 +45,9 @@ COL_ACTIVE = 0
 COL_NAME = 1
 COL_TYPE = 2
 COL_SCHEDULE = 3
-COL_NEXT_RUN = 4
-COL_NEXT_RUN_SORT = 5
+COL_COMMENT = 4
+COL_NEXT_RUN = 5
+COL_NEXT_RUN_SORT = 6
 
 # Cache for expensive next-run computations keyed by the cron dict and the
 # current minute.  The result only changes once per minute, so caching by
@@ -106,7 +107,7 @@ def create_schedule_page(app):
     desc.set_line_wrap(True)
     outer.pack_start(desc, False, False, 0)
 
-    app.schedule_store = Gtk.ListStore(bool, str, str, str, str, str)
+    app.schedule_store = Gtk.ListStore(bool, str, str, str, str, str, str)
     app.schedule_view = Gtk.TreeView(model=app.schedule_store)
     app.schedule_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.schedule_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
@@ -121,15 +122,20 @@ def create_schedule_page(app):
         (COL_NAME, "Profile Name", 140),
         (COL_TYPE, "Type", 70),
         (COL_SCHEDULE, "Schedule", 90),
+        (COL_COMMENT, "Comment", 180),
         (COL_NEXT_RUN, "Next Run", 130),
     ]:
         r = Gtk.CellRendererText()
-        r.set_property("editable", False)
+        if col_idx == COL_COMMENT:
+            r.set_property("editable", True)
+            r.connect("edited", _on_comment_edited, app)
+        else:
+            r.set_property("editable", False)
         if col_idx == COL_NEXT_RUN:
             set_monospace_font(r)
         col = Gtk.TreeViewColumn(title_text, r, text=col_idx)
         configure_treeview_column(col, width=width)
-        if col_idx in (COL_NAME, COL_TYPE):
+        if col_idx in (COL_NAME, COL_TYPE, COL_COMMENT):
             col.set_sort_column_id(col_idx)
             col.set_clickable(True)
         elif col_idx == COL_NEXT_RUN:
@@ -165,6 +171,16 @@ def create_schedule_page(app):
     app.schedule_type_label.set_halign(Gtk.Align.START)
     info_grid.attach(Gtk.Label(label="Type:"), 0, 1, 1, 1)
     info_grid.attach(app.schedule_type_label, 1, 1, 1, 1)
+
+    comment_lbl = Gtk.Label(label="Comment:")
+    comment_lbl.set_halign(Gtk.Align.END)
+    info_grid.attach(comment_lbl, 0, 2, 1, 1)
+    app.schedule_comment_entry = Gtk.Entry()
+    app.schedule_comment_entry.set_hexpand(True)
+    app.schedule_comment_entry.set_tooltip_text("Optional description for this profile")
+    app.schedule_comment_entry.connect("changed", _on_comment_entry_changed, app)
+    info_grid.attach(app.schedule_comment_entry, 1, 2, 1, 1)
+
     app.schedule_detail_box.pack_start(info_grid, False, False, 0)
 
     cron_frame = Gtk.Frame()
@@ -419,6 +435,7 @@ def _build_schedule_rows(profiles):
                 profile["profile_name"],
                 profile.get("tab_type", ""),
                 sched,
+                profile.get("comment", ""),
                 next_run,
                 next_run_sort,
             ]
@@ -603,9 +620,12 @@ def _on_selection_changed(selection, app):
     pending = app._schedule_pending.get(profile_name, {})
     cron = pending.get("cron", profile.get("cron", {}))
     cron.setdefault("condition", "")
+    saved_comment = profile.get("comment", "")
+    current_comment = pending.get("comment", saved_comment)
 
     app._schedule_ignore_changes = True
     load_schedule_config(app, cron)
+    app.schedule_comment_entry.set_text(current_comment)
     app._schedule_ignore_changes = False
 
     saved_active = profile.get("active", False)
@@ -622,6 +642,11 @@ def _on_selection_changed(selection, app):
         pending["cron"] = current_cron
     else:
         pending.pop("cron", None)
+
+    if current_comment != saved_comment:
+        pending["comment"] = current_comment
+    else:
+        pending.pop("comment", None)
 
     if pending:
         app._schedule_pending[profile_name] = pending
@@ -687,6 +712,60 @@ def _on_cron_entry_changed(entry, app):
     if not pending:
         app._schedule_pending.pop(profile_name, None)
 
+    _update_schedule_dirty(app)
+
+
+def _on_comment_entry_changed(entry, app):
+    if getattr(app, "_schedule_ignore_changes", False):
+        return
+
+    selection = app.schedule_view.get_selection()
+    model, paths = selection.get_selected_rows()
+    if not paths:
+        return
+
+    tree_iter = model.get_iter(paths[0])
+    profile_name = model.get_value(tree_iter, COL_NAME)
+    profile = load_profile(profile_name)
+    if profile is None:
+        return
+
+    current_comment = entry.get_text().strip()
+    saved_comment = profile.get("comment", "")
+    pending = app._schedule_pending.setdefault(profile_name, {})
+    if current_comment != saved_comment:
+        pending["comment"] = current_comment
+    else:
+        pending.pop("comment", None)
+    if not pending:
+        app._schedule_pending.pop(profile_name, None)
+
+    app.schedule_store.set_value(tree_iter, COL_COMMENT, current_comment)
+    _update_schedule_dirty(app)
+
+
+def _on_comment_edited(renderer, path, new_text, app):
+    """Inline treeview edit for the Comment column."""
+    tree_iter = app.schedule_store.get_iter_from_string(path)
+    profile_name = app.schedule_store.get_value(tree_iter, COL_NAME)
+    profile = load_profile(profile_name)
+    if profile is None:
+        return
+
+    comment = new_text.strip()
+    saved_comment = profile.get("comment", "")
+    pending = app._schedule_pending.setdefault(profile_name, {})
+    if comment != saved_comment:
+        pending["comment"] = comment
+    else:
+        pending.pop("comment", None)
+    if not pending:
+        app._schedule_pending.pop(profile_name, None)
+
+    app._schedule_ignore_changes = True
+    app.schedule_store.set_value(tree_iter, COL_COMMENT, comment)
+    app.schedule_comment_entry.set_text(comment)
+    app._schedule_ignore_changes = False
     _update_schedule_dirty(app)
 
 
@@ -850,6 +929,8 @@ def on_schedule_save(app):
             profile["active"] = changes["active"]
         if "cron" in changes:
             profile["cron"] = changes["cron"]
+        if "comment" in changes:
+            profile["comment"] = changes["comment"]
         save_profile(profile)
 
         tree_iter = _find_iter_by_name(app, profile_name)
@@ -857,6 +938,9 @@ def on_schedule_save(app):
             app.schedule_store.set_value(tree_iter, COL_ACTIVE, profile.get("active", False))
             app.schedule_store.set_value(
                 tree_iter, COL_SCHEDULE, _format_cron(profile.get("cron", {}))
+            )
+            app.schedule_store.set_value(
+                tree_iter, COL_COMMENT, profile.get("comment", "")
             )
             _update_next_run_for_iter(app, tree_iter)
 
@@ -879,6 +963,9 @@ def on_schedule_revert(app):
                 app.schedule_store.set_value(
                     tree_iter, COL_SCHEDULE, _format_cron(profile.get("cron", {}))
                 )
+                app.schedule_store.set_value(
+                    tree_iter, COL_COMMENT, profile.get("comment", "")
+                )
                 _update_next_run_for_iter(app, tree_iter)
         app._schedule_pending.clear()
 
@@ -891,6 +978,7 @@ def on_schedule_revert(app):
         if profile is not None:
             app._schedule_ignore_changes = True
             load_schedule_config(app, profile.get("cron", {}))
+            app.schedule_comment_entry.set_text(profile.get("comment", ""))
             app._schedule_ignore_changes = False
             _update_interpretation(app)
 

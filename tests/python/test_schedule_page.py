@@ -146,7 +146,7 @@ class TestScheduleDirtyTracking(unittest.TestCase):
 
     COL_ACTIVE = 0
     COL_NAME = 1
-    COL_NEXT_RUN_SORT = 5
+    COL_NEXT_RUN_SORT = 6
 
     def _import_schedule_page(self):
         with mock_gtk():
@@ -172,6 +172,7 @@ class TestScheduleDirtyTracking(unittest.TestCase):
             "weekday": MagicMock(),
             "condition": MagicMock(),
         }
+        app.schedule_comment_entry = MagicMock()
         return app
 
     def _cron_text(self, app, cron):
@@ -184,7 +185,7 @@ class TestScheduleDirtyTracking(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_active_toggle_marks_save_red(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[False, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[False, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows)
         saved_profile = {"profile_name": "p1", "active": False, "cron": {}}
 
@@ -199,7 +200,7 @@ class TestScheduleDirtyTracking(unittest.TestCase):
     def test_active_toggle_selects_only_toggled_row(self, mock_red):
         """Toggling the Active checkbox must select only that row."""
         schedule_page = self._import_schedule_page()
-        rows = [[False, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[False, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows)
         saved_profile = {"profile_name": "p1", "active": False, "cron": {}}
 
@@ -213,7 +214,7 @@ class TestScheduleDirtyTracking(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_active_toggle_back_to_saved_clears_dirty(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows)
         # The UI shows enabled but the saved profile is disabled,
         # so the row is dirty. Toggling it back to disabled clears the dirty state.
@@ -228,7 +229,7 @@ class TestScheduleDirtyTracking(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_cron_edit_marks_save_red(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows)
         saved_profile = {
             "profile_name": "p1",
@@ -263,8 +264,8 @@ class TestScheduleDirtyTracking(unittest.TestCase):
     def test_save_writes_all_pending_profiles(self, mock_red):
         schedule_page = self._import_schedule_page()
         rows = [
-            [False, "p1", "backup", "* * * * *", "next", ""],
-            [True, "p2", "offsite", "* * * * *", "next", ""],
+            [False, "p1", "backup", "* * * * *", "", "next", ""],
+            [True, "p2", "offsite", "* * * * *", "", "next", ""],
         ]
         app = self._make_app(rows)
         profiles = {
@@ -307,8 +308,8 @@ class TestScheduleDirtyTracking(unittest.TestCase):
     def test_revert_restores_all_pending_profiles(self, mock_red):
         schedule_page = self._import_schedule_page()
         rows = [
-            [False, "p1", "backup", "changed", "next", ""],
-            [True, "p2", "offsite", "changed", "next", ""],
+            [False, "p1", "backup", "changed", "", "next", ""],
+            [True, "p2", "offsite", "changed", "", "next", ""],
         ]
         app = self._make_app(rows)
         profiles = {
@@ -359,12 +360,13 @@ class TestConfigSummary(unittest.TestCase):
             "weekday": MagicMock(),
             "condition": MagicMock(),
         }
+        app.schedule_comment_entry = MagicMock()
         return app
 
     @patch("schedule_page.set_button_markup_red")
     def test_long_config_not_truncated(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows)
 
         long_config = {
@@ -396,7 +398,7 @@ class TestConfigSummary(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_dry_run_shown_in_summary(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows)
 
         saved_profile = {
@@ -418,7 +420,7 @@ class TestConfigSummary(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_crontab_entry_shown_for_active_profile(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "0 2 * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows)
 
         saved_profile = {
@@ -455,7 +457,7 @@ class TestConfigSummary(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_no_crontab_entry_for_inactive_profile(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows)
 
         saved_profile = {
@@ -483,7 +485,7 @@ class TestConfigSummary(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_offsite_summary_does_not_show_offsite_pools(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[False, "root-offsite-daily", "offsite", "0 2 * * *", "next", ""]]
+        rows = [[False, "root-offsite-daily", "offsite", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows)
 
         saved_profile = {
@@ -555,6 +557,7 @@ class TestConfigSummaryScroll(unittest.TestCase):
             "weekday": MagicMock(),
             "condition": MagicMock(),
         }
+        app.schedule_comment_entry = MagicMock()
 
         buffer = MagicMock()
         buffer.get_text.return_value = existing_summary
@@ -648,7 +651,7 @@ class TestSchedulePageWidgets(unittest.TestCase):
 
     @patch("schedule_page.Gtk")
     @patch("schedule_page.list_profiles", return_value=[])
-    def test_next_run_profile_name_and_type_columns_are_sortable(self, _lst, mock_gtk):
+    def test_next_run_profile_name_type_and_comment_columns_are_sortable(self, _lst, mock_gtk):
         schedule_page = self._import_schedule_page()
         app = MagicMock()
         app._ui_state = MagicMock()
@@ -659,6 +662,7 @@ class TestSchedulePageWidgets(unittest.TestCase):
         sort_ids = {call[0][0] for call in sort_calls}
         self.assertIn(schedule_page.COL_NAME, sort_ids)
         self.assertIn(schedule_page.COL_TYPE, sort_ids)
+        self.assertIn(schedule_page.COL_COMMENT, sort_ids)
         self.assertIn(schedule_page.COL_NEXT_RUN_SORT, sort_ids)
 
         clickable_calls = mock_gtk.TreeViewColumn.return_value.set_clickable.call_args_list
@@ -713,7 +717,7 @@ class TestUpdateNextRunForIter(unittest.TestCase):
         schedule_page = self._import_schedule_page()
         schedule_page._NEXT_RUN_CACHE.clear()
         mock_load.return_value = {"profile_name": "p1", "cron": {}}
-        rows = [[True, "p1", "backup", "* * * * *", "old", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "old", ""]]
         app = MagicMock()
         app.schedule_store = FakeScheduleStore(rows)
 
@@ -899,6 +903,7 @@ class TestRunNow(unittest.TestCase):
             "weekday": MagicMock(),
             "condition": MagicMock(),
         }
+        app.schedule_comment_entry = MagicMock()
         return app
 
     def _make_popen(self, stdout_data="", stderr_data=""):
@@ -948,8 +953,8 @@ class TestRunNow(unittest.TestCase):
     ):
         schedule_page = self._import_schedule_page()
         rows = [
-            [False, "p1", "backup", "* * * * *", "next", ""],
-            [False, "p2", "offsite", "* * * * *", "next", ""],
+            [False, "p1", "backup", "* * * * *", "", "next", ""],
+            [False, "p2", "offsite", "* * * * *", "", "next", ""],
         ]
         app = self._make_app(rows, [0, 1])
 
@@ -986,7 +991,7 @@ class TestRunNow(unittest.TestCase):
         self, _mock_child_watch, _mock_io_add_watch, _mock_set_blocking, _mock_red
     ):
         schedule_page = self._import_schedule_page()
-        rows = [[False, "inactive", "backup", "* * * * *", "next", ""]]
+        rows = [[False, "inactive", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows, [0])
         process = self._make_popen()
 
@@ -1004,7 +1009,7 @@ class TestRunNow(unittest.TestCase):
     @patch("schedule_page.os.set_blocking")
     def test_run_now_logs_profile_output_with_prefix(self, _mock_set_blocking, _mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows, [0])
         process = self._make_popen(stdout_data="line1\nline2")
 
@@ -1038,7 +1043,7 @@ class TestRunNow(unittest.TestCase):
     ):
         """Regression: child_watch_add must use the modern GLib signature."""
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows, [0])
         process = self._make_popen()
 
@@ -1084,7 +1089,7 @@ class TestRunNow(unittest.TestCase):
     ):
         """If GLib watch setup fails, the run aborts and a FATAL is logged."""
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows, [0])
         process = self._make_popen()
         mock_child_watch.side_effect = TypeError("expected at most 4 positional arguments")
@@ -1116,7 +1121,7 @@ class TestRunNow(unittest.TestCase):
     ):
         """The global status label appears when the first profile starts."""
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows, [0])
         process = self._make_popen()
 
@@ -1135,7 +1140,7 @@ class TestRunNow(unittest.TestCase):
     def test_run_now_pv_line_updates_status_label(self, _mock_set_blocking, _mock_red):
         """A pv progress line from the profile updates the status label."""
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows, [0])
         process = self._make_popen()
         pv_line = "0:00:05 [28.1MiB/s] [===> ] 20% ETA 0:00:20"
@@ -1206,6 +1211,7 @@ class TestScheduleDelete(unittest.TestCase):
             "weekday": MagicMock(),
             "condition": MagicMock(),
         }
+        app.schedule_comment_entry = MagicMock()
         return app
 
     @patch("schedule_page.set_button_markup_red")
@@ -1218,8 +1224,8 @@ class TestScheduleDelete(unittest.TestCase):
     ):
         schedule_page = self._import_schedule_page()
         rows = [
-            [True, "p1", "backup", "0 2 * * *", "next", ""],
-            [False, "p2", "offsite", "0 3 * * *", "next", ""],
+            [True, "p1", "backup", "0 2 * * *", "", "next", ""],
+            [False, "p2", "offsite", "0 3 * * *", "", "next", ""],
         ]
         app = self._make_app(rows, [0, 1])
         mock_dialog.return_value.run.return_value = schedule_page.Gtk.ResponseType.YES
@@ -1239,7 +1245,7 @@ class TestScheduleDelete(unittest.TestCase):
         self, mock_dialog, mock_delete, mock_regenerate, mock_refresh, _mock_red
     ):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "0 2 * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows, [0])
         mock_dialog.return_value.run.return_value = schedule_page.Gtk.ResponseType.NO
 
@@ -1275,8 +1281,9 @@ class TestRefreshSchedulePage(unittest.TestCase):
     COL_NAME = 1
     COL_TYPE = 2
     COL_SCHEDULE = 3
-    COL_NEXT_RUN = 4
-    COL_NEXT_RUN_SORT = 5
+    COL_COMMENT = 4
+    COL_NEXT_RUN = 5
+    COL_NEXT_RUN_SORT = 6
 
     def _import_schedule_page(self):
         with mock_gtk():
@@ -1307,7 +1314,7 @@ class TestRefreshSchedulePage(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_refresh_updates_next_run_in_place(self, _mock_red, mock_load, _mock_next, _mock_log):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "old run", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "old run", ""]]
         app = self._make_app(rows)
         profile = {
             "profile_name": "p1",
@@ -1334,7 +1341,7 @@ class TestRefreshSchedulePage(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_refresh_rebuilds_when_profile_list_changes(self, _mock_red, mock_refresh, _mock_log):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows)
         profiles = [
             {
@@ -1365,7 +1372,7 @@ class TestRefreshSchedulePage(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_refresh_preserves_pending_changes(self, _mock_red, mock_load, _mock_next, _mock_log):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "old run", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "old run", ""]]
         app = self._make_app(rows)
         app._schedule_pending = {"p1": {"active": False}}
         profile = {
@@ -1386,7 +1393,7 @@ class TestRefreshSchedulePage(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_refresh_clears_pending_for_deleted_profile(self, mock_red, mock_refresh, _mock_log):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = self._make_app(rows)
         app._schedule_pending = {"p1": {"active": False}, "p2": {"active": True}}
         profiles = [
@@ -1409,7 +1416,7 @@ class TestRefreshSchedulePage(unittest.TestCase):
     @patch("schedule_page.load_profile")
     def test_refresh_restores_selection(self, mock_load, _mock_next, _mock_log):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "old run", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "old run", ""]]
         app = self._make_app(rows, selected_paths=[0])
         profile = {
             "profile_name": "p1",
@@ -1438,7 +1445,7 @@ class TestRefreshScheduleAsync(unittest.TestCase):
 
     def test_async_refresh_starts_background_thread(self):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = MagicMock()
         app.schedule_store = FakeScheduleStore(rows)
         app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
@@ -1460,7 +1467,7 @@ class TestRefreshScheduleAsync(unittest.TestCase):
 
     def test_async_refresh_coalesces_overlapping_requests(self):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "* * * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "* * * * *", "", "next", ""]]
         app = MagicMock()
         app.schedule_store = FakeScheduleStore(rows)
         app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
@@ -1581,6 +1588,7 @@ class TestConditionField(unittest.TestCase):
             "weekday": MagicMock(),
             "condition": MagicMock(),
         }
+        app.schedule_comment_entry = MagicMock()
         return app
 
     @patch("schedule_page.Gtk")
@@ -1600,7 +1608,7 @@ class TestConditionField(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_condition_edit_marks_save_red(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows)
         saved_profile = {
             "profile_name": "p1",
@@ -1631,7 +1639,7 @@ class TestConditionField(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_save_writes_condition(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows)
         saved_profile = {
             "profile_name": "p1",
@@ -1679,7 +1687,7 @@ class TestConditionField(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_revert_restores_condition(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows)
         saved_profile = {
             "profile_name": "p1",
@@ -1719,7 +1727,7 @@ class TestConditionField(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_interpretation_mentions_condition(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows)
         for key in app.schedule_cron_entries:
             app.schedule_cron_entries[key].get_text.return_value = "*"
@@ -1734,7 +1742,7 @@ class TestConditionField(unittest.TestCase):
     def test_missing_condition_key_does_not_mark_dirty(self, mock_red):
         """Old profiles without a condition key should not be dirty on selection."""
         schedule_page = self._import_schedule_page()
-        rows = [[False, "p1", "backup", "0 2 * * *", "next", ""]]
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows)
         saved_profile = {
             "profile_name": "p1",
@@ -1764,7 +1772,7 @@ class TestConditionField(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_crontab_entry_shows_condition(self, mock_red):
         schedule_page = self._import_schedule_page()
-        rows = [[True, "p1", "backup", "0 2 * * *", "next", ""]]
+        rows = [[True, "p1", "backup", "0 2 * * *", "", "next", ""]]
         app = self._make_app(rows)
         saved_profile = {
             "profile_name": "p1",
@@ -1838,6 +1846,187 @@ class TestNextRunCache(unittest.TestCase):
             schedule_page._next_run_strings(cron)
 
         self.assertEqual(mock_next.call_count, 2)
+
+
+class TestCommentColumn(unittest.TestCase):
+    """Verify comment display and editing on the Schedule page."""
+
+    COL_COMMENT = 4
+
+    def _import_schedule_page(self):
+        with mock_gtk():
+            import schedule_page
+
+            return schedule_page
+
+    def _make_app(self, rows):
+        app = MagicMock()
+        app.schedule_store = FakeScheduleStore(rows)
+        app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
+            app.schedule_store,
+            [FakeTreePath(0)],
+        )
+        app._schedule_save_button = MagicMock()
+        app._schedule_pending = {}
+        app._schedule_ignore_changes = False
+        app.schedule_cron_entries = {
+            "minute": MagicMock(),
+            "hour": MagicMock(),
+            "day": MagicMock(),
+            "month": MagicMock(),
+            "weekday": MagicMock(),
+            "condition": MagicMock(),
+        }
+        app.schedule_comment_entry = MagicMock()
+        return app
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_comment_loaded_from_profile(self, _mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {
+            "profile_name": "p1",
+            "active": False,
+            "tab_type": "backup",
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+            },
+            "comment": "Daily backup",
+        }
+
+        selection = MagicMock()
+        selection.get_selected_rows.return_value = (app.schedule_store, [FakeTreePath(0)])
+
+        with patch("schedule_page.load_profile", return_value=saved_profile):
+            schedule_page._on_selection_changed(selection, app)
+
+        app.schedule_comment_entry.set_text.assert_called_once_with("Daily backup")
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_comment_edit_marks_save_red(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {
+            "profile_name": "p1",
+            "active": False,
+            "comment": "",
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+            },
+        }
+        app.schedule_comment_entry.get_text.return_value = "Daily backup"
+
+        with patch("schedule_page.load_profile", return_value=saved_profile):
+            schedule_page._on_comment_entry_changed(app.schedule_comment_entry, app)
+
+        self.assertIn("p1", app._schedule_pending)
+        self.assertEqual(app._schedule_pending["p1"]["comment"], "Daily backup")
+        mock_red.assert_called_with(app._schedule_save_button, True)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_save_writes_comment(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {
+            "profile_name": "p1",
+            "active": False,
+            "comment": "",
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+            },
+        }
+        app._schedule_pending = {"p1": {"comment": "Daily backup"}}
+        saved = []
+
+        def fake_save(profile):
+            saved.append(dict(profile))
+
+        with (
+            patch("schedule_page.load_profile", return_value=dict(saved_profile)),
+            patch("schedule_page.save_profile", side_effect=fake_save),
+            patch("schedule_page.list_profiles", return_value=[dict(saved_profile)]),
+            patch("schedule_page.write_cron_file") as mock_write_cron,
+            patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN]),
+        ):
+            schedule_page.on_schedule_save(app)
+
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["comment"], "Daily backup")
+        self.assertEqual(
+            app.schedule_store.get_value(0, self.COL_COMMENT),
+            "Daily backup",
+        )
+        mock_write_cron.assert_called_once()
+        self.assertFalse(app._schedule_pending)
+        mock_red.assert_called_with(app._schedule_save_button, False)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_revert_restores_comment(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "changed", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {
+            "profile_name": "p1",
+            "active": False,
+            "comment": "Saved comment",
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+            },
+        }
+        app._schedule_pending = {"p1": {"comment": "changed"}}
+
+        with (
+            patch("schedule_page.load_profile", return_value=saved_profile),
+            patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN]),
+        ):
+            schedule_page.on_schedule_revert(app)
+
+        self.assertEqual(app.schedule_store.get_value(0, self.COL_COMMENT), "Saved comment")
+        app.schedule_comment_entry.set_text.assert_called_once_with("Saved comment")
+        self.assertFalse(app._schedule_pending)
+        mock_red.assert_called_with(app._schedule_save_button, False)
+
+    @patch("schedule_page.set_button_markup_red")
+    def test_inline_comment_edit_updates_store(self, mock_red):
+        schedule_page = self._import_schedule_page()
+        rows = [[False, "p1", "backup", "0 2 * * *", "", "next", ""]]
+        app = self._make_app(rows)
+        saved_profile = {
+            "profile_name": "p1",
+            "active": False,
+            "comment": "",
+            "cron": {},
+        }
+
+        with patch("schedule_page.load_profile", return_value=saved_profile):
+            schedule_page._on_comment_edited(None, "0", "Inline comment", app)
+
+        self.assertEqual(
+            app.schedule_store.get_value(0, self.COL_COMMENT),
+            "Inline comment",
+        )
+        app.schedule_comment_entry.set_text.assert_called_once_with("Inline comment")
+        self.assertEqual(app._schedule_pending["p1"]["comment"], "Inline comment")
+        mock_red.assert_called_with(app._schedule_save_button, True)
 
 
 if __name__ == "__main__":
