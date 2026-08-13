@@ -6,7 +6,7 @@ A hierarchical dataset lock manager for ZFS utilities that prevents conflicting 
 
 ## Design Points
 
-- **Lock storage**: `/run/lock/zfs/` (cleared on reboot)
+- **Lock storage**: `/run/lock/zfsutilities/` (cleared on reboot)
 - **Stale detection**: PID-based (check if process exists) + EXIT traps
 - **CLI tool**: [zfslockctl](../commands-and-modules/commands.md#zfslockctl) for manual lock management
 - **Chain awareness**: Independent (no checkagainst integration for now)
@@ -36,7 +36,7 @@ When acquiring a lock on `/pool/parent/child`:
 ## Lock File Structure
 
 ```
-/run/lock/zfs/
+/run/lock/zfsutilities/
 ├── .locks/                    # Lock data files
 │   ├── pool.lock
 │   ├── pool%2Fdataset.lock    # URL-encoded paths
@@ -222,7 +222,7 @@ zfslock_check_hierarchy() {
     done
 
     # Check descendants (glob lock files matching prefix)
-    for lockfile in /run/lock/zfs/.locks/"${dataset_encoded}"*; do
+    for lockfile in /run/lock/zfsutilities/.locks/"${dataset_encoded}"*; do
         if zfslock_conflicts "$lockfile" "$type" "descendant"; then
             return 1
         fi

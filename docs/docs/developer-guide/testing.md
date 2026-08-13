@@ -247,7 +247,7 @@ if __name__ == "__main__":
 
 | Fixture | Purpose |
 |---------|---------|
-| `temp_config_dir()` | Overrides `CONFIG_PATH`, `CRON_FILE`, `SNAPFILE`, and `OFFSITE_SNAPFILE` to a temp directory |
+| `temp_config_dir()` | Overrides `CONFIG_PATH`, `CRON_FILE`, `SNAPFILE`, `OFFSITE_SNAPFILE`, `SESSION_LOG_DIR`, and advisory-lock paths to a temp directory |
 | `mock_subprocess()` | Patches `subprocess.run` with a stateful mock that handles `zfs`, `zpool`, `rsync`, and `ssh` commands |
 | `capture_logs()` | Captures `log_msg` output to a list for assertions |
 | `capture_stderr()` | Captures `sys.stderr` to a string |

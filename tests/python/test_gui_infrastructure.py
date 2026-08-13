@@ -9,8 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-import paths
-from test_support import REPO_ROOT, capture_logs, mock_gtk
+from test_support import REPO_ROOT, capture_logs, mock_gtk, temp_config_dir
 
 GUI_PY_PATH = os.path.join(REPO_ROOT, "python", "zfsutilities_gui.py")
 GTK_GUI_HTML_PATH = os.path.join(REPO_ROOT, "docs", "site", "user-guide", "gtk-gui", "index.html")
@@ -408,23 +407,10 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
 
     def test_loads_default_state_when_no_config(self):
         with mock_gtk() as gtk_mock:
-            import tempfile
-
-            import backup_config
-            import config_core
-
-            original_path = backup_config.CONFIG_PATH
-            with tempfile.TemporaryDirectory() as tmpdir:
-                path = os.path.join(tmpdir, "zfsutilities.json")
-                backup_config.CONFIG_PATH = path
-                config_core.CONFIG_PATH = path
-                try:
-                    win = self._make_window(gtk_mock)
-                    self.assertEqual(win._zoom_level, 1.0)
-                    self.assertEqual(win._theme, "default")
-                finally:
-                    backup_config.CONFIG_PATH = original_path
-                    config_core.CONFIG_PATH = original_path
+            with temp_config_dir():
+                win = self._make_window(gtk_mock, config={})
+                self.assertEqual(win._zoom_level, 1.0)
+                self.assertEqual(win._theme, "default")
 
     def test_restores_geometry_and_zoom_from_config(self):
         with mock_gtk() as gtk_mock:
@@ -513,64 +499,49 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
     def test_theme_script_message_updates_saved_theme(self):
         with mock_gtk() as gtk_mock:
             import backup_config
-            import config_core
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                path = os.path.join(tmpdir, "zfsutilities.json")
-                backup_config.CONFIG_PATH = path
-                config_core.CONFIG_PATH = path
-                try:
-                    config = {"ui_state": {}}
-                    win = self._make_window(gtk_mock, config)
-                    win._webview = MagicMock()
-                    win._theme = "default"
-                    win.get_window = MagicMock(return_value=None)
-                    win.get_size = MagicMock(return_value=(900, 700))
-                    win.get_position = MagicMock(return_value=(10, 20))
+            with temp_config_dir():
+                config = {"ui_state": {}}
+                win = self._make_window(gtk_mock, config)
+                win._webview = MagicMock()
+                win._theme = "default"
+                win.get_window = MagicMock(return_value=None)
+                win.get_size = MagicMock(return_value=(900, 700))
+                win.get_position = MagicMock(return_value=(10, 20))
 
-                    js_result = MagicMock()
-                    js_result.get_js_value.return_value.to_string.return_value = '"slate"'
-                    win._on_theme_script_message(None, js_result)
+                js_result = MagicMock()
+                js_result.get_js_value.return_value.to_string.return_value = '"slate"'
+                win._on_theme_script_message(None, js_result)
 
-                    self.assertEqual(win._theme, "slate")
-                    saved = backup_config.load_config()
-                    self.assertEqual(saved["ui_state"]["docs_viewer"]["theme"], "slate")
-                finally:
-                    backup_config.CONFIG_PATH = paths.get_config_path()
-                    config_core.CONFIG_PATH = paths.get_config_path()
+                self.assertEqual(win._theme, "slate")
+                saved = backup_config.load_config()
+                self.assertEqual(saved["ui_state"]["docs_viewer"]["theme"], "slate")
 
     def test_save_persists_docs_viewer_state(self):
         with mock_gtk() as gtk_mock:
             import backup_config
-            import config_core
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                path = os.path.join(tmpdir, "zfsutilities.json")
-                backup_config.CONFIG_PATH = path
-                config_core.CONFIG_PATH = path
-                try:
-                    config = {"ui_state": {}}
-                    win = self._make_window(gtk_mock, config)
-                    win._webview = MagicMock()
-                    win._zoom_level = 1.25
-                    win._theme = "slate"
-                    win.get_window = MagicMock(return_value=None)
-                    win.get_size = MagicMock(return_value=(900, 700))
-                    win.get_position = MagicMock(return_value=(10, 20))
+            with temp_config_dir():
+                config = {"ui_state": {}}
+                win = self._make_window(gtk_mock, config)
+                win._webview = MagicMock()
+                win._zoom_level = 1.25
+                win._theme = "slate"
+                win.get_window = MagicMock(return_value=None)
+                win.get_size = MagicMock(return_value=(900, 700))
+                win.get_position = MagicMock(return_value=(10, 20))
 
-                    win._do_save()
+                win._do_save()
 
-                    saved = backup_config.load_config()
-                    dv = saved["ui_state"]["docs_viewer"]
-                    self.assertEqual(dv["zoom"], 1.25)
-                    self.assertEqual(dv["theme"], "slate")
-                    self.assertEqual(dv["width"], 900)
-                    self.assertEqual(dv["height"], 700)
-                    self.assertEqual(dv["x"], 10)
-                    self.assertEqual(dv["y"], 20)
-                    self.assertFalse(dv["maximized"])
-                finally:
-                    backup_config.CONFIG_PATH = paths.get_config_path()
+                saved = backup_config.load_config()
+                dv = saved["ui_state"]["docs_viewer"]
+                self.assertEqual(dv["zoom"], 1.25)
+                self.assertEqual(dv["theme"], "slate")
+                self.assertEqual(dv["width"], 900)
+                self.assertEqual(dv["height"], 700)
+                self.assertEqual(dv["x"], 10)
+                self.assertEqual(dv["y"], 20)
+                self.assertFalse(dv["maximized"])
 
 
 class TestGtkMocking(unittest.TestCase):
@@ -2360,77 +2331,60 @@ class TestMinimizeWidth(unittest.TestCase):
         """Cancel response leaves columns, config, and window unchanged."""
         _clear_cached_modules("gui_helpers")
         with mock_gtk() as gtk_mock:
-            import backup_config
-            import config_core
             import gui_helpers as gh
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                path = os.path.join(tmpdir, "zfsutilities.json")
-                backup_config.CONFIG_PATH = path
-                config_core.CONFIG_PATH = path
-                try:
-                    dialog = MagicMock()
-                    dialog.run.return_value = 0  # CANCEL
-                    gtk_mock.MessageDialog.return_value = dialog
+            with temp_config_dir():
+                dialog = MagicMock()
+                dialog.run.return_value = 0  # CANCEL
+                gtk_mock.MessageDialog.return_value = dialog
 
-                    window = MagicMock()
-                    window.get_size.return_value = (1000, 700)
-                    window.config = {"ui_state": {"treeview_columns": {"x": [100]}}}
-                    window.get_window.return_value = None
+                window = MagicMock()
+                window.get_size.return_value = (1000, 700)
+                window.config = {"ui_state": {"treeview_columns": {"x": [100]}}}
+                window.get_window.return_value = None
 
-                    gh.confirm_and_minimize_width(window)
+                gh.confirm_and_minimize_width(window)
 
-                    gtk_mock.MessageDialog.assert_called_once()
-                    window.resize.assert_not_called()
-                    self.assertEqual(window.config["ui_state"]["treeview_columns"], {"x": [100]})
-                finally:
-                    backup_config.CONFIG_PATH = paths.get_config_path()
-                    config_core.CONFIG_PATH = paths.get_config_path()
+                gtk_mock.MessageDialog.assert_called_once()
+                window.resize.assert_not_called()
+                self.assertEqual(window.config["ui_state"]["treeview_columns"], {"x": [100]})
 
     def test_confirm_and_minimize_width_ok_resets_and_shrinks(self):
         """OK response resets columns, clears saved widths, and resizes."""
         _clear_cached_modules("gui_helpers")
         with mock_gtk() as gtk_mock:
             import backup_config
-            import config_core
             import gui_helpers as gh
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                path = os.path.join(tmpdir, "zfsutilities.json")
-                backup_config.CONFIG_PATH = path
-                config_core.CONFIG_PATH = path
+            with temp_config_dir():
+                dialog = MagicMock()
+                dialog.run.return_value = 1  # OK
+                gtk_mock.MessageDialog.return_value = dialog
+
+                original_reset = gh.reset_resizable_columns_to_min_width
+                mock_reset = MagicMock(return_value=7)
+                gh.reset_resizable_columns_to_min_width = mock_reset
+
+                window = MagicMock()
+                window.get_size.return_value = (1000, 700)
+                window.config = {"ui_state": {"treeview_columns": {"x": [100]}}}
+                window.get_window.return_value = None
+                window._ui_state = MagicMock()
+
                 try:
-                    dialog = MagicMock()
-                    dialog.run.return_value = 1  # OK
-                    gtk_mock.MessageDialog.return_value = dialog
-
-                    original_reset = gh.reset_resizable_columns_to_min_width
-                    mock_reset = MagicMock(return_value=7)
-                    gh.reset_resizable_columns_to_min_width = mock_reset
-
-                    window = MagicMock()
-                    window.get_size.return_value = (1000, 700)
-                    window.config = {"ui_state": {"treeview_columns": {"x": [100]}}}
-                    window.get_window.return_value = None
-                    window._ui_state = MagicMock()
-
-                    try:
-                        with capture_logs() as logs:
-                            gh.confirm_and_minimize_width(window)
-                    finally:
-                        gh.reset_resizable_columns_to_min_width = original_reset
-
-                    gtk_mock.MessageDialog.assert_called_once()
-                    mock_reset.assert_called_once_with(window)
-                    window._ui_state.flush.assert_called_once()
-                    window.queue_resize.assert_called_once()
-                    window.resize.assert_called_once_with(1, 700)
-                    saved = backup_config.load_config()
-                    self.assertEqual(saved["ui_state"]["treeview_columns"], {})
-                    self.assertTrue(any("Reset 7 column" in m for m in logs))
+                    with capture_logs() as logs:
+                        gh.confirm_and_minimize_width(window)
                 finally:
-                    backup_config.CONFIG_PATH = paths.get_config_path()
-                    config_core.CONFIG_PATH = paths.get_config_path()
+                    gh.reset_resizable_columns_to_min_width = original_reset
+
+                gtk_mock.MessageDialog.assert_called_once()
+                mock_reset.assert_called_once_with(window)
+                window._ui_state.flush.assert_called_once()
+                window.queue_resize.assert_called_once()
+                window.resize.assert_called_once_with(1, 700)
+                saved = backup_config.load_config()
+                self.assertEqual(saved["ui_state"]["treeview_columns"], {})
+                self.assertTrue(any("Reset 7 column" in m for m in logs))
 
 
 @contextlib.contextmanager

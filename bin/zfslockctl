@@ -414,7 +414,7 @@ Examples:
   zfslockctl release pool/dataset       # Force release lock on dataset
 
 Lock Storage:
-  Locks are stored in /run/lock/zfs/.locks/ and are automatically cleared on reboot.
+  Locks are stored in /run/lock/zfsutilities/.locks/ and are automatically cleared on reboot.
 EOF
 }
 

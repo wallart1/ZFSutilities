@@ -2439,7 +2439,7 @@ migration helper.</p>
 </tr>
 <tr>
 <td><code>ZFSUTILITIES_LOCK_DIR</code></td>
-<td><code>/run/lock/zfs</code></td>
+<td><code>/run/lock/zfsutilities</code></td>
 <td>Advisory-lock directory</td>
 </tr>
 <tr>
@@ -3754,7 +3754,7 @@ zfslock_check<span class="w"> </span>&lt;dataset&gt;<span class="w"> </span>&lt;
 </tbody>
 </table>
 <p>Lock types: <code>r</code> (shared read), <code>w</code> (exclusive write), <code>x</code> (exclusive destroy).</p>
-<p>Lock files are stored in <code>/run/lock/zfs/.locks/</code> (cleared on reboot).</p>
+<p>Lock files are stored in <code>/run/lock/zfsutilities/.locks/</code> (cleared on reboot).</p>
 <p><strong>Globals:</strong> none.</p>
 <p><strong>Hierarchy rules:</strong></p>
 <table>
@@ -3789,7 +3789,7 @@ creating a new lock file. The lock is released only when the original holder
 releases it.</p>
 <p><strong>Internal flow / algorithm:</strong></p>
 <ol>
-<li><code>zfslock_init</code> creates <code>/run/lock/zfs/.locks/</code> and <code>/run/lock/zfs/.pids/</code>
+<li><code>zfslock_init</code> creates <code>/run/lock/zfsutilities/.locks/</code> and <code>/run/lock/zfsutilities/.pids/</code>
    and installs an <code>EXIT</code> trap that calls <code>zfslock_release_all</code>.</li>
 <li>Each lock is stored as a JSON file named
    <code>&lt;path-encoded-dataset&gt;.&lt;type&gt;.&lt;pid&gt;.&lt;lock-id&gt;.lock</code> under <code>.locks/</code>.
@@ -3823,7 +3823,7 @@ releases it.</p>
 <tbody>
 <tr>
 <td><a href="../../developer-guide/data-structures/#lock-files">Lock files</a></td>
-<td>On-disk under <code>/run/lock/zfs/.locks/</code></td>
+<td>On-disk under <code>/run/lock/zfsutilities/.locks/</code></td>
 </tr>
 </tbody>
 </table>
@@ -4599,7 +4599,7 @@ steps.</p>
 <li>If the snapfile exists and contains a snapshot name, prompt the user to
    reuse it. Reusing keeps incremental chains stable across interrupted runs.</li>
 <li>If reuse is declined, delete the snapfile and generate a new name.</li>
-<li>Acquire the global snapshot-name lock (<code>/run/lock/zfs/.snapname.lock</code>). The
+<li>Acquire the global snapshot-name lock (<code>/run/lock/zfsutilities/.snapname.lock</code>). The
    lock is held only while the name is being generated and recorded.</li>
 <li>Normalize <code>$label</code>: default to <code>@dailybackup</code>, ensure it starts with <code>@</code>.</li>
 <li>Compute the bucket if <code>$bucket</code> is unset:<ul>
@@ -4610,7 +4610,7 @@ steps.</p>
 </ul>
 </li>
 <li>Build the name as <code>@&lt;label&gt;-&lt;ISO-8601-minutes&gt;-&lt;bucket&gt;</code>, record it in the
-   one-minute reservation file (<code>/run/lock/zfs/.snapname.reserved</code>), release the
+   one-minute reservation file (<code>/run/lock/zfsutilities/.snapname.reserved</code>), release the
    lock, write the name to the snapfile, and print it.</li>
 <li><code>removesnapfile</code> deletes the snapfile; orchestrators such as
    <code>zfsdailybackup</code> call it after a successful run.</li>
@@ -4681,7 +4681,7 @@ steps.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.3
+      ZFS Utilities v0.83.4
     </div>
   
   
@@ -4706,7 +4706,7 @@ steps.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.3"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.4"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

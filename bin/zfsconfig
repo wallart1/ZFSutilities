@@ -18,7 +18,7 @@
 #
 # Environment:
 #   ZFSCONFIG_PATH  override config path (default: /var/lib/zfsutilities/config.json)
-#   ZFSLOCK_DIR     override lock directory (default: /run/lock/zfs)
+#   ZFSLOCK_DIR     override lock directory (default: /run/lock/zfsutilities)
 #
 # Cached in the shell for speed: _ZFSCONFIG_POOLS_CACHE,
 # _ZFSCONFIG_OFFSITE_CACHE, _ZFSCONFIG_CA_CACHE.
@@ -35,7 +35,7 @@ if [[ -z "${ZFSUTILITIES_CONFIG_PATH:-}" ]]; then
 fi
 
 ZFSCONFIG_PATH="${ZFSCONFIG_PATH:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
-ZFSLOCK_DIR="${ZFSLOCK_DIR:-${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfs}}"
+ZFSLOCK_DIR="${ZFSLOCK_DIR:-${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}}"
 
 # Legacy fallback: if the new path does not exist and the old path does, use
 # the old path so existing installs keep working before the Step 5 migration.

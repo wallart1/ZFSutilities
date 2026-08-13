@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.83.4
+
+*Released 2026-08-13*
+
+### Changed
+
+- **Lock directory namespace cleanup** — All advisory-lock paths moved from
+  `/run/lock/zfs` to `/run/lock/zfsutilities`. This affects dataset locks,
+  profile locks, snapshot-name reservation locks (`.snapname.lock` and
+  `.snapname.reserved`), and JSON-state locks (`.config.lock`, `.history.lock`,
+  `.log_index.lock`, `.scrub_state.lock`). The change makes the lock namespace
+  project-specific and consistent with the other runtime paths
+  (`/var/lib/zfsutilities`, `/var/log/zfsutilities`, `/run/zfsutilities`).
+  Environment overrides (`ZFSUTILITIES_LOCK_DIR`, `ZFSLOCK_DIR`,
+  `ZFSUTILITIES_PROFILE_LOCK_DIR`) continue to work as before.
+
+### Tests
+
+- `test-check-prerequisites` now runs under `fakeroot` when not executed as root
+  so the suite passes in non-root development and CI environments.
+- `test-installer-retention` now isolates the lock directory and exports
+  `ZFSUTILITIES_PYTHON_SRC` so the installer retention helper can run without a
+  deployed `/usr/local/lib/zfsutilities/current/python` directory.
+- Several Python tests refactored to use the shared `temp_config_dir()` helper
+  for consistent temporary path isolation.
+
+### Documentation
+
+- Updated all references to the advisory-lock directory in the command/module
+  reference, developer guides, and user guide.
+
 ## 0.83.3
 
 *Released 2026-08-13*

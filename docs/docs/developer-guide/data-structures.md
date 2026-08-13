@@ -46,9 +46,9 @@ place.
 
 To prevent two concurrent jobs from generating a snapshot name at the exact same
 instant, both `zfssnapbuild` and `feature_config.generate_snapshot_name()` acquire
-a brief global lock (`/run/lock/zfs/.snapname.lock`) while building the name and
+a brief global lock (`/run/lock/zfsutilities/.snapname.lock`) while building the name and
 recording it in a one-minute reservation file
-(`/run/lock/zfs/.snapname.reserved`). The reservation records the most recently
+(`/run/lock/zfsutilities/.snapname.reserved`). The reservation records the most recently
 issued name for each label/bucket with a timestamp; stale entries expire after 60
 seconds. The lock is released immediately after the reservation is written.
 
@@ -585,7 +585,7 @@ reboot starts fresh.
 ## Lock files
 
 Written by [`zfslockmanager`](../commands-and-modules/modules.md#zfslockmanager)
-under `/run/lock/zfs/.locks/`:
+under `/run/lock/zfsutilities/.locks/`:
 
 ```
 <path-encoded-dataset>.<type>.<pid>.<lock-id>

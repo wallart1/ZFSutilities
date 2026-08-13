@@ -19,7 +19,7 @@ class TestGenerateCronLine(unittest.TestCase):
         self.assertIn("python3 /opt/runner.py", line)
         self.assertIn("mkdir -p", line)
         self.assertIn("/var/log/zfsutilities", line)
-        self.assertIn("/run/lock/zfs/profiles", line)
+        self.assertIn("/run/lock/zfsutilities/profiles", line)
         self.assertTrue(line.rstrip().endswith(">> /var/log/zfsutilities/cron.log 2>&1"))
 
     def test_specific_weekday(self):

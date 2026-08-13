@@ -2,7 +2,7 @@
 
 Python callers use fcntl.flock context managers; bash callers can use the
 system `flock` command on the same lock files. Lock files live under
-/run/lock/zfs/ by default to match the snapshot-name lock convention.
+/run/lock/zfsutilities/ by default to match the snapshot-name lock convention.
 """
 
 import fcntl

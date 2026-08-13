@@ -597,42 +597,22 @@ class TestRunRetentionProfile(unittest.TestCase):
 
 class TestSessionLogFile(unittest.TestCase):
     def test_create_and_trailer(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            orig_dir = session_log.SESSION_LOG_DIR
-            orig_log_dir = log_index.SESSION_LOG_DIR
-            session_log.SESSION_LOG_DIR = tmpdir
-            log_index.SESSION_LOG_DIR = tmpdir
-            try:
-                path = session_log.create_session_log_file("backup", "test")
-                self.assertIsNotNone(path)
-                self.assertTrue(os.path.exists(path))
-                session_log.write_session_trailer(path, time.time(), rc=0)
-                with open(path) as f:
-                    content = f.read()
-                self.assertIn("rc=0", content)
-            finally:
-                session_log.SESSION_LOG_DIR = orig_dir
-                log_index.SESSION_LOG_DIR = orig_log_dir
+        with temp_config_dir():
+            path = session_log.create_session_log_file("backup", "test")
+            self.assertIsNotNone(path)
+            self.assertTrue(os.path.exists(path))
+            session_log.write_session_trailer(path, time.time(), rc=0)
+            with open(path) as f:
+                content = f.read()
+        self.assertIn("rc=0", content)
 
     def test_trailer_persists_done_to_log_index(self):
-        import tempfile
+        with temp_config_dir():
+            path = session_log.create_session_log_file("backup", "test")
+            session_log.write_session_trailer(path, time.time(), rc=0, bytes_transferred=5678)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            orig_dir = session_log.SESSION_LOG_DIR
-            orig_log_dir = log_index.SESSION_LOG_DIR
-            session_log.SESSION_LOG_DIR = tmpdir
-            log_index.SESSION_LOG_DIR = tmpdir
-            try:
-                path = session_log.create_session_log_file("backup", "test")
-                session_log.write_session_trailer(path, time.time(), rc=0, bytes_transferred=5678)
-
-                index = log_index.LogIndex.load()
-                entry = index.get(path)
-            finally:
-                session_log.SESSION_LOG_DIR = orig_dir
-                log_index.SESSION_LOG_DIR = orig_log_dir
+            index = log_index.LogIndex.load()
+            entry = index.get(path)
 
         self.assertIsNotNone(entry)
         self.assertEqual(entry["status"], "Done")
@@ -640,49 +620,29 @@ class TestSessionLogFile(unittest.TestCase):
         self.assertIsNotNone(entry["duration"])
 
     def test_trailer_persists_failed_to_log_index(self):
-        import tempfile
+        with temp_config_dir():
+            path = session_log.create_session_log_file("backup", "test")
+            session_log.write_session_trailer(path, time.time(), rc=2)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            orig_dir = session_log.SESSION_LOG_DIR
-            orig_log_dir = log_index.SESSION_LOG_DIR
-            session_log.SESSION_LOG_DIR = tmpdir
-            log_index.SESSION_LOG_DIR = tmpdir
-            try:
-                path = session_log.create_session_log_file("backup", "test")
-                session_log.write_session_trailer(path, time.time(), rc=2)
-
-                index = log_index.LogIndex.load()
-                entry = index.get(path)
-            finally:
-                session_log.SESSION_LOG_DIR = orig_dir
-                log_index.SESSION_LOG_DIR = orig_log_dir
+            index = log_index.LogIndex.load()
+            entry = index.get(path)
 
         self.assertIsNotNone(entry)
         self.assertEqual(entry["status"], "Failed")
 
     def test_maybe_truncate_resets_index(self):
-        import tempfile
+        with temp_config_dir():
+            path = session_log.create_session_log_file("backup", "test")
+            index = log_index.LogIndex.load()
+            index.update(path)
+            index.save()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            orig_dir = session_log.SESSION_LOG_DIR
-            orig_log_dir = log_index.SESSION_LOG_DIR
-            session_log.SESSION_LOG_DIR = tmpdir
-            log_index.SESSION_LOG_DIR = tmpdir
-            try:
-                path = session_log.create_session_log_file("backup", "test")
-                index = log_index.LogIndex.load()
-                index.update(path)
-                index.save()
+            with patch("session_log.truncate_session_log", return_value=True) as mock_truncate:
+                session_log.maybe_truncate_session_log(path, 0)
 
-                with patch("session_log.truncate_session_log", return_value=True) as mock_truncate:
-                    session_log.maybe_truncate_session_log(path, 0)
-
-                mock_truncate.assert_called_once_with(path)
-                index2 = log_index.LogIndex.load()
-                self.assertIsNone(index2.get(path))
-            finally:
-                session_log.SESSION_LOG_DIR = orig_dir
-                log_index.SESSION_LOG_DIR = orig_log_dir
+            mock_truncate.assert_called_once_with(path)
+            index2 = log_index.LogIndex.load()
+            self.assertIsNone(index2.get(path))
 
 
 class TestWriteRawLine(unittest.TestCase):

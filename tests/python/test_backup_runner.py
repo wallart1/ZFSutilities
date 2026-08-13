@@ -25,7 +25,7 @@ if PYTHON_SRC not in sys.path:
 
 # Mock GTK/WebKit so gi.repository imports succeed without a display.
 import log_index as li
-from test_support import mock_gtk
+from test_support import mock_gtk, temp_config_dir
 
 with mock_gtk():
     import backup_runner as br
@@ -463,7 +463,7 @@ class TestSessionTrailer(unittest.TestCase):
 
     def test_trailer_includes_bytes(self):
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+        with temp_config_dir():
             runner.prepare_session_log()
             runner._session_start_time = time.time()
             runner._write_session_trailer(rc=0, bytes_transferred=1234)
@@ -474,7 +474,7 @@ class TestSessionTrailer(unittest.TestCase):
 
     def test_trailer_omits_bytes_when_zero(self):
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+        with temp_config_dir():
             runner.prepare_session_log()
             runner._session_start_time = time.time()
             runner._write_session_trailer(rc=0, bytes_transferred=0)
@@ -485,7 +485,7 @@ class TestSessionTrailer(unittest.TestCase):
 
     def test_trailer_persists_done_to_log_index(self):
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+        with temp_config_dir():
             runner.prepare_session_log()
             runner._session_start_time = time.time()
             runner._write_session_trailer(rc=0, bytes_transferred=1234)
@@ -502,7 +502,7 @@ class TestSessionTrailer(unittest.TestCase):
 
     def test_trailer_persists_failed_to_log_index(self):
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+        with temp_config_dir():
             runner.prepare_session_log()
             runner._session_start_time = time.time()
             runner._write_session_trailer(rc=1)
@@ -517,7 +517,7 @@ class TestSessionTrailer(unittest.TestCase):
 
     def test_trailer_persists_cancelled_to_log_index(self):
         runner = self._runner()
-        with tempfile.TemporaryDirectory() as tmpdir, _patch_log_dirs(tmpdir):
+        with temp_config_dir():
             runner.prepare_session_log()
             runner._session_start_time = time.time()
             runner._write_session_trailer(rc=None, cancelled=True)

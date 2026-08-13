@@ -12,7 +12,7 @@ test_paths_defaults() {
     assert_equals "/var/lib/zfsutilities" "$ZFSUTILITIES_STATE_DIR"
     assert_equals "/var/log/zfsutilities" "$ZFSUTILITIES_LOG_DIR"
     assert_equals "/run/zfsutilities" "$ZFSUTILITIES_RUN_DIR"
-    assert_equals "/run/lock/zfs" "$ZFSUTILITIES_LOCK_DIR"
+    assert_equals "/run/lock/zfsutilities" "$ZFSUTILITIES_LOCK_DIR"
     assert_equals "/etc/zfsutilities" "$ZFSUTILITIES_SYSTEM_CONFIG_DIR"
 }
 
@@ -29,7 +29,7 @@ test_paths_composed_defaults() {
     assert_equals "/run/zfsutilities/main.pid" "$ZFSUTILITIES_PID_FILE"
     assert_equals "/var/log/zfsutilities/sessions" "$ZFSUTILITIES_SESSION_LOG_DIR"
     assert_equals "/etc/cron.d/zfsutilities" "$ZFSUTILITIES_CRON_FILE"
-    assert_equals "/run/lock/zfs/profiles" "$ZFSUTILITIES_PROFILE_LOCK_DIR"
+    assert_equals "/run/lock/zfsutilities/profiles" "$ZFSUTILITIES_PROFILE_LOCK_DIR"
 }
 
 test_paths_legacy_defaults() {

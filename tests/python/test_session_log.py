@@ -12,7 +12,7 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk
+from test_support import mock_gtk, temp_config_dir
 
 with mock_gtk():
     import log_index
@@ -82,65 +82,63 @@ class TestWriteRawLine(unittest.TestCase):
 class TestWriteSessionTrailer(unittest.TestCase):
     """write_session_trailer writes the final trailer and updates the index."""
 
+    def _log_path(self):
+        os.makedirs(sl.SESSION_LOG_DIR, exist_ok=True)
+        return os.path.join(sl.SESSION_LOG_DIR, "2026-06-22_07-00-00_backup_x.log")
+
     def test_writes_rc_trailer(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            log_index.SESSION_LOG_DIR = tmpdir
-            path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_x.log")
+        with temp_config_dir():
+            path = self._log_path()
             open(path, "a").close()
             start = time.time() - 10.0
             sl.write_session_trailer(path, start, rc=0)
             with open(path) as fh:
                 content = fh.read()
-            self.assertIn("# END: rc=0, duration=10.0s", content)
+        self.assertIn("# END: rc=0, duration=10.0s", content)
 
     def test_writes_cancelled_trailer(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            log_index.SESSION_LOG_DIR = tmpdir
-            path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_x.log")
+        with temp_config_dir():
+            path = self._log_path()
             open(path, "a").close()
             sl.write_session_trailer(path, time.time(), cancelled=True)
             with open(path) as fh:
                 content = fh.read()
-            self.assertIn("# END: cancelled", content)
+        self.assertIn("# END: cancelled", content)
 
     def test_writes_bytes_transferred(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            log_index.SESSION_LOG_DIR = tmpdir
-            path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_x.log")
+        with temp_config_dir():
+            path = self._log_path()
             open(path, "a").close()
             sl.write_session_trailer(path, time.time(), rc=0, bytes_transferred=1234)
             with open(path) as fh:
                 content = fh.read()
-            self.assertIn("bytes=1234", content)
+        self.assertIn("bytes=1234", content)
 
     def test_persists_done_to_index(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            log_index.SESSION_LOG_DIR = tmpdir
-            path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_x.log")
+        with temp_config_dir():
+            path = self._log_path()
             open(path, "a").close()
             sl.write_session_trailer(path, time.time(), rc=0, bytes_transferred=5678)
             entry = log_index.LogIndex.load().get(path)
-            self.assertIsNotNone(entry)
-            self.assertEqual(entry["status"], "Done")
-            self.assertEqual(entry["bytes_transferred"], 5678)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["status"], "Done")
+        self.assertEqual(entry["bytes_transferred"], 5678)
 
     def test_persists_failed_to_index(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            log_index.SESSION_LOG_DIR = tmpdir
-            path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_x.log")
+        with temp_config_dir():
+            path = self._log_path()
             open(path, "a").close()
             sl.write_session_trailer(path, time.time(), rc=1)
             entry = log_index.LogIndex.load().get(path)
-            self.assertEqual(entry["status"], "Failed")
+        self.assertEqual(entry["status"], "Failed")
 
     def test_persists_cancelled_to_index(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            log_index.SESSION_LOG_DIR = tmpdir
-            path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_x.log")
+        with temp_config_dir():
+            path = self._log_path()
             open(path, "a").close()
             sl.write_session_trailer(path, time.time(), cancelled=True)
             entry = log_index.LogIndex.load().get(path)
-            self.assertEqual(entry["status"], "Cancelled")
+        self.assertEqual(entry["status"], "Cancelled")
 
     def test_noop_when_no_file(self):
         sl.write_session_trailer(None, time.time(), rc=0)
@@ -159,9 +157,9 @@ class TestMaybeTruncateSessionLog(unittest.TestCase):
             self.assertEqual(new_last, last)
 
     def test_resets_index_after_truncation(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            log_index.SESSION_LOG_DIR = tmpdir
-            path = os.path.join(tmpdir, "huge.log")
+        with temp_config_dir():
+            os.makedirs(sl.SESSION_LOG_DIR, exist_ok=True)
+            path = os.path.join(sl.SESSION_LOG_DIR, "huge.log")
             # Write a log larger than the small cap we patch in for the test.
             with open(path, "w") as fh:
                 fh.write("line\n" * 50)

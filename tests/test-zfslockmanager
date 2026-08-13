@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 # shellcheck disable=SC1090,SC2034,SC2154
 # test-zfslockmanager — Adapted from zfslockmanager-test for the test harness.
-# Requires root because the lock manager uses /run/lock/zfs by default.
+# Requires root because the lock manager uses /run/lock/zfsutilities by default.
 # To avoid interfering with production locks, tests use a temporary lock directory.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"

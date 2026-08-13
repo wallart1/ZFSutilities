@@ -2,7 +2,6 @@
 
 import os
 import sys
-import tempfile
 import threading
 import time
 import unittest
@@ -352,7 +351,7 @@ class TestScrubStatePersistence(unittest.TestCase):
     """load_scrub_state / save_scrub_state round trips."""
 
     def test_load_missing_returns_defaults(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with temp_config_dir() as tmpdir:
             path = os.path.join(tmpdir, "scrub_state.json")
             with patch.object(feature_config, "SCRUB_STATE_PATH", path):
                 data = feature_config.load_scrub_state()
@@ -363,7 +362,7 @@ class TestScrubStatePersistence(unittest.TestCase):
         self.assertEqual(data["target"], 1)
 
     def test_save_then_load_round_trips(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with temp_config_dir() as tmpdir:
             path = os.path.join(tmpdir, "scrub_state.json")
             with patch.object(feature_config, "SCRUB_STATE_PATH", path):
                 feature_config.save_scrub_state(
@@ -382,7 +381,7 @@ class TestScrubStatePersistence(unittest.TestCase):
         self.assertEqual(data["target"], 3)
 
     def test_load_corrupt_file_returns_defaults(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with temp_config_dir() as tmpdir:
             path = os.path.join(tmpdir, "scrub_state.json")
             with open(path, "w") as fh:
                 fh.write("not json")
@@ -391,7 +390,7 @@ class TestScrubStatePersistence(unittest.TestCase):
         self.assertEqual(data["pending"], [])
 
     def test_load_non_list_buckets_default_to_empty_lists(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with temp_config_dir() as tmpdir:
             path = os.path.join(tmpdir, "scrub_state.json")
             with open(path, "w") as fh:
                 import json

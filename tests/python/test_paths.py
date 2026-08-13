@@ -27,7 +27,7 @@ class TestPathDefaults(unittest.TestCase):
         self.assertEqual(paths.get_run_dir(), "/run/zfsutilities")
 
     def test_lock_dir_default(self):
-        self.assertEqual(paths.get_lock_dir(), "/run/lock/zfs")
+        self.assertEqual(paths.get_lock_dir(), "/run/lock/zfsutilities")
 
     def test_config_path_default(self):
         self.assertEqual(paths.get_config_path(), "/var/lib/zfsutilities/config.json")
@@ -81,7 +81,7 @@ class TestPathDefaults(unittest.TestCase):
         self.assertEqual(paths.get_cron_file_path(), "/etc/cron.d/zfsutilities")
 
     def test_profile_lock_dir_default(self):
-        self.assertEqual(paths.get_profile_lock_dir(), "/run/lock/zfs/profiles")
+        self.assertEqual(paths.get_profile_lock_dir(), "/run/lock/zfsutilities/profiles")
 
 
 class TestUserPaths(unittest.TestCase):

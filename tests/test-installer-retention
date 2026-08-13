@@ -10,9 +10,19 @@ INSTALLER_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/installer-li
 [[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
 source "$INSTALLER_LIB"
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_SRC="$REPO_ROOT/python"
+
 _ensure_retention_profiles() {
     # Redirect normal output so the test harness stays quiet.
     ensure_retention_profiles >/dev/null 2>&1
+}
+
+_setup_lock_dir() {
+    local tmpdir="$1"
+    mkdir -p "$tmpdir/locks"
+    export ZFSUTILITIES_LOCK_DIR="$tmpdir/locks"
+    export ZFSUTILITIES_PYTHON_SRC="$PYTHON_SRC"
 }
 
 _get_retention_keys() {
@@ -24,10 +34,11 @@ test_new_install_creates_default_only() {
     local tmpdir
     tmpdir=$(mktemp -d)
     export ZFSCONFIG_PATH="$tmpdir/zfsutilities.json"
+    _setup_lock_dir "$tmpdir"
     _ensure_retention_profiles
     local keys
     keys=$(_get_retention_keys "$ZFSCONFIG_PATH")
-    unset ZFSCONFIG_PATH
+    unset ZFSCONFIG_PATH ZFSUTILITIES_LOCK_DIR ZFSUTILITIES_PYTHON_SRC
     rm -rf "$tmpdir"
     if [[ "$keys" == "default" ]]; then
         test_pass
@@ -41,6 +52,7 @@ test_existing_config_preserves_user_profiles() {
     local tmpdir
     tmpdir=$(mktemp -d)
     export ZFSCONFIG_PATH="$tmpdir/zfsutilities.json"
+    _setup_lock_dir "$tmpdir"
     python3 -c "
 import json
 cfg = {'retention': {
@@ -53,7 +65,7 @@ with open('$ZFSCONFIG_PATH', 'w') as f:
     _ensure_retention_profiles
     local keys
     keys=$(_get_retention_keys "$ZFSCONFIG_PATH")
-    unset ZFSCONFIG_PATH
+    unset ZFSCONFIG_PATH ZFSUTILITIES_LOCK_DIR ZFSUTILITIES_PYTHON_SRC
     rm -rf "$tmpdir"
     if [[ "$keys" == *"tank"* && "$keys" == *"default"* ]]; then
         test_pass
@@ -67,6 +79,7 @@ test_existing_config_missing_default_adds_default() {
     local tmpdir
     tmpdir=$(mktemp -d)
     export ZFSCONFIG_PATH="$tmpdir/zfsutilities.json"
+    _setup_lock_dir "$tmpdir"
     python3 -c "
 import json
 cfg = {'retention': {'tank': [{'name': 'd', 'retain': 7, 'minage': 0}]}}
@@ -76,7 +89,7 @@ with open('$ZFSCONFIG_PATH', 'w') as f:
     _ensure_retention_profiles
     local keys
     keys=$(_get_retention_keys "$ZFSCONFIG_PATH")
-    unset ZFSCONFIG_PATH
+    unset ZFSCONFIG_PATH ZFSUTILITIES_LOCK_DIR ZFSUTILITIES_PYTHON_SRC
     rm -rf "$tmpdir"
     if [[ "$keys" == *"default"* && "$keys" == *"tank"* ]]; then
         test_pass

@@ -26,9 +26,10 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk
+from test_support import mock_gtk, temp_config_dir
 
 with mock_gtk():
+    import log_index as li
     import logs_page as lp
 
 
@@ -646,18 +647,19 @@ class TestScanLogStatus(unittest.TestCase):
 
 class TestLogIndexIntegration(unittest.TestCase):
     def test_scan_logs_creates_persistent_index(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_profile-x.log")
-            with open(path, "w") as fh:
-                fh.write(
-                    "2026-06-22 07:00:00  /a:1: WARN: host down\n"
-                    "# END: rc=0, duration=5.5s, bytes=2048\n"
-                )
+        with tempfile.TemporaryDirectory() as tmpdir, temp_config_dir():
+            with patch.object(lp, "SESSION_LOG_DIR", tmpdir):
+                os.makedirs(li.SESSION_LOG_DIR, exist_ok=True)
+                path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_profile-x.log")
+                with open(path, "w") as fh:
+                    fh.write(
+                        "2026-06-22 07:00:00  /a:1: WARN: host down\n"
+                        "# END: rc=0, duration=5.5s, bytes=2048\n"
+                    )
 
-            with _patch_log_dir(tmpdir):
                 app = _make_scan_app()
                 rows = lp._scan_logs(app)
-                index_path = os.path.join(tmpdir, ".log_index.json")
+                index_path = os.path.join(li.SESSION_LOG_DIR, ".log_index.json")
                 self.assertTrue(os.path.exists(index_path))
 
                 # Second scan should reuse the cached index and produce the same row.

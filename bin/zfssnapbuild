@@ -8,8 +8,8 @@
 
 # Paths for the global snapshot-name reservation mechanism. These can be
 # overridden by callers/tests via environment variables.
-SNAPNAME_LOCK="${SNAPNAME_LOCK:-/run/lock/zfs/.snapname.lock}"
-SNAPNAME_RESERVED="${SNAPNAME_RESERVED:-/run/lock/zfs/.snapname.reserved}"
+SNAPNAME_LOCK="${SNAPNAME_LOCK:-/run/lock/zfsutilities/.snapname.lock}"
+SNAPNAME_RESERVED="${SNAPNAME_RESERVED:-/run/lock/zfsutilities/.snapname.reserved}"
 SNAPNAME_RESERVE_SECONDS="${SNAPNAME_RESERVE_SECONDS:-60}"
 
 function buildsnapfilename {

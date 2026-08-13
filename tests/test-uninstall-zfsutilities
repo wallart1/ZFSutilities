@@ -53,8 +53,8 @@ _setup_uninstall_env() {
     export ZFSUTILITIES_CACHE_DIR="$_tmpdir/root/.cache/zfsutilities"
     export ZFSUTILITIES_LOG_DIR="$_tmpdir/var/log/zfsutilities"
     export ZFSUTILITIES_CRON_FILE="$_tmpdir/etc/cron.d/zfsutilities"
-    export ZFSUTILITIES_PROFILE_LOCK_DIR="$_tmpdir/run/lock/zfs/profiles"
-    export ZFSUTILITIES_ZFSLOCK_DIR="$_tmpdir/run/lock/zfs"
+    export ZFSUTILITIES_PROFILE_LOCK_DIR="$_tmpdir/run/lock/zfsutilities/profiles"
+    export ZFSUTILITIES_ZFSLOCK_DIR="$_tmpdir/run/lock/zfsutilities"
     export ZFSUTILITIES_SYSTEMD_DIR="$_tmpdir/etc/systemd/system"
     export ZFSUTILITIES_ISCSI_ENCRYPTED_CONF="$_tmpdir/etc/iscsi-encrypted-luns.conf"
     export ZFSUTILITIES_LUKS_KEYFILE="$_tmpdir/root/.luks-key"
@@ -65,7 +65,7 @@ _setup_uninstall_env() {
         "$_tmpdir/etc/zfsutilities" "$_tmpdir/etc/cron.d" \
         "$_tmpdir/usr/local/lib" "$_tmpdir/usr/local/bin" \
         "$_tmpdir/etc/systemd/system" \
-        "$_tmpdir/run/lock/zfs/profiles" "$_tmpdir/run/lock/zfs" \
+        "$_tmpdir/run/lock/zfsutilities/profiles" "$_tmpdir/run/lock/zfsutilities" \
         "$_tmpdir/var/lib/zfsutilities" "$_tmpdir/var/lib/zfsutilities/profiles" \
         "$_tmpdir/root/.config/zfsutilities" "$_tmpdir/root/.cache/zfsutilities" \
         "$_tmpdir/var/log/zfsutilities"

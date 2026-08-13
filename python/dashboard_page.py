@@ -10,6 +10,7 @@ import threading
 from datetime import datetime
 
 import gi
+import paths
 
 gi.require_version("Gtk", "3.0")
 from backup_history import load_history
@@ -108,10 +109,10 @@ _CAP_RE = re.compile(r"^\s*(\d+)\s*%")
 _ENCRYPTED_LUN_RE = re.compile(r"^([^#\s][^:]*):([^:]+):(.+)$")
 
 
-ZFSLOCK_DIR = "/run/lock/zfs"
+ZFSLOCK_DIR = paths.get_lock_dir()
 ZFSLOCK_LOCKS_DIR = os.path.join(ZFSLOCK_DIR, ".locks")
 ZFSLOCK_PIDS_DIR = os.path.join(ZFSLOCK_DIR, ".pids")
-PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles")
+PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", paths.get_profile_lock_dir())
 
 
 def _read_json_lock(lock_path):
@@ -746,7 +747,7 @@ def _get_iscsi_missing_luns():
 
 
 def _count_stale_locks():
-    """Check /run/lock/zfs/.locks/ for stale entries.
+    """Check /run/lock/zfsutilities/.locks/ for stale entries.
 
     A lock is stale if its owning PID is no longer alive.
     Returns the count of stale locks.

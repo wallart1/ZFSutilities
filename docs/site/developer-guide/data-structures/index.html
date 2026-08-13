@@ -2158,9 +2158,9 @@ place.</p>
 <h2 id="snapshot-name-reservation">Snapshot-name reservation<a class="headerlink" href="#snapshot-name-reservation" title="Permanent link">&para;</a></h2>
 <p>To prevent two concurrent jobs from generating a snapshot name at the exact same
 instant, both <code>zfssnapbuild</code> and <code>feature_config.generate_snapshot_name()</code> acquire
-a brief global lock (<code>/run/lock/zfs/.snapname.lock</code>) while building the name and
+a brief global lock (<code>/run/lock/zfsutilities/.snapname.lock</code>) while building the name and
 recording it in a one-minute reservation file
-(<code>/run/lock/zfs/.snapname.reserved</code>). The reservation records the most recently
+(<code>/run/lock/zfsutilities/.snapname.reserved</code>). The reservation records the most recently
 issued name for each label/bucket with a timestamp; stale entries expire after 60
 seconds. The lock is released immediately after the reservation is written.</p>
 <h2 id="fss-table-in-memory-rows-from-zfscheckagainst-json"><code>fss</code> table (in-memory rows from <a href="../../commands-and-modules/modules/#zfscheckagainst">zfscheckagainst</a> JSON)<a class="headerlink" href="#fss-table-in-memory-rows-from-zfscheckagainst-json" title="Permanent link">&para;</a></h2>
@@ -3060,7 +3060,7 @@ or interrupted scrub run.</p>
 reboot starts fresh.</p>
 <h2 id="lock-files">Lock files<a class="headerlink" href="#lock-files" title="Permanent link">&para;</a></h2>
 <p>Written by <a href="../../commands-and-modules/modules/#zfslockmanager"><code>zfslockmanager</code></a>
-under <code>/run/lock/zfs/.locks/</code>:</p>
+under <code>/run/lock/zfsutilities/.locks/</code>:</p>
 <div class="highlight"><pre><span></span><code>&lt;path-encoded-dataset&gt;.&lt;type&gt;.&lt;pid&gt;.&lt;lock-id&gt;
 </code></pre></div>
 <p>Cleared automatically at reboot (tmpfs). Path separators and special
@@ -3100,7 +3100,7 @@ characters in dataset names are URL-encoded (<code>%2F</code> for <code>/</code>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.3
+      ZFS Utilities v0.83.4
     </div>
   
   
@@ -3125,7 +3125,7 @@ characters in dataset names are URL-encoded (<code>%2F</code> for <code>/</code>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.3"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.4"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

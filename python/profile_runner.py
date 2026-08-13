@@ -16,6 +16,8 @@ import time
 from contextlib import nullcontext
 from datetime import datetime, timezone
 
+import paths
+
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
@@ -67,7 +69,7 @@ from scrub_manager import (
 from zfs_repository import is_dataset_encrypted
 
 # Directory for per-profile advisory locks. Override for testing.
-PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", "/run/lock/zfs/profiles")
+PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", paths.get_profile_lock_dir())
 
 # How long to wait for an already-running instance of the same profile before
 # giving up. Overridable via environment so no host-specific value is hard-coded.

@@ -789,7 +789,7 @@ log_msg("DEBUG: variable =", value)
   performs its read-modify-write under a single exclusive lock so concurrent
   runners cannot lose history entries.
 - Phase 5 profile-level concurrency: Added per-profile advisory locks in
-  `profile_runner.py` under `/run/lock/zfs/profiles/<profile>.lock`. A second
+  `profile_runner.py` under `/run/lock/zfsutilities/profiles/<profile>.lock`. A second
   invocation of the same profile exits 0 without running, so cron does not mail
   on the expected duplicate-run case. The Dashboard Running Tasks list now shows
   "Profile" entries and warns when a profile is active. The lock directory is

@@ -13,7 +13,7 @@ class TestLockPathDefaults(unittest.TestCase):
     """Default lock paths live under the centralized lock directory."""
 
     def _expected_default_dir(self):
-        return "/run/lock/zfs"
+        return "/run/lock/zfsutilities"
 
     def test_config_lock_path_default(self):
         expected = os.path.join(self._expected_default_dir(), ".config.lock")

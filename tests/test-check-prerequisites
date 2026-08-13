@@ -127,7 +127,17 @@ EOF
     chmod +x "$tmp_bin/dpkg"
 
     # pveversion is handled by the caller via PATH order; we leave it absent here.
-    PATH="$tmp_bin:$PATH" "$PREREQ_SCRIPT" "$@"
+    local maybe_fakeroot=()
+    if [[ $EUID -ne 0 ]]; then
+        if command -v fakeroot >/dev/null 2>&1; then
+            maybe_fakeroot=(fakeroot)
+        else
+            rm -rf "$tmp_bin"
+            return 255
+        fi
+    fi
+
+    PATH="$tmp_bin:$PATH" "${maybe_fakeroot[@]}" "$PREREQ_SCRIPT" "$@"
     local rc=$?
     rm -rf "$tmp_bin"
     return $rc
@@ -137,8 +147,13 @@ test_proxmox_absent_warning() {
     test_start "Proxmox absence produces informational warning, not failure"
 
     local output rc
-    output=$(run_check_prerequisites_with_mock_env --single-node 2>&1) || true
+    output=$(run_check_prerequisites_with_mock_env --single-node 2>&1)
     rc=$?
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
 
     # Should exit 0 because Proxmox is optional.
     if [[ $rc -ne 0 ]]; then
@@ -189,7 +204,17 @@ EOF
     chmod +x "$tmp_bin/pveversion"
 
     local output rc
-    output=$(PATH="$tmp_bin:$PATH" "$PREREQ_SCRIPT" --single-node 2>&1) || true
+    local maybe_fakeroot=()
+    if [[ $EUID -ne 0 ]]; then
+        if command -v fakeroot >/dev/null 2>&1; then
+            maybe_fakeroot=(fakeroot)
+        else
+            rm -rf "$tmp_bin"
+            test_skip "Requires root or fakeroot"
+            return
+        fi
+    fi
+    output=$(PATH="$tmp_bin:$PATH" "${maybe_fakeroot[@]}" "$PREREQ_SCRIPT" --single-node 2>&1)
     rc=$?
 
     rm -rf "$tmp_bin"

@@ -2024,7 +2024,7 @@ three lock types on ZFS datasets:</p>
 </tr>
 </tbody>
 </table>
-<p>Locks are stored in <code>/run/lock/zfs/.locks/</code> and are automatically released on
+<p>Locks are stored in <code>/run/lock/zfsutilities/.locks/</code> and are automatically released on
 process exit. The manager also detects hierarchical conflicts: a lock on
 <code>pool/parent</code> blocks conflicting locks on descendants, and locks on descendants
 block a parent <code>x</code> lock.</p>
@@ -2164,7 +2164,7 @@ while still serializing two restores targeting the same destination.</p>
 <h3 id="4-snapshot-name-collisions">4. Snapshot-name collisions<a class="headerlink" href="#4-snapshot-name-collisions" title="Permanent link">&para;</a></h3>
 <p>Snapshot names are generated from the current minute. Both bash and Python
 generators now serialize name generation with a brief global lock and record the
-issued name in a one-minute reservation file (<code>/run/lock/zfs/.snapname.reserved</code>).</p>
+issued name in a one-minute reservation file (<code>/run/lock/zfsutilities/.snapname.reserved</code>).</p>
 <ul>
 <li>Bash callers use <code>zfssnapbuild</code>, which writes <code>/run/zfsutilities/nextsnap_&lt;caller&gt;</code>.</li>
 <li>Python callers use <code>feature_config.generate_snapshot_name()</code> and
@@ -2196,25 +2196,25 @@ interoperate.</p>
 <td><code>/var/lib/zfsutilities/config.json</code></td>
 <td>GUI (<code>save_config</code>), <code>zfsconfig</code> bash helper</td>
 <td>Bash scripts via <code>zfsconfig</code>, <code>profile_runner.py</code> at startup</td>
-<td><code>/run/lock/zfs/.config.lock</code></td>
+<td><code>/run/lock/zfsutilities/.config.lock</code></td>
 </tr>
 <tr>
 <td><code>/var/lib/zfsutilities/history.json</code></td>
 <td><code>BackupRunner._finish()</code>, <code>profile_runner.py</code></td>
 <td>Logs tab, dashboard</td>
-<td><code>/run/lock/zfs/.history.lock</code></td>
+<td><code>/run/lock/zfsutilities/.history.lock</code></td>
 </tr>
 <tr>
 <td><code>/var/log/zfsutilities/sessions/.log_index.json</code></td>
 <td><code>BackupRunner</code>, <code>profile_runner.py</code>, Logs tab</td>
 <td>Logs tab</td>
-<td><code>/run/lock/zfs/.log_index.lock</code></td>
+<td><code>/run/lock/zfsutilities/.log_index.lock</code></td>
 </tr>
 <tr>
 <td><code>/var/lib/zfsutilities/scrub_state.json</code></td>
 <td><code>ScrubQueue</code></td>
 <td><code>ScrubQueue</code> on restart</td>
-<td><code>/run/lock/zfs/.scrub_state.lock</code></td>
+<td><code>/run/lock/zfsutilities/.scrub_state.lock</code></td>
 </tr>
 </tbody>
 </table>
@@ -2457,9 +2457,9 @@ profile while the first is still running.</li>
 <ul>
 <li>Both <code>zfssnapbuild</code> and <code>feature_config.generate_snapshot_name()</code> /
   <code>generate_offsite_snapshot_name()</code> acquire a brief global lock
-  (<code>/run/lock/zfs/.snapname.lock</code>) while building a name.</li>
+  (<code>/run/lock/zfsutilities/.snapname.lock</code>) while building a name.</li>
 <li>Each generated name is recorded in a one-minute reservation file
-  (<code>/run/lock/zfs/.snapname.reserved</code>) shared between bash and Python.</li>
+  (<code>/run/lock/zfsutilities/.snapname.reserved</code>) shared between bash and Python.</li>
 <li>The existing snapshot naming format is unchanged.</li>
 </ul>
 <h2 id="recently-resolved-phase-6">Recently resolved (Phase 6)<a class="headerlink" href="#recently-resolved-phase-6" title="Permanent link">&para;</a></h2>
@@ -2546,7 +2546,7 @@ snapshot.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.3
+      ZFS Utilities v0.83.4
     </div>
   
   
@@ -2571,7 +2571,7 @@ snapshot.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.3"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.4"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

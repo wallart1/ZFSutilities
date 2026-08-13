@@ -1872,7 +1872,7 @@ Lock types: `r` (shared read), `w` (exclusive write), `x` (exclusive destroy).
 
 | Structure                                                      | Reference                         |
 | -------------------------------------------------------------- | --------------------------------- |
-| [Lock files](../developer-guide/data-structures.md#lock-files) | Read from `/run/lock/zfs/.locks/` |
+| [Lock files](../developer-guide/data-structures.md#lock-files) | Read from `/run/lock/zfsutilities/.locks/` |
 
 See also: [`zfslockmanager`](modules.md#zfslockmanager).
 
@@ -1886,7 +1886,7 @@ See also: [`zfslockmanager`](modules.md#zfslockmanager).
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| Lock files | Read from and removed under `/run/lock/zfs/.locks/` | [Lock files](../developer-guide/data-structures.md#lock-files) |
+| Lock files | Read from and removed under `/run/lock/zfsutilities/.locks/` | [Lock files](../developer-guide/data-structures.md#lock-files) |
 
 
 **Return codes:**
@@ -1931,7 +1931,7 @@ sudo zfslockmanager-test
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| Lock files | Created, read, and removed under `/run/lock/zfs/.locks/` during tests | [Lock files](../developer-guide/data-structures.md#lock-files) |
+| Lock files | Created, read, and removed under `/run/lock/zfsutilities/.locks/` during tests | [Lock files](../developer-guide/data-structures.md#lock-files) |
 
 All 33 tests should pass.
 

@@ -476,7 +476,7 @@ Live compilation of issues that need attention:
 - Pools with an active ZFS checkpoint
 - Missing backup/offsite/checkagainst configuration
 - Unregistered pools
-- Stale lock files in `/run/lock/zfs/.locks/`
+- Stale lock files in `/run/lock/zfsutilities/.locks/`
 
 ### Pool Health
 

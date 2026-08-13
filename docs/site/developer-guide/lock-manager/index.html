@@ -2075,7 +2075,7 @@
 <p>A hierarchical dataset lock manager for ZFS utilities that prevents conflicting operations on datasets, with support for multiple lock types, stale lock detection, and interactive conflict resolution.</p>
 <h2 id="design-points">Design Points<a class="headerlink" href="#design-points" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Lock storage</strong>: <code>/run/lock/zfs/</code> (cleared on reboot)</li>
+<li><strong>Lock storage</strong>: <code>/run/lock/zfsutilities/</code> (cleared on reboot)</li>
 <li><strong>Stale detection</strong>: PID-based (check if process exists) + EXIT traps</li>
 <li><strong>CLI tool</strong>: <a href="../../commands-and-modules/commands/#zfslockctl">zfslockctl</a> for manual lock management</li>
 <li><strong>Chain awareness</strong>: Independent (no checkagainst integration for now)</li>
@@ -2125,7 +2125,7 @@
 <li>Any lock on child → blocks <code>x</code> on ancestors</li>
 </ul>
 <h2 id="lock-file-structure">Lock File Structure<a class="headerlink" href="#lock-file-structure" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>/run/lock/zfs/
+<div class="highlight"><pre><span></span><code>/run/lock/zfsutilities/
 ├── .locks/                    # Lock data files
 │   ├── pool.lock
 │   ├── pool%2Fdataset.lock    # URL-encoded paths
@@ -2262,7 +2262,7 @@ this as a request to abort the entire operation.</p>
 <span class="w">    </span><span class="k">done</span>
 
 <span class="w">    </span><span class="c1"># Check descendants (glob lock files matching prefix)</span>
-<span class="w">    </span><span class="k">for</span><span class="w"> </span>lockfile<span class="w"> </span><span class="k">in</span><span class="w"> </span>/run/lock/zfs/.locks/<span class="s2">&quot;</span><span class="si">${</span><span class="nv">dataset_encoded</span><span class="si">}</span><span class="s2">&quot;</span>*<span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span>lockfile<span class="w"> </span><span class="k">in</span><span class="w"> </span>/run/lock/zfsutilities/.locks/<span class="s2">&quot;</span><span class="si">${</span><span class="nv">dataset_encoded</span><span class="si">}</span><span class="s2">&quot;</span>*<span class="p">;</span><span class="w"> </span><span class="k">do</span>
 <span class="w">        </span><span class="k">if</span><span class="w"> </span>zfslock_conflicts<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$lockfile</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$type</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;descendant&quot;</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
 <span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="m">1</span>
 <span class="w">        </span><span class="k">fi</span>
@@ -2393,7 +2393,7 @@ deterministic order to avoid deadlocks. Use:</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.3
+      ZFS Utilities v0.83.4
     </div>
   
   
@@ -2418,7 +2418,7 @@ deterministic order to avoid deadlocks. Use:</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.3"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.4"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

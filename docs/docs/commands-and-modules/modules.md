@@ -235,7 +235,7 @@ source "$(find_zfsutility_script paths.sh)"
 | `ZFSUTILITIES_STATE_DIR` | `/var/lib/zfsutilities` | Persistent runtime-state directory |
 | `ZFSUTILITIES_LOG_DIR` | `/var/log/zfsutilities` | Log directory |
 | `ZFSUTILITIES_RUN_DIR` | `/run/zfsutilities` | Transient runtime-state directory |
-| `ZFSUTILITIES_LOCK_DIR` | `/run/lock/zfs` | Advisory-lock directory |
+| `ZFSUTILITIES_LOCK_DIR` | `/run/lock/zfsutilities` | Advisory-lock directory |
 | `ZFSUTILITIES_SYSTEM_CONFIG_DIR` | `/etc/zfsutilities` | System administrator config directory |
 | `ZFSUTILITIES_CONFIG_PATH` | `${STATE_DIR}/config.json` | Main JSON config file |
 | `ZFSUTILITIES_HISTORY_PATH` | `${STATE_DIR}/history.json` | Backup-history JSON file |
@@ -953,7 +953,7 @@ zfslock_check <dataset> <type>                    # 0=no conflict, 1=conflict
 
 Lock types: `r` (shared read), `w` (exclusive write), `x` (exclusive destroy).
 
-Lock files are stored in `/run/lock/zfs/.locks/` (cleared on reboot).
+Lock files are stored in `/run/lock/zfsutilities/.locks/` (cleared on reboot).
 
 **Globals:** none.
 
@@ -973,7 +973,7 @@ releases it.
 
 **Internal flow / algorithm:**
 
-1. `zfslock_init` creates `/run/lock/zfs/.locks/` and `/run/lock/zfs/.pids/`
+1. `zfslock_init` creates `/run/lock/zfsutilities/.locks/` and `/run/lock/zfsutilities/.pids/`
    and installs an `EXIT` trap that calls `zfslock_release_all`.
 2. Each lock is stored as a JSON file named
    `<path-encoded-dataset>.<type>.<pid>.<lock-id>.lock` under `.locks/`.
@@ -1000,7 +1000,7 @@ releases it.
 
 | Structure                                                      | Reference                             |
 | -------------------------------------------------------------- | ------------------------------------- |
-| [Lock files](../developer-guide/data-structures.md#lock-files) | On-disk under `/run/lock/zfs/.locks/` |
+| [Lock files](../developer-guide/data-structures.md#lock-files) | On-disk under `/run/lock/zfsutilities/.locks/` |
 
 **Return codes:**
 
@@ -1379,7 +1379,7 @@ Format: `@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>`
 2. If the snapfile exists and contains a snapshot name, prompt the user to
    reuse it. Reusing keeps incremental chains stable across interrupted runs.
 3. If reuse is declined, delete the snapfile and generate a new name.
-4. Acquire the global snapshot-name lock (`/run/lock/zfs/.snapname.lock`). The
+4. Acquire the global snapshot-name lock (`/run/lock/zfsutilities/.snapname.lock`). The
    lock is held only while the name is being generated and recorded.
 5. Normalize `$label`: default to `@dailybackup`, ensure it starts with `@`.
 6. Compute the bucket if `$bucket` is unset:
@@ -1388,7 +1388,7 @@ Format: `@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>`
     - `d` otherwise.
     - Hard-code `s` when the label is `@offsite`.
 7. Build the name as `@<label>-<ISO-8601-minutes>-<bucket>`, record it in the
-   one-minute reservation file (`/run/lock/zfs/.snapname.reserved`), release the
+   one-minute reservation file (`/run/lock/zfsutilities/.snapname.reserved`), release the
    lock, write the name to the snapfile, and print it.
 8. `removesnapfile` deletes the snapfile; orchestrators such as
    `zfsdailybackup` call it after a successful run.

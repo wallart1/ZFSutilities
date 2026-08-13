@@ -598,7 +598,9 @@ ensure_retention_profiles() {
     lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
     local python_src
-    if [[ -d "/usr/local/lib/zfsutilities/current/python" ]]; then
+    if [[ -n "${ZFSUTILITIES_PYTHON_SRC:-}" ]]; then
+        python_src="$ZFSUTILITIES_PYTHON_SRC"
+    elif [[ -d "/usr/local/lib/zfsutilities/current/python" ]]; then
         python_src="/usr/local/lib/zfsutilities/current/python"
     else
         python_src="$(cd "$lib_dir/../python" && pwd)"

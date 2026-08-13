@@ -2,7 +2,7 @@
 
 This module reads and writes the same JSON lock files as the bash
 `zfslockmanager` so that Python GUI operations can participate in the same
-hierarchical locking scheme.  Locks are stored under `/run/lock/zfs/` by
+hierarchical locking scheme.  Locks are stored under `/run/lock/zfsutilities/` by
 default; the base directory can be overridden with the `ZFSLOCK_DIR`
 environment variable for testing.
 """
@@ -23,7 +23,7 @@ from backup_config import log_msg
 # Constants and module state
 # ---------------------------------------------------------------------------
 
-ZFSLOCK_DIR = os.environ.get("ZFSLOCK_DIR", "/run/lock/zfs")
+ZFSLOCK_DIR = os.environ.get("ZFSLOCK_DIR", "/run/lock/zfsutilities")
 ZFSLOCK_LOCKS_DIR = os.path.join(ZFSLOCK_DIR, ".locks")
 ZFSLOCK_PIDS_DIR = os.path.join(ZFSLOCK_DIR, ".pids")
 

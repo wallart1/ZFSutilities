@@ -54,7 +54,7 @@ def get_run_dir() -> str:
 
 def get_lock_dir() -> str:
     """Return the advisory-lock directory."""
-    return _env_or_default("ZFSUTILITIES_LOCK_DIR", "/run/lock/zfs")
+    return _env_or_default("ZFSUTILITIES_LOCK_DIR", "/run/lock/zfsutilities")
 
 
 # ---------------------------------------------------------------------------

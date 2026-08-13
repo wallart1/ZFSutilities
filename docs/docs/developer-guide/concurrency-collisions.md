@@ -15,7 +15,7 @@ three lock types on ZFS datasets:
 | `w`  | Exclusive write (snapshots, send/receive) | `r`, `w`, `x` |
 | `x`  | Exclusive destroy (dataset/snapshot destruction) | `r`, `w`, `x` |
 
-Locks are stored in `/run/lock/zfs/.locks/` and are automatically released on
+Locks are stored in `/run/lock/zfsutilities/.locks/` and are automatically released on
 process exit. The manager also detects hierarchical conflicts: a lock on
 `pool/parent` blocks conflicting locks on descendants, and locks on descendants
 block a parent `x` lock.
@@ -104,7 +104,7 @@ while still serializing two restores targeting the same destination.
 
 Snapshot names are generated from the current minute. Both bash and Python
 generators now serialize name generation with a brief global lock and record the
-issued name in a one-minute reservation file (`/run/lock/zfs/.snapname.reserved`).
+issued name in a one-minute reservation file (`/run/lock/zfsutilities/.snapname.reserved`).
 
 * Bash callers use `zfssnapbuild`, which writes `/run/zfsutilities/nextsnap_<caller>`.
 * Python callers use `feature_config.generate_snapshot_name()` and
@@ -128,10 +128,10 @@ interoperate.
 
 | File | Writers | Readers | Lock file |
 |------|---------|---------|-----------|
-| `/var/lib/zfsutilities/config.json` | GUI (`save_config`), `zfsconfig` bash helper | Bash scripts via `zfsconfig`, `profile_runner.py` at startup | `/run/lock/zfs/.config.lock` |
-| `/var/lib/zfsutilities/history.json` | `BackupRunner._finish()`, `profile_runner.py` | Logs tab, dashboard | `/run/lock/zfs/.history.lock` |
-| `/var/log/zfsutilities/sessions/.log_index.json` | `BackupRunner`, `profile_runner.py`, Logs tab | Logs tab | `/run/lock/zfs/.log_index.lock` |
-| `/var/lib/zfsutilities/scrub_state.json` | `ScrubQueue` | `ScrubQueue` on restart | `/run/lock/zfs/.scrub_state.lock` |
+| `/var/lib/zfsutilities/config.json` | GUI (`save_config`), `zfsconfig` bash helper | Bash scripts via `zfsconfig`, `profile_runner.py` at startup | `/run/lock/zfsutilities/.config.lock` |
+| `/var/lib/zfsutilities/history.json` | `BackupRunner._finish()`, `profile_runner.py` | Logs tab, dashboard | `/run/lock/zfsutilities/.history.lock` |
+| `/var/log/zfsutilities/sessions/.log_index.json` | `BackupRunner`, `profile_runner.py`, Logs tab | Logs tab | `/run/lock/zfsutilities/.log_index.lock` |
+| `/var/lib/zfsutilities/scrub_state.json` | `ScrubQueue` | `ScrubQueue` on restart | `/run/lock/zfsutilities/.scrub_state.lock` |
 
 The following files are still not lock-protected because they are outside the
 scope of this phase:
@@ -301,9 +301,9 @@ Snapshot-name generation is now coordinated across bash and Python:
 
 * Both `zfssnapbuild` and `feature_config.generate_snapshot_name()` /
   `generate_offsite_snapshot_name()` acquire a brief global lock
-  (`/run/lock/zfs/.snapname.lock`) while building a name.
+  (`/run/lock/zfsutilities/.snapname.lock`) while building a name.
 * Each generated name is recorded in a one-minute reservation file
-  (`/run/lock/zfs/.snapname.reserved`) shared between bash and Python.
+  (`/run/lock/zfsutilities/.snapname.reserved`) shared between bash and Python.
 * The existing snapshot naming format is unchanged.
 
 ## Recently resolved (Phase 6)
