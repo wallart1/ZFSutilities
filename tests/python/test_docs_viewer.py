@@ -24,6 +24,27 @@ def _import_docs_viewer_fresh():
 class TestDocsViewerMain(unittest.TestCase):
     """Verify docs_viewer.main() launches the documentation viewer window."""
 
+    def test_import_sets_no_at_bridge(self):
+        """Importing the module disables the AT-SPI bridge to avoid warnings."""
+        with mock_gtk():
+            with patch.dict("os.environ", {}, clear=False):
+                os.environ.pop("NO_AT_BRIDGE", None)
+                dv = _import_docs_viewer_fresh()
+                self.assertEqual(os.environ.get("NO_AT_BRIDGE"), "1")
+
+        self.assertIn("docs_viewer", sys.modules)
+        self.assertIs(dv, sys.modules["docs_viewer"])
+
+    def test_import_preserves_existing_no_at_bridge(self):
+        """An existing NO_AT_BRIDGE value must not be overwritten."""
+        with mock_gtk():
+            with patch.dict("os.environ", {"NO_AT_BRIDGE": "0"}, clear=False):
+                dv = _import_docs_viewer_fresh()
+                self.assertEqual(os.environ.get("NO_AT_BRIDGE"), "0")
+
+        self.assertIn("docs_viewer", sys.modules)
+        self.assertIs(dv, sys.modules["docs_viewer"])
+
     def test_main_creates_window_and_starts_gtk_main(self):
         with mock_gtk() as gtk_mock:
             dv = _import_docs_viewer_fresh()

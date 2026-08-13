@@ -227,7 +227,13 @@ The **Help** menu contains:
 ### Documentation Viewer
 
 **Help → Documentation** opens a standalone window that renders the
-documentation website using an embedded browser. 
+documentation website using an embedded browser.
+
+!!! note "Pre-built content only"
+    The embedded viewer serves the last built copy of the documentation
+    (`docs/site/`). It does not auto-rebuild when source Markdown files change.
+    For live updates while editing, use `startdocserver` and a web browser as
+    described in [Documentation Server](../developer-guide/doc-server.md).
 
 The installer creates a symbolic link named **ZFSutilities Documentation**
 in the installing user's home directory. This can be used to open the documentation viewer independently of the GUI. Open the link directly, or run `zfsutilities-docs`; the documentation viewer does not require root.

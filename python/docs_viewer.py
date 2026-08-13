@@ -14,6 +14,13 @@ import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
 
+# Suppress the AT-SPI accessibility-bus warning that can appear when the
+# viewer is launched from a mixed-privilege or root-inherited environment
+# (for example, the home-directory symlink on a node where the GUI is
+# normally run as root). This only disables the accessibility bridge for
+# this process; it does not affect the editor or any other application.
+os.environ.setdefault("NO_AT_BRIDGE", "1")
+
 import gi
 
 gi.require_version("Gtk", "3.0")

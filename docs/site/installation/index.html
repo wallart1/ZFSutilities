@@ -2102,6 +2102,8 @@
   separate compute host running Proxmox VE VMs. The storage host does not need
   Proxmox VE.</li>
 </ul>
+<p>For an overview of all documentation sections, return to the
+<a href="../">ZFS Utilities home page</a>.</p>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
 <ul>
@@ -2180,12 +2182,14 @@ packages if they are missing:</p>
 <li>Prompt for your hostname (default: current hostname)</li>
 <li>Generate the installation configuration file <code>/etc/zfsutilities/node.conf</code> (legacy <code>/etc/zfsutilities-node.conf</code> also works)</li>
 <li>Deploy scripts as a <strong>versioned installation</strong> to <code>/usr/local/lib/zfsutilities/versions/&lt;version&gt;/</code></li>
-<li>Activate the version and wire it into active production:</li>
+<li>Activate the version and wire it into active production:<ul>
 <li>Configure <code>PATH</code> in <code>/etc/profile.d</code> and <code>/etc/sudoers.d</code></li>
 <li>Create the <code>/root/bashinit</code> symlink</li>
 <li>Create the <code>/usr/local/lib/zfsutilities/bin</code> symlink and library symlinks</li>
 <li>Create desktop shortcuts in the installing user's home directory:
-     <strong>ZFSutilities GUI</strong> and <strong>ZFSutilities Documentation</strong></li>
+  <strong>ZFSutilities GUI</strong> and <strong>ZFSutilities Documentation</strong></li>
+</ul>
+</li>
 </ol>
 <h3 id="two-node">Two-node<a class="headerlink" href="#two-node" title="Permanent link">&para;</a></h3>
 <p>Run on the <strong>storage host</strong> (the machine with the ZFS pools):</p>
@@ -2204,12 +2208,14 @@ packages if they are missing:</p>
 <li><strong>Create iSCSI targets</strong> on the storage host automatically (idempotent —
    skips targets that already exist)</li>
 <li>Deploy scripts as a <strong>versioned installation</strong> on both hosts via SSH</li>
-<li>Activate the version on both hosts and wire it into active production:</li>
+<li>Activate the version on both hosts and wire it into active production:<ul>
 <li>Configure <code>PATH</code> in <code>/etc/profile.d</code> and <code>/etc/sudoers.d</code></li>
 <li>Create the <code>/root/bashinit</code> symlink</li>
 <li>Create the <code>/usr/local/lib/zfsutilities/bin</code> symlink and library symlinks</li>
 <li>Create desktop shortcuts in the installing user's home directory:
-     <strong>ZFSutilities GUI</strong> and <strong>ZFSutilities Documentation</strong></li>
+  <strong>ZFSutilities GUI</strong> and <strong>ZFSutilities Documentation</strong></li>
+</ul>
+</li>
 <li>Verify SSH key authorization between hosts</li>
 <li><strong>Patch PVE's iSCSI rescan rate limit</strong> on the compute host when PVE is
     detected — limits automatic <code>iscsiadm --rescan</code> to once per day, which
@@ -2515,7 +2521,7 @@ sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.1
+      ZFS Utilities v0.83.2
     </div>
   
   
@@ -2540,7 +2546,7 @@ sudo<span class="w"> </span>python3<span class="w"> </span><span class="s1">&#39
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.2"}</script>
     
     
       <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>

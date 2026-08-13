@@ -863,6 +863,7 @@ class TestLogsPopoutToggle(unittest.TestCase):
         lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame, outer)
 
         outer.remove.assert_called_once_with(viewer_frame)
+        viewer_frame.remove.assert_called_once_with(viewer_box)
         app.logs_popout_window.box.pack_start.assert_called_once_with(viewer_box, True, True, 0)
         app.logs_popout_window.resize.assert_called_once_with(800, 600)
         app.logs_popout_window.move.assert_called_once_with(100, 200)
@@ -907,6 +908,8 @@ class TestLogsPopoutToggle(unittest.TestCase):
         lp._on_logs_popout_toggled(button, app, viewer_box, viewer_frame, outer)
 
         outer.remove.assert_called_once_with(viewer_frame)
+        viewer_frame.remove.assert_called_once_with(viewer_box)
+        app.logs_popout_window.box.pack_start.assert_called_once_with(viewer_box, True, True, 0)
         app.logs_popout_window.resize.assert_not_called()
         app.logs_popout_window.move.assert_not_called()
         app.logs_popout_window.show_all.assert_called_once()

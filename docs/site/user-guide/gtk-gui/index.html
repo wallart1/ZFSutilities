@@ -3119,7 +3119,14 @@ GUI Logs tab is not flooded with file-list progress from routine rsync jobs.</p>
 </table>
 <h3 id="documentation-viewer">Documentation Viewer<a class="headerlink" href="#documentation-viewer" title="Permanent link">&para;</a></h3>
 <p><strong>Help → Documentation</strong> opens a standalone window that renders the
-documentation website using an embedded browser. </p>
+documentation website using an embedded browser.</p>
+<div class="admonition note">
+<p class="admonition-title">Pre-built content only</p>
+<p>The embedded viewer serves the last built copy of the documentation
+(<code>docs/site/</code>). It does not auto-rebuild when source Markdown files change.
+For live updates while editing, use <code>startdocserver</code> and a web browser as
+described in <a href="../../developer-guide/doc-server/">Documentation Server</a>.</p>
+</div>
 <p>The installer creates a symbolic link named <strong>ZFSutilities Documentation</strong>
 in the installing user's home directory. This can be used to open the documentation viewer independently of the GUI. Open the link directly, or run <code>zfsutilities-docs</code>; the documentation viewer does not require root.</p>
 <p>The viewer window includes a toolbar:</p>
@@ -5228,7 +5235,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.1
+      ZFS Utilities v0.83.2
     </div>
   
   
@@ -5253,7 +5260,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.2"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

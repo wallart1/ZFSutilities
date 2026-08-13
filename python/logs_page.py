@@ -205,9 +205,12 @@ def _on_logs_popout_toggled(button, app, viewer_box, viewer_frame, outer):
     """Toggle the Logs tab viewer between the tab and a pop-out window."""
     if button.get_active():
         # Remove the entire viewer pane from the Logs tab and host it in the
-        # pop-out window.  Apply saved geometry before showing so the window
-        # manager honours the requested position.
+        # pop-out window.  viewer_box must be explicitly removed from its
+        # frame before it can be reparented into the pop-out window.
+        # Apply saved geometry before showing so the window manager honours
+        # the requested position.
         outer.remove(viewer_frame)
+        viewer_frame.remove(viewer_box)
         app.logs_popout_window.box.pack_start(viewer_box, True, True, 0)
         state = get_ui_state(app.config).get("logs_log_window", {})
         if state.get("width") and state.get("height"):

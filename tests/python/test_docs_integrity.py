@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import re
 import unittest
 
 from test_support import (
@@ -208,6 +209,78 @@ class TestPythonModulesReference(unittest.TestCase):
                 missing.append(module)
         if missing:
             self.fail(f"Documented Python modules missing from {PYTHON_SRC}: {missing}")
+
+
+class TestMarkdownListIndentation(unittest.TestCase):
+    def test_nested_lists_under_numbered_items_are_sufficiently_indented(self):
+        """Nested list markers under numbered items must be indented by 4.
+
+        MkDocs uses Python-Markdown with a tab length of 4. Any list item
+        inside a numbered-list tree must be indented at least 4 spaces past
+        its parent list item; otherwise Python-Markdown treats it as a
+        continuation of the ordered list, flattening the intended nested
+        structure and changing the rendered item counts.
+        """
+        list_marker_re = re.compile(r"^(\s*)(\d+\.\s+|[*+-]\s+)")
+        numbered_marker_re = re.compile(r"^(\s*)(\d+\.\s+)")
+        failures = []
+
+        for root, _dirs, files in os.walk(DOCS_DIR):
+            for fname in files:
+                if not fname.endswith(".md"):
+                    continue
+                path = os.path.join(root, fname)
+                with open(path, encoding="utf-8") as f:
+                    lines = f.readlines()
+
+                # Stack of (indent, content_indent, is_numbered, in_numbered_tree)
+                stack = []
+                for i, raw_line in enumerate(lines):
+                    line = raw_line.rstrip("\n")
+                    if not line.strip():
+                        continue
+
+                    m = list_marker_re.match(line)
+                    if m:
+                        indent = len(m.group(1))
+                        marker_text = m.group(2)
+                        marker_width = len(marker_text.rstrip())
+                        spaces_after = len(marker_text) - marker_width
+                        content_indent = indent + marker_width + spaces_after
+                        is_numbered = numbered_marker_re.match(line) is not None
+
+                        while stack and stack[-1][0] >= indent:
+                            stack.pop()
+
+                        in_numbered_tree = is_numbered or (
+                            bool(stack) and stack[-1][3]
+                        )
+
+                        if stack and in_numbered_tree and indent < stack[-1][0] + 4:
+                            rel = os.path.relpath(path, DOCS_DIR)
+                            failures.append(
+                                f"{rel}:{i + 1}: nested list marker at indent "
+                                f"{indent} must be at least "
+                                f"{stack[-1][0] + 4} (parent item indent "
+                                f"{stack[-1][0]} + 4)"
+                            )
+
+                        stack.append(
+                            (indent, content_indent, is_numbered, in_numbered_tree)
+                        )
+                    else:
+                        non_space_indent = len(line) - len(line.lstrip())
+                        if non_space_indent == 0 and line.strip():
+                            stack = []
+                        else:
+                            while stack and stack[-1][1] > non_space_indent:
+                                stack.pop()
+
+        if failures:
+            self.fail(
+                "Insufficiently indented nested lists found (will render as "
+                "flattened ordered lists):\n  " + "\n  ".join(failures)
+            )
 
 
 if __name__ == "__main__":

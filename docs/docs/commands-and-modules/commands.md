@@ -1495,10 +1495,10 @@ report the specific cause — holds, open files, iSCSI LUNs, running VMs, etc.
 2. Save the caller's filter state, then set `$includes`, `$excludes`, `$startwith` from arguments.
 3. Build `fsarray` bottom-up so descendants are destroyed before parents.
 4. For each dataset:
-   - Abort if any snapshot has clone dependents.
-   - In two-node mode, tear down matching iSCSI LUN/backstore for `vm-<N>-disk-<N>` zvols and record the teardown in `ISCSI_TEARDOWN`.
-   - Call `delallsnaps` with `releaseholds`.
-   - Run `zfs destroy`; on failure call `diagnose_dataset_busy` and abort.
+    - Abort if any snapshot has clone dependents.
+    - In two-node mode, tear down matching iSCSI LUN/backstore for `vm-<N>-disk-<N>` zvols and record the teardown in `ISCSI_TEARDOWN`.
+    - Call `delallsnaps` with `releaseholds`.
+    - Run `zfs destroy`; on failure call `diagnose_dataset_busy` and abort.
 5. Restore the caller's filter state.
 
 **Return codes:**
@@ -2470,10 +2470,10 @@ sudo zfssendoffsite "dryrun='Y'"
 2. Call `findoffsitepool` to select `z22tb` or `z40tb`.
 3. Apply overrides from `$1`.
 4. Execute enabled steps:
-   - Step 1: `temp` → `<offsite>`
-   - Step 2: `threeamigos` → `fivebays` (filtered to `proxmox`)
-   - Step 3: `NVME1` → `fivebays`
-   - Step 4: `fivebays` → `<offsite>` (filtered to `threeamigos/proxmox` and `NVME1/proxmox`)
+    - Step 1: `temp` → `<offsite>`
+    - Step 2: `threeamigos` → `fivebays` (filtered to `proxmox`)
+    - Step 3: `NVME1` → `fivebays`
+    - Step 4: `fivebays` → `<offsite>` (filtered to `threeamigos/proxmox` and `NVME1/proxmox`)
 5. After each successful step, call `applyholds` to place `offsite-<pool>` holds on source and destination snapshots.
 
 **Return codes:**

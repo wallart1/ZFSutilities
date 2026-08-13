@@ -2486,13 +2486,15 @@ sudo<span class="w"> </span>new-vm-disk<span class="w"> </span>threeamigos<span 
 <ol>
 <li>
 <p>In the Proxmox GUI: <strong>Create VM</strong> → set VM ID 300</p>
-</li>
+<ul>
 <li>
 <p>On the <strong>Disks</strong> step: select "No disk" or delete the default disk</p>
 </li>
 <li>
 <p>After creation: <strong>Hardware → Add → Hard Disk → iSCSI</strong> → select the
-     LUNs created in step 1</p>
+  LUNs created in step 1</p>
+</li>
+</ul>
 </li>
 <li>
 <p>Attach ISO, boot, install OS</p>
@@ -2508,30 +2510,25 @@ stores UEFI firmware variables (boot order, Secure Boot state, etc.).</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>new-vm-disk<span class="w"> </span>threeamigos<span class="w"> </span><span class="m">300</span><span class="w"> </span><span class="m">0</span><span class="w"> </span>EFI
 </code></pre></div>
 <p>The script will ask about Secure Boot:</p>
-<ul>
-<li><strong>y</strong> — pre-enroll Microsoft + distro keys (required for Windows 11)</li>
-<li>
-<p><strong>N</strong> — clean slate, Secure Boot off (simpler for Linux; can enable later)</p>
-</li>
-<li>
-<p>Create the boot and data disks as normal:</p>
-</li>
-</ul>
+<pre><code>- **y** — pre-enroll Microsoft + distro keys (required for Windows 11)
+- **N** — clean slate, Secure Boot off (simpler for Linux; can enable later)
+</code></pre>
+<ol>
+<li>Create the boot and data disks as normal:</li>
+</ol>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>new-vm-disk<span class="w"> </span>threeamigos<span class="w"> </span><span class="m">300</span><span class="w"> </span><span class="m">1</span><span class="w"> </span>50G<span class="w">    </span><span class="c1"># boot disk</span>
 sudo<span class="w"> </span>new-vm-disk<span class="w"> </span>threeamigos<span class="w"> </span><span class="m">300</span><span class="w"> </span><span class="m">2</span><span class="w"> </span>500G<span class="w">   </span><span class="c1"># data disk (optional)</span>
 </code></pre></div>
 <ol>
 <li>
 <p>In the Proxmox GUI: <strong>Create VM</strong> → set VM ID 300</p>
-</li>
-<li>
-<p>On the <strong>System</strong> tab: set BIOS to <strong>OVMF (UEFI)</strong> and <strong>uncheck</strong>
-     "Add EFI Disk" (the script already created and configured it)</p>
-</li>
+<ul>
+<li>On the <strong>System</strong> tab: set BIOS to <strong>OVMF (UEFI)</strong> and <strong>uncheck</strong>
+  "Add EFI Disk" (the script already created and configured it)</li>
 <li>On the <strong>Disks</strong> step: select "No disk" or delete the default disk</li>
-<li>
-<p>After creation: <strong>Hardware → Add → Hard Disk → iSCSI</strong> → select the
-     boot/data LUNs</p>
+<li>After creation: <strong>Hardware → Add → Hard Disk → iSCSI</strong> → select the
+  boot/data LUNs</li>
+</ul>
 </li>
 <li>
 <p>Attach ISO, boot, install OS</p>
@@ -2955,7 +2952,7 @@ hardware settings). For everything storage-related, use ZFSutilities:</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.1
+      ZFS Utilities v0.83.2
     </div>
   
   
@@ -2980,7 +2977,7 @@ hardware settings). For everything storage-related, use ZFSutilities:</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.2"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

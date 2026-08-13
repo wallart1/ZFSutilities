@@ -106,10 +106,10 @@ For most Linux VMs:
 
 2. In the Proxmox GUI: **Create VM** → set VM ID 300
    
-   - On the **Disks** step: select "No disk" or delete the default disk
+    - On the **Disks** step: select "No disk" or delete the default disk
    
-   - After creation: **Hardware → Add → Hard Disk → iSCSI** → select the
-     LUNs created in step 1
+    - After creation: **Hardware → Add → Hard Disk → iSCSI** → select the
+      LUNs created in step 1
 
 3. Attach ISO, boot, install OS
 
@@ -127,8 +127,8 @@ stores UEFI firmware variables (boot order, Secure Boot state, etc.).
    
    The script will ask about Secure Boot:
    
-   - **y** — pre-enroll Microsoft + distro keys (required for Windows 11)
-   - **N** — clean slate, Secure Boot off (simpler for Linux; can enable later)
+    - **y** — pre-enroll Microsoft + distro keys (required for Windows 11)
+    - **N** — clean slate, Secure Boot off (simpler for Linux; can enable later)
 
 2. Create the boot and data disks as normal:
    
@@ -139,11 +139,11 @@ stores UEFI firmware variables (boot order, Secure Boot state, etc.).
 
 3. In the Proxmox GUI: **Create VM** → set VM ID 300
    
-   - On the **System** tab: set BIOS to **OVMF (UEFI)** and **uncheck**
-     "Add EFI Disk" (the script already created and configured it)
-   - On the **Disks** step: select "No disk" or delete the default disk
-   - After creation: **Hardware → Add → Hard Disk → iSCSI** → select the
-     boot/data LUNs
+    - On the **System** tab: set BIOS to **OVMF (UEFI)** and **uncheck**
+      "Add EFI Disk" (the script already created and configured it)
+    - On the **Disks** step: select "No disk" or delete the default disk
+    - After creation: **Hardware → Add → Hard Disk → iSCSI** → select the
+      boot/data LUNs
 
 4. Attach ISO, boot, install OS
    

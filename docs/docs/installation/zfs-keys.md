@@ -6,6 +6,9 @@ removable USB device that is protected by LUKS full-disk encryption. This
 guide explains how to prepare the USB device, create keys, create encrypted
 zvols, and recover from a boot where the USB was not inserted.
 
+For an overview of all documentation sections, return to the
+[ZFS Utilities home page](../index.md).
+
 ## Overview
 
 ```

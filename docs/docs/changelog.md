@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.83.2
+
+*Released 2026-08-13*
+
+### Fixed
+
+- **Documentation viewer accessibility warning** — `python/docs_viewer.py` now
+  sets `NO_AT_BRIDGE=1` before initializing GTK, suppressing the
+  `Couldn't connect to accessibility bus` warning that could appear when the
+  viewer was launched from the home-directory symlink.
+- **Logs tab pop-out reparenting** — `python/logs_page.py` now explicitly
+  removes the viewer box from its parent frame before reparenting it into the
+  pop-out window, preventing GTK warnings when the log viewer is popped out.
+
+### Documentation
+
+- Fixed nested list indentation throughout the Markdown documentation so
+  ordered-list items containing nested bullets render correctly under MkDocs.
+- Added a docs-integrity test that enforces 4-space indentation for nested
+  list markers under numbered items.
+- Updated the documentation-server guide to clarify the three ways to view
+  docs (embedded GUI viewer, standalone viewer, and `startdocserver` live
+  reload) and to note that only `startdocserver` auto-rebuilds.
+
 ## 0.83.1
 
 *Released 2026-08-12*
@@ -22,6 +46,13 @@
   covering non-root load/save and root system-config save paths.
 - Added `TestUserPaths` to `tests/python/test_paths.py` for the new
   user-specific path helpers.
+
+### Fixed
+
+- **Documentation viewer accessibility warning** — `python/docs_viewer.py` now
+  sets `NO_AT_BRIDGE=1` before initializing GTK, suppressing the
+  `Couldn't connect to accessibility bus` warning that could appear when the
+  viewer was launched from the home-directory symlink.
 
 ## 0.83.0
 

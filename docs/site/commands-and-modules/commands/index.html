@@ -5236,11 +5236,13 @@ report the specific cause — holds, open files, iSCSI LUNs, running VMs, etc.</
 <li>Source the node config and determine <code>NODE_MODE</code>.</li>
 <li>Save the caller's filter state, then set <code>$includes</code>, <code>$excludes</code>, <code>$startwith</code> from arguments.</li>
 <li>Build <code>fsarray</code> bottom-up so descendants are destroyed before parents.</li>
-<li>For each dataset:</li>
+<li>For each dataset:<ul>
 <li>Abort if any snapshot has clone dependents.</li>
 <li>In two-node mode, tear down matching iSCSI LUN/backstore for <code>vm-&lt;N&gt;-disk-&lt;N&gt;</code> zvols and record the teardown in <code>ISCSI_TEARDOWN</code>.</li>
 <li>Call <code>delallsnaps</code> with <code>releaseholds</code>.</li>
 <li>Run <code>zfs destroy</code>; on failure call <code>diagnose_dataset_busy</code> and abort.</li>
+</ul>
+</li>
 <li>Restore the caller's filter state.</li>
 </ol>
 <p><strong>Return codes:</strong></p>
@@ -6969,11 +6971,13 @@ already exist.</p>
 <li>Set <code>label='@offsite'</code> and generate <code>$nextsnap</code>.</li>
 <li>Call <code>findoffsitepool</code> to select <code>z22tb</code> or <code>z40tb</code>.</li>
 <li>Apply overrides from <code>$1</code>.</li>
-<li>Execute enabled steps:</li>
+<li>Execute enabled steps:<ul>
 <li>Step 1: <code>temp</code> → <code>&lt;offsite&gt;</code></li>
 <li>Step 2: <code>threeamigos</code> → <code>fivebays</code> (filtered to <code>proxmox</code>)</li>
 <li>Step 3: <code>NVME1</code> → <code>fivebays</code></li>
 <li>Step 4: <code>fivebays</code> → <code>&lt;offsite&gt;</code> (filtered to <code>threeamigos/proxmox</code> and <code>NVME1/proxmox</code>)</li>
+</ul>
+</li>
 <li>After each successful step, call <code>applyholds</code> to place <code>offsite-&lt;pool&gt;</code> holds on source and destination snapshots.</li>
 </ol>
 <p><strong>Return codes:</strong></p>
@@ -7993,7 +7997,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.1
+      ZFS Utilities v0.83.2
     </div>
   
   
@@ -8018,7 +8022,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.2"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

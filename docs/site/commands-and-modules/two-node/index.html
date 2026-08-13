@@ -2363,12 +2363,14 @@ Produces a fully independent copy with no ongoing ZFS dependency on the source.<
 <li>Validate arguments and delegate to the compute host in two-node mode.</li>
 <li>Parse disk lines from the source VM config (single-node: <code>storage:vm-...</code>;
    two-node: iSCSI <code>by-path</code>).</li>
-<li>For each disk:</li>
+<li>For each disk:<ul>
 <li>Snapshot the source zvol as <code>@clone-to-&lt;dst&gt;</code>.</li>
 <li><code>zfs send | zfs receive</code> to a new destination zvol.</li>
 <li>Destroy the source and destination clone snapshots.</li>
 <li>In two-node mode, create an iSCSI backstore and LUN on the storage host.</li>
 <li>Add the new backstore to <code>expected-backstores.txt</code>.</li>
+</ul>
+</li>
 <li>In two-node mode, save iSCSI config on the storage host.</li>
 <li>Write the destination VM config with new LUN numbers, fresh MAC addresses,
    and a new <code>vmgenid</code>.</li>
@@ -2608,13 +2610,15 @@ at service startup.</p>
 <p><strong>Internal flow / algorithm:</strong></p>
 <ol>
 <li>In single-node mode, print an informational message and exit.</li>
-<li>For each entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>:</li>
+<li>For each entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>:<ul>
 <li>Skip if the device node is not present (keys not loaded).</li>
 <li>Skip if the backstore already exists.</li>
 <li>Look up the original LUN index from <code>saveconfig.json</code> to preserve stable
-     compute-node <code>by-path</code> symlinks.</li>
+  compute-node <code>by-path</code> symlinks.</li>
 <li>Create the block backstore and map it to the target at the original LUN
-     index (or auto-allocate if no index is found).</li>
+  index (or auto-allocate if no index is found).</li>
+</ul>
+</li>
 <li>Save the iSCSI config via <code>safe-iscsi-save</code>.</li>
 </ol>
 <p><strong>Return codes / side effects:</strong></p>
@@ -2925,11 +2929,13 @@ guest.</p>
    and merge with the VM/guest maps.</li>
 <li>In two-node mode, gather LUN/zvol metadata from the storage host and merge
    with the VM/guest maps from the compute host.</li>
-<li>Annotate each zvol with clone relationships:</li>
+<li>Annotate each zvol with clone relationships:<ul>
 <li><code>[clone of &lt;snapshot&gt;]</code> if the zvol is a ZFS clone, where <code>&lt;snapshot&gt;</code>
-     is the full origin snapshot dataset name (e.g.
-     <code>threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c</code>).</li>
+  is the full origin snapshot dataset name (e.g.
+  <code>threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c</code>).</li>
 <li><code>[cloned by: vm-N, vm-M]</code> if any of its snapshots have clone dependents.</li>
+</ul>
+</li>
 </ol>
 <p><strong>Return codes / side effects:</strong></p>
 <table>
@@ -3172,16 +3178,18 @@ re-attached later.</p>
 <li>Read the VM config and locate the requested disk line.</li>
 <li>Warn if the VM is running; prompt for confirmation.</li>
 <li>Remove the disk line from the VM config.</li>
-<li>In two-node mode:</li>
+<li>In two-node mode:<ul>
 <li>Parse the target and LUN from the disk line and remove the LUN mapping and
-     backstore on the storage host.</li>
+  backstore on the storage host.</li>
 <li>Remove the backstore name from <code>expected-backstores.txt</code> so the Dashboard
-     does not report the detached disk as missing and <code>safe-iscsi-save</code> can
-     save the degraded-but-intentional config.</li>
+  does not report the detached disk as missing and <code>safe-iscsi-save</code> can
+  save the degraded-but-intentional config.</li>
 <li>Save the iSCSI config via <code>safe-iscsi-save</code> (found relative to this
-     script).</li>
+  script).</li>
 <li>Resolve the compute host's active deployed version again and trigger a
-     compute-host rescan using that version's <code>rescan-storage</code>.</li>
+  compute-host rescan using that version's <code>rescan-storage</code>.</li>
+</ul>
+</li>
 </ol>
 <p><strong>Return codes / side effects:</strong></p>
 <table>
@@ -3414,16 +3422,18 @@ compute-node <code>by-path</code> symlinks remain stable.</p>
 <li>Verify both VMs are stopped and the destination zvol name is free.</li>
 <li>Write an initial state file (<code>/tmp/move-vm-disk-&lt;src&gt;-&lt;dst&gt;-&lt;timestamp&gt;.state</code>).</li>
 <li>Prompt for confirmation.</li>
-<li><strong>Storage-node operations (two-node):</strong></li>
+<li><strong>Storage-node operations (two-node):</strong><ul>
 <li>Tear down the old LUN and backstore.</li>
 <li>Remove the source entry from <code>expected-backstores.txt</code> and
-     <code>/etc/iscsi-encrypted-luns.conf</code> if encrypted.</li>
+  <code>/etc/iscsi-encrypted-luns.conf</code> if encrypted.</li>
 <li><code>zfs rename</code> the zvol to the destination name.</li>
 <li>The destination zvol is placed in the same parent dataset as the source
-     zvol (for example, <code>pool/custom/vm-100-disk-0</code> → <code>pool/custom/vm-200-disk-0</code>).</li>
+  zvol (for example, <code>pool/custom/vm-100-disk-0</code> → <code>pool/custom/vm-200-disk-0</code>).</li>
 <li>Create the new backstore and LUN, reusing the original LUN number if possible.</li>
 <li>Add the destination entry to the manifests.</li>
 <li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
+</ul>
+</li>
 <li><strong>Single-node operations:</strong> <code>zfs rename</code> the zvol to the destination name.</li>
 <li>Move the disk line from the source VM config to the destination VM config.</li>
 <li>Rescan iSCSI on the compute host.</li>
@@ -3564,14 +3574,16 @@ the disk line to the VM config on the compute node.</p>
 <ol>
 <li>Validate arguments and delegate storage work to the storage host via SSH in
    two-node mode.</li>
-<li>If <code>--encrypted</code>:</li>
+<li>If <code>--encrypted</code>:<ul>
 <li>Mount the ZFS keys USB if needed.</li>
 <li>Auto-detect encryption algorithm/keyformat from existing encrypted LUNs.</li>
 <li>Prompt for the key file name.</li>
+</ul>
+</li>
 <li>Create the zvol (<code>zfs create -V ... -s -o compression=lz4</code>); for encrypted
    zvols, also set <code>encryption</code>, <code>keyformat</code>, and <code>keylocation</code>.</li>
 <li>For encrypted zvols, immediately secure the keys with <code>lock-zfs-keys</code>.</li>
-<li>In two-node mode:</li>
+<li>In two-node mode:<ul>
 <li>Create the iSCSI backstore and LUN.</li>
 <li>Add the backstore to <code>expected-backstores.txt</code>.</li>
 <li>Add an entry to <code>iscsi-encrypted-luns.conf</code> if encrypted.</li>
@@ -3579,7 +3591,9 @@ the disk line to the VM config on the compute node.</p>
 <li>Determine the assigned LUN number.</li>
 <li>Trigger a compute-host rescan.</li>
 <li>Re-invoke <code>new-vm-disk --config-only=&lt;lun&gt;</code> on the compute host to write
-     the VM config line (or initialize EFI vars for <code>EFI</code> size).</li>
+  the VM config line (or initialize EFI vars for <code>EFI</code> size).</li>
+</ul>
+</li>
 <li>Single-node mode: only the zvol is created. The VM config line must be added
    separately (the script does not write <code>storage:vm-...</code> lines or initialize EFI
    disks in single-node mode).</li>
@@ -3771,13 +3785,15 @@ for the full workflow.</p>
    two-node mode.</li>
 <li>Resolve the zvol path, target, and backstore name.</li>
 <li>Prompt twice for confirmation.</li>
-<li>In two-node mode:</li>
+<li>In two-node mode:<ul>
 <li>Find and remove the LUN mapping.</li>
 <li>Remove the block backstore.</li>
 <li>Remove entries from <code>expected-backstores.txt</code> and
-     <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
+  <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
 <li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
 <li>Trigger a compute-host rescan.</li>
+</ul>
+</li>
 <li>Destroy the zvol. If <code>zfs destroy</code> fails, source <code>zfs-diagnose-busy</code> and
    print the cause before exiting fatally.</li>
 </ol>
@@ -3900,10 +3916,12 @@ each restored zvol and rewrites the Proxmox config disk lines with new LUN numbe
 <li>In two-node mode, create backstores and LUNs for each restored zvol and
    update <code>expected-backstores.txt</code> and <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
 <li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
-<li>Restore/rewrite the Proxmox config:</li>
+<li>Restore/rewrite the Proxmox config:<ul>
 <li>Single-node: rewrite VMID in disk lines if <code>--new-vmid</code> was used.</li>
 <li>Two-node: rewrite disk lines with new target/LUN paths using <code>.disk_info</code>.</li>
 <li>Regenerate <code>vmgenid</code> and <code>smbios1</code> UUIDs when <code>--new-vmid</code> is used.</li>
+</ul>
+</li>
 <li>Trigger iSCSI rescan on the compute host.</li>
 </ol>
 <p><strong>Return codes / side effects:</strong></p>
@@ -4298,11 +4316,13 @@ targets.</p>
 <li>Exit silently in single-node mode.</li>
 <li>Verify the script is running on the storage host.</li>
 <li>Ensure <code>targetcli</code> is installed.</li>
-<li>For each entry in <code>POOL_TARGET</code>:</li>
+<li>For each entry in <code>POOL_TARGET</code>:<ul>
 <li>Create the target IQN if it does not already exist.</li>
 <li>Ensure TPG1 exists.</li>
 <li>Disable authentication and demo-mode write protect.</li>
 <li>Create the portal <code>${STORAGE_IP}:3260</code> if it does not already exist.</li>
+</ul>
+</li>
 <li>Save the targetcli configuration if anything changed.</li>
 </ol>
 <p><strong>Return codes / side effects:</strong></p>
@@ -4503,21 +4523,23 @@ on the compute node.</p>
 <li><code>--list</code>: enumerate installed versions and mark current/previous.</li>
 <li><code>--uninstall</code>: remove production wiring (symlinks, profile, sudoers, desktop
    shortcuts) while leaving the version directory intact.</li>
-<li>Version activation:</li>
+<li>Version activation:<ul>
 <li>Resolve <code>previous</code> to a version name if requested.</li>
 <li>Verify the target version directory exists.</li>
 <li>If the requested version is not already active:<ul>
 <li>Call the prior version's own <code>switch-version --uninstall</code> to clean up its
-   wiring.</li>
+  wiring.</li>
 <li>Record the current version as <code>previous</code>.</li>
 <li>Repoint the <code>current</code> symlink.</li>
 <li>Re-execute the target version's <code>switch-version</code> so its code performs the
-   wiring.</li>
+  wiring.</li>
 </ul>
 </li>
 <li>Install wiring: <code>bin</code> symlink, <code>/etc/profile.d</code>, <code>/etc/sudoers.d</code>,
-     <code>/root/bashinit</code>, library symlinks, desktop shortcuts.</li>
+  <code>/root/bashinit</code>, library symlinks, desktop shortcuts.</li>
 <li>Stop any running documentation server on port 8000.</li>
+</ul>
+</li>
 </ol>
 <p><strong>Return codes / side effects:</strong></p>
 <table>
@@ -4872,11 +4894,13 @@ copy-on-write.</p>
 <li>Validate arguments and delegate to the compute host in two-node mode.</li>
 <li>Parse disk lines from the source VM config (single-node: <code>storage:vm-...</code>;
    two-node: iSCSI <code>by-path</code>).</li>
-<li>For each disk:</li>
+<li>For each disk:<ul>
 <li>Create a <code>@clone-&lt;timestamp&gt;-c</code> snapshot on the source zvol if it does not
-     already exist (same snapshot reused across all disks in this operation).</li>
+  already exist (same snapshot reused across all disks in this operation).</li>
 <li><code>zfs clone</code> the snapshot to a new destination zvol.</li>
 <li>In two-node mode, create an iSCSI backstore and LUN on the storage host.</li>
+</ul>
+</li>
 <li>In two-node mode, save iSCSI config on the storage host via <code>safe-iscsi-save</code>.</li>
 <li>Write the destination VM config with new LUN numbers, fresh MAC addresses,
    new <code>vmgenid</code>, and new SMBIOS UUID.</li>
@@ -4945,7 +4969,7 @@ to cut dependencies before retiring the source VM.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.1
+      ZFS Utilities v0.83.2
     </div>
   
   
@@ -4970,7 +4994,7 @@ to cut dependencies before retiring the source VM.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.2"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

@@ -163,11 +163,11 @@ sudo clone-vm <src_vmid> <dst_vmid> <new_name>
 2. Parse disk lines from the source VM config (single-node: `storage:vm-...`;
    two-node: iSCSI `by-path`).
 3. For each disk:
-   - Snapshot the source zvol as `@clone-to-<dst>`.
-   - `zfs send | zfs receive` to a new destination zvol.
-   - Destroy the source and destination clone snapshots.
-   - In two-node mode, create an iSCSI backstore and LUN on the storage host.
-   - Add the new backstore to `expected-backstores.txt`.
+    - Snapshot the source zvol as `@clone-to-<dst>`.
+    - `zfs send | zfs receive` to a new destination zvol.
+    - Destroy the source and destination clone snapshots.
+    - In two-node mode, create an iSCSI backstore and LUN on the storage host.
+    - Add the new backstore to `expected-backstores.txt`.
 4. In two-node mode, save iSCSI config on the storage host.
 5. Write the destination VM config with new LUN numbers, fresh MAC addresses,
    and a new `vmgenid`.
@@ -331,12 +331,12 @@ at service startup.
 
 1. In single-node mode, print an informational message and exit.
 2. For each entry in `/etc/zfsutilities/iscsi-encrypted-luns.conf`:
-   - Skip if the device node is not present (keys not loaded).
-   - Skip if the backstore already exists.
-   - Look up the original LUN index from `saveconfig.json` to preserve stable
-     compute-node `by-path` symlinks.
-   - Create the block backstore and map it to the target at the original LUN
-     index (or auto-allocate if no index is found).
+    - Skip if the device node is not present (keys not loaded).
+    - Skip if the backstore already exists.
+    - Look up the original LUN index from `saveconfig.json` to preserve stable
+      compute-node `by-path` symlinks.
+    - Create the block backstore and map it to the target at the original LUN
+      index (or auto-allocate if no index is found).
 3. Save the iSCSI config via `safe-iscsi-save`.
 
 **Return codes / side effects:**
@@ -529,10 +529,10 @@ sudo list-vm-disks [--with-devices]
 5. In two-node mode, gather LUN/zvol metadata from the storage host and merge
    with the VM/guest maps from the compute host.
 6. Annotate each zvol with clone relationships:
-   - `[clone of <snapshot>]` if the zvol is a ZFS clone, where `<snapshot>`
-     is the full origin snapshot dataset name (e.g.
-     `threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c`).
-   - `[cloned by: vm-N, vm-M]` if any of its snapshots have clone dependents.
+    - `[clone of <snapshot>]` if the zvol is a ZFS clone, where `<snapshot>`
+      is the full origin snapshot dataset name (e.g.
+      `threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c`).
+    - `[cloned by: vm-N, vm-M]` if any of its snapshots have clone dependents.
 
 **Return codes / side effects:**
 
@@ -688,15 +688,15 @@ sudo detach-vm-disk <vmid> <disk-key>
 3. Warn if the VM is running; prompt for confirmation.
 4. Remove the disk line from the VM config.
 5. In two-node mode:
-   - Parse the target and LUN from the disk line and remove the LUN mapping and
-     backstore on the storage host.
-   - Remove the backstore name from `expected-backstores.txt` so the Dashboard
-     does not report the detached disk as missing and `safe-iscsi-save` can
-     save the degraded-but-intentional config.
-   - Save the iSCSI config via `safe-iscsi-save` (found relative to this
-     script).
-   - Resolve the compute host's active deployed version again and trigger a
-     compute-host rescan using that version's `rescan-storage`.
+    - Parse the target and LUN from the disk line and remove the LUN mapping and
+      backstore on the storage host.
+    - Remove the backstore name from `expected-backstores.txt` so the Dashboard
+      does not report the detached disk as missing and `safe-iscsi-save` can
+      save the degraded-but-intentional config.
+    - Save the iSCSI config via `safe-iscsi-save` (found relative to this
+      script).
+    - Resolve the compute host's active deployed version again and trigger a
+      compute-host rescan using that version's `rescan-storage`.
 
 **Return codes / side effects:**
 
@@ -826,15 +826,15 @@ sudo move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
 4. Write an initial state file (`/tmp/move-vm-disk-<src>-<dst>-<timestamp>.state`).
 5. Prompt for confirmation.
 6. **Storage-node operations (two-node):**
-   - Tear down the old LUN and backstore.
-   - Remove the source entry from `expected-backstores.txt` and
-     `/etc/iscsi-encrypted-luns.conf` if encrypted.
-   - `zfs rename` the zvol to the destination name.
-   - The destination zvol is placed in the same parent dataset as the source
-     zvol (for example, `pool/custom/vm-100-disk-0` → `pool/custom/vm-200-disk-0`).
-   - Create the new backstore and LUN, reusing the original LUN number if possible.
-   - Add the destination entry to the manifests.
-   - Save iSCSI config via `safe-iscsi-save`.
+    - Tear down the old LUN and backstore.
+    - Remove the source entry from `expected-backstores.txt` and
+      `/etc/iscsi-encrypted-luns.conf` if encrypted.
+    - `zfs rename` the zvol to the destination name.
+    - The destination zvol is placed in the same parent dataset as the source
+      zvol (for example, `pool/custom/vm-100-disk-0` → `pool/custom/vm-200-disk-0`).
+    - Create the new backstore and LUN, reusing the original LUN number if possible.
+    - Add the destination entry to the manifests.
+    - Save iSCSI config via `safe-iscsi-save`.
 7. **Single-node operations:** `zfs rename` the zvol to the destination name.
 8. Move the disk line from the source VM config to the destination VM config.
 9. Rescan iSCSI on the compute host.
@@ -914,21 +914,21 @@ sudo new-vm-disk <pool> <vmid> <disk-num> <size> [--encrypted]
 1. Validate arguments and delegate storage work to the storage host via SSH in
    two-node mode.
 2. If `--encrypted`:
-   - Mount the ZFS keys USB if needed.
-   - Auto-detect encryption algorithm/keyformat from existing encrypted LUNs.
-   - Prompt for the key file name.
+    - Mount the ZFS keys USB if needed.
+    - Auto-detect encryption algorithm/keyformat from existing encrypted LUNs.
+    - Prompt for the key file name.
 3. Create the zvol (`zfs create -V ... -s -o compression=lz4`); for encrypted
    zvols, also set `encryption`, `keyformat`, and `keylocation`.
 4. For encrypted zvols, immediately secure the keys with `lock-zfs-keys`.
 5. In two-node mode:
-   - Create the iSCSI backstore and LUN.
-   - Add the backstore to `expected-backstores.txt`.
-   - Add an entry to `iscsi-encrypted-luns.conf` if encrypted.
-   - Save config via `safe-iscsi-save`.
-   - Determine the assigned LUN number.
-   - Trigger a compute-host rescan.
-   - Re-invoke `new-vm-disk --config-only=<lun>` on the compute host to write
-     the VM config line (or initialize EFI vars for `EFI` size).
+    - Create the iSCSI backstore and LUN.
+    - Add the backstore to `expected-backstores.txt`.
+    - Add an entry to `iscsi-encrypted-luns.conf` if encrypted.
+    - Save config via `safe-iscsi-save`.
+    - Determine the assigned LUN number.
+    - Trigger a compute-host rescan.
+    - Re-invoke `new-vm-disk --config-only=<lun>` on the compute host to write
+      the VM config line (or initialize EFI vars for `EFI` size).
 6. Single-node mode: only the zvol is created. The VM config line must be added
    separately (the script does not write `storage:vm-...` lines or initialize EFI
    disks in single-node mode).
@@ -1046,12 +1046,12 @@ sudo remove-vm-disk <pool> <vmid> <disk-num>
 2. Resolve the zvol path, target, and backstore name.
 3. Prompt twice for confirmation.
 4. In two-node mode:
-   - Find and remove the LUN mapping.
-   - Remove the block backstore.
-   - Remove entries from `expected-backstores.txt` and
-     `/etc/iscsi-encrypted-luns.conf`.
-   - Save iSCSI config via `safe-iscsi-save`.
-   - Trigger a compute-host rescan.
+    - Find and remove the LUN mapping.
+    - Remove the block backstore.
+    - Remove entries from `expected-backstores.txt` and
+      `/etc/iscsi-encrypted-luns.conf`.
+    - Save iSCSI config via `safe-iscsi-save`.
+    - Trigger a compute-host rescan.
 5. Destroy the zvol. If `zfs destroy` fails, source `zfs-diagnose-busy` and
    print the cause before exiting fatally.
 
@@ -1116,9 +1116,9 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
    update `expected-backstores.txt` and `/etc/iscsi-encrypted-luns.conf`.
 8. Save iSCSI config via `safe-iscsi-save`.
 9. Restore/rewrite the Proxmox config:
-   - Single-node: rewrite VMID in disk lines if `--new-vmid` was used.
-   - Two-node: rewrite disk lines with new target/LUN paths using `.disk_info`.
-   - Regenerate `vmgenid` and `smbios1` UUIDs when `--new-vmid` is used.
+    - Single-node: rewrite VMID in disk lines if `--new-vmid` was used.
+    - Two-node: rewrite disk lines with new target/LUN paths using `.disk_info`.
+    - Regenerate `vmgenid` and `smbios1` UUIDs when `--new-vmid` is used.
 10. Trigger iSCSI rescan on the compute host.
 
 **Return codes / side effects:**
@@ -1375,10 +1375,10 @@ sudo setup-iscsi-targets
 2. Verify the script is running on the storage host.
 3. Ensure `targetcli` is installed.
 4. For each entry in `POOL_TARGET`:
-   - Create the target IQN if it does not already exist.
-   - Ensure TPG1 exists.
-   - Disable authentication and demo-mode write protect.
-   - Create the portal `${STORAGE_IP}:3260` if it does not already exist.
+    - Create the target IQN if it does not already exist.
+    - Ensure TPG1 exists.
+    - Disable authentication and demo-mode write protect.
+    - Create the portal `${STORAGE_IP}:3260` if it does not already exist.
 5. Save the targetcli configuration if anything changed.
 
 **Return codes / side effects:**
@@ -1484,18 +1484,18 @@ sudo switch-version <version>|previous|--list|--uninstall
 2. `--uninstall`: remove production wiring (symlinks, profile, sudoers, desktop
    shortcuts) while leaving the version directory intact.
 3. Version activation:
-   - Resolve `previous` to a version name if requested.
-   - Verify the target version directory exists.
-   - If the requested version is not already active:
-     - Call the prior version's own `switch-version --uninstall` to clean up its
-       wiring.
-     - Record the current version as `previous`.
-     - Repoint the `current` symlink.
-     - Re-execute the target version's `switch-version` so its code performs the
-       wiring.
-   - Install wiring: `bin` symlink, `/etc/profile.d`, `/etc/sudoers.d`,
-     `/root/bashinit`, library symlinks, desktop shortcuts.
-   - Stop any running documentation server on port 8000.
+    - Resolve `previous` to a version name if requested.
+    - Verify the target version directory exists.
+    - If the requested version is not already active:
+        - Call the prior version's own `switch-version --uninstall` to clean up its
+          wiring.
+        - Record the current version as `previous`.
+        - Repoint the `current` symlink.
+        - Re-execute the target version's `switch-version` so its code performs the
+          wiring.
+    - Install wiring: `bin` symlink, `/etc/profile.d`, `/etc/sudoers.d`,
+      `/root/bashinit`, library symlinks, desktop shortcuts.
+    - Stop any running documentation server on port 8000.
 
 **Return codes / side effects:**
 
@@ -1707,10 +1707,10 @@ sudo zfsclone-vm <src_vmid> <dst_vmid> <new_name>
 2. Parse disk lines from the source VM config (single-node: `storage:vm-...`;
    two-node: iSCSI `by-path`).
 3. For each disk:
-   - Create a `@clone-<timestamp>-c` snapshot on the source zvol if it does not
-     already exist (same snapshot reused across all disks in this operation).
-   - `zfs clone` the snapshot to a new destination zvol.
-   - In two-node mode, create an iSCSI backstore and LUN on the storage host.
+    - Create a `@clone-<timestamp>-c` snapshot on the source zvol if it does not
+      already exist (same snapshot reused across all disks in this operation).
+    - `zfs clone` the snapshot to a new destination zvol.
+    - In two-node mode, create an iSCSI backstore and LUN on the storage host.
 4. In two-node mode, save iSCSI config on the storage host via `safe-iscsi-save`.
 5. Write the destination VM config with new LUN numbers, fresh MAC addresses,
    new `vmgenid`, and new SMBIOS UUID.

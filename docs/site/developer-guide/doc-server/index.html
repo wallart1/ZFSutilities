@@ -1396,6 +1396,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#viewing-the-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Viewing the Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#automatic-installation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1868,6 +1879,29 @@
 <h1 id="documentation-server">Documentation Server<a class="headerlink" href="#documentation-server" title="Permanent link">&para;</a></h1>
 <p>The documentation is built with <a href="https://www.mkdocs.org/">MkDocs</a> using the
 <a href="https://squidfunk.github.io/mkdocs-material/">Material theme</a>.</p>
+<h2 id="viewing-the-documentation">Viewing the Documentation<a class="headerlink" href="#viewing-the-documentation" title="Permanent link">&para;</a></h2>
+<p>The documentation can be viewed in three ways:</p>
+<ol>
+<li><strong>Embedded viewer in the GTK GUI</strong> — choose <strong>Help → Documentation</strong>. This
+   opens the built-in WebKit viewer and displays the pre-built site in
+   <code>docs/site/</code>. It does <strong>not</strong> automatically refresh when Markdown source
+   files change.</li>
+<li><strong>Standalone documentation viewer</strong> — open the <strong>ZFSutilities Documentation</strong>
+   symlink in the installing user's home directory, or run <code>zfsutilities-docs</code>.
+   This is the same viewer as the embedded one and also displays the pre-built
+   <code>docs/site/</code> content without auto-refresh.</li>
+<li><strong>Web browser via <code>startdocserver</code></strong> — run <code>startdocserver</code>, then open
+   <code>http://&lt;host&gt;:8000</code> in a web browser. This is the only option that provides
+   MkDocs live reload: edits saved in <code>docs/docs/</code> are rebuilt and the browser
+   page refreshes automatically.</li>
+</ol>
+<div class="admonition tip">
+<p class="admonition-title">Live updates while editing</p>
+<p>If you are actively editing documentation, use <code>startdocserver</code> and a web
+browser. The embedded and standalone viewers show the most recent static
+build and only update after the next <code>mkdocs build</code> or the next
+<code>deploy-version</code> run.</p>
+</div>
 <h2 id="automatic-installation">Automatic Installation<a class="headerlink" href="#automatic-installation" title="Permanent link">&para;</a></h2>
 <p>Both installers — <code>bin/install-single-node</code> and
 <code>bin/install-two-node</code> — install MkDocs and the Material theme as
@@ -2033,7 +2067,7 @@ without relying on a desktop URI handler. See
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.1
+      ZFS Utilities v0.83.2
     </div>
   
   
@@ -2058,7 +2092,7 @@ without relying on a desktop URI handler. See
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.2"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

@@ -3,6 +3,29 @@
 The documentation is built with [MkDocs](https://www.mkdocs.org/) using the
 [Material theme](https://squidfunk.github.io/mkdocs-material/).
 
+## Viewing the Documentation
+
+The documentation can be viewed in three ways:
+
+1. **Embedded viewer in the GTK GUI** — choose **Help → Documentation**. This
+   opens the built-in WebKit viewer and displays the pre-built site in
+   `docs/site/`. It does **not** automatically refresh when Markdown source
+   files change.
+2. **Standalone documentation viewer** — open the **ZFSutilities Documentation**
+   symlink in the installing user's home directory, or run `zfsutilities-docs`.
+   This is the same viewer as the embedded one and also displays the pre-built
+   `docs/site/` content without auto-refresh.
+3. **Web browser via `startdocserver`** — run `startdocserver`, then open
+   `http://<host>:8000` in a web browser. This is the only option that provides
+   MkDocs live reload: edits saved in `docs/docs/` are rebuilt and the browser
+   page refreshes automatically.
+
+!!! tip "Live updates while editing"
+    If you are actively editing documentation, use `startdocserver` and a web
+    browser. The embedded and standalone viewers show the most recent static
+    build and only update after the next `mkdocs build` or the next
+    `deploy-version` run.
+
 ## Automatic Installation
 
 Both installers — `bin/install-single-node` and

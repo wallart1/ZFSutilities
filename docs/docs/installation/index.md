@@ -9,6 +9,9 @@ ZFSutilities supports two deployment modes:
   separate compute host running Proxmox VE VMs. The storage host does not need
   Proxmox VE.
 
+For an overview of all documentation sections, return to the
+[ZFS Utilities home page](../index.md).
+
 ## Prerequisites
 
 ### Required
@@ -96,11 +99,11 @@ The installer will:
 5. Generate the installation configuration file `/etc/zfsutilities/node.conf` (legacy `/etc/zfsutilities-node.conf` also works)
 6. Deploy scripts as a **versioned installation** to `/usr/local/lib/zfsutilities/versions/<version>/`
 7. Activate the version and wire it into active production:
-   - Configure `PATH` in `/etc/profile.d` and `/etc/sudoers.d`
-   - Create the `/root/bashinit` symlink
-   - Create the `/usr/local/lib/zfsutilities/bin` symlink and library symlinks
-   - Create desktop shortcuts in the installing user's home directory:
-     **ZFSutilities GUI** and **ZFSutilities Documentation**
+    - Configure `PATH` in `/etc/profile.d` and `/etc/sudoers.d`
+    - Create the `/root/bashinit` symlink
+    - Create the `/usr/local/lib/zfsutilities/bin` symlink and library symlinks
+    - Create desktop shortcuts in the installing user's home directory:
+      **ZFSutilities GUI** and **ZFSutilities Documentation**
 
 ### Two-node
 
@@ -124,11 +127,11 @@ The installer will:
    skips targets that already exist)
 8. Deploy scripts as a **versioned installation** on both hosts via SSH
 9. Activate the version on both hosts and wire it into active production:
-   - Configure `PATH` in `/etc/profile.d` and `/etc/sudoers.d`
-   - Create the `/root/bashinit` symlink
-   - Create the `/usr/local/lib/zfsutilities/bin` symlink and library symlinks
-   - Create desktop shortcuts in the installing user's home directory:
-     **ZFSutilities GUI** and **ZFSutilities Documentation**
+    - Configure `PATH` in `/etc/profile.d` and `/etc/sudoers.d`
+    - Create the `/root/bashinit` symlink
+    - Create the `/usr/local/lib/zfsutilities/bin` symlink and library symlinks
+    - Create desktop shortcuts in the installing user's home directory:
+      **ZFSutilities GUI** and **ZFSutilities Documentation**
 10. Verify SSH key authorization between hosts
 11. **Patch PVE's iSCSI rescan rate limit** on the compute host when PVE is
     detected — limits automatic `iscsiadm --rescan` to once per day, which

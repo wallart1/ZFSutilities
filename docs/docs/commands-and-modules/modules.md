@@ -1383,10 +1383,10 @@ Format: `@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>`
    lock is held only while the name is being generated and recorded.
 5. Normalize `$label`: default to `@dailybackup`, ensure it starts with `@`.
 6. Compute the bucket if `$bucket` is unset:
-   - `m` if the current day is the 1st of the month (takes precedence over Sunday).
-   - `w` if the current day is Sunday.
-   - `d` otherwise.
-   - Hard-code `s` when the label is `@offsite`.
+    - `m` if the current day is the 1st of the month (takes precedence over Sunday).
+    - `w` if the current day is Sunday.
+    - `d` otherwise.
+    - Hard-code `s` when the label is `@offsite`.
 7. Build the name as `@<label>-<ISO-8601-minutes>-<bucket>`, record it in the
    one-minute reservation file (`/run/lock/zfs/.snapname.reserved`), release the
    lock, write the name to the snapfile, and print it.
