@@ -14,7 +14,12 @@ from unittest.mock import MagicMock, patch
 @contextmanager
 def _patch_log_dirs(tmpdir):
     """Patch session_log and log_index to use tmpdir as SESSION_LOG_DIR."""
-    with patch("session_log.SESSION_LOG_DIR", tmpdir), patch("log_index.SESSION_LOG_DIR", tmpdir):
+    lock_path = os.path.join(tmpdir, ".log_index.lock")
+    with (
+        patch("session_log.SESSION_LOG_DIR", tmpdir),
+        patch("log_index.SESSION_LOG_DIR", tmpdir),
+        patch("file_locking.LOG_INDEX_LOCK_PATH", lock_path),
+    ):
         yield
 
 

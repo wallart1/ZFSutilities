@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **shellcheck info-level warnings** — `bin/clone-vm` no longer triggers SC2029
+  when invoking the remote `safe-iscsi-save` script, and `bin/move-vm-disk`
+  quotes parameter expansions inside `${var#...}` correctly (SC2295).
+
+- **`move-vm-disk` storage-info heredoc bootstrap** — The storage-side heredoc
+  that gathers backstore/zvol info now sources `bashinit` so `log_msg` is
+  available, matching the other recently-fixed storage heredocs.
+
+### Tests
+
+- **Silenced non-root test warnings** — `tests/python/test_backup_runner.py`
+  now patches `file_locking.LOG_INDEX_LOCK_PATH` into the temporary log
+  directory, eliminating permission-denied warnings for
+  `/run/lock/zfsutilities/.log_index.lock`.
+- `tests/python/runner.py` filters the harmless GLib IOChannel "bad file
+  descriptor" warning emitted by some GTK-related tests.
+
 ## 0.84.0
 
 *Released 2026-08-19*

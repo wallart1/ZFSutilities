@@ -11,6 +11,16 @@ import unittest
 # headless environment. Mirrors the guard in python/docs_viewer.py.
 os.environ.setdefault("NO_AT_BRIDGE", "1")
 
+# Suppress a harmless GLib IOChannel warning that occurs when mocked tests close
+# file descriptors that the real GLib override still references.
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message=".*Error while getting flags for FD.*",
+    category=Warning,
+)
+
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:

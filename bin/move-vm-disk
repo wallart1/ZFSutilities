@@ -310,7 +310,7 @@ update_vm_configs() {
     echo "✓ Removed ${SRCKEY} from VM ${SRCVMID} config"
 
     # Build destination line by replacing only the key prefix.
-    local dest_line="${DSTKEY}:${SRC_LINE#${SRCKEY}:}"
+    local dest_line="${DSTKEY}:${SRC_LINE#"${SRCKEY}":}"
     echo "$dest_line" >> "$DST_CONF"
     echo "✓ Added ${DSTKEY} to VM ${DSTVMID} config"
 }
@@ -338,7 +338,7 @@ rollback() {
             echo "✓ Removed ${DSTKEY} from VM ${DSTVMID} config"
         fi
         if [[ -f "$SRC_CONF" ]] && ! grep -q "^${SRCKEY}:" "$SRC_CONF" && [[ -n "$SRC_LINE" ]]; then
-            echo "${SRCKEY}:${SRC_LINE#${SRCKEY}:}" >> "$SRC_CONF"
+            echo "${SRCKEY}:${SRC_LINE#"${SRCKEY}":}" >> "$SRC_CONF"
             echo "✓ Restored ${SRCKEY} to VM ${SRCVMID} config"
         fi
     fi
@@ -564,6 +564,10 @@ if is_two_node; then
     }
 
     storage_info=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s "$TARGET" "$SRCLUN" << 'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
 set -e
 TARGET="$1"
 LUN="$2"

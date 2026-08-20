@@ -379,7 +379,7 @@ done
 # --- Save iSCSI config on the storage host ---
 echo "Saving iSCSI configuration..."
 REMOTE_SAFE_ISCSI_SAVE=$(remote_zfsutility_script "$STORAGE_HOST" "safe-iscsi-save")
-ssh root@"$STORAGE_HOST" "$REMOTE_SAFE_ISCSI_SAVE" >/dev/null
+ssh root@"$STORAGE_HOST" bash -c 'exec "$@"' bash "$REMOTE_SAFE_ISCSI_SAVE" >/dev/null
 echo "✓ Configuration saved"
 echo ""
 
