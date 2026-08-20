@@ -171,7 +171,7 @@ class TestAddHistoryEntry(unittest.TestCase):
 
     def test_adds_entry_to_front(self):
         entry = backup_history.build_entry(
-            timestamp="2026-05-20T12:00:00",
+            timestamp=datetime.now(timezone.utc).isoformat(),
             run_type="backup",
             name="Daily",
             duration=60.0,

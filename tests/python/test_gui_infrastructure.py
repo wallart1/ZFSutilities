@@ -2448,6 +2448,23 @@ class TestStatusLabel(unittest.TestCase):
         self._call_update_progress(Obj(), 0.5, "text")
 
 
+class TestInfoPanelFont(unittest.TestCase):
+    """Main-window log panel uses a monospace font, including when popped out."""
+
+    def test_info_text_uses_monospace_font(self):
+        _clear_cached_modules("gui_helpers")
+        with mock_gtk():
+            import gui_helpers as gh
+
+            app = MagicMock()
+            app.config = {}
+            app._ui_state = None
+
+            gh.create_info_panel(app)
+
+            app.info_text.set_monospace.assert_called_once_with(True)
+
+
 class TestClearButton(unittest.TestCase):
     """Clear button in the log panel also clears the bottom status bar."""
 

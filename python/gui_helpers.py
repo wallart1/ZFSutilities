@@ -1717,6 +1717,7 @@ def create_info_panel(app):
     app.info_text.set_editable(False)
     app.info_text.set_cursor_visible(False)
     app.info_text.set_wrap_mode(Gtk.WrapMode.CHAR)
+    app.info_text.set_monospace(True)
     app.info_text.set_left_margin(5)
     app.info_text.set_right_margin(5)
     app.log_scrolled.add(app.info_text)

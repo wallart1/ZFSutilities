@@ -2262,6 +2262,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#rename-vm-disk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rename-vm-disk
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2480,6 +2491,7 @@ arrays and on-disk tables are on <a href="../../developer-guide/data-structures/
 <li><a href="#pve-send-to-archive"><code>PVE-send-to-archive</code></a></li>
 <li><a href="#archive-vm"><code>archive-vm</code></a></li>
 <li><a href="#remove-vm"><code>remove-vm</code></a></li>
+<li><a href="#rename-vm-disk"><code>rename-vm-disk</code></a></li>
 <li><a href="#run-tests"><code>run-tests</code></a></li>
 <li><a href="#startdocserver"><code>startdocserver</code></a></li>
 <li><a href="#switch-version"><code>switch-version</code></a></li>
@@ -7962,6 +7974,164 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
 </tr>
 </tbody>
 </table>
+<hr />
+<h3 id="rename-vm-disk"><code>rename-vm-disk</code><a class="headerlink" href="#rename-vm-disk" title="Permanent link">&para;</a></h3>
+<p>Renames a ZFS zvol while preserving any Proxmox VM and iSCSI wiring. The new
+path must be under the same ZFS pool as the old path, but anything after the
+pool name may be changed.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>rename-vm-disk<span class="w"> </span>&lt;old-zvol-path&gt;<span class="w"> </span>&lt;new-zvol-path&gt;
+</code></pre></div>
+<p><strong>Arguments:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>old-zvol-path</code></td>
+<td>Full path of the existing zvol (e.g. <code>threeamigos/proxmox/vm-100-disk-0</code>)</td>
+</tr>
+<tr>
+<td><code>new-zvol-path</code></td>
+<td>Desired full path under the <strong>same</strong> pool</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Examples:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Change a VM disk number</span>
+sudo<span class="w"> </span>rename-vm-disk<span class="w"> </span>threeamigos/proxmox/vm-100-disk-0<span class="w"> </span>threeamigos/proxmox/vm-100-disk-1
+
+<span class="c1"># Change a parent dataset</span>
+sudo<span class="w"> </span>rename-vm-disk<span class="w"> </span>threeamigos/oldparent/vm-100-disk-0<span class="w"> </span>threeamigos/newparent/vm-100-disk-0
+
+<span class="c1"># Arbitrary rename under the same pool</span>
+sudo<span class="w"> </span>rename-vm-disk<span class="w"> </span>threeamigos/proxmox/old-name<span class="w"> </span>threeamigos/proxmox/new-name
+</code></pre></div>
+<p><strong>Behavior:</strong></p>
+<ol>
+<li>Validates that both paths are under the same pool, the source zvol exists,
+   the destination does not exist, and the destination parent dataset exists.</li>
+<li>Discovers whether the zvol is exported as an iSCSI LUN on the storage host
+   (two-node only).</li>
+<li>Scans <strong>all</strong> Proxmox VM configs to find references to the old zvol. The
+   VMID embedded in the zvol basename is <strong>not</strong> assumed to match the VM using
+   the disk.</li>
+<li>Refuses to proceed if any VM referencing the disk is running.</li>
+<li>Tears down and recreates the iSCSI backstore/LUN, preserving the original
+   LUN number whenever possible (two-node only).</li>
+<li>Renames the zvol with <code>zfs rename</code>.</li>
+<li>Updates each Proxmox config that references the disk:<ul>
+<li><strong>Single-node:</strong> rewrites the <code>pool:&lt;old-basename&gt;</code> reference to
+  <code>pool:&lt;new-basename&gt;</code>.</li>
+<li><strong>Two-node:</strong> no change is needed unless the storage host had to assign a
+  new LUN number.</li>
+</ul>
+</li>
+<li>Triggers an iSCSI rescan on the compute host (two-node only).</li>
+</ol>
+<p>Detached/orphaned zvols (not referenced by any VM config) can also be renamed.
+In two-node mode, an existing iSCSI export is preserved; in single-node mode,
+only the <code>zfs rename</code> is performed.</p>
+<p><strong>Globals:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Node-config globals</td>
+<td>See <a href="../two-node/">Two-Node Infrastructure Commands</a></td>
+</tr>
+<tr>
+<td><code>PVE_CONF_DIR</code></td>
+<td>Directory containing Proxmox VM configs (default <code>/etc/pve/qemu-server</code>)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Called modules:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose in this command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>node-lib.sh</code></td>
+<td>Single-node / two-node detection and host resolution</td>
+</tr>
+<tr>
+<td><code>rootcheck</code></td>
+<td>Verify root privileges</td>
+</tr>
+<tr>
+<td><code>safe-iscsi-save</code> (two-node)</td>
+<td>Persist iSCSI configuration after rebuild</td>
+</tr>
+<tr>
+<td><code>rescan-storage</code> (two-node)</td>
+<td>Refresh compute-host device view</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data structures consumed / produced:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Structure</th>
+<th>Role</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Node config</td>
+<td>Determines single-node vs two-node paths</td>
+<td><a href="../../developer-guide/data-structures/#node-configuration-file-etczfsutilitiesnodeconf">Node config</a></td>
+</tr>
+<tr>
+<td><code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code></td>
+<td>Updated when the zvol is referenced by a VM</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>/etc/rtslib-fb-target/expected-backstores.txt</code></td>
+<td>Backstore manifest updated on storage host</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td>Encrypted-LUN config updated on storage host</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Return codes:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Rename completed successfully.</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Invalid input, missing prerequisites, or command failure.</td>
+</tr>
+</tbody>
+</table>
 
 
 
@@ -7997,7 +8167,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.4
+      ZFS Utilities v0.84.0
     </div>
   
   
@@ -8022,7 +8192,7 @@ using <code>zfsdelfs</code>. Finally removes the Proxmox VM definition.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.4"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.84.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

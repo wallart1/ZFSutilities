@@ -27,6 +27,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`PVE-send-to-archive`](#pve-send-to-archive)
 - [`archive-vm`](#archive-vm)
 - [`remove-vm`](#remove-vm)
+- [`rename-vm-disk`](#rename-vm-disk)
 - [`run-tests`](#run-tests)
 - [`startdocserver`](#startdocserver)
 - [`switch-version`](#switch-version)
@@ -3091,3 +3092,91 @@ sudo remove-vm <vmid>
 | ---- | ------- |
 | `0` | Completed successfully (or nothing to remove). |
 | non-zero | Invalid input or command failure. |
+
+---
+
+### `rename-vm-disk`
+
+Renames a ZFS zvol while preserving any Proxmox VM and iSCSI wiring. The new
+path must be under the same ZFS pool as the old path, but anything after the
+pool name may be changed.
+
+```bash
+sudo rename-vm-disk <old-zvol-path> <new-zvol-path>
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `old-zvol-path` | Full path of the existing zvol (e.g. `threeamigos/proxmox/vm-100-disk-0`) |
+| `new-zvol-path` | Desired full path under the **same** pool |
+
+**Examples:**
+
+```bash
+# Change a VM disk number
+sudo rename-vm-disk threeamigos/proxmox/vm-100-disk-0 threeamigos/proxmox/vm-100-disk-1
+
+# Change a parent dataset
+sudo rename-vm-disk threeamigos/oldparent/vm-100-disk-0 threeamigos/newparent/vm-100-disk-0
+
+# Arbitrary rename under the same pool
+sudo rename-vm-disk threeamigos/proxmox/old-name threeamigos/proxmox/new-name
+```
+
+**Behavior:**
+
+1. Validates that both paths are under the same pool, the source zvol exists,
+   the destination does not exist, and the destination parent dataset exists.
+2. Discovers whether the zvol is exported as an iSCSI LUN on the storage host
+   (two-node only).
+3. Scans **all** Proxmox VM configs to find references to the old zvol. The
+   VMID embedded in the zvol basename is **not** assumed to match the VM using
+   the disk.
+4. Refuses to proceed if any VM referencing the disk is running.
+5. Tears down and recreates the iSCSI backstore/LUN, preserving the original
+   LUN number whenever possible (two-node only).
+6. Renames the zvol with `zfs rename`.
+7. Updates each Proxmox config that references the disk:
+    - **Single-node:** rewrites the `pool:<old-basename>` reference to
+      `pool:<new-basename>`.
+    - **Two-node:** no change is needed unless the storage host had to assign a
+      new LUN number.
+8. Triggers an iSCSI rescan on the compute host (two-node only).
+
+Detached/orphaned zvols (not referenced by any VM config) can also be renamed.
+In two-node mode, an existing iSCSI export is preserved; in single-node mode,
+only the `zfs rename` is performed.
+
+**Globals:**
+
+| Variable | Role |
+| -------- | ---- |
+| Node-config globals | See [Two-Node Infrastructure Commands](two-node.md) |
+| `PVE_CONF_DIR` | Directory containing Proxmox VM configs (default `/etc/pve/qemu-server`) |
+
+**Called modules:**
+
+| Script | Purpose in this command |
+| ------ | ----------------------- |
+| `node-lib.sh` | Single-node / two-node detection and host resolution |
+| `rootcheck` | Verify root privileges |
+| `safe-iscsi-save` (two-node) | Persist iSCSI configuration after rebuild |
+| `rescan-storage` (two-node) | Refresh compute-host device view |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| Node config | Determines single-node vs two-node paths | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| `/etc/pve/qemu-server/<vmid>.conf` | Updated when the zvol is referenced by a VM | — |
+| `/etc/rtslib-fb-target/expected-backstores.txt` | Backstore manifest updated on storage host | — |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Encrypted-LUN config updated on storage host | — |
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Rename completed successfully. |
+| `1` | Invalid input, missing prerequisites, or command failure. |

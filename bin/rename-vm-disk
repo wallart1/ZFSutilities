@@ -1,0 +1,429 @@
+#!/usr/bin/bash
+# rename-vm-disk <old-zvol-path> <new-zvol-path>
+# Renames a ZFS zvol while preserving any Proxmox VM and iSCSI wiring.
+# The new path must be under the same ZFS pool as the old path; anything after
+# the pool name may be changed.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/rename-vm-disk on BOTH hosts
+# Run from:   the compute host (or the storage host -- delegates via SSH)
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source "$(find_zfsutility_script rootcheck)"
+
+rootcheck
+
+if ! command -v qm >/dev/null 2>&1; then
+    log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
+    log_msg "FATAL:   On a single node without Proxmox there are no VMs to manage."
+    log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
+    exit 1
+fi
+
+MY_HOST=$(hostname -s)
+PVE_CONF_DIR="/etc/pve/qemu-server"
+
+# Arrays populated during discovery. Each element is "vmid:diskkey".
+declare -a VM_REFS=()
+
+# iSCSI state discovered on the storage host (two-node only).
+ISCSI_TARGET=""
+ISCSI_LUN=""
+ISCSI_BACKSTORE=""
+ISCSI_ENCRYPTED="N"
+
+usage() {
+    echo "Usage: rename-vm-disk <old-zvol-path> <new-zvol-path>"
+    echo ""
+    echo "  old-zvol-path  Full path of the existing zvol (e.g. threeamigos/proxmox/vm-100-disk-0)"
+    echo "  new-zvol-path  Desired full path under the SAME pool"
+    echo ""
+    echo "WARNING: Any VM referencing this zvol must be stopped before running this script."
+    echo ""
+    echo "Examples:"
+    echo "  rename-vm-disk threeamigos/proxmox/vm-100-disk-0 threeamigos/proxmox/vm-100-disk-1"
+    echo "  rename-vm-disk threeamigos/proxmox/old-name threeamigos/proxmox/new-name"
+    exit 1
+}
+
+# --- Argument validation ------------------------------------------------------
+validate_args() {
+    [[ $# -eq 2 ]] || usage
+
+    OLD_ZVOL="$1"
+    NEW_ZVOL="$2"
+
+    [[ -n "$OLD_ZVOL" && "$OLD_ZVOL" == */* ]] || {
+        log_msg "FATAL: old-zvol-path must include a pool and dataset, got: $OLD_ZVOL"
+        exit 1
+    }
+    [[ -n "$NEW_ZVOL" && "$NEW_ZVOL" == */* ]] || {
+        log_msg "FATAL: new-zvol-path must include a pool and dataset, got: $NEW_ZVOL"
+        exit 1
+    }
+
+    OLD_POOL="${OLD_ZVOL%%/*}"
+    NEW_POOL="${NEW_ZVOL%%/*}"
+    [[ "$OLD_POOL" == "$NEW_POOL" ]] || {
+        log_msg "FATAL: old and new zvol paths must be under the same pool."
+        log_msg "FATAL:   Old pool: $OLD_POOL"
+        log_msg "FATAL:   New pool: $NEW_POOL"
+        exit 1
+    }
+    POOL="$OLD_POOL"
+
+    OLD_BASENAME="${OLD_ZVOL##*/}"
+    NEW_BASENAME="${NEW_ZVOL##*/}"
+
+    if ! zfs list -H -t volume -o name "$OLD_ZVOL" >/dev/null 2>&1; then
+        log_msg "FATAL: Source zvol does not exist: $OLD_ZVOL"
+        exit 1
+    fi
+
+    if zfs list -H -t volume -o name "$NEW_ZVOL" >/dev/null 2>&1; then
+        log_msg "FATAL: Destination zvol already exists: $NEW_ZVOL"
+        exit 1
+    fi
+
+    NEW_PARENT="${NEW_ZVOL%/*}"
+    if ! zfs list -H -o name "$NEW_PARENT" >/dev/null 2>&1; then
+        log_msg "FATAL: Destination parent dataset does not exist: $NEW_PARENT"
+        exit 1
+    fi
+
+    if [[ "$OLD_BASENAME" =~ ^vm-[0-9]+-disk-[0-9]+$ ]] && \
+       ! [[ "$NEW_BASENAME" =~ ^vm-[0-9]+-disk-[0-9]+$ ]]; then
+        warn "New basename '$NEW_BASENAME' does not match the VM disk naming convention."
+        warn "Some ZFS Utilities tools may not recognize it as a VM disk."
+    fi
+}
+
+# --- iSCSI discovery on the storage host (two-node only) ----------------------
+discover_iscsi_state() {
+    ISCSI_TARGET=""
+    ISCSI_LUN=""
+    ISCSI_BACKSTORE=""
+    ISCSI_ENCRYPTED="N"
+
+    local result
+    result=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s "$OLD_ZVOL" 2>&1 <<'SSHEOF'
+set -e
+OLD_ZVOL="$1"
+
+# Enumerate every iSCSI LUN and find the one whose backstore points at this zvol.
+while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    while IFS= read -r line; do
+        lun=$(echo "$line" | grep -oP 'lun\K[0-9]+' | head -1 || true)
+        bsname=$(echo "$line" | grep -oP 'block/\K\S+' | head -1 || true)
+        if [[ -n "$bsname" && -n "$lun" ]]; then
+            dev=$(targetcli "/backstores/block/${bsname}" info 2>/dev/null \
+                | grep -oP '/dev/zvol/\S+' | head -1 || true)
+            if [[ "$dev" == "/dev/zvol/${OLD_ZVOL}" ]]; then
+                encrypted=$(zfs get -H -o value encryption "$OLD_ZVOL" 2>/dev/null || echo "off")
+                echo "EXPORTED|${target}|${lun}|${bsname}|${encrypted}"
+                exit 0
+            fi
+        fi
+    done < <(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null || true)
+done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+' || true)
+
+echo "NOT_EXPORTED"
+SSHEOF
+    ) || {
+        log_msg "FATAL: iSCSI discovery failed on $STORAGE_HOST"
+        log_msg "FATAL:   $result"
+        exit 1
+    }
+
+    if [[ "${result%%|*}" == "EXPORTED" ]]; then
+        local exported_target exported_lun exported_bs exported_enc
+        IFS='|' read -r _ exported_target exported_lun exported_bs exported_enc \
+            <<< "$result"
+        ISCSI_TARGET="$exported_target"
+        ISCSI_LUN="$exported_lun"
+        ISCSI_BACKSTORE="$exported_bs"
+        [[ "$exported_enc" != "off" && "$exported_enc" != "-" ]] && ISCSI_ENCRYPTED="Y"
+    fi
+}
+
+# --- Scan Proxmox VM configs for references to the old zvol -------------------
+find_vm_refs() {
+    VM_REFS=()
+
+    local conf vmid line key
+    for conf in "$PVE_CONF_DIR"/*.conf; do
+        [[ -f "$conf" ]] || continue
+        vmid=$(basename "$conf" .conf)
+        [[ "$vmid" =~ ^[0-9]+$ ]] || continue
+
+        while IFS= read -r line; do
+            [[ -n "$line" ]] || continue
+            key="${line%%:*}"
+            [[ "$key" == "$line" ]] && continue
+            if is_single_node; then
+                local single_re="^${key}:[[:space:]]*${POOL}:${OLD_BASENAME}(,|[[:space:]]|$)"
+                if [[ "$line" =~ $single_re ]]; then
+                    VM_REFS+=("${vmid}:${key}")
+                fi
+            else
+                if [[ -n "$ISCSI_TARGET" && -n "$ISCSI_LUN" ]]; then
+                    local targetshort="${ISCSI_TARGET##*:}"
+                    local iscsi_re="^${key}:.*ip-${STORAGE_IP}:3260-iscsi-"
+                    iscsi_re+="${IQN_PREFIX}:${targetshort}-lun-${ISCSI_LUN}(,|[[:space:]]|$)"
+                    if [[ "$line" =~ $iscsi_re ]]; then
+                        VM_REFS+=("${vmid}:${key}")
+                    fi
+                fi
+            fi
+        done < <(grep -E '^(scsi|ide|sata|virtio|efidisk)[0-9]+:' "$conf" 2>/dev/null || true)
+    done
+}
+
+# --- Ensure every VM that references this zvol is stopped ---------------------
+check_vms_stopped() {
+    local ref vmid status
+    for ref in "${VM_REFS[@]}"; do
+        vmid="${ref%%:*}"
+        status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}' || true)
+        [[ "${status:-unknown}" == "stopped" ]] || {
+            log_msg "FATAL: VM $vmid must be stopped before renaming its disk" \
+                "(status: ${status:-unknown})"
+            exit 1
+        }
+    done
+}
+
+# --- Build the storage-side rename heredoc (two-node only) --------------------
+storage_rename_script() {
+    cat <<'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
+set -e
+OLD_ZVOL="$1"
+NEW_ZVOL="$2"
+TARGET="$3"
+OLD_BS="$4"
+LUN="$5"
+ENCRYPTED="$6"
+ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+ISCSI_ENCRYPTED_CONF="/etc/zfsutilities/iscsi-encrypted-luns.conf"
+
+NEW_BS="${NEW_ZVOL##*/}"
+TARGETSHORT="${TARGET##*:}"
+
+manifest_remove() {
+    [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" \
+        && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"
+}
+manifest_add() {
+    [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" \
+        && echo "$1" >> "$ISCSI_MANIFEST"
+}
+encrypted_remove() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
+        && sed -i "/^${1}:/d" "$ISCSI_ENCRYPTED_CONF"
+}
+encrypted_add() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
+        && echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
+}
+
+# Tear down old LUN and backstore if present.
+if [[ -n "$OLD_BS" ]]; then
+    if targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null | grep -q " ${OLD_BS} "; then
+        targetcli "/iscsi/${TARGET}/tpg1/luns" delete "lun${LUN}"
+    fi
+    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${OLD_BS} "; then
+        targetcli /backstores/block delete "${OLD_BS}"
+    fi
+    manifest_remove "${OLD_BS}"
+    encrypted_remove "${OLD_BS}"
+fi
+
+# Rename the zvol.
+zfs rename "${OLD_ZVOL}" "${NEW_ZVOL}"
+
+# Recreate backstore and LUN if the old zvol was exported.
+if [[ -n "$OLD_BS" ]]; then
+    ZVOL_DEV="/dev/zvol/${NEW_ZVOL}"
+    for _i in $(seq 1 20); do
+        [[ -b "$ZVOL_DEV" ]] && break
+        sleep 0.5
+    done
+    [[ -b "$ZVOL_DEV" ]] || { log_msg "FATAL: device node not found: $ZVOL_DEV"; exit 1; }
+
+    targetcli /backstores/block create "${NEW_BS}" "${ZVOL_DEV}"
+    targetcli "/backstores/block/${NEW_BS}" set attribute emulate_tpu=1
+
+    NEW_LUN="$LUN"
+    if ! targetcli "/iscsi/${TARGET}/tpg1/luns" create \
+            "/backstores/block/${NEW_BS}" "${NEW_LUN}" 2>/dev/null; then
+        targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${NEW_BS}"
+        NEW_LUN=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
+            | grep " ${NEW_BS} " | grep -oP 'lun\K[0-9]+' | head -1)
+    fi
+    [[ -n "$NEW_LUN" ]] || { log_msg "FATAL: could not determine new LUN"; exit 1; }
+
+    manifest_add "${NEW_BS}"
+    if [[ "$ENCRYPTED" == "Y" ]]; then
+        encrypted_add "${NEW_BS}" "${ZVOL_DEV}" "${TARGETSHORT}"
+    fi
+
+    "$mydir/safe-iscsi-save"
+    echo "LUN=${NEW_LUN}"
+fi
+SSHEOF
+}
+
+# --- Run the storage-side rename (two-node only) ------------------------------
+run_storage_rename() {
+    echo "Performing storage operations on ${STORAGE_HOST}..."
+    local result
+    result=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
+        "$OLD_ZVOL" "$NEW_ZVOL" "$ISCSI_TARGET" "$ISCSI_BACKSTORE" \
+        "$ISCSI_LUN" "$ISCSI_ENCRYPTED" \
+        <<< "$(storage_rename_script)" 2>&1) || {
+            log_msg "FATAL: Storage-side rename failed on $STORAGE_HOST"
+            echo "$result"
+            exit 1
+        }
+
+    # If the storage host had to fall back to a new LUN number, capture it.
+    if [[ "$result" == *LUN=* ]]; then
+        local new_lun
+        new_lun=$(echo "$result" | grep -oP '^LUN=\K[0-9]+' | tail -1 || true)
+        [[ -n "$new_lun" ]] && ISCSI_LUN="$new_lun"
+    fi
+    echo "$result" | grep -v '^LUN=' || true
+}
+
+# --- Update Proxmox VM configs ------------------------------------------------
+update_vm_configs() {
+    [[ ${#VM_REFS[@]} -gt 0 ]] || return 0
+
+    if is_two_node; then
+        # Two-node configs reference disks by LUN/by-path. No change is needed
+        # unless the storage host had to assign a different LUN.
+        [[ -n "$ISCSI_TARGET" ]] || return 0
+        local targetshort="${ISCSI_TARGET##*:}"
+        local old_by_path="ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:${targetshort}-lun-"
+        local new_by_path="${old_by_path}${ISCSI_LUN}"
+        old_by_path="${old_by_path}[0-9]+"
+
+        local ref vmid key conf
+        for ref in "${VM_REFS[@]}"; do
+            vmid="${ref%%:*}"
+            key="${ref#*:}"
+            conf="$PVE_CONF_DIR/${vmid}.conf"
+            if grep -qE "^${key}:.*${old_by_path}" "$conf" 2>/dev/null; then
+                sed -i -E "s|^(${key}:.*)${old_by_path}|\\1${new_by_path}|" "$conf"
+                echo "✓ Updated ${key} in VM ${vmid} config"
+            fi
+        done
+    else
+        # Single-node configs reference disks as pool:basename.
+        local ref vmid key conf
+        for ref in "${VM_REFS[@]}"; do
+            vmid="${ref%%:*}"
+            key="${ref#*:}"
+            conf="$PVE_CONF_DIR/${vmid}.conf"
+            local single_re="^${key}:[[:space:]]*${POOL}:${OLD_BASENAME}(,|[[:space:]]|$)"
+            local single_sub="s|^(${key}:[[:space:]]*)${POOL}:${OLD_BASENAME}|"
+            single_sub+="\\1${POOL}:${NEW_BASENAME}|"
+            if grep -qE "$single_re" "$conf" 2>/dev/null; then
+                sed -i -E "$single_sub" "$conf"
+                echo "✓ Updated ${key} in VM ${vmid} config"
+            fi
+        done
+    fi
+}
+
+# --- Rescan iSCSI on the compute host (two-node only) -------------------------
+run_rescan() {
+    is_two_node || return 0
+    [[ -n "$ISCSI_BACKSTORE" ]] || return 0
+    echo "Rescanning iSCSI..."
+    "$mydir/rescan-storage"
+}
+
+# === Main =====================================================================
+main() {
+    validate_args "$@"
+
+    # Delegate to compute host if invoked on the storage node (two-node only).
+    if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+        REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "rename-vm-disk")
+        exec ssh -t root@"$COMPUTE_HOST" \
+            "$REMOTE_SCRIPT '$OLD_ZVOL' '$NEW_ZVOL'"
+    fi
+
+    # === Running on the compute host ===
+
+    echo "=== rename-vm-disk ==="
+    echo "  Old: $OLD_ZVOL"
+    echo "  New: $NEW_ZVOL"
+    echo ""
+
+    if is_two_node; then
+        discover_iscsi_state
+        if [[ -n "$ISCSI_TARGET" ]]; then
+            echo "  iSCSI: ${ISCSI_TARGET} LUN ${ISCSI_LUN} backstore ${ISCSI_BACKSTORE}"
+        else
+            echo "  iSCSI: not exported"
+        fi
+        echo ""
+    fi
+
+    find_vm_refs
+
+    if [[ ${#VM_REFS[@]} -gt 0 ]]; then
+        echo "  Referenced by VM(s):"
+        local ref
+        for ref in "${VM_REFS[@]}"; do
+            echo "    ${ref%%:*} disk ${ref#*:}"
+        done
+        echo ""
+        check_vms_stopped
+    else
+        echo "  Not referenced by any VM config (detached/orphaned zvol)."
+        echo ""
+    fi
+
+    read -rp "Proceed with rename? (y/N): " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+    echo ""
+
+    if is_two_node; then
+        run_storage_rename
+    else
+        echo "Renaming zvol..."
+        zfs rename "$OLD_ZVOL" "$NEW_ZVOL" || {
+            log_msg "FATAL: zfs rename failed"
+            exit 1
+        }
+        echo "✓ Zvol renamed"
+    fi
+
+    update_vm_configs
+    run_rescan
+
+    echo ""
+    echo "=== Done ==="
+    echo "  $OLD_ZVOL  →  $NEW_ZVOL"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

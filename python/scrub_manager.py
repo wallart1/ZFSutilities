@@ -430,7 +430,7 @@ def pause_scrubs_for_pools(
                 queue.pending.discard(name)
                 queue.paused.add(name)
                 queue.paused_by_user.add(name)
-            _emit(_log, f"INFO: Pools paused: {', '.join(sorted(paused))}")
+            _emit(_log, f"INFO: Scrubs paused: {', '.join(sorted(paused))}")
             queue._save()
 
     return paused
@@ -498,7 +498,7 @@ def resume_scrubs_for_pools(
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
                 _emit(_log, f"WARN: cannot resume scrub on '{name}': {exc}")
         elif info.state == ScrubState.SCANNING:
-            _emit(_log, f"INFO: Scrub on '{name}' is already running; no resume needed")
+            _emit(_log, f"VERB: Scrub on '{name}' is already running; no resume needed")
             already_running.append(name)
         elif info.state in (ScrubState.FINISHED, ScrubState.NONE):
             _emit(_log, f"INFO: Scrub on '{name}' finished while paused; no resume needed")
@@ -525,7 +525,7 @@ def resume_scrubs_for_pools(
             queue.paused_by_user.discard(name)
             queue.pending.discard(name)
         if resumed:
-            _emit(_log, f"INFO: Pools resumed: {', '.join(sorted(resumed))}")
+            _emit(_log, f"INFO: Scrubs resumed: {', '.join(sorted(resumed))}")
         elif already_running or finished_while_paused:
             _emit(
                 _log,
@@ -689,7 +689,7 @@ class ScrubQueue:
             self.paused.add(name)
             self.paused_by_user.add(name)
         if to_pause:
-            log_msg(f"INFO: Pools paused: {', '.join(sorted(to_pause))}")
+            log_msg(f"INFO: Scrubs paused: {', '.join(sorted(to_pause))}")
             self._save()
 
     def resume_pools(self, pool_names: list[str]):
@@ -701,7 +701,7 @@ class ScrubQueue:
             self.paused_by_user.discard(name)
             self.pending.add(name)
         if to_resume:
-            log_msg(f"INFO: Pools resumed: {', '.join(sorted(to_resume))}")
+            log_msg(f"INFO: Scrubs resumed: {', '.join(sorted(to_resume))}")
             self._save()
 
     def tick(self, states: dict[str, ScrubInfo]):
@@ -725,9 +725,12 @@ class ScrubQueue:
                 self.active.discard(pool_name)
                 self.finished.add(pool_name)
             elif info.state == ScrubState.PAUSED:
-                # External pause detected
+                # External pause detected (e.g., user ran zpool scrub -p).
+                # Treat it like a user-initiated pause so the queue does not
+                # auto-resume it.
                 self.active.discard(pool_name)
                 self.paused.add(pool_name)
+                self.paused_by_user.add(pool_name)
             elif info.state == ScrubState.NONE:
                 # Scrub finished or was reset
                 started_at = self._start_times.get(pool_name)
@@ -783,7 +786,10 @@ class ScrubQueue:
                 self.active.add(pool_name)
                 log_msg(f"INFO: External scrub detected on '{pool_name}'")
             elif info.state == ScrubState.PAUSED:
+                # Externally paused pool that the queue was not tracking.
+                # Treat it as user-paused so it stays paused.
                 self.paused.add(pool_name)
+                self.paused_by_user.add(pool_name)
             elif info.state in (ScrubState.FINISHED, ScrubState.CANCELED):
                 self.finished.add(pool_name)
 

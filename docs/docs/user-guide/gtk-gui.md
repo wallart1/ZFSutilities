@@ -511,7 +511,10 @@ only when the selection contains at least one real task; selecting the
 The scrub list is reconciled against live `zpool status` on every refresh, so
 scrubs that finish or are paused externally — for example, by a headless
 profile that uses the **Pause scrubs during each step** option — do not keep
-showing as running after the actual scrub state changes.
+showing as running after the actual scrub state changes. Scrubs paused outside
+zfsutilities (for example, with `zpool scrub -p <pool>`) are treated as
+user-paused and remain paused until you explicitly resume them from the
+[Pools tab](#pools-tab).
 
 ### Active Locks
 

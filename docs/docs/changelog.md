@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.84.0
+
+*Released 2026-08-19*
+
+### Added
+
+- **`rename-vm-disk`** — New command that renames a ZFS zvol while preserving
+  Proxmox VM config references and iSCSI LUN wiring. The new path must be under
+  the same pool as the old path. Supports both single-node
+  (`pool:basename`) and two-node (`/dev/disk/by-path/…`) disk references,
+  encrypted LUNs, and detached/orphaned zvols.
+
+### Changed
+
+- **Remote heredoc bootstrap fixed** — Storage-side SSH heredocs in `clone-vm`
+  and `move-vm-disk` no longer rely on `${BASH_SOURCE[0]}`, which failed with a
+  `realpath` error when the remote shell was invoked via `bash -s`. They now use
+  the deployed path `/usr/local/lib/zfsutilities/current/bin` directly.
+
+- **External scrub pauses honored** — Scrubs paused outside zfsutilities (for
+  example, with `zpool scrub -p <pool>`) are now treated as user-paused and are
+  not auto-resumed by the scrub queue.
+
+- **Routine completion messages lowered to `VERB`** — "Dataset action complete",
+  "Deleted profile", and "Cron file updated" messages are now emitted at `VERB`
+  level instead of `INFO`.
+
+- **GUI log panel uses monospace font** — The main-window log panel and its
+  popped-out window now render text with a monospace font for better alignment
+  of command output.
+
+- **Installer retention lock path isolation** — When
+  `ensure_default_retention_profile()` is called with an explicit config path,
+  the advisory lock is placed next to that config file so tests and alternate
+  installs do not need write access to `/run/lock`.
+
+### Fixed
+
+- **`zfssnapbuild` snapfile removal quoting** — The temporary snapfile path is
+  now quoted in the `rm` call.
+
+### Tests
+
+- Added `tests/test-rename-vm-disk` for the new `rename-vm-disk` helper
+  functions.
+
+- Added `tests/test-clone-vm` regression tests for the storage-side heredoc
+  bootstrap.
+
+- Extended `tests/test-move-vm-disk` with bootstrap regression tests for both
+  storage-side heredocs.
+
+- Extended `tests/python/test_scrub_manager.py` coverage for externally paused
+  scrubs.
+
+- Extended `tests/python/test_gui_infrastructure.py` coverage for the monospace
+  log panel.
+
+- Extended `tests/python/test_installer_retention.py` coverage for the adjacent
+  lock file used with overridden config paths.
+
+### Documentation
+
+- Added `rename-vm-disk` to the command reference and Proxmox integration guide.
+
+- Updated `docs/docs/user-guide/gtk-gui.md` to document externally paused scrubs.
+
 ## 0.83.4
 
 *Released 2026-08-13*
@@ -638,8 +705,12 @@
 
 - **Scrub pause/resume log level adjusted** — The per-pool "Pausing scrub" and
   "Scrub paused" / "Resuming scrub" and "Scrub resumed" messages are now
-  emitted at `VERB` level; the summary "Pools paused:" / "Pools resumed:"
+  emitted at `VERB` level; the summary "Scrubs paused:" / "Scrubs resumed:"
   lines remain at `INFO`.
+
+- **Routine completion messages lowered to `VERB`** — "Dataset action complete",
+  "Deleted profile", and "Cron file updated" messages are now emitted at `VERB`
+  level instead of `INFO`.
 
 ### Tests
 

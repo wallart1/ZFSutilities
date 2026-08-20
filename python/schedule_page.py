@@ -1035,4 +1035,4 @@ def on_schedule_delete(app):
     delete_profile(profile_name)
     _regenerate_cron(app)
     _refresh_profile_list(app)
-    log_msg(f"INFO: Deleted profile: {profile_name}")
+    log_msg(f"VERB: Deleted profile: {profile_name}")

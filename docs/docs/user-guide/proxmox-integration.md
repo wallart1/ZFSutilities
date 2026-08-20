@@ -58,6 +58,7 @@ can attach and detach them, but cannot create, resize, or delete them.
 | **Detach VM disk**              | Proxmox GUI: Hardware → select disk → Detach                                     | Script only: [`detach-vm-disk`](../commands-and-modules/two-node.md#detach-vm-disk-both) |
 | **Attach existing disk**        | Proxmox GUI: Hardware → Add → Hard Disk → select existing                        | Script only: [`attach-vm-disk`](../commands-and-modules/two-node.md#attach-vm-disk-both) |
 | **Move VM disk to another VM**  | Proxmox GUI: not supported for iSCSI LUNs                                        | Script only: [`move-vm-disk`](../commands-and-modules/two-node.md#move-vm-disk-both)     |
+| **Rename VM disk zvol**         | Use [`rename-vm-disk`](../commands-and-modules/commands.md#rename-vm-disk)       | Script only: [`rename-vm-disk`](../commands-and-modules/commands.md#rename-vm-disk)      |
 | **Clone VM (full copy)**        | Proxmox GUI: right-click VM → Clone (Mode: Full Clone)                           | Script only: [`clone-vm`](../commands-and-modules/two-node.md#clone-vm-both)             |
 | **Clone VM (linked/ZFS clone)** | Proxmox GUI: right-click VM → Clone (Mode: Linked Clone)                         | Script only: [`zfsclone-vm`](../commands-and-modules/two-node.md#zfsclone-vm-both)       |
 | **Promote clone**               | Not exposed in Proxmox GUI — use [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both) | [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both)          |
@@ -290,6 +291,33 @@ sudo move-vm-disk 100 scsi1 200
 The script verifies the iSCSI LUN exists on the storage node via SSH, confirms
 both VMs are stopped, and moves the disk line from the source VM config to the
 destination VM config. The LUN number and device path do not change.
+
+---
+
+## Renaming a VM Disk Zvol
+
+To change any part of the zvol path after the pool name while preserving Proxmox
+and iSCSI wiring, use [`rename-vm-disk`](../commands-and-modules/commands.md#rename-vm-disk):
+
+```bash
+sudo rename-vm-disk threeamigos/proxmox/vm-100-disk-0 threeamigos/proxmox/vm-100-disk-1
+sudo rename-vm-disk threeamigos/proxmox/old-name threeamigos/proxmox/new-name
+```
+
+The new path must be under the **same pool** as the old path. The script:
+
+1. Discovers whether the zvol is currently exported as an iSCSI LUN (two-node).
+2. Scans **all** Proxmox VM configs to find references — the VMID embedded in the
+   zvol basename is not assumed to match the VM actually using the disk.
+3. Refuses to proceed if any VM referencing the disk is running.
+4. Tears down and recreates the iSCSI backstore/LUN, preserving the LUN number
+   whenever possible (two-node).
+5. Renames the zvol.
+6. Updates each Proxmox config that references the disk.
+7. Triggers an iSCSI rescan (two-node).
+
+Detached/orphaned zvols (not referenced by any VM config) can also be renamed;
+in two-node mode the iSCSI export is preserved if it exists.
 
 ---
 
@@ -605,10 +633,11 @@ ZFSutilities scripts and the GTK GUI for:
 The Proxmox GUI handles VM runtime management (start, stop, console,
 hardware settings). For everything storage-related, use ZFSutilities:
 
-- **All disk operations**: create, resize, delete, move ([`new-vm-disk`](../commands-and-modules/two-node.md#new-vm-disk-both),
+- **All disk operations**: create, resize, delete, move, rename ([`new-vm-disk`](../commands-and-modules/two-node.md#new-vm-disk-both),
   [`resize-vm-disk`](../commands-and-modules/two-node.md#resize-vm-disk-both),
   [`remove-vm-disk`](../commands-and-modules/two-node.md#remove-vm-disk-both),
-  [`move-vm-disk`](../commands-and-modules/two-node.md#move-vm-disk-both))
+  [`move-vm-disk`](../commands-and-modules/two-node.md#move-vm-disk-both),
+  [`rename-vm-disk`](../commands-and-modules/commands.md#rename-vm-disk))
 - **All clone operations**: [`zfsclone-vm`](../commands-and-modules/two-node.md#zfsclone-vm-both),
   [`clone-vm`](../commands-and-modules/two-node.md#clone-vm-both),
   [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both)

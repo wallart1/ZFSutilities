@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-# shellcheck disable=SC1090,SC2034,SC2154
+# shellcheck disable=SC1090,SC1091,SC2016,SC2034,SC2154
 # test-move-vm-disk — Unit tests for move-vm-disk helper functions.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
@@ -17,10 +17,22 @@ func_text+=$'\n'
 eval "$func_text"
 
 # Define the manifest helpers locally (they are simple one-liners in move-vm-disk).
-manifest_remove() { [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"; }
-manifest_add()    { [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" && echo "$1" >> "$ISCSI_MANIFEST"; }
-encrypted_remove(){ [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" && sed -i "/^${1}:/d" "$ISCSI_ENCRYPTED_CONF"; }
-encrypted_add()   { [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" && echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"; }
+manifest_remove() {
+    [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" \
+        && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"
+}
+manifest_add() {
+    [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" \
+        && echo "$1" >> "$ISCSI_MANIFEST"
+}
+encrypted_remove() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
+        && sed -i "/^${1}:/d" "$ISCSI_ENCRYPTED_CONF"
+}
+encrypted_add() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
+        && echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
+}
 
 # ------------------------------------------------------------------
 # Test helpers
@@ -29,7 +41,59 @@ setup_manifests() {
     ISCSI_MANIFEST="$_mock_zfs_state_dir/expected-backstores.txt"
     ISCSI_ENCRYPTED_CONF="$_mock_zfs_state_dir/iscsi-encrypted-luns.conf"
     echo "vm-100-disk-0" > "$ISCSI_MANIFEST"
-    echo "vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos" > "$ISCSI_ENCRYPTED_CONF"
+    echo "vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos" \
+        > "$ISCSI_ENCRYPTED_CONF"
+}
+
+# ------------------------------------------------------------------
+# Bootstrap regression tests for storage-side heredocs.
+# The heredocs previously used BASH_SOURCE[0] and failed under bash -s.
+# ------------------------------------------------------------------
+
+# Extract a specific SSHEOF-delimited heredoc by a unique content marker.
+extract_heredoc_by_marker() {
+    local marker="$1"
+    awk '
+        /cat <<.SSHEOF.$/ || /<< .SSHEOF.$/ { in_block=1; next }
+        /^SSHEOF$/ {
+            in_block=0
+            if (block ~ marker) { printf "%s", block }
+            block=""
+            next
+        }
+        in_block { block = block $0 "\n" }
+    ' marker="$marker" "$old_mydir/bin/move-vm-disk"
+}
+
+test_storage_move_heredoc_bootstrap() {
+    test_start "storage_move heredoc avoids BASH_SOURCE[0] bootstrap"
+    local bootstrap
+    bootstrap=$(extract_heredoc_by_marker 'PHASE=teardown_done')
+    if grep -q 'BASH_SOURCE\[0\]' <<< "$bootstrap"; then
+        test_fail "storage_move heredoc still uses BASH_SOURCE[0] bootstrap"
+        return
+    fi
+    if ! grep -q 'mydir=\$(realpath /usr/local/lib/zfsutilities/current/bin)' <<< "$bootstrap"; then
+        test_fail "storage_move heredoc does not use deployed-path bootstrap"
+        return
+    fi
+    test_pass
+}
+
+test_rollback_heredoc_bootstrap() {
+    test_start "rollback heredoc avoids BASH_SOURCE[0] bootstrap"
+    local bootstrap
+    local marker="# Rename zvol back if it exists under the destination name"
+    bootstrap=$(extract_heredoc_by_marker "$marker")
+    if grep -q 'BASH_SOURCE\[0\]' <<< "$bootstrap"; then
+        test_fail "rollback heredoc still uses BASH_SOURCE[0] bootstrap"
+        return
+    fi
+    if ! grep -q 'mydir=\$(realpath /usr/local/lib/zfsutilities/current/bin)' <<< "$bootstrap"; then
+        test_fail "rollback heredoc does not use deployed-path bootstrap"
+        return
+    fi
+    test_pass
 }
 
 # ------------------------------------------------------------------
@@ -110,8 +174,11 @@ test_encrypted_add() {
     setup_manifests
     echo "" > "$ISCSI_ENCRYPTED_CONF"
     test_start "encrypted_add adds backstore to encrypted-luns config"
-    encrypted_add "vm-100-disk-0" "/dev/zvol/threeamigos/proxmox/vm-100-disk-0" "threeamigos"
-    if grep -q "^vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos" "$ISCSI_ENCRYPTED_CONF"; then
+    encrypted_add "vm-100-disk-0" \
+        "/dev/zvol/threeamigos/proxmox/vm-100-disk-0" \
+        "threeamigos"
+    if grep -q "^vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos" \
+            "$ISCSI_ENCRYPTED_CONF"; then
         test_pass
     else
         test_fail "Backstore not added to encrypted config"
@@ -121,6 +188,8 @@ test_encrypted_add() {
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
+test_storage_move_heredoc_bootstrap
+test_rollback_heredoc_bootstrap
 test_disk_num_from_key
 test_disk_num_from_key_ide
 test_auto_select_dst_key

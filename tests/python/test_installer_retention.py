@@ -93,6 +93,30 @@ class TestEnsureDefaultRetentionProfile(unittest.TestCase):
             config = self._read_config(path)
             self.assertEqual(list(config["retention"].keys()), ["default"])
 
+    def test_explicit_config_path_uses_adjacent_lock(self):
+        """An overridden config path uses a lock file next to the config."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "zfsutilities.json")
+            lock_path = os.path.join(tmpdir, ".config.lock")
+            original_lock_path = installer_retention.file_locking.CONFIG_LOCK_PATH
+            # Remove the adjacent lock if a previous test left it behind.
+            if os.path.exists(lock_path):
+                os.remove(lock_path)
+
+            installer_retention.ensure_default_retention_profile(
+                config_path=path, new_install=True
+            )
+
+            self.assertTrue(
+                os.path.exists(lock_path),
+                "Expected adjacent lock file to be created next to overridden config",
+            )
+            # Ensure the global lock path was restored after the call.
+            self.assertEqual(
+                installer_retention.file_locking.CONFIG_LOCK_PATH,
+                original_lock_path,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

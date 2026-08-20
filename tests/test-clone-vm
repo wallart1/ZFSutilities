@@ -1,0 +1,89 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1091,SC2016
+# test-clone-vm — Regression tests for clone-vm.
+#
+# Focuses on the storage-side SSH heredoc bootstrap that previously failed
+# with "realpath: '': No such file or directory" when run via bash -s.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# Extract the storage-side heredoc from clone-vm (between the SSHEOF markers).
+heredoc=$(sed -n '/bash -s "\$target" "\$SRCVMID"/,/^SSHEOF$/{ /bash -s/d; p; }' \
+    "$mydir/bin/clone-vm")
+
+test_heredoc_avoids_bash_source_bootstrap() {
+    test_start "storage heredoc avoids BASH_SOURCE[0] bootstrap"
+
+    if grep -q 'BASH_SOURCE\[0\]' <<< "$heredoc"; then
+        test_fail "heredoc still uses BASH_SOURCE[0] bootstrap"
+        return
+    fi
+    test_pass
+}
+
+test_heredoc_uses_deployed_path_bootstrap() {
+    test_start "storage heredoc uses deployed-path bootstrap"
+
+    if grep -q 'mydir=\$(realpath /usr/local/lib/zfsutilities/current/bin)' <<< "$heredoc"; then
+        test_pass
+    else
+        test_fail "heredoc does not use deployed-path bootstrap"
+    fi
+}
+
+test_heredoc_bootstrap_no_realpath_error() {
+    test_start "storage heredoc bootstrap has no realpath error under bash -s"
+
+    local tmp_dir stderr_file rc
+    tmp_dir=$(mktemp -d)
+    stderr_file="$tmp_dir/stderr.log"
+
+    # Create a minimal fake deployment tree with bashinit.
+    mkdir -p "$tmp_dir/bin"
+    cat > "$tmp_dir/bin/bashinit" << 'EOF'
+function bashinit { :; }
+function log_msg { echo "$*" >&2; }
+function source_helper { :; }
+EOF
+
+    # Mock realpath so the hardcoded deployment path resolves to our temp tree.
+    cat > "$tmp_dir/bin/realpath" << EOF
+#!/usr/bin/bash
+if [[ "\$1" == "/usr/local/lib/zfsutilities/current/bin" ]]; then
+    echo "$tmp_dir/bin"
+else
+    command realpath "\$@"
+fi
+EOF
+    chmod +x "$tmp_dir/bin/realpath"
+
+    # Extract just the bootstrap lines (mydir + source + bashinit) and run
+    # them through bash -s, which is what happens on the remote storage host.
+    bootstrap=$(sed -n '1,/^bashinit$/p' <<< "$heredoc")
+
+    PATH="$tmp_dir/bin:$PATH" bash -s <<< "$bootstrap" 2>"$stderr_file"
+    rc=$?
+
+    if grep -q "realpath: '': No such file or directory" "$stderr_file"; then
+        test_fail "bootstrap emitted realpath error under bash -s"
+        rm -rf "$tmp_dir"
+        return
+    fi
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "bootstrap exited non-zero (rc=$rc)"
+        rm -rf "$tmp_dir"
+        return
+    fi
+
+    rm -rf "$tmp_dir"
+    test_pass
+}
+
+test_heredoc_avoids_bash_source_bootstrap
+test_heredoc_uses_deployed_path_bootstrap
+test_heredoc_bootstrap_no_realpath_error
+
+test_summary
+teardown_test_env

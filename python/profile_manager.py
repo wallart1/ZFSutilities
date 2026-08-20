@@ -88,7 +88,7 @@ def delete_profile(name):
     path = os.path.join(get_profiles_dir(), f"{name}.json")
     try:
         os.remove(path)
-        log_msg(f"INFO: Deleted profile: {name}")
+        log_msg(f"VERB: Deleted profile: {name}")
         return True
     except OSError:
         return False

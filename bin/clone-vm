@@ -287,15 +287,9 @@ for key in "${disk_keys[@]}"; do
     echo "Cloning ${key} (pool=${pool}, LUN ${old_lun})..."
 
     new_lun=$(ssh root@"$STORAGE_HOST" bash -s "$target" "$SRCVMID" "$DSTVMID" "$old_lun" "$pool" << 'SSHEOF'
-_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
-if [[ -f "$_local_bashinit" ]]; then
-    source "$_local_bashinit"
-else
-    source ~/bashinit
-fi
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
 bashinit
-unset _local_bashinit
-
 
 set -e
 TARGET="$1"
@@ -303,8 +297,6 @@ SRC_VMID="$2"
 DST_VMID="$3"
 OLD_LUN="$4"
 POOL="$5"
-
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 
 # Find the backstore name for the old LUN to get the disk number
 backstore=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \

@@ -415,7 +415,19 @@ class TestScrubQueue(unittest.TestCase):
         states = {"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)}
         q.tick(states)
         self.assertIn("tank", q.paused)
+        self.assertIn("tank", q.paused_by_user)
         self.assertNotIn("tank", q.active)
+
+    def test_tick_external_pause_not_auto_resumed(self):
+        """An externally paused active scrub stays paused when a slot is free."""
+        q = sm.ScrubQueue(target=1)
+        q.active.add("tank")
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)}
+        with patch.object(sm, "resume_scrub") as mock_resume:
+            q.tick(states)
+        self.assertIn("tank", q.paused)
+        self.assertIn("tank", q.paused_by_user)
+        mock_resume.assert_not_called()
 
     def test_remove_pools(self):
         q = sm.ScrubQueue(target=1)
@@ -496,6 +508,16 @@ class TestScrubQueue(unittest.TestCase):
         states = {"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}
         q.tick(states)
         self.assertIn("tank", q.active)
+
+    def test_tick_untracked_external_pause_not_auto_resumed(self):
+        """An externally paused pool not tracked by the queue stays paused."""
+        q = sm.ScrubQueue(target=1)
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)}
+        with patch.object(sm, "resume_scrub") as mock_resume:
+            q.tick(states)
+        self.assertIn("tank", q.paused)
+        self.assertIn("tank", q.paused_by_user)
+        mock_resume.assert_not_called()
 
     def test_tick_grace_period_for_none(self):
         q = sm.ScrubQueue(target=1)
@@ -839,6 +861,20 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
         sm.attach_step_scrub_callbacks(step, "host:/path", "/mnt/path", enabled=True, dry_run=False)
         self.assertIsNone(step.pre_callback)
         self.assertIsNone(step.post_callback)
+
+    def test_attach_step_scrub_callbacks_do_not_resume_pre_existing_paused_scrub(self):
+        """If the pool was already paused, the callback must not resume it."""
+        from command_builders import BashStep
+
+        step = BashStep([], "send")
+        sm.attach_step_scrub_callbacks(step, "src/a", "dst/b", enabled=True, dry_run=False)
+        with patch.object(
+            sm, "pause_scrubs_for_pools", return_value=[]
+        ) as mock_pause, patch.object(sm, "resume_scrubs_for_pools") as mock_resume:
+            step.pre_callback()
+            mock_pause.assert_called_once()
+            step.post_callback()
+            mock_resume.assert_not_called()
 
     def test_pause_scrubs_for_pools_uses_custom_log_func(self):
         """pause_scrubs_for_pools routes messages through log_func when given."""

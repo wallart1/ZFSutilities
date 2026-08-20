@@ -63,7 +63,7 @@ zfssnapbuild() {
             echo "$nextsnap"
             return 0
         else
-            rm $snapfile
+            rm "$snapfile"
         fi
     fi
     # Generate a new snapshot name under the global snapshot-name lock.

@@ -16,6 +16,7 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 import config_core
+import file_locking
 from config_core import load_config, save_config
 from feature_config import get_all_retention
 from logging_config import log_msg
@@ -36,7 +37,14 @@ def ensure_default_retention_profile(config_path=None, new_install=False):
     path = config_path or config_core.CONFIG_PATH
 
     old_path = config_core.CONFIG_PATH
+    old_lock_path = file_locking.CONFIG_LOCK_PATH
     config_core.CONFIG_PATH = path
+    if config_path is not None:
+        # Keep the advisory lock next to the overridden config file so tests
+        # and alternate installs do not need write access to /run/lock.
+        file_locking.CONFIG_LOCK_PATH = os.path.join(
+            os.path.dirname(path), ".config.lock"
+        )
     try:
         config = load_config()
 
@@ -73,6 +81,7 @@ def ensure_default_retention_profile(config_path=None, new_install=False):
         raise
     finally:
         config_core.CONFIG_PATH = old_path
+        file_locking.CONFIG_LOCK_PATH = old_lock_path
 
 
 def main(argv=None):

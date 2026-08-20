@@ -53,7 +53,7 @@ def write_cron_file(profiles, runner_path):
         with open(CRON_FILE, "w") as f:
             f.write(content)
         os.chmod(CRON_FILE, 0o644)
-        log_msg(f"INFO: Cron file updated: {CRON_FILE}")
+        log_msg(f"VERB: Cron file updated: {CRON_FILE}")
     except OSError as e:
         log_msg(f"FATAL: Could not write cron file {CRON_FILE}: {e}")
         raise

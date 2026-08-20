@@ -1259,6 +1259,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#renaming-a-vm-disk-zvol" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Renaming a VM Disk Zvol
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#cloning-a-vm" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2398,6 +2409,11 @@ can attach and detach them, but cannot create, resize, or delete them.</p>
 <td>Script only: <a href="../../commands-and-modules/two-node/#move-vm-disk-both"><code>move-vm-disk</code></a></td>
 </tr>
 <tr>
+<td><strong>Rename VM disk zvol</strong></td>
+<td>Use <a href="../../commands-and-modules/commands/#rename-vm-disk"><code>rename-vm-disk</code></a></td>
+<td>Script only: <a href="../../commands-and-modules/commands/#rename-vm-disk"><code>rename-vm-disk</code></a></td>
+</tr>
+<tr>
 <td><strong>Clone VM (full copy)</strong></td>
 <td>Proxmox GUI: right-click VM → Clone (Mode: Full Clone)</td>
 <td>Script only: <a href="../../commands-and-modules/two-node/#clone-vm-both"><code>clone-vm</code></a></td>
@@ -2634,6 +2650,27 @@ directly — no data is copied and no zvols are renamed.</p>
 <p>The script verifies the iSCSI LUN exists on the storage node via SSH, confirms
 both VMs are stopped, and moves the disk line from the source VM config to the
 destination VM config. The LUN number and device path do not change.</p>
+<hr />
+<h2 id="renaming-a-vm-disk-zvol">Renaming a VM Disk Zvol<a class="headerlink" href="#renaming-a-vm-disk-zvol" title="Permanent link">&para;</a></h2>
+<p>To change any part of the zvol path after the pool name while preserving Proxmox
+and iSCSI wiring, use <a href="../../commands-and-modules/commands/#rename-vm-disk"><code>rename-vm-disk</code></a>:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>rename-vm-disk<span class="w"> </span>threeamigos/proxmox/vm-100-disk-0<span class="w"> </span>threeamigos/proxmox/vm-100-disk-1
+sudo<span class="w"> </span>rename-vm-disk<span class="w"> </span>threeamigos/proxmox/old-name<span class="w"> </span>threeamigos/proxmox/new-name
+</code></pre></div>
+<p>The new path must be under the <strong>same pool</strong> as the old path. The script:</p>
+<ol>
+<li>Discovers whether the zvol is currently exported as an iSCSI LUN (two-node).</li>
+<li>Scans <strong>all</strong> Proxmox VM configs to find references — the VMID embedded in the
+   zvol basename is not assumed to match the VM actually using the disk.</li>
+<li>Refuses to proceed if any VM referencing the disk is running.</li>
+<li>Tears down and recreates the iSCSI backstore/LUN, preserving the LUN number
+   whenever possible (two-node).</li>
+<li>Renames the zvol.</li>
+<li>Updates each Proxmox config that references the disk.</li>
+<li>Triggers an iSCSI rescan (two-node).</li>
+</ol>
+<p>Detached/orphaned zvols (not referenced by any VM config) can also be renamed;
+in two-node mode the iSCSI export is preserved if it exists.</p>
 <hr />
 <h2 id="cloning-a-vm">Cloning a VM<a class="headerlink" href="#cloning-a-vm" title="Permanent link">&para;</a></h2>
 <h3 id="single-node_5">Single-node<a class="headerlink" href="#single-node_5" title="Permanent link">&para;</a></h3>
@@ -2907,10 +2944,11 @@ ZFSutilities scripts and the GTK GUI for:</p>
 <p>The Proxmox GUI handles VM runtime management (start, stop, console,
 hardware settings). For everything storage-related, use ZFSutilities:</p>
 <ul>
-<li><strong>All disk operations</strong>: create, resize, delete, move (<a href="../../commands-and-modules/two-node/#new-vm-disk-both"><code>new-vm-disk</code></a>,
+<li><strong>All disk operations</strong>: create, resize, delete, move, rename (<a href="../../commands-and-modules/two-node/#new-vm-disk-both"><code>new-vm-disk</code></a>,
   <a href="../../commands-and-modules/two-node/#resize-vm-disk-both"><code>resize-vm-disk</code></a>,
   <a href="../../commands-and-modules/two-node/#remove-vm-disk-both"><code>remove-vm-disk</code></a>,
-  <a href="../../commands-and-modules/two-node/#move-vm-disk-both"><code>move-vm-disk</code></a>)</li>
+  <a href="../../commands-and-modules/two-node/#move-vm-disk-both"><code>move-vm-disk</code></a>,
+  <a href="../../commands-and-modules/commands/#rename-vm-disk"><code>rename-vm-disk</code></a>)</li>
 <li><strong>All clone operations</strong>: <a href="../../commands-and-modules/two-node/#zfsclone-vm-both"><code>zfsclone-vm</code></a>,
   <a href="../../commands-and-modules/two-node/#clone-vm-both"><code>clone-vm</code></a>,
   <a href="../../commands-and-modules/two-node/#promote-vm-clone-both"><code>promote-vm-clone</code></a></li>
@@ -2952,7 +2990,7 @@ hardware settings). For everything storage-related, use ZFSutilities:</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.83.4
+      ZFS Utilities v0.84.0
     </div>
   
   
@@ -2977,7 +3015,7 @@ hardware settings). For everything storage-related, use ZFSutilities:</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.83.4"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.84.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

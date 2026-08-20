@@ -191,14 +191,9 @@ check_dst_zvol_free() {
 # All output is echoed back to the compute host for state capture.
 storage_move_script() {
     cat <<'SSHEOF'
-_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
-if [[ -f "$_local_bashinit" ]]; then
-    source "$_local_bashinit"
-else
-    source ~/bashinit
-fi
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
 bashinit
-unset _local_bashinit
 
 set -e
 SRCZVOL="$1"; DSTZVOL="$2"
@@ -206,8 +201,6 @@ SRCBACKSTORE="$3"; DSTBACKSTORE="$4"
 TARGET="$5"; SRCLUN="$6"; ENCRYPTED="$7"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
 ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
-
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 
 manifest_remove() { [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"; }
 manifest_add()    { [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" && echo "$1" >> "$ISCSI_MANIFEST"; }
@@ -355,14 +348,9 @@ rollback() {
         ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
             "$SRCZVOL" "$DSTZVOL" "$SRCBACKSTORE" "$DSTBACKSTORE" "$TARGET" "$SRCLUN" "$ENCRYPTED" \
             << 'SSHEOF'
-_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
-if [[ -f "$_local_bashinit" ]]; then
-    source "$_local_bashinit"
-else
-    source ~/bashinit
-fi
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
 bashinit
-unset _local_bashinit
 
 set -e
 SRCZVOL="$1"; DSTZVOL="$2"
@@ -370,8 +358,6 @@ SRCBACKSTORE="$3"; DSTBACKSTORE="$4"
 TARGET="$5"; SRCLUN="$6"; ENCRYPTED="$7"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
 ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
-
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 
 manifest_remove() { [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"; }
 manifest_add()    { [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" && echo "$1" >> "$ISCSI_MANIFEST"; }

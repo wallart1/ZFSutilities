@@ -6,6 +6,11 @@ import os
 import sys
 import unittest
 
+# Suppress the GTK/AT-SPI "Couldn't connect to accessibility bus" warning when
+# tests import real GTK modules (e.g. test_datasets_tree, test_main) in a
+# headless environment. Mirrors the guard in python/docs_viewer.py.
+os.environ.setdefault("NO_AT_BRIDGE", "1")
+
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
