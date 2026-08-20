@@ -38,18 +38,18 @@ ZFSLOCK_MANAGER="${ZFSLOCK_MANAGER:-$(find_zfsutility_script zfslockmanager)}"
 source "$ZFSLOCK_MANAGER"
 
 usage() {
-    echo "Usage: archive-vm <vmid>"
+    log_msg "INFO: Usage: archive-vm <vmid>"
     echo ""
-    echo "  vmid   VM ID to retire"
+    log_msg "INFO:   vmid   VM ID to retire"
     echo ""
-    echo "Steps:"
-    echo "  1. Discover ZFS clones that depend on this VM"
-    echo "  2. Optionally promote clones (sever dependency)"
-    echo "  3. Archive zvols and Proxmox config"
-    echo "  4. Verify archive integrity"
-    echo "  5. Optionally remove the VM"
+    log_msg "INFO: Steps:"
+    log_msg "INFO:   1. Discover ZFS clones that depend on this VM"
+    log_msg "INFO:   2. Optionally promote clones (sever dependency)"
+    log_msg "INFO:   3. Archive zvols and Proxmox config"
+    log_msg "INFO:   4. Verify archive integrity"
+    log_msg "INFO:   5. Optionally remove the VM"
     echo ""
-    echo "Example: archive-vm 904"
+    log_msg "INFO: Example: archive-vm 904"
     exit 1
 }
 
@@ -85,13 +85,12 @@ ensure_retire_snapshot() {
             fi
             zfslock_release "$ZFSLOCK_ID"
             snap="${zvol}${snap_name}"
-            echo "  Created retire snapshot: ${snap}" >&2
+            log_msg "INFO:   Created retire snapshot: ${snap}"
         fi
     else
         snap=$(ssh root@"$STORAGE_HOST" bash -s "$zvol" << 'SSHEOF'
 zvol="$1"
 
-log_msg() { echo "$*" >&2; }
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
@@ -102,20 +101,20 @@ snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1
 if [[ -z "$snap" ]]; then
     zfslock_init
     if ! zfslock_acquire "$zvol" "w" "archive-vm auto-snapshot"; then
-        log_msg "Could not acquire write lock on ${zvol} for snapshot creation"
+        log_msg "FATAL: Could not acquire write lock on ${zvol} for snapshot creation"
         echo "__ARCHIVE_VM_ERROR__"
         exit 1
     fi
     snap_name="@retire-$(date -Iminutes)-d"
     if ! zfs snapshot "${zvol}${snap_name}"; then
         zfslock_release "$ZFSLOCK_ID"
-        log_msg "Failed to create snapshot ${zvol}${snap_name}"
+        log_msg "FATAL: Failed to create snapshot ${zvol}${snap_name}"
         echo "__ARCHIVE_VM_ERROR__"
         exit 1
     fi
     zfslock_release "$ZFSLOCK_ID"
     snap="${zvol}${snap_name}"
-    echo "  Created retire snapshot: ${snap}" >&2
+    log_msg "INFO:   Created retire snapshot: ${snap}"
 fi
 echo "$snap"
 SSHEOF
@@ -213,12 +212,12 @@ collect_referenced_zvols() {
     if [[ ${#target_lun_refs[@]} -gt 0 ]]; then
         ssh root@"$STORAGE_HOST" bash -s "$VMID" \
             "${target_lun_refs[@]}" << 'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
 VMID="$1"
 shift
-
-if [[ $(type -t log_msg) != function ]]; then
-    log_msg() { echo "$*" >&2; }
-fi
 
 declare -A referenced_zvols=()
 for ref in "$@"; do
@@ -278,21 +277,25 @@ if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
         "$REMOTE_SCRIPT '$VMID'"
 fi
 
-echo "=== archive-vm ==="
-echo "  VM: ${VMID}"
+log_msg "INFO: === archive-vm ==="
+log_msg "INFO:   VM: ${VMID}"
 echo ""
 
 # =======================================================================
 # Step 1: Discover clones
 # =======================================================================
 
-echo "--- Step 1: Discovering dependent clones ---"
+log_msg "INFO: --- Step 1: Discovering dependent clones ---"
 
 if is_single_node; then
     clone_info=$(zfs list -H -o name,origin \
         | awk -v v="$VMID" '$2 ~ "/proxmox/vm-" v "-disk-" {print $1 "\t" $2}')
 else
     clone_info=$(ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
 VMID="$1"
 zfs list -H -o name,origin \
     | awk -v v="$VMID" '$2 ~ "/proxmox/vm-" v "-disk-" {print $1 "\t" $2}'
@@ -302,7 +305,7 @@ fi
 
 declare -A clone_vmids
 if [[ -n "$clone_info" ]]; then
-    echo "  Found dependent clones:"
+    log_msg "INFO:   Found dependent clones:"
     while IFS=$'\t' read -r zvol origin; do
         # grep -oP '/proxmox/vm-\K[0-9]+(?=-disk-)'
         # Purpose: Extract the VM ID from a zvol path using PCRE lookaround assertions.
@@ -311,8 +314,8 @@ if [[ -n "$clone_info" ]]; then
         clone_vmid=$(echo "$zvol" | grep -oP '/proxmox/vm-\K[0-9]+(?=-disk-)')
         if [[ -n "$clone_vmid" && "$clone_vmid" != "$VMID" ]]; then
             clone_vmids["$clone_vmid"]=1
-            echo "    VM ${clone_vmid}: ${zvol}"
-            echo "      origin: ${origin}"
+            log_msg "INFO:     VM ${clone_vmid}: ${zvol}"
+            log_msg "INFO:       origin: ${origin}"
         fi
     done <<< "$clone_info"
     echo ""
@@ -320,17 +323,17 @@ if [[ -n "$clone_info" ]]; then
     if ask_yn "Promote all clones to sever dependency on VM ${VMID}?"; then
         for clone_vmid in "${!clone_vmids[@]}"; do
             echo ""
-            echo "Promoting VM ${clone_vmid}..."
+            log_msg "INFO: Promoting VM ${clone_vmid}..."
             promote_vm_clone=$(find_zfsutility_script promote-vm-clone)
             "$promote_vm_clone" "$clone_vmid" \
                 || { log_msg "FATAL: Promotion failed for VM ${clone_vmid}"; exit 1; }
         done
     else
-        echo "  Skipping clone promotion."
+        log_msg "INFO:   Skipping clone promotion."
         log_msg "WARN: Archiving may fail if snapshots are held by clones."
     fi
 else
-    echo "  No dependent clones found."
+    log_msg "INFO:   No dependent clones found."
 fi
 echo ""
 
@@ -338,7 +341,7 @@ echo ""
 # Step 2: Archive
 # =======================================================================
 
-echo "--- Step 2: Archiving VM ${VMID} ---"
+log_msg "INFO: --- Step 2: Archiving VM ${VMID} ---"
 
 # Always prompt for archive base path
 configured_path=$(get_json_archive_path)
@@ -368,7 +371,7 @@ fi
 # Save the path back to JSON (in case it changed or was empty)
 if [[ "$ARCHIVE_BASE" != "$configured_path" ]]; then
     save_json_archive_path "$ARCHIVE_BASE"
-    echo "  ✓ Saved archive path to JSON config"
+    log_msg "INFO:   ✓ Saved archive path to JSON config"
 fi
 
 # Get mountpoint of the base dataset
@@ -387,13 +390,15 @@ zvols=$(collect_referenced_zvols | sort -u) \
     || { log_msg "FATAL: Failed to discover referenced zvols"; exit 1; }
 [[ -n "$zvols" ]] || { log_msg "FATAL: No referenced zvols found for VM ${VMID}"; exit 1; }
 
-echo "  Archive base: ${ARCHIVE_BASE} (mount: ${ARCHIVE_MOUNT})"
-echo "  Zvols to archive:"
-echo "$zvols" | sed 's/^/    /'
+log_msg "INFO:   Archive base: ${ARCHIVE_BASE} (mount: ${ARCHIVE_MOUNT})"
+log_msg "INFO:   Zvols to archive:"
+while IFS= read -r _zvol; do
+    log_msg "INFO:     ${_zvol}"
+done <<< "$zvols"
 echo ""
 
 if ! ask_yn "Proceed with archive?"; then
-    echo "Aborted."
+    log_msg "INFO: Aborted."
     exit 0
 fi
 
@@ -408,16 +413,16 @@ for zvol in $zvols; do
     snap_name="@${snap##*@}"
     archive_dataset="${ARCHIVE_BASE}/${zvol}"
 
-    echo "  Snapshot to archive: ${snap}"
+    log_msg "INFO:   Snapshot to archive: ${snap}"
 
     if is_single_node; then
         # Get original volblocksize and save it immediately
         orig_vbs=$(zfs get -H -o value volblocksize "$zvol")
-        echo "  Original volblocksize: ${orig_vbs}"
+        log_msg "INFO:   Original volblocksize: ${orig_vbs}"
         parent=$(dirname "$archive_dataset")
         zfs create -p "$parent" 2>/dev/null || true
 
-        echo "  Archiving ${zvol}${snap_name} → ${archive_dataset}"
+        log_msg "INFO:   Archiving ${zvol}${snap_name} → ${archive_dataset}"
         if ! zfs send -cw "$zvol$snap_name" \
                 | zfs receive -o volblocksize=1M "$archive_dataset"; then
             { log_msg "FATAL: Failed to archive ${zvol}"; exit 1; }
@@ -441,10 +446,14 @@ for zvol in $zvols; do
         fi
     else
         # Two-node: delegate to storage host
-        echo "  Archiving ${zvol}${snap_name} → ${archive_dataset}"
+        log_msg "INFO:   Archiving ${zvol}${snap_name} → ${archive_dataset}"
         ssh root@"$STORAGE_HOST" bash -s "$zvol" "$snap_name" \
             "$archive_dataset" "$ARCHIVE_MOUNT" "$VMID" \
             "$proxmoxconfig" << 'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
 zvol="$1"
 snap_name="$2"
 archive_dataset="$3"
@@ -454,13 +463,13 @@ proxmoxconfig="$6"
 
 # Get original volblocksize on the storage host
 orig_vbs=$(zfs get -H -o value volblocksize "$zvol")
-echo "  Original volblocksize: ${orig_vbs}" >&2
+log_msg "INFO:   Original volblocksize: ${orig_vbs}"
 
 parent=$(dirname "$archive_dataset")
 zfs create -p "$parent" 2>/dev/null || true
 
 if ! zfs send -cw "${zvol}${snap_name}" | zfs receive -o volblocksize=1M "$archive_dataset"; then
-    echo "Failed to archive ${zvol}" >&2
+    log_msg "FATAL: Failed to archive ${zvol}"
     exit 1
 fi
 
@@ -506,7 +515,7 @@ SSHEOF
         [[ $? -eq 0 ]] || { log_msg "FATAL: Failed to archive ${zvol}"; exit 1; }
     fi
 
-    echo "  ✓ Archived: ${archive_dataset}"
+    log_msg "INFO:   ✓ Archived: ${archive_dataset}"
 done
 
 # Archive Proxmox config — mirror the full path under the base mountpoint
@@ -519,14 +528,14 @@ else
     ssh root@"$STORAGE_HOST" "mkdir -p '$(dirname "$config_dest_mount")'"
     scp -q "$proxmoxconfig" "root@${STORAGE_HOST}:${config_dest_mount}"
 fi
-echo "  ✓ Config archived: ${proxmoxconfig}"
+log_msg "INFO:   ✓ Config archived: ${proxmoxconfig}"
 echo ""
 
 # =======================================================================
 # Step 3: Verify archive
 # =======================================================================
 
-echo "--- Step 3: Verifying archive ---"
+log_msg "INFO: --- Step 3: Verifying archive ---"
 
 errors=0
 for zvol in $zvols; do
@@ -537,7 +546,7 @@ for zvol in $zvols; do
             ((++errors))
         else
             size=$(zfs get -H -o value volsize "$archive_dataset")
-            echo "  ✓ ${archive_dataset} (${size})"
+            log_msg "INFO:   ✓ ${archive_dataset} (${size})"
         fi
     else
         if ! ssh root@"$STORAGE_HOST" "zfs list -H '$archive_dataset'" \
@@ -547,7 +556,7 @@ for zvol in $zvols; do
         else
             size=$(ssh root@"$STORAGE_HOST" \
                 "zfs get -H -o value volsize '$archive_dataset'")
-            echo "  ✓ ${archive_dataset} (${size})"
+            log_msg "INFO:   ✓ ${archive_dataset} (${size})"
         fi
     fi
 done
@@ -559,14 +568,14 @@ if is_single_node; then
         log_msg "FATAL: Config archive missing or empty"
         ((++errors))
     else
-        echo "  ✓ Config archive OK"
+        log_msg "INFO:   ✓ Config archive OK"
     fi
 else
     if ! ssh root@"$STORAGE_HOST" "[[ -f '$config_dest_mount' && -s '$config_dest_mount' ]]"; then
         log_msg "FATAL: Config archive missing or empty"
         ((++errors))
     else
-        echo "  ✓ Config archive OK"
+        log_msg "INFO:   ✓ Config archive OK"
     fi
 fi
 
@@ -575,33 +584,33 @@ if [[ $errors -gt 0 ]]; then
 fi
 
 echo ""
-echo "  Archive verified."
+log_msg "INFO:   Archive verified."
 echo ""
 
 # =======================================================================
 # Step 4: Optionally remove the VM
 # =======================================================================
 
-echo "--- Step 4: VM removal ---"
+log_msg "INFO: --- Step 4: VM removal ---"
 
 if ! ask_yn "Remove VM ${VMID}?"; then
-    echo "VM ${VMID} preserved. Archive is under: ${ARCHIVE_BASE}"
+    log_msg "INFO: VM ${VMID} preserved. Archive is under: ${ARCHIVE_BASE}"
     exit 0
 fi
 
 # Stop the VM if running
 vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
 if [[ "$vm_status" == "running" ]]; then
-    echo "  Stopping VM ${VMID}..."
+    log_msg "INFO:   Stopping VM ${VMID}..."
     qm stop "$VMID" 2>/dev/null || true
     sleep 2
 fi
 
 # Remove disks
 if is_single_node; then
-    echo "  Removing disks..."
+    log_msg "INFO:   Removing disks..."
     for zvol in $zvols; do
-        echo "    Destroying ${zvol}..."
+        log_msg "INFO:     Destroying ${zvol}..."
         if ! zfs destroy "$zvol"; then
             zfs_diagnose_busy=$(find_zfsutility_script zfs-diagnose-busy)
             source "$zfs_diagnose_busy"
@@ -610,12 +619,12 @@ if is_single_node; then
         fi
     done
 else
-    echo "  Removing disks and iSCSI resources..."
+    log_msg "INFO:   Removing disks and iSCSI resources..."
     for zvol in $zvols; do
         # grep -oP 'disk-\K[0-9]+$'  —  Extract disk number from zvol path (see comment above).
         disknum=$(echo "$zvol" | grep -oP 'disk-\K[0-9]+$')
         pool="${zvol%%/*}"
-        echo "    Removing disk ${disknum} from pool ${pool}..."
+        log_msg "INFO:     Removing disk ${disknum} from pool ${pool}..."
         remote_remove_vm_disk=$(remote_zfsutility_script "$STORAGE_HOST" "remove-vm-disk")
         ssh root@"$STORAGE_HOST" \
             "$remote_remove_vm_disk '$pool' '$VMID' '$disknum'" \
@@ -624,10 +633,10 @@ else
 fi
 
 # Remove Proxmox config
-echo "  Removing Proxmox config..."
+log_msg "INFO:   Removing Proxmox config..."
 rm -f "$proxmoxconfig"
 
 echo ""
-echo "=== Done ==="
-echo "  VM ${VMID} has been archived."
-echo "  Archive: ${ARCHIVE_BASE}"
+log_msg "INFO: === Done ==="
+log_msg "INFO:   VM ${VMID} has been archived."
+log_msg "INFO:   Archive: ${ARCHIVE_BASE}"

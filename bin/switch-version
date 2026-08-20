@@ -59,7 +59,7 @@ if [[ -n "$_DESKTOP_LAUNCHER_LIB" ]]; then
     # shellcheck source=/dev/null
     source "$_DESKTOP_LAUNCHER_LIB"
 else
-    echo "  ⚠ WARNING: desktop-launcher-lib.sh not found; desktop shortcuts will not be managed." >&2
+    log_msg "WARN:   desktop-launcher-lib.sh not found; desktop shortcuts will not be managed."
     get_desktop_user() { echo "${SUDO_USER:-}"; }
     create_desktop_symlinks() { return 0; }
     remove_desktop_symlinks() { return 0; }
@@ -68,18 +68,18 @@ fi
 # die is provided by bashinit (sourced above).
 
 usage() {
-    echo "Usage: switch-version <version>|previous|--list|--uninstall"
-    echo ""
-    echo "  version     Version string to activate"
-    echo "  previous    Roll back to the previous active version"
-    echo "  --list      Show all installed versions"
-    echo "  --uninstall Remove this version's production wiring"
-    echo ""
-    echo "Examples:"
-    echo "  sudo switch-version 1.1.0"
-    echo "  sudo switch-version previous"
-    echo "  sudo switch-version --list"
-    echo "  sudo switch-version --uninstall"
+    log_msg "INFO: Usage: switch-version <version>|previous|--list|--uninstall"
+    log_msg "INFO:"
+    log_msg "INFO:   version     Version string to activate"
+    log_msg "INFO:   previous    Roll back to the previous active version"
+    log_msg "INFO:   --list      Show all installed versions"
+    log_msg "INFO:   --uninstall Remove this version's production wiring"
+    log_msg "INFO:"
+    log_msg "INFO: Examples:"
+    log_msg "INFO:   sudo switch-version 1.1.0"
+    log_msg "INFO:   sudo switch-version previous"
+    log_msg "INFO:   sudo switch-version --list"
+    log_msg "INFO:   sudo switch-version --uninstall"
     exit 1
 }
 
@@ -91,7 +91,7 @@ setup_bin_symlink() {
     local bin_link="$VERSION_BASE/bin"
     if [[ ! -L "$bin_link" ]]; then
         ln -sfn "current/bin" "$bin_link"
-        echo "  Created $bin_link -> current/bin"
+        log_msg "INFO:   Created $bin_link -> current/bin"
     fi
 }
 
@@ -104,7 +104,7 @@ setup_path_config() {
     if [[ ! -f "$profile_file" ]] || ! grep -qF "$bin_path" "$profile_file" 2>/dev/null; then
         echo "export PATH=\"${bin_path}:\$PATH\"" > "$profile_file"
         chmod 644 "$profile_file"
-        echo "  Created $profile_file"
+        log_msg "INFO:   Created $profile_file"
     fi
 
     # /etc/sudoers.d — idempotent and validated
@@ -117,10 +117,10 @@ EOF
         if visudo -c -f "$tmpfile" >/dev/null 2>&1; then
             mv "$tmpfile" "$sudoers_file"
             chmod 440 "$sudoers_file"
-            echo "  Created $sudoers_file"
+            log_msg "INFO:   Created $sudoers_file"
         else
             rm -f "$tmpfile"
-            echo "  ⚠ WARNING: sudoers validation failed — $sudoers_file not updated" >&2
+            log_msg "WARN:   sudoers validation failed — $sudoers_file not updated"
         fi
     fi
 }
@@ -131,12 +131,12 @@ setup_bashinit_symlink() {
 
     if [[ -f "$link" && ! -L "$link" ]]; then
         mv "$link" "${link}.bak"
-        echo "  Backed up existing /root/bashinit to /root/bashinit.bak"
+        log_msg "INFO:   Backed up existing /root/bashinit to /root/bashinit.bak"
     fi
 
     if [[ ! -L "$link" ]] || [[ "$(readlink "$link")" != "$target" ]]; then
         ln -sfn "$target" "$link"
-        echo "  Created /root/bashinit -> $target"
+        log_msg "INFO:   Created /root/bashinit -> $target"
     fi
 }
 
@@ -148,26 +148,26 @@ setup_library_symlinks() {
 
     if [[ -f "$VERSION_BASE/current/lib/node-lib.sh" ]]; then
         ln -sfn "$node_target" "$NODE_LIB_LINK"
-        echo "  Created $NODE_LIB_LINK -> $node_target"
+        log_msg "INFO:   Created $NODE_LIB_LINK -> $node_target"
     fi
 
     if [[ -f "$VERSION_BASE/current/lib/two-node-lib.sh" ]]; then
         ln -sfn "$two_node_target" "$TWO_NODE_LIB_LINK"
-        echo "  Created $TWO_NODE_LIB_LINK -> $two_node_target"
+        log_msg "INFO:   Created $TWO_NODE_LIB_LINK -> $two_node_target"
     elif [[ -f "$VERSION_BASE/current/lib/node-lib.sh" ]]; then
         # Backward-compat: old scripts source /usr/local/lib/two-node-lib.sh
         ln -sfn "node-lib.sh" "$TWO_NODE_LIB_LINK"
-        echo "  Created $TWO_NODE_LIB_LINK -> node-lib.sh (compat)"
+        log_msg "INFO:   Created $TWO_NODE_LIB_LINK -> node-lib.sh (compat)"
     fi
 
     if [[ -f "$VERSION_BASE/current/lib/iscsi-lib.sh" ]]; then
         ln -sfn "$iscsi_lib_target" "$ISCSI_LIB_LINK"
-        echo "  Created $ISCSI_LIB_LINK -> $iscsi_lib_target"
+        log_msg "INFO:   Created $ISCSI_LIB_LINK -> $iscsi_lib_target"
     fi
 
     if [[ -f "$VERSION_BASE/current/bin/rootcheck" ]]; then
         ln -sfn "$rootcheck_target" "$ROOTCHECK_LINK"
-        echo "  Created $ROOTCHECK_LINK -> $rootcheck_target"
+        log_msg "INFO:   Created $ROOTCHECK_LINK -> $rootcheck_target"
     fi
 }
 
@@ -182,13 +182,13 @@ cleanup_old_symlinks() {
         ((++removed))
     done
     if [[ $removed -gt 0 ]]; then
-        echo "  Removed $removed old symlinks from $LOCAL_BIN_DIR"
+        log_msg "INFO:   Removed $removed old symlinks from $LOCAL_BIN_DIR"
     fi
 }
 
 install_wiring() {
     load_switch_config
-    echo "=== Wiring version into active production ==="
+    log_msg "INFO: === Wiring version into active production ==="
     setup_bin_symlink
     setup_path_config
     setup_bashinit_symlink
@@ -202,31 +202,31 @@ install_wiring() {
 
 uninstall_wiring() {
     load_switch_config
-    echo "=== Unwiring version from active production ==="
+    log_msg "INFO: === Unwiring version from active production ==="
 
     if [[ -L "$BASHINIT_LINK" ]]; then
         rm -f "$BASHINIT_LINK"
-        echo "  Removed $BASHINIT_LINK"
+        log_msg "INFO:   Removed $BASHINIT_LINK"
     fi
 
     if [[ -L "$NODE_LIB_LINK" ]]; then
         rm -f "$NODE_LIB_LINK"
-        echo "  Removed $NODE_LIB_LINK"
+        log_msg "INFO:   Removed $NODE_LIB_LINK"
     fi
 
     if [[ -L "$TWO_NODE_LIB_LINK" ]]; then
         rm -f "$TWO_NODE_LIB_LINK"
-        echo "  Removed $TWO_NODE_LIB_LINK"
+        log_msg "INFO:   Removed $TWO_NODE_LIB_LINK"
     fi
 
     if [[ -L "$ISCSI_LIB_LINK" ]]; then
         rm -f "$ISCSI_LIB_LINK"
-        echo "  Removed $ISCSI_LIB_LINK"
+        log_msg "INFO:   Removed $ISCSI_LIB_LINK"
     fi
 
     if [[ -L "$ROOTCHECK_LINK" ]]; then
         rm -f "$ROOTCHECK_LINK"
-        echo "  Removed $ROOTCHECK_LINK"
+        log_msg "INFO:   Removed $ROOTCHECK_LINK"
     fi
 
     local desktop_user
@@ -239,9 +239,9 @@ uninstall_wiring() {
 # ------------------------------------------------------------------
 
 list_versions() {
-    echo "=== Installed versions ==="
+    log_msg "INFO: === Installed versions ==="
     if [[ ! -d "$VERSION_BASE/versions" ]]; then
-        echo "  (no versions installed)"
+        log_msg "INFO:   (no versions installed)"
         return 0
     fi
 
@@ -316,11 +316,11 @@ switch_version_main() {
             prior_version=$(basename "$current")
             local prior_switch="$VERSION_BASE/versions/$prior_version/bin/switch-version"
             if [[ -x "$prior_switch" ]]; then
-                echo "  Unwiring previous version $prior_version..."
+                log_msg "INFO:   Unwiring previous version $prior_version..."
                 "$prior_switch" --uninstall || \
-                    echo "  ⚠ WARNING: previous version uninstall returned non-zero; continuing" >&2
+                    log_msg "WARN:   previous version uninstall returned non-zero; continuing"
             else
-                echo "  ⚠ WARNING: previous version switch-version not found at $prior_switch" >&2
+                log_msg "WARN:   previous version switch-version not found at $prior_switch"
             fi
         fi
 
@@ -363,15 +363,15 @@ switch_version_main() {
     fi
     if [[ -n "$_docserver_pid" ]]; then
         kill "$_docserver_pid" 2>/dev/null || true
-        echo "  Stopped documentation server (will restart on next access)"
+        log_msg "INFO:   Stopped documentation server (will restart on next access)"
     fi
 
-    echo "=== switch-version ==="
-    echo "  Active: $version"
-    [[ -n "$current" && "$current" != "$target" ]] && echo "  Previous: $(basename "$current")"
-    echo ""
-    echo "  New invocations will use $version immediately."
-    echo "  Already-running scripts are unaffected."
+    log_msg "INFO: === switch-version ==="
+    log_msg "INFO:   Active: $version"
+    [[ -n "$current" && "$current" != "$target" ]] && log_msg "INFO:   Previous: $(basename "$current")"
+    log_msg "INFO:"
+    log_msg "INFO:   New invocations will use $version immediately."
+    log_msg "INFO:   Already-running scripts are unaffected."
 
     if [[ $old_set_e -eq 0 ]]; then
         set +e

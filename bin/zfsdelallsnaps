@@ -31,9 +31,8 @@ function delallsnaps {
     local snap
     local save_autoproceed=$autoproceed
 
-    if [[ $1 = '' ]]; then 
-        echo "$0: A dataset must be specified."
-        exit 8
+    if [[ $1 = '' ]]; then
+        die "A dataset must be specified."
     else
         zfsdelallsnaps_fs=$1
     fi

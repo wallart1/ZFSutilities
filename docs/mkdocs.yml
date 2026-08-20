@@ -54,6 +54,7 @@ nav:
     - Architecture: 'developer-guide/architecture.md'
     - Conventions: 'developer-guide/conventions.md'
     - Coding Policies: 'developer-guide/coding-policies.md'
+    - Bash Logging Exceptions: 'developer-guide/bash-logging-exceptions.md'
     - Testing: 'developer-guide/testing.md'
     - Lock Manager: 'developer-guide/lock-manager.md'
     - Concurrency Collisions: 'developer-guide/concurrency-collisions.md'

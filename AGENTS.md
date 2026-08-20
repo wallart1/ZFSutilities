@@ -313,6 +313,9 @@ The `bashinit` script provides these functions:
 - `ask_yn "prompt" ["Y"|"N"]` - Prompts for y/n with input validation; optional second argument is the default answer (N if omitted); returns 0 for yes, 1 for no
 - `die "message"` - Logs a FATAL message and terminates the process via `bashfatal`
 - `warn "message"` - Logs a WARN message
+
+A small number of scripts are intentional exceptions to the `log_msg`/`warn`/`die` requirement (for example, pure data wrappers, test harnesses, and scripts that must format interactive tables). Those exceptions are recorded in `docs/docs/developer-guide/bash-logging-exceptions.md`.
+
 - `calledbybash` - Returns 0 if script was executed directly (not sourced)
 - `find_zfsutility_script <name>` - Searches the repo or deployed layout for a sibling script or library and prints its absolute path. Used to locate `node-lib.sh`, `rootcheck`, and other siblings from scripts in `bin/` without hard-coding paths. The absolute deployment directories can be overridden with `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`.
 

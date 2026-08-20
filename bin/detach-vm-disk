@@ -32,14 +32,14 @@ MY_HOST=$(hostname -s)
 PVE_CONF_DIR="/etc/pve/qemu-server"
 
 usage() {
-    echo "Usage: detach-vm-disk <vmid> <disk-key>"
+    log_msg "INFO: Usage: detach-vm-disk <vmid> <disk-key>"
     echo ""
-    echo "  vmid      Proxmox VM ID"
-    echo "  disk-key  Disk key to detach (e.g. scsi0, scsi1, efidisk0)"
+    log_msg "INFO:   vmid      Proxmox VM ID"
+    log_msg "INFO:   disk-key  Disk key to detach (e.g. scsi0, scsi1, efidisk0)"
     echo ""
-    echo "WARNING: The VM must be stopped before detaching a disk."
+    log_msg "WARN: WARNING: The VM must be stopped before detaching a disk."
     echo ""
-    echo "Example: detach-vm-disk 300 scsi1"
+    log_msg "INFO: Example: detach-vm-disk 300 scsi1"
     exit 1
 }
 
@@ -77,11 +77,11 @@ conf="$PVE_CONF_DIR/${VMID}.conf"
 status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
 if [[ "${status:-unknown}" != "stopped" ]]; then
     log_msg "WARN: VM $VMID is currently $status"
-    echo "  Detaching a disk from a running VM is allowed but may cause I/O errors"
-    echo "  if the guest OS is actively using the disk."
+    log_msg "INFO:   Detaching a disk from a running VM is allowed but may cause I/O errors"
+    log_msg "INFO:   if the guest OS is actively using the disk."
     echo ""
     read -rp "  Continue anyway? (y/N): " proceed
-    [[ "$proceed" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+    [[ "$proceed" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
     echo ""
 fi
 
@@ -92,10 +92,10 @@ disk_line=$(grep "^${DISKKEY}:" "$conf" 2>/dev/null || true)
     exit 1
 }
 
-echo "=== detach-vm-disk ==="
-echo "  VM:        $VMID"
-echo "  Disk key:  $DISKKEY"
-echo "  Config:    $conf"
+log_msg "INFO: === detach-vm-disk ==="
+log_msg "INFO:   VM:        $VMID"
+log_msg "INFO:   Disk key:  $DISKKEY"
+log_msg "INFO:   Config:    $conf"
 
 # --- Two-node: parse iSCSI info from disk line ---
 BACKSTORE_NAME=""
@@ -133,24 +133,24 @@ fi
 
 # --- Show what will be done ---
 echo ""
-echo "This will detach $DISKKEY from VM $VMID:"
-echo "  $disk_line"
+log_msg "INFO: This will detach $DISKKEY from VM $VMID:"
+log_msg "INFO:   $disk_line"
 if is_two_node && [[ -n "$BACKSTORE_NAME" ]]; then
     echo ""
-    echo "  Two-node: iSCSI LUN and backstore will also be removed:"
-    echo "    LUN:       $LUN_NUM"
-    echo "    Backstore: $BACKSTORE_NAME"
+    log_msg "INFO:   Two-node: iSCSI LUN and backstore will also be removed:"
+    log_msg "INFO:     LUN:       $LUN_NUM"
+    log_msg "INFO:     Backstore: $BACKSTORE_NAME"
 fi
 echo ""
-echo "  The underlying zvol will be left intact."
+log_msg "INFO:   The underlying zvol will be left intact."
 echo ""
 read -rp "Proceed? (y/N): " confirm
-[[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+[[ "$confirm" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
 echo ""
 
 # --- Remove from Proxmox config ---
 sed -i "/^${DISKKEY}:/d" "$conf"
-echo "✓ Removed $DISKKEY from VM $VMID config"
+log_msg "INFO: ✓ Removed $DISKKEY from VM $VMID config"
 
 # --- Two-node: tear down iSCSI ---
 if is_two_node && [[ -n "$BACKSTORE_NAME" ]]; then
@@ -158,16 +158,16 @@ if is_two_node && [[ -n "$BACKSTORE_NAME" ]]; then
 
     # Remove LUN from target
     if [[ -n "$LUN_NUM" ]]; then
-        echo "Removing LUN $LUN_NUM from target..."
+        log_msg "INFO: Removing LUN $LUN_NUM from target..."
         targetcli "/iscsi/${TARGET}/tpg1/luns" delete "lun${LUN_NUM}" 2>/dev/null || \
             log_msg "WARN: Could not remove LUN (may already be removed)"
     fi
 
     # Remove backstore
     if targetcli /backstores/block ls 2>/dev/null | grep -q " ${BACKSTORE_NAME} "; then
-        echo "Removing backstore $BACKSTORE_NAME..."
+        log_msg "INFO: Removing backstore $BACKSTORE_NAME..."
         targetcli /backstores/block delete "$BACKSTORE_NAME"
-        echo "✓ Backstore removed"
+        log_msg "INFO: ✓ Backstore removed"
     else
         log_msg "WARN: Backstore not found — skipping"
     fi
@@ -179,28 +179,28 @@ if is_two_node && [[ -n "$BACKSTORE_NAME" ]]; then
     MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
     if [[ -f "$MANIFEST" ]] && grep -q "^${BACKSTORE_NAME}$" "$MANIFEST"; then
         sed -i "/^${BACKSTORE_NAME}$/d" "$MANIFEST"
-        echo "✓ Removed from expected-backstores manifest"
+        log_msg "INFO: ✓ Removed from expected-backstores manifest"
     fi
 
     # Save config
-    echo "Saving iSCSI configuration..."
+    log_msg "INFO: Saving iSCSI configuration..."
     "$mydir/safe-iscsi-save"
-    echo "✓ Configuration saved"
+    log_msg "INFO: ✓ Configuration saved"
 
     # Rescan on the compute host, using its active deployed version.
     REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
-    echo "Triggering iSCSI rescan on $COMPUTE_HOST..."
+    log_msg "INFO: Triggering iSCSI rescan on $COMPUTE_HOST..."
     if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
         "$REMOTE_RESCAN" 2>&1; then
-        echo "✓ Rescan triggered"
+        log_msg "INFO: ✓ Rescan triggered"
     else
         log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' manually"
     fi
 fi
 
 echo ""
-echo "=== Done ==="
-echo "  Detached: $DISKKEY from VM $VMID"
+log_msg "INFO: === Done ==="
+log_msg "INFO:   Detached: $DISKKEY from VM $VMID"
 if is_two_node && [[ -n "$POOL" ]]; then
-    echo "  Zvol left intact: $POOL/proxmox/$BACKSTORE_NAME"
+    log_msg "INFO:   Zvol left intact: $POOL/proxmox/$BACKSTORE_NAME"
 fi

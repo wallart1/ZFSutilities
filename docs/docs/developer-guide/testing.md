@@ -43,6 +43,7 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-detach-vm-disk` | 2 | `detach-vm-disk` manifest handling: exact backstore removal and no-match pass-through |
 | `test-ensure-restored-vm-iscsi` | 23 | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding |
 | `test-check-prerequisites` | 5 | `check-prerequisites` helper `check_mkdocs_version`: absent mkdocs, mkdocs 1.x, mkdocs 2.x, mkdocs 10.x, and malformed version output |
+| `test-datesubtract` | 4 | `datesubtract` argument validation, day/month/year output, and `log_msg` routing |
 | `test-installer-checks` | 17 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal; partial-uninstall detection; `install_doc_server` pins `mkdocs<2` |
 | `test-move-vm-disk` | 8 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove |
 | `test-switch-version` | 6 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, and `--list` |
@@ -65,7 +66,8 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-zfs-send-receive-dryrun` | 35 | Dry-run logging, space-check logic (including `space_check_min_buffer` override), resume-token decisions (including non-existent destination), `handle_commsnap_rc` paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling |
 | `integration/test-zfs-send-receive-pools` | 7 | Real-pool integration tests for `zfs-send-receive`: full copy, incremental with/without intermediates, rollback, resume token, space-check skip, clone copy. Requires root and the local test pools described below. |
 | `test-zfssnapbuild` | 9 | Snapshot name generation, bucket logic (daily / weekly / monthly / offsite), snapfile reuse |
-| `test-logging` | 4 | `log_msg` writes all messages to the session log file and ignores `msg_level` |
+| `test-zfsshowbigstuff` | 6 | `zfsshowbigstuff` argument validation, largest/smallest sort flags, count handling, and `log_msg` routing |
+| `test-logging` | 12 | `log_msg` writes all messages to the session log file and ignores `msg_level`; unset `ZFSUTILITIES_LOG_FILE` handling; `ask_yn`, `warn`, and `die` helpers |
 | `test-module-dependencies` | 1 | Static analysis: every root-level bash module call to a known module function is satisfied by a local definition, a sourced module, or `bashinit` |
 
 Bash tests run without a real ZFS pool — commands are intercepted with bash

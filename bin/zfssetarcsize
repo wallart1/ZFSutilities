@@ -1,12 +1,27 @@
 #!/usr/bin/bash
-set -x
+set -euo pipefail
 # Set the max size of the ZFS ARC.
 
-GiB=45
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+source_helper rootcheck
+rootcheck
+
+gib=45
+bytes=$((gib * 1024 * 1024 * 1024))
 
 # On the fly
-echo "$(($GiB * 1024 * 1024 * 1024))" | sudo tee /sys/module/zfs/parameters/zfs_arc_maxS # On the fly
+log_msg "INFO: Setting zfs_arc_max to ${gib} GiB (${bytes} bytes) on the fly"
+echo "$bytes" | sudo tee /sys/module/zfs/parameters/zfs_arc_max
 
 # Permanent
-echo "options zfs zfs_arc_max=$(($GiB * 1024 * 1024 * 1024))" | sudo tee /etc/modprobe.d/zfs.conf
+log_msg "INFO: Updating /etc/modprobe.d/zfs.conf for persistence"
+echo "options zfs zfs_arc_max=${bytes}" | sudo tee /etc/modprobe.d/zfs.conf
 sudo update-initramfs -u

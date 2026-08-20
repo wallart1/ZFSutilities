@@ -260,10 +260,13 @@ test_create_desktop_symlinks_creates_links() {
 
 test_create_desktop_symlinks_handles_missing_user() {
     test_start "create_desktop_symlinks warns when user is empty"
+    clear_test_log_file
     local output
     output=$(create_desktop_symlinks "" 2>&1)
     local rc=$?
-    if [[ $rc -ne 0 && "$output" == *"Cannot determine desktop user"* ]]; then
+    local log_output
+    log_output=$(cat "$(get_test_log_file)")
+    if [[ $rc -ne 0 && "$log_output" == *"Cannot determine desktop user"* ]]; then
         test_pass
     else
         test_fail "Expected warning for missing user"
@@ -272,12 +275,15 @@ test_create_desktop_symlinks_handles_missing_user() {
 
 test_create_desktop_symlinks_handles_missing_home() {
     test_start "create_desktop_symlinks warns when home is missing"
+    clear_test_log_file
     get_user_home() { echo ""; }
     local output
     output=$(create_desktop_symlinks "erin" 2>&1)
     local rc=$?
     unset -f get_user_home 2>/dev/null || true
-    if [[ $rc -ne 0 && "$output" == *"Home directory for 'erin' not found"* ]]; then
+    local log_output
+    log_output=$(cat "$(get_test_log_file)")
+    if [[ $rc -ne 0 && "$log_output" == *"Home directory for 'erin' not found"* ]]; then
         test_pass
     else
         test_fail "Expected warning for missing home directory"

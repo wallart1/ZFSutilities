@@ -11,7 +11,7 @@
       
       
       
-        <link rel="prev" href="../coding-policies/">
+        <link rel="prev" href="../bash-logging-exceptions/">
       
       
         <link rel="next" href="../lock-manager/">
@@ -1165,6 +1165,34 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../bash-logging-exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bash Logging Exceptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -2079,6 +2107,11 @@ tests/run-tests<span class="w"> </span>--failures-only
 <td><code>check-prerequisites</code> helper <code>check_mkdocs_version</code>: absent mkdocs, mkdocs 1.x, mkdocs 2.x, mkdocs 10.x, and malformed version output</td>
 </tr>
 <tr>
+<td><code>test-datesubtract</code></td>
+<td>4</td>
+<td><code>datesubtract</code> argument validation, day/month/year output, and <code>log_msg</code> routing</td>
+</tr>
+<tr>
 <td><code>test-installer-checks</code></td>
 <td>17</td>
 <td>Installer safety checks: ZFS root filesystem detection with <code>findmnt</code>; desktop-user detection; home-directory symlink creation and removal; partial-uninstall detection; <code>install_doc_server</code> pins <code>mkdocs&lt;2</code></td>
@@ -2189,9 +2222,14 @@ tests/run-tests<span class="w"> </span>--failures-only
 <td>Snapshot name generation, bucket logic (daily / weekly / monthly / offsite), snapfile reuse</td>
 </tr>
 <tr>
+<td><code>test-zfsshowbigstuff</code></td>
+<td>6</td>
+<td><code>zfsshowbigstuff</code> argument validation, largest/smallest sort flags, count handling, and <code>log_msg</code> routing</td>
+</tr>
+<tr>
 <td><code>test-logging</code></td>
-<td>4</td>
-<td><code>log_msg</code> writes all messages to the session log file and ignores <code>msg_level</code></td>
+<td>12</td>
+<td><code>log_msg</code> writes all messages to the session log file and ignores <code>msg_level</code>; unset <code>ZFSUTILITIES_LOG_FILE</code> handling; <code>ask_yn</code>, <code>warn</code>, and <code>die</code> helpers</td>
 </tr>
 <tr>
 <td><code>test-module-dependencies</code></td>
@@ -2785,7 +2823,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.84.0
+      ZFS Utilities v0.84.1
     </div>
   
   
@@ -2810,7 +2848,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.84.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.84.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

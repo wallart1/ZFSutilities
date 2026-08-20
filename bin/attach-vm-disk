@@ -32,17 +32,17 @@ MY_HOST=$(hostname -s)
 PVE_CONF_DIR="/etc/pve/qemu-server"
 
 usage() {
-    echo "Usage: attach-vm-disk <zvol> <vmid> [dst-disk-key]"
+    log_msg "INFO: Usage: attach-vm-disk <zvol> <vmid> [dst-disk-key]"
     echo ""
-    echo "  zvol        Full zvol path (e.g. threeamigos/proxmox/vm-100-disk-0)"
-    echo "  vmid        Destination Proxmox VM ID"
-    echo "  dst-disk-key  Optional target slot (e.g. scsi1). Auto-detected if omitted."
+    log_msg "INFO:   zvol        Full zvol path (e.g. threeamigos/proxmox/vm-100-disk-0)"
+    log_msg "INFO:   vmid        Destination Proxmox VM ID"
+    log_msg "INFO:   dst-disk-key  Optional target slot (e.g. scsi1). Auto-detected if omitted."
     echo ""
-    echo "WARNING: The destination VM must be stopped."
+    log_msg "WARN: WARNING: The destination VM must be stopped."
     echo ""
-    echo "Examples:"
-    echo "  attach-vm-disk threeamigos/proxmox/vm-100-disk-0 200"
-    echo "  attach-vm-disk threeamigos/proxmox/vm-100-disk-0 200 scsi2"
+    log_msg "INFO: Examples:"
+    log_msg "INFO:   attach-vm-disk threeamigos/proxmox/vm-100-disk-0 200"
+    log_msg "INFO:   attach-vm-disk threeamigos/proxmox/vm-100-disk-0 200 scsi2"
     exit 1
 }
 
@@ -108,11 +108,11 @@ dst_conf="$PVE_CONF_DIR/${DSTVMID}.conf"
 status=$(qm status "$DSTVMID" 2>/dev/null | awk '{print $2}')
 if [[ "${status:-unknown}" != "stopped" ]]; then
     log_msg "WARN: VM $DSTVMID is currently $status"
-    echo "  Attaching a disk to a running VM is allowed but the guest OS may"
-    echo "  need to rescan SCSI buses to see the new device."
+    log_msg "INFO:   Attaching a disk to a running VM is allowed but the guest OS may"
+    log_msg "INFO:   need to rescan SCSI buses to see the new device."
     echo ""
     read -rp "  Continue anyway? (y/N): " proceed
-    [[ "$proceed" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+    [[ "$proceed" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
     echo ""
 fi
 
@@ -131,11 +131,11 @@ else
     DSTKEY="${bus}${n}"
 fi
 
-echo "=== attach-vm-disk ==="
-echo "  Zvol:      $ZVOL"
-echo "  Size:      $ZVOL_SIZE"
-echo "  Dest VM:   $DSTVMID"
-echo "  Dest key:  $DSTKEY"
+log_msg "INFO: === attach-vm-disk ==="
+log_msg "INFO:   Zvol:      $ZVOL"
+log_msg "INFO:   Size:      $ZVOL_SIZE"
+log_msg "INFO:   Dest VM:   $DSTVMID"
+log_msg "INFO:   Dest key:  $DSTKEY"
 
 # --- Two-node: ensure iSCSI backstore and LUN exist ---
 LUN_NUM=""
@@ -146,11 +146,15 @@ if is_two_node; then
     }
 
     echo ""
-    echo "Ensuring iSCSI infrastructure on $STORAGE_HOST..."
+    log_msg "INFO: Ensuring iSCSI infrastructure on $STORAGE_HOST..."
 
     # Check/create backstore and LUN on storage host
     lun_result=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
         "$ZVOL" "$ZVOL_DEV" "$BACKSTORE_NAME" "$TARGET" 2>&1 << 'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
 set -e
 ZVOL="$1"
 ZVOL_DEV="$2"
@@ -161,11 +165,11 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 
 # Check if backstore exists
 if targetcli /backstores/block ls 2>/dev/null | grep -q " ${BACKSTORE_NAME} "; then
-    echo "BACKSTORE_EXISTS"
+    log_msg "INFO: BACKSTORE_EXISTS"
 else
     targetcli /backstores/block create "$BACKSTORE_NAME" "$ZVOL_DEV"
     targetcli "/backstores/block/${BACKSTORE_NAME}" set attribute emulate_tpu=1
-    echo "BACKSTORE_CREATED"
+    log_msg "INFO: BACKSTORE_CREATED"
 fi
 
 # Check if LUN is mapped
@@ -196,19 +200,19 @@ SSHEOF
     # Parse result
     if echo "$lun_result" | grep -q "LUN_EXISTS:"; then
         LUN_NUM=$(echo "$lun_result" | grep "LUN_EXISTS:" | cut -d: -f2)
-        echo "✓ LUN $LUN_NUM already mapped"
+        log_msg "INFO: ✓ LUN $LUN_NUM already mapped"
     elif echo "$lun_result" | grep -q "LUN_CREATED:"; then
         LUN_NUM=$(echo "$lun_result" | grep "LUN_CREATED:" | cut -d: -f2)
-        echo "✓ LUN $LUN_NUM created and mapped"
+        log_msg "INFO: ✓ LUN $LUN_NUM created and mapped"
     else
         log_msg "FATAL: Could not determine LUN number from storage host"
         exit 1
     fi
 
     # Rescan
-    echo "Triggering iSCSI rescan..."
+    log_msg "INFO: Triggering iSCSI rescan..."
     "$mydir/rescan-storage"
-    echo "✓ Rescan complete"
+    log_msg "INFO: ✓ Rescan complete"
 fi
 
 # --- Build disk line ---
@@ -222,17 +226,17 @@ fi
 
 # --- Confirmation ---
 echo ""
-echo "Will add the following line to VM $DSTVMID config:"
-echo "  $disk_line"
+log_msg "INFO: Will add the following line to VM $DSTVMID config:"
+log_msg "INFO:   $disk_line"
 echo ""
 read -rp "Proceed? (y/N): " confirm
-[[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+[[ "$confirm" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
 echo ""
 
 # --- Add to VM config ---
 echo "$disk_line" >> "$dst_conf"
-echo "✓ Added $DSTKEY to VM $DSTVMID config"
+log_msg "INFO: ✓ Added $DSTKEY to VM $DSTVMID config"
 
 echo ""
-echo "=== Done ==="
-echo "  Attached: $ZVOL → VM $DSTVMID as $DSTKEY"
+log_msg "INFO: === Done ==="
+log_msg "INFO:   Attached: $ZVOL → VM $DSTVMID as $DSTKEY"

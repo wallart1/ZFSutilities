@@ -1,0 +1,64 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-datesubtract — Verify argument validation and logging for datesubtract.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+DATESUBTRACT_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/datesubtract"
+[[ -f "$DATESUBTRACT_SCRIPT" ]] || die "Missing: $DATESUBTRACT_SCRIPT"
+
+test_missing_args_shows_usage_and_fails() {
+    test_start "missing arguments print usage and exit non-zero"
+    local output rc
+    output=$("$DATESUBTRACT_SCRIPT" 2>&1) && rc=0 || rc=$?
+    assert_rc 1 "$rc"
+    if [[ "$output" == *"Usage:"* && "$output" == *"Two dates are required"* ]]; then
+        test_pass
+    else
+        test_fail "Expected usage and error message; got:\n$output"
+    fi
+}
+
+test_single_arg_shows_usage_and_fails() {
+    test_start "single argument prints usage and exits non-zero"
+    local output rc
+    output=$("$DATESUBTRACT_SCRIPT" "2026-01-01" 2>&1) && rc=0 || rc=$?
+    assert_rc 1 "$rc"
+    if [[ "$output" == *"Usage:"* && "$output" == *"Two dates are required"* ]]; then
+        test_pass
+    else
+        test_fail "Expected usage and error message; got:\n$output"
+    fi
+}
+
+test_valid_dates_compute_differences() {
+    test_start "valid dates produce day/month/year output"
+    local output rc
+    output=$("$DATESUBTRACT_SCRIPT" "2026-01-01" "2026-01-31" 2>&1) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    if [[ "$output" == *"30 days"* && "$output" == *"months"* && "$output" == *"years"* ]]; then
+        test_pass
+    else
+        test_fail "Expected day/month/year output; got:\n$output"
+    fi
+}
+
+test_log_messages_routed_through_log_msg() {
+    test_start "output is routed through log_msg on stderr"
+    local output
+    output=$("$DATESUBTRACT_SCRIPT" "2026-01-01" "2026-01-02" 2>&1 >/dev/null)
+    if [[ "$output" == *"INFO:"*"1 days"* ]]; then
+        test_pass
+    else
+        test_fail "Expected INFO-prefixed log message on stderr; got:\n$output"
+    fi
+}
+
+test_missing_args_shows_usage_and_fails
+test_single_arg_shows_usage_and_fails
+test_valid_dates_compute_differences
+test_log_messages_routed_through_log_msg
+
+test_summary
+teardown_test_env

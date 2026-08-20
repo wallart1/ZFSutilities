@@ -22,7 +22,7 @@ rootcheck
 MY_HOST=$(hostname -s)
 
 if is_single_node; then
-    echo "rescan-storage: not applicable in single-node mode (no iSCSI)"
+    log_msg "INFO: rescan-storage: not applicable in single-node mode (no iSCSI)"
     exit 0
 fi
 
@@ -34,7 +34,7 @@ fi
 
 # === Running on the compute host ===
 
-echo "=== rescan-storage ==="
+log_msg "INFO: === rescan-storage ==="
 
 # --- Check iSCSI sessions ---
 SESSION_COUNT=$(iscsiadm -m session 2>/dev/null | wc -l)
@@ -44,19 +44,17 @@ if [[ "$SESSION_COUNT" -eq 0 ]]; then
     exit 1
 fi
 
-echo "Active iSCSI sessions: $SESSION_COUNT"
+log_msg "INFO: Active iSCSI sessions: $SESSION_COUNT"
 iscsiadm -m session 2>/dev/null | sed 's/^/  /'
-echo ""
 
 # --- Rescan all sessions ---
-echo "Rescanning iSCSI sessions..."
+log_msg "INFO: Rescanning iSCSI sessions..."
 iscsiadm -m session --rescan 2>&1 | sed 's/^/  /'
-echo "✓ Rescan complete"
+log_msg "INFO: ✓ Rescan complete"
 
 # --- Show device count ---
 DEVICE_COUNT=$(ls /dev/disk/by-path/ip-${STORAGE_IP}* 2>/dev/null | wc -l)
-echo ""
-echo "Total iSCSI devices visible: $DEVICE_COUNT"
+log_msg "INFO: Total iSCSI devices visible: $DEVICE_COUNT"
 
 if [[ "$DEVICE_COUNT" -lt 31 ]]; then
     log_msg "WARN: Expected at least 31 devices (29 threeamigos + 2 nvme1)"

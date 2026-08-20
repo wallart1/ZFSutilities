@@ -38,21 +38,21 @@ usage() {
     else
         pool_choices=$(zpool list -H -o name 2>/dev/null | paste -sd '|' -)
     fi
-    echo "Usage: resize-vm-disk <pool> <vmid> <disk-num> <new-size>"
+    log_msg "INFO: Usage: resize-vm-disk <pool> <vmid> <disk-num> <new-size>"
     echo ""
-    echo "  pool      ZFS pool name (${pool_choices})"
-    echo "  vmid      Proxmox VM ID"
-    echo "  disk-num  Disk number"
-    echo "  new-size  TOTAL size after resize — not an increment (e.g. 200G, 1T)"
+    log_msg "INFO:   pool      ZFS pool name (${pool_choices})"
+    log_msg "INFO:   vmid      Proxmox VM ID"
+    log_msg "INFO:   disk-num  Disk number"
+    log_msg "INFO:   new-size  TOTAL size after resize — not an increment (e.g. 200G, 1T)"
     echo ""
-    echo "  NOTE: Specify the final size you want, not the amount to add."
-    echo "        This is different from the Proxmox GUI, which asks for an increment."
-    echo "        ZFS only supports growing, not shrinking."
+    log_msg "INFO:   NOTE: Specify the final size you want, not the amount to add."
+    log_msg "INFO:         This is different from the Proxmox GUI, which asks for an increment."
+    log_msg "INFO:         ZFS only supports growing, not shrinking."
     echo ""
-    echo "  To find the current size first: sudo list-vm-disks"
+    log_msg "INFO:   To find the current size first: sudo list-vm-disks"
     echo ""
-    echo "Example: disk is currently 100G, you want it to be 200G:"
-    echo "  resize-vm-disk threeamigos 300 1 200G"
+    log_msg "INFO: Example: disk is currently 100G, you want it to be 200G:"
+    log_msg "INFO:   resize-vm-disk threeamigos 300 1 200G"
     exit 1
 }
 
@@ -98,7 +98,7 @@ fi
 
 # --- If not on the storage host, delegate storage work via SSH (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
-    echo "Connecting to $STORAGE_HOST for storage operations..."
+    log_msg "INFO: Connecting to $STORAGE_HOST for storage operations..."
     REMOTE_SCRIPT=$(remote_zfsutility_script "$STORAGE_HOST" "resize-vm-disk")
     ssh root@"$STORAGE_HOST" "$REMOTE_SCRIPT '$POOL' '$VMID' '$DISKNUM' '$NEWSIZE' --skip-rescan" \
         || {
@@ -106,7 +106,7 @@ if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
             exit 1
         }
     echo ""
-    echo "Rescanning iSCSI on $(hostname)..."
+    log_msg "INFO: Rescanning iSCSI on $(hostname)..."
     if [[ "$MY_HOST" == "$COMPUTE_HOST" ]]; then
         "$mydir/rescan-storage"
     else
@@ -121,9 +121,9 @@ fi
 
 ZVOL_NAME="$POOL/proxmox/vm-${VMID}-disk-${DISKNUM}"
 
-echo "=== resize-vm-disk ==="
-echo "  Zvol:       $ZVOL_NAME"
-echo "  Total size: $NEWSIZE  (this is the final size, not an increment)"
+log_msg "INFO: === resize-vm-disk ==="
+log_msg "INFO:   Zvol:       $ZVOL_NAME"
+log_msg "INFO:   Total size: $NEWSIZE  (this is the final size, not an increment)"
 echo ""
 
 # --- Check zvol exists ---
@@ -133,32 +133,32 @@ if ! zfs list -H -o name "$ZVOL_NAME" 2>/dev/null | grep -q .; then
 fi
 
 CURRENT_SIZE=$(zfs get -H -o value volsize "$ZVOL_NAME")
-echo "  Current size: $CURRENT_SIZE"
+log_msg "INFO:   Current size: $CURRENT_SIZE"
 echo ""
 
 # --- Grow zvol ---
-echo "Resizing zvol to $NEWSIZE..."
+log_msg "INFO: Resizing zvol to $NEWSIZE..."
 zfs set volsize="$NEWSIZE" "$ZVOL_NAME"
-echo "✓ Zvol resized"
+log_msg "INFO: ✓ Zvol resized"
 
 NEW_ACTUAL=$(zfs get -H -o value volsize "$ZVOL_NAME")
-echo "  New size: $NEW_ACTUAL"
+log_msg "INFO:   New size: $NEW_ACTUAL"
 
 # --- Trigger rescan on the compute host (two-node only, unless called remotely) ---
 if is_two_node && [[ "$SKIP_RESCAN" == false ]]; then
-    echo "Triggering iSCSI rescan on $COMPUTE_HOST..."
+    log_msg "INFO: Triggering iSCSI rescan on $COMPUTE_HOST..."
     REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
     if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1; then
-        echo "✓ Rescan triggered"
+        log_msg "INFO: ✓ Rescan triggered"
     else
         log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
     fi
 fi
 
 echo ""
-echo "=== Done ==="
-echo "  $ZVOL_NAME"
-echo "  Before: $CURRENT_SIZE  →  After: $NEW_ACTUAL"
+log_msg "INFO: === Done ==="
+log_msg "INFO:   $ZVOL_NAME"
+log_msg "INFO:   Before: $CURRENT_SIZE  →  After: $NEW_ACTUAL"
 echo ""
-echo "Next steps inside the VM:"
-echo "  Resize the partition and filesystem (growpart, resize2fs, etc.)"
+log_msg "INFO: Next steps inside the VM:"
+log_msg "INFO:   Resize the partition and filesystem (growpart, resize2fs, etc.)"

@@ -52,7 +52,7 @@ if [[ -n "$_DESKTOP_LAUNCHER_LIB" ]]; then
     # shellcheck source=/dev/null
     source "$_DESKTOP_LAUNCHER_LIB"
 else
-    echo "  ⚠ WARNING: desktop-launcher-lib.sh not found; desktop shortcuts will not be removed." >&2
+    log_msg "WARN:   desktop-launcher-lib.sh not found; desktop shortcuts will not be removed."
     get_desktop_user() { echo "${SUDO_USER:-}"; }
 fi
 
@@ -118,24 +118,22 @@ DO_DRY_RUN="false"
 # die and ask_yn are provided by bashinit (sourced above).
 
 usage() {
-    cat <<EOF
-Usage: uninstall-zfsutilities [OPTIONS]
-
-Completely remove ZFSutilities from this host.
-
-Options:
-  --purge       Also remove configuration files, logs, history, cron,
-                systemd integration, cache-warm, and other remnants.
-  --all-nodes   In two-node mode, also run the uninstall on the peer host.
-  --yes, -y     Skip interactive confirmation prompts.
-  --dry-run     Print actions without executing them.
-  --help, -h    Show this help and exit.
-
-Examples:
-  sudo uninstall-zfsutilities
-  sudo uninstall-zfsutilities --purge --yes
-  sudo uninstall-zfsutilities --purge --all-nodes
-EOF
+    log_msg "INFO: Usage: uninstall-zfsutilities [OPTIONS]"
+    log_msg "INFO:"
+    log_msg "INFO: Completely remove ZFSutilities from this host."
+    log_msg "INFO:"
+    log_msg "INFO: Options:"
+    log_msg "INFO:   --purge       Also remove configuration files, logs, history, cron,"
+    log_msg "INFO:                 systemd integration, cache-warm, and other remnants."
+    log_msg "INFO:   --all-nodes   In two-node mode, also run the uninstall on the peer host."
+    log_msg "INFO:   --yes, -y     Skip interactive confirmation prompts."
+    log_msg "INFO:   --dry-run     Print actions without executing them."
+    log_msg "INFO:   --help, -h    Show this help and exit."
+    log_msg "INFO:"
+    log_msg "INFO: Examples:"
+    log_msg "INFO:   sudo uninstall-zfsutilities"
+    log_msg "INFO:   sudo uninstall-zfsutilities --purge --yes"
+    log_msg "INFO:   sudo uninstall-zfsutilities --purge --all-nodes"
     exit 0
 }
 
@@ -146,11 +144,11 @@ remove_file() {
         return 0
     fi
     if [[ "$DO_DRY_RUN" == "true" ]]; then
-        echo "  [DRY-RUN] rm -f $path"
+        log_msg "INFO:   [DRY-RUN] rm -f $path"
         return 0
     fi
     rm -f "$path"
-    echo "  Removed $path"
+    log_msg "INFO:   Removed $path"
 }
 
 # Remove a symlink if it exists.
@@ -160,11 +158,11 @@ remove_symlink() {
         return 0
     fi
     if [[ "$DO_DRY_RUN" == "true" ]]; then
-        echo "  [DRY-RUN] rm -f $path"
+        log_msg "INFO:   [DRY-RUN] rm -f $path"
         return 0
     fi
     rm -f "$path"
-    echo "  Removed $path"
+    log_msg "INFO:   Removed $path"
 }
 
 # Remove a directory tree if it exists.
@@ -174,11 +172,11 @@ remove_dir() {
         return 0
     fi
     if [[ "$DO_DRY_RUN" == "true" ]]; then
-        echo "  [DRY-RUN] rm -rf $path"
+        log_msg "INFO:   [DRY-RUN] rm -rf $path"
         return 0
     fi
     rm -rf "$path"
-    echo "  Removed $path"
+    log_msg "INFO:   Removed $path"
 }
 
 # Run a systemctl command, tolerating missing units.
@@ -186,7 +184,7 @@ systemctl_cmd() {
     local action="$1"
     local unit="$2"
     if [[ "$DO_DRY_RUN" == "true" ]]; then
-        echo "  [DRY-RUN] systemctl $action $unit"
+        log_msg "INFO:   [DRY-RUN] systemctl $action $unit"
         return 0
     fi
     systemctl "$action" "$unit" 2>/dev/null || true
@@ -195,7 +193,7 @@ systemctl_cmd() {
 # Reload systemd daemon, idempotently.
 reload_systemd() {
     if [[ "$DO_DRY_RUN" == "true" ]]; then
-        echo "  [DRY-RUN] systemctl daemon-reload"
+        log_msg "INFO:   [DRY-RUN] systemctl daemon-reload"
         return 0
     fi
     systemctl daemon-reload 2>/dev/null || true
@@ -207,7 +205,7 @@ run_on_peer() {
     shift
     local cmd="$*"
     if [[ "$DO_DRY_RUN" == "true" ]]; then
-        echo "  [DRY-RUN] ssh root@$peer $cmd"
+        log_msg "INFO:   [DRY-RUN] ssh root@$peer $cmd"
         return 0
     fi
     ssh -o ConnectTimeout=5 "root@$peer" "$cmd"
@@ -245,7 +243,7 @@ parse_args() {
                 usage
                 ;;
             *)
-                echo "Unknown option: $1" >&2
+                log_msg "WARN: Unknown option: $1"
                 usage
                 ;;
         esac
@@ -338,37 +336,36 @@ detect_installed_state() {
 # ask_yn is provided by bashinit (sourced above).
 
 present_interactive_dialog() {
-    echo ""
-    echo "=== ZFSutilities Uninstall ==="
-    echo ""
-    echo "This script will remove the ZFSutilities software from this host."
-    echo ""
-    echo "Detected state:"
-    echo "  Deployed software:     $HAS_VERSION_BASE"
-    echo "  Active version link:   $HAS_CURRENT"
-    echo "  Configuration files:   $HAS_CONFIG"
-    echo "  Log files:             $HAS_LOGS"
-    echo "  Cron schedules:        $HAS_CRON"
-    echo "  Systemd integration:   $HAS_SYSTEMD"
-    echo "  Cache-warm utility:    $HAS_CACHEWARM"
-    echo "  Node mode:             $NODE_MODE"
-    echo ""
-    echo "You have two choices:"
-    echo ""
-    echo "  1) Remove software only"
-    echo "     - Removes deployed scripts, PATH wiring, sudoers entry, desktop"
-    echo "       shortcuts, cron schedules, and systemd service/drop-in files."
-    echo "     - Keeps your configuration, logs, and history."
-    echo ""
-    echo "  2) Remove software and clean up everything (--purge)"
-    echo "     - Also removes configuration files, logs, history, the cache-warm"
-    echo "       utility, encrypted-LUN config, and the LUKS keyfile."
-    echo ""
+    log_msg "INFO: === ZFSutilities Uninstall ==="
+    log_msg "INFO:"
+    log_msg "INFO: This script will remove the ZFSutilities software from this host."
+    log_msg "INFO:"
+    log_msg "INFO: Detected state:"
+    log_msg "INFO:   Deployed software:     $HAS_VERSION_BASE"
+    log_msg "INFO:   Active version link:   $HAS_CURRENT"
+    log_msg "INFO:   Configuration files:   $HAS_CONFIG"
+    log_msg "INFO:   Log files:             $HAS_LOGS"
+    log_msg "INFO:   Cron schedules:        $HAS_CRON"
+    log_msg "INFO:   Systemd integration:   $HAS_SYSTEMD"
+    log_msg "INFO:   Cache-warm utility:    $HAS_CACHEWARM"
+    log_msg "INFO:   Node mode:             $NODE_MODE"
+    log_msg "INFO:"
+    log_msg "INFO: You have two choices:"
+    log_msg "INFO:"
+    log_msg "INFO:   1) Remove software only"
+    log_msg "INFO:      - Removes deployed scripts, PATH wiring, sudoers entry, desktop"
+    log_msg "INFO:        shortcuts, cron schedules, and systemd service/drop-in files."
+    log_msg "INFO:      - Keeps your configuration, logs, and history."
+    log_msg "INFO:"
+    log_msg "INFO:   2) Remove software and clean up everything (--purge)"
+    log_msg "INFO:      - Also removes configuration files, logs, history, the cache-warm"
+    log_msg "INFO:        utility, encrypted-LUN config, and the LUKS keyfile."
+    log_msg "INFO:"
 
     if [[ "$NODE_MODE" == "two-node" ]]; then
-        echo "This is a two-node setup. You can also run the uninstall on the peer"
-        echo "node ($(peer_host)) using --all-nodes."
-        echo ""
+        log_msg "INFO: This is a two-node setup. You can also run the uninstall on the peer"
+        log_msg "INFO: node ($(peer_host)) using --all-nodes."
+        log_msg "INFO:"
     fi
 
     local choice
@@ -384,17 +381,17 @@ present_interactive_dialog() {
                 break
                 ;;
             c|cancel)
-                echo "Cancelled."
+                log_msg "INFO: Cancelled."
                 exit 0
                 ;;
             *)
-                echo "  Please enter 1, 2, or c."
+                log_msg "INFO:   Please enter 1, 2, or c."
                 ;;
         esac
     done
 
     if [[ "$NODE_MODE" == "two-node" && "$DO_ALL_NODES" != "true" ]]; then
-        echo ""
+        log_msg "INFO:"
         if ask_yn "Also run the uninstall on the peer node ($(peer_host))?" "N"; then
             DO_ALL_NODES="true"
         fi
@@ -405,79 +402,79 @@ present_interactive_dialog() {
 # Final confirmation
 # ------------------------------------------------------------------
 confirm_uninstall() {
-    echo ""
-    echo "=== Summary of actions ==="
-    echo "  Mode:            $([[ "$DO_PURGE" == "true" ]] && echo "Remove software and clean up everything" || echo "Remove software only")"
+    log_msg "INFO:"
+    log_msg "INFO: === Summary of actions ==="
+    log_msg "INFO:   Mode:            $([[ "$DO_PURGE" == "true" ]] && echo "Remove software and clean up everything" || echo "Remove software only")"
     local peer
     peer=$(peer_host)
-    echo "  Peer node:       $([[ "$DO_ALL_NODES" == "true" ]] && echo "$peer" || echo "(local only)")"
-    echo "  Dry run:         $DO_DRY_RUN"
-    echo ""
+    log_msg "INFO:   Peer node:       $([[ "$DO_ALL_NODES" == "true" ]] && echo "$peer" || echo "(local only)")"
+    log_msg "INFO:   Dry run:         $DO_DRY_RUN"
+    log_msg "INFO:"
 
     if [[ "$DO_PURGE" == "true" ]]; then
-        echo "The following will be removed:"
-        echo "  - $VERSION_BASE"
-        echo "  - $BASHINIT_LINK"
-        echo "  - $NODE_LIB_LINK"
-        echo "  - $TWO_NODE_LIB_LINK"
-        echo "  - $ROOTCHECK_LINK"
-        echo "  - $PROFILE_FILE"
-        echo "  - $SUDOERS_FILE"
-        echo "  - $CRON_FILE"
-        echo "  - $SYSTEMD_DIR/rtslib-fb-targetctl.service.d/"
-        echo "  - $SYSTEMD_DIR/zfs-keys-unlock.service"
-        echo "  - $SYSTEMD_DIR/zfs-cache-warm.service"
-        echo "  - $SYSTEM_CONFIG_DIR/"
-        echo "  - $STATE_DIR/"
-        echo "  - $NODE_CONF"
-        echo "  - $LEGACY_NODE_CONF"
-        echo "  - $LEGACY_TWO_NODE_CONF"
-        echo "  - $DEPLOY_CONF"
-        echo "  - $CONFIG_PATH"
-        echo "  - $CONFIG_DIR"
-        echo "  - $HISTORY_PATH"
-        echo "  - $CACHE_DIR"
-        echo "  - $LOG_DIR"
-        echo "  - $ISCSI_ENCRYPTED_CONF"
-        echo "  - Cache-warm scripts in $LOCAL_BIN_DIR and related logs"
-        echo "  - $LUKS_KEYFILE (will ask for extra confirmation)"
-        echo "  - Desktop shortcuts for the GUI and documentation viewer"
+        log_msg "INFO: The following will be removed:"
+        log_msg "INFO:   - $VERSION_BASE"
+        log_msg "INFO:   - $BASHINIT_LINK"
+        log_msg "INFO:   - $NODE_LIB_LINK"
+        log_msg "INFO:   - $TWO_NODE_LIB_LINK"
+        log_msg "INFO:   - $ROOTCHECK_LINK"
+        log_msg "INFO:   - $PROFILE_FILE"
+        log_msg "INFO:   - $SUDOERS_FILE"
+        log_msg "INFO:   - $CRON_FILE"
+        log_msg "INFO:   - $SYSTEMD_DIR/rtslib-fb-targetctl.service.d/"
+        log_msg "INFO:   - $SYSTEMD_DIR/zfs-keys-unlock.service"
+        log_msg "INFO:   - $SYSTEMD_DIR/zfs-cache-warm.service"
+        log_msg "INFO:   - $SYSTEM_CONFIG_DIR/"
+        log_msg "INFO:   - $STATE_DIR/"
+        log_msg "INFO:   - $NODE_CONF"
+        log_msg "INFO:   - $LEGACY_NODE_CONF"
+        log_msg "INFO:   - $LEGACY_TWO_NODE_CONF"
+        log_msg "INFO:   - $DEPLOY_CONF"
+        log_msg "INFO:   - $CONFIG_PATH"
+        log_msg "INFO:   - $CONFIG_DIR"
+        log_msg "INFO:   - $HISTORY_PATH"
+        log_msg "INFO:   - $CACHE_DIR"
+        log_msg "INFO:   - $LOG_DIR"
+        log_msg "INFO:   - $ISCSI_ENCRYPTED_CONF"
+        log_msg "INFO:   - Cache-warm scripts in $LOCAL_BIN_DIR and related logs"
+        log_msg "INFO:   - $LUKS_KEYFILE (will ask for extra confirmation)"
+        log_msg "INFO:   - Desktop shortcuts for the GUI and documentation viewer"
     else
-        echo "The following will be removed:"
-        echo "  - $VERSION_BASE"
-        echo "  - $BASHINIT_LINK"
-        echo "  - $NODE_LIB_LINK"
-        echo "  - $TWO_NODE_LIB_LINK"
-        echo "  - $ROOTCHECK_LINK"
-        echo "  - $PROFILE_FILE"
-        echo "  - $SUDOERS_FILE"
-        echo "  - $CRON_FILE"
-        echo "  - $SYSTEMD_DIR/rtslib-fb-targetctl.service.d/"
-        echo "  - $SYSTEMD_DIR/zfs-keys-unlock.service"
-        echo "  - $SYSTEMD_DIR/zfs-cache-warm.service"
-        echo "  - Desktop shortcuts for the GUI and documentation viewer"
-        echo ""
-        echo "The following will be preserved:"
-        echo "  - Configuration files in /etc/zfsutilities/, /var/lib/zfsutilities/,"
-        echo "    and legacy /root/.config/ and /etc/zfsutilities-* paths"
-        echo "  - Log files in /var/log/zfsutilities"
-        echo "  - History files"
+        log_msg "INFO: The following will be removed:"
+        log_msg "INFO:   - $VERSION_BASE"
+        log_msg "INFO:   - $BASHINIT_LINK"
+        log_msg "INFO:   - $NODE_LIB_LINK"
+        log_msg "INFO:   - $TWO_NODE_LIB_LINK"
+        log_msg "INFO:   - $ROOTCHECK_LINK"
+        log_msg "INFO:   - $PROFILE_FILE"
+        log_msg "INFO:   - $SUDOERS_FILE"
+        log_msg "INFO:   - $CRON_FILE"
+        log_msg "INFO:   - $SYSTEMD_DIR/rtslib-fb-targetctl.service.d/"
+        log_msg "INFO:   - $SYSTEMD_DIR/zfs-keys-unlock.service"
+        log_msg "INFO:   - $SYSTEMD_DIR/zfs-cache-warm.service"
+        log_msg "INFO:   - Desktop shortcuts for the GUI and documentation viewer"
+        log_msg "INFO:"
+        log_msg "INFO: The following will be preserved:"
+        log_msg "INFO:   - Configuration files in /etc/zfsutilities/, /var/lib/zfsutilities/,"
+        log_msg "INFO:     and legacy /root/.config/ and /etc/zfsutilities-* paths"
+        log_msg "INFO:   - Log files in /var/log/zfsutilities"
+        log_msg "INFO:   - History files"
     fi
 
-    echo ""
-    echo "ZFS pools, datasets, snapshots, and iSCSI targets will NOT be touched."
+    log_msg "INFO:"
+    log_msg "INFO: ZFS pools, datasets, snapshots, and iSCSI targets will NOT be touched."
 
     if [[ -f "$PVE_ISCSI_PLUGIN" ]] && grep -q 'tdiff > 86400' "$PVE_ISCSI_PLUGIN" 2>/dev/null; then
-        echo ""
-        echo "Note: The Proxmox iSCSI rescan-rate patch on $PVE_ISCSI_PLUGIN"
-        echo "      will NOT be reversed automatically. To reverse it manually, run:"
-        echo "        sed -i 's/tdiff > 86400)/tdiff > 10)/' $PVE_ISCSI_PLUGIN"
-        echo "        systemctl restart pvestatd"
+        log_msg "INFO:"
+        log_msg "INFO: Note: The Proxmox iSCSI rescan-rate patch on $PVE_ISCSI_PLUGIN"
+        log_msg "INFO:       will NOT be reversed automatically. To reverse it manually, run:"
+        log_msg "INFO:         sed -i 's/tdiff > 86400)/tdiff > 10)/' $PVE_ISCSI_PLUGIN"
+        log_msg "INFO:         systemctl restart pvestatd"
     fi
 
-    echo ""
+    log_msg "INFO:"
     if ! ask_yn "Proceed with uninstall?" "N"; then
-        echo "Cancelled."
+        log_msg "INFO: Cancelled."
         exit 0
     fi
 }
@@ -486,8 +483,8 @@ confirm_uninstall() {
 # Removal phases
 # ------------------------------------------------------------------
 uninstall_software() {
-    echo ""
-    echo "=== Removing software and production wiring ==="
+    log_msg "INFO:"
+    log_msg "INFO: === Removing software and production wiring ==="
 
     # Stop/disable services before removing their units.
     systemctl_cmd stop zfs-cache-warm.service
@@ -502,11 +499,11 @@ uninstall_software() {
     local switch_version="$VERSION_BASE/current/bin/switch-version"
     if [[ -x "$switch_version" ]]; then
         if [[ "$DO_DRY_RUN" == "true" ]]; then
-            echo "  [DRY-RUN] $switch_version --uninstall"
+            log_msg "INFO:   [DRY-RUN] $switch_version --uninstall"
         else
-            echo "  Unwiring active version..."
+            log_msg "INFO:   Unwiring active version..."
             "$switch_version" --uninstall || \
-                echo "  ⚠ switch-version --uninstall returned non-zero; continuing"
+                log_msg "WARN:   switch-version --uninstall returned non-zero; continuing"
         fi
     fi
 
@@ -526,7 +523,7 @@ uninstall_software() {
     local desktop_user
     desktop_user=$(get_desktop_user)
     if [[ "$DO_DRY_RUN" == "true" ]]; then
-        echo "  [DRY-RUN] remove desktop shortcuts for '$desktop_user'"
+        log_msg "INFO:   [DRY-RUN] remove desktop shortcuts for '$desktop_user'"
     else
         remove_desktop_symlinks "$desktop_user" || true
     fi
@@ -546,8 +543,8 @@ uninstall_software() {
 }
 
 uninstall_purge() {
-    echo ""
-    echo "=== Removing configuration, logs, and other remnants ==="
+    log_msg "INFO:"
+    log_msg "INFO: === Removing configuration, logs, and other remnants ==="
 
     remove_dir "$SYSTEM_CONFIG_DIR"
     remove_dir "$STATE_DIR"
@@ -588,13 +585,13 @@ uninstall_purge() {
 
     # LUKS keyfile requires explicit confirmation even with --yes.
     if [[ -f "$LUKS_KEYFILE" ]]; then
-        echo ""
-        echo "The LUKS keyfile $LUKS_KEYFILE was created during installation."
-        echo "Removing it will prevent unattended boot unlocking of encrypted ZFS keys."
+        log_msg "INFO:"
+        log_msg "INFO: The LUKS keyfile $LUKS_KEYFILE was created during installation."
+        log_msg "INFO: Removing it will prevent unattended boot unlocking of encrypted ZFS keys."
         if ask_yn "Remove $LUKS_KEYFILE?" "N"; then
             remove_file "$LUKS_KEYFILE"
         else
-            echo "  Kept $LUKS_KEYFILE"
+            log_msg "INFO:   Kept $LUKS_KEYFILE"
         fi
     fi
 
@@ -613,8 +610,8 @@ uninstall_peer() {
         return 0
     fi
 
-    echo ""
-    echo "=== Running uninstall on peer node: $peer ==="
+    log_msg "INFO:"
+    log_msg "INFO: === Running uninstall on peer node: $peer ==="
 
     local remote_flags=""
     [[ "$DO_PURGE" == "true" ]] && remote_flags+=" --purge"
@@ -630,9 +627,9 @@ uninstall_peer() {
         run_on_peer "$peer" "$remote_script$remote_flags"
     else
         if [[ "$DO_DRY_RUN" == "true" ]]; then
-            echo "  [DRY-RUN] would run local uninstall-zfsutilities on $peer via ssh"
+            log_msg "INFO:   [DRY-RUN] would run local uninstall-zfsutilities on $peer via ssh"
         else
-            echo "  Peer has no deployed uninstall script; running local copy via ssh..."
+            log_msg "INFO:   Peer has no deployed uninstall script; running local copy via ssh..."
             ssh -o ConnectTimeout=5 "root@$peer" "bash -s$remote_flags" < "$0"
         fi
     fi
@@ -656,7 +653,7 @@ main() {
     detect_installed_state
 
     if [[ "$DO_DRY_RUN" == "true" ]]; then
-        echo "=== DRY RUN — no changes will be made ==="
+        log_msg "INFO: === DRY RUN — no changes will be made ==="
     fi
 
     if [[ "$DO_YES" != "true" ]]; then
@@ -674,15 +671,15 @@ main() {
         uninstall_peer
     fi
 
-    echo ""
-    echo "=== ZFSutilities uninstall complete ==="
+    log_msg "INFO:"
+    log_msg "INFO: === ZFSutilities uninstall complete ==="
     if [[ "$DO_DRY_RUN" == "true" ]]; then
-        echo "This was a dry run; no changes were made."
+        log_msg "INFO: This was a dry run; no changes were made."
     else
-        echo "ZFSutilities has been removed from this host."
+        log_msg "INFO: ZFSutilities has been removed from this host."
         if [[ "$DO_PURGE" != "true" ]]; then
-            echo "Configuration, logs, and history were preserved."
-            echo "Run with --purge to remove them as well."
+            log_msg "INFO: Configuration, logs, and history were preserved."
+            log_msg "INFO: Run with --purge to remove them as well."
         fi
     fi
 

@@ -5,15 +5,17 @@ relevant to developers working on ZFS Utilities.
 
 ## Contents
 
-| Page                                         | Description                                                         |
-| -------------------------------------------- | ------------------------------------------------------------------- |
-| [Architecture](architecture.md)              | Overall design, script patterns, data flow                          |
-| [Conventions](conventions.md)                | Coding standards and patterns used throughout                       |
-| [Testing](testing.md)                        | Automated test harness, mock infrastructure, and writing new suites |
-| [Lock Manager](lock-manager.md)              | The interlock system for preventing conflicting operations          |
-| [Two-Node Configuration](two-node-config.md) | Centralised config for storage host / compute host scripts          |
-| [Documentation Server](doc-server.md)        | MkDocs configuration and edit-in-MarkText integration               |
-| [Development Provenance](provenance.md)      | AI-assisted development notes and CLAUDE files                      |
+| Page                                                 | Description                                                         |
+| ---------------------------------------------------- | ------------------------------------------------------------------- |
+| [Architecture](architecture.md)                      | Overall design, script patterns, data flow                          |
+| [Conventions](conventions.md)                        | Coding standards and patterns used throughout                       |
+| [Coding Policies](coding-policies.md)                | Project coding policies for Bash and Python                         |
+| [Bash Logging Exceptions](bash-logging-exceptions.md)| Scripts and output patterns exempt from the `log_msg` requirement   |
+| [Testing](testing.md)                                | Automated test harness, mock infrastructure, and writing new suites |
+| [Lock Manager](lock-manager.md)                      | The interlock system for preventing conflicting operations          |
+| [Two-Node Configuration](two-node-config.md)         | Centralised config for storage host / compute host scripts          |
+| [Documentation Server](doc-server.md)                | MkDocs configuration and edit-in-MarkText integration               |
+| [Development Provenance](provenance.md)              | AI-assisted development notes and CLAUDE files                      |
 
 ## Repository Structure
 

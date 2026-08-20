@@ -2,7 +2,37 @@
 
 ## Unreleased
 
+## 0.84.1
+
+*Released 2026-08-20*
+
+### Changed
+
+- **Bash logging compliance audit** — Most operational scripts that previously
+  emitted status, warning, error, and usage messages with raw `echo`/`printf`
+  now route them through the `bashinit` logging helpers (`log_msg`, `warn`,
+  `die`). Affected scripts include VM / iSCSI lifecycle helpers, ZFS key
+  scripts, version / deployment scripts, uninstall / cleanup scripts, and
+  several standalone utilities (`datesubtract`, `git-release`,
+  `zfssetarcsize`, `zfsshowbigstuff`, `zfsshowtuneables`, `zfswatcharc`).
+  Structured `stdout` data consumed by callers is preserved; only human-readable
+  status banners moved to `stderr` with the standard `file:line:` prefix and
+  session-log capture.
+
+- **Strict mode and rootcheck for standalone utilities** —
+  `datesubtract`, `zfssetarcsize`, `zfsshowbigstuff`, `zfsshowtuneables`, and
+  `zfswatcharc` now use `set -euo pipefail` and call `rootcheck`, aligning them
+  with the project initialization conventions.
+
+- **`zfsshowbigstuff` argument validation** — The script now validates that a
+  dataset is supplied and that the sort option is either `largest` or
+  `smallest`. It also fixes a latent reference to an undefined `sortoption`
+  variable.
+
 ### Fixed
+
+- **`bashinit` unbound `ZFSUTILITIES_LOG_FILE`** — `log_msg` no longer fails
+  when `ZFSUTILITIES_LOG_FILE` is unset.
 
 - **shellcheck info-level warnings** — `bin/clone-vm` no longer triggers SC2029
   when invoking the remote `safe-iscsi-save` script, and `bin/move-vm-disk`
@@ -14,12 +44,27 @@
 
 ### Tests
 
+- Added `tests/test-datesubtract` for argument validation, date arithmetic, and
+  `log_msg` routing.
+- Added `tests/test-zfsshowbigstuff` for argument validation, largest/smallest
+  sort behavior, count handling, and `log_msg` routing.
+- Extended `tests/test-logging` with a regression test for an unset
+  `ZFSUTILITIES_LOG_FILE`.
 - **Silenced non-root test warnings** — `tests/python/test_backup_runner.py`
   now patches `file_locking.LOG_INDEX_LOCK_PATH` into the temporary log
   directory, eliminating permission-denied warnings for
   `/run/lock/zfsutilities/.log_index.lock`.
 - `tests/python/runner.py` filters the harmless GLib IOChannel "bad file
   descriptor" warning emitted by some GTK-related tests.
+
+### Documentation
+
+- Added `docs/docs/developer-guide/bash-logging-exceptions.md` documenting the
+  small set of scripts and output patterns intentionally exempt from the
+  `log_msg` requirement.
+- Updated `docs/docs/developer-guide/index.md`, `conventions.md`, and
+  `testing.md` to reference the new logging-exceptions page and current test
+  suite list.
 
 ## 0.84.0
 

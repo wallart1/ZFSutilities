@@ -1,58 +1,63 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # release <version> <commit-message>
 # Bumps VERSION, commits all staged changes, and creates a git tag.
 #
 # Example:
 #   ./release 0.1.4 "Fix bashinit mydir handling and symlink resolution"
 
-set -e
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
 
 usage() {
-    echo "Usage: ./bin/git-release <version> <commit-message>"
-    echo ""
-    echo "  version         New version string (e.g. 0.1.4)"
-    echo "  commit-message  Message for the git commit and tag"
-    echo ""
-    echo "Example:"
-    echo '  ./bin/git-release 0.1.4 "Fix bashinit mydir handling"'
+    log_msg "INFO: Usage: $0 <version> <commit-message>"
+    log_msg "INFO:"
+    log_msg "INFO:   version         New version string (e.g. 0.1.4)"
+    log_msg "INFO:   commit-message  Message for the git commit and tag"
+    log_msg "INFO:"
+    log_msg "INFO: Example:"
+    log_msg 'INFO:   ./bin/git-release 0.1.4 "Fix bashinit mydir handling"'
     exit 1
 }
 
 [[ $# -ge 2 ]] || usage
 
-VERSION="$1"
+version="$1"
 shift
-MSG="$*"
+msg="$*"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
 
 # Validate we're in a git repo
 if [[ ! -d .git ]]; then
-    echo "✗ ERROR: Not a git repository" >&2
-    exit 1
+    die "Not a git repository"
 fi
 
 # Check for uncommitted changes before touching VERSION
 if ! git diff --quiet HEAD || ! git diff --cached --quiet HEAD; then
-    echo "Changes detected:"
+    log_msg "INFO: Changes detected:"
     git status --short
 fi
 
-echo "Bumping VERSION to $VERSION"
-echo "$VERSION" > VERSION
+log_msg "INFO: Bumping VERSION to $version"
+echo "$version" > VERSION
 
-echo "Committing with message: $MSG"
+log_msg "INFO: Committing with message: $msg"
 git add -A
-git commit -m "$MSG"
+git commit -m "$msg"
 
-echo "Tagging as v$VERSION"
-git tag -a "v$VERSION" -m "$MSG"
+log_msg "INFO: Tagging as v$version"
+git tag -a "v$version" -m "$msg"
 
-echo ""
-echo "=== Done ==="
-echo "  Version: $VERSION"
-echo "  Commit:  $(git rev-parse --short HEAD)"
-echo "  Tag:     v$VERSION"
-echo ""
-echo "To push:   git push && git push --tags"
+log_msg "INFO: === Done ==="
+log_msg "INFO:   Version: $version"
+log_msg "INFO:   Commit:  $(git rev-parse --short HEAD)"
+log_msg "INFO:   Tag:     v$version"
+log_msg "INFO: To push:   git push && git push --tags"

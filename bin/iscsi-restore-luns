@@ -33,7 +33,7 @@ if [[ ! -f "$SAVEFILE" ]]; then
     exit 1
 fi
 
-echo "=== Restoring missing iSCSI LUNs ==="
+log_msg "INFO: === Restoring missing iSCSI LUNs ==="
 echo ""
 
 ADDED_BS=0
@@ -49,7 +49,7 @@ while IFS=: read -r name dev; do
         continue
     fi
     if targetcli /backstores/block create "$name" "$dev" >/dev/null 2>&1; then
-        echo "  ✓ Added backstore $name"
+        log_msg "INFO:   ✓ Added backstore $name"
         ((ADDED_BS++))
     fi
 done < <(python3 - "$SAVEFILE" << 'PYEOF'
@@ -71,7 +71,7 @@ while IFS=: read -r iqn tag idx bs_name; do
     [[ -z "$iqn" ]] && continue
     if targetcli "/iscsi/${iqn}/tpg${tag}/luns" \
             create "/backstores/block/${bs_name}" "$idx" >/dev/null 2>&1; then
-        echo "  ✓ Added LUN $idx ($bs_name) to ${iqn}"
+        log_msg "INFO:   ✓ Added LUN $idx ($bs_name) to ${iqn}"
         ((ADDED_LUNS++))
     fi
 done < <(python3 - "$SAVEFILE" << 'PYEOF'
@@ -94,10 +94,10 @@ PYEOF
 )
 
 if [[ $ADDED_BS -eq 0 && $ADDED_LUNS -eq 0 ]]; then
-    echo "  ✓ All LUNs present — nothing to restore"
+    log_msg "INFO:   ✓ All LUNs present — nothing to restore"
 else
     echo ""
-    echo "  ✓ Restored $ADDED_BS backstore(s), $ADDED_LUNS LUN mapping(s)"
+    log_msg "INFO:   ✓ Restored $ADDED_BS backstore(s), $ADDED_LUNS LUN mapping(s)"
 fi
 
 echo ""
@@ -107,6 +107,6 @@ echo ""
 
 # Rescan compute host so it discovers any newly restored LUNs
 if [[ $ADDED_BS -gt 0 || $ADDED_LUNS -gt 0 ]]; then
-    echo "=== Rescanning compute host ==="
+    log_msg "INFO: === Rescanning compute host ==="
     "$mydir/rescan-storage"
 fi

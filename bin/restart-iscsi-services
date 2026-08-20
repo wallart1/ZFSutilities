@@ -96,11 +96,11 @@ check_running_vms() {
         echo ""
         log_msg "FATAL: The following VMs are currently running on $COMPUTE_HOST:"
         for vm in "${running_vms[@]}"; do
-            echo "    VM $vm"
+            log_msg "INFO:     VM $vm"
         done
         echo ""
-        echo "Restarting iSCSI will disconnect their disks and cause I/O errors."
-        echo "Stop the VMs first, then re-run this script."
+        log_msg "INFO: Restarting iSCSI will disconnect their disks and cause I/O errors."
+        log_msg "FATAL: Stop the VMs first, then re-run this script."
         exit 1
     fi
 }
@@ -109,27 +109,27 @@ check_running_vms() {
 # Main
 # ------------------------------------------------------------------
 main() {
-    echo "=== Restarting iSCSI Target Services ==="
+    log_msg "INFO: === Restarting iSCSI Target Services ==="
 
     check_running_vms
 
     # Stop the iSCSI target service
-    echo "Stopping rtslib-fb-targetctl..."
+    log_msg "INFO: Stopping rtslib-fb-targetctl..."
     systemctl stop rtslib-fb-targetctl
 
     # Start the iSCSI target service
     # ExecStart restores boot config; ExecStartPost adds encrypted LUNs if available
-    echo "Starting rtslib-fb-targetctl..."
+    log_msg "INFO: Starting rtslib-fb-targetctl..."
     systemctl start rtslib-fb-targetctl
 
     # Show encrypted LUN status
     echo ""
-    echo "Encrypted LUN status:"
+    log_msg "INFO: Encrypted LUN status:"
     if [[ -f "$CONF" ]]; then
         while IFS=: read -r name device _target; do
             [[ -z "$name" || "$name" == \#* ]] && continue
             if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
-                echo "  ✓ $name configured"
+                log_msg "INFO:   ✓ $name configured"
             elif [[ ! -e "$device" ]]; then
                 log_msg "WARN:   $name — device not available (keys not loaded?)"
             else
@@ -137,7 +137,7 @@ main() {
             fi
         done < "$CONF"
     else
-        echo "  (no encrypted LUNs config at $CONF)"
+        log_msg "INFO:   (no encrypted LUNs config at $CONF)"
     fi
 
     # Save only if all expected LUNs are active
@@ -146,11 +146,11 @@ main() {
 
     # Show current status
     echo ""
-    echo "=== iSCSI Target Status ==="
+    log_msg "INFO: === iSCSI Target Status ==="
     targetcli ls /iscsi 2>/dev/null | grep -E "iqn\.|LUNs"
 
     echo ""
-    echo "=== Complete ==="
+    log_msg "INFO: === Complete ==="
 }
 
 # Run main only when executed directly, not when sourced for tests.

@@ -133,4 +133,4 @@ if [[ $dopart2 = 'Y' ]]; then
     ensure_restored_iscsi
 fi
 
-echo "***  zfsrestore completed.  ***"
+log_msg "INFO: zfsrestore completed."

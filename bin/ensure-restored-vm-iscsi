@@ -357,7 +357,7 @@ else
         | grep -x "$EXPECTED_LUN" \
         | head -1 || true)
     if [[ -n "$occupied" ]]; then
-        echo "LUN_OCCUPIED:${EXPECTED_LUN}"
+        log_msg "INFO: LUN_OCCUPIED:${EXPECTED_LUN}"
         exit 0
     fi
     targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${BSNAME}" "$EXPECTED_LUN"

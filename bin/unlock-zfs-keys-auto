@@ -38,7 +38,7 @@ CONF="/etc/iscsi-encrypted-luns.conf"
 # this, or a previous run left it mounted).
 # ---------------------------------------------------------------------------
 if mountpoint -q "$KEY_MOUNT" 2>/dev/null; then
-    echo "Using already-mounted keys at $KEY_MOUNT"
+    log_msg "INFO: Using already-mounted keys at $KEY_MOUNT"
     USE_EXISTING_MOUNT=true
 else
     USE_EXISTING_MOUNT=false
@@ -51,12 +51,12 @@ if [[ "$USE_EXISTING_MOUNT" != true ]]; then
     # Without a keyfile we cannot unlock non-interactively. Exit cleanly so
     # iSCSI can still start without encrypted LUNs.
     if [[ ! -f "$KEY_FILE" ]]; then
-        echo "No $KEY_FILE present — unattended LUKS unlock not configured."
-        echo "Encrypted LUNs will remain offline until unlock-zfs-keys is run manually."
+        log_msg "INFO: No $KEY_FILE present — unattended LUKS unlock not configured."
+        log_msg "INFO: Encrypted LUNs will remain offline until unlock-zfs-keys is run manually."
         exit 0
     fi
 
-    echo "Waiting for ZFS keys USB device..."
+    log_msg "INFO: Waiting for ZFS keys USB device..."
 
     TIMEOUT=60
     ELAPSED=0
@@ -74,21 +74,21 @@ if [[ "$USE_EXISTING_MOUNT" != true ]]; then
         exit 0
     fi
 
-    echo "Found ZFS keys USB: $DEVICE"
+    log_msg "INFO: Found ZFS keys USB: $DEVICE"
 
     # Unlock LUKS
     if [[ -e /dev/mapper/keys ]]; then
-        echo "Already unlocked"
+        log_msg "INFO: Already unlocked"
     else
-        echo "Unlocking LUKS partition..."
+        log_msg "INFO: Unlocking LUKS partition..."
         cryptsetup luksOpen "$DEVICE" keys --key-file "$KEY_FILE"
-        echo "Unlocked successfully"
+        log_msg "INFO: Unlocked successfully"
     fi
 
     # Prepare mount point (remove legacy symlink if present)
     if [[ -L "$KEY_MOUNT" ]]; then
         rm "$KEY_MOUNT"
-        echo "Removed legacy symlink $KEY_MOUNT"
+        log_msg "INFO: Removed legacy symlink $KEY_MOUNT"
     fi
     mkdir -p "$KEY_MOUNT"
 
@@ -98,20 +98,20 @@ if [[ "$USE_EXISTING_MOUNT" != true ]]; then
             log_msg "FATAL: Failed to mount $KEY_MOUNT"
             exit 1
         }
-        echo "Mounted at $KEY_MOUNT"
+        log_msg "INFO: Mounted at $KEY_MOUNT"
     fi
 fi
 
 # ---------------------------------------------------------------------------
 # Load ZFS keys
 # ---------------------------------------------------------------------------
-echo "Loading ZFS encryption keys..."
+log_msg "INFO: Loading ZFS encryption keys..."
 
 LOADED=0
 TOTAL=0
 
 if [[ ! -f "$CONF" ]]; then
-    echo "No encrypted LUNs config at $CONF — nothing to load"
+    log_msg "INFO: No encrypted LUNs config at $CONF — nothing to load"
 else
     while IFS=: read -r name device _target; do
         [[ -z "$name" || "$name" == \#* ]] && continue
@@ -120,13 +120,13 @@ else
         STATUS=$(zfs get keystatus "$dataset" -H -o value 2>/dev/null || echo "unknown")
         if [[ "$STATUS" == "unavailable" ]]; then
             if zfs load-key "$dataset" 2>/dev/null; then
-                echo "  ✓ $dataset"
+                log_msg "INFO:   ✓ $dataset"
                 LOADED=$((LOADED + 1))
             else
                 log_msg "WARN:   $dataset — failed to load key"
             fi
         elif [[ "$STATUS" == "available" ]]; then
-            echo "  ✓ $dataset — already loaded"
+            log_msg "INFO:   ✓ $dataset — already loaded"
             LOADED=$((LOADED + 1))
         else
             log_msg "WARN:   $dataset — status: $STATUS"
@@ -134,7 +134,7 @@ else
     done < "$CONF"
 fi
 
-echo "ZFS keys loaded: $LOADED of $TOTAL"
+log_msg "INFO: ZFS keys loaded: $LOADED of $TOTAL"
 
 # Wait briefly for zvol device nodes to appear after key loading
 sleep 2
@@ -142,8 +142,8 @@ sleep 2
 # ---------------------------------------------------------------------------
 # Unmount keys immediately — they're in ZFS kernel memory now
 # ---------------------------------------------------------------------------
-echo "Securing keys..."
+log_msg "INFO: Securing keys..."
 "$mydir/lock-zfs-keys"
 
-echo "ZFS keys unlock complete"
+log_msg "INFO: ZFS keys unlock complete"
 exit 0

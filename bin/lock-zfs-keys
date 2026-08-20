@@ -20,26 +20,26 @@ rootcheck
 
 set -e
 
-echo "Locking ZFS keys USB..."
+log_msg "INFO: Locking ZFS keys USB..."
 
 # Legacy cleanup: if /mnt/ZFSkeys is a symlink, remove it.
 if [[ -L /mnt/ZFSkeys ]]; then
     rm /mnt/ZFSkeys
-    echo "Removed legacy symlink /mnt/ZFSkeys"
+    log_msg "INFO: Removed legacy symlink /mnt/ZFSkeys"
 fi
 
 # Unmount /mnt/ZFSkeys if we mounted it. If udisksd mounted it, unmount it too
 # so the device can be removed safely.
 if mountpoint -q /mnt/ZFSkeys 2>/dev/null; then
     umount /mnt/ZFSkeys
-    echo "Unmounted /mnt/ZFSkeys"
+    log_msg "INFO: Unmounted /mnt/ZFSkeys"
 fi
 
 # Close only the LUKS mapper we opened ourselves. udisksd may have used a
 # different mapper name; leave those alone.
 if [[ -e /dev/mapper/keys ]]; then
     cryptsetup luksClose keys
-    echo "LUKS container /dev/mapper/keys closed"
+    log_msg "INFO: LUKS container /dev/mapper/keys closed"
 fi
 
-echo "Done. Safe to remove USB drive."
+log_msg "INFO: Done. Safe to remove USB drive."

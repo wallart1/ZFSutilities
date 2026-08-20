@@ -125,10 +125,26 @@ test_log_msg_writes_to_file_when_owned() {
     rm -f "$logfile"
 }
 
+test_log_msg_handles_unset_log_file() {
+    test_start "log_msg tolerates an unset ZFSUTILITIES_LOG_FILE"
+    local output rc
+    output=$(
+        (
+            unset ZFSUTILITIES_LOG_FILE
+            source ~/bashinit
+            bashinit
+            log_msg "INFO: no log file set"
+        ) 2>&1
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$output" "INFO: no log file set"
+}
+
 test_log_msg_writes_to_file_when_owned
 test_log_msg_writes_all_levels
 test_log_msg_prints_all_to_stderr
 test_log_msg_no_filtering
+test_log_msg_handles_unset_log_file
 
 # ------------------------------------------------------------------------------
 # ask_yn

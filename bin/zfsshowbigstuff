@@ -1,40 +1,68 @@
 #!/usr/bin/bash
+set -euo pipefail
 # Show the biggest or smallest datasets in the pool or dataset given in $1
 
-pool=$(echo $1 | awk -F'/' '{print $1}')
-if [[ $2 != '' ]]; then
-    sequence="$2"
-    if   [[ "$sequence" = 'largest' ]];  then true
-    elif [[ "$sequence" = 'smallest' ]]; then true
-    else echo 'Sort option ($2) must be either \"largest\" or \"smallest\".'
-    fi
-else sequence='largest'
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
 fi
-if [[ $3 != '' ]]; then
-    numberofdatasets=$3
+bashinit
+unset _local_bashinit
+
+source_helper rootcheck
+rootcheck
+
+usage() {
+    log_msg "INFO: Usage: $0 <dataset> [largest|smallest] [count]"
+    log_msg "INFO:   dataset   Pool or dataset to examine (required)."
+    log_msg "INFO:   sequence  Sort order: 'largest' (default) or 'smallest'."
+    log_msg "INFO:   count     Number of datasets to show for smallest (default: 5)."
+}
+
+if [[ $# -lt 1 ]]; then
+    usage
+    die "A dataset must be specified."
+fi
+
+target="${1}"
+pool="$(echo "$target" | awk -F '/' '{print $1}')"
+
+if [[ -n "${2:-}" ]]; then
+    sequence="$2"
+    if [[ "$sequence" != 'largest' && "$sequence" != 'smallest' ]]; then
+        usage
+        die "Sort option must be either 'largest' or 'smallest'."
+    fi
+else
+    sequence='largest'
+fi
+
+if [[ -n "${3:-}" ]]; then
+    numberofdatasets="$3"
 else
     numberofdatasets=5
 fi
-echo "Sequence=$sequence."
-echo "Number of datasets=$numberofdatasets."
+
+log_msg "INFO: Sequence=${sequence}."
+log_msg "INFO: Number of datasets=${numberofdatasets}."
 
 zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health "$pool"
-zfs get -o name,property,value recordsize "$1"
+zfs get -o name,property,value recordsize "$target"
 
 sortbys=('used' 'usedds' 'usedsnap' 'written' 'quota' 'refer' 'refquota' 'reservation')
 for sortby in "${sortbys[@]}"; do
-    echo -e "\nSorted by:" $sequence $sortby
-    sortby="$sortoption $sortby"
+    log_msg "INFO: Sorted by: $sequence $sortby"
     if [[ $sequence = 'largest' ]]; then
-        zfs list -rt all -S $sortby \
-            -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$1" \
-        | head -n5
+        zfs list -rt all -S "$sortby" \
+            -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$target" \
+            | head -n 5
     elif [[ $sequence = 'smallest' ]]; then
-        zfs list -rt all -s $sortby \
-            -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$1" \
-        | head -n$numberofdatasets
+        zfs list -rt all -s "$sortby" \
+            -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$target" \
+            | head -n "$numberofdatasets"
     else
-        false
+        die "Unexpected sort sequence '${sequence}'."
     fi
 done
-

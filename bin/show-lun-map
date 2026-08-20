@@ -22,7 +22,7 @@ rootcheck
 MY_HOST=$(hostname -s)
 
 if is_single_node; then
-    echo "show-lun-map: not applicable in single-node mode (no iSCSI)"
+    log_msg "INFO: show-lun-map: not applicable in single-node mode (no iSCSI)"
     exit 0
 fi
 
@@ -34,7 +34,7 @@ fi
 
 # === Running on the compute host ===
 
-echo "=== LUN → Device Map ==="
+log_msg "INFO: === LUN → Device Map ==="
 echo ""
 
 # /dev/disk/by-path entries for iSCSI look like:
@@ -87,4 +87,4 @@ for KEY in $(printf '%s\n' "${!LUN_TO_DEV[@]}" | sort -t: -k1,1 -k2,2n); do
 done
 
 echo ""
-echo "Total iSCSI LUNs visible: ${#LUN_TO_DEV[@]}"
+log_msg "INFO: Total iSCSI LUNs visible: ${#LUN_TO_DEV[@]}"

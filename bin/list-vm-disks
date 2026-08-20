@@ -389,7 +389,7 @@ print_two_node_output() {
     local current_target=""
     local -a fields
 
-    echo "=== VM Disk Inventory ==="
+    log_msg "INFO: === VM Disk Inventory ==="
     echo ""
 
     while IFS='|' read -r -a fields; do
@@ -401,8 +401,8 @@ print_two_node_output() {
 
         if [[ "$current_target" != "$targetshort" ]]; then
             [[ -n "$current_target" ]] && echo ""
-            echo "Target: ${IQN_PREFIX}:${targetshort}"
-            echo "---------------------------------------------------------------"
+            log_msg "INFO: Target: ${IQN_PREFIX}:${targetshort}"
+            log_msg "INFO: ---------------------------------------------------------------"
             current_target="$targetshort"
         fi
 
@@ -417,7 +417,7 @@ run_single_node() {
     build_running_vm_set
     build_guest_device_map
 
-    echo "=== VM Disk Inventory (single-node) ==="
+    log_msg "INFO: === VM Disk Inventory (single-node) ==="
     echo ""
 
     local pool zvols zvol bsname SIZE disk_id origin clone_info clone_list
@@ -425,8 +425,8 @@ run_single_node() {
         zvols=$(zfs list -H -t volume -o name -r "$pool" 2>/dev/null | grep '/proxmox/vm-' || true)
         [[ -n "$zvols" ]] || continue
 
-        echo "Pool: $pool"
-        echo "---------------------------------------------------------------"
+        log_msg "INFO: Pool: $pool"
+        log_msg "INFO: ---------------------------------------------------------------"
 
         while IFS= read -r zvol; do
             bsname="${zvol##*/}"

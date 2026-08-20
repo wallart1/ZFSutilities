@@ -27,6 +27,7 @@ log_msg() {
     local _ts
     _ts=$(date '+%Y-%m-%d %H:%M:%S')
     echo -e "${_ts}  ${prefix} $*" >> "${_TEST_LOG_FILE}" 2>/dev/null || true
+    echo -e "${prefix} $*" >&2
 }
 
 ask_yn() {

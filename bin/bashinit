@@ -120,7 +120,7 @@ function log_msg {
         echo -e "${full}" >&2
     fi
     # Append to session log file if one is configured and we own it.
-    if [[ -n "${ZFSUTILITIES_LOG_FILE}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
+    if [[ -n "${ZFSUTILITIES_LOG_FILE:-}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
         local _ts
         _ts=$(date '+%Y-%m-%d %H:%M:%S')
         echo -e "${_ts}  ${full}" >> "${ZFSUTILITIES_LOG_FILE}" 2>/dev/null || true

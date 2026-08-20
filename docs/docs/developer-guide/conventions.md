@@ -95,7 +95,9 @@ file. They handle the `sourced vs. executed` context transparently.
 ## Error Logging
 
 Use `log_msg` from `bashinit` for bash scripts, and `log_msg` from
-`backup_config` for Python scripts:
+`backup_config` for Python scripts. A small set of scripts and output patterns
+are intentionally exempt from this requirement; see
+[Bash Logging Exceptions](bash-logging-exceptions.md) for the list and rationale.
 
 ```bash
 log_msg "Something went wrong with $variable."

@@ -39,11 +39,11 @@ is_single_node && exit 0
 MY_HOST=$(hostname -s)
 
 usage() {
-    echo "Usage: repair-iscsi-luns [--dry-run] [--force-relogin]"
+    log_msg "INFO: Usage: repair-iscsi-luns [--dry-run] [--force-relogin]"
     echo ""
-    echo "  --dry-run         Report what would be changed without making changes"
-    echo "  --force-relogin   Re-log iSCSI sessions if rescan does not reveal all LUNs"
-    echo "                    (briefly disconnects all LUNs on the compute host)"
+    log_msg "INFO:   --dry-run         Report what would be changed without making changes"
+    log_msg "INFO:   --force-relogin   Re-log iSCSI sessions if rescan does not reveal all LUNs"
+    log_msg "INFO:                     (briefly disconnects all LUNs on the compute host)"
     exit 1
 }
 
@@ -250,7 +250,7 @@ create_backstore() {
 
     if targetcli /backstores/block create "$name" "$dev" >/dev/null 2>&1; then
         targetcli "/backstores/block/${name}" set attribute emulate_tpu=1 >/dev/null 2>&1
-        echo "  ✓ Created backstore $name -> $dev"
+        log_msg "INFO:   ✓ Created backstore $name -> $dev"
         _bs_names+=("$name")
         _bs_devs["$name"]="$dev"
         return 0
@@ -281,7 +281,7 @@ create_lun_mapping() {
     fi
 
     if targetcli "/iscsi/${iqn}/tpg1/luns" create "/backstores/block/${name}" "$idx" >/dev/null 2>&1; then
-        echo "  ✓ Mapped $name to ${iqn}/tpg1/lun$idx"
+        log_msg "INFO:   ✓ Mapped $name to ${iqn}/tpg1/lun$idx"
         _used_indexes+=("$idx")
         _lun_indexes["$name"]="$idx"
         return 0
@@ -320,7 +320,7 @@ regenerate_manifest() {
     } > "$tmpfile"
 
     mv -f "$tmpfile" "$MANIFEST"
-    echo "  ✓ Regenerated $MANIFEST"
+    log_msg "INFO:   ✓ Regenerated $MANIFEST"
 }
 
 # ------------------------------------------------------------------
@@ -347,7 +347,7 @@ rescan_compute_host() {
     fi
 
     if "$RESCAN_STORAGE"; then
-        echo "  ✓ Compute host rescan complete"
+        log_msg "INFO:   ✓ Compute host rescan complete"
     else
         log_msg "WARN: Compute host rescan returned non-zero"
     fi
@@ -363,13 +363,17 @@ relogin_compute_host() {
     fi
 
     ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" bash -s -- "$STORAGE_IP" <<'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
         STORAGE_IP="$1"
         iscsiadm -m node -p "${STORAGE_IP}:3260" -u
         sleep 1
         iscsiadm -m node -p "${STORAGE_IP}:3260" -l
 SSHEOF
 
-    echo "  ✓ Re-login complete"
+    log_msg "INFO:   ✓ Re-login complete"
 }
 
 # ------------------------------------------------------------------
@@ -378,7 +382,7 @@ SSHEOF
 
 main() {
 
-echo "=== repair-iscsi-luns ==="
+log_msg "INFO: === repair-iscsi-luns ==="
 echo ""
 
 # Gather current target state
@@ -488,9 +492,9 @@ if [[ ${#UNMAPPED_ZVOLS[@]} -gt 0 ]]; then
     echo ""
     log_msg "WARN: The following zvols exist but are not in the expected manifest:"
     for zvol in "${UNMAPPED_ZVOLS[@]}"; do
-        echo "    $zvol"
+        log_msg "INFO:     $zvol"
     done
-    echo "  (They will not be exported. Use attach-vm-disk or new-vm-disk when you want to use them.)"
+    log_msg "INFO:   (They will not be exported. Use attach-vm-disk or new-vm-disk when you want to use them.)"
 fi
 
 # Persist changes
@@ -503,7 +507,7 @@ if [[ "$TARGET_CHANGED" == true ]]; then
         regenerate_manifest
         if type -t "$SAFE_ISCSI_SAVE" >/dev/null 2>&1; then
             if "$SAFE_ISCSI_SAVE"; then
-                echo "  ✓ iSCSI configuration saved"
+                log_msg "INFO:   ✓ iSCSI configuration saved"
             else
                 log_msg "FATAL: safe-iscsi-save failed — configuration may not be persistent"
             fi
@@ -539,18 +543,18 @@ fi
 
 # Summary
 echo ""
-echo "=== Summary ==="
+log_msg "INFO: === Summary ==="
 if [[ ${#MISSING_BACKSTORES[@]} -gt 0 ]]; then
-    echo "  ✓ Backstores added/verified: ${#MISSING_BACKSTORES[@]}"
+    log_msg "INFO:   ✓ Backstores added/verified: ${#MISSING_BACKSTORES[@]}"
 fi
 if [[ ${#MISSING_LUNS[@]} -gt 0 ]]; then
-    echo "  ✓ LUN mappings added/verified: ${#MISSING_LUNS[@]}"
+    log_msg "INFO:   ✓ LUN mappings added/verified: ${#MISSING_LUNS[@]}"
 fi
 if [[ ${#UNMAPPED_ZVOLS[@]} -gt 0 ]]; then
     log_msg "WARN: Unexported zvols: ${#UNMAPPED_ZVOLS[@]}"
 fi
 log_msg "INFO: Visible devices on $COMPUTE_HOST: ${VISIBLE_AFTER:-?}"
-echo "  ✓ Done"
+log_msg "INFO:   ✓ Done"
 echo ""
 
 } # end main

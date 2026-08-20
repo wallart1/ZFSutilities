@@ -77,11 +77,11 @@ while IFS=: read -r name device target; do
     if [[ -n "$lun_num" ]]; then
         targetcli /iscsi/"${IQN_PREFIX}":"${target}"/tpg1/luns \
             create /backstores/block/"$name" "$lun_num" >/dev/null 2>&1
-        echo "  ✓ Added $name (LUN $lun_num)"
+        log_msg "INFO:   ✓ Added $name (LUN $lun_num)"
     else
         targetcli /iscsi/"${IQN_PREFIX}":"${target}"/tpg1/luns \
             create /backstores/block/"$name" >/dev/null 2>&1
-        echo "  ✓ Added $name (auto LUN)"
+        log_msg "INFO:   ✓ Added $name (auto LUN)"
     fi
     ADDED=$((ADDED + 1))
 done < "$CONF"

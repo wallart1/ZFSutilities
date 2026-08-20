@@ -1309,6 +1309,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../bash-logging-exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bash Logging Exceptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../testing/" class="md-nav__link">
         
   
@@ -1925,7 +1953,9 @@ source_helper<span class="w"> </span>somemodule
 file. They handle the <code>sourced vs. executed</code> context transparently.</p>
 <h2 id="error-logging">Error Logging<a class="headerlink" href="#error-logging" title="Permanent link">&para;</a></h2>
 <p>Use <code>log_msg</code> from <code>bashinit</code> for bash scripts, and <code>log_msg</code> from
-<code>backup_config</code> for Python scripts:</p>
+<code>backup_config</code> for Python scripts. A small set of scripts and output patterns
+are intentionally exempt from this requirement; see
+<a href="../bash-logging-exceptions/">Bash Logging Exceptions</a> for the list and rationale.</p>
 <div class="highlight"><pre><span></span><code>log_msg<span class="w"> </span><span class="s2">&quot;Something went wrong with </span><span class="nv">$variable</span><span class="s2">.&quot;</span>
 log_msg<span class="w"> </span><span class="s2">&quot;Multi-line message.&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span><span class="s2">&quot;\n\tSecond line indented.&quot;</span>
@@ -2045,7 +2075,7 @@ symlink tracking and prevents version switching from working correctly.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.84.0
+      ZFS Utilities v0.84.1
     </div>
   
   
@@ -2070,7 +2100,7 @@ symlink tracking and prevents version switching from working correctly.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.84.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.84.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

@@ -23,14 +23,14 @@ VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
 # die is provided by bashinit (sourced above).
 
 usage() {
-    echo "Usage: uninstall-version [-y|--yes] <version>"
-    echo ""
-    echo "Options:"
-    echo "  -y, --yes    Skip the confirmation prompt"
-    echo ""
-    echo "Examples:"
-    echo "  sudo uninstall-version 1.0.0"
-    echo "  sudo uninstall-version -y 1.0.0"
+    log_msg "INFO: Usage: uninstall-version [-y|--yes] <version>"
+    log_msg "INFO:"
+    log_msg "INFO: Options:"
+    log_msg "INFO:   -y, --yes    Skip the confirmation prompt"
+    log_msg "INFO:"
+    log_msg "INFO: Examples:"
+    log_msg "INFO:   sudo uninstall-version 1.0.0"
+    log_msg "INFO:   sudo uninstall-version -y 1.0.0"
     exit 1
 }
 
@@ -48,7 +48,7 @@ while [[ $# -gt 0 ]]; do
             usage
             ;;
         -*)
-            echo "Unknown option: $1" >&2
+            log_msg "WARN: Unknown option: $1"
             usage
             ;;
         *)
@@ -74,10 +74,10 @@ if [[ "$FORCE_YES" -eq 0 ]]; then
     # Regex: ^[Yy]$
     # Purpose: Accept any single-character response starting with Y or y as confirmation.
     # Example: "Y" -> match; "y" -> match; "yes" -> no match (triggers abort)
-    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+    [[ "$confirm" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
 fi
 
 rm -rf "$TARGET"
 
-echo "=== uninstall-version ==="
-echo "  Removed: $VERSION"
+log_msg "INFO: === uninstall-version ==="
+log_msg "INFO:   Removed: $VERSION"

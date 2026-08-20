@@ -67,7 +67,7 @@ regenerate_expected_backstores_manifest() {
 
     if [[ -s "$tmpfile" ]]; then
         mv -f "$tmpfile" "$MANIFEST"
-        echo "✓ Regenerated expected-backstores manifest"
+        log_msg "INFO: ✓ Regenerated expected-backstores manifest"
     else
         rm -f "$tmpfile"
         log_msg "WARN: Could not regenerate expected-backstores manifest (no backstores found)"
@@ -122,7 +122,7 @@ with open(dst, "w") as f:
 PYEOF
 
     if [[ $? -eq 0 ]]; then
-        echo "✓ Boot config generated ($count encrypted backstores excluded)"
+        log_msg "INFO: ✓ Boot config generated ($count encrypted backstores excluded)"
     else
         log_msg "WARN: Failed to generate boot config"
     fi
@@ -169,7 +169,7 @@ if [[ "$active" -gt "$expected" ]]; then
 fi
 
 targetcli saveconfig >/dev/null 2>&1
-echo "✓ iSCSI configuration saved ($active/$expected LUNs active)"
+log_msg "INFO: ✓ iSCSI configuration saved ($active/$expected LUNs active)"
 
 generate_boot_config
 

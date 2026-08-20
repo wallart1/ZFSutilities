@@ -40,11 +40,11 @@ if ! command -v qm >/dev/null 2>&1; then
 fi
 
 usage() {
-    echo "Usage: promote-vm-clone <vmid>"
+    log_msg "INFO: Usage: promote-vm-clone <vmid>"
     echo ""
-    echo "  vmid   VM ID whose zvols should be promoted (must be a ZFS clone)"
+    log_msg "INFO:   vmid   VM ID whose zvols should be promoted (must be a ZFS clone)"
     echo ""
-    echo "Example: promote-vm-clone 310"
+    log_msg "INFO: Example: promote-vm-clone 310"
     exit 1
 }
 
@@ -65,6 +65,10 @@ if is_single_node; then
         | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
 else
     clone_info=$(ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
 VMID="$1"
 zfs list -H -o name,origin \
     | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}'
@@ -75,48 +79,52 @@ fi
 [[ -n "$clone_info" ]] \
     || { log_msg "FATAL: No clone zvols found for VM ${VMID} — already promoted or not a ZFS clone"; exit 1; }
 
-echo "=== promote-vm-clone ==="
-echo "  VM: ${VMID}"
+log_msg "INFO: === promote-vm-clone ==="
+log_msg "INFO:   VM: ${VMID}"
 echo ""
-echo "  Zvols to promote:"
+log_msg "INFO:   Zvols to promote:"
 while IFS=$'\t' read -r zvol origin; do
     src_vmid=$(echo "$origin" | grep -oP '/proxmox/vm-\K[0-9]+(?=-disk-)')
-    echo "    ${zvol}"
-    echo "      origin: ${origin}"
-    [[ -n "$src_vmid" ]] && echo "      cuts dependency on VM ${src_vmid}"
+    log_msg "INFO:     ${zvol}"
+    log_msg "INFO:       origin: ${origin}"
+    [[ -n "$src_vmid" ]] && log_msg "INFO:       cuts dependency on VM ${src_vmid}"
 done <<< "$clone_info"
 echo ""
 
 read -rp "Proceed with promotion? (y/N): " confirm
-[[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+[[ "$confirm" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
 echo ""
 
 # --- Promote each zvol ---
 if is_single_node; then
     while IFS=$'\t' read -r zvol origin; do
         zfs promote "$zvol" || { log_msg "FATAL: Promotion failed: $zvol"; exit 1; }
-        echo "✓ Promoted: ${zvol}"
-        echo "  snapshot moved from ${origin%%@*} to ${zvol}"
+        log_msg "INFO: ✓ Promoted: ${zvol}"
+        log_msg "INFO:   snapshot moved from ${origin%%@*} to ${zvol}"
     done < <(zfs list -H -o name,origin \
         | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
 else
     ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF' || { log_msg "FATAL: Promotion failed on $STORAGE_HOST"; exit 1; }
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
 set -e
 VMID="$1"
 while IFS=$'\t' read -r zvol origin; do
     zfs promote "$zvol"
-    echo "✓ Promoted: ${zvol}"
-    echo "  snapshot moved from ${origin%%@*} to ${zvol}"
+    log_msg "INFO: ✓ Promoted: ${zvol}"
+    log_msg "INFO:   snapshot moved from ${origin%%@*} to ${zvol}"
 done < <(zfs list -H -o name,origin \
     | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
 SSHEOF
 fi
 
 echo ""
-echo "=== Done ==="
-echo "  VM ${VMID} zvols are now independent."
-echo "  Other clones of the same snapshots have been re-parented to VM ${VMID}."
-echo "  The former source VM can be destroyed when ready:"
-echo "    1. Stop the source VM"
-echo "    2. Remove its disks from the Proxmox config"
-echo "    3. For each source zvol: zfsdelfs <pool>/proxmox/vm-<srcvmid>-disk-<N>"
+log_msg "INFO: === Done ==="
+log_msg "INFO:   VM ${VMID} zvols are now independent."
+log_msg "INFO:   Other clones of the same snapshots have been re-parented to VM ${VMID}."
+log_msg "INFO:   The former source VM can be destroyed when ready:"
+log_msg "INFO:     1. Stop the source VM"
+log_msg "INFO:     2. Remove its disks from the Proxmox config"
+log_msg "INFO:     3. For each source zvol: zfsdelfs <pool>/proxmox/vm-<srcvmid>-disk-<N>"

@@ -34,31 +34,31 @@ VERSION=""
 DEPLOY_GROUPS=()
 
 usage() {
-    echo "Usage: deploy-version [version] [group ...]"
-    echo ""
-    echo "  version  Version string (default: read from ./VERSION)"
-    echo "  group    One or more deployment-group names defined in"
-    echo "           /etc/zfsutilities-deploy.conf. If omitted, all"
-    echo "           groups are deployed."
-    echo ""
-    echo "Examples:"
-    echo "  sudo ./bin/deploy-version                  # deploy current VERSION to all groups"
-    echo "  sudo ./bin/deploy-version 1.2.0            # deploy specific version to all groups"
-    echo "  sudo ./bin/deploy-version 1.2.0 production # deploy only 'production' group"
-    echo ""
+    log_msg "INFO: Usage: deploy-version [version] [group ...]"
+    log_msg "INFO:"
+    log_msg "INFO:   version  Version string (default: read from ./VERSION)"
+    log_msg "INFO:   group    One or more deployment-group names defined in"
+    log_msg "INFO:            /etc/zfsutilities-deploy.conf. If omitted, all"
+    log_msg "INFO:            groups are deployed."
+    log_msg "INFO:"
+    log_msg "INFO: Examples:"
+    log_msg "INFO:   sudo ./bin/deploy-version                  # deploy current VERSION to all groups"
+    log_msg "INFO:   sudo ./bin/deploy-version 1.2.0            # deploy specific version to all groups"
+    log_msg "INFO:   sudo ./bin/deploy-version 1.2.0 production # deploy only 'production' group"
+    log_msg "INFO:"
     if [[ -f /etc/zfsutilities-deploy.conf ]]; then
-        echo "Available groups from /etc/zfsutilities-deploy.conf:"
+        log_msg "INFO: Available groups from /etc/zfsutilities-deploy.conf:"
         # shellcheck source=/dev/null
         source /etc/zfsutilities-deploy.conf
         local var
         for var in ${!DEPLOY_GROUP_*}; do
             local name="${var#DEPLOY_GROUP_}"
             local hosts="${!var}"
-            echo "  $name -> $hosts"
+            log_msg "INFO:   $name -> $hosts"
         done
     else
-        echo "No /etc/zfsutilities-deploy.conf found."
-        echo "Remote deployment falls back to legacy node-config behaviour."
+        log_msg "INFO: No /etc/zfsutilities-deploy.conf found."
+        log_msg "INFO: Remote deployment falls back to legacy node-config behaviour."
     fi
     exit 0
 }
@@ -136,7 +136,7 @@ validate_critical_scripts() {
     local missing=0
     for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive rootcheck; do
         if [[ ! -f "$VERSION_DIR/bin/$script" ]]; then
-            echo "  Missing: $VERSION_DIR/bin/$script" >&2
+            log_msg "WARN:   Missing: $VERSION_DIR/bin/$script"
             ((++missing))
         fi
     done
@@ -151,8 +151,7 @@ validate_critical_scripts() {
 deploy_to_host() {
     local host_label="$1"
 
-    echo ""
-    echo "=== Deploying to $host_label ==="
+    log_msg "INFO: === Deploying to $host_label ==="
 
     # Create version directory structure
     mkdir -p "$VERSION_DIR/bin" "$VERSION_DIR/lib" \
@@ -227,7 +226,7 @@ deploy_to_host() {
     # Verify critical scripts were copied
     validate_critical_scripts
 
-    echo "  ✓ $host_label complete"
+    log_msg "INFO:   ✓ $host_label complete"
 }
 
 # ------------------------------------------------------------------
@@ -239,8 +238,7 @@ _sync_to_host() {
 
     [[ "$MY_HOST" == "$host" ]] && return
 
-    echo ""
-    echo "Syncing to $host..."
+    log_msg "INFO: Syncing to $host..."
     local ssh_ctrl="/tmp/.deploy-version-ssh-${host}-$$"
     local ssh_opts="-o ControlMaster=auto -o ControlPath=${ssh_ctrl} -o ControlPersist=60"
 
@@ -248,16 +246,15 @@ _sync_to_host() {
     rsync -az --delete -e "ssh $ssh_opts" "$VERSION_DIR/" "root@$host:$VERSION_DIR/"
     ssh -O exit -o ControlPath="$ssh_ctrl" root@"$host" 2>/dev/null || true
     rm -f "$ssh_ctrl"
-    echo "  ✓ $host files synced (run switch-version on $host to activate)"
+    log_msg "INFO:   ✓ $host files synced (run switch-version on $host to activate)"
 }
 
 # ------------------------------------------------------------------
 # Main: local deployment
 # ------------------------------------------------------------------
-echo "=== deploy-version ==="
-echo "  Version: $VERSION"
-echo "  Source:  $MYDIR"
-echo ""
+log_msg "INFO: === deploy-version ==="
+log_msg "INFO:   Version: $VERSION"
+log_msg "INFO:   Source:  $MYDIR"
 
 deploy_to_host "local host ($MY_HOST)"
 
@@ -317,11 +314,10 @@ for host in "${REMOTE_HOSTS[@]}"; do
     _sync_to_host "$host"
 done
 
-echo ""
-echo "=== Done ==="
-echo "  Deployed: $VERSION"
-echo "  Location: $VERSION_DIR"
-echo ""
-echo "  Scripts are available via PATH: $VERSION_BASE/bin"
-echo "  To activate:   sudo switch-version $VERSION"
-echo "  To list all:   sudo switch-version --list"
+log_msg "INFO: === Done ==="
+log_msg "INFO:   Deployed: $VERSION"
+log_msg "INFO:   Location: $VERSION_DIR"
+log_msg "INFO:"
+log_msg "INFO:   Scripts are available via PATH: $VERSION_BASE/bin"
+log_msg "INFO:   To activate:   sudo switch-version $VERSION"
+log_msg "INFO:   To list all:   sudo switch-version --list"

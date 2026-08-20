@@ -1,0 +1,108 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfsshowbigstuff — Verify argument validation and sort behavior.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+SHOWBIG_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/zfsshowbigstuff"
+[[ -f "$SHOWBIG_SCRIPT" ]] || die "Missing: $SHOWBIG_SCRIPT"
+
+# Common subsell runner. Sets up mocks, runs the script, and prints both
+# stderr (log messages) and a trailing sequence marker.
+_run_showbig() {
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+    setup_test_env
+    mock_zpool_list "threeamigos"
+    mock_zfs_fs_list "threeamigos\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-100-disk-0"
+    mock_zfs_dataset_exists "threeamigos"
+    mock_zfs_dataset_exists "threeamigos/proxmox"
+    mock_zfs_dataset_exists "threeamigos/proxmox/vm-100-disk-0"
+    mock_zfs_prop "threeamigos/proxmox/vm-100-disk-0" "recordsize" "8K"
+    source "$SHOWBIG_SCRIPT" "$@" 2>&1
+    echo "__SEQUENCE__$(cat "$_mock_zfs_state_dir/sequence" 2>/dev/null)"
+}
+
+test_missing_dataset_shows_usage_and_fails() {
+    test_start "missing dataset prints usage and exits non-zero"
+    local output rc
+    output=$(
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+        setup_test_env
+        source "$SHOWBIG_SCRIPT" 2>&1
+    ) && rc=0 || rc=$?
+    assert_rc 1 "$rc"
+    if [[ "$output" == *"Usage:"* && "$output" == *"A dataset must be specified"* ]]; then
+        test_pass
+    else
+        test_fail "Expected usage and error message; got:\n$output"
+    fi
+}
+
+test_invalid_sort_option_shows_usage_and_fails() {
+    test_start "invalid sort option prints usage and exits non-zero"
+    local output rc
+    output=$(
+        _run_showbig "threeamigos/proxmox" "biggest"
+    ) && rc=0 || rc=$?
+    assert_rc 1 "$rc"
+    if [[ "$output" == *"Usage:"* && "$output" == *"Sort option must be either"* ]]; then
+        test_pass
+    else
+        test_fail "Expected usage and error message; got:\n$output"
+    fi
+}
+
+test_largest_uses_descending_sort() {
+    test_start "largest mode passes -S (descending) to zfs list"
+    local output rc
+    output=$(
+        _run_showbig "threeamigos/proxmox" "largest"
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$output" "__SEQUENCE__S"
+}
+
+test_smallest_uses_ascending_sort() {
+    test_start "smallest mode passes -s (ascending) to zfs list"
+    local output rc
+    output=$(
+        _run_showbig "threeamigos/proxmox" "smallest" "3"
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$output" "__SEQUENCE__s"
+}
+
+test_smallest_honors_count() {
+    test_start "smallest mode logs the requested count"
+    local output rc
+    output=$(
+        _run_showbig "threeamigos/proxmox" "smallest" "3"
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$output" "Number of datasets=3"
+}
+
+test_log_messages_routed_through_log_msg() {
+    test_start "status lines are routed through log_msg"
+    local output rc
+    output=$(
+        _run_showbig "threeamigos/proxmox"
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    if [[ "$output" == *"INFO: Sequence=largest"* && "$output" == *"INFO: Sorted by:"* ]]; then
+        test_pass
+    else
+        test_fail "Expected INFO-prefixed status lines; got:\n$output"
+    fi
+}
+
+test_missing_dataset_shows_usage_and_fails
+test_invalid_sort_option_shows_usage_and_fails
+test_largest_uses_descending_sort
+test_smallest_uses_ascending_sort
+test_smallest_honors_count
+test_log_messages_routed_through_log_msg
+
+test_summary
+teardown_test_env

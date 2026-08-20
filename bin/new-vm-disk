@@ -50,22 +50,22 @@ usage() {
     else
         pool_choices=$(zpool list -H -o name 2>/dev/null | paste -sd '|' -)
     fi
-    echo "Usage: new-vm-disk <pool> <vmid> <disk-num> <size>"
+    log_msg "INFO: Usage: new-vm-disk <pool> <vmid> <disk-num> <size>"
     echo ""
-    echo "  pool      ZFS pool name (${pool_choices})"
-    echo "  vmid      Proxmox VM ID (e.g. 300)"
-    echo "  disk-num  Disk number (e.g. 0 for first disk, 1 for second)"
-    echo "  size      Zvol size (e.g. 50G, 500G, 2T)"
-    echo "            Use EFI to create an EFI firmware disk (4M, UEFI boot)"
+    log_msg "INFO:   pool      ZFS pool name (${pool_choices})"
+    log_msg "INFO:   vmid      Proxmox VM ID (e.g. 300)"
+    log_msg "INFO:   disk-num  Disk number (e.g. 0 for first disk, 1 for second)"
+    log_msg "INFO:   size      Zvol size (e.g. 50G, 500G, 2T)"
+    log_msg "INFO:             Use EFI to create an EFI firmware disk (4M, UEFI boot)"
     echo ""
-    echo "Options:"
-    echo "  --encrypted  Create an encrypted zvol (requires /mnt/ZFSkeys mounted)"
+    log_msg "INFO: Options:"
+    log_msg "INFO:   --encrypted  Create an encrypted zvol (requires /mnt/ZFSkeys mounted)"
     echo ""
-    echo "Examples:"
-    echo "  new-vm-disk threeamigos 300 0 EFI   # EFI firmware disk (create first)"
-    echo "  new-vm-disk threeamigos 300 1 50G   # boot disk"
-    echo "  new-vm-disk threeamigos 300 2 500G  # data disk"
-    echo "  new-vm-disk threeamigos 300 1 50G --encrypted  # encrypted disk"
+    log_msg "INFO: Examples:"
+    log_msg "INFO:   new-vm-disk threeamigos 300 0 EFI   # EFI firmware disk (create first)"
+    log_msg "INFO:   new-vm-disk threeamigos 300 1 50G   # boot disk"
+    log_msg "INFO:   new-vm-disk threeamigos 300 2 500G  # data disk"
+    log_msg "INFO:   new-vm-disk threeamigos 300 1 50G --encrypted  # encrypted disk"
     exit 1
 }
 
@@ -126,11 +126,11 @@ if [[ "${SIZE^^}" == "EFI" ]]; then
     if [[ "$SECURE_BOOT_FLAG" == true ]]; then
         SECURE_BOOT=true
     elif [[ "$CONFIG_ONLY" == false ]]; then
-        echo "EFI disk requested (4M — stores UEFI firmware variables)"
+        log_msg "INFO: EFI disk requested (4M — stores UEFI firmware variables)"
         echo ""
-        echo "Secure Boot pre-enrolls Microsoft + distro certificate keys."
-        echo "  Required for Windows 11."
-        echo "  Optional for Linux — can be enabled later from the VM's BIOS menu."
+        log_msg "INFO: Secure Boot pre-enrolls Microsoft + distro certificate keys."
+        log_msg "INFO:   Required for Windows 11."
+        log_msg "INFO:   Optional for Linux — can be enabled later from the VM's BIOS menu."
         read -rp "Enable Secure Boot pre-enrolled keys? (y/N): " sb_response
         [[ "$sb_response" =~ ^[Yy]$ ]] && SECURE_BOOT=true
         echo ""
@@ -186,9 +186,9 @@ init_efi_disk() {
 
     [[ -f "$vars_file" ]] || {
         log_msg "WARN: OVMF firmware file not found: $vars_file"
-        echo "  Is pve-edk2-firmware installed? (apt install pve-edk2-firmware)"
-        echo "  Initialize manually when available:"
-        echo "  sudo dd if=$vars_file of=/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${lun_num} bs=1M conv=notrunc"
+        log_msg "INFO:   Is pve-edk2-firmware installed? (apt install pve-edk2-firmware)"
+        log_msg "INFO:   Initialize manually when available:"
+        log_msg "INFO:   sudo dd if=$vars_file of=/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${lun_num} bs=1M conv=notrunc"
         return 1
     }
 
@@ -204,16 +204,16 @@ init_efi_disk() {
 
     if [[ ! -b "$device" ]]; then
         log_msg "WARN: Device not found: $by_path"
-        echo "  After the device appears, initialize manually:"
-        echo "  sudo dd if=$vars_file of=$by_path bs=1M conv=notrunc"
+        log_msg "INFO:   After the device appears, initialize manually:"
+        log_msg "INFO:   sudo dd if=$vars_file of=$by_path bs=1M conv=notrunc"
         return 1
     fi
 
-    echo "Initializing EFI disk with OVMF firmware variables..."
-    echo "  Source: $vars_file"
-    echo "  Device: $device ($by_path)"
+    log_msg "INFO: Initializing EFI disk with OVMF firmware variables..."
+    log_msg "INFO:   Source: $vars_file"
+    log_msg "INFO:   Device: $device ($by_path)"
     dd if="$vars_file" of="$device" bs=1M conv=notrunc 2>&1 | tail -1 | sed 's/^/  /'
-    echo "✓ EFI disk initialized"
+    log_msg "INFO: ✓ EFI disk initialized"
 
     # Construct the VM config lines
     # Proxmox uses the by-path symlink directly as the volume identifier for iSCSI
@@ -223,39 +223,39 @@ init_efi_disk() {
     # Edit VM config if the VM already exists
     local conf="/etc/pve/qemu-server/${VMID}.conf"
     if [[ -f "$conf" ]]; then
-        echo "Updating VM ${VMID} config..."
+        log_msg "INFO: Updating VM ${VMID} config..."
 
         # Set BIOS to OVMF
         if grep -q "^bios:" "$conf"; then
             if ! grep -q "^bios: ovmf" "$conf"; then
                 sed -i "s/^bios:.*/bios: ovmf/" "$conf"
-                echo "✓ Changed VM ${VMID} BIOS to OVMF (UEFI)"
+                log_msg "INFO: ✓ Changed VM ${VMID} BIOS to OVMF (UEFI)"
             else
-                echo "✓ VM ${VMID} already set to OVMF (UEFI)"
+                log_msg "INFO: ✓ VM ${VMID} already set to OVMF (UEFI)"
             fi
         else
             echo "bios: ovmf" >> "$conf"
-            echo "✓ Set VM ${VMID} BIOS to OVMF (UEFI)"
+            log_msg "INFO: ✓ Set VM ${VMID} BIOS to OVMF (UEFI)"
         fi
 
         # Add efidisk0
         if grep -q "^efidisk0:" "$conf"; then
             log_msg "WARN: VM ${VMID} already has an efidisk0 entry — not replacing:"
-            echo "  $(grep "^efidisk0:" "$conf")"
+            log_msg "INFO:   $(grep "^efidisk0:" "$conf")"
         else
             echo "$efidisk_line" >> "$conf"
-            echo "✓ Added efidisk0 to VM ${VMID} config"
+            log_msg "INFO: ✓ Added efidisk0 to VM ${VMID} config"
         fi
     else
         log_msg "WARN: VM ${VMID} does not exist yet."
-        echo "  Create the VM in Proxmox GUI (no disk), then add these lines"
-        echo "  to /etc/pve/qemu-server/${VMID}.conf:"
+        log_msg "INFO:   Create the VM in Proxmox GUI (no disk), then add these lines"
+        log_msg "INFO:   to /etc/pve/qemu-server/${VMID}.conf:"
     fi
 
     echo ""
-    echo "=== EFI config lines for VM ${VMID} ==="
-    echo "  bios: ovmf"
-    echo "  $efidisk_line"
+    log_msg "INFO: === EFI config lines for VM ${VMID} ==="
+    log_msg "INFO:   bios: ovmf"
+    log_msg "INFO:   $efidisk_line"
 }
 
 # --- Add a regular data disk to the VM config (runs on the compute host) ---
@@ -266,8 +266,8 @@ add_data_disk_to_config() {
 
     if [[ ! -f "$conf" ]]; then
         log_msg "WARN: VM ${VMID} config not found — create the VM in Proxmox GUI (no disk), then run:"
-        echo "  qm set ${VMID} -scsiX ${by_path},format=raw,discard=on,iothread=1,size=${SIZE}"
-        echo "  (replace X with the desired scsi slot number)"
+        log_msg "INFO:   qm set ${VMID} -scsiX ${by_path},format=raw,discard=on,iothread=1,size=${SIZE}"
+        log_msg "INFO:   (replace X with the desired scsi slot number)"
         return 1
     fi
 
@@ -279,8 +279,8 @@ add_data_disk_to_config() {
 
     local disk_line="scsi${slot}: ${by_path},format=raw,discard=on,iothread=1,size=${SIZE}"
     echo "$disk_line" >> "$conf"
-    echo "✓ Added scsi${slot} to VM ${VMID} config"
-    echo "  ${disk_line}"
+    log_msg "INFO: ✓ Added scsi${slot} to VM ${VMID} config"
+    log_msg "INFO:   ${disk_line}"
 }
 
 # --- If not on the storage host, delegate storage work via SSH (two-node only) ---
@@ -299,7 +299,7 @@ if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
         exit 0
     fi
 
-    echo "Connecting to $STORAGE_HOST for storage operations..."
+    log_msg "INFO: Connecting to $STORAGE_HOST for storage operations..."
     enc_flag=""
     [[ "$ENCRYPTED_FLAG" == true ]] && enc_flag=" --encrypted"
     REMOTE_SCRIPT=$(remote_zfsutility_script "$STORAGE_HOST" "new-vm-disk")
@@ -309,7 +309,7 @@ if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
             exit 1
         }
     echo ""
-    echo "Rescanning iSCSI on $(hostname)..."
+    log_msg "INFO: Rescanning iSCSI on $(hostname)..."
     if [[ "$MY_HOST" == "$COMPUTE_HOST" ]]; then
         "$mydir/rescan-storage"
     else
@@ -335,7 +335,7 @@ if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
         if [[ "$EFI_DISK" == true ]]; then
             echo ""
             log_msg "WARN: EFI disk initialization must be run from the compute host."
-            echo "  Run on $COMPUTE_HOST: sudo new-vm-disk $POOL $VMID $DISKNUM EFI"
+            log_msg "INFO:   Run on $COMPUTE_HOST: sudo new-vm-disk $POOL $VMID $DISKNUM EFI"
         fi
     fi
     exit 0
@@ -345,12 +345,12 @@ fi
 
 ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
 
-echo "=== new-vm-disk ==="
-echo "  Zvol:      $ZVOL_NAME ($SIZE)"
-echo "  Backstore: $BACKSTORE_NAME"
-echo "  Target:    $TARGET"
-[[ "$EFI_DISK" == true ]] && echo "  Type:      EFI firmware disk"
-[[ "$ENCRYPTED_FLAG" == true ]] && echo "  Type:      Encrypted"
+log_msg "INFO: === new-vm-disk ==="
+log_msg "INFO:   Zvol:      $ZVOL_NAME ($SIZE)"
+log_msg "INFO:   Backstore: $BACKSTORE_NAME"
+log_msg "INFO:   Target:    $TARGET"
+[[ "$EFI_DISK" == true ]] && log_msg "INFO:   Type:      EFI firmware disk"
+[[ "$ENCRYPTED_FLAG" == true ]] && log_msg "INFO:   Type:      Encrypted"
 echo ""
 
 # --- Check zvol doesn't already exist ---
@@ -388,7 +388,7 @@ if [[ "$ENCRYPTED_FLAG" == true ]]; then
 
     # Mount the keys USB if not already mounted
     if ! mountpoint -q "$KEY_MOUNT" 2>/dev/null; then
-        echo "The ZFS keys USB drive must be inserted to create an encrypted zvol."
+        log_msg "INFO: The ZFS keys USB drive must be inserted to create an encrypted zvol."
         read -rp "Insert the keys USB drive and press Enter to continue..."
         echo ""
 
@@ -398,11 +398,11 @@ if [[ "$ENCRYPTED_FLAG" == true ]]; then
             log_msg "FATAL: No USB drive found with PARTLABEL=ZFSkeys. Insert the drive and try again."
             exit 1
         fi
-        echo "Found key USB: $KEY_DEVICE"
+        log_msg "INFO: Found key USB: $KEY_DEVICE"
 
         # Unlock LUKS if needed
         if [[ ! -e /dev/mapper/keys ]]; then
-            echo "Unlocking LUKS partition..."
+            log_msg "INFO: Unlocking LUKS partition..."
             if [[ -f /root/.luks-key ]]; then
                 cryptsetup luksOpen "$KEY_DEVICE" keys --key-file /root/.luks-key
             else
@@ -418,11 +418,11 @@ if [[ "$ENCRYPTED_FLAG" == true ]]; then
         # Mount
         mkdir -p "$KEY_MOUNT"
         mount LABEL=ZFSkeys "$KEY_MOUNT"
-        echo "Mounted at $KEY_MOUNT"
+        log_msg "INFO: Mounted at $KEY_MOUNT"
     fi
 
     # Prompt for key file
-    echo "Available key files on /mnt/ZFSkeys:"
+    log_msg "INFO: Available key files on /mnt/ZFSkeys:"
     ls -1 /mnt/ZFSkeys/ 2>/dev/null | sed 's/^/  /'
     echo ""
     read -rp "Enter key file name (e.g. key3): " KEY_NAME
@@ -440,34 +440,34 @@ if [[ "$ENCRYPTED_FLAG" == true ]]; then
     fi
 
     echo ""
-    echo "Encryption settings:"
-    echo "  Algorithm:    $ENC_ALGO"
-    echo "  Key format:   $ENC_KEYFMT"
-    echo "  Key location: $ENC_KEYLOCATION"
+    log_msg "INFO: Encryption settings:"
+    log_msg "INFO:   Algorithm:    $ENC_ALGO"
+    log_msg "INFO:   Key format:   $ENC_KEYFMT"
+    log_msg "INFO:   Key location: $ENC_KEYLOCATION"
     echo ""
 fi
 
 # --- Create the zvol ---
 if [[ "$ENCRYPTED_FLAG" == true ]]; then
-    echo "Creating encrypted zvol $ZVOL_NAME ($SIZE)..."
+    log_msg "INFO: Creating encrypted zvol $ZVOL_NAME ($SIZE)..."
     zfs create -V "$SIZE" -s -o compression=lz4 \
         -o encryption="$ENC_ALGO" \
         -o keyformat="$ENC_KEYFMT" \
         -o keylocation="$ENC_KEYLOCATION" \
         "$ZVOL_NAME"
-    echo "✓ Encrypted zvol created"
+    log_msg "INFO: ✓ Encrypted zvol created"
 
     # Immediately secure the keys — they're in ZFS kernel memory now
-    echo "Securing keys..."
+    log_msg "INFO: Securing keys..."
     "$mydir/lock-zfs-keys"
 else
-    echo "Creating zvol $ZVOL_NAME ($SIZE)..."
+    log_msg "INFO: Creating zvol $ZVOL_NAME ($SIZE)..."
     zfs create -V "$SIZE" -s -o compression=lz4 "$ZVOL_NAME"
-    echo "✓ Zvol created"
+    log_msg "INFO: ✓ Zvol created"
 fi
 
 # Wait for /dev/zvol symlink to appear (udev is async)
-echo "Waiting for device node..."
+log_msg "INFO: Waiting for device node..."
 for _ in $(seq 1 20); do
     [[ -b "$ZVOL_DEV" ]] && break
     sleep 0.5
@@ -476,28 +476,28 @@ done
     log_msg "FATAL: Device node $ZVOL_DEV did not appear after 10s"
     exit 1
 }
-echo "✓ Device node ready: $ZVOL_DEV"
+log_msg "INFO: ✓ Device node ready: $ZVOL_DEV"
 
 # --- iSCSI setup (two-node only) ---
 LUN_NUM=""
 if is_two_node; then
     # --- Create iSCSI backstore ---
-    echo "Creating iSCSI backstore..."
+    log_msg "INFO: Creating iSCSI backstore..."
     targetcli /backstores/block create "$BACKSTORE_NAME" "$ZVOL_DEV"
     targetcli "/backstores/block/${BACKSTORE_NAME}" set attribute emulate_tpu=1
-    echo "✓ Backstore created (UNMAP/TRIM enabled)"
+    log_msg "INFO: ✓ Backstore created (UNMAP/TRIM enabled)"
 
     # --- Add LUN to target ---
-    echo "Adding LUN to target $TARGET..."
+    log_msg "INFO: Adding LUN to target $TARGET..."
     targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${BACKSTORE_NAME}"
-    echo "✓ LUN added"
+    log_msg "INFO: ✓ LUN added"
 
     # --- Add to expected-backstores manifest ---
     MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
     if [[ -f "$MANIFEST" ]]; then
         if ! grep -q "^${BACKSTORE_NAME}$" "$MANIFEST"; then
             echo "$BACKSTORE_NAME" >> "$MANIFEST"
-            echo "✓ Added to expected-backstores manifest"
+            log_msg "INFO: ✓ Added to expected-backstores manifest"
         fi
     fi
 
@@ -505,17 +505,17 @@ if is_two_node; then
     if [[ "$ENCRYPTED_FLAG" == true ]]; then
         TARGET_SHORT="${TARGET##*:}"
         if [[ -f "$ENCRYPTED_CONF" ]] && grep -q "^${BACKSTORE_NAME}:" "$ENCRYPTED_CONF"; then
-            echo "✓ Already in encrypted LUNs config"
+            log_msg "INFO: ✓ Already in encrypted LUNs config"
         else
             echo "${BACKSTORE_NAME}:${ZVOL_DEV}:${TARGET_SHORT}" >> "$ENCRYPTED_CONF"
-            echo "✓ Added to encrypted LUNs config"
+            log_msg "INFO: ✓ Added to encrypted LUNs config"
         fi
     fi
 
     # --- Save targetcli config ---
-    echo "Saving iSCSI configuration..."
+    log_msg "INFO: Saving iSCSI configuration..."
     "$mydir/safe-iscsi-save"
-    echo "✓ Configuration saved"
+    log_msg "INFO: ✓ Configuration saved"
 
     # --- Find the LUN number that was assigned ---
     LUN_NUM=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
@@ -525,10 +525,10 @@ if is_two_node; then
 
     # --- Trigger rescan on the compute host ---
     if [[ "$SKIP_RESCAN" == false ]]; then
-        echo "Triggering iSCSI rescan on $COMPUTE_HOST..."
+        log_msg "INFO: Triggering iSCSI rescan on $COMPUTE_HOST..."
         REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
         if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1; then
-            echo "✓ Rescan triggered"
+            log_msg "INFO: ✓ Rescan triggered"
         else
             log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
         fi
@@ -536,26 +536,26 @@ if is_two_node; then
         # Delegate config writing / EFI initialization to the compute host
         if [[ -n "$LUN_NUM" ]]; then
             echo ""
-            echo "Writing VM config on $COMPUTE_HOST..."
+            log_msg "INFO: Writing VM config on $COMPUTE_HOST..."
             sb_flag=""
             [[ "$SECURE_BOOT" == true ]] && sb_flag=" --secure-boot"
             REMOTE_CONFIG_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "new-vm-disk")
             if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
                 "$REMOTE_CONFIG_SCRIPT '$POOL' '$VMID' '$DISKNUM' '$ORIG_SIZE' --config-only='$LUN_NUM'$sb_flag"; then
-                echo "✓ VM config updated on $COMPUTE_HOST"
+                log_msg "INFO: ✓ VM config updated on $COMPUTE_HOST"
             else
                 log_msg "WARN: Could not update VM config on $COMPUTE_HOST"
                 if [[ "$EFI_DISK" == true ]]; then
-                    echo "  Initialize manually on $COMPUTE_HOST:"
+                    log_msg "INFO:   Initialize manually on $COMPUTE_HOST:"
                     if [[ "$SECURE_BOOT" == true ]]; then
-                        echo "  dd if=/usr/share/pve-edk2-firmware/OVMF_VARS_4M.ms.fd \\"
+                        log_msg "INFO:   dd if=/usr/share/pve-edk2-firmware/OVMF_VARS_4M.ms.fd \\"
                     else
-                        echo "  dd if=/usr/share/pve-edk2-firmware/OVMF_VARS_4M.fd \\"
+                        log_msg "INFO:   dd if=/usr/share/pve-edk2-firmware/OVMF_VARS_4M.fd \\"
                     fi
-                    echo "    of=/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${LUN_NUM} bs=1M conv=notrunc"
+                    log_msg "INFO:     of=/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${LUN_NUM} bs=1M conv=notrunc"
                 else
                     by_path="/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${LUN_NUM}"
-                    echo "  qm set ${VMID} -scsiX ${by_path},format=raw,discard=on,iothread=1,size=${SIZE}"
+                    log_msg "INFO:   qm set ${VMID} -scsiX ${by_path},format=raw,discard=on,iothread=1,size=${SIZE}"
                 fi
             fi
         fi
@@ -564,8 +564,8 @@ fi
 
 # --- Summary ---
 echo ""
-echo "=== Done ==="
-echo "  Zvol:   $ZVOL_NAME"
-echo "  Device: $ZVOL_DEV"
-echo "  Target: $TARGET"
-[[ -n "$LUN_NUM" ]] && echo "  LUN:    $LUN_NUM"
+log_msg "INFO: === Done ==="
+log_msg "INFO:   Zvol:   $ZVOL_NAME"
+log_msg "INFO:   Device: $ZVOL_DEV"
+log_msg "INFO:   Target: $TARGET"
+[[ -n "$LUN_NUM" ]] && log_msg "INFO:   LUN:    $LUN_NUM"

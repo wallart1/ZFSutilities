@@ -29,14 +29,14 @@ source_helper rootcheck
 rootcheck
 
 usage() {
-    echo "Usage: uninstall-some-versions [listfile]"
-    echo ""
-    echo "Reads version numbers from listfile (default: ./someinstalledversions)"
-    echo "and invokes uninstall-version -y for each entry."
-    echo ""
-    echo "Examples:"
-    echo "  sudo uninstall-some-versions"
-    echo "  sudo uninstall-some-versions /root/versions-to-remove.txt"
+    log_msg "INFO: Usage: uninstall-some-versions [listfile]"
+    log_msg "INFO:"
+    log_msg "INFO: Reads version numbers from listfile (default: ./someinstalledversions)"
+    log_msg "INFO: and invokes uninstall-version -y for each entry."
+    log_msg "INFO:"
+    log_msg "INFO: Examples:"
+    log_msg "INFO:   sudo uninstall-some-versions"
+    log_msg "INFO:   sudo uninstall-some-versions /root/versions-to-remove.txt"
     exit 1
 }
 

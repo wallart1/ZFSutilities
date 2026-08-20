@@ -42,16 +42,16 @@ ISCSI_BACKSTORE=""
 ISCSI_ENCRYPTED="N"
 
 usage() {
-    echo "Usage: rename-vm-disk <old-zvol-path> <new-zvol-path>"
+    log_msg "INFO: Usage: rename-vm-disk <old-zvol-path> <new-zvol-path>"
     echo ""
-    echo "  old-zvol-path  Full path of the existing zvol (e.g. threeamigos/proxmox/vm-100-disk-0)"
-    echo "  new-zvol-path  Desired full path under the SAME pool"
+    log_msg "INFO:   old-zvol-path  Full path of the existing zvol (e.g. threeamigos/proxmox/vm-100-disk-0)"
+    log_msg "INFO:   new-zvol-path  Desired full path under the SAME pool"
     echo ""
-    echo "WARNING: Any VM referencing this zvol must be stopped before running this script."
+    log_msg "WARN: WARNING: Any VM referencing this zvol must be stopped before running this script."
     echo ""
-    echo "Examples:"
-    echo "  rename-vm-disk threeamigos/proxmox/vm-100-disk-0 threeamigos/proxmox/vm-100-disk-1"
-    echo "  rename-vm-disk threeamigos/proxmox/old-name threeamigos/proxmox/new-name"
+    log_msg "INFO: Examples:"
+    log_msg "INFO:   rename-vm-disk threeamigos/proxmox/vm-100-disk-0 threeamigos/proxmox/vm-100-disk-1"
+    log_msg "INFO:   rename-vm-disk threeamigos/proxmox/old-name threeamigos/proxmox/new-name"
     exit 1
 }
 
@@ -116,6 +116,10 @@ discover_iscsi_state() {
 
     local result
     result=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s "$OLD_ZVOL" 2>&1 <<'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
 set -e
 OLD_ZVOL="$1"
 
@@ -289,7 +293,7 @@ SSHEOF
 
 # --- Run the storage-side rename (two-node only) ------------------------------
 run_storage_rename() {
-    echo "Performing storage operations on ${STORAGE_HOST}..."
+    log_msg "INFO: Performing storage operations on ${STORAGE_HOST}..."
     local result
     result=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
         "$OLD_ZVOL" "$NEW_ZVOL" "$ISCSI_TARGET" "$ISCSI_BACKSTORE" \
@@ -329,7 +333,7 @@ update_vm_configs() {
             conf="$PVE_CONF_DIR/${vmid}.conf"
             if grep -qE "^${key}:.*${old_by_path}" "$conf" 2>/dev/null; then
                 sed -i -E "s|^(${key}:.*)${old_by_path}|\\1${new_by_path}|" "$conf"
-                echo "✓ Updated ${key} in VM ${vmid} config"
+                log_msg "INFO: ✓ Updated ${key} in VM ${vmid} config"
             fi
         done
     else
@@ -344,7 +348,7 @@ update_vm_configs() {
             single_sub+="\\1${POOL}:${NEW_BASENAME}|"
             if grep -qE "$single_re" "$conf" 2>/dev/null; then
                 sed -i -E "$single_sub" "$conf"
-                echo "✓ Updated ${key} in VM ${vmid} config"
+                log_msg "INFO: ✓ Updated ${key} in VM ${vmid} config"
             fi
         done
     fi
@@ -354,7 +358,7 @@ update_vm_configs() {
 run_rescan() {
     is_two_node || return 0
     [[ -n "$ISCSI_BACKSTORE" ]] || return 0
-    echo "Rescanning iSCSI..."
+    log_msg "INFO: Rescanning iSCSI..."
     "$mydir/rescan-storage"
 }
 
@@ -371,17 +375,17 @@ main() {
 
     # === Running on the compute host ===
 
-    echo "=== rename-vm-disk ==="
-    echo "  Old: $OLD_ZVOL"
-    echo "  New: $NEW_ZVOL"
+    log_msg "INFO: === rename-vm-disk ==="
+    log_msg "INFO:   Old: $OLD_ZVOL"
+    log_msg "INFO:   New: $NEW_ZVOL"
     echo ""
 
     if is_two_node; then
         discover_iscsi_state
         if [[ -n "$ISCSI_TARGET" ]]; then
-            echo "  iSCSI: ${ISCSI_TARGET} LUN ${ISCSI_LUN} backstore ${ISCSI_BACKSTORE}"
+            log_msg "INFO:   iSCSI: ${ISCSI_TARGET} LUN ${ISCSI_LUN} backstore ${ISCSI_BACKSTORE}"
         else
-            echo "  iSCSI: not exported"
+            log_msg "INFO:   iSCSI: not exported"
         fi
         echo ""
     fi
@@ -389,39 +393,39 @@ main() {
     find_vm_refs
 
     if [[ ${#VM_REFS[@]} -gt 0 ]]; then
-        echo "  Referenced by VM(s):"
+        log_msg "INFO:   Referenced by VM(s):"
         local ref
         for ref in "${VM_REFS[@]}"; do
-            echo "    ${ref%%:*} disk ${ref#*:}"
+            log_msg "INFO:     ${ref%%:*} disk ${ref#*:}"
         done
         echo ""
         check_vms_stopped
     else
-        echo "  Not referenced by any VM config (detached/orphaned zvol)."
+        log_msg "INFO:   Not referenced by any VM config (detached/orphaned zvol)."
         echo ""
     fi
 
     read -rp "Proceed with rename? (y/N): " confirm
-    [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+    [[ "$confirm" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
     echo ""
 
     if is_two_node; then
         run_storage_rename
     else
-        echo "Renaming zvol..."
+        log_msg "INFO: Renaming zvol..."
         zfs rename "$OLD_ZVOL" "$NEW_ZVOL" || {
             log_msg "FATAL: zfs rename failed"
             exit 1
         }
-        echo "✓ Zvol renamed"
+        log_msg "INFO: ✓ Zvol renamed"
     fi
 
     update_vm_configs
     run_rescan
 
     echo ""
-    echo "=== Done ==="
-    echo "  $OLD_ZVOL  →  $NEW_ZVOL"
+    log_msg "INFO: === Done ==="
+    log_msg "INFO:   $OLD_ZVOL  →  $NEW_ZVOL"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
