@@ -277,8 +277,16 @@ sudo move-vm-disk 100 scsi1 200          # move scsi1 from VM 100 → next free 
 sudo move-vm-disk 100 scsi1 200 scsi0    # move scsi1 from VM 100 → scsi0 on VM 200
 ```
 
-Both VMs must be stopped. The script edits `/etc/pve/qemu-server/<vmid>.conf`
-directly — no data is copied and no zvols are renamed.
+By default the underlying zvol is renamed to match the destination VM ID. Both
+VMs must be stopped. The script edits `/etc/pve/qemu-server/<vmid>.conf`
+directly — no data is copied.
+
+To move only the Proxmox disk reference and leave the zvol name unchanged, add
+`--no-rename`:
+
+```bash
+sudo move-vm-disk --no-rename 100 scsi1 200 scsi0
+```
 
 ### Two-node
 
@@ -290,7 +298,16 @@ sudo move-vm-disk 100 scsi1 200
 
 The script verifies the iSCSI LUN exists on the storage node via SSH, confirms
 both VMs are stopped, and moves the disk line from the source VM config to the
-destination VM config. The LUN number and device path do not change.
+destination VM config. By default the zvol is renamed and the iSCSI backstore
+is recreated to match the destination VM ID; the original LUN number is reused
+whenever possible.
+
+Use `--no-rename` to leave the zvol, backstore, and LUN unchanged and move only
+the Proxmox disk reference:
+
+```bash
+sudo move-vm-disk --no-rename 100 scsi1 200
+```
 
 ---
 

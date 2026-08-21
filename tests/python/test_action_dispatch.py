@@ -105,7 +105,7 @@ class TestCheckagainstPageSpec(unittest.TestCase):
 
     def test_get_entries_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["checkagainst"]["buttons"]
-        self.assertIn(("Get Entries", "view-refresh", None), buttons)
+        self.assertIn(("Get Entries", "view-refresh", "_ca_get_entries_button"), buttons)
 
     def test_add_pair_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["checkagainst"]["buttons"]

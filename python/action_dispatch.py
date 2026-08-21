@@ -213,7 +213,7 @@ PAGE_SPECS = {
         "buttons": [
             ("Add Row", "list-add", None),
             ("Remove Row", "list-remove", None),
-            ("Get Entries", "view-refresh", None),
+            ("Get Entries", "view-refresh", "_ca_get_entries_button"),
             ("Add pair...", "list-add", None),
             ("Save", "document-save", "_ca_save_button"),
             ("Revert", "document-revert", None),

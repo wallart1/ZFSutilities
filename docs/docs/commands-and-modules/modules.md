@@ -928,7 +928,7 @@ Suppresses "tag already exists" errors — safe to call repeatedly.
 ### `zfslockmanager`
 
 Core dataset lock management. Provides acquire, release, and conflict-checking
-functions. Used by `zfs-send-receive`, `zfsdelsnap`, and others.
+functions. Used by `zfs-send-receive`, `zfsdelsnap`, `clone-vm`, and others.
 
 ```bash
 source_helper zfslockmanager
@@ -950,6 +950,7 @@ zfslock_check <dataset> <type>                    # 0=no conflict, 1=conflict
 | `zfslock_release`           | `<lock-id>`                      | Release a specific lock                   |
 | `zfslock_release_all` | —                                | Release all locks for the current PID     |
 | `zfslock_check`       | `<dataset> <type>`               | Report whether a lock would conflict      |
+| `zfslock_wait_or_resolve`   | `<dataset> <type> [description]` | Acquire a lock or prompt to abort/skip    |
 
 Lock types: `r` (shared read), `w` (exclusive write), `x` (exclusive destroy).
 

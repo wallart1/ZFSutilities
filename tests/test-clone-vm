@@ -8,8 +8,8 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
-# Extract the storage-side heredoc from clone-vm (between the SSHEOF markers).
-heredoc=$(sed -n '/bash -s "\$target" "\$SRCVMID"/,/^SSHEOF$/{ /bash -s/d; p; }' \
+# Extract the storage-side heredoc from clone-vm (the SSHEOF-delimited block).
+heredoc=$(sed -n "/<< 'SSHEOF'\$/,/^SSHEOF\$/{ /<< 'SSHEOF'\$/d; p; }" \
     "$mydir/bin/clone-vm")
 
 test_heredoc_avoids_bash_source_bootstrap() {
@@ -81,9 +81,56 @@ EOF
     test_pass
 }
 
+test_clone_vm_sources_lock_manager() {
+    test_start "clone-vm sources zfslockmanager"
+    if grep -q 'source_helper zfslockmanager' "$mydir/bin/clone-vm"; then
+        test_pass
+    else
+        test_fail "clone-vm does not source zfslockmanager"
+    fi
+}
+
+test_clone_vm_initializes_lock_manager() {
+    test_start "clone-vm initializes lock manager in both paths"
+    local count
+    count=$(grep -c 'zfslock_init' "$mydir/bin/clone-vm")
+    if [[ "$count" -ge 2 ]]; then
+        test_pass
+    else
+        test_fail "Expected zfslock_init in both single-node and two-node paths, found $count"
+    fi
+}
+
+test_clone_vm_acquires_source_and_destination_locks() {
+    test_start "clone-vm acquires source and destination locks"
+    local src_count dst_count
+    src_count=$(grep -c 'zfslock_wait_or_resolve.*clone-vm source' "$mydir/bin/clone-vm")
+    dst_count=$(grep -c 'zfslock_wait_or_resolve.*clone-vm destination' "$mydir/bin/clone-vm")
+    if [[ "$src_count" -ge 2 && "$dst_count" -ge 2 ]]; then
+        test_pass
+    else
+        test_fail "source=$src_count destination=$dst_count (expected >=2 each)"
+    fi
+}
+
+test_clone_vm_releases_per_disk_locks() {
+    test_start "clone-vm releases per-disk locks"
+    local release_count
+    release_count=$(grep -c 'zfslock_release "\$lock_' "$mydir/bin/clone-vm")
+    if [[ "$release_count" -ge 4 ]]; then
+        test_pass
+    else
+        test_fail "Expected at least 4 lock releases, found $release_count"
+    fi
+}
+
 test_heredoc_avoids_bash_source_bootstrap
 test_heredoc_uses_deployed_path_bootstrap
 test_heredoc_bootstrap_no_realpath_error
+test_clone_vm_sources_lock_manager
+test_clone_vm_initializes_lock_manager
+test_clone_vm_acquires_source_and_destination_locks
+test_clone_vm_releases_per_disk_locks
 
 test_summary
 teardown_test_env

@@ -1184,5 +1184,171 @@ class TestAddPairAssistant(unittest.TestCase):
         fake_dlg.destroy.assert_called_once()
 
 
+class TestAutoDerivedLoad(unittest.TestCase):
+    """Derived sections auto-populate from current Backup/Offsite configs on load."""
+
+    def setUp(self):
+        self._p = patch.object(cap, "set_button_markup")
+        self._p.start()
+
+    def tearDown(self):
+        self._p.stop()
+
+    def test_load_populates_derived_from_backup_and_offsite(self):
+        app = MagicMock()
+        app.config = {
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    {"active": True, "source": "poolA/a", "dest": "poolB"},
+                ],
+            },
+            "offsite": {
+                "steps": [
+                    {"active": True, "source": "poolB/poolA/a", "dest": "<offsite>"},
+                ],
+            },
+            "checkagainst": {"user_entries": []},
+        }
+        app._ca_backup_store = _FakeStore()
+        app._ca_offsite_store = _FakeStore()
+        app._ca_store = _FakeStore()
+        app._ca_merged_store = _FakeStore()
+        app._ca_backup_active_chk = _make_checkbox(True)
+        app._ca_offsite_active_chk = _make_checkbox(True)
+        app._ca_status_label = MagicMock()
+        app._ca_save_button = MagicMock()
+
+        cap._load_fss_into_store(app)
+
+        self.assertEqual(len(app._ca_backup_store), 2)
+        self.assertEqual(app._ca_backup_store[0], ["dailybackup", "poolA/a", "poolB/poolA/a", ""])
+        self.assertEqual(app._ca_backup_store[1], ["dailybackup", "poolB/poolA/a", "poolA/a", ""])
+        self.assertEqual(len(app._ca_offsite_store), 2)
+        self.assertEqual(
+            app._ca_offsite_store[0],
+            ["offsite", "poolB/poolA/a", "<offsite>", ""],
+        )
+        self.assertEqual(
+            app._ca_offsite_store[1],
+            ["offsite", "<offsite>", "poolB/poolA/a", ""],
+        )
+
+    def test_load_starts_clean_when_derived_matches_backup_offsite(self):
+        app = MagicMock()
+        app.config = {
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    {"active": True, "source": "poolA/a", "dest": "poolB"},
+                ],
+            },
+            "offsite": {"steps": []},
+            "checkagainst": {"user_entries": []},
+        }
+        app._ca_backup_store = _FakeStore()
+        app._ca_offsite_store = _FakeStore()
+        app._ca_store = _FakeStore()
+        app._ca_merged_store = _FakeStore()
+        app._ca_backup_active_chk = _make_checkbox(True)
+        app._ca_offsite_active_chk = _make_checkbox(True)
+        app._ca_status_label = MagicMock()
+        app._ca_save_button = MagicMock()
+
+        cap._load_fss_into_store(app)
+
+        self.assertFalse(cap._is_ca_dirty(app))
+
+
+class TestDerivedStaleness(unittest.TestCase):
+    """Stale-state detection and Get Entries button styling."""
+
+    def setUp(self):
+        self._p = patch.object(cap, "set_button_markup")
+        self._p.start()
+
+    def tearDown(self):
+        self._p.stop()
+
+    def _make_app(self, backup_steps=None, offsite_steps=None):
+        app = MagicMock()
+        app.config = {
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": backup_steps or [],
+            },
+            "offsite": {"steps": offsite_steps or []},
+            "checkagainst": {"user_entries": []},
+        }
+        app._ca_backup_store = _FakeStore()
+        app._ca_offsite_store = _FakeStore()
+        app._ca_store = _FakeStore()
+        app._ca_merged_store = _FakeStore()
+        app._ca_backup_active_chk = _make_checkbox(True)
+        app._ca_offsite_active_chk = _make_checkbox(True)
+        app._ca_status_label = MagicMock()
+        app._ca_save_button = MagicMock()
+        app._ca_get_entries_button = MagicMock()
+        return app
+
+    def test_refresh_derived_populates_stores_and_button_stays_plain(self):
+        app = self._make_app(
+            backup_steps=[{"active": True, "source": "poolA/a", "dest": "poolB"}],
+        )
+        cap.refresh_checkagainst_derived(app)
+
+        self.assertEqual(len(app._ca_backup_store), 2)
+        self.assertFalse(cap._is_derived_stale(app))
+        app._ca_get_entries_button.get_child.assert_not_called()
+
+    def test_derived_becomes_stale_when_backup_config_changes(self):
+        app = self._make_app(
+            backup_steps=[{"active": True, "source": "poolA/a", "dest": "poolB"}],
+        )
+        cap.refresh_checkagainst_derived(app)
+        self.assertFalse(cap._is_derived_stale(app))
+
+        # Simulate the user editing the Backup tab without refreshing Checkagainst.
+        app.config["backup"]["send_receive_steps"] = [
+            {"active": True, "source": "poolA/a", "dest": "poolC"},
+        ]
+        self.assertTrue(cap._is_derived_stale(app))
+
+    def test_check_stale_styles_get_entries_button_red(self):
+        app = self._make_app(
+            backup_steps=[{"active": True, "source": "poolA/a", "dest": "poolB"}],
+        )
+        cap.refresh_checkagainst_derived(app)
+        app.config["backup"]["send_receive_steps"] = [
+            {"active": True, "source": "poolA/a", "dest": "poolC"},
+        ]
+
+        cap.check_checkagainst_stale(app)
+
+        cap.set_button_markup.assert_called_with(
+            app._ca_get_entries_button,
+            '<span foreground="red">Get Entries</span>',
+        )
+
+    def test_get_entries_clears_red_style(self):
+        app = self._make_app(
+            backup_steps=[{"active": True, "source": "poolA/a", "dest": "poolB"}],
+        )
+        cap.refresh_checkagainst_derived(app)
+        app.config["backup"]["send_receive_steps"] = [
+            {"active": True, "source": "poolA/a", "dest": "poolC"},
+        ]
+        cap.check_checkagainst_stale(app)
+
+        with patch.object(cap, "log_msg"):
+            cap.on_checkagainst_get_entries(app)
+
+        self.assertFalse(cap._is_derived_stale(app))
+        cap.set_button_markup.assert_called_with(
+            app._ca_get_entries_button,
+            "Get Entries",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -765,7 +765,7 @@ class BackupRunner:
             self.set_stdin_enabled(False)
             if self.progress:
                 self.progress(None, None)
-            self._log(f"VERB: {self.label} complete")
+            self._log(f"INFO: {self.label} complete")
         except Exception as exc:
             self._log(f"WARN: Error during finish UI cleanup: {exc}")
 

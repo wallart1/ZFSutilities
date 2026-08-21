@@ -22,6 +22,7 @@ unset _local_bashinit
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 source "$(find_zfsutility_script rootcheck)"
+source_helper zfslockmanager
 
 rootcheck
 
@@ -148,6 +149,8 @@ if is_single_node; then
     [[ "$confirm" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
     echo ""
 
+    zfslock_init
+
     # Clone each disk via zfs send/receive
     for key in "${sn_disk_keys[@]}"; do
         src_zvol="${sn_disk_zvols[$key]}"
@@ -164,6 +167,18 @@ if is_single_node; then
                 exit 1
             }
 
+        if ! zfslock_wait_or_resolve "$src_zvol" "w" "clone-vm source"; then
+            log_msg "FATAL: Could not acquire write lock on source zvol ${src_zvol}"
+            exit 1
+        fi
+        lock_src="$ZFSLOCK_ID"
+        if ! zfslock_wait_or_resolve "$dst_zvol" "w" "clone-vm destination"; then
+            zfslock_release "$lock_src"
+            log_msg "FATAL: Could not acquire write lock on destination zvol ${dst_zvol}"
+            exit 1
+        fi
+        lock_dst="$ZFSLOCK_ID"
+
         zfs snapshot "$snap"
         zfs send "$snap" | zfs receive -o compression=lz4 -o refreservation=none "$dst_zvol"
         if ! zfs destroy "${dst_zvol}@clone-to-${DSTVMID}" 2>/dev/null; then
@@ -174,6 +189,8 @@ if is_single_node; then
             source "$(find_zfsutility_script zfs-diagnose-busy)"
             diagnose_dataset_busy "$snap"
         fi
+        zfslock_release "$lock_dst"
+        zfslock_release "$lock_src"
         log_msg "INFO: ✓ Zvol cloned"
         echo ""
     done
@@ -276,6 +293,8 @@ read -rp "Proceed? (y/N): " confirm
 [[ "$confirm" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
 echo ""
 
+zfslock_init
+
 # --- Clone each disk on the storage host ---
 declare -A disk_new_luns=()
 
@@ -286,7 +305,49 @@ for key in "${disk_keys[@]}"; do
 
     log_msg "INFO: Cloning ${key} (pool=${pool}, LUN ${old_lun})..."
 
-    new_lun=$(ssh root@"$STORAGE_HOST" bash -s "$target" "$SRCVMID" "$DSTVMID" "$old_lun" "$pool" << 'SSHEOF'
+    # Resolve the source disk number so we can acquire advisory locks on the
+    # source and destination zvols locally (where the Dashboard reads them).
+    disknum=$(ssh root@"$STORAGE_HOST" bash -s "$target" "$old_lun" <<'DISKEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
+TARGET="$1"
+OLD_LUN="$2"
+
+backstore=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
+    | grep -E "lun${OLD_LUN}[^0-9]" \
+    | grep -oP 'block/\K\S+')
+[[ -n "$backstore" ]] || exit 1
+echo "$backstore" | grep -oP 'disk-\K[0-9]+$'
+DISKEOF
+    ) || {
+        log_msg "FATAL: Could not determine disk number for ${key} (LUN ${old_lun})"
+        exit 1
+    }
+
+    [[ -n "$disknum" ]] || {
+        log_msg "FATAL: Could not determine disk number for ${key}"
+        exit 1
+    }
+
+    src_zvol="${pool}/proxmox/vm-${SRCVMID}-disk-${disknum}"
+    dst_zvol="${pool}/proxmox/vm-${DSTVMID}-disk-${disknum}"
+
+    if ! zfslock_wait_or_resolve "$src_zvol" "w" "clone-vm source"; then
+        log_msg "FATAL: Could not acquire write lock on source zvol ${src_zvol}"
+        exit 1
+    fi
+    lock_src="$ZFSLOCK_ID"
+    if ! zfslock_wait_or_resolve "$dst_zvol" "w" "clone-vm destination"; then
+        zfslock_release "$lock_src"
+        log_msg "FATAL: Could not acquire write lock on destination zvol ${dst_zvol}"
+        exit 1
+    fi
+    lock_dst="$ZFSLOCK_ID"
+
+    new_lun=$(ssh root@"$STORAGE_HOST" bash -s \
+        "$target" "$SRCVMID" "$DSTVMID" "$old_lun" "$pool" "$disknum" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
@@ -297,22 +358,12 @@ SRC_VMID="$2"
 DST_VMID="$3"
 OLD_LUN="$4"
 POOL="$5"
+DISKNUM="$6"
 
-# Find the backstore name for the old LUN to get the disk number
-backstore=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
-    | grep -E "lun${OLD_LUN}[^0-9]" \
-    | grep -oP 'block/\K\S+')
-[[ -n "$backstore" ]] \
-    || { log_msg "FATAL: No backstore found for LUN ${OLD_LUN} in ${TARGET}"; exit 1; }
-
-disknum=$(echo "$backstore" | grep -oP 'disk-\K[0-9]+$')
-[[ -n "$disknum" ]] \
-    || { log_msg "FATAL: Cannot extract disk number from '${backstore}'"; exit 1; }
-
-src_zvol="${POOL}/proxmox/vm-${SRC_VMID}-disk-${disknum}"
-dst_zvol="${POOL}/proxmox/vm-${DST_VMID}-disk-${disknum}"
+src_zvol="${POOL}/proxmox/vm-${SRC_VMID}-disk-${DISKNUM}"
+dst_zvol="${POOL}/proxmox/vm-${DST_VMID}-disk-${DISKNUM}"
 dst_zvol_dev="/dev/zvol/${dst_zvol}"
-dst_backstore="vm-${DST_VMID}-disk-${disknum}"
+dst_backstore="vm-${DST_VMID}-disk-${DISKNUM}"
 snap="${src_zvol}@clone-to-${DST_VMID}"
 
 log_msg "INFO:   ${src_zvol} → ${dst_zvol}"
@@ -366,6 +417,9 @@ SSHEOF
         log_msg "FATAL: Failed to clone ${key}"
         exit 1
     }
+
+    zfslock_release "$lock_dst"
+    zfslock_release "$lock_src"
 
     [[ -n "$new_lun" ]] || {
         log_msg "FATAL: Could not determine new LUN number for ${key}"

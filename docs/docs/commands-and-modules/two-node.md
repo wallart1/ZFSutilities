@@ -149,6 +149,7 @@ sudo clone-vm <src_vmid> <dst_vmid> <new_name>
 | `safe-iscsi-save` (storage host) | Persist new backstores/LUNs after clone |
 | `rescan-storage` | Make new LUNs visible on the compute host |
 | `zfs-diagnose-busy` | Diagnose snapshot-destroy failures |
+| `zfslockmanager` | Acquire per-disk source/destination zvol write locks |
 
 **Data structures consumed / produced:**
 
@@ -163,6 +164,9 @@ sudo clone-vm <src_vmid> <dst_vmid> <new_name>
 2. Parse disk lines from the source VM config (single-node: `storage:vm-...`;
    two-node: iSCSI `by-path`).
 3. For each disk:
+    - Acquire a write lock on the source zvol and the destination zvol.
+      These locks are visible in the Dashboard **Active Locks** list and are
+      released when the disk finishes cloning.
     - Snapshot the source zvol as `@clone-to-<dst>`.
     - `zfs send | zfs receive` to a new destination zvol.
     - Destroy the source and destination clone snapshots.
@@ -772,14 +776,18 @@ order is reset and may need to be re-selected in the firmware setup.
 
 ### `move-vm-disk` (both)
 
-Moves an existing VM disk from one Proxmox VM to another. The underlying zvol
-is renamed from `vm-<src>-disk-<N>` to `vm-<dst>-disk-<M>` so the zvol name
-remains authoritative for VM ownership. The iSCSI backstore is recreated with
-the new name, and the original LUN number is reused whenever possible so
-compute-node `by-path` symlinks remain stable.
+Moves an existing VM disk from one Proxmox VM to another. By default the
+underlying zvol is renamed from `vm-<src>-disk-<N>` to `vm-<dst>-disk-<M>` so
+the zvol name remains authoritative for VM ownership. The iSCSI backstore is
+recreated with the new name, and the original LUN number is reused whenever
+possible so compute-node `by-path` symlinks remain stable.
+
+Use `--no-rename` to leave the zvol, backstore, and LUN unchanged and only move
+the Proxmox disk reference from the source VM config to the destination VM
+config.
 
 ```bash
-sudo move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
+sudo move-vm-disk [--no-rename] <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
 ```
 
 **Arguments:**
@@ -795,6 +803,8 @@ sudo move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
 
 | Option                  | Description                                                      |
 | ----------------------- | ---------------------------------------------------------------- |
+| `--no-rename`           | Move only the Proxmox disk reference; leave the zvol, iSCSI      |
+|                         | backstore, and LUN unchanged.                                    |
 | `--continue <state>`    | Resume an interrupted move from the recorded state file.         |
 | `--rollback <state>`    | Revert a partially completed move using the recorded state file. |
 
@@ -822,10 +832,11 @@ sudo move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
 2. Parse the source disk line to determine pool, target, LUN, and backing zvol.
    The zvol is discovered by searching the entire pool for the backstore name,
    so disks living outside the `proxmox` dataset are handled correctly.
-3. Verify both VMs are stopped and the destination zvol name is free.
+3. Verify both VMs are stopped and (unless `--no-rename` is used) the
+   destination zvol name is free.
 4. Write an initial state file (`/tmp/move-vm-disk-<src>-<dst>-<timestamp>.state`).
 5. Prompt for confirmation.
-6. **Storage-node operations (two-node):**
+6. **Storage-node operations (two-node), skipped when `--no-rename` is used:**
     - Tear down the old LUN and backstore.
     - Remove the source entry from `expected-backstores.txt` and
       `/etc/iscsi-encrypted-luns.conf` if encrypted.
@@ -835,7 +846,8 @@ sudo move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
     - Create the new backstore and LUN, reusing the original LUN number if possible.
     - Add the destination entry to the manifests.
     - Save iSCSI config via `safe-iscsi-save`.
-7. **Single-node operations:** `zfs rename` the zvol to the destination name.
+7. **Single-node operations, skipped when `--no-rename` is used:** `zfs rename`
+   the zvol to the destination name.
 8. Move the disk line from the source VM config to the destination VM config.
 9. Rescan iSCSI on the compute host.
 10. Mark the state file as completed.
@@ -843,10 +855,12 @@ sudo move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
 **Rollback (`--rollback`):**
 
 - Removes the destination config line and restores the source line.
-- Tears down the destination backstore/LUN and recreates the original source
-  backstore/LUN if the source zvol still exists.
-- Renames the zvol back to the source name.
-- Rescans iSCSI and deletes the state file.
+- When `--no-rename` was not used: tears down the destination backstore/LUN and
+  recreates the original source backstore/LUN if the source zvol still exists;
+  renames the zvol back to the source name; rescans iSCSI.
+- When `--no-rename` was used: no storage-side changes are reverted because none
+  were made.
+- Deletes the state file.
 
 **Return codes / side effects:**
 
@@ -855,14 +869,15 @@ sudo move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
 | `0`  | Move completed or rolled back |
 | `1`  | Validation, SSH, ZFS rename, or targetcli failure |
 
-Side effects: renames the zvol; recreates iSCSI backstore/LUN with the new name;
-updates manifests and VM configs.
+Side effects (default): renames the zvol; recreates iSCSI backstore/LUN with the
+new name; updates manifests and VM configs. With `--no-rename`, only the VM
+configs are changed.
 
 **Safety checks:**
 
 - Both VMs must be stopped.
 - The destination disk key must not already exist in the destination VM config.
-- The destination zvol name must not already exist.
+- The destination zvol name must not already exist (except with `--no-rename`).
 - Prompts for confirmation before making changes.
 - Writes a state file to `/tmp/move-vm-disk-<src>-<dst>-<timestamp>.state` for
   recovery if the operation is interrupted.

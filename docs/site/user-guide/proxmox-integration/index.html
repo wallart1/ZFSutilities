@@ -2669,15 +2669,26 @@ sees the new size. The guest OS still needs its own rescan or reboot.</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>move-vm-disk<span class="w"> </span><span class="m">100</span><span class="w"> </span>scsi1<span class="w"> </span><span class="m">200</span><span class="w">          </span><span class="c1"># move scsi1 from VM 100 → next free scsi on VM 200</span>
 sudo<span class="w"> </span>move-vm-disk<span class="w"> </span><span class="m">100</span><span class="w"> </span>scsi1<span class="w"> </span><span class="m">200</span><span class="w"> </span>scsi0<span class="w">    </span><span class="c1"># move scsi1 from VM 100 → scsi0 on VM 200</span>
 </code></pre></div>
-<p>Both VMs must be stopped. The script edits <code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code>
-directly — no data is copied and no zvols are renamed.</p>
+<p>By default the underlying zvol is renamed to match the destination VM ID. Both
+VMs must be stopped. The script edits <code>/etc/pve/qemu-server/&lt;vmid&gt;.conf</code>
+directly — no data is copied.</p>
+<p>To move only the Proxmox disk reference and leave the zvol name unchanged, add
+<code>--no-rename</code>:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>move-vm-disk<span class="w"> </span>--no-rename<span class="w"> </span><span class="m">100</span><span class="w"> </span>scsi1<span class="w"> </span><span class="m">200</span><span class="w"> </span>scsi0
+</code></pre></div>
 <h3 id="two-node_4">Two-node<a class="headerlink" href="#two-node_4" title="Permanent link">&para;</a></h3>
 <p>The same script works for iSCSI-backed disks:</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>move-vm-disk<span class="w"> </span><span class="m">100</span><span class="w"> </span>scsi1<span class="w"> </span><span class="m">200</span>
 </code></pre></div>
 <p>The script verifies the iSCSI LUN exists on the storage node via SSH, confirms
 both VMs are stopped, and moves the disk line from the source VM config to the
-destination VM config. The LUN number and device path do not change.</p>
+destination VM config. By default the zvol is renamed and the iSCSI backstore
+is recreated to match the destination VM ID; the original LUN number is reused
+whenever possible.</p>
+<p>Use <code>--no-rename</code> to leave the zvol, backstore, and LUN unchanged and move only
+the Proxmox disk reference:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>move-vm-disk<span class="w"> </span>--no-rename<span class="w"> </span><span class="m">100</span><span class="w"> </span>scsi1<span class="w"> </span><span class="m">200</span>
+</code></pre></div>
 <hr />
 <h2 id="renaming-a-vm-disk-zvol">Renaming a VM Disk Zvol<a class="headerlink" href="#renaming-a-vm-disk-zvol" title="Permanent link">&para;</a></h2>
 <p>To change any part of the zvol path after the pool name while preserving Proxmox
@@ -3018,7 +3029,7 @@ hardware settings). For everything storage-related, use ZFSutilities:</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.84.1
+      ZFS Utilities v0.85.0
     </div>
   
   
@@ -3043,7 +3054,7 @@ hardware settings). For everything storage-related, use ZFSutilities:</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.84.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.85.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

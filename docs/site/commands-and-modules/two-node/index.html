@@ -2362,6 +2362,10 @@ Produces a fully independent copy with no ongoing ZFS dependency on the source.<
 <td><code>zfs-diagnose-busy</code></td>
 <td>Diagnose snapshot-destroy failures</td>
 </tr>
+<tr>
+<td><code>zfslockmanager</code></td>
+<td>Acquire per-disk source/destination zvol write locks</td>
+</tr>
 </tbody>
 </table>
 <p><strong>Data structures consumed / produced:</strong></p>
@@ -2392,6 +2396,9 @@ Produces a fully independent copy with no ongoing ZFS dependency on the source.<
 <li>Parse disk lines from the source VM config (single-node: <code>storage:vm-...</code>;
    two-node: iSCSI <code>by-path</code>).</li>
 <li>For each disk:<ul>
+<li>Acquire a write lock on the source zvol and the destination zvol.
+  These locks are visible in the Dashboard <strong>Active Locks</strong> list and are
+  released when the disk finishes cloning.</li>
 <li>Snapshot the source zvol as <code>@clone-to-&lt;dst&gt;</code>.</li>
 <li><code>zfs send | zfs receive</code> to a new destination zvol.</li>
 <li>Destroy the source and destination clone snapshots.</li>
@@ -3336,12 +3343,15 @@ The VM is left stopped. After starting it, watch the console — the UEFI boot
 order is reset and may need to be re-selected in the firmware setup.</p>
 <hr />
 <h3 id="move-vm-disk-both"><code>move-vm-disk</code> (both)<a class="headerlink" href="#move-vm-disk-both" title="Permanent link">&para;</a></h3>
-<p>Moves an existing VM disk from one Proxmox VM to another. The underlying zvol
-is renamed from <code>vm-&lt;src&gt;-disk-&lt;N&gt;</code> to <code>vm-&lt;dst&gt;-disk-&lt;M&gt;</code> so the zvol name
-remains authoritative for VM ownership. The iSCSI backstore is recreated with
-the new name, and the original LUN number is reused whenever possible so
-compute-node <code>by-path</code> symlinks remain stable.</p>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>move-vm-disk<span class="w"> </span>&lt;src-vmid&gt;<span class="w"> </span>&lt;src-disk-key&gt;<span class="w"> </span>&lt;dst-vmid&gt;<span class="w"> </span><span class="o">[</span>dst-disk-key<span class="o">]</span>
+<p>Moves an existing VM disk from one Proxmox VM to another. By default the
+underlying zvol is renamed from <code>vm-&lt;src&gt;-disk-&lt;N&gt;</code> to <code>vm-&lt;dst&gt;-disk-&lt;M&gt;</code> so
+the zvol name remains authoritative for VM ownership. The iSCSI backstore is
+recreated with the new name, and the original LUN number is reused whenever
+possible so compute-node <code>by-path</code> symlinks remain stable.</p>
+<p>Use <code>--no-rename</code> to leave the zvol, backstore, and LUN unchanged and only move
+the Proxmox disk reference from the source VM config to the destination VM
+config.</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>move-vm-disk<span class="w"> </span><span class="o">[</span>--no-rename<span class="o">]</span><span class="w"> </span>&lt;src-vmid&gt;<span class="w"> </span>&lt;src-disk-key&gt;<span class="w"> </span>&lt;dst-vmid&gt;<span class="w"> </span><span class="o">[</span>dst-disk-key<span class="o">]</span>
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
 <table>
@@ -3379,6 +3389,14 @@ compute-node <code>by-path</code> symlinks remain stable.</p>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td><code>--no-rename</code></td>
+<td>Move only the Proxmox disk reference; leave the zvol, iSCSI</td>
+</tr>
+<tr>
+<td></td>
+<td>backstore, and LUN unchanged.</td>
+</tr>
 <tr>
 <td><code>--continue &lt;state&gt;</code></td>
 <td>Resume an interrupted move from the recorded state file.</td>
@@ -3447,10 +3465,11 @@ compute-node <code>by-path</code> symlinks remain stable.</p>
 <li>Parse the source disk line to determine pool, target, LUN, and backing zvol.
    The zvol is discovered by searching the entire pool for the backstore name,
    so disks living outside the <code>proxmox</code> dataset are handled correctly.</li>
-<li>Verify both VMs are stopped and the destination zvol name is free.</li>
+<li>Verify both VMs are stopped and (unless <code>--no-rename</code> is used) the
+   destination zvol name is free.</li>
 <li>Write an initial state file (<code>/tmp/move-vm-disk-&lt;src&gt;-&lt;dst&gt;-&lt;timestamp&gt;.state</code>).</li>
 <li>Prompt for confirmation.</li>
-<li><strong>Storage-node operations (two-node):</strong><ul>
+<li><strong>Storage-node operations (two-node), skipped when <code>--no-rename</code> is used:</strong><ul>
 <li>Tear down the old LUN and backstore.</li>
 <li>Remove the source entry from <code>expected-backstores.txt</code> and
   <code>/etc/iscsi-encrypted-luns.conf</code> if encrypted.</li>
@@ -3462,7 +3481,8 @@ compute-node <code>by-path</code> symlinks remain stable.</p>
 <li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
 </ul>
 </li>
-<li><strong>Single-node operations:</strong> <code>zfs rename</code> the zvol to the destination name.</li>
+<li><strong>Single-node operations, skipped when <code>--no-rename</code> is used:</strong> <code>zfs rename</code>
+   the zvol to the destination name.</li>
 <li>Move the disk line from the source VM config to the destination VM config.</li>
 <li>Rescan iSCSI on the compute host.</li>
 <li>Mark the state file as completed.</li>
@@ -3470,10 +3490,12 @@ compute-node <code>by-path</code> symlinks remain stable.</p>
 <p><strong>Rollback (<code>--rollback</code>):</strong></p>
 <ul>
 <li>Removes the destination config line and restores the source line.</li>
-<li>Tears down the destination backstore/LUN and recreates the original source
-  backstore/LUN if the source zvol still exists.</li>
-<li>Renames the zvol back to the source name.</li>
-<li>Rescans iSCSI and deletes the state file.</li>
+<li>When <code>--no-rename</code> was not used: tears down the destination backstore/LUN and
+  recreates the original source backstore/LUN if the source zvol still exists;
+  renames the zvol back to the source name; rescans iSCSI.</li>
+<li>When <code>--no-rename</code> was used: no storage-side changes are reverted because none
+  were made.</li>
+<li>Deletes the state file.</li>
 </ul>
 <p><strong>Return codes / side effects:</strong></p>
 <table>
@@ -3494,13 +3516,14 @@ compute-node <code>by-path</code> symlinks remain stable.</p>
 </tr>
 </tbody>
 </table>
-<p>Side effects: renames the zvol; recreates iSCSI backstore/LUN with the new name;
-updates manifests and VM configs.</p>
+<p>Side effects (default): renames the zvol; recreates iSCSI backstore/LUN with the
+new name; updates manifests and VM configs. With <code>--no-rename</code>, only the VM
+configs are changed.</p>
 <p><strong>Safety checks:</strong></p>
 <ul>
 <li>Both VMs must be stopped.</li>
 <li>The destination disk key must not already exist in the destination VM config.</li>
-<li>The destination zvol name must not already exist.</li>
+<li>The destination zvol name must not already exist (except with <code>--no-rename</code>).</li>
 <li>Prompts for confirmation before making changes.</li>
 <li>Writes a state file to <code>/tmp/move-vm-disk-&lt;src&gt;-&lt;dst&gt;-&lt;timestamp&gt;.state</code> for
   recovery if the operation is interrupted.</li>
@@ -4997,7 +5020,7 @@ to cut dependencies before retiring the source VM.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.84.1
+      ZFS Utilities v0.85.0
     </div>
   
   
@@ -5022,7 +5045,7 @@ to cut dependencies before retiring the source VM.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.84.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.85.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

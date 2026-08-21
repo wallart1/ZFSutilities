@@ -1,10 +1,11 @@
 #!/usr/bin/bash
-# move-vm-disk <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
+# move-vm-disk [--no-rename] <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]
 # Moves an existing iSCSI-backed (two-node) or ZFS-backed (single-node) VM disk
-# from one VM to another. The underlying zvol is renamed to match the destination
-# VMID, and the iSCSI backstore/LUN are recreated with the new name. The LUN
-# number is preserved whenever possible so compute-node by-path symlinks remain
-# stable.
+# from one VM to another. By default the underlying zvol is renamed to match the
+# destination VMID, and the iSCSI backstore/LUN are recreated with the new name.
+# Use --no-rename to leave the zvol/backstore/LUN unchanged and only move the
+# Proxmox disk reference. The LUN number is preserved whenever possible so
+# compute-node by-path symlinks remain stable.
 #
 # Supports --continue and --rollback for recovery from interrupted moves.
 #
@@ -51,12 +52,19 @@ if is_two_node; then
 fi
 
 usage() {
-    log_msg "INFO: Usage: move-vm-disk [--continue|--rollback] <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]"
+    log_msg "INFO: Usage: move-vm-disk [--no-rename]"
+    log_msg "INFO:          [--continue <state-file>|--rollback <state-file>]"
+    log_msg "INFO:          <src-vmid> <src-disk-key> <dst-vmid> [dst-disk-key]"
     echo ""
     log_msg "INFO:   src-vmid      Source Proxmox VM ID"
     log_msg "INFO:   src-disk-key  Disk key in source VM (e.g. scsi0, scsi1, efidisk0)"
     log_msg "INFO:   dst-vmid      Destination Proxmox VM ID"
-    log_msg "INFO:   dst-disk-key  Desired disk key in destination VM (optional; auto-selected if omitted)"
+    log_msg "INFO:   dst-disk-key  Desired disk key in destination VM"
+    log_msg "INFO:                   (optional; auto-selected if omitted)"
+    echo ""
+    log_msg "INFO: Options:"
+    log_msg "INFO:   --no-rename               Move the disk reference only;"
+    log_msg "INFO:                             do not rename the zvol"
     echo ""
     log_msg "INFO: Recovery options (use the state file path printed by the failed run):"
     log_msg "INFO:   --continue <state-file>   Resume an interrupted move"
@@ -129,6 +137,7 @@ SRCLUN=$SRCLUN
 DSTLUN=$DSTLUN
 PHASE=$PHASE
 ENCRYPTED=$ENCRYPTED
+NO_RENAME=$NO_RENAME
 EOF
 }
 
@@ -260,6 +269,11 @@ SSHEOF
 
 # Perform storage-node move (two-node) or local rename (single-node).
 run_storage_move() {
+    if [[ "$NO_RENAME" == "Y" ]]; then
+        log_msg "INFO: --no-rename set; leaving zvol/backstore/LUN unchanged"
+        return
+    fi
+
     if is_single_node; then
         log_msg "INFO: Renaming zvol ${SRCZVOL} → ${DSTZVOL}..."
         zfs rename "${SRCZVOL}" "${DSTZVOL}" || {
@@ -321,6 +335,7 @@ rollback() {
         log_msg "FATAL: No state file provided for rollback."
         exit 1
     }
+    NO_RENAME="N"
     read_state "$STATE_FILE"
 
     SRC_CONF="$PVE_CONF_DIR/${SRCVMID}.conf"
@@ -343,11 +358,14 @@ rollback() {
         fi
     fi
 
-    if is_two_node; then
-        # Storage rollback.
-        ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
-            "$SRCZVOL" "$DSTZVOL" "$SRCBACKSTORE" "$DSTBACKSTORE" "$TARGET" "$SRCLUN" "$ENCRYPTED" \
-            << 'SSHEOF'
+    if [[ "$NO_RENAME" == "Y" ]]; then
+        log_msg "INFO: --no-rename was set; no storage-side changes to roll back"
+    else
+        if is_two_node; then
+            # Storage rollback.
+            ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
+                "$SRCZVOL" "$DSTZVOL" "$SRCBACKSTORE" "$DSTBACKSTORE" "$TARGET" "$SRCLUN" "$ENCRYPTED" \
+                << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
@@ -392,48 +410,67 @@ if [[ -b "$ZVOL_DEV" ]]; then
     "$mydir/safe-iscsi-save" 2>/dev/null || true
 fi
 SSHEOF
-    else
-        # Single-node rollback.
-        if zfs list -H -o name "${DSTZVOL}" >/dev/null 2>&1; then
-            zfs rename "${DSTZVOL}" "${SRCZVOL}"
-            log_msg "INFO: ✓ Renamed zvol back to ${SRCZVOL}"
+        else
+            # Single-node rollback.
+            if zfs list -H -o name "${DSTZVOL}" >/dev/null 2>&1; then
+                zfs rename "${DSTZVOL}" "${SRCZVOL}"
+                log_msg "INFO: ✓ Renamed zvol back to ${SRCZVOL}"
+            fi
         fi
-    fi
 
-    if is_two_node; then
-        log_msg "INFO: Rescanning iSCSI..."
-        "$mydir/rescan-storage" 2>/dev/null || true
+        if is_two_node; then
+            log_msg "INFO: Rescanning iSCSI..."
+            "$mydir/rescan-storage" 2>/dev/null || true
+        fi
     fi
 
     rm -f "$STATE_FILE"
     log_msg "INFO: === Rollback complete ==="
 }
 
+# Parse command-line arguments into global variables.
+parse_args() {
+    local arg
+    MODE=""
+    STATE_FILE=""
+    NO_RENAME="N"
+    POS_ARGS=()
+    for arg in "$@"; do
+        case "$arg" in
+            --no-rename)
+                NO_RENAME="Y"
+                ;;
+            --continue|--rollback)
+                MODE="${arg#--}"
+                ;;
+            -*)
+                log_msg "FATAL: Unknown option: $arg"
+                return 1
+                ;;
+            *)
+                if [[ -n "$MODE" && -z "$STATE_FILE" ]]; then
+                    STATE_FILE="$arg"
+                else
+                    POS_ARGS+=("$arg")
+                fi
+                ;;
+        esac
+    done
+
+    if [[ -n "$MODE" && -z "$STATE_FILE" ]]; then
+        log_msg "FATAL: --${MODE} requires a state-file argument"
+        return 1
+    fi
+    return 0
+}
+
 # --- Argument parsing ---
-MODE=""
-STATE_FILE=""
-POS_ARGS=()
-for arg in "$@"; do
-    case "$arg" in
-        --continue|--rollback)
-            MODE="${arg#--}"
-            ;;
-        -*)
-            log_msg "FATAL: Unknown option: $arg"
-            usage
-            ;;
-        *)
-            if [[ -n "$MODE" && -z "$STATE_FILE" ]]; then
-                STATE_FILE="$arg"
-            else
-                POS_ARGS+=("$arg")
-            fi
-            ;;
-    esac
-done
+if ! parse_args "$@"; then
+    usage
+fi
 
 if [[ -n "$MODE" ]]; then
-    [[ -n "$STATE_FILE" ]] || usage
+    NO_RENAME="N"
     if [[ "$MODE" == "rollback" ]]; then
         rollback
         exit 0
@@ -482,8 +519,10 @@ fi
 # --- Delegate to compute host if run on storage node (two-node only, normal mode only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
     REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "move-vm-disk")
-    exec ssh -t root@"$COMPUTE_HOST" \
-        "$REMOTE_SCRIPT '${POS_ARGS[0]}' '${POS_ARGS[1]}' '${POS_ARGS[2]}' '${POS_ARGS[3]:-}'"
+    remote_args=()
+    [[ "$NO_RENAME" == "Y" ]] && remote_args+=("--no-rename")
+    remote_args+=("${POS_ARGS[0]}" "${POS_ARGS[1]}" "${POS_ARGS[2]}" "${POS_ARGS[3]:-}")
+    exec ssh -t root@"$COMPUTE_HOST" "$REMOTE_SCRIPT" "${remote_args[@]}"
 fi
 
 # === Running on the compute host ===
@@ -616,13 +655,18 @@ if grep -q "^${DSTKEY}:" "$DST_CONF"; then
     exit 1
 fi
 
-DISKNUM=$(disk_num_from_key "$DSTKEY")
-DSTBACKSTORE="vm-${DSTVMID}-disk-${DISKNUM}"
-# Place the destination zvol in the same parent dataset as the source zvol.
-SRC_DATASET="${SRCZVOL%/*}"
-DSTZVOL="${SRC_DATASET}/${DSTBACKSTORE}"
+if [[ "$NO_RENAME" == "Y" ]]; then
+    DSTBACKSTORE="$SRCBACKSTORE"
+    DSTZVOL="$SRCZVOL"
+else
+    DISKNUM=$(disk_num_from_key "$DSTKEY")
+    DSTBACKSTORE="vm-${DSTVMID}-disk-${DISKNUM}"
+    # Place the destination zvol in the same parent dataset as the source zvol.
+    SRC_DATASET="${SRCZVOL%/*}"
+    DSTZVOL="${SRC_DATASET}/${DSTBACKSTORE}"
 
-check_dst_zvol_free
+    check_dst_zvol_free
+fi
 
 # --- Write initial state file (normal mode only) ---
 if [[ -z "$MODE" ]]; then
@@ -634,14 +678,23 @@ if [[ "$PHASE" == "started" ]]; then
     log_msg "INFO: === move-vm-disk ==="
     log_msg "INFO:   Source:  VM ${SRCVMID}, ${SRCKEY}"
     log_msg "INFO:   Dest:    VM ${DSTVMID}, ${DSTKEY}"
-    log_msg "INFO:   Zvol:    ${SRCZVOL} → ${DSTZVOL}"
+    if [[ "$NO_RENAME" == "Y" ]]; then
+        log_msg "INFO:   Zvol:    ${SRCZVOL} (unchanged)"
+    else
+        log_msg "INFO:   Zvol:    ${SRCZVOL} → ${DSTZVOL}"
+    fi
     if is_two_node; then
         log_msg "INFO:   Size:    ${ZVOL_SIZE}"
         log_msg "INFO:   LUN:     ${SRCLUN}"
     fi
     echo ""
-    log_msg "WARN: Both VMs must be stopped. This will rename the underlying zvol"
-    log_msg "INFO:   and recreate the iSCSI backstore/LUN to match VM ${DSTVMID}."
+    if [[ "$NO_RENAME" == "Y" ]]; then
+        log_msg "WARN: This will move the disk reference to VM ${DSTVMID}"
+        log_msg "INFO:   without renaming the underlying zvol."
+    else
+        log_msg "WARN: Both VMs must be stopped. This will rename the underlying zvol"
+        log_msg "INFO:   and recreate the iSCSI backstore/LUN to match VM ${DSTVMID}."
+    fi
     echo ""
     read -rp "Proceed? (y/N): " confirm
     [[ "$confirm" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; rm -f "$STATE_FILE"; exit 0; }
@@ -653,7 +706,7 @@ if [[ "$PHASE" == "started" ]]; then
     run_storage_move
 fi
 
-if is_two_node && [[ -z "$DSTLUN" ]]; then
+if is_two_node && [[ "$NO_RENAME" != "Y" ]] && [[ -z "$DSTLUN" ]]; then
     # If continuing and DSTLUN wasn't captured, discover it now.
     DSTLUN=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" \
         "targetcli \"/iscsi/${TARGET}/tpg1/luns\" ls 2>/dev/null | grep '${DSTBACKSTORE}' | grep -oP 'lun\\K[0-9]+' | head -1")

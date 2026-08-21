@@ -1062,8 +1062,13 @@ to the actual offsite-candidate pools happens at run time inside
 ### Derived entries
 
 Derived rows are generated automatically from the Backup and Offsite tab
-send/receive steps. For each active step `source → dest` with label
-`dailybackup` (Backup) or `offsite` (Offsite), two rows are produced:
+send/receive steps. When the Checkagainst tab is first opened, the
+Backup-derived and Offsite-derived sections are populated immediately from
+the current Backup/Offsite configurations, so the tables should never be
+empty if steps are configured.
+
+For each active step `source → dest` with label `dailybackup` (Backup) or
+`offsite` (Offsite), two rows are produced:
 
 - **Forward**: `source <actual_destination> <label>`
 - **Reverse**: `<actual_destination> source <label>`
@@ -1074,11 +1079,17 @@ derived row keeps the placeholder literal. `zfscheckagainst` expands it to
 every pool marked as an offsite candidate in the [Pools tab](#pools-tab) at
 run time, so one derived row can verify against all candidate pools.
 
+If you edit the Backup or Offsite tab and return to Checkagainst while it is
+still open, the **Get Entries** button turns **red** to show that the derived
+rows no longer match the current Backup/Offsite configurations. Click **Get
+Entries** to refresh the derived sections; the tab becomes dirty so you can
+save the updated rows.
+
 ### Actions
 
 | Button          | Behavior                                                                                                              |
 | --------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **Get Entries** | Refresh the Backup-derived and Offsite-derived sections from the current Backup/Offsite configs. Marks the tab dirty. |
+| **Get Entries** | Refresh the Backup-derived and Offsite-derived sections from the current Backup/Offsite configs. The button label turns **red** when the displayed derived rows are stale; clicking it updates the tables and marks the tab dirty. |
 | **Add pair...** | Open an assistant that asks for snapshot label, source root, destination root, and comment; it appends the forward row and the reverse row to the user table. |
 | **Add Row**     | Appends a new empty row to the user table.                                                                            |
 | **Remove Row**  | Deletes the selected row(s) from the user table.                                                                      |

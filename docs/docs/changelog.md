@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+## 0.85.0
+
+*Released 2026-08-21*
+
+### Added
+
+- **`clone-vm` acquires advisory ZFS locks** — Before cloning each disk, the
+  script now acquires a write lock on both the source and destination zvols via
+  `zfslockmanager`. Locks are visible in the Dashboard **Active Locks** list and
+  are released when the disk finishes cloning.
+
+- **`move-vm-disk --no-rename`** — New option to move only the Proxmox disk
+  reference from one VM to another without renaming the underlying zvol or
+  recreating the iSCSI backstore/LUN. Rollback skips storage-side changes when
+  `--no-rename` was used.
+
+- **Checkagainst tab auto-populates derived rows** — When the Checkagainst tab
+  is opened, the Backup-derived and Offsite-derived sections are immediately
+  built from the current Backup/Offsite configurations instead of from whatever
+  was last saved.
+
+- **Checkagainst stale-state indicator** — The **Get Entries** button turns red
+  when the displayed derived rows no longer match the current Backup/Offsite
+  configurations. Clicking it refreshes the rows and clears the highlight.
+
+### Changed
+
+- **`backup_runner` completion log level** — The "complete" message emitted
+  during finish UI cleanup is now logged at `INFO` instead of `VERB`.
+
+### Tests
+
+- Extended `tests/test-clone-vm` to verify `zfslockmanager` sourcing,
+  initialization, per-disk lock acquisition/release, and heredoc extraction.
+- Extended `tests/test-move-vm-disk` with argument parsing tests for
+  `--no-rename`, `--continue`, and `--rollback`; a state-file round-trip test
+  for `NO_RENAME`; and a usage mention test.
+- Extended `tests/python/test_checkagainst_page.py` with tests for derived-row
+  auto-population, staleness detection, and Get Entries button styling.
+- Updated `tests/python/test_action_dispatch.py` and
+  `tests/python/test_gui_infrastructure.py` for the new Checkagainst button ID
+  and staleness styling hook.
+
+### Documentation
+
+- Updated `docs/docs/commands-and-modules/two-node.md` with the `clone-vm` lock
+  behavior and the `move-vm-disk --no-rename` option and flow.
+- Updated `docs/docs/commands-and-modules/modules.md` to document
+  `zfslock_wait_or_resolve` and list `clone-vm` as a `zfslockmanager` caller.
+- Updated `docs/docs/user-guide/gtk-gui.md` to describe Checkagainst derived-row
+  auto-population and the red stale-state button.
+- Updated `docs/docs/user-guide/proxmox-integration.md` with `--no-rename`
+  examples for both single-node and two-node deployments.
+
 ## 0.84.1
 
 *Released 2026-08-20*

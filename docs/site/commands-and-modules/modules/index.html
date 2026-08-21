@@ -3730,7 +3730,7 @@ zfshold<span class="w"> </span>&lt;hold-tag&gt;<span class="w"> </span>&lt;datas
 <hr />
 <h3 id="zfslockmanager"><code>zfslockmanager</code><a class="headerlink" href="#zfslockmanager" title="Permanent link">&para;</a></h3>
 <p>Core dataset lock management. Provides acquire, release, and conflict-checking
-functions. Used by <code>zfs-send-receive</code>, <code>zfsdelsnap</code>, and others.</p>
+functions. Used by <code>zfs-send-receive</code>, <code>zfsdelsnap</code>, <code>clone-vm</code>, and others.</p>
 <div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfslockmanager
 zfslock_init
 zfslock_acquire<span class="w"> </span>&lt;dataset&gt;<span class="w"> </span>&lt;type&gt;<span class="w"> </span><span class="o">[</span>description<span class="o">]</span><span class="w">   </span><span class="c1"># 0=ok, 1=conflict, 2=error</span>
@@ -3778,6 +3778,11 @@ zfslock_check<span class="w"> </span>&lt;dataset&gt;<span class="w"> </span>&lt;
 <td><code>zfslock_check</code></td>
 <td><code>&lt;dataset&gt; &lt;type&gt;</code></td>
 <td>Report whether a lock would conflict</td>
+</tr>
+<tr>
+<td><code>zfslock_wait_or_resolve</code></td>
+<td><code>&lt;dataset&gt; &lt;type&gt; [description]</code></td>
+<td>Acquire a lock or prompt to abort/skip</td>
 </tr>
 </tbody>
 </table>
@@ -4709,7 +4714,7 @@ steps.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.84.1
+      ZFS Utilities v0.85.0
     </div>
   
   
@@ -4734,7 +4739,7 @@ steps.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.84.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.85.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

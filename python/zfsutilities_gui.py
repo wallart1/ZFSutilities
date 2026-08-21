@@ -23,7 +23,7 @@ if _script_dir not in sys.path:
 from action_dispatch import ACTION_HANDLERS, PAGE_SPECS
 from app_context import AppContext
 from backup_page import create_backup_page
-from checkagainst_page import create_checkagainst_page
+from checkagainst_page import check_checkagainst_stale, create_checkagainst_page
 from config_core import (
     CONFIG_PATH,
     get_docs_editor,
@@ -563,6 +563,8 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
                 from restore_page import refresh_restore_destination
 
                 refresh_restore_destination(self)
+            elif page_name == "checkagainst":
+                check_checkagainst_stale(self)
             elif page_name == "schedule":
                 refresh_schedule_page(self)
             self._start_stop_dashboard_timer(page_name)

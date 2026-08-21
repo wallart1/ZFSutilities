@@ -75,15 +75,6 @@ def _entries_from_config(app):
     ]
 
 
-def _derived_from_config(app, section):
-    """Load backup_derived or offsite_derived rows as 4-tuples."""
-    data = get_checkagainst(app.config)
-    return [
-        (e.get("label", ""), e.get("source_root", ""), e.get("dest_root", ""), e.get("comment", ""))
-        for e in data.get(section, [])
-    ]
-
-
 def _row_to_dict(row):
     """Convert a 4-tuple store row into the config row dict."""
     return {
@@ -329,8 +320,9 @@ def _load_fss_into_store(app):
     app._ca_backup_active_chk.set_active(data.get("backup_derived_active", True))
     app._ca_offsite_active_chk.set_active(data.get("offsite_derived_active", True))
 
-    _load_store(app._ca_backup_store, _derived_from_config(app, "backup_derived"))
-    _load_store(app._ca_offsite_store, _derived_from_config(app, "offsite_derived"))
+    # Derived sections always reflect the current Backup/Offsite configs,
+    # not whatever happened to be saved in the checkagainst dict.
+    refresh_checkagainst_derived(app)
 
     entries = _entries_from_config(app)
     _load_store(app._ca_store, entries)
@@ -362,6 +354,75 @@ def _is_ca_dirty(app):
     return _full_dict_from_ui(app) != app._ca_original_full
 
 
+def refresh_checkagainst_derived(app):
+    """Recompute derived rows from current Backup/Offsite configs and update stores."""
+    backup_derived, offsite_derived = derive_checkagainst_entries(app.config)
+    _load_store(
+        app._ca_backup_store,
+        [
+            (
+                e.get("label", ""),
+                e.get("source_root", ""),
+                e.get("dest_root", ""),
+                e.get("comment", ""),
+            )
+            for e in backup_derived
+        ],
+    )
+    _load_store(
+        app._ca_offsite_store,
+        [
+            (
+                e.get("label", ""),
+                e.get("source_root", ""),
+                e.get("dest_root", ""),
+                e.get("comment", ""),
+            )
+            for e in offsite_derived
+        ],
+    )
+    _update_ca_status(app)
+
+
+def _is_derived_stale(app):
+    """Return True if displayed derived rows differ from current Backup/Offsite configs."""
+    backup_derived, offsite_derived = derive_checkagainst_entries(app.config)
+
+    def _rows_match(store, entries):
+        if len(store) != len(entries):
+            return False
+        for store_row, entry in zip(store, entries):
+            if (
+                store_row[COL_LABEL] != entry.get("label", "")
+                or store_row[COL_SOURCE_ROOT] != entry.get("source_root", "")
+                or store_row[COL_DEST_ROOT] != entry.get("dest_root", "")
+                or store_row[COL_COMMENT] != entry.get("comment", "")
+            ):
+                return False
+        return True
+
+    return not (
+        _rows_match(app._ca_backup_store, backup_derived)
+        and _rows_match(app._ca_offsite_store, offsite_derived)
+    )
+
+
+def _style_get_entries_button(app):
+    """Set the Get Entries action button red when derived rows are stale."""
+    btn = getattr(app, "_ca_get_entries_button", None)
+    if btn is None:
+        return
+    if _is_derived_stale(app):
+        set_button_markup(btn, '<span foreground="red">Get Entries</span>')
+    else:
+        set_button_markup(btn, "Get Entries")
+
+
+def check_checkagainst_stale(app):
+    """Update the Get Entries button to reflect whether derived rows are stale."""
+    _style_get_entries_button(app)
+
+
 def _validate_rows(rows, source):
     """Validate rows and return a list of human-readable errors."""
     errors = []
@@ -391,6 +452,10 @@ def _update_ca_status(app):
 
     # Also update Save button styling
     check_checkagainst_dirty(app)
+
+    # Update Get Entries button styling when derived rows drift from
+    # the current Backup/Offsite configurations.
+    _style_get_entries_button(app)
 
 
 def _on_active_toggled(checkbox, app):
@@ -488,36 +553,12 @@ def on_checkagainst_get_entries(app):
     data["offsite_derived"] = offsite_derived
     app.config["checkagainst"] = data
 
-    _load_store(
-        app._ca_backup_store,
-        [
-            (
-                e.get("label", ""),
-                e.get("source_root", ""),
-                e.get("dest_root", ""),
-                e.get("comment", ""),
-            )
-            for e in backup_derived
-        ],
-    )
-    _load_store(
-        app._ca_offsite_store,
-        [
-            (
-                e.get("label", ""),
-                e.get("source_root", ""),
-                e.get("dest_root", ""),
-                e.get("comment", ""),
-            )
-            for e in offsite_derived
-        ],
-    )
+    refresh_checkagainst_derived(app)
 
     log_msg(
         f"INFO: Derived {len(backup_derived)} backup and {len(offsite_derived)} "
         "offsite checkagainst entries"
     )
-    _update_ca_status(app)
 
 
 def _build_pair_rows(source, dest, label, comment=""):
