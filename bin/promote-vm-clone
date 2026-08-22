@@ -28,7 +28,8 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
+source_helper zfslockmanager
 
 rootcheck
 
@@ -97,8 +98,14 @@ echo ""
 
 # --- Promote each zvol ---
 if is_single_node; then
+    zfslock_init
     while IFS=$'\t' read -r zvol origin; do
+        if ! zfslock_wait_or_resolve "$zvol" "w" "promote-vm-clone"; then
+            log_msg "FATAL: Could not acquire write lock on ${zvol}"
+            exit 1
+        fi
         zfs promote "$zvol" || { log_msg "FATAL: Promotion failed: $zvol"; exit 1; }
+        zfslock_release "$ZFSLOCK_ID"
         log_msg "INFO: ✓ Promoted: ${zvol}"
         log_msg "INFO:   snapshot moved from ${origin%%@*} to ${zvol}"
     done < <(zfs list -H -o name,origin \
@@ -109,10 +116,18 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
+source_helper zfslockmanager
+
 set -e
 VMID="$1"
+zfslock_init
 while IFS=$'\t' read -r zvol origin; do
+    if ! zfslock_wait_or_resolve "$zvol" "w" "promote-vm-clone"; then
+        log_msg "FATAL: Could not acquire write lock on ${zvol}"
+        exit 1
+    fi
     zfs promote "$zvol"
+    zfslock_release "$ZFSLOCK_ID"
     log_msg "INFO: ✓ Promoted: ${zvol}"
     log_msg "INFO:   snapshot moved from ${origin%%@*} to ${zvol}"
 done < <(zfs list -H -o name,origin \

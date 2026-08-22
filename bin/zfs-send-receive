@@ -28,19 +28,8 @@ function send-receive {
     source_helper zfsdelallsnaps
     source_helper zfsdelallholds
     source_helper zfsholds
-    local iscsi_lib
-    iscsi_lib=$(find_zfsutility_script iscsi-lib.sh)
-    if [[ -z "$iscsi_lib" ]]; then
-        log_msg "FATAL: Could not locate iscsi-lib.sh"
-        source "$(find_zfsutility_script bashfatal)"
-    fi
-    source "$iscsi_lib"
-    local zfsdelfs_path
-    zfsdelfs_path=$(find_zfsutility_script zfsdelfs)
-    if [[ -z "$zfsdelfs_path" ]]; then
-        log_msg "FATAL: Could not locate zfsdelfs"
-        source "$(find_zfsutility_script bashfatal)"
-    fi
+    source_helper iscsi-lib.sh
+    source_helper zfsdelfs
     source_helper zfsoverrides
     source_helper zfslockmanager
     source_helper zfscheckrunningvms
@@ -190,7 +179,7 @@ function send-receive {
                 read -p "Press enter to continue."
             fi
             local saved_fsarray=("${fsarray[@]}")
-            if ! autoproceed="$autoproceed" "$zfsdelfs_path" "$dest"; then
+            if ! autoproceed="$autoproceed" delfs "$dest"; then
                 log_msg "WARN: Dataset deletion failed."; return 1
             fi
             fsarray=("${saved_fsarray[@]}")

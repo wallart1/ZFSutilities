@@ -11,8 +11,8 @@ fi
 bashinit
 unset _local_bashinit
 
-source "$(find_zfsutility_script rootcheck)"
-source "$(find_zfsutility_script zfsconfig)"
+source_helper rootcheck
+source_helper zfsconfig
 
 function findoffsitepool {
 

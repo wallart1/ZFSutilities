@@ -1,26 +1,17 @@
 #!/usr/bin/bash
 # shellcheck disable=SC1090,SC2034,SC2154
 # test-zfslockmanager — Adapted from zfslockmanager-test for the test harness.
-# Requires root because the lock manager uses /run/lock/zfsutilities by default.
-# To avoid interfering with production locks, tests use a temporary lock directory.
+# Uses a temporary lock directory so tests do not interfere with production
+# locks and do not require root.
 
+# shellcheck source=tests/test-lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
-
-# ---------------------------------------------------------------------------
-# Root check — skip everything if not root.
-# ---------------------------------------------------------------------------
-
-if [[ "$EUID" -ne 0 ]]; then
-    test_start "Root required for lock manager tests"
-    test_skip "Must run as root"
-    test_summary
-    exit 0
-fi
 
 # ---------------------------------------------------------------------------
 # Load the real lock manager (overrides the test-lib stubs).
 # ---------------------------------------------------------------------------
 
+# shellcheck source=bin/zfslockmanager
 source "$mydir/bin/zfslockmanager"
 
 # Redirect lock directory to a temp location so we do not interfere with
@@ -50,7 +41,8 @@ _bg_lock_start() {
     _BG_LOCK_RCFILE="$_mock_zfs_state_dir/bg_lock_rc_${id}"
     cat > "$script" <<EOF
 #!/usr/bin/bash
-source ~/bashinit
+source "$mydir/bin/bashinit"
+export ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs"
 bashinit
 source "$mydir/bin/zfslockmanager"
 export ZFSLOCK_DIR="$ZFSLOCK_DIR"

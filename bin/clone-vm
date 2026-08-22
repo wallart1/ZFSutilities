@@ -21,7 +21,7 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
 source_helper zfslockmanager
 
 rootcheck
@@ -182,11 +182,11 @@ if is_single_node; then
         zfs snapshot "$snap"
         zfs send "$snap" | zfs receive -o compression=lz4 -o refreservation=none "$dst_zvol"
         if ! zfs destroy "${dst_zvol}@clone-to-${DSTVMID}" 2>/dev/null; then
-            source "$(find_zfsutility_script zfs-diagnose-busy)"
+            source_helper zfs-diagnose-busy
             diagnose_dataset_busy "${dst_zvol}@clone-to-${DSTVMID}"
         fi
         if ! zfs destroy "$snap" 2>/dev/null; then
-            source "$(find_zfsutility_script zfs-diagnose-busy)"
+            source_helper zfs-diagnose-busy
             diagnose_dataset_busy "$snap"
         fi
         zfslock_release "$lock_dst"
@@ -258,6 +258,10 @@ declare -A disk_pools=()
 declare -A disk_targets=()
 declare -A disk_luns=()
 
+# Pre-build the regex so the loop line stays within the 100-character limit.
+iscsi_disk_re="^([a-z]+[0-9]+):.*ip-${STORAGE_IP}:3260-iscsi-"
+iscsi_disk_re+="${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+)"
+
 while IFS= read -r line; do
     [[ "$line" =~ ^\[.+\] ]] && break
     # Regex: ^([a-z]+[0-9]+):.*ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+)
@@ -265,7 +269,7 @@ while IFS= read -r line; do
     # Group 1: disk key       e.g. "scsi0"
     # Group 2: target short   e.g. "threeamigos"
     # Group 3: LUN number     e.g. "0"
-    if [[ "$line" =~ ^([a-z]+[0-9]+):.*ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+) ]]; then
+    if [[ "$line" =~ $iscsi_disk_re ]]; then
         key="${BASH_REMATCH[1]}"
         target_short="${BASH_REMATCH[2]}"
         lun="${BASH_REMATCH[3]}"
@@ -478,14 +482,16 @@ while IFS= read -r line; do
     elif [[ "$line" =~ ^net[0-9]+: ]]; then
         # Replace MAC address (XX:XX:XX:XX:XX:XX after the model= field)
         new_mac=$(gen_mac)
-        # Regex: ^(net[0-9]+:.*=)([0-9A-Fa-f][0-9A-Fa-f]:...)(,.*)$
-        # Purpose: MAC address replacement variant using explicit per-nibble hex classes.
-        #          This is functionally equivalent to [0-9A-Fa-f:]{17} but spelled out
-        #          nibble-by-nibble to be extra explicit about the 17-char format.
+        # Regex: ^(net[0-9]+:.*=)(<MAC>)(,.*)$
+        # Purpose: MAC address replacement using explicit per-nibble hex classes.
+        #          Functionally equivalent to [0-9A-Fa-f:]{17} but explicit.
         # Group 1: prefix up to =    e.g. "net0: virtio="
         # Group 2: MAC address       e.g. "BC:24:11:AA:BB:CC"
         # Group 3: trailing params   e.g. ",bridge=vmbr0"
-        if [[ "$line" =~ ^(net[0-9]+:.*=)([0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f])(,.*)$ ]]; then
+        _mac_nibble='[0-9A-Fa-f][0-9A-Fa-f]'
+        _mac_re="^(net[0-9]+:.*=)(${_mac_nibble}:${_mac_nibble}:${_mac_nibble}:"
+        _mac_re+="${_mac_nibble}:${_mac_nibble}:${_mac_nibble})(,.*)$"
+        if [[ "$line" =~ $_mac_re ]]; then
             echo "${BASH_REMATCH[1]}${new_mac}${BASH_REMATCH[3]}"
         else
             echo "$line"

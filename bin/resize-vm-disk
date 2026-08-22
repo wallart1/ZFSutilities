@@ -18,7 +18,8 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
+source_helper zfslockmanager
 
 rootcheck
 
@@ -137,8 +138,15 @@ log_msg "INFO:   Current size: $CURRENT_SIZE"
 echo ""
 
 # --- Grow zvol ---
+zfslock_init
+if ! zfslock_wait_or_resolve "$ZVOL_NAME" "w" "resize-vm-disk"; then
+    log_msg "FATAL: Could not acquire write lock on ${ZVOL_NAME}"
+    exit 1
+fi
+
 log_msg "INFO: Resizing zvol to $NEWSIZE..."
 zfs set volsize="$NEWSIZE" "$ZVOL_NAME"
+zfslock_release "$ZFSLOCK_ID"
 log_msg "INFO: ✓ Zvol resized"
 
 NEW_ACTUAL=$(zfs get -H -o value volsize "$ZVOL_NAME")

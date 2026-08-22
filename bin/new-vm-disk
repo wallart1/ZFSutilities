@@ -30,7 +30,8 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
+source_helper zfslockmanager
 
 rootcheck
 
@@ -448,6 +449,12 @@ if [[ "$ENCRYPTED_FLAG" == true ]]; then
 fi
 
 # --- Create the zvol ---
+zfslock_init
+if ! zfslock_wait_or_resolve "$POOL/proxmox" "w" "new-vm-disk create"; then
+    log_msg "FATAL: Could not acquire write lock on ${POOL}/proxmox"
+    exit 1
+fi
+
 if [[ "$ENCRYPTED_FLAG" == true ]]; then
     log_msg "INFO: Creating encrypted zvol $ZVOL_NAME ($SIZE)..."
     zfs create -V "$SIZE" -s -o compression=lz4 \
@@ -465,6 +472,8 @@ else
     zfs create -V "$SIZE" -s -o compression=lz4 "$ZVOL_NAME"
     log_msg "INFO: ✓ Zvol created"
 fi
+
+zfslock_release "$ZFSLOCK_ID"
 
 # Wait for /dev/zvol symlink to appear (udev is async)
 log_msg "INFO: Waiting for device node..."

@@ -1,0 +1,111 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC1091,SC2016,SC2034,SC2154
+# test-lock-coverage — Static checks that newly-locked dataset-mutating scripts
+# source the lock manager, initialize it, and acquire/release locks around
+# mutations as required by the project locking policy.
+
+# shellcheck source=tests/test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# Each entry: script-file:expected-pattern:description
+# Patterns are POSIX ERE substrings expected to appear in the script.
+test_lock_patterns() {
+    test_start "Locked scripts source zfslockmanager and acquire locks"
+
+    local checks=(
+        "zfsclone-vm:source_helper zfslockmanager:sources lock manager"
+        "zfsclone-vm:zfslock_init:initializes lock manager"
+        "zfsclone-vm:zfsclone-vm source.*w:acquires source write lock"
+        "zfsclone-vm:zfsclone-vm destination.*w:acquires destination write lock"
+        "zfsresume:source_helper zfslockmanager:sources lock manager"
+        "zfsresume:zfslock_init:initializes lock manager"
+        "unarchive-vm:source_helper zfslockmanager:sources lock manager"
+        "unarchive-vm:zfslock_init:initializes lock manager"
+        "unarchive-vm:unarchive-vm restore.*w:acquires restore write lock"
+        "PVE-send-to-archive:source_helper zfslockmanager:sources lock manager"
+        "PVE-send-to-archive:zfslock_init:initializes lock manager"
+        "PVE-send-to-archive:zfslock_acquire.*w:acquires source write lock"
+        "move-vm-disk:source_helper zfslockmanager:sources lock manager"
+        "move-vm-disk:zfslock_init:initializes lock manager"
+        "move-vm-disk:move-vm-disk source.*x:acquires source destroy lock"
+        "move-vm-disk:move-vm-disk destination.*x:acquires destination destroy lock"
+        "remove-vm-disk:source_helper zfslockmanager:sources lock manager"
+        "remove-vm-disk:zfslock_init:initializes lock manager"
+        "remove-vm-disk:remove-vm-disk destroy.*x:acquires destroy lock"
+        "rename-vm-disk:source_helper zfslockmanager:sources lock manager"
+        "rename-vm-disk:zfslock_init:initializes lock manager"
+        "rename-vm-disk:rename-vm-disk source.*x:acquires source destroy lock"
+        "rename-vm-disk:rename-vm-disk destination.*x:acquires destination destroy lock"
+        "new-vm-disk:source_helper zfslockmanager:sources lock manager"
+        "new-vm-disk:zfslock_init:initializes lock manager"
+        "new-vm-disk:new-vm-disk create.*w:acquires parent write lock"
+        "resize-vm-disk:source_helper zfslockmanager:sources lock manager"
+        "resize-vm-disk:zfslock_init:initializes lock manager"
+        "resize-vm-disk:resize-vm-disk.*w:acquires resize write lock"
+        "promote-vm-clone:source_helper zfslockmanager:sources lock manager"
+        "promote-vm-clone:zfslock_init:initializes lock manager"
+        "promote-vm-clone:promote-vm-clone.*w:acquires promote write lock"
+        "zfsmassdelsnaps:source_helper zfslockmanager:sources lock manager"
+        "zfsmassdelsnaps:zfslock_init:initializes lock manager"
+        "zfsmassdelsnaps:zfsmassdelsnaps enumeration.*w:acquires enumeration write lock"
+        "zfsdelallsnaps:source_helper zfslockmanager:sources lock manager"
+        "zfsdelallsnaps:zfslock_init:initializes lock manager"
+        "zfsdelallsnaps:zfsdelallsnaps.*w:acquires dataset write lock"
+        "zfscleanupbadoffsiteholds:source_helper zfslockmanager:sources lock manager"
+        "zfscleanupbadoffsiteholds:zfslock_init:initializes lock manager"
+        "zfscleanupbadoffsiteholds:cleanupbadoffsiteholds.*w:acquires parent write lock"
+        "zfsdelholds:source_helper zfslockmanager:sources lock manager"
+        "zfsdelholds:zfslock_init:initializes lock manager"
+        "zfsdelholds:zfsdelholds.*w:acquires subtree write lock"
+        "zfshold:source_helper zfslockmanager:sources lock manager"
+        "zfshold:zfslock_init:initializes lock manager"
+        "zfshold:zfshold.*w:acquires subtree write lock"
+        "zfsholds:source_helper zfslockmanager:sources lock manager"
+        "zfsholds:zfslock_init:initializes lock manager"
+        "zfsholds:zfsholds.*r:acquires subtree read lock"
+        "zfsdelallholds:source_helper zfslockmanager:sources lock manager"
+        "zfsdelallholds:zfslock_init:initializes lock manager"
+        "zfsdelallholds:zfsdelallholds.*w:acquires parent write lock"
+        "zfsdelallholdssubtree:source_helper zfslockmanager:sources lock manager"
+        "zfsdelallholdssubtree:zfslock_init:initializes lock manager"
+        "zfsdelallholdssubtree:zfsdelallholdssubtree.*w:acquires subtree write lock"
+        "zfsmount:source_helper zfslockmanager:sources lock manager"
+        "zfsmount:zfslock_init:initializes lock manager"
+        "zfsmount:zfsmount.*w:acquires mount write lock"
+        "zfsunmount:source_helper zfslockmanager:sources lock manager"
+        "zfsunmount:zfslock_init:initializes lock manager"
+        "zfsunmount:zfsunmount.*w:acquires unmount write lock"
+        "zfsrestoresendstream:source_helper zfslockmanager:sources lock manager"
+        "zfsrestoresendstream:zfslock_init:initializes lock manager"
+        "zfsrestoresendstream:zfsrestoresendstream.*w:acquires restore write lock"
+        "zfsresume:source_helper zfslockmanager:sources lock manager"
+        "zfsresume:zfslock_init:initializes lock manager"
+        "zfsresume:zfsresume.*w:acquires resume write lock"
+    )
+
+    local failures=()
+    local entry script pattern description
+    for entry in "${checks[@]}"; do
+        script="${entry%%:*}"
+        description="${entry##*:}"
+        pattern="${entry#*:}"
+        pattern="${pattern%:*}"
+        if ! tr -d '\n' < "$old_mydir/bin/$script" | grep -Eq "$pattern" 2>/dev/null; then
+            failures+=("$script: $description (pattern: $pattern)")
+        fi
+    done
+
+    if [[ ${#failures[@]} -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Missing lock coverage:\n$(printf '  %s\n' "${failures[@]}")"
+    fi
+}
+
+test_lock_patterns
+
+test_summary
+teardown_test_env

@@ -1,6 +1,7 @@
 #!/usr/bin/bash
 # test-zfsdelallsnaps — Verify return-code behavior of delallsnaps.
 
+# shellcheck source=tests/test-lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
@@ -16,6 +17,13 @@ rootcheck() { true; }
 EOF
     cat > "$tmpdir/zfsoverrides" << 'EOF'
 overrides() { true; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_acquire() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_wait_or_resolve() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_release() { true; }
+zfslock_release_all() { true; }
 EOF
     printf '%s\n' "$tmpdir"
 }
@@ -43,6 +51,7 @@ test_all_success_returns_zero() {
 
     output=$(
         mydir="$tmpdir"
+        export ZFSUTILITIES_BIN_DIR="$tmpdir"
         bash -c '
             zfs() {
                 if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
@@ -82,6 +91,7 @@ test_any_failure_returns_one() {
 
     output=$(
         mydir="$tmpdir"
+        export ZFSUTILITIES_BIN_DIR="$tmpdir"
         bash -c '
             zfs() {
                 if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
@@ -121,6 +131,7 @@ test_no_snapshots_returns_zero() {
 
     output=$(
         mydir="$tmpdir"
+        export ZFSUTILITIES_BIN_DIR="$tmpdir"
         bash -c '
             zfs() {
                 if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
@@ -154,6 +165,7 @@ test_filtered_no_match_returns_zero() {
 
     output=$(
         mydir="$tmpdir"
+        export ZFSUTILITIES_BIN_DIR="$tmpdir"
         bash -c '
             zfs() {
                 if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
@@ -194,6 +206,7 @@ test_releaseholds_tags_default() {
 
     output=$(
         mydir="$tmpdir"
+        export ZFSUTILITIES_BIN_DIR="$tmpdir"
         bash -c '
             zfs() {
                 if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then

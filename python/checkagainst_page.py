@@ -57,7 +57,9 @@ _COLUMN_TITLES = {
 # Tooltips for each column header.
 _COLUMN_TOOLTIPS = {
     COL_LABEL: "Snapshot label used to build snapshot names (e.g. offsite, dailybackup).",
-    COL_SOURCE_ROOT: "Source root dataset tree whose snapshots are checked. <offsite> may appear anywhere.",
+    COL_SOURCE_ROOT: (
+        "Source root dataset tree whose snapshots are checked. <offsite> may appear anywhere."
+    ),
     COL_DEST_ROOT: (
         "Destination root dataset tree where the counterpart snapshot is expected. "
         "<offsite> expands to all offsite-candidate pools."
@@ -407,7 +409,7 @@ def _is_derived_stale(app):
     )
 
 
-def _style_get_entries_button(app):
+def style_get_entries_button(app):
     """Set the Get Entries action button red when derived rows are stale."""
     btn = getattr(app, "_ca_get_entries_button", None)
     if btn is None:
@@ -416,11 +418,6 @@ def _style_get_entries_button(app):
         set_button_markup(btn, '<span foreground="red">Get Entries</span>')
     else:
         set_button_markup(btn, "Get Entries")
-
-
-def check_checkagainst_stale(app):
-    """Update the Get Entries button to reflect whether derived rows are stale."""
-    _style_get_entries_button(app)
 
 
 def _validate_rows(rows, source):
@@ -444,6 +441,11 @@ def _update_ca_status(app):
         app._ca_status_label.set_markup("<span foreground='red'>" + "\n".join(errors) + "</span>")
     elif _is_ca_dirty(app):
         app._ca_status_label.set_markup("<span foreground='orange'>Unsaved changes.</span>")
+    elif _is_derived_stale(app):
+        app._ca_status_label.set_markup(
+            "<span foreground='orange'>Derived entries are stale; "
+            "click Get Entries to refresh.</span>"
+        )
     else:
         app._ca_status_label.set_text("")
 
@@ -455,7 +457,7 @@ def _update_ca_status(app):
 
     # Update Get Entries button styling when derived rows drift from
     # the current Backup/Offsite configurations.
-    _style_get_entries_button(app)
+    style_get_entries_button(app)
 
 
 def _on_active_toggled(checkbox, app):

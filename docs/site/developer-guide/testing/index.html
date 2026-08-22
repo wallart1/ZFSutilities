@@ -2118,8 +2118,8 @@ tests/run-tests<span class="w"> </span>--failures-only
 </tr>
 <tr>
 <td><code>test-move-vm-disk</code></td>
-<td>8</td>
-<td><code>move-vm-disk</code> helper functions: disk-key parsing, manifest add/remove</td>
+<td>14</td>
+<td><code>move-vm-disk</code> helper functions: disk-key parsing, manifest add/remove, validation helpers, state round-trip, heredoc bootstrap</td>
 </tr>
 <tr>
 <td><code>test-switch-version</code></td>
@@ -2188,18 +2188,43 @@ tests/run-tests<span class="w"> </span>--failures-only
 </tr>
 <tr>
 <td><code>test-zfsdelsnap</code></td>
-<td>7</td>
-<td>Fatal error when required helper <code>zfs-diagnose-busy</code> is missing; normal operation when helper is present; <code>checkagainst</code> rc handling; regression test that the real <code>zfscheckagainst</code> sources <code>zfsremoveleadingqualifiers</code></td>
+<td>6</td>
+<td>Fatal error when required helper <code>zfs-diagnose-busy</code> is missing; normal operation when helper is present; <code>checkagainst</code> rc handling; user-hold blocking</td>
 </tr>
 <tr>
 <td><code>test-zfsdelallsnaps</code></td>
-<td>4</td>
-<td>Return-code behavior of <code>zfsdelallsnaps</code>: all-success returns <code>0</code>, any <code>delsnap</code> failure returns <code>1</code>, empty list returns <code>0</code></td>
+<td>5</td>
+<td>Return-code behavior of <code>zfsdelallsnaps</code>: all-success returns <code>0</code>, any <code>delsnap</code> failure returns <code>1</code>, empty list returns <code>0</code>; lock acquisition</td>
+</tr>
+<tr>
+<td><code>test-lock-coverage</code></td>
+<td>1</td>
+<td>Static checks that locked dataset-mutating scripts source <code>zfslockmanager</code>, initialize it, and acquire locks.</td>
 </tr>
 <tr>
 <td><code>test-zfslockmanager</code></td>
-<td>33</td>
-<td>Lock acquire / release, same-dataset conflicts, hierarchy conflicts, stale detection, concurrent access, path encoding. <strong>Requires root.</strong></td>
+<td>43</td>
+<td>Lock acquire / release, same-dataset conflicts, hierarchy conflicts, stale detection, concurrent access, path encoding, multi-lock acquisition, headless wait modes, headless timed wait.</td>
+</tr>
+<tr>
+<td><code>test-zfsmount</code></td>
+<td>2</td>
+<td>Lock acquisition before mount/unmount per dataset.</td>
+</tr>
+<tr>
+<td><code>test-zfsrestoresendstream</code></td>
+<td>1</td>
+<td>Lock acquisition before each <code>zfs receive</code> destination.</td>
+</tr>
+<tr>
+<td><code>test-zfsresume</code></td>
+<td>1</td>
+<td>Lock acquisition before reading the resume token.</td>
+</tr>
+<tr>
+<td><code>test-zfsunmount</code></td>
+<td>1</td>
+<td>Lock acquisition before unmount per dataset.</td>
 </tr>
 <tr>
 <td><code>test-zfsretain</code></td>
@@ -2239,8 +2264,7 @@ tests/run-tests<span class="w"> </span>--failures-only
 </tbody>
 </table>
 <p>Bash tests run without a real ZFS pool — commands are intercepted with bash
-function overrides so every suite can execute as a normal user (root is only
-needed for the lock-manager suite).</p>
+function overrides so every suite can execute as a normal user.</p>
 <h3 id="writing-a-new-bash-suite">Writing a New Bash Suite<a class="headerlink" href="#writing-a-new-bash-suite" title="Permanent link">&para;</a></h3>
 <ol>
 <li>Create <code>tests/test-&lt;scriptname&gt;</code> (executable, no extension).</li>
@@ -2755,8 +2779,8 @@ by setting an artificially large buffer.</p>
 <code>test-lib.sh</code> so the harness stays quiet.  Tests that need to assert on
 <code>log_msg</code> output should read the file returned by <code>get_test_log_file()</code> (or
 use <code>get_stderr_log()</code> from <code>test-zfs-send-receive-dryrun</code>).</li>
-<li><strong>Root check</strong> — <a href="../../commands-and-modules/modules/#rootcheck">rootcheck</a> is mocked to a no-op.  Suites that require root
-(e.g. <code>test-zfslockmanager</code>) should check <code>$EUID</code> and call <code>test_skip</code> when
+<li><strong>Root check</strong> — <a href="../../commands-and-modules/modules/#rootcheck">rootcheck</a> is mocked to a no-op.  Any future suite that
+legitimately requires root should check <code>$EUID</code> and call <code>test_skip</code> when
 non-root.</li>
 <li><strong>Inner functions</strong> — Functions defined <em>inside</em> another function (e.g.
 <code>check_space_available</code> inside <code>send-receive</code>) become available for direct
@@ -2823,7 +2847,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.85.0
+      ZFS Utilities v0.85.1
     </div>
   
   
@@ -2848,7 +2872,7 @@ Python changes. The Ruff configuration is in <code>pyproject.toml</code>.</li>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.85.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.85.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

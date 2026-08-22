@@ -2136,7 +2136,7 @@ class TestPageLabelWrapping(unittest.TestCase):
             app.config = {"checkagainst": []}
             with (
                 patch.object(cp, "check_checkagainst_dirty", MagicMock()),
-                patch.object(cp, "_style_get_entries_button", MagicMock()),
+                patch.object(cp, "style_get_entries_button", MagicMock()),
             ):
                 cp.create_checkagainst_page(app)
 

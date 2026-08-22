@@ -505,7 +505,15 @@ def on_datasets_unmount_snapshot(app):
         dialog.destroy()
         return
 
-    result = subprocess.run(["sudo", "umount", path], capture_output=True, text=True, check=False)
+    try:
+        with zlm.lock(s["dataset"], "w", f"umount snapshot {full_snap}"):
+            result = subprocess.run(
+                ["sudo", "umount", path], capture_output=True, text=True, check=False
+            )
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot unmount {full_snap}: {exc}")
+        return
+
     if result.returncode == 0:
         log_msg(f"INFO: Unmounted snapshot {full_snap}")
         update_ds_button_sensitivity(app)

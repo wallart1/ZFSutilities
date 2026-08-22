@@ -2334,11 +2334,11 @@ deterministic order to avoid deadlocks. Use:</p>
 <li><code>@</code> → <code>%40</code> (for snapshots)</li>
 </ul>
 <h2 id="integration-points">Integration Points<a class="headerlink" href="#integration-points" title="Permanent link">&para;</a></h2>
-<p>Scripts that have lock integration:</p>
+<p>Scripts and modules that have lock integration:</p>
 <table>
 <thead>
 <tr>
-<th>Script</th>
+<th>Script / module</th>
 <th>Lock Type</th>
 <th>Dataset(s) / pools</th>
 </tr>
@@ -2348,6 +2348,21 @@ deterministic order to avoid deadlocks. Use:</p>
 <td>zfs-send-receive</td>
 <td><code>w</code></td>
 <td>source, destination</td>
+</tr>
+<tr>
+<td>zfsrestoresendstream</td>
+<td><code>w</code></td>
+<td>destination dataset per receive</td>
+</tr>
+<tr>
+<td>zfsmount</td>
+<td><code>w</code></td>
+<td>each dataset being mounted/unmounted</td>
+</tr>
+<tr>
+<td>zfsunmount</td>
+<td><code>w</code></td>
+<td>each dataset being unmounted</td>
 </tr>
 <tr>
 <td>zfsretain</td>
@@ -2370,9 +2385,94 @@ deterministic order to avoid deadlocks. Use:</p>
 <td>parent dataset (via <code>zfsdelsnap</code>)</td>
 </tr>
 <tr>
+<td>zfsmassdelsnaps</td>
+<td><code>w</code></td>
+<td>each parent dataset</td>
+</tr>
+<tr>
 <td>zfsdelfs</td>
 <td><code>x</code></td>
 <td>top-level dataset being destroyed</td>
+</tr>
+<tr>
+<td>clone-vm / zfsclone-vm</td>
+<td><code>w</code></td>
+<td>source and destination zvols</td>
+</tr>
+<tr>
+<td>move-vm-disk</td>
+<td><code>x</code>/<code>w</code></td>
+<td>source and destination zvols</td>
+</tr>
+<tr>
+<td>rename-vm-disk</td>
+<td><code>w</code></td>
+<td>affected zvol</td>
+</tr>
+<tr>
+<td>remove-vm-disk</td>
+<td><code>x</code></td>
+<td>affected zvol</td>
+</tr>
+<tr>
+<td>resize-vm-disk</td>
+<td><code>w</code></td>
+<td>affected zvol / pool</td>
+</tr>
+<tr>
+<td>new-vm-disk</td>
+<td><code>w</code></td>
+<td>affected zvol / pool</td>
+</tr>
+<tr>
+<td>promote-vm-clone</td>
+<td><code>w</code></td>
+<td>zvol being promoted</td>
+</tr>
+<tr>
+<td>archive-vm</td>
+<td><code>w</code></td>
+<td>archived zvols</td>
+</tr>
+<tr>
+<td>unarchive-vm</td>
+<td><code>w</code></td>
+<td>restored zvols</td>
+</tr>
+<tr>
+<td>PVE-send-to-archive</td>
+<td><code>w</code></td>
+<td>archived zvols</td>
+</tr>
+<tr>
+<td>zfshold / zfsholds</td>
+<td><code>w</code>/<code>r</code></td>
+<td>affected datasets</td>
+</tr>
+<tr>
+<td>zfsdelallholds*</td>
+<td><code>w</code></td>
+<td>parent dataset of the snapshot</td>
+</tr>
+<tr>
+<td>zfscleanupbadoffsiteholds</td>
+<td><code>w</code></td>
+<td>parent dataset of snapshots with self-referencing offsite holds</td>
+</tr>
+<tr>
+<td>zfsresume</td>
+<td><code>w</code></td>
+<td>resumable destination</td>
+</tr>
+<tr>
+<td>dataset_actions.py</td>
+<td><code>w</code></td>
+<td>dataset for snapshot/delete/hold/rollback/umount</td>
+</tr>
+<tr>
+<td>retention_actions.py</td>
+<td><code>w</code></td>
+<td>pool-level pre-flight check before prune</td>
 </tr>
 <tr>
 <td>zfsdailybackup</td>
@@ -2421,7 +2521,7 @@ deterministic order to avoid deadlocks. Use:</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.85.0
+      ZFS Utilities v0.85.1
     </div>
   
   
@@ -2446,7 +2546,7 @@ deterministic order to avoid deadlocks. Use:</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.85.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.85.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

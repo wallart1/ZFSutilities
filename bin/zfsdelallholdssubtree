@@ -7,15 +7,23 @@ source ~/bashinit
 source_helper rootcheck
 source_helper zfsbuildfsarray
 source_helper zfsdelallholds
+source_helper zfslockmanager
 bashinit
 rootcheck
 
-if [[ $1 = '' ]]; then 
+if [[ $1 = '' ]]; then
     log_msg 'FATAL: A dataset must be provided as $1.'
     exit 8
 else
     sourcefs=$1
 fi
+
+zfslock_init
+if ! zfslock_wait_or_resolve "$sourcefs" "w" "zfsdelallholdssubtree"; then
+    log_msg "WARN: Could not acquire write lock on ${sourcefs}; aborting."
+    exit 1
+fi
+_delallholdssubtree_lock="$ZFSLOCK_ID"
 if [[ $2 != '' ]]; then tag=$2; else unset tag; fi
 
 if [[ $autoproceed = '' ]]; then autoproceed='N'; fi
@@ -39,4 +47,6 @@ if [[ ${#fsarray[@]} -gt 0 ]]; then
         delallholds $snap $tag
     done
 fi
+
+zfslock_release "$_delallholdssubtree_lock"
 

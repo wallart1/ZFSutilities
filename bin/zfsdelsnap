@@ -35,10 +35,6 @@ function delsnap {
     source_helper zfscheckagainst
     source_helper zfsdelallholds
     source_helper zfslockmanager
-    if [[ -z "$(find_zfsutility_script zfs-diagnose-busy)" ]]; then
-        log_msg "FATAL: Required helper zfs-diagnose-busy could not be located."
-        source "$(find_zfsutility_script bashfatal)" 8
-    fi
     source_helper zfs-diagnose-busy
 
     if [[ "$1" != '' ]]; then

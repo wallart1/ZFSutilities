@@ -1,0 +1,96 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfsresume — Verify lock manager integration.
+
+# shellcheck source=tests/test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# ------------------------------------------------------------------
+# Test: Resume acquires a write lock on the destination dataset
+# ------------------------------------------------------------------
+test_zfsresume_acquires_lock() {
+    test_start "zfsresume acquires write lock before reading resume token"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/rootcheck" << 'EOF'
+rootcheck() { true; }
+EOF
+
+    cat > "$tmpdir/bashreturn" << 'EOF'
+return ${1:-8}
+EOF
+
+    local lock_log="$tmpdir/lock_calls.log"
+    : > "$lock_log"
+
+    cat > "$tmpdir/zfslockmanager" << EOF
+zfslock_init() { true; }
+zfslock_wait_or_resolve() {
+    echo "\$1 \$2" >> "$lock_log"
+    ZFSLOCK_ID="$tmpdir/lock_\$1"
+    return 0
+}
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+
+    local zfs_calls="$tmpdir/zfs_calls.log"
+    : > "$zfs_calls"
+
+    cat > "$tmpdir/zfs" << 'EOF'
+#!/usr/bin/bash
+case "$1" in
+    list)
+        if [[ "$2" == "-Hrt" && "$3" == "filesystem,volume" \
+             && "$4" == "-o" && "$5" == "name" ]]; then
+            echo "pool/dest"
+        fi
+        ;;
+    get)
+        if [[ "$2" == "-H" && "$3" == "receive_resume_token" ]]; then
+            printf 'pool/dest\treceive_resume_token\t1-abc\n'
+        fi
+        ;;
+    send)
+        if [[ "$2" == "-nP" && "$3" == "-t" ]]; then
+            echo "size 1024"
+            exit 0
+        fi
+        ;;
+esac
+exit 0
+EOF
+    chmod +x "$tmpdir/zfs"
+
+    local output rc=0
+    output=$(
+        PATH="$tmpdir:$PATH" bash -c \
+            "mydir='$tmpdir'; source '$old_mydir/bin/zfsresume' pool/dest" \
+            2>&1
+    ) || rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected rc=0, got rc=$rc output: $output"
+        rm -rf "$tmpdir"
+        return
+    fi
+
+    if [[ "$(<"$lock_log")" != *"pool/dest w"* ]]; then
+        test_fail "Missing expected lock call (log: $(<"$lock_log"))"
+        rm -rf "$tmpdir"
+        return
+    fi
+
+    test_pass
+    rm -rf "$tmpdir"
+}
+
+test_zfsresume_acquires_lock
+
+test_summary
+teardown_test_env

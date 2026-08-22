@@ -14,6 +14,7 @@ bashinit
 unset _local_bashinit
 
 source_helper zfsdelallholds
+source_helper zfslockmanager
 
 function delholds {
     local zfsdelholds_subtree zfsdelholds_match zfsdelholds_depth
@@ -27,6 +28,13 @@ function delholds {
     else
         zfsdelholds_subtree=$1
     fi
+
+    zfslock_init
+    if ! zfslock_wait_or_resolve "$zfsdelholds_subtree" "w" "zfsdelholds"; then
+        log_msg "WARN: Could not acquire write lock on ${zfsdelholds_subtree}; aborting."
+        return 1
+    fi
+    local _delholds_lock="$ZFSLOCK_ID"
     zfsdelholds_match=$2
     if [[ $3 = '' ]]; then
         zfsdelholds_depth=""
@@ -69,6 +77,8 @@ function delholds {
     for snap in "${snaparray[@]}"; do
         delallholds "$snap"
     done
+
+    zfslock_release "$_delholds_lock"
 }
 
 if calledbybash; then delholds "$1" "$2" "$3"; fi

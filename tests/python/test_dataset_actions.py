@@ -321,5 +321,131 @@ class TestDeleteDatasetsRunner(unittest.TestCase):
         app.dataset_runner.start.assert_not_called()
 
 
+class TestUnmountSnapshot(unittest.TestCase):
+    """on_datasets_unmount_snapshot acquires a write lock before umount."""
+
+    def setUp(self):
+        zlm._lock_refcounts.clear()
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+
+            return da
+
+    def _make_app(self):
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        return app
+
+    def test_acquires_lock_before_umount(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {"type": "snapshot", "dataset": "tank/vm-100", "name": "manual-2025-01-01"}
+                ],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tmp/mnt/tank_vm-100@manual-2025-01-01",
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_ds_button_sensitivity"),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_unmount_snapshot(app)
+
+            mock_zlm.lock.assert_called_once_with(
+                "tank/vm-100",
+                "w",
+                "umount snapshot tank/vm-100@manual-2025-01-01",
+            )
+            mock_subprocess.run.assert_called_once_with(
+                ["sudo", "umount", "/tmp/mnt/tank_vm-100@manual-2025-01-01"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            mock_log.assert_any_call("INFO: Unmounted snapshot tank/vm-100@manual-2025-01-01")
+
+    def test_logs_warning_when_locked(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {"type": "snapshot", "dataset": "tank/vm-100", "name": "manual-2025-01-01"}
+                ],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tmp/mnt/tank_vm-100@manual-2025-01-01",
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_ds_button_sensitivity"),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            mock_zlm.lock.side_effect = RuntimeError(
+                "conflict: cannot acquire w lock on tank/vm-100"
+            )
+            da.on_datasets_unmount_snapshot(app)
+
+            mock_zlm.lock.assert_called_once()
+            mock_subprocess.run.assert_not_called()
+            mock_log.assert_called_once_with(
+                "WARN: cannot unmount tank/vm-100@manual-2025-01-01: "
+                "conflict: cannot acquire w lock on tank/vm-100"
+            )
+
+    def test_logs_busy_when_umount_reports_busy(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {"type": "snapshot", "dataset": "tank/vm-100", "name": "manual-2025-01-01"}
+                ],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tmp/mnt/tank_vm-100@manual-2025-01-01",
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_ds_button_sensitivity"),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm"),
+        ):
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=1, stderr="umount: target is busy"
+            )
+            da.on_datasets_unmount_snapshot(app)
+
+            mock_subprocess.run.assert_called_once()
+            mock_log.assert_any_call(
+                "WARN: Snapshot tank/vm-100@manual-2025-01-01 is busy. "
+                "Please close any file manager windows and try again."
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

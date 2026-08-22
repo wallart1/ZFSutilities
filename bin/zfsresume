@@ -12,11 +12,23 @@ fi
 bashinit
 unset _local_bashinit
 
+source_helper rootcheck
+source_helper zfslockmanager
+
+rootcheck
+
 if [[ $1 = '' ]]; then
     log_msg 'FATAL: A resumable destination dataset must be given in $1.'
     source "$(find_zfsutility_script bashreturn)" 8
 else
     resumeds=$1
+
+    zfslock_init
+    if ! zfslock_wait_or_resolve "$resumeds" "w" "zfsresume destination token"; then
+        log_msg "FATAL: Could not acquire write lock on resumable destination ${resumeds}"
+        source "$(find_zfsutility_script bashreturn)" 8
+    fi
+
     # Inline: list datasets with a non-empty receive_resume_token and extract the token
     if ! resumetoken=$(zfs list -Hrt filesystem,volume -o name "$resumeds" \
         | xargs -n1 zfs get -H receive_resume_token \

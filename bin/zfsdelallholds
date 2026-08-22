@@ -19,6 +19,7 @@ function delallholds {
     bashinit
     unset _local_bashinit
 
+    source_helper zfslockmanager
 
     local zfsdelallholds_snap="$1"
     shift
@@ -27,6 +28,14 @@ function delallholds {
     declare -a holdarray released_tags held_tags
 
     ZFS_DELALLHOLDS_REMAINING_TAGS=""
+
+    local _delallholds_parent="${zfsdelallholds_snap%%@*}"
+    zfslock_init
+    if ! zfslock_wait_or_resolve "$_delallholds_parent" "w" "zfsdelallholds"; then
+        log_msg "WARN: Could not acquire write lock on ${_delallholds_parent}; aborting."
+        return 1
+    fi
+    local _delallholds_lock="$ZFSLOCK_ID"
 
     # Read each line from zfs holds -H into holdarray
     IFS=$'\n' readarray -t holdarray < <(zfs holds -H "$zfsdelallholds_snap")
@@ -83,8 +92,11 @@ function delallholds {
     for holdtag in "${released_tags[@]}"; do
         if ! zfs release "$holdtag" "$zfsdelallholds_snap"; then
             rc=$?
+            zfslock_release "$_delallholds_lock"
             log_msg "FATAL: Release of hold $holdtag on $zfsdelallholds_snap failed rc=$rc."
             exit 8
         fi
     done
+
+    zfslock_release "$_delallholds_lock"
 }

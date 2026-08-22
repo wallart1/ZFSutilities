@@ -13,6 +13,7 @@ bashinit
 unset _local_bashinit
 
 source_helper rootcheck
+source_helper zfslockmanager
 
 if [[ $1 != 'mount' ]] && [[ $1 != 'unmount' ]]; then
     log_msg 'FATAL: $1 must be either "mount" or "unmount"'
@@ -30,14 +31,16 @@ if [[ $2 = "" ]]; then log_msg "FATAL: A subtree must be specified."; exit 8; fi
 subtree=$2
 rootcheck
 
-readarray -t mountarray < <(zfs list -Hrt $dstype -o name $subtree)
+zfslock_init
+
+readarray -t mountarray < <(zfs list -Hrt $dstype -o name "$subtree")
 
 if [[ ${#mountarray[@]} -gt 0 ]]; then
     log_msg "INFO: About to $command the following datasets:"
     declare -i x=0
     for fs in "${mountarray[@]}"; do
-        if [[ $(zfs get -H mounted $fs | awk '{print $3}') = "$mountedcondition" ]]; then
-            echo $fs
+        if [[ $(zfs get -H mounted "$fs" | awk '{print $3}') = "$mountedcondition" ]]; then
+            echo "$fs"
             x=$(($x+1))
         fi
     done
@@ -50,7 +53,20 @@ if [[ ${#mountarray[@]} -gt 0 ]]; then
 
     for fs in "${mountarray[@]}"; do
         if [[ $(zfs get -H mounted "$fs" | awk '{print $3}') = "$mountedcondition" ]]; then
+            lock_rc=""
+            zfslock_wait_or_resolve "$fs" "w" "zfsmount $command"
+            lock_rc=$?
+            if [[ $lock_rc -ne 0 ]]; then
+                if [[ $lock_rc -eq 2 ]]; then
+                    log_msg "WARN: Skipping ${fs} (user skipped lock acquisition)."
+                    continue
+                fi
+                log_msg "FATAL: Could not acquire write lock on ${fs}; aborting."
+                exit 8
+            fi
+            fs_lock="$ZFSLOCK_ID"
             zfs "$command" "$fs"
+            zfslock_release "$fs_lock" || true
         fi
     done
 else

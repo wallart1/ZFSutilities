@@ -2,6 +2,7 @@
 # shellcheck disable=SC1090,SC2034,SC2154
 # test-zfsmassdelsnaps — Unit tests for snapshot mass delete.
 
+# shellcheck source=tests/test-lib.sh
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
 setup_test_env
 
@@ -51,6 +52,14 @@ cleanup() {
     fi
     return 0
 }
+EOF
+
+cat > "$mock_mydir/zfslockmanager" <<'EOF'
+zfslock_init() { true; }
+zfslock_acquire() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_wait_or_resolve() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_release() { true; }
+zfslock_release_all() { true; }
 EOF
 
 source "$old_mydir/bin/zfsmassdelsnaps"

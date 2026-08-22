@@ -2,10 +2,24 @@
 # shellcheck disable=SC1090,SC2034,SC2154
 # test-zfsdelallholds — Verify selective hold release by tag patterns.
 
+# shellcheck source=tests/test-lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
 old_mydir="$mydir"
+
+# Provide a mock lock manager so tests do not require root or a writable
+# /run/lock/zfsutilities directory. ZFSUTILITIES_BIN_DIR ensures source_helper
+# resolves the mock before the deployed real helper.
+_zfsdelallholds_lock_dir=$(mktemp -d)
+cat > "$_zfsdelallholds_lock_dir/zfslockmanager" <<'EOF'
+zfslock_init() { true; }
+zfslock_acquire() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_wait_or_resolve() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+export ZFSUTILITIES_BIN_DIR="$_zfsdelallholds_lock_dir"
 
 # Source the real helper; it depends only on bashinit (mocked above) and zfs.
 source "$old_mydir/bin/zfsdelallholds"
@@ -90,4 +104,5 @@ test_no_holds_returns_zero
 test_multiple_patterns
 
 test_summary
+rm -rf "${_zfsdelallholds_lock_dir:-}"
 teardown_test_env

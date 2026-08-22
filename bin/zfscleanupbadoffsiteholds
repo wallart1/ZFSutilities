@@ -16,12 +16,14 @@ bashinit
 unset _local_bashinit
 
 source_helper rootcheck
+source_helper zfslockmanager
 rootcheck
 
 function cleanupbadoffsiteholds {
     local pool=$1
     local dryrun=$2
     local snap holdtag snappool count=0
+    declare -A locked_parents=()
 
     if [[ -z $pool ]]; then
         log_msg "FATAL: Pool name required."
@@ -57,6 +59,15 @@ function cleanupbadoffsiteholds {
         # If the hold references the same pool as the snapshot, it's wrong
         if [[ $holdpool = "$snappool" ]]; then
             ((count++))
+            local parent_dataset="${snap%%@*}"
+            if [[ -z "${locked_parents[$parent_dataset]:-}" ]]; then
+                zfslock_init
+                if ! zfslock_acquire "$parent_dataset" "w" "cleanupbadoffsiteholds"; then
+                    log_msg "WARN: Could not acquire write lock on ${parent_dataset}; skipping."
+                    continue
+                fi
+                locked_parents["$parent_dataset"]="$ZFSLOCK_ID"
+            fi
             if [[ $dryrun = "dryrun" ]]; then
                 echo "Would remove: $snap  hold=$holdtag"
             else

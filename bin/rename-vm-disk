@@ -18,7 +18,8 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
+source_helper zfslockmanager
 
 rootcheck
 
@@ -214,6 +215,8 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
+source_helper zfslockmanager
+
 set -e
 OLD_ZVOL="$1"
 NEW_ZVOL="$2"
@@ -243,6 +246,19 @@ encrypted_add() {
     [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
         && echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
 }
+
+zfslock_init
+if ! zfslock_wait_or_resolve "$OLD_ZVOL" "x" "rename-vm-disk source"; then
+    log_msg "FATAL: Could not acquire destroy lock on source zvol ${OLD_ZVOL}"
+    exit 1
+fi
+lock_old="$ZFSLOCK_ID"
+if ! zfslock_wait_or_resolve "$NEW_ZVOL" "x" "rename-vm-disk destination"; then
+    zfslock_release "$lock_old"
+    log_msg "FATAL: Could not acquire destroy lock on destination zvol ${NEW_ZVOL}"
+    exit 1
+fi
+lock_new="$ZFSLOCK_ID"
 
 # Tear down old LUN and backstore if present.
 if [[ -n "$OLD_BS" ]]; then
@@ -288,6 +304,9 @@ if [[ -n "$OLD_BS" ]]; then
     "$mydir/safe-iscsi-save"
     echo "LUN=${NEW_LUN}"
 fi
+
+zfslock_release "$lock_new"
+zfslock_release "$lock_old"
 SSHEOF
 }
 
@@ -412,11 +431,28 @@ main() {
     if is_two_node; then
         run_storage_rename
     else
+        zfslock_init
+        if ! zfslock_wait_or_resolve "$OLD_ZVOL" "x" "rename-vm-disk source"; then
+            log_msg "FATAL: Could not acquire destroy lock on source zvol ${OLD_ZVOL}"
+            exit 1
+        fi
+        lock_old="$ZFSLOCK_ID"
+        if ! zfslock_wait_or_resolve "$NEW_ZVOL" "x" "rename-vm-disk destination"; then
+            zfslock_release "$lock_old"
+            log_msg "FATAL: Could not acquire destroy lock on destination zvol ${NEW_ZVOL}"
+            exit 1
+        fi
+        lock_new="$ZFSLOCK_ID"
+
         log_msg "INFO: Renaming zvol..."
         zfs rename "$OLD_ZVOL" "$NEW_ZVOL" || {
+            zfslock_release "$lock_new"
+            zfslock_release "$lock_old"
             log_msg "FATAL: zfs rename failed"
             exit 1
         }
+        zfslock_release "$lock_new"
+        zfslock_release "$lock_old"
         log_msg "INFO: ✓ Zvol renamed"
     fi
 

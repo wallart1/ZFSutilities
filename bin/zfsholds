@@ -10,9 +10,22 @@ fi
 bashinit
 unset _local_bashinit
 
+source_helper rootcheck
+source_helper zfslockmanager
+
+rootcheck
 
 function holds {
     log_msg 'INFO: Snapshot holds for' "$1"'.'
+
+    zfslock_init
+    if ! zfslock_acquire "$1" "r" "zfsholds"; then
+        log_msg "WARN: Could not acquire read lock on ${1}; aborting."
+        return 1
+    fi
+
     zfs list -Hrt snapshot -o name "$1" | xargs -r -n1 zfs holds -H
+
+    zfslock_release "$ZFSLOCK_ID"
 }
 if calledbybash; then holds "$*"; fi

@@ -27,7 +27,8 @@ function delallsnaps {
     rootcheck
     source_helper zfsdelsnap
     source_helper zfsoverrides
-    
+    source_helper zfslockmanager
+
     local snap
     local save_autoproceed=$autoproceed
 
@@ -36,6 +37,13 @@ function delallsnaps {
     else
         zfsdelallsnaps_fs=$1
     fi
+
+    zfslock_init
+    if ! zfslock_wait_or_resolve "$zfsdelallsnaps_fs" "w" "zfsdelallsnaps"; then
+        log_msg "WARN: Could not acquire write lock on ${zfsdelallsnaps_fs}; aborting."
+        return 1
+    fi
+    local _delallsnaps_lock="$ZFSLOCK_ID"
 
     unset zfsdelsnapsfind
     if [[ $2 != '' ]]; then zfsdelsnapsfind="$2"; fi
@@ -65,6 +73,7 @@ function delallsnaps {
         if calledbybash; then
             log_msg "INFO: There are no snapshots of $zfsdelallsnaps_fs to delete."
         fi
+        zfslock_release "$_delallsnaps_lock"
         autoproceed=$save_autoproceed
         return 0
     else
@@ -81,6 +90,7 @@ function delallsnaps {
                log_msg "INFO: There are no snapshots of $zfsdelallsnaps_fs with string" \
                 "$zfsdelsnapsfind."
             fi
+            zfslock_release "$_delallsnaps_lock"
             autoproceed=$save_autoproceed
             return 0
         else
@@ -104,6 +114,7 @@ function delallsnaps {
                     _delallsnaps_failed=1
                 fi
             done
+            zfslock_release "$_delallsnaps_lock"
             if [[ $_delallsnaps_failed -ne 0 ]]; then
                 autoproceed=$save_autoproceed
                 return 1

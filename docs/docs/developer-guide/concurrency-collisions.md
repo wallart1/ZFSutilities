@@ -20,7 +20,7 @@ process exit. The manager also detects hierarchical conflicts: a lock on
 `pool/parent` blocks conflicting locks on descendants, and locks on descendants
 block a parent `x` lock.
 
-Only three modules currently use the lock manager:
+The following scripts and modules currently use the lock manager:
 
 * **`zfs-send-receive`** acquires a `w` lock on the source dataset **and** a `w`
   lock on the destination dataset before creating or choosing a snapshot and
@@ -28,10 +28,28 @@ Only three modules currently use the lock manager:
   first, it releases its destination `w` lock before calling `zfsdelfs` and
   reacquires it afterward, so the child `x` lock does not conflict with the
   parent's held `w` lock.
+* **`zfsrestoresendstream`** acquires a `w` lock on the destination dataset
+  before each `zfs receive`.
+* **`zfsresume`** acquires a `w` lock on the resumable destination dataset before
+  reading or aborting its receive resume token.
+* **`zfsmount`** and **`zfsunmount`** acquire a `w` lock on each dataset before
+  changing its mount state.
 * **`zfsdelfs`** acquires an `x` lock on the dataset being destroyed before
   teardown and holds it until destruction is complete.
-* **`zfsdelsnap`** acquires a `w` lock on the parent dataset before deleting a
-  snapshot.
+* **`zfsdelsnap`**, **`zfsdelallsnaps`**, **`zfsmassdelsnaps`** and related
+  snapshot-deletion helpers acquire a `w` lock on the parent dataset before
+  deleting snapshots.
+* **`zfsretain`** / **`zfscleanup`** acquire a `w` lock on each filesystem
+  before pruning its snapshots.
+* **VM-disk lifecycle scripts** (`clone-vm`, `zfsclone-vm`, `move-vm-disk`,
+  `rename-vm-disk`, `remove-vm-disk`, `resize-vm-disk`, `new-vm-disk`,
+  `promote-vm-clone`, `archive-vm`, `unarchive-vm`, `PVE-send-to-archive`)
+  acquire `w` or `x` locks on the affected zvols.
+* **Hold helpers** (`zfshold`, `zfsholds`, `zfsdelallholds`, etc.) acquire
+  `w`/`r` locks on the affected datasets.
+* **GUI dataset actions** in `python/dataset_actions.py` use the Python
+  `zfs_lock_manager` client to lock datasets around snapshot, delete, hold,
+  rollback, and snapshot-unmount operations.
 
 The GUI no longer globally serializes `Backup`, `Offsite`, and `Restore`.
 All three may run concurrently; per-dataset locks still serialize them when
@@ -59,26 +77,24 @@ The scenarios below are ordered roughly by severity.
 
 ### 1. Prune running at the same time as a backup or restore
 
-`zfscleanup` and `zfsretain` never lock the datasets they iterate. Only the
-individual `delsnap` calls lock the parent dataset for the moment of deletion.
-This means a prune job can enumerate snapshots, decide which ones to delete, and
-start deleting them while another job is in the middle of a long-running
-`zfs-send-receive` that depends on those snapshots.
+`zfsretain` acquires a `w` lock on each dataset before enumerating its
+snapshots, and `zfscleanup` initializes the lock manager so each `zfsretain`
+invocation can acquire those per-dataset locks. The lock is held for the
+duration of pruning on that dataset, not just for the moment of deletion.
+This prevents a prune job from deleting snapshots that a concurrent backup or
+restore still needs.
 
 **Possible outcomes**
 
-* An incremental send fails because its base snapshot was deleted.
-* A restore that needs an older common snapshot cannot find it.
-* A resumable receive cannot be resumed because the snapshot it depends on is
-gone.
-* The prune itself logs a "Dataset is busy" warning (`skipbusy='Y'`) and skips
-a snapshot that was actually deleted by the concurrent job, but the warning is
-not treated as an error.
+* A concurrent prune is blocked by the dataset `w` lock held by `zfs-send-receive`
+  until the send/receive step finishes.
+* Two prune jobs targeting the same dataset serialize on the per-dataset `w` lock.
 
 **How to trigger it**
 
 Start a restore or offsite backup, then click **Prune** in the GUI while the
-first job is still sending/receiving. There is no GUI check that prevents this.
+first job is still sending/receiving. The per-dataset `w` locks acquired by
+`zfs-send-receive` block the prune from touching the same datasets.
 
 ### 2. Two prune jobs on the same pool
 
@@ -184,10 +200,10 @@ disappears before it finishes, or it may report spurious mismatches.
 
 ### 9. GUI tab isolation is incomplete
 
-The GUI only blocks `Backup`, `Offsite`, and `Restore` from starting while
-another of those three is running. It does **not** block:
+The GUI blocks `Backup`, `Offsite`, and `Restore` from starting while another
+of those three is running, and `Retention` pruning performs a pre-flight lock
+check that aborts if any selected pool is already locked. It does **not** block:
 
-* Prune while Backup/Offsite/Restore is running.
 * Dataset destroy while Backup/Offsite/Restore/Prune is running.
 * Scrub while any of the above is running.
 * Snapshot creation while any of the above is running.

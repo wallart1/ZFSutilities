@@ -35,13 +35,7 @@ if [[ "$NODE_MODE" == "single-node" ]]; then
 fi
 
 # Shared iSCSI teardown/rebuild helpers.
-ISCSI_LIB=$(find_zfsutility_script iscsi-lib.sh)
-if [[ -z "$ISCSI_LIB" ]]; then
-    log_msg "FATAL: Could not locate iscsi-lib.sh"
-    # shellcheck source=bin/bashfatal
-    source "$_zfsdelfs_dir/bashfatal"
-fi
-source "$ISCSI_LIB"
+source_helper iscsi-lib.sh
 
 # Returns 0 if the dataset has any snapshots with ZFS clone dependents, 1 otherwise.
 # Used to block deletion of zvols that are the origin of ZFS clones.

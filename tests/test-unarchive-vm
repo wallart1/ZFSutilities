@@ -2,6 +2,7 @@
 # shellcheck disable=SC1090,SC2034,SC2154
 # test-unarchive-vm — Unit tests for unarchive-vm new-VMID support.
 
+# shellcheck source=tests/test-lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
@@ -16,6 +17,19 @@ NODE_MODE=single-node
 EOF
     export NODE_CONF="$NODE_CONF_FILE"
 }
+
+# Provide a mock lock manager so tests do not require root or a writable
+# /run/lock/zfsutilities directory. ZFSUTILITIES_BIN_DIR ensures source_helper
+# resolves the mock before the deployed real helper.
+_unarchive_vm_lock_dir=$(mktemp -d)
+cat > "$_unarchive_vm_lock_dir/zfslockmanager" <<'EOF'
+zfslock_init() { true; }
+zfslock_acquire() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_wait_or_resolve() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+export ZFSUTILITIES_BIN_DIR="$_unarchive_vm_lock_dir"
 
 setup_archive() {
     local archive_base="$1"
@@ -272,3 +286,4 @@ test_explicit_new_vmid_rejected_if_in_use
 test_original_vmid_preserved_without_conflict
 
 test_summary
+rm -rf "${_unarchive_vm_lock_dir:-}"

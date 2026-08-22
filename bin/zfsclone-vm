@@ -28,7 +28,8 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
+source_helper zfslockmanager
 
 rootcheck
 
@@ -110,6 +111,8 @@ if is_single_node; then
 
     SNAP_SUFFIX="@clone-$(date -Iminutes)-c"
 
+    zfslock_init
+
     log_msg "INFO: === zfsclone-vm (single-node) ==="
     log_msg "INFO:   Source:   VM ${SRCVMID}"
     log_msg "INFO:   Dest:     VM ${DSTVMID} (${NEW_NAME})"
@@ -136,6 +139,18 @@ if is_single_node; then
         ! zfs list -H "$dst_zvol" >/dev/null 2>&1 \
             || { log_msg "FATAL: Destination zvol already exists: $dst_zvol"; exit 1; }
 
+        if ! zfslock_wait_or_resolve "$src_zvol" "w" "zfsclone-vm source"; then
+            log_msg "FATAL: Could not acquire write lock on source zvol ${src_zvol}"
+            exit 1
+        fi
+        lock_src="$ZFSLOCK_ID"
+        if ! zfslock_wait_or_resolve "$dst_zvol" "w" "zfsclone-vm destination"; then
+            zfslock_release "$lock_src"
+            log_msg "FATAL: Could not acquire write lock on destination zvol ${dst_zvol}"
+            exit 1
+        fi
+        lock_dst="$ZFSLOCK_ID"
+
         if ! zfs list -H -t snapshot "$snap" >/dev/null 2>&1; then
             zfs snapshot "$snap"
             log_msg "INFO: ✓ Snapshot created: $snap"
@@ -144,6 +159,8 @@ if is_single_node; then
         fi
 
         zfs clone -o compression=lz4 -o refreservation=none "$snap" "$dst_zvol"
+        zfslock_release "$lock_dst"
+        zfslock_release "$lock_src"
         log_msg "INFO: ✓ ZFS clone created: $dst_zvol"
         echo ""
     done
@@ -234,6 +251,8 @@ done < "$src_conf"
 # Snapshot name — same for all disks in this operation, kept as clone origin
 SNAP_SUFFIX="@clone-$(date -Iminutes)-c"
 
+zfslock_init
+
 log_msg "INFO: === zfsclone-vm ==="
 log_msg "INFO:   Source:   VM ${SRCVMID}"
 log_msg "INFO:   Dest:     VM ${DSTVMID} (${NEW_NAME})"
@@ -261,6 +280,8 @@ for key in "${disk_keys[@]}"; do
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
+
+source_helper zfslockmanager
 
 set -e
 TARGET="$1"
@@ -296,6 +317,19 @@ snap="${src_zvol}${SNAP_SUFFIX}"
 log_msg "INFO:   ${src_zvol} → ${dst_zvol}"
 log_msg "INFO:   Snapshot: ${snap}"
 
+zfslock_init
+if ! zfslock_wait_or_resolve "$src_zvol" "w" "zfsclone-vm source"; then
+    log_msg "FATAL: Could not acquire write lock on source zvol ${src_zvol}"
+    exit 1
+fi
+lock_src="$ZFSLOCK_ID"
+if ! zfslock_wait_or_resolve "$dst_zvol" "w" "zfsclone-vm destination"; then
+    zfslock_release "$lock_src"
+    log_msg "FATAL: Could not acquire write lock on destination zvol ${dst_zvol}"
+    exit 1
+fi
+lock_dst="$ZFSLOCK_ID"
+
 zfs list -H "$src_zvol" >/dev/null 2>&1 \
     || { log_msg "FATAL: Source zvol not found: ${src_zvol}"; exit 1; }
 ! zfs list -H "$dst_zvol" >/dev/null 2>&1 \
@@ -314,6 +348,8 @@ fi
 # ZFS clone — instantaneous, shares all blocks with source until they diverge
 zfs clone -o compression=lz4 -o refreservation=none "$snap" "$dst_zvol"
 log_msg "INFO: ✓ ZFS clone created"
+zfslock_release "$lock_dst"
+zfslock_release "$lock_src"
 
 # Wait for device node to appear (udev is async)
 for i in $(seq 1 20); do [[ -b "$dst_zvol_dev" ]] && break; sleep 0.5; done

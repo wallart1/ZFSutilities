@@ -24,7 +24,7 @@ fi
 bashinit
 unset _local_bashinit
 
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
 rootcheck
 
 set -e

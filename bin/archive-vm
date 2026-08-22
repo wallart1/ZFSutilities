@@ -19,7 +19,7 @@ unset _local_bashinit
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
 
 rootcheck
 
@@ -34,8 +34,7 @@ MY_HOST=$(hostname -s)
 PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 JSON_CONFIG="${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
 
-ZFSLOCK_MANAGER="${ZFSLOCK_MANAGER:-$(find_zfsutility_script zfslockmanager)}"
-source "$ZFSLOCK_MANAGER"
+source_helper zfslockmanager
 
 usage() {
     log_msg "INFO: Usage: archive-vm <vmid>"
@@ -612,8 +611,7 @@ if is_single_node; then
     for zvol in $zvols; do
         log_msg "INFO:     Destroying ${zvol}..."
         if ! zfs destroy "$zvol"; then
-            zfs_diagnose_busy=$(find_zfsutility_script zfs-diagnose-busy)
-            source "$zfs_diagnose_busy"
+            source_helper zfs-diagnose-busy
             diagnose_dataset_busy "$zvol"
             log_msg "WARN: Could not destroy ${zvol}"
         fi

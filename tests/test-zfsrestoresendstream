@@ -1,0 +1,98 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfsrestoresendstream — Verify lock manager integration.
+
+# shellcheck source=tests/test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# ------------------------------------------------------------------
+# Test: Lock is acquired on each destination dataset before receive
+# ------------------------------------------------------------------
+test_restoresendstream_acquires_locks() {
+    test_start "zfsrestoresendstream acquires write lock before each receive"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Copy the script under test and redirect its hard-coded source directory
+    # to our temp tree so the test is self-contained.
+    cp "$old_mydir/bin/zfsrestoresendstream" "$tmpdir/zfsrestoresendstream"
+    sed -i "s|local sourcedir=.*|local sourcedir=\"$tmpdir/source/threeamigos/proxmox\"|" \
+        "$tmpdir/zfsrestoresendstream"
+
+    # Stub helpers
+    cat > "$tmpdir/rootcheck" << 'EOF'
+rootcheck() { true; }
+EOF
+    cat > "$tmpdir/bashsetx" << 'EOF'
+EOF
+    cat > "$tmpdir/bashreturn" << 'EOF'
+return ${1:-8}
+EOF
+
+    local lock_log="$tmpdir/lock_calls.log"
+    : > "$lock_log"
+
+    cat > "$tmpdir/zfslockmanager" << EOF
+zfslock_init() { true; }
+zfslock_wait_or_resolve() {
+    echo "\$1 \$2" >> "$lock_log"
+    ZFSLOCK_ID="$tmpdir/lock_\$1"
+    return 0
+}
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+
+    # Source dir and files matching the hard-coded restore pattern.
+    mkdir -p "$tmpdir/source/threeamigos/proxmox"
+    touch "$tmpdir/source/threeamigos/proxmox/vm-205-disk-0.zfssendstream"
+    touch "$tmpdir/source/threeamigos/proxmox/vm-205-disk-1.zfssendstream"
+
+    # Mock zfs and pv so the receive loop runs.
+    cat > "$tmpdir/zfs" << 'EOF'
+#!/usr/bin/bash
+exit 0
+EOF
+    chmod +x "$tmpdir/zfs"
+    cat > "$tmpdir/pv" << 'EOF'
+#!/usr/bin/bash
+cat
+EOF
+    chmod +x "$tmpdir/pv"
+
+    local output rc=0
+    output=$(
+        PATH="$tmpdir:$PATH" bash -c "mydir='$tmpdir'; source '$tmpdir/zfsrestoresendstream'" 2>&1
+    ) || rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected rc=0, got rc=$rc output: $output"
+        rm -rf "$tmpdir"
+        return
+    fi
+
+    local expected_calls expected_call
+    expected_calls=(
+        "threeamigos/proxmox/vm-205-disk-0 w"
+        "threeamigos/proxmox/vm-205-disk-1 w"
+    )
+    for expected_call in "${expected_calls[@]}"; do
+        if [[ "$(<"$lock_log")" != *"$expected_call"* ]]; then
+            test_fail "Missing expected lock call: $expected_call (log: $(<"$lock_log"))"
+            rm -rf "$tmpdir"
+            return
+        fi
+    done
+
+    test_pass
+    rm -rf "$tmpdir"
+}
+
+test_restoresendstream_acquires_locks
+
+test_summary
+teardown_test_env

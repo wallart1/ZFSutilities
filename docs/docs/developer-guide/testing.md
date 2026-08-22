@@ -45,7 +45,7 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-check-prerequisites` | 5 | `check-prerequisites` helper `check_mkdocs_version`: absent mkdocs, mkdocs 1.x, mkdocs 2.x, mkdocs 10.x, and malformed version output |
 | `test-datesubtract` | 4 | `datesubtract` argument validation, day/month/year output, and `log_msg` routing |
 | `test-installer-checks` | 17 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal; partial-uninstall detection; `install_doc_server` pins `mkdocs<2` |
-| `test-move-vm-disk` | 8 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove |
+| `test-move-vm-disk` | 14 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove, validation helpers, state round-trip, heredoc bootstrap |
 | `test-switch-version` | 6 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, and `--list` |
 | `test-repair-iscsi-luns` | 9 | Backstore/LUN parsing, zvol discovery, gap-free LUN index allocation, missing backstore/LUN creation, dry-run mode, and compute-host rescan |
 | `test-restart-iscsi-services` | 8 | VM running-state detection before iSCSI target restart |
@@ -59,9 +59,14 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-zfsconfig` | 13 | Pool entry parsing: strings, dicts, mixed entries, missing/empty/null names; offsite-candidate selection; checkagainst field emission and default/incomplete-entry handling |
 | `test-zfs-diagnose-busy` | 8 | Diagnostic output from `zfs-diagnose-busy` — detects busy dataset causes (clones, holds, open files, sends, receives, shares, iSCSI LUNs) |
 | `test-zfsdelfs` | 7 | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs` |
-| `test-zfsdelsnap` | 7 | Fatal error when required helper `zfs-diagnose-busy` is missing; normal operation when helper is present; `checkagainst` rc handling; regression test that the real `zfscheckagainst` sources `zfsremoveleadingqualifiers` |
-| `test-zfsdelallsnaps` | 4 | Return-code behavior of `zfsdelallsnaps`: all-success returns `0`, any `delsnap` failure returns `1`, empty list returns `0` |
-| `test-zfslockmanager` | 33 | Lock acquire / release, same-dataset conflicts, hierarchy conflicts, stale detection, concurrent access, path encoding. **Requires root.** |
+| `test-zfsdelsnap` | 6 | Fatal error when required helper `zfs-diagnose-busy` is missing; normal operation when helper is present; `checkagainst` rc handling; user-hold blocking |
+| `test-zfsdelallsnaps` | 5 | Return-code behavior of `zfsdelallsnaps`: all-success returns `0`, any `delsnap` failure returns `1`, empty list returns `0`; lock acquisition |
+| `test-lock-coverage` | 1 | Static checks that locked dataset-mutating scripts source `zfslockmanager`, initialize it, and acquire locks. |
+| `test-zfslockmanager` | 43 | Lock acquire / release, same-dataset conflicts, hierarchy conflicts, stale detection, concurrent access, path encoding, multi-lock acquisition, headless wait modes, headless timed wait. |
+| `test-zfsmount` | 2 | Lock acquisition before mount/unmount per dataset. |
+| `test-zfsrestoresendstream` | 1 | Lock acquisition before each `zfs receive` destination. |
+| `test-zfsresume` | 1 | Lock acquisition before reading the resume token. |
+| `test-zfsunmount` | 1 | Lock acquisition before unmount per dataset. |
 | `test-zfsretain` | 10 | Retention policy phases: offsite monthly dedup, same-day dedup, bucket pruning with empty-snapshot preference, empty logging, retain=0 |
 | `test-zfs-send-receive-dryrun` | 35 | Dry-run logging, space-check logic (including `space_check_min_buffer` override), resume-token decisions (including non-existent destination), `handle_commsnap_rc` paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling |
 | `integration/test-zfs-send-receive-pools` | 7 | Real-pool integration tests for `zfs-send-receive`: full copy, incremental with/without intermediates, rollback, resume token, space-check skip, clone copy. Requires root and the local test pools described below. |
@@ -71,8 +76,7 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-module-dependencies` | 1 | Static analysis: every root-level bash module call to a known module function is satisfied by a local definition, a sourced module, or `bashinit` |
 
 Bash tests run without a real ZFS pool — commands are intercepted with bash
-function overrides so every suite can execute as a normal user (root is only
-needed for the lock-manager suite).
+function overrides so every suite can execute as a normal user.
 
 ### Writing a New Bash Suite
 
@@ -378,8 +382,8 @@ zfs list -r zfstest1 zfstest2
 `test-lib.sh` so the harness stays quiet.  Tests that need to assert on
 `log_msg` output should read the file returned by `get_test_log_file()` (or
 use `get_stderr_log()` from `test-zfs-send-receive-dryrun`).
-* **Root check** — [rootcheck](../commands-and-modules/modules.md#rootcheck) is mocked to a no-op.  Suites that require root
-(e.g. `test-zfslockmanager`) should check `$EUID` and call `test_skip` when
+* **Root check** — [rootcheck](../commands-and-modules/modules.md#rootcheck) is mocked to a no-op.  Any future suite that
+legitimately requires root should check `$EUID` and call `test_skip` when
 non-root.
 * **Inner functions** — Functions defined *inside* another function (e.g.
 `check_space_available` inside `send-receive`) become available for direct

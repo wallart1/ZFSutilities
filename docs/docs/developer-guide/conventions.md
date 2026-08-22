@@ -22,8 +22,9 @@ rootcheck
 Prefer the `bashinit` next to this script so the current checkout or deployed
 version bootstraps itself; fall back to `~/bashinit` for test layouts that only
 provide a fake `bashinit` in `$HOME`. All subsequent helper loading should use
-`source_helper <name>` (or `find_zfsutility_script` directly when an argument is
-needed).
+`source_helper <name>`. `find_zfsutility_script` is reserved for runtime path
+resolution (for example, locating a script to execute via SSH) and for the
+`NODE_LIB` exception documented below.
 
 ### Node-aware scripts
 
@@ -35,7 +36,7 @@ source ~/bashinit
 bashinit
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
 rootcheck
 ```
 

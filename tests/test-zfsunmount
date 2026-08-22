@@ -1,0 +1,82 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfsunmount — Verify lock manager integration.
+
+# shellcheck source=tests/test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# ------------------------------------------------------------------
+# Test: zfsunmount acquires a write lock per dataset
+# ------------------------------------------------------------------
+test_zfsunmount_acquires_locks() {
+    test_start "zfsunmount acquires write lock before each unmount"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/rootcheck" << 'EOF'
+rootcheck() { true; }
+EOF
+
+    local lock_log="$tmpdir/lock_calls.log"
+    : > "$lock_log"
+
+    cat > "$tmpdir/zfslockmanager" << EOF
+zfslock_init() { true; }
+zfslock_wait_or_resolve() {
+    echo "\$1 \$2" >> "$lock_log"
+    ZFSLOCK_ID="$tmpdir/lock_\$1"
+    return 0
+}
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+
+    local zfs_calls="$tmpdir/zfs_calls.log"
+    : > "$zfs_calls"
+
+    cat > "$tmpdir/zfs" << EOF
+#!/usr/bin/bash
+case "\$*" in
+    "list -Hrt filesystem -o name pool")
+        echo "pool/a"
+        echo "pool/b"
+        ;;
+    "unmount pool/a"|"unmount pool/b")
+        echo "\$*" >> "$zfs_calls"
+        ;;
+esac
+EOF
+    chmod +x "$tmpdir/zfs"
+
+    local output rc=0
+    output=$(
+        PATH="$tmpdir:$PATH" bash -c "mydir='$tmpdir'; source '$old_mydir/bin/zfsunmount' pool" 2>&1
+    ) || rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected rc=0, got rc=$rc output: $output"
+        rm -rf "$tmpdir"
+        return
+    fi
+
+    local expected_call
+    for expected_call in "pool/a w" "pool/b w"; do
+        if [[ "$(<"$lock_log")" != *"$expected_call"* ]]; then
+            test_fail "Missing expected lock call: $expected_call (log: $(<"$lock_log"))"
+            rm -rf "$tmpdir"
+            return
+        fi
+    done
+
+    test_pass
+    rm -rf "$tmpdir"
+}
+
+test_zfsunmount_acquires_locks
+
+test_summary
+teardown_test_env

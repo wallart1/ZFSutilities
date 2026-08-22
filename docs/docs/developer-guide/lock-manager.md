@@ -275,15 +275,35 @@ Dataset paths are URL-encoded for safe filenames:
 
 ## Integration Points
 
-Scripts that have lock integration:
+Scripts and modules that have lock integration:
 
-| Script           | Lock Type | Dataset(s) / pools               |
-| ---------------- | --------- | -------------------------------- |
-| zfs-send-receive | `w`       | source, destination              |
-| zfsretain        | `w`       | filesystem being retained        |
-| zfscleanup       | `w`       | per dataset (via `zfsretain`)    |
-| zfsdelsnap       | `w`       | snapshot's parent dataset        |
-| zfsdelallsnaps   | `w`       | parent dataset (via `zfsdelsnap`)|
-| zfsdelfs         | `x`       | top-level dataset being destroyed|
-| zfsdailybackup   |           | orchestrates other scripts       |
-| zfssendoffsite   |           | orchestrates other scripts       |
+| Script / module       | Lock Type | Dataset(s) / pools                              |
+| --------------------- | --------- | ----------------------------------------------- |
+| zfs-send-receive      | `w`       | source, destination                             |
+| zfsrestoresendstream  | `w`       | destination dataset per receive                 |
+| zfsmount              | `w`       | each dataset being mounted/unmounted            |
+| zfsunmount            | `w`       | each dataset being unmounted                    |
+| zfsretain             | `w`       | filesystem being retained                       |
+| zfscleanup            | `w`       | per dataset (via `zfsretain`)                   |
+| zfsdelsnap            | `w`       | snapshot's parent dataset                       |
+| zfsdelallsnaps        | `w`       | parent dataset (via `zfsdelsnap`)               |
+| zfsmassdelsnaps       | `w`       | each parent dataset                             |
+| zfsdelfs              | `x`       | top-level dataset being destroyed               |
+| clone-vm / zfsclone-vm| `w`       | source and destination zvols                    |
+| move-vm-disk          | `x`/`w`   | source and destination zvols                    |
+| rename-vm-disk        | `w`       | affected zvol                                   |
+| remove-vm-disk        | `x`       | affected zvol                                   |
+| resize-vm-disk        | `w`       | affected zvol / pool                            |
+| new-vm-disk           | `w`       | affected zvol / pool                            |
+| promote-vm-clone      | `w`       | zvol being promoted                             |
+| archive-vm            | `w`       | archived zvols                                  |
+| unarchive-vm          | `w`       | restored zvols                                  |
+| PVE-send-to-archive   | `w`       | archived zvols                                  |
+| zfshold / zfsholds    | `w`/`r`   | affected datasets                               |
+| zfsdelallholds*       | `w`       | parent dataset of the snapshot                  |
+| zfscleanupbadoffsiteholds | `w`   | parent dataset of snapshots with self-referencing offsite holds |
+| zfsresume             | `w`       | resumable destination                           |
+| dataset_actions.py    | `w`       | dataset for snapshot/delete/hold/rollback/umount |
+| retention_actions.py  | `w`       | pool-level pre-flight check before prune        |
+| zfsdailybackup        |           | orchestrates other scripts                      |
+| zfssendoffsite        |           | orchestrates other scripts                      |

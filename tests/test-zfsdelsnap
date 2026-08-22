@@ -2,57 +2,12 @@
 # shellcheck disable=SC1090,SC2034,SC2154
 # test-zfsdelsnap — Verify fatal error when required helpers are missing.
 
+# shellcheck source=tests/test-lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
 old_mydir="$mydir"
 
-# ------------------------------------------------------------------
-# Test: Missing zfs-diagnose-busy is fatal
-# ------------------------------------------------------------------
-test_missing_zfs_diagnose_busy_is_fatal() {
-    test_start "Missing zfs-diagnose-busy causes fatal message"
-    local tmpdir
-    tmpdir=$(mktemp -d)
-
-    # Stub out the other helpers that delsnap sources
-    cat > "$tmpdir/zfscheckagainst" << 'EOF'
-checkagainst() { true; }
-remove_leading_qualifiers() { echo "$2"; }
-EOF
-    cat > "$tmpdir/zfsdelallholds" << 'EOF'
-delallholds() { true; }
-EOF
-    cat > "$tmpdir/zfslockmanager" << 'EOF'
-zfslock_init() { true; }
-zfslock_wait_or_resolve() { return 0; }
-zfslock_release() { true; }
-EOF
-    # Intentionally do NOT create zfs-diagnose-busy
-    # Provide a stub bashfatal so the test shell does not exit.
-    cat > "$tmpdir/bashfatal" << 'EOF'
-#!/usr/bin/bash
-exit ${1:-8}
-EOF
-
-    # Run delsnap in a subshell so a fatal exit does not kill the test runner.
-    local output rc=0
-    output=$(
-        mydir="$tmpdir"
-        ZFSUTILITIES_BIN_DIR=/dev/null \
-        ZFSUTILITIES_CURRENT_BIN_DIR=/dev/null \
-        ZFSUTILITIES_SYSTEM_LIB_DIR=/dev/null \
-        bash -c "source '$old_mydir/bin/zfsdelsnap'; delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
-    ) || rc=$?
-
-    if [[ "$output" == *"FATAL: Required helper zfs-diagnose-busy could not be located."* ]]; then
-        test_pass
-    else
-        test_fail "Expected fatal message about missing helper, got: $output"
-    fi
-
-    rm -rf "$tmpdir"
-}
 
 # ------------------------------------------------------------------
 # Test: Present zfs-diagnose-busy allows normal operation
@@ -101,7 +56,8 @@ EOF
     local output rc=0
     output=$(
         mydir="$tmpdir"
-        bash -c "source '$old_mydir/bin/zfsdelsnap'; delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
+        bash -c "source '$old_mydir/bin/zfsdelsnap'; \
+                 delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
     ) || rc=$?
 
     unset -f zfs
@@ -115,8 +71,55 @@ EOF
     rm -rf "$tmpdir"
 }
 
+# ------------------------------------------------------------------
+# Test: Missing zfs-diagnose-busy is fatal via source_helper
+# ------------------------------------------------------------------
+test_missing_zfs_diagnose_busy_is_fatal() {
+    test_start "Missing zfs-diagnose-busy causes fatal message"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Stub out the other helpers that delsnap sources
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { true; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfsdelallholds" << 'EOF'
+delallholds() { true; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    # Intentionally do NOT create zfs-diagnose-busy
+    # Provide a stub bashfatal so the test shell does not exit.
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    # Run delsnap in a subshell so a fatal exit does not kill the test runner.
+    local output rc=0
+    output=$(
+        mydir="$tmpdir"
+        ZFSUTILITIES_BIN_DIR=/dev/null \
+        ZFSUTILITIES_CURRENT_BIN_DIR=/dev/null \
+        ZFSUTILITIES_SYSTEM_LIB_DIR=/dev/null \
+        bash -c "source '$old_mydir/bin/zfsdelsnap'; \
+                 delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
+    ) || rc=$?
+
+    if [[ "$output" == *"FATAL: Could not locate zfs-diagnose-busy"* ]]; then
+        test_pass
+    else
+        test_fail "Expected fatal message about missing helper, got: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
 test_missing_zfs_diagnose_busy_is_fatal
-test_present_zfs_diagnose_busy_proceeds
 
 # ------------------------------------------------------------------
 # Test: checkagainst rc=7 blocks deletion
@@ -236,7 +239,6 @@ EOF
     rm -rf "$tmpdir"
 }
 
-test_missing_zfs_diagnose_busy_is_fatal
 test_present_zfs_diagnose_busy_proceeds
 test_checkagainst_rc7_blocks_deletion
 test_checkagainst_rc4_allows_deletion

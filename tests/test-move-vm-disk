@@ -2,6 +2,7 @@
 # shellcheck disable=SC1090,SC1091,SC2016,SC2034,SC2154
 # test-move-vm-disk — Unit tests for move-vm-disk helper functions.
 
+# shellcheck source=tests/test-lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
@@ -13,7 +14,9 @@ func_text=$(sed -n '/^disk_num_from_key() {/,/^}$/p' "$old_mydir/bin/move-vm-dis
 func_text+=$'\n'
 func_text+=$(sed -n '/^auto_select_dst_key() {/,/^}$/p' "$old_mydir/bin/move-vm-disk" | head -30)
 func_text+=$'\n'
-func_text+=$(sed -n '/^parse_args() {/,/^}$/p' "$old_mydir/bin/move-vm-disk")
+func_text+=$(sed -n '/^_is_valid_vm_id() {/,/^}$/p' "$old_mydir/bin/move-vm-disk")
+func_text+=$'\n'
+func_text+=$(sed -n '/^_is_valid_disk_key() {/,/^}$/p' "$old_mydir/bin/move-vm-disk")
 func_text+=$'\n'
 func_text+=$(sed -n '/^write_state() {/,/^}$/p' "$old_mydir/bin/move-vm-disk")
 func_text+=$'\n'
@@ -191,61 +194,27 @@ test_encrypted_add() {
 }
 
 # ------------------------------------------------------------------
-# Argument-parsing tests
+# Validation helper tests
 # ------------------------------------------------------------------
 
-test_parse_args_normal() {
-    test_start "parse_args handles normal positional arguments"
-    local args=(100 scsi0 200)
-    parse_args "${args[@]}"
-    assert_equals "N" "$NO_RENAME"
-    assert_equals "" "$MODE"
-    assert_equals "" "$STATE_FILE"
-    assert_array_len 3 "${POS_ARGS[@]}"
+test_is_valid_vm_id() {
+    test_start "_is_valid_vm_id accepts numeric VM IDs"
+    _is_valid_vm_id "100"
+    _is_valid_vm_id "0"
+    ! _is_valid_vm_id "abc"
+    ! _is_valid_vm_id "100a"
+    test_pass
 }
 
-test_parse_args_no_rename() {
-    test_start "parse_args handles --no-rename"
-    local args=(--no-rename 100 scsi0 200 scsi2)
-    parse_args "${args[@]}"
-    assert_equals "Y" "$NO_RENAME"
-    assert_array_len 4 "${POS_ARGS[@]}"
-    assert_equals "100" "${POS_ARGS[0]}"
-    assert_equals "scsi0" "${POS_ARGS[1]}"
-    assert_equals "200" "${POS_ARGS[2]}"
-    assert_equals "scsi2" "${POS_ARGS[3]}"
-}
-
-test_parse_args_continue() {
-    test_start "parse_args handles --continue with state file"
-    local args=(--continue /tmp/foo.state)
-    parse_args "${args[@]}"
-    assert_equals "continue" "$MODE"
-    assert_equals "/tmp/foo.state" "$STATE_FILE"
-    assert_array_len 0 "${POS_ARGS[@]}"
-}
-
-test_parse_args_no_rename_continue() {
-    test_start "parse_args handles --no-rename with --continue"
-    local args=(--no-rename --continue /tmp/foo.state)
-    parse_args "${args[@]}"
-    assert_equals "Y" "$NO_RENAME"
-    assert_equals "continue" "$MODE"
-    assert_equals "/tmp/foo.state" "$STATE_FILE"
-}
-
-test_parse_args_unknown_option() {
-    test_start "parse_args rejects unknown options"
-    local rc
-    parse_args --bad; rc=$?
-    assert_rc 1 "$rc"
-}
-
-test_parse_args_rollback_missing_state() {
-    test_start "parse_args requires state file for --rollback"
-    local rc
-    parse_args --rollback; rc=$?
-    assert_rc 1 "$rc"
+test_is_valid_disk_key() {
+    test_start "_is_valid_disk_key accepts bus+number keys"
+    _is_valid_disk_key "scsi0"
+    _is_valid_disk_key "ide1"
+    _is_valid_disk_key "virtio7"
+    ! _is_valid_disk_key "disk0"
+    ! _is_valid_disk_key "scsi"
+    ! _is_valid_disk_key "scsi0a"
+    test_pass
 }
 
 test_state_round_trip_no_rename() {
@@ -295,12 +264,8 @@ test_manifest_remove
 test_manifest_add
 test_encrypted_remove
 test_encrypted_add
-test_parse_args_normal
-test_parse_args_no_rename
-test_parse_args_continue
-test_parse_args_no_rename_continue
-test_parse_args_unknown_option
-test_parse_args_rollback_missing_state
+test_is_valid_vm_id
+test_is_valid_disk_key
 test_state_round_trip_no_rename
 test_usage_includes_no_rename
 

@@ -42,6 +42,7 @@ function mass_delete_snapshots {
     source_helper zfsbuildfsarray
     source_helper zfsdelsnap
     source_helper zfscleanup
+    source_helper zfslockmanager
 
     local pools=("$@")
     if [[ ${#pools[@]} -eq 0 ]]; then
@@ -64,12 +65,17 @@ function mass_delete_snapshots {
 function _mass_delete_ignore_retention {
     local pool fs snap
     local all_snaps=()
+    zfslock_init
     for pool in "$@"; do
         # shellcheck disable=SC2034
         # Intentionally set for sourced buildfsarray helper.
         sourcefs="$pool"
         buildfsarray "$pool"
         for fs in "${fsarray[@]}"; do
+            if ! zfslock_acquire "$fs" "w" "zfsmassdelsnaps enumeration"; then
+                log_msg "WARN: Could not acquire write lock on ${fs}; skipping."
+                continue
+            fi
             while IFS= read -r snap; do
                 [[ -z "$snap" ]] && continue
                 if [[ -n "${snapshot_has:-}" && "$snap" != *"$snapshot_has"* ]]; then
@@ -77,6 +83,7 @@ function _mass_delete_ignore_retention {
                 fi
                 all_snaps+=("$snap")
             done < <(zfs list -Ho name -t snapshot "$fs" 2>/dev/null)
+            zfslock_release "$ZFSLOCK_ID"
         done
     done
 

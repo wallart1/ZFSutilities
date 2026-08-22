@@ -19,7 +19,8 @@ unset _local_bashinit
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
+source_helper zfslockmanager
 
 rootcheck
 
@@ -351,10 +352,19 @@ if is_single_node; then
         zfs create -p "$parent" 2>/dev/null || true
 
         log_msg "INFO:   Restoring ${new_zvol} (volblocksize: ${orig_vbs})..."
+
+        zfslock_init
+        if ! zfslock_wait_or_resolve "$new_zvol" "w" "unarchive-vm restore"; then
+            log_msg "FATAL: Could not acquire write lock on ${new_zvol}"
+            exit 1
+        fi
+
         if ! zfs send -cw "${arc_dataset}${snap_name}" \
                 | zfs receive -o volblocksize="$orig_vbs" "$new_zvol"; then
+            zfslock_release "$ZFSLOCK_ID"
             { log_msg "FATAL: Failed to restore ${new_zvol}"; exit 1; }
         fi
+        zfslock_release "$ZFSLOCK_ID"
         log_msg "INFO:   ✓ Restored: ${new_zvol}"
     done
 else
@@ -364,6 +374,8 @@ else
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
+
+source_helper zfslockmanager
 
 set -e
 ARCHIVE_MOUNT="$1"
@@ -390,8 +402,17 @@ for i in "${!archive_datasets[@]}"; do
     zfs create -p "$parent" 2>/dev/null || true
 
     log_msg "INFO:   Restoring ${new_zvol} (volblocksize: ${orig_vbs})..."
+
+    zfslock_init
+    if ! zfslock_wait_or_resolve "$new_zvol" "w" "unarchive-vm restore"; then
+        log_msg "FATAL: Could not acquire write lock on ${new_zvol}"
+        exit 1
+    fi
+
     zfs send -cw "${arc_dataset}${snap_name}" \
         | zfs receive -o volblocksize="$orig_vbs" "$new_zvol"
+
+    zfslock_release "$ZFSLOCK_ID"
     log_msg "INFO:   ✓ Restored: ${new_zvol}"
 done
 SSHEOF

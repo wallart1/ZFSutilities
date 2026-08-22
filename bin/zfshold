@@ -12,12 +12,25 @@ fi
 bashinit
 unset _local_bashinit
 
+source_helper rootcheck
+source_helper zfslockmanager
+
+rootcheck
 
 function zfshold {
     if [[ -z $3 ]]; then
         log_msg "WARN: zfshold requires a snapshot pattern (\$3). Skipping."
         return 1
     fi
+
+    zfslock_init
+    if ! zfslock_wait_or_resolve "$2" "w" "zfshold"; then
+        log_msg "WARN: Could not acquire write lock on ${2}; aborting."
+        return 1
+    fi
+
     # -r: don't run if empty, suppress "tag already exists" errors (hold already present)
     zfs list -Hrt snapshot -o name "$2" | grep "$3" | xargs -r -n1 zfs hold "$1" 2>/dev/null
+
+    zfslock_release "$ZFSLOCK_ID"
 }

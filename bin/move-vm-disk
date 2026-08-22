@@ -23,7 +23,8 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
+source_helper zfslockmanager
 
 rootcheck
 
@@ -71,8 +72,10 @@ usage() {
     log_msg "INFO:   --rollback <state-file>   Revert a partially completed move"
     echo ""
     log_msg "INFO: Examples:"
-    log_msg "INFO:   move-vm-disk 100 scsi1 200          # move scsi1 from VM 100 → next free scsi on VM 200"
-    log_msg "INFO:   move-vm-disk 100 scsi1 200 scsi0    # move scsi1 from VM 100 → scsi0 on VM 200"
+    log_msg "INFO:   move-vm-disk 100 scsi1 200"
+    log_msg "INFO:     # move scsi1 from VM 100 → next free scsi on VM 200"
+    log_msg "INFO:   move-vm-disk 100 scsi1 200 scsi0"
+    log_msg "INFO:     # move scsi1 from VM 100 → scsi0 on VM 200"
     echo ""
     log_msg "WARN: WARNING: Both VMs must be stopped before running this script."
     exit 1
@@ -204,6 +207,8 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
+source_helper zfslockmanager
+
 set -e
 SRCZVOL="$1"; DSTZVOL="$2"
 SRCBACKSTORE="$3"; DSTBACKSTORE="$4"
@@ -211,10 +216,35 @@ TARGET="$5"; SRCLUN="$6"; ENCRYPTED="$7"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
 ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
 
-manifest_remove() { [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"; }
-manifest_add()    { [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" && echo "$1" >> "$ISCSI_MANIFEST"; }
-encrypted_remove(){ [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" && sed -i "/^${1}:/d" "$ISCSI_ENCRYPTED_CONF"; }
-encrypted_add()   { [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" && echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"; }
+manifest_remove() {
+    [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" \
+        && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"
+}
+manifest_add() {
+    [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" \
+        && echo "$1" >> "$ISCSI_MANIFEST"
+}
+encrypted_remove() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
+        && sed -i "/^${1}:/d" "$ISCSI_ENCRYPTED_CONF"
+}
+encrypted_add() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
+        && echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
+}
+
+zfslock_init
+if ! zfslock_wait_or_resolve "$SRCZVOL" "x" "move-vm-disk source"; then
+    log_msg "FATAL: Could not acquire destroy lock on source zvol ${SRCZVOL}"
+    exit 1
+fi
+lock_src="$ZFSLOCK_ID"
+if ! zfslock_wait_or_resolve "$DSTZVOL" "x" "move-vm-disk destination"; then
+    zfslock_release "$lock_src"
+    log_msg "FATAL: Could not acquire destroy lock on destination zvol ${DSTZVOL}"
+    exit 1
+fi
+lock_dst="$ZFSLOCK_ID"
 
 # 1. Remove old LUN and backstore.
 echo "PHASE=teardown_done"
@@ -246,7 +276,8 @@ targetcli "/backstores/block/${DSTBACKSTORE}" set attribute emulate_tpu=1
 # 4. Create new LUN, reusing the original LUN number if possible.
 echo "PHASE=lun_done"
 DSTLUN="$SRCLUN"
-if ! targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${DSTBACKSTORE}" "${DSTLUN}" 2>/dev/null; then
+if ! targetcli "/iscsi/${TARGET}/tpg1/luns" \
+        create "/backstores/block/${DSTBACKSTORE}" "${DSTLUN}" 2>/dev/null; then
     # Slot was taken; let targetcli assign a new one.
     targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${DSTBACKSTORE}"
     DSTLUN=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
@@ -264,6 +295,9 @@ fi
 # 6. Save config.
 "$mydir/safe-iscsi-save"
 echo "PHASE=saved"
+
+zfslock_release "$lock_dst"
+zfslock_release "$lock_src"
 SSHEOF
 }
 
@@ -275,11 +309,28 @@ run_storage_move() {
     fi
 
     if is_single_node; then
+        zfslock_init
+        if ! zfslock_wait_or_resolve "$SRCZVOL" "x" "move-vm-disk source"; then
+            log_msg "FATAL: Could not acquire destroy lock on source zvol ${SRCZVOL}"
+            exit 1
+        fi
+        lock_src="$ZFSLOCK_ID"
+        if ! zfslock_wait_or_resolve "$DSTZVOL" "x" "move-vm-disk destination"; then
+            zfslock_release "$lock_src"
+            log_msg "FATAL: Could not acquire destroy lock on destination zvol ${DSTZVOL}"
+            exit 1
+        fi
+        lock_dst="$ZFSLOCK_ID"
+
         log_msg "INFO: Renaming zvol ${SRCZVOL} → ${DSTZVOL}..."
         zfs rename "${SRCZVOL}" "${DSTZVOL}" || {
+            zfslock_release "$lock_dst"
+            zfslock_release "$lock_src"
             log_msg "FATAL: zfs rename failed"
             exit 1
         }
+        zfslock_release "$lock_dst"
+        zfslock_release "$lock_src"
         update_phase "rename_done"
         return
     fi
@@ -364,11 +415,15 @@ rollback() {
         if is_two_node; then
             # Storage rollback.
             ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
-                "$SRCZVOL" "$DSTZVOL" "$SRCBACKSTORE" "$DSTBACKSTORE" "$TARGET" "$SRCLUN" "$ENCRYPTED" \
+                "$SRCZVOL" "$DSTZVOL" \
+                "$SRCBACKSTORE" "$DSTBACKSTORE" \
+                "$TARGET" "$SRCLUN" "$ENCRYPTED" \
                 << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
+
+source_helper zfslockmanager
 
 set -e
 SRCZVOL="$1"; DSTZVOL="$2"
@@ -377,14 +432,29 @@ TARGET="$5"; SRCLUN="$6"; ENCRYPTED="$7"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
 ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
 
-manifest_remove() { [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"; }
-manifest_add()    { [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" && echo "$1" >> "$ISCSI_MANIFEST"; }
-encrypted_remove(){ [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" && sed -i "/^${1}:/d" "$ISCSI_ENCRYPTED_CONF"; }
-encrypted_add()   { [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" && echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"; }
+manifest_remove() {
+    [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" \
+        && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"
+}
+manifest_add() {
+    [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" \
+        && echo "$1" >> "$ISCSI_MANIFEST"
+}
+encrypted_remove() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
+        && sed -i "/^${1}:/d" "$ISCSI_ENCRYPTED_CONF"
+}
+encrypted_add() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
+        && echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
+}
 
 # If new backstore/LUN exist, tear them down.
 if targetcli /backstores/block ls 2>/dev/null | grep -q " ${DSTBACKSTORE} "; then
-    LUN=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null | grep "${DSTBACKSTORE}" | grep -oP 'lun\K[0-9]+' | head -1 || true)
+    LUN=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
+        | grep "${DSTBACKSTORE}" \
+        | grep -oP 'lun\K[0-9]+' \
+        | head -1 || true)
     [[ -n "$LUN" ]] && targetcli "/iscsi/${TARGET}/tpg1/luns" delete "lun${LUN}" 2>/dev/null || true
     targetcli /backstores/block delete "${DSTBACKSTORE}" 2>/dev/null || true
     manifest_remove "${DSTBACKSTORE}"
@@ -392,8 +462,14 @@ if targetcli /backstores/block ls 2>/dev/null | grep -q " ${DSTBACKSTORE} "; the
 fi
 
 # Rename zvol back if it exists under the destination name.
+zfslock_init
 if zfs list -H -o name "${DSTZVOL}" >/dev/null 2>&1; then
+    if ! zfslock_wait_or_resolve "$DSTZVOL" "x" "move-vm-disk rollback"; then
+        log_msg "FATAL: Could not acquire destroy lock on ${DSTZVOL}"
+        exit 1
+    fi
     zfs rename "${DSTZVOL}" "${SRCZVOL}"
+    zfslock_release "$ZFSLOCK_ID"
 fi
 
 # Recreate original backstore and LUN if the source zvol exists.
@@ -401,7 +477,8 @@ ZVOL_DEV="/dev/zvol/${SRCZVOL}"
 if [[ -b "$ZVOL_DEV" ]]; then
     targetcli /backstores/block create "${SRCBACKSTORE}" "${ZVOL_DEV}" 2>/dev/null || true
     targetcli "/backstores/block/${SRCBACKSTORE}" set attribute emulate_tpu=1 2>/dev/null || true
-    targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${SRCBACKSTORE}" "${SRCLUN}" 2>/dev/null || true
+    targetcli "/iscsi/${TARGET}/tpg1/luns" \
+        create "/backstores/block/${SRCBACKSTORE}" "${SRCLUN}" 2>/dev/null || true
     manifest_add "${SRCBACKSTORE}"
     if [[ "$ENCRYPTED" == "Y" ]]; then
         TARGETSHORT="${TARGET##*:}"
@@ -413,7 +490,13 @@ SSHEOF
         else
             # Single-node rollback.
             if zfs list -H -o name "${DSTZVOL}" >/dev/null 2>&1; then
+                zfslock_init
+                if ! zfslock_wait_or_resolve "$DSTZVOL" "x" "move-vm-disk rollback"; then
+                    log_msg "FATAL: Could not acquire destroy lock on ${DSTZVOL}"
+                    exit 1
+                fi
                 zfs rename "${DSTZVOL}" "${SRCZVOL}"
+                zfslock_release "$ZFSLOCK_ID"
                 log_msg "INFO: ✓ Renamed zvol back to ${SRCZVOL}"
             fi
         fi
@@ -428,44 +511,44 @@ SSHEOF
     log_msg "INFO: === Rollback complete ==="
 }
 
-# Parse command-line arguments into global variables.
-parse_args() {
-    local arg
-    MODE=""
-    STATE_FILE=""
-    NO_RENAME="N"
-    POS_ARGS=()
-    for arg in "$@"; do
-        case "$arg" in
-            --no-rename)
-                NO_RENAME="Y"
-                ;;
-            --continue|--rollback)
-                MODE="${arg#--}"
-                ;;
-            -*)
-                log_msg "FATAL: Unknown option: $arg"
-                return 1
-                ;;
-            *)
-                if [[ -n "$MODE" && -z "$STATE_FILE" ]]; then
-                    STATE_FILE="$arg"
-                else
-                    POS_ARGS+=("$arg")
-                fi
-                ;;
-        esac
-    done
+# Validation helpers reused below and in unit tests.
+_is_valid_vm_id() {
+    [[ "$1" =~ ^[0-9]+$ ]]
+}
 
-    if [[ -n "$MODE" && -z "$STATE_FILE" ]]; then
-        log_msg "FATAL: --${MODE} requires a state-file argument"
-        return 1
-    fi
-    return 0
+_is_valid_disk_key() {
+    [[ "$1" =~ ^[a-z]+[0-9]+$ ]]
 }
 
 # --- Argument parsing ---
-if ! parse_args "$@"; then
+MODE=""
+STATE_FILE=""
+NO_RENAME="N"
+POS_ARGS=()
+for _arg in "$@"; do
+    case "$_arg" in
+        --no-rename)
+            NO_RENAME="Y"
+            ;;
+        --continue|--rollback)
+            MODE="${_arg#--}"
+            ;;
+        -*)
+            log_msg "FATAL: Unknown option: $_arg"
+            usage
+            ;;
+        *)
+            if [[ -n "$MODE" && -z "$STATE_FILE" ]]; then
+                STATE_FILE="$_arg"
+            else
+                POS_ARGS+=("$_arg")
+            fi
+            ;;
+    esac
+done
+
+if [[ -n "$MODE" && -z "$STATE_FILE" ]]; then
+    log_msg "FATAL: --${MODE} requires a state-file argument"
     usage
 fi
 
@@ -489,19 +572,19 @@ else
     DSTVMID="${POS_ARGS[2]}"
     DSTKEY="${POS_ARGS[3]:-}"
 
-    [[ "$SRCVMID" =~ ^[0-9]+$ ]] || {
+    _is_valid_vm_id "$SRCVMID" || {
         log_msg "FATAL: src-vmid must be a number, got: $SRCVMID"
         exit 1
     }
-    [[ "$DSTVMID" =~ ^[0-9]+$ ]] || {
+    _is_valid_vm_id "$DSTVMID" || {
         log_msg "FATAL: dst-vmid must be a number, got: $DSTVMID"
         exit 1
     }
-    [[ "$SRCKEY" =~ ^[a-z]+[0-9]+$ ]] || {
+    _is_valid_disk_key "$SRCKEY" || {
         log_msg "FATAL: src-disk-key must be like scsi0 or ide1, got: $SRCKEY"
         exit 1
     }
-    [[ -z "$DSTKEY" || "$DSTKEY" =~ ^[a-z]+[0-9]+$ ]] || {
+    [[ -z "$DSTKEY" ]] || _is_valid_disk_key "$DSTKEY" || {
         log_msg "FATAL: dst-disk-key must be like scsi0 or ide1, got: $DSTKEY"
         exit 1
     }
@@ -568,7 +651,9 @@ SRCLUN=""
 ENCRYPTED="N"
 
 if is_two_node; then
-    if [[ "$SRC_LINE" =~ ^${SRCKEY}:.*ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+) ]]; then
+    iscsi_disk_re="^${SRCKEY}:.*ip-${STORAGE_IP}:3260-iscsi-"
+    iscsi_disk_re+="${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+)"
+    if [[ "$SRC_LINE" =~ $iscsi_disk_re ]]; then
         TARGETSHORT="${BASH_REMATCH[1]}"
         SRCLUN="${BASH_REMATCH[2]}"
         POOL="${TARGET_POOL[$TARGETSHORT]}"
@@ -602,7 +687,8 @@ if is_two_node; then
         exit 1
     }
 
-    storage_info=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s "$TARGET" "$SRCLUN" << 'SSHEOF'
+    storage_info=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" \
+        bash -s "$TARGET" "$SRCLUN" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
@@ -709,7 +795,8 @@ fi
 if is_two_node && [[ "$NO_RENAME" != "Y" ]] && [[ -z "$DSTLUN" ]]; then
     # If continuing and DSTLUN wasn't captured, discover it now.
     DSTLUN=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" \
-        "targetcli \"/iscsi/${TARGET}/tpg1/luns\" ls 2>/dev/null | grep '${DSTBACKSTORE}' | grep -oP 'lun\\K[0-9]+' | head -1")
+        "targetcli \"/iscsi/${TARGET}/tpg1/luns\" ls 2>/dev/null" \
+        " | grep '${DSTBACKSTORE}' | grep -oP 'lun\\K[0-9]+' | head -1")
     [[ -n "$DSTLUN" ]] || {
         log_msg "FATAL: Could not determine new LUN number for ${DSTBACKSTORE}"
         exit 1

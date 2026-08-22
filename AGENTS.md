@@ -133,7 +133,7 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
-source "$(find_zfsutility_script rootcheck)"
+source_helper rootcheck
 rootcheck
 ```
 
@@ -409,7 +409,7 @@ tests/run-tests test-zfsretain test-zfsbuildfsarray
 | `test-deploy-version`          | 21    | Root-level script selection, exclusions, retention-policy file filtering, critical-script validation, and no production wiring |
 | `test-installer-checks`        | 12    | Installer prerequisite checks and desktop-launcher helper functions                                           |
 | `test-installer-retention`     | 3     | Installer default retention profile initialization and preservation of existing user profiles                 |
-| `test-move-vm-disk`            | 8     | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove                                        |
+| `test-move-vm-disk`            | 14    | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove, validation helpers, state round-trip, heredoc bootstrap |
 | `test-restart-iscsi-services`  | 8     | VM running-state detection before iSCSI target restart                                                        |
 | `test-startdocserver`          | 15    | Server health checks, PID discovery, CWD mismatch, restart logic                                              |
 | `test-switch-version`          | 6     | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, and `--list`          |
@@ -419,12 +419,21 @@ tests/run-tests test-zfsretain test-zfsbuildfsarray
 | `test-zfscleanup`              | 5     | Pool selection: config pools, explicit argument, fallback to online pools, offline skip                       |
 | `test-zfs-diagnose-busy`       | 8     | Diagnostic output from `zfs-diagnose-busy` — busy dataset causes                                              |
 | `test-zfsdelfs`                | 7     | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs`                                                        |
-| `test-zfsdelsnap`              | 7     | Snapshot deletion safety checks, hold release, and `zfscheckagainst` dependency sourcing                      |
+| `test-zfsdelsnap`              | 6     | Snapshot deletion safety checks, hold release, `zfscheckagainst` dependency sourcing, user-hold blocking        |
 | `test-ensure-restored-vm-iscsi` | 23    | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding |
-| `test-zfslockmanager`          | 35    | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition |
+| `test-zfslockmanager`          | 43    | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition, headless timed wait |
 | `test-zfsretain`               | 10    | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
 | `test-zfs-send-receive-dryrun` | 33    | Dry-run logging, space checks, resume-token helpers (including non-existent destination), clone messages, pv quiet in headless mode, full-copy lock hand-off |
 | `test-zfssnapbuild`            | 9     | Snapshot name generation, bucket logic, snapfile handling                                                     |
+| `test-lock-coverage`           | 1     | Static checks that locked scripts source zfslockmanager, initialize it, and acquire locks                    |
+| `test-unarchive-vm`            | 6     | `--new-vmid` rewriting, UUID regeneration, conflict handling                                                  |
+| `test-zfsdelallholds`          | 6     | Selective hold release by tag patterns                                                                        |
+| `test-zfsdelallsnaps`          | 5     | Return-code behavior and lock acquisition around snapshot deletion                                            |
+| `test-zfsmassdelsnaps`         | 16    | Mass snapshot deletion: ignore/respect retention, dry-run, approval, releaseholds forwarding                  |
+| `test-zfsmount`                | 2     | Lock acquisition before mount/unmount per dataset                                                             |
+| `test-zfsrestoresendstream`    | 1     | Lock acquisition before each zfs receive destination                                                          |
+| `test-zfsresume`               | 1     | Lock acquisition before reading resume token                                                                  |
+| `test-zfsunmount`              | 1     | Lock acquisition before unmount per dataset                                                                   |
 | `test-module-dependencies`     | 1     | Static analysis: root-level bash modules source the modules whose functions they call                         |
 
 ### Writing New Tests
@@ -474,7 +483,7 @@ Key mock state variables:
   harness stays quiet. Tests that need to assert on `log_msg` output should read
   the file returned by `get_test_log_file()` or use `get_stderr_log()` from
   `test-zfs-send-receive-dryrun`.
-- `rootcheck` is mocked to a no-op so tests run as non-root.  Tests that require root (e.g. `test-zfslockmanager`) check `$EUID` and emit `SKIP` when non-root.
+- `rootcheck` is mocked to a no-op so tests run as non-root.  Any suite that legitimately requires root should check `$EUID` and emit `test_skip` when non-root.
 - The `zfs` mock handles combined short options (e.g. `-Hp`) and per-dataset snapshot lists.
 - Inner functions defined inside a function (e.g. `send-receive`) become available for direct testing **after** the outer function has been executed once.
 

@@ -1323,7 +1323,7 @@ class TestDerivedStaleness(unittest.TestCase):
             {"active": True, "source": "poolA/a", "dest": "poolC"},
         ]
 
-        cap.check_checkagainst_stale(app)
+        cap.style_get_entries_button(app)
 
         cap.set_button_markup.assert_called_with(
             app._ca_get_entries_button,
@@ -1338,7 +1338,7 @@ class TestDerivedStaleness(unittest.TestCase):
         app.config["backup"]["send_receive_steps"] = [
             {"active": True, "source": "poolA/a", "dest": "poolC"},
         ]
-        cap.check_checkagainst_stale(app)
+        cap.style_get_entries_button(app)
 
         with patch.object(cap, "log_msg"):
             cap.on_checkagainst_get_entries(app)
@@ -1348,6 +1348,22 @@ class TestDerivedStaleness(unittest.TestCase):
             app._ca_get_entries_button,
             "Get Entries",
         )
+
+    def test_stale_shows_refresh_prompt_in_status(self):
+        app = self._make_app(
+            backup_steps=[{"active": True, "source": "poolA/a", "dest": "poolB"}],
+        )
+        cap.refresh_checkagainst_derived(app)
+        # Snapshot the refreshed UI state so the dirty check does not fire.
+        app._ca_original_full = cap._full_dict_from_ui(app)
+        app.config["backup"]["send_receive_steps"] = [
+            {"active": True, "source": "poolA/a", "dest": "poolC"},
+        ]
+
+        cap._update_ca_status(app)
+
+        markup = app._ca_status_label.set_markup.call_args[0][0]
+        self.assertIn("Derived entries are stale", markup)
 
 
 if __name__ == "__main__":

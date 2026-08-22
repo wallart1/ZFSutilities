@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+## 0.85.1
+
+*Released 2026-08-21*
+
+### Added
+
+- **Advisory locking extended to dataset lifecycle scripts** — `zfsmount`,
+  `zfsunmount`, `zfsrestoresendstream`, `zfsresume`, `zfshold`, `zfsholds`,
+  `zfsdelholds`, `zfsdelallholds`, `zfsdelallholdssubtree`, `zfsmassdelsnaps`,
+  `PVE-send-to-archive`, `unarchive-vm`, `clone-vm`, `zfsclone-vm`,
+  `promote-vm-clone`, `move-vm-disk`, `rename-vm-disk`, `remove-vm-disk`,
+  `resize-vm-disk`, and `new-vm-disk` now acquire `w`/`x` locks on the affected
+  datasets via `zfslockmanager` before mutating them.
+- **`python/dataset_actions.py` locks snapshot unmounts** — The GUI snapshot
+  unmount action now acquires a `w` lock on the parent dataset before calling
+  `umount`.
+
+### Changed
+
+- **Helper loading convention** — Scripts now use `source_helper <name>` to load
+  sibling helpers. `find_zfsutility_script` is reserved for runtime path
+  resolution such as locating a script to execute over SSH.
+- **`checkagainst_page.py` staleness API** — The internal wrapper
+  `check_checkagainst_stale` was renamed to `style_get_entries_button` and made
+  public; the status label now tells the user when derived entries are stale.
+
+### Tests
+
+- Added `tests/test-lock-coverage` to statically verify that newly-locked
+  dataset-mutating scripts source `zfslockmanager`, initialize it, and acquire
+  the expected locks.
+- Added `tests/test-zfsmount`, `tests/test-zfsunmount`,
+  `tests/test-zfsrestoresendstream`, and `tests/test-zfsresume` to verify lock
+  acquisition around mount, unmount, restore receive, and resume-token reads.
+- Extended `tests/test-zfsdelsnap` with a user-hold blocking test and updated it
+  for the `source_helper` loading path.
+- Extended `tests/test-zfslockmanager` with headless timed-wait acquisition and
+  timeout tests.
+- Extended `tests/test-move-vm-disk` with `_is_valid_vm_id` and
+  `_is_valid_disk_key` validation-helper tests.
+
+### Documentation
+
+- Updated `docs/docs/developer-guide/lock-manager.md` integration table to list
+  all scripts that now participate in the lock manager.
+- Updated `docs/docs/developer-guide/concurrency-collisions.md` to reflect that
+  `zfsretain`/`zfscleanup` now hold per-dataset `w` locks while pruning.
+- Updated `docs/docs/developer-guide/testing.md` and `AGENTS.md` with new test
+  suites and current test counts.
+
 ## 0.85.0
 
 *Released 2026-08-21*

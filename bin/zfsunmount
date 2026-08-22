@@ -10,6 +10,29 @@ fi
 bashinit
 unset _local_bashinit
 
+source_helper rootcheck
+source_helper zfslockmanager
 
-zfs list -Hrt filesystem -o name "$1" | xargs -rt -n1 zfs unmount
+rootcheck
+zfslock_init
 
+readarray -t fsarray < <(zfs list -Hrt filesystem -o name "$1")
+
+for fs in "${fsarray[@]}"; do
+    lock_rc=""
+    zfslock_wait_or_resolve "$fs" "w" "zfsunmount"
+    lock_rc=$?
+    if [[ $lock_rc -ne 0 ]]; then
+        if [[ $lock_rc -eq 2 ]]; then
+            log_msg "WARN: Skipping ${fs} (user skipped lock acquisition)."
+            continue
+        fi
+        log_msg "FATAL: Could not acquire write lock on ${fs}; aborting."
+        exit 8
+    fi
+    fs_lock="$ZFSLOCK_ID"
+    if ! zfs unmount "$fs"; then
+        log_msg "WARN: Unable to unmount ${fs}"
+    fi
+    zfslock_release "$fs_lock" || true
+done
