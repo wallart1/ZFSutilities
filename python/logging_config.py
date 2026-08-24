@@ -266,12 +266,30 @@ def viewer_should_show(level, min_level):
     return _MSG_PRIORITY[level] >= _MSG_PRIORITY[min_level]
 
 
-def log_msg(*parts, session_log_file=None, caller_file=None, caller_line=None):
+def _stderr_is_terminal():
+    """Return True when stderr is connected to a real terminal."""
+    _term = os.environ.get("TERM", "")
+    return hasattr(sys.stderr, "isatty") and sys.stderr.isatty() and _term != "dumb"
+
+
+def log_msg(
+    *parts,
+    long_prefix=False,
+    session_log_file=None,
+    caller_file=None,
+    caller_line=None,
+):
     """Log a message with file:line prefix, GUI sink, and session log file.
 
     All messages are always emitted (to the GUI sink or stderr) and appended
     to the session log file when one is configured. Filtering by message level
     is performed by the GUI log viewers.
+
+    By default, when stderr is a terminal the message is emitted without the
+    file:line prefix. Pass ``--long-prefix`` as the first positional argument,
+    or ``long_prefix=True`` as a keyword argument, to force the file:line
+    prefix. Non-terminal output and session log files always use the long
+    file:line prefix.
 
     If *session_log_file* is provided, it is used as the session log target
     instead of the ``ZFSUTILITIES_LOG_FILE`` environment variable. This lets
@@ -282,13 +300,17 @@ def log_msg(*parts, session_log_file=None, caller_file=None, caller_line=None):
     logging wrapper preserve the location of the original message issuer while
     remaining the single writer to the log.
     """
+    if parts and parts[0] == "--long-prefix":
+        long_prefix = True
+        parts = parts[1:]
+
     msg = " ".join(str(p) for p in parts)
 
     if caller_file is not None and caller_line is not None:
         try:
-            prefix = f"{os.path.realpath(caller_file)}:{caller_line}:"
+            long_prefix_str = f"{os.path.realpath(caller_file)}:{caller_line}:"
         except (TypeError, OSError):
-            prefix = "zfsutilities:"
+            long_prefix_str = "zfsutilities:"
     else:
         frame = inspect.currentframe().f_back
         try:
@@ -298,21 +320,24 @@ def log_msg(*parts, session_log_file=None, caller_file=None, caller_line=None):
                     break
                 frame = frame.f_back
             if frame is not None:
-                prefix = f"{os.path.realpath(inspect.getfile(frame))}:{frame.f_lineno}:"
+                long_prefix_str = (
+                    f"{os.path.realpath(inspect.getfile(frame))}:{frame.f_lineno}:"
+                )
             else:
-                prefix = "zfsutilities:"
+                long_prefix_str = "zfsutilities:"
         except (TypeError, OSError):
-            prefix = "zfsutilities:"
+            long_prefix_str = "zfsutilities:"
         finally:
             del frame
 
-    full = f"{prefix} {msg}"
+    use_long_prefix = long_prefix or _gui_log_sink is not None or not _stderr_is_terminal()
+    prefix = long_prefix_str if use_long_prefix else ""
+    full = f"{prefix}{' ' if prefix else ''}{msg}"
 
     if _gui_log_sink is not None:
         _gui_log_sink(full)
     else:
-        _term = os.environ.get("TERM", "")
-        if hasattr(sys.stderr, "isatty") and sys.stderr.isatty() and _term != "dumb":
+        if _stderr_is_terminal():
             if msg.startswith("WARN:"):
                 print(f"\033[38;5;208m{full}\033[0m", file=sys.stderr)
             elif msg.startswith("FATAL:"):
@@ -330,8 +355,9 @@ def log_msg(*parts, session_log_file=None, caller_file=None, caller_line=None):
     if log_file:
         try:
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            long_full = f"{long_prefix_str} {msg}"
             with open(log_file, "a") as fh:
-                fh.write(f"{ts}  {full}\n")
+                fh.write(f"{ts}  {long_full}\n")
         except OSError:
             pass
 

@@ -19,11 +19,33 @@ organized by the script that issues them. Each entry describes:
 All messages are issued via `log_msg` — from `bashinit` for bash scripts, or
 from `backup_config.py` for Python scripts. Bash messages are written to
 **stderr**; Python messages route to the GUI log panel when the GUI is running,
-or to **stderr** in CLI mode. Every message is prefixed with the source location:
+or to **stderr** in CLI mode.
+
+When output is going to a terminal, messages are emitted with a short prefix
+(the message text only; the `LEVEL:` token remains part of the text):
 
 ```
-/path/to/script:linenum: Message text here.
+INFO: Message text here.
 ```
+
+When output is redirected to a file or pipe, or when the `--long-prefix` flag
+is passed, messages include the source location:
+
+```
+/path/to/script:linenum: INFO: Message text here.
+```
+
+Use the long prefix when you need to know exactly where a message originated:
+
+```bash
+log_msg --long-prefix "INFO: tracing this line"
+log_msg("--long-prefix", "INFO: tracing this line")
+# Python also accepts a keyword argument:
+log_msg("INFO: tracing this line", long_prefix=True)
+```
+
+Session log files and GUI sinks always use the long `file:line:` prefix so logs
+remain useful for tracing.
 
 When a Python runner wraps a bash subprocess, the raw line captured from the
 subprocess may already contain a bash `file:line:` prefix. The viewer's level

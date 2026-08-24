@@ -61,7 +61,9 @@ This initializes basic runtime variables and sources commonly-used functions.
     DEBUG   VERB   INFO   WARN   FATAL
     ```
 
-    `FATAL` has the greatest importance.
+    `FATAL` has the greatest importance.  By default the `file:line:` prefix is
+    omitted when output goes to a terminal; pass `--long-prefix` (or
+    `long_prefix=True` in Python) if the source location must be visible.
 
 - **Check command exit codes** and handle failures gracefully.
 - **Use traps** for cleanup on exit, especially when using temporary files:

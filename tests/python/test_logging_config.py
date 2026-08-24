@@ -1,5 +1,6 @@
 """Tests for logging_config.py — message levels, GUI sink, and session log env."""
 
+import io
 import os
 import sys
 import tempfile
@@ -200,6 +201,73 @@ class TestLogMsg(unittest.TestCase):
         result = log_msg("INFO: return value")
         self.assertIsNotNone(result)
         self.assertIn("return value", result)
+
+    @patch("logging_config._stderr_is_terminal")
+    @patch("sys.stderr", new_callable=io.StringIO)
+    def test_log_msg_short_prefix_in_terminal(self, mock_stderr, mock_terminal):
+        """On a terminal, log_msg omits the file:line prefix by default."""
+        mock_stderr.isatty = lambda: True
+        mock_terminal.return_value = True
+        log_msg("INFO: terminal message")
+        self.assertEqual(mock_stderr.getvalue().strip(), "INFO: terminal message")
+
+    @patch("logging_config._stderr_is_terminal")
+    @patch("sys.stderr", new_callable=io.StringIO)
+    def test_log_msg_long_prefix_flag_in_terminal(self, mock_stderr, mock_terminal):
+        """--long-prefix forces the file:line prefix on a terminal."""
+        mock_stderr.isatty = lambda: True
+        mock_terminal.return_value = True
+        log_msg("--long-prefix", "INFO: long message")
+        output = mock_stderr.getvalue().strip()
+        self.assertIn("INFO: long message", output)
+        self.assertIn(": INFO: long message", output)
+
+    @patch("logging_config._stderr_is_terminal")
+    @patch("sys.stderr", new_callable=io.StringIO)
+    def test_log_msg_long_prefix_kwarg_in_terminal(self, mock_stderr, mock_terminal):
+        """long_prefix=True forces the file:line prefix on a terminal."""
+        mock_stderr.isatty = lambda: True
+        mock_terminal.return_value = True
+        log_msg("INFO: kwarg message", long_prefix=True)
+        output = mock_stderr.getvalue().strip()
+        self.assertIn("INFO: kwarg message", output)
+        self.assertIn(": INFO: kwarg message", output)
+
+    @patch("logging_config._stderr_is_terminal")
+    @patch("sys.stderr", new_callable=io.StringIO)
+    def test_log_msg_long_prefix_off_terminal(self, mock_stderr, mock_terminal):
+        """Non-terminal output keeps the file:line prefix."""
+        mock_stderr.isatty = lambda: False
+        mock_terminal.return_value = False
+        log_msg("INFO: piped message")
+        output = mock_stderr.getvalue().strip()
+        self.assertIn("INFO: piped message", output)
+        self.assertIn(": INFO: piped message", output)
+
+    @patch("logging_config._stderr_is_terminal")
+    def test_log_msg_log_file_always_long_prefix(self, mock_terminal):
+        """Session log files always keep the file:line prefix."""
+        mock_terminal.return_value = True
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            path = f.name
+        try:
+            os.environ["ZFSUTILITIES_LOG_FILE"] = path
+            log_msg("INFO: logged message")
+            with open(path) as fh:
+                content = fh.read()
+            self.assertIn("INFO: logged message", content)
+            self.assertIn(": INFO: logged message", content)
+        finally:
+            os.unlink(path)
+
+    def test_log_msg_gui_sink_always_long_prefix(self):
+        """GUI sink output always keeps the file:line prefix."""
+        sink = MagicMock()
+        set_log_sink(sink)
+        log_msg("INFO: gui message")
+        output = sink.call_args[0][0]
+        self.assertIn("INFO: gui message", output)
+        self.assertIn(": INFO: gui message", output)
 
     def test_get_log_sink_returns_current_sink(self):
         sink = MagicMock()

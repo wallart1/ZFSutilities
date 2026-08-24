@@ -140,15 +140,87 @@ test_log_msg_handles_unset_log_file() {
     assert_contains "$output" "INFO: no log file set"
 }
 
+test_log_msg_short_prefix_on_terminal() {
+    test_start "log_msg uses short prefix on a terminal"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            export ZFSUTILITIES_LOG_INHERIT="Y"
+            bashinit
+            __log_msg_terminal_p() { return 0; }
+            log_msg "INFO: terminal message"
+        ) 2>&1 >/dev/null
+    )"
+    assert_equals "INFO: terminal message" "$stderr"
+}
+
+test_log_msg_long_prefix_with_flag_on_terminal() {
+    test_start "log_msg --long-prefix uses long prefix on a terminal"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            export ZFSUTILITIES_LOG_INHERIT="Y"
+            bashinit
+            __log_msg_terminal_p() { return 0; }
+            log_msg --long-prefix "INFO: long message"
+        ) 2>&1 >/dev/null
+    )"
+    assert_contains "$stderr" "INFO: long message"
+    assert_contains "$stderr" ": INFO: long message"
+}
+
+test_log_msg_long_prefix_off_terminal() {
+    test_start "log_msg uses long prefix when not on a terminal"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            export ZFSUTILITIES_LOG_INHERIT="Y"
+            bashinit
+            __log_msg_terminal_p() { return 1; }
+            log_msg "INFO: piped message"
+        ) 2>&1 >/dev/null
+    )"
+    assert_contains "$stderr" "INFO: piped message"
+    assert_contains "$stderr" ": INFO: piped message"
+}
+
+test_log_msg_log_file_always_long_prefix() {
+    test_start "log_msg writes long prefix to session log even on a terminal"
+    local logfile
+    logfile="$(mktemp)"
+    (
+        source ~/bashinit
+        # Suppress bashinit's auto-created session log so we control the file.
+        export ZFSUTILITIES_LOG_INHERIT="Y"
+        bashinit
+        export ZFSUTILITIES_LOG_FILE="$logfile"
+        export ZFSUTILITIES_LOG_INHERIT="N"
+        __log_msg_terminal_p() { return 0; }
+        log_msg "INFO: logged message"
+    ) >/dev/null 2>&1
+    local content
+    content="$(cat "$logfile")"
+    assert_contains "$content" "INFO: logged message"
+    assert_contains "$content" ": INFO: logged message"
+    rm -f "$logfile"
+}
+
 test_log_msg_writes_to_file_when_owned
 test_log_msg_writes_all_levels
 test_log_msg_prints_all_to_stderr
 test_log_msg_no_filtering
 test_log_msg_handles_unset_log_file
+test_log_msg_short_prefix_on_terminal
+test_log_msg_long_prefix_with_flag_on_terminal
+test_log_msg_long_prefix_off_terminal
+test_log_msg_log_file_always_long_prefix
 
 # ------------------------------------------------------------------------------
 # ask_yn
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 test_ask_yn_yes_returns_zero() {
     test_start "ask_yn returns 0 for yes"

@@ -2023,7 +2023,9 @@ bashinit
   priority:</p>
 <div class="highlight"><pre><span></span><code>DEBUG   VERB   INFO   WARN   FATAL
 </code></pre></div>
-<p><code>FATAL</code> has the greatest importance.</p>
+<p><code>FATAL</code> has the greatest importance.  By default the <code>file:line:</code> prefix is
+omitted when output goes to a terminal; pass <code>--long-prefix</code> (or
+<code>long_prefix=True</code> in Python) if the source location must be visible.</p>
 </li>
 <li>
 <p><strong>Check command exit codes</strong> and handle failures gracefully.</p>

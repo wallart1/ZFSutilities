@@ -1899,9 +1899,23 @@ and documented.</p>
 <p>All messages are issued via <code>log_msg</code> — from <code>bashinit</code> for bash scripts, or
 from <code>backup_config.py</code> for Python scripts. Bash messages are written to
 <strong>stderr</strong>; Python messages route to the GUI log panel when the GUI is running,
-or to <strong>stderr</strong> in CLI mode. Every message is prefixed with the source location:</p>
-<div class="highlight"><pre><span></span><code>/path/to/script:linenum: Message text here.
+or to <strong>stderr</strong> in CLI mode.</p>
+<p>When output is going to a terminal, messages are emitted with a short prefix
+(the message text only; the <code>LEVEL:</code> token remains part of the text):</p>
+<div class="highlight"><pre><span></span><code>INFO: Message text here.
 </code></pre></div>
+<p>When output is redirected to a file or pipe, or when the <code>--long-prefix</code> flag
+is passed, messages include the source location:</p>
+<div class="highlight"><pre><span></span><code>/path/to/script:linenum: INFO: Message text here.
+</code></pre></div>
+<p>Use the long prefix when you need to know exactly where a message originated:</p>
+<div class="highlight"><pre><span></span><code>log_msg<span class="w"> </span>--long-prefix<span class="w"> </span><span class="s2">&quot;INFO: tracing this line&quot;</span>
+log_msg<span class="o">(</span><span class="s2">&quot;--long-prefix&quot;</span>,<span class="w"> </span><span class="s2">&quot;INFO: tracing this line&quot;</span><span class="o">)</span>
+<span class="c1"># Python also accepts a keyword argument:</span>
+log_msg<span class="o">(</span><span class="s2">&quot;INFO: tracing this line&quot;</span>,<span class="w"> </span><span class="nv">long_prefix</span><span class="o">=</span>True<span class="o">)</span>
+</code></pre></div>
+<p>Session log files and GUI sinks always use the long <code>file:line:</code> prefix so logs
+remain useful for tracing.</p>
 <p>When a Python runner wraps a bash subprocess, the raw line captured from the
 subprocess may already contain a bash <code>file:line:</code> prefix. The viewer's level
 parser strips one or more leading <code>file:line:</code> prefixes (plus an optional

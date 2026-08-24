@@ -33,6 +33,12 @@ _ZFSUTILITIES_TESTS_FAILURES_ONLY="${ZFSUTILITIES_TESTS_FAILURES_ONLY:-}"
 # when per-test output is suppressed.
 _CURRENT_TEST_NAME=""
 function log_msg {
+    # Strip the optional --long-prefix flag so it does not appear in captured
+    # test logs. Tests run with stderr redirected, so the harness keeps the
+    # long file:line prefix form.
+    if [[ "${1:-}" == "--long-prefix" ]]; then
+        shift
+    fi
     local caller_file="${BASH_SOURCE[1]}"
     local caller_line="${BASH_LINENO[0]}"
     local prefix

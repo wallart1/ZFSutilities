@@ -309,10 +309,10 @@ causes data loss.
 The `bashinit` script provides these functions:
 
 - `bashinit` - Sets `$mydir` to the calling script's directory; auto-creates a session log file for directly-executed scripts
-- `log_msg "message"` - Logs with file:line prefix to stderr and to `$ZFSUTILITIES_LOG_FILE` if set. All messages are always emitted; filtering by message level is done in the GUI log viewers.
+- `log_msg [--long-prefix] "message"` - Logs to stderr and to `$ZFSUTILITIES_LOG_FILE` if set. The `file:line:` prefix is omitted on terminals by default; pass `--long-prefix` to force it. All messages are always emitted; filtering by message level is done in the GUI log viewers.
 - `ask_yn "prompt" ["Y"|"N"]` - Prompts for y/n with input validation; optional second argument is the default answer (N if omitted); returns 0 for yes, 1 for no
-- `die "message"` - Logs a FATAL message and terminates the process via `bashfatal`
-- `warn "message"` - Logs a WARN message
+- `die [--long-prefix] "message"` - Logs a FATAL message and terminates the process via `bashfatal`; `--long-prefix` forces the `file:line:` prefix
+- `warn [--long-prefix] "message"` - Logs a WARN message; `--long-prefix` forces the `file:line:` prefix
 
 A small number of scripts are intentional exceptions to the `log_msg`/`warn`/`die` requirement (for example, pure data wrappers, test harnesses, and scripts that must format interactive tables). Those exceptions are recorded in `docs/docs/developer-guide/bash-logging-exceptions.md`.
 

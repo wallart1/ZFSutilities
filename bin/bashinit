@@ -91,25 +91,49 @@ function find_zfsutility_script {
 }
 fi
 
+# Return true when stderr is connected to a real terminal.
+function __log_msg_terminal_p {
+    [[ -t 2 && "${TERM}" != "dumb" ]]
+}
+
 # Logging function with automatic prefix.
 # Usage:
 # log_msg "This is a message"
 # log_msg "DEBUG: verbose diagnostic"
+# log_msg --long-prefix "DEBUG: verbose diagnostic"
 # All messages are always emitted to stderr and appended to the session log
 # file when one is configured and owned by this process. Message-level
 # filtering is performed by the GUI log viewers, not by this function.
+#
+# By default, when stderr is a terminal the message is emitted without the
+# file:line prefix for readability. Pass --long-prefix as the first argument
+# to force the file:line prefix even on a terminal. Non-terminal output and
+# session log files always use the long file:line prefix.
 function log_msg {
+    local long_prefix=false
+    if [[ "${1:-}" == "--long-prefix" ]]; then
+        long_prefix=true
+        shift
+    fi
+
     local caller_file="${BASH_SOURCE[1]}"
     local caller_line="${BASH_LINENO[0]}"
-    local prefix
+    local long_prefix_str
     if [[ -n "$caller_file" ]]; then
-        prefix="$(realpath "$caller_file"):$caller_line:"
+        long_prefix_str="$(realpath "$caller_file"):$caller_line:"
     else
-        prefix="zfsutilities:"
+        long_prefix_str="zfsutilities:"
     fi
-    local full="${prefix} $*"
+
+    local prefix=""
+    if [[ "$long_prefix" == true ]] || ! __log_msg_terminal_p; then
+        prefix="$long_prefix_str"
+    fi
+
+    local full="${prefix}${prefix:+ }$*"
+
     # Colorize stderr output when connected to a terminal.
-    if [[ -t 2 && "${TERM}" != "dumb" ]]; then
+    if __log_msg_terminal_p; then
         local colored="${full}"
         case "$*" in
             WARN:*) colored="\033[38;5;208m${full}\033[0m" ;;
@@ -119,25 +143,36 @@ function log_msg {
     else
         echo -e "${full}" >&2
     fi
+
     # Append to session log file if one is configured and we own it.
+    # The log file always keeps the long file:line prefix.
     if [[ -n "${ZFSUTILITIES_LOG_FILE:-}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
         local _ts
         _ts=$(date '+%Y-%m-%d %H:%M:%S')
-        echo -e "${_ts}  ${full}" >> "${ZFSUTILITIES_LOG_FILE}" 2>/dev/null || true
+        local long_full="${long_prefix_str} $*"
+        echo -e "${_ts}  ${long_full}" >> "${ZFSUTILITIES_LOG_FILE}" 2>/dev/null || true
     fi
 }
 
 # Generate message prefix for when you don't want to use log_msg.
+# Pass --long-prefix to force the prefix even when stderr is a terminal.
 function msg_prefix {
-    local caller_file="${BASH_SOURCE[1]}"
-    local caller_line="${BASH_LINENO[0]}"
-    local msgprefix
-    if [[ -n "$caller_file" ]]; then
-        msgprefix="$(realpath "$caller_file"):$caller_line:"
-    else
-        msgprefix="zfsutilities:"
+    local long_prefix=false
+    if [[ "${1:-}" == "--long-prefix" ]]; then
+        long_prefix=true
+        shift
     fi
-    echo -n "$msgprefix" >&2
+    if [[ "$long_prefix" == true ]] || ! __log_msg_terminal_p; then
+        local caller_file="${BASH_SOURCE[1]}"
+        local caller_line="${BASH_LINENO[0]}"
+        local msgprefix
+        if [[ -n "$caller_file" ]]; then
+            msgprefix="$(realpath "$caller_file"):$caller_line:"
+        else
+            msgprefix="zfsutilities:"
+        fi
+        echo -n "$msgprefix" >&2
+    fi
 }
 
 function calledbybash {
@@ -195,15 +230,27 @@ fi
 
 # Print a fatal message and terminate the process.
 # Usage: die "error message"
+# Usage: die --long-prefix "error message"
 function die {
-    log_msg "FATAL: $*"
+    if [[ "${1:-}" == "--long-prefix" ]]; then
+        shift
+        log_msg --long-prefix "FATAL: $*"
+    else
+        log_msg "FATAL: $*"
+    fi
     source "$(find_zfsutility_script bashfatal)" 1
 }
 
 # Log a warning message.
 # Usage: warn "warning message"
+# Usage: warn --long-prefix "warning message"
 function warn {
-    log_msg "WARN: $*"
+    if [[ "${1:-}" == "--long-prefix" ]]; then
+        shift
+        log_msg --long-prefix "WARN: $*"
+    else
+        log_msg "WARN: $*"
+    fi
 }
 
 # Load the centralized path layout so every script that sources bashinit
