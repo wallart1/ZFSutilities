@@ -98,7 +98,8 @@ test_exclude_exact() {
     skipclones=""
     buildfsarray "pool"
     test_start "Exact exclude with = prefix"
-    if [[ "${#fsarray[@]}" -eq 2 && "${fsarray[*]}" == *"pool/app1"* && "${fsarray[*]}" == *"pool/data"* ]]; then
+    if [[ "${#fsarray[@]}" -eq 2 && "${fsarray[*]}" == *"pool/app1"* ]] &&\
+       [[ "${fsarray[*]}" == *"pool/data"* ]]; then
         test_pass
     else
         test_fail "Expected [pool/app1 pool/data], got [${fsarray[*]}]"
@@ -165,7 +166,8 @@ test_clone_skip() {
     buildfsarray "pool"
     test_start "Clone skipping removes clone origins"
     assert_array_len 2 "${fsarray[@]}"
-    if [[ "${fsarray[*]}" == *"pool/fs1"* && "${fsarray[*]}" == *"pool/fs3"* && "${fsarray[*]}" != *"pool/fs2"* ]]; then
+    if [[ "${fsarray[*]}" == *"pool/fs1"* && "${fsarray[*]}" == *"pool/fs3"* ]] &&\
+       [[ "${fsarray[*]}" != *"pool/fs2"* ]]; then
         test_pass
     else
         test_fail "Expected [pool/fs1 pool/fs3], got [${fsarray[*]}]"

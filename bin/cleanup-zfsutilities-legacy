@@ -55,13 +55,16 @@ load_cleanup_config() {
     # Legacy paths are read from lib/paths.sh; these are the local names used
     # by this script.
     LEGACY_CONFIG_PATH="${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
-    LEGACY_HISTORY_PATH="${ZFSUTILITIES_LEGACY_HISTORY_PATH:-/root/.config/zfsutilities-history.json}"
+    local _def_history="/root/.config/zfsutilities-history.json"
+    LEGACY_HISTORY_PATH="${ZFSUTILITIES_LEGACY_HISTORY_PATH:-$_def_history}"
     LEGACY_PROFILES_DIR="${ZFSUTILITIES_LEGACY_PROFILES_DIR:-/root/.config/profiles}"
     LEGACY_NEXTSNAP_FILE="${ZFSUTILITIES_LEGACY_NEXTSNAP_FILE:-/root/.config/zfsutilities_nextsnap}"
-    LEGACY_OFFSITE_NEXTSNAP_FILE="${ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE:-/root/.config/zfsutilities_offsite_nextsnap}"
+    local _d_offsnap="/root/.config/zfsutilities_offsite_nextsnap"
+    LEGACY_OFFSITE_NEXTSNAP_FILE="${ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE:-$_d_offsnap}"
     LEGACY_NODE_CONF="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
     LEGACY_DEPLOY_CONF="${ZFSUTILITIES_LEGACY_DEPLOY_CONF:-/etc/zfsutilities-deploy.conf}"
-    LEGACY_ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF:-/etc/iscsi-encrypted-luns.conf}"
+    local _def_iscsi_enc="/etc/iscsi-encrypted-luns.conf"
+    LEGACY_ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF:-$_def_iscsi_enc}"
     LEGACY_TWO_NODE_CONF="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
     LEGACY_CONFIG_DIR="${ZFSUTILITIES_LEGACY_CONFIG_DIR:-/root/.config/zfsutilities}"
 }
@@ -181,7 +184,8 @@ _version_supports_new_layout() {
     # Detect whether this deployed version already understands the FHS-aligned
     # layout by looking for the new path variables or the migration helper.
     # shellcheck disable=SC2091
-    grep -qE 'ZFSUTILITIES_STATE_DIR|ZFSUTILITIES_CONFIG_DIR|migrate_zfsutilities_state' "$bashinit_file" 2>/dev/null
+    grep -qE 'ZFSUTILITIES_STATE_DIR|ZFSUTILITIES_CONFIG_DIR|migrate_zfsutilities_state' \
+        "$bashinit_file" 2>/dev/null
 }
 
 # List installed version names, sorted with sort -V.

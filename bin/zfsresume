@@ -18,7 +18,7 @@ source_helper zfslockmanager
 rootcheck
 
 if [[ $1 = '' ]]; then
-    log_msg 'FATAL: A resumable destination dataset must be given in $1.'
+    log_msg "FATAL: A resumable destination dataset must be given in \$1."
     source "$(find_zfsutility_script bashreturn)" 8
 else
     resumeds=$1
@@ -36,7 +36,7 @@ else
         log_msg "FATAL: Unable to retrive receive_resume_token for $resumeds."
         source "$(find_zfsutility_script bashreturn)" 8
     else
-        if ! resumedata=$(zfs send -nP -t $resumetoken 2>&1); then
+        if ! resumedata=$(zfs send -nP -t "$resumetoken" 2>&1); then
             if [[ $resumedata == *"no longer exists"* ]] \
               || [[ $resumedata == *"@--head--"* ]] \
               || [[ $resumedata == *"Invalid argument"* ]]; then

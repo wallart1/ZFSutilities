@@ -251,7 +251,10 @@ class TestParseScrubStatus(unittest.TestCase):
         self.assertEqual(info.state, sm.ScrubState.UNKNOWN)
 
     def test_finished_with_days_duration(self):
-        raw = "  scan: scrub repaired 0B in 1 days 01:35:48 with 0 errors on Wed Jun  3 20:50:19 2026\n"
+        raw = (
+            "  scan: scrub repaired 0B in 1 days 01:35:48 with 0 errors on "
+            "Wed Jun  3 20:50:19 2026\n"
+        )
         info = sm.parse_scrub_status(raw)
         self.assertEqual(info.state, sm.ScrubState.FINISHED)
         self.assertEqual(info.errors, 0)

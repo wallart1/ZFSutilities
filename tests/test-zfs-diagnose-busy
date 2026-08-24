@@ -113,8 +113,10 @@ zfs() {
             while [[ $arg_idx -le $# ]]; do
                 local a="${*:$arg_idx:1}"
                 case "$a" in
-                    -t) type="${*:$((arg_idx+1)):1}"; have_listing_opt=1; ((arg_idx+=2)); continue ;;
-                    -o) outcols="${*:$((arg_idx+1)):1}"; have_listing_opt=1; ((arg_idx+=2)); continue ;;
+                    -t) type="${*:$((arg_idx+1)):1}";
+                        have_listing_opt=1; ((arg_idx+=2)); continue ;;
+                    -o) outcols="${*:$((arg_idx+1)):1}";
+                        have_listing_opt=1; ((arg_idx+=2)); continue ;;
                     -H*|-d*|-r) have_listing_opt=1; ((arg_idx++)); continue ;;
                     -*) have_listing_opt=1; ((arg_idx++)); continue ;;
                     *) specific_arg="$a"; ((arg_idx++)); continue ;;

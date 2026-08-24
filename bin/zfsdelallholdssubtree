@@ -12,7 +12,7 @@ bashinit
 rootcheck
 
 if [[ $1 = '' ]]; then
-    log_msg 'FATAL: A dataset must be provided as $1.'
+    log_msg "FATAL: A dataset must be provided as \$1."
     exit 8
 else
     sourcefs=$1
@@ -32,19 +32,19 @@ if [[ $includes = '' ]]; then includes=(); fi
 # shellcheck disable=SC2034
 buildfsarraytype='snapshot'     # Build an array of snapshots (ZFS dataset type)
 
-buildfsarray $sourcefs
+buildfsarray "$sourcefs"
 
 if [[ ${#fsarray[@]} -gt 0 ]]; then
     if [[ $autoproceed != 'Y' ]]; then
         if [[ $tag = '' ]]; then msgtag='all'; else msgtag=$tag; fi
         log_msg "INFO: Will release $msgtag holds on these snapshots:"
         for snap in "${fsarray[@]}"; do
-            echo $snap $tag
+            echo "$snap" "$tag"
         done
-        read -p 'Press enter to continue.'
+        read -rp 'Press enter to continue.'
     fi
     for snap in "${fsarray[@]}"; do
-        delallholds $snap $tag
+        delallholds "$snap" "$tag"
     done
 fi
 

@@ -75,7 +75,10 @@ ensure_retire_snapshot() {
         if [[ -z "$snap" ]]; then
             zfslock_init
             if ! zfslock_acquire "$zvol" "w" "archive-vm auto-snapshot"; then
-                { log_msg "FATAL: Could not acquire write lock on ${zvol} for snapshot creation"; exit 1; }
+                {
+                    log_msg "FATAL: Could not acquire write lock on ${zvol} for snapshot creation"
+                    exit 1
+                }
             fi
             snap_name="@retire-$(date -Iminutes)-d"
             if ! zfs snapshot "${zvol}${snap_name}"; then
@@ -119,7 +122,10 @@ echo "$snap"
 SSHEOF
         )
         if [[ -z "$snap" || "$snap" == __ARCHIVE_VM_ERROR__ ]]; then
-            { log_msg "FATAL: Failed to determine snapshot for ${zvol} on ${STORAGE_HOST}"; exit 1; }
+            {
+                log_msg "FATAL: Failed to determine snapshot for ${zvol} on ${STORAGE_HOST}"
+                exit 1
+            }
         fi
     fi
 
@@ -201,7 +207,8 @@ collect_referenced_zvols() {
         # Matches Proxmox iSCSI disk lines such as:
         #   scsi0: ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-0,size=10G
         # Group 1 is the full target IQN; group 2 is the LUN number.
-        if [[ "$config_line" =~ ^[a-z]+[0-9]+:.*ip-[0-9.]+:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+) ]]; then
+        local _disk_re='^[a-z]+[0-9]+:.*ip-[0-9.]+:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+)'
+        if [[ "$config_line" =~ $_disk_re ]]; then
             target="${BASH_REMATCH[1]}"
             lun="${BASH_REMATCH[2]}"
             target_lun_refs+=("${target}:${lun}")
@@ -267,7 +274,10 @@ SSHEOF
 
 VMID="$1"
 [[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
-[[ $EUID -eq 0 || ${ARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || { log_msg "FATAL: Must run as root (use sudo)"; exit 1; }
+[[ $EUID -eq 0 || ${ARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || {
+    log_msg "FATAL: Must run as root (use sudo)"
+    exit 1
+}
 
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
@@ -446,9 +456,9 @@ for zvol in $zvols; do
     else
         # Two-node: delegate to storage host
         log_msg "INFO:   Archiving ${zvol}${snap_name} → ${archive_dataset}"
-        ssh root@"$STORAGE_HOST" bash -s "$zvol" "$snap_name" \
-            "$archive_dataset" "$ARCHIVE_MOUNT" "$VMID" \
-            "$proxmoxconfig" << 'SSHEOF'
+        if ! ssh root@"$STORAGE_HOST" bash -s "$zvol" "$snap_name" \
+                "$archive_dataset" "$ARCHIVE_MOUNT" "$VMID" \
+                "$proxmoxconfig" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
@@ -511,7 +521,10 @@ if [[ -n "$target" && -n "$lun" ]]; then
     fi
 fi
 SSHEOF
-        [[ $? -eq 0 ]] || { log_msg "FATAL: Failed to archive ${zvol}"; exit 1; }
+        then
+            log_msg "FATAL: Failed to archive ${zvol}"
+            exit 1
+        fi
     fi
 
     log_msg "INFO:   ✓ Archived: ${archive_dataset}"

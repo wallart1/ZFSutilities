@@ -117,7 +117,8 @@ if is_two_node; then
     #          can be removed. ${TARGET_RE} is a pipe-joined list of valid target short names.
     # Group 1: target short name  e.g. "threeamigos"
     # Group 2: LUN number         e.g. "0"
-    if [[ "$disk_line" =~ ^${DISKKEY}:.*ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+) ]]; then
+    _detach_re="^${DISKKEY}:.*ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+)"
+    if [[ "$disk_line" =~ $_detach_re ]]; then
         TARGET_SHORT="${BASH_REMATCH[1]}"
         LUN_NUM="${BASH_REMATCH[2]}"
         POOL="${TARGET_POOL[$TARGET_SHORT]}"

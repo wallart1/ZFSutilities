@@ -240,11 +240,15 @@ test_create_desktop_symlinks_creates_links() {
         failed=1
         echo "    Docs symlink missing"
     fi
-    if [[ -L "$gui_link" && "$(readlink "$gui_link")" != "/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui" ]]; then
+    if [[ -L "$gui_link" ]] &&\
+       local _wrap_rhs="/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui"
+       [[ "$(readlink "$gui_link")" != "$_wrap_rhs" ]]; then
         failed=1
         echo "    GUI symlink target wrong: $(readlink "$gui_link")"
     fi
-    if [[ -L "$docs_link" && "$(readlink "$docs_link")" != "/usr/local/lib/zfsutilities/current/bin/zfsutilities-docs" ]]; then
+    if [[ -L "$docs_link" ]] &&\
+       local _wrap_rhs="/usr/local/lib/zfsutilities/current/bin/zfsutilities-docs"
+       [[ "$(readlink "$docs_link")" != "$_wrap_rhs" ]]; then
         failed=1
         echo "    Docs symlink target wrong: $(readlink "$docs_link")"
     fi
@@ -536,7 +540,8 @@ test_ensure_iscsi_target_stack_already_installed() {
         test_fail "Expected rc=0 when stack is installed, got $rc"
         return
     fi
-    if [[ "$output" != *"targetcli found"* || "$output" != *"rtslib-fb-targetctl.service found"* ]]; then
+    if [[ "$output" != *"targetcli found"* ]] ||\
+       [[ "$output" != *"rtslib-fb-targetctl.service found"* ]]; then
         test_fail "Expected found messages in output, got: $output"
         return
     fi

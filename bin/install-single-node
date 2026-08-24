@@ -46,7 +46,7 @@ _check_zfs_root() {
     root_fs_type=$(findmnt -n -o FSTYPE / 2>/dev/null || true)
     if [[ "$root_fs_type" == "zfs" ]]; then
         echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "  ⚠  WARNING: ZFS root filesystem detected"
         echo ""
         echo "  ZFS Utilities has NOT been tested on systems where the root"
@@ -56,7 +56,7 @@ _check_zfs_root() {
         echo "  scripts may interact with the root pool in unexpected ways."
         echo ""
         echo "  Proceed at your own risk."
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
         read -rp "Press Enter to continue, or Ctrl-C to abort..."
     fi
@@ -132,7 +132,8 @@ elif [[ -f "${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}" ]]; t
     echo "  The old file will be left in place; the runtime will fall back to it if needed."
     echo ""
 elif [[ -f "${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}" ]]; then
-    echo "⚠ Legacy ${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf} found (no $NODE_CONF)."
+    echo "⚠ Legacy ${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf} found" \
+        "(no $NODE_CONF)."
     echo "  This will create a new single-node config at $NODE_CONF."
     echo "  The old file will be left in place as a backup."
     echo ""
@@ -153,7 +154,8 @@ if [[ "${SKIP_CONFIG:-}" != "true" ]]; then
     echo "Generating configuration..."
 
     # Build the config file from template
-    sed "s/@@THIS_HOST@@/${THIS_HOST}/g" "$REPO_DIR/share/installer/node.conf.template" > "$NODE_CONF"
+    sed "s/@@THIS_HOST@@/${THIS_HOST}/g" \
+        "$REPO_DIR/share/installer/node.conf.template" > "$NODE_CONF"
     chmod 0644 "$NODE_CONF"
 
     echo ""

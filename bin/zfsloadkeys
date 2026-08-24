@@ -14,7 +14,7 @@ rootcheck
 
 log_msg "INFO: Will attempt to load keys for the following datasets:"
 zfs list -o name,keystatus,keylocation | grep unavailable | grep -v prompt
-read -p "Press enter to continue."
+read -rp "Press enter to continue."
 
 if ! mount /dev/disk/by-label/ZFSkeys /mnt/ZFSkeys; then
     log_msg "FATAL: Unable to mount ZFSkeys."

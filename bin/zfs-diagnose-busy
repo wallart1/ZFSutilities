@@ -49,7 +49,8 @@ function diagnose_dataset_busy {
     else
         # Dataset: check if any snapshot in its tree has clones
         local clone_snaps
-        clone_snaps=$(zfs list -H -t snapshot -o clones -r "$target" 2>/dev/null | grep -v '^-$' || true)
+        clone_snaps=$(zfs list -H -t snapshot -o clones -r "$target" 2>/dev/null \
+            | grep -v '^-$' || true)
         if [[ -n "$clone_snaps" ]]; then
             log_msg "WARN:   → One or more snapshots of ${target} have clone dependents."
             log_msg "WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
@@ -84,13 +85,21 @@ function diagnose_dataset_busy {
 
         local procs=""
         if command -v fuser >/dev/null 2>&1; then
-            procs=$(fuser -m "$mountpoint" 2>/dev/null | sed 's/.*://' | tr -s ' ' '\n' | while read -r pid; do
+            procs=$(fuser -m "$mountpoint" 2>/dev/null \
+                | sed 's/.*://' \
+                | tr -s ' ' '\n' \
+                | while read -r pid; do
                 [[ -n "$pid" ]] || continue
                 ps -p "$pid" -o comm= 2>/dev/null
             done | sort -u | tr '\n' ' ' | sed 's/ *$//')
         fi
         if [[ -z "$procs" ]] && command -v lsof >/dev/null 2>&1; then
-            procs=$(lsof +D "$mountpoint" 2>/dev/null | tail -n +2 | awk '{print $1}' | sort -u | tr '\n' ' ' | sed 's/ *$//')
+            procs=$(lsof +D "$mountpoint" 2>/dev/null \
+                | tail -n +2 \
+                | awk '{print $1}' \
+                | sort -u \
+                | tr '\n' ' ' \
+                | sed 's/ *$//')
         fi
 
         if [[ -n "$procs" ]]; then
@@ -126,7 +135,8 @@ function diagnose_dataset_busy {
     # ------------------------------------------------------------------
     if [[ "$is_snapshot" == true ]]; then
         local bmarks
-        bmarks=$(zfs list -t bookmark -H -o name -r "${target%%@*}" 2>/dev/null | grep "#${target#*@}" || true)
+        bmarks=$(zfs list -t bookmark -H -o name -r "${target%%@*}" 2>/dev/null \
+            | grep "#${target#*@}" || true)
         if [[ -n "$bmarks" ]]; then
             log_msg "WARN:   → Snapshot is referenced by bookmark(s): ${bmarks}"
             log_msg "WARN:     Destroy the bookmark(s) first with 'zfs destroy <bookmark>'."
@@ -156,7 +166,8 @@ function diagnose_dataset_busy {
                 if [[ -n "$lun_info" ]]; then
                     log_msg "WARN:   → Zvol is exposed as an iSCSI LUN on ${lun_info}."
                 else
-                    log_msg "WARN:   → Zvol has an iSCSI backstore (${bsname}) but no LUN mapping."
+                    log_msg "WARN:   → Zvol has an iSCSI backstore (${bsname})" \
+                        "but no LUN mapping."
                 fi
                 log_msg "WARN:     Use 'remove-vm-disk' or targetcli to tear down iSCSI first."
                 found_cause=true

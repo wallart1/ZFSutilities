@@ -237,7 +237,8 @@ emit_vm_data() {
     local disk_id
     for disk_id in "${!VM_MAP_VMID[@]}"; do
         printf 'VM|%s|%s|%s|%s\n' \
-            "$disk_id" "${VM_MAP_VMID[$disk_id]}" "${VM_MAP_NAME[$disk_id]}" "${VM_MAP_KEY[$disk_id]}"
+            "$disk_id" "${VM_MAP_VMID[$disk_id]}" \
+            "${VM_MAP_NAME[$disk_id]}" "${VM_MAP_KEY[$disk_id]}"
     done
     for disk_id in "${!HOST_DEV[@]}"; do
         printf 'HOST|%s|%s|%s\n' "$disk_id" "${HOST_DEV[$disk_id]}" "${HOST_BYPATH[$disk_id]}"

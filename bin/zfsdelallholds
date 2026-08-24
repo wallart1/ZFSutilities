@@ -80,12 +80,13 @@ function delallholds {
     # Only prompt when releasing all holds (no patterns supplied), matching
     # historical behavior for direct/manual use.
     if [[ ${#zfsdelallholds_patterns[@]} -eq 0 ]]; then
-        log_msg "INFO: About to release the following ${#released_tags[@]} holds from $zfsdelallholds_snap."
+        log_msg "INFO: About to release the following ${#released_tags[@]} holds from" \
+            "$zfsdelallholds_snap."
         for holdtag in "${released_tags[@]}"; do
             echo "$holdtag"
         done
         if [[ $autoproceed != "Y" ]]; then
-            read -p "Press enter to continue."
+            read -rp "Press enter to continue."
         fi
     fi
 

@@ -368,7 +368,9 @@ switch_version_main() {
 
     log_msg "INFO: === switch-version ==="
     log_msg "INFO:   Active: $version"
-    [[ -n "$current" && "$current" != "$target" ]] && log_msg "INFO:   Previous: $(basename "$current")"
+    if [[ -n "$current" && "$current" != "$target" ]]; then
+        log_msg "INFO:   Previous: $(basename "$current")"
+    fi
     log_msg "INFO:"
     log_msg "INFO:   New invocations will use $version immediately."
     log_msg "INFO:   Already-running scripts are unaffected."

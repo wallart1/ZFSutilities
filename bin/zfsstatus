@@ -5,4 +5,6 @@
 # Assumes `watchall` is in PATH (see the Watchall/ directory). Adjust the
 # refresh interval and command as needed for your environment.
 
-watchall -n 60 'zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health; echo; zpool status'
+_cmd='zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health;'
+_cmd+=' echo; zpool status'
+watchall -n 60 "$_cmd"

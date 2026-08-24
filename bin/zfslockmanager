@@ -353,9 +353,16 @@ zfslock_acquire() {
     timestamp=$(date -Iseconds)
     script=$(_zfslock_scriptname)
     local tmpfile="${lockfile}.tmp.$$"
-    printf '{"dataset":"%s","type":"%s","pid":%s,"script":"%s","acquired":"%s","description":"%s"}\n' \
-        "$dataset" "$type" "$$" "$script" "$timestamp" "$description" > "$tmpfile" || {
-        rm -f "$tmpfile"; log_msg "WARN: Failed to create lock file $lockfile"; return 2; }
+    {
+        printf '{"dataset":"%s","type":"%s","pid":%s,"script":"%s",' \
+            "$dataset" "$type" "$$" "$script"
+        printf '"acquired":"%s","description":"%s"}\n' \
+            "$timestamp" "$description"
+    } > "$tmpfile" || {
+        rm -f "$tmpfile"
+        log_msg "WARN: Failed to create lock file $lockfile"
+        return 2
+    }
     mv -f "$tmpfile" "$lockfile" || {
         rm -f "$tmpfile"; log_msg "WARN: Failed to install lock file $lockfile"; return 2; }
 
@@ -587,7 +594,8 @@ zfslock_wait_or_resolve() {
         esac
 
         echo ""
-        echo "CONFLICT: A lock could not be acquired for '$dataset' because another task is using the dataset or a related dataset."
+        echo "CONFLICT: A lock could not be acquired for '$dataset' because another task is using" \
+            "the dataset or a related dataset."
         echo "  Locked dataset: $lock_dataset"
         echo "  Script: $lock_script (PID $lock_pid)"
         echo "  Type: $type_name"
@@ -609,7 +617,8 @@ zfslock_wait_or_resolve() {
 
         case "${choice^^}" in
             W|"")
-                echo "Waiting for lock; checking every $_wait_interval seconds. Press Ctrl+C to stop waiting."
+                echo "Waiting for lock; checking every $_wait_interval seconds. Press Ctrl+C to" \
+                    "stop waiting."
                 local _wait_interrupted=0
                 local _prev_int_trap
                 _prev_int_trap=$(trap -p INT)
@@ -642,7 +651,8 @@ zfslock_wait_or_resolve() {
                 read -rp "Are you sure? Type 'yes' to confirm: " confirm
                 if [[ "$confirm" == "yes" ]]; then
                     rm -f "$lockfile"
-                    log_msg "WARN: Force-released lock on $lock_dataset (was held by $lock_script PID $lock_pid)"
+                    log_msg "WARN: Force-released lock on $lock_dataset (was held by $lock_script" \
+                        "PID $lock_pid)"
                     # Loop will retry to acquire
                 else
                     echo "Force release cancelled."

@@ -15,7 +15,8 @@
 # documented two-step restore workflows can continue to source it.
 
 # $restoresourcefs             (Required.) The dataset to be restored. May be not fully-qualified.
-# $sourcefsremovequalifiers     (Optional.) Number of leading qualifiers to remove from $restoresourcefs.
+# $sourcefsremovequalifiers     (Optional.) Number of leading qualifiers to remove
+#                                           from $restoresourcefs.
 #                                           Default: "0".
 # $destfs                       (Required.) The prefix of the destination dataset.
 # $nextsnap                     (Optional.) Name of snapshot. If specified, will be used as name of
@@ -82,7 +83,7 @@ function zfsfullcopy {
         if [[ $overrides != '' ]]; then overrides "$overrides"; fi
         
         if [[ $restoresourcefs == '' ]]; then           # Dataset to be source of restore.
-            log_msg 'FATAL: $restoresourcefs was not specified.'
+            log_msg "FATAL: \$restoresourcefs was not specified."
             source "$(find_zfsutility_script bashfatal)" 8
         fi
         if [[ $sourcefsremovequalifiers == '' ]]; then
@@ -90,11 +91,11 @@ function zfsfullcopy {
         fi                          # '0' = Keep the full sourcefs name in the destfs name.
         if [[ $destfs == '' ]]; then # Add the dest pool name and '/' at the beginning of the
                                     # sourcefs name, giving the destination filesystem.
-            log_msg 'FATAL: $destfs was not specified.'
+            log_msg "FATAL: \$destfs was not specified."
             source "$(find_zfsutility_script bashfatal)" 8
         fi
 
-        send-receive $restoresourcefs
+        send-receive "$restoresourcefs"
     fi
 
     if [[ $dopart2 = 'Y' ]]; then
@@ -117,14 +118,14 @@ function zfsfullcopy {
 
         if [[ $autoproceed != 'Y' ]]; then
             while :; do
-                read -p msg_prefix 'Press enter to continue with part two. Or enter overrides.: ' \
-                    overrides
+                read -rp "${msg_prefix}Press enter to continue with part two."\
+                    " Or enter overrides.: " overrides
                 if [[ $overrides != '' ]]; then overrides "$overrides"
                 else break
                 fi
             done
         fi
 
-        send-receive $restoresourcefs
+        send-receive "$restoresourcefs"
     fi
 }    

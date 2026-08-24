@@ -23,7 +23,7 @@ function send {
     nextsnap=$(zfssnapbuild)
     #nextsnap='@initial'
     log_msg "INFO: Next snap: $nextsnap"
-    if [[ $autoproceed != 'Y' ]]; then read -p 'Press enter to continue.'; fi
+    if [[ $autoproceed != 'Y' ]]; then read -rp 'Press enter to continue.'; fi
 
     # shellcheck disable=SC2034
     # Intentionally set for sourced zfs-send-receive helper.
@@ -50,11 +50,11 @@ function send {
     # shellcheck disable=SC2034
     receive_F_option=''     # "F" = Roll back modifications on destination.
 
-    if [[ $1 != '' ]]; then overrides $1; fi
+    if [[ $1 != '' ]]; then overrides "$1"; fi
 
     send-receive
 
     log_msg "INFO: ***  Copy completed.  ***"
 }
-if calledbybash; then send $1; fi
+if calledbybash; then send "$1"; fi
 

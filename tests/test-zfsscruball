@@ -75,7 +75,9 @@ test_scrub_runs_selected_pool() {
     if [[ -f "$ZFSLOCK_TEST_SCRUB_LOG" ]] && grep -q '^testpool$' "$ZFSLOCK_TEST_SCRUB_LOG"; then
         test_pass
     else
-        test_fail "Expected scrub log to contain 'testpool', got $(cat "$ZFSLOCK_TEST_SCRUB_LOG" 2>/dev/null)"
+        local _log
+        _log=$(cat "$ZFSLOCK_TEST_SCRUB_LOG" 2>/dev/null)
+        test_fail "Expected scrub log to contain 'testpool', got $_log"
     fi
 
     test_start "Logs DEBUG message before issuing zpool scrub -w"
@@ -106,7 +108,9 @@ test_resume_skips_completed_pools() {
     if [[ -f "$ZFSLOCK_TEST_SCRUB_LOG" ]] && ! grep -q '^donepool$' "$ZFSLOCK_TEST_SCRUB_LOG"; then
         test_pass
     else
-        test_fail "Expected scrub log to not contain 'donepool', got $(cat "$ZFSLOCK_TEST_SCRUB_LOG" 2>/dev/null)"
+        local _log
+        _log=$(cat "$ZFSLOCK_TEST_SCRUB_LOG" 2>/dev/null)
+        test_fail "Expected scrub log to not contain 'donepool', got $_log"
     fi
 }
 
@@ -131,7 +135,9 @@ test_pause_scrubs_in_progress() {
     if [[ -f "$ZFSLOCK_TEST_PAUSE_LOG" ]] && grep -q '^activepool$' "$ZFSLOCK_TEST_PAUSE_LOG"; then
         test_pass
     else
-        test_fail "Expected pause log to contain 'activepool', got $(cat "$ZFSLOCK_TEST_PAUSE_LOG" 2>/dev/null)"
+        local _log
+        _log=$(cat "$ZFSLOCK_TEST_PAUSE_LOG" 2>/dev/null)
+        test_fail "Expected pause log to contain 'activepool', got $_log"
     fi
 
     test_start "Logs DEBUG message before issuing zpool scrub -p"

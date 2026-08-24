@@ -47,7 +47,7 @@ fi
 log_msg "INFO: [INFO] Current ZFS scrub parameters:"
 params_found=false
 shopt -s nullglob
-for p in /sys/module/zfs/parameters/${params_pattern}*; do
+for p in /sys/module/zfs/parameters/"${params_pattern}"*; do
     if [[ -f "$p" ]]; then
         params_found=true
         printf "  %-40s %s\n" "$(basename "$p"):" "$(cat "$p")"
@@ -56,7 +56,8 @@ done
 shopt -u nullglob
 
 if ! $params_found; then
-    log_msg "INFO:   (No matching $params_pattern parameters found — possibly renamed or unsupported)"
+    log_msg "INFO:   (No matching $params_pattern parameters found — possibly renamed or" \
+        "unsupported)"
 fi
 
 # 4. Optional: dmesg verification

@@ -104,7 +104,8 @@ if is_two_node; then
     }
 else
     zpool list -H -o name "$POOL" >/dev/null 2>&1 || {
-        log_msg "FATAL: Pool '$POOL' not found. Available pools: $(zpool list -H -o name 2>/dev/null | paste -sd ' ' -)"
+        log_msg "FATAL: Pool '$POOL' not found. Available pools:" \
+            "$(zpool list -H -o name 2>/dev/null | paste -sd ' ' -)"
         exit 1
     }
 fi
@@ -166,7 +167,8 @@ build_efidisk_line() {
     local by_path="$1"
     local pre_enrolled="$2"
     local secure_boot="$3"
-    local line="efidisk0: ${by_path},efitype=4m,pre-enrolled-keys=${pre_enrolled},size=4M,format=raw"
+    local line="efidisk0: ${by_path},efitype=4m,"\
+        "pre-enrolled-keys=${pre_enrolled},size=4M,format=raw"
     if [[ "$secure_boot" == true ]]; then
         line+=",ms-cert=2023k"
     fi
@@ -189,7 +191,9 @@ init_efi_disk() {
         log_msg "WARN: OVMF firmware file not found: $vars_file"
         log_msg "INFO:   Is pve-edk2-firmware installed? (apt install pve-edk2-firmware)"
         log_msg "INFO:   Initialize manually when available:"
-        log_msg "INFO:   sudo dd if=$vars_file of=/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${lun_num} bs=1M conv=notrunc"
+        log_msg "INFO:   sudo dd if=$vars_file" \
+            "of=/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${lun_num} bs=1M" \
+            "conv=notrunc"
         return 1
     }
 
@@ -266,8 +270,10 @@ add_data_disk_to_config() {
     local conf="/etc/pve/qemu-server/${VMID}.conf"
 
     if [[ ! -f "$conf" ]]; then
-        log_msg "WARN: VM ${VMID} config not found — create the VM in Proxmox GUI (no disk), then run:"
-        log_msg "INFO:   qm set ${VMID} -scsiX ${by_path},format=raw,discard=on,iothread=1,size=${SIZE}"
+        log_msg "WARN: VM ${VMID} config not found — create the VM in Proxmox GUI" \
+            "(no disk), then run:"
+        log_msg "INFO:   qm set ${VMID} -scsiX" \
+            "${by_path},format=raw,discard=on,iothread=1,size=${SIZE}"
         log_msg "INFO:   (replace X with the desired scsi slot number)"
         return 1
     fi
@@ -304,7 +310,8 @@ if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
     enc_flag=""
     [[ "$ENCRYPTED_FLAG" == true ]] && enc_flag=" --encrypted"
     REMOTE_SCRIPT=$(remote_zfsutility_script "$STORAGE_HOST" "new-vm-disk")
-    ssh -t root@"$STORAGE_HOST" "$REMOTE_SCRIPT '$POOL' '$VMID' '$DISKNUM' '$SIZE' --skip-rescan${enc_flag}" \
+    ssh -t root@"$STORAGE_HOST" \
+        "$REMOTE_SCRIPT '$POOL' '$VMID' '$DISKNUM' '$SIZE' --skip-rescan${enc_flag}" \
         || {
             log_msg "FATAL: Storage operations failed on $STORAGE_HOST"
             exit 1
@@ -316,7 +323,8 @@ if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
     else
         REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
         ssh root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1 \
-            || log_msg "WARN: Could not rescan $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+            || log_msg "WARN: Could not rescan $COMPUTE_HOST — run 'sudo rescan-storage'" \
+                "on $COMPUTE_HOST manually"
     fi
 
     if [[ "$MY_HOST" == "$COMPUTE_HOST" ]]; then
@@ -396,7 +404,8 @@ if [[ "$ENCRYPTED_FLAG" == true ]]; then
         # Auto-detect the device
         KEY_DEVICE=$(blkid -t PARTLABEL=ZFSkeys -o device 2>/dev/null | head -1 || true)
         if [[ -z "$KEY_DEVICE" ]]; then
-            log_msg "FATAL: No USB drive found with PARTLABEL=ZFSkeys. Insert the drive and try again."
+            log_msg "FATAL: No USB drive found with PARTLABEL=ZFSkeys. Insert the drive and try" \
+                "again."
             exit 1
         fi
         log_msg "INFO: Found key USB: $KEY_DEVICE"
@@ -424,7 +433,7 @@ if [[ "$ENCRYPTED_FLAG" == true ]]; then
 
     # Prompt for key file
     log_msg "INFO: Available key files on /mnt/ZFSkeys:"
-    ls -1 /mnt/ZFSkeys/ 2>/dev/null | sed 's/^/  /'
+    find /mnt/ZFSkeys/ -mindepth 1 -maxdepth 1 -printf '  %f\n' 2>/dev/null | sort
     echo ""
     read -rp "Enter key file name (e.g. key3): " KEY_NAME
     [[ -n "$KEY_NAME" ]] || {
@@ -539,7 +548,8 @@ if is_two_node; then
         if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1; then
             log_msg "INFO: ✓ Rescan triggered"
         else
-            log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+            log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' on" \
+                "$COMPUTE_HOST manually"
         fi
 
         # Delegate config writing / EFI initialization to the compute host
@@ -549,8 +559,9 @@ if is_two_node; then
             sb_flag=""
             [[ "$SECURE_BOOT" == true ]] && sb_flag=" --secure-boot"
             REMOTE_CONFIG_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "new-vm-disk")
-            if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
-                "$REMOTE_CONFIG_SCRIPT '$POOL' '$VMID' '$DISKNUM' '$ORIG_SIZE' --config-only='$LUN_NUM'$sb_flag"; then
+            _remote_config_cmd="$REMOTE_CONFIG_SCRIPT '$POOL' '$VMID' '$DISKNUM'"
+            _remote_config_cmd+=" '$ORIG_SIZE' --config-only='$LUN_NUM'$sb_flag"
+            if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "$_remote_config_cmd"; then
                 log_msg "INFO: ✓ VM config updated on $COMPUTE_HOST"
             else
                 log_msg "WARN: Could not update VM config on $COMPUTE_HOST"
@@ -561,10 +572,13 @@ if is_two_node; then
                     else
                         log_msg "INFO:   dd if=/usr/share/pve-edk2-firmware/OVMF_VARS_4M.fd \\"
                     fi
-                    log_msg "INFO:     of=/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${LUN_NUM} bs=1M conv=notrunc"
+                    log_msg "INFO:    " \
+                        "of=/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${LUN_NUM}"\
+                        " bs=1M conv=notrunc"
                 else
                     by_path="/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${LUN_NUM}"
-                    log_msg "INFO:   qm set ${VMID} -scsiX ${by_path},format=raw,discard=on,iothread=1,size=${SIZE}"
+                    log_msg "INFO:   qm set ${VMID} -scsiX" \
+                        "${by_path},format=raw,discard=on,iothread=1,size=${SIZE}"
                 fi
             fi
         fi

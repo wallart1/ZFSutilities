@@ -334,7 +334,8 @@ zfs() {
                         ;;
                     -o)
                         outcols="${args[$((arg_idx+1))]}"
-                        [[ "$outcols" == "name" || "$outcols" == "name,creation" ]] && have_listing_opt=1
+                        [[ "$outcols" == "name" ]] ||\
+                        [[ "$outcols" == "name,creation" ]] && have_listing_opt=1
                         ((arg_idx+=2))
                         continue
                         ;;
@@ -378,7 +379,8 @@ zfs() {
                     return 1
                 fi
                 if [[ "$outcols" == "name,creation" ]]; then
-                    [[ -n "$_mock_zfs_snap_list_creation" ]] && echo -e "$_mock_zfs_snap_list_creation"
+                    [[ -n "$_mock_zfs_snap_list_creation" ]] \
+                        && echo -e "$_mock_zfs_snap_list_creation"
                 elif [[ "$outcols" == "guid" ]]; then
                     if [[ -n "${_mock_zfs_guid_lists[$specific_arg]+x}" ]]; then
                         echo -e "${_mock_zfs_guid_lists[$specific_arg]}"
@@ -576,7 +578,8 @@ test_summary() {
     echo ""
     echo "  Total:   $TESTS_RUN"
     echo -e "  Passed:  ${GREEN}$TESTS_PASSED${NC}"
-    [[ $TESTS_FAILED -gt 0 ]] && echo -e "  Failed:  ${RED}$TESTS_FAILED${NC}" || echo "  Failed:  0"
+    [[ $TESTS_FAILED -gt 0 ]] && echo -e "  Failed:  ${RED}$TESTS_FAILED${NC}" \
+        || echo "  Failed:  0"
     [[ $TESTS_SKIPPED -gt 0 ]] && echo -e "  Skipped: ${YELLOW}$TESTS_SKIPPED${NC}" || true
     echo ""
     local rc=0

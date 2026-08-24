@@ -59,15 +59,16 @@ function delallsnaps {
         releaseholds='N'
         release=''
     fi
-    if [[ $4 = 'recursive' ]]; then 
-        recurse='-r'
+    local -a recurse_args=()
+    if [[ $4 = 'recursive' ]]; then
+        recurse_args=(-r)
         autoproceed='N'
     fi
-    
+
     if [[ "$5" != '' ]]; then overrides "$5"; fi
 
-    readarray -t snaparray < <(zfs list $recurse -Ho name -t snapshot "$zfsdelallsnaps_fs" \
-        2> /dev/null)
+    readarray -t snaparray < <(zfs list "${recurse_args[@]}" -Ho name -t snapshot \
+        "$zfsdelallsnaps_fs" 2> /dev/null)
 
     if [[ ${#snaparray[@]} -lt 1 ]]; then        # There are no snapshots
         if calledbybash; then
@@ -79,7 +80,8 @@ function delallsnaps {
     else
         if [[ $zfsdelsnapsfind != "" ]]; then
             for ((i=0; i<${#snaparray[@]}; i++)); do
-                if [[ ${snaparray[i]} != *"$zfsdelsnapsfind"* ]]; then # If search string is not found
+                # If search string is not found
+                if [[ ${snaparray[i]} != *"$zfsdelsnapsfind"* ]]; then
                     snaparray=("${snaparray[@]:0:$i}" "${snaparray[@]:$((i+1))}")  # delete the item
                     ((i--))     # Adjust i so that it points to the item before the deleted item
                 fi
@@ -96,7 +98,8 @@ function delallsnaps {
         else
             log_msg "INFO: About to delete the following ${#snaparray[@]} snapshots from" \
                 "$zfsdelallsnaps_fs." \
-                "\nThis will disregard system offsite-* holds and snapshot age; user holds may block individual snapshots."
+                "\nThis will disregard system offsite-* holds and snapshot age;" \
+                "user holds may block individual snapshots."
             local now
             now=$(date +%s)
             for snap in "${snaparray[@]}"; do
@@ -106,7 +109,7 @@ function delallsnaps {
                 printf "%-60s  (%d days old)\n" "$snap" "$age_days"
             done
             if [[ $autoproceed != "Y" ]]; then
-                read -p "Press enter to continue."
+                read -rp "Press enter to continue."
             fi
             local _delallsnaps_failed=0
             for snap in "${snaparray[@]}"; do

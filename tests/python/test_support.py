@@ -434,7 +434,8 @@ class MockSubprocess:
                 return self._completed("")
             # Dataset listing
             stdout = "\n".join(
-                f"{d['name']}\t{d.get('used', '10G')}\t{d.get('avail', '100G')}\t{d.get('refer', '5G')}\t{d.get('mountpoint', '/')}"
+                f"{d['name']}\t{d.get('used', '10G')}\t{d.get('avail', '100G')}\t"
+                f"{d.get('refer', '5G')}\t{d.get('mountpoint', '/')}"
                 for d in self._zfs_fs_list
             )
             return self._completed(stdout)

@@ -100,7 +100,8 @@ zfs() {
         local requested_root="$6"
         if [[ -n "$_mock_zfs_list" ]]; then
             # Only return datasets under the requested root path
-            echo -e "$_mock_zfs_list" | awk -v root="$requested_root" '$0 == root || index($0, root "/") == 1'
+            echo -e "$_mock_zfs_list" | awk -v root="$requested_root" \
+                '$0 == root || index($0, root "/") == 1'
         fi
         return 0
     fi
@@ -197,7 +198,9 @@ test_parse_backstores() {
     reset_mocks
     test_start "parse_backstores extracts backstore names and device paths"
 
-    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) write-thru activated]\n  o- vm-205-disk-3 ............ [/dev/zvol/NVME1/proxmox/vm-205-disk-3 (401.0GiB) write-thru activated]'
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]\n  o- vm-205-disk-3 ............ '
+    _mock_backstores+='[/dev/zvol/NVME1/proxmox/vm-205-disk-3 (401.0GiB) write-thru activated]'
 
     parse_backstores
 
@@ -215,7 +218,12 @@ test_parse_target_luns() {
     reset_mocks
     test_start "parse_target_luns extracts LUN indexes and backstores"
 
-    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]\n  | o- lun19 ..... [block/vm-207-disk-2 (/dev/zvol/threeamigos/proxmox/vm-207-disk-2) (default_tg_pt_gp)]\n  | o- lun27  [block/vm-209-disk-1 (/dev/zvol/threeamigos/proxmox/vm-209-disk-1) (default_tg_pt_gp)]'
+    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]\n  '
+    _mock_luns_threeamigos+='| o- lun19 ..... [block/vm-207-disk-2 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-207-disk-2) (default_tg_pt_gp)]\n  '
+    _mock_luns_threeamigos+='| o- lun27  [block/vm-209-disk-1 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-209-disk-1) (default_tg_pt_gp)]'
 
     parse_target_luns "iqn.2026-02.local.stewie:threeamigos"
 
@@ -232,7 +240,9 @@ test_discover_zvols() {
     reset_mocks
     test_start "discover_zvols finds VM zvols in configured pools"
 
-    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/proxmox/vm-209-disk-2\nNVME1/proxmox\nNVME1/proxmox/vm-205-disk-3\nthreeamigos/proxmox/Rocky'
+    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/prox'
+    _mock_zfs_list+='mox/vm-209-disk-2\nNVME1/proxmox\nNVME1/proxmox/vm-205-disk-3\nthreeamigos/pro'
+    _mock_zfs_list+='xmox/Rocky'
 
     discover_zvols
 
@@ -270,9 +280,12 @@ test_missing_backstore_and_lun_created() {
     reset_mocks
     test_start "Missing backstore and LUN are created for unexported zvol"
 
-    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) write-thru activated]'
-    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
-    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/proxmox/vm-209-disk-2'
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
+    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
+    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/prox'
+    _mock_zfs_list+='mox/vm-209-disk-2'
 
     main >/dev/null 2>&1 || true
 
@@ -282,7 +295,9 @@ test_missing_backstore_and_lun_created() {
         if [[ "$call" == "/backstores/block create vm-209-disk-2"* ]]; then
             create_backstore_called=true
         fi
-        if [[ "$call" == "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns create /backstores/block/vm-209-disk-2"* ]]; then
+        local _wrap_rhs="/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns create "
+        _wrap_rhs+="/backstores/block/vm-209-disk-2"
+        if [[ "$call" == "$_wrap_rhs"* ]]; then
             create_lun_called=true
         fi
     done
@@ -298,8 +313,14 @@ test_existing_lun_index_preserved() {
     reset_mocks
     test_start "Existing LUN indexes are preserved"
 
-    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) write-thru activated]\n  o- vm-207-disk-2 ...... [/dev/zvol/threeamigos/proxmox/vm-207-disk-2 (140.0GiB) write-thru activated]'
-    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]\n  | o- lun19 ..... [block/vm-207-disk-2 (/dev/zvol/threeamigos/proxmox/vm-207-disk-2) (default_tg_pt_gp)]'
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]\n  o- vm-207-disk-2 ...... '
+    _mock_backstores+='[/dev/zvol/threeamigos/proxmox/vm-207-disk-2 (140.0GiB) write-thru '
+    _mock_backstores+='activated]'
+    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]\n  '
+    _mock_luns_threeamigos+='| o- lun19 ..... [block/vm-207-disk-2 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-207-disk-2) (default_tg_pt_gp)]'
 
     parse_backstores
     parse_target_luns "iqn.2026-02.local.stewie:threeamigos"
@@ -315,8 +336,10 @@ test_rescan_always_runs() {
     reset_mocks
     test_start "Compute host rescan runs even with no target changes"
 
-    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) write-thru activated]'
-    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
+    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
     _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0'
     _mock_visible_count="1"
 
@@ -334,9 +357,12 @@ test_dry_run_makes_no_changes() {
     reset_mocks
     test_start "Dry-run mode does not call targetcli mutate or safe-iscsi-save"
 
-    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) write-thru activated]'
-    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
-    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/proxmox/vm-209-disk-2'
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
+    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
+    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/prox'
+    _mock_zfs_list+='mox/vm-209-disk-2'
 
     DRY_RUN=true
     main >/dev/null 2>&1 || true
@@ -361,7 +387,8 @@ test_existing_backstore_without_lun_gets_mapped() {
     reset_mocks
     test_start "Existing backstore without LUN mapping gets mapped"
 
-    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) write-thru activated]'
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
     _mock_luns_threeamigos=''
     _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0'
 
@@ -369,7 +396,9 @@ test_existing_backstore_without_lun_gets_mapped() {
 
     local create_lun_called=false
     for call in "${_mock_targetcli_calls[@]}"; do
-        if [[ "$call" == "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns create /backstores/block/vm-101-disk-0"* ]]; then
+        local _wrap_rhs="/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns create "
+        _wrap_rhs+="/backstores/block/vm-101-disk-0"
+        if [[ "$call" == "$_wrap_rhs"* ]]; then
             create_lun_called=true
         fi
     done
@@ -398,9 +427,12 @@ test_manifest_entry_creates_missing_backstore() {
     manifest=$(make_temp_manifest "vm-209-disk-2")
     MANIFEST="$manifest"
 
-    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) write-thru activated]'
-    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
-    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/proxmox/vm-209-disk-2'
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
+    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
+    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/prox'
+    _mock_zfs_list+='mox/vm-209-disk-2'
 
     main >/dev/null 2>&1 || true
 
@@ -413,7 +445,9 @@ test_manifest_entry_creates_missing_backstore() {
         if [[ "$call" == "/backstores/block create vm-209-disk-2"* ]]; then
             create_backstore_called=true
         fi
-        if [[ "$call" == "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns create /backstores/block/vm-209-disk-2"* ]]; then
+        local _wrap_rhs="/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns create "
+        _wrap_rhs+="/backstores/block/vm-209-disk-2"
+        if [[ "$call" == "$_wrap_rhs"* ]]; then
             create_lun_called=true
         fi
     done
@@ -433,9 +467,12 @@ test_manifest_limits_exported_zvols() {
     manifest=$(make_temp_manifest "vm-101-disk-0")
     MANIFEST="$manifest"
 
-    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) write-thru activated]'
-    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
-    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/proxmox/vm-209-disk-2'
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
+    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
+    _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/prox'
+    _mock_zfs_list+='mox/vm-209-disk-2'
 
     main >/dev/null 2>&1 || true
 
@@ -449,7 +486,8 @@ test_manifest_limits_exported_zvols() {
         fi
     done
 
-    if [[ "$create_called" == false ]] && [[ " ${UNMAPPED_ZVOLS[*]} " == *" threeamigos/proxmox/vm-209-disk-2 "* ]]; then
+    if [[ "$create_called" == false ]] &&\
+       [[ " ${UNMAPPED_ZVOLS[*]} " == *" threeamigos/proxmox/vm-209-disk-2 "* ]]; then
         test_pass
     else
         test_fail "Expected vm-209-disk-2 to be reported as unexported, not created"

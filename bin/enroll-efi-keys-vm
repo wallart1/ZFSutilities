@@ -111,7 +111,10 @@ parse_efidisk_line() {
 # Echoes "<target> <lun>" and returns 0 on success, 1 otherwise.
 parse_iscsi_by_path() {
     local path="$1"
-    if [[ "$path" =~ ^/dev/disk/by-path/ip-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+-iscsi-(.+)-lun-([0-9]+)$ ]]; then
+    local _efi_path_re
+    _efi_path_re='^/dev/disk/by-path/ip-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+'
+    _efi_path_re+='-iscsi-(.+)-lun-([0-9]+)$'
+    if [[ "$path" =~ $_efi_path_re ]]; then
         printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
         return 0
     fi
@@ -145,13 +148,21 @@ if [[ "$by_path" == /dev/disk/by-path/* ]]; then
 
     if is_two_node; then
         log_msg "INFO: Resolving iSCSI LUN $LUN in target $TARGET on $STORAGE_HOST..."
-        backstore=$(ssh root@"$STORAGE_HOST" "targetcli '/iscsi/${TARGET}/tpg1/luns' ls 2>/dev/null | grep -E 'lun${LUN}[^0-9]' | grep -oP 'block/\\K\\S+' | head -1")
+        backstore=$(ssh root@"$STORAGE_HOST" \
+            "targetcli '/iscsi/${TARGET}/tpg1/luns' ls 2>/dev/null \
+            | grep -E 'lun${LUN}[^0-9]' \
+            | grep -oP 'block/\\K\\S+' \
+            | head -1")
         [[ -n "$backstore" ]] || {
             log_msg "FATAL: No iSCSI backstore found for LUN $LUN in $TARGET"
             exit 1
         }
 
-        zvol=$(ssh root@"$STORAGE_HOST" "targetcli /backstores/block ls 2>/dev/null | grep ' ${backstore} ' | grep -oP '/dev/zvol/\\K\\S+' | head -1")
+        zvol=$(ssh root@"$STORAGE_HOST" \
+            "targetcli /backstores/block ls 2>/dev/null \
+            | grep ' ${backstore} ' \
+            | grep -oP '/dev/zvol/\\K\\S+' \
+            | head -1")
         [[ -n "$zvol" ]] || {
             log_msg "FATAL: No zvol found for backstore $backstore"
             exit 1
@@ -162,14 +173,17 @@ if [[ "$by_path" == /dev/disk/by-path/* ]]; then
     fi
 elif [[ "$by_path" =~ ^([^:]+):vm-([0-9]+)-disk-([0-9]+)$ ]]; then
     # Proxmox storage reference (single-node only).
-    zvol=$(zfs list -H -t volume -o name 2>/dev/null | grep "/proxmox/vm-${BASH_REMATCH[2]}-disk-${BASH_REMATCH[3]}$" | head -1)
+    zvol=$(zfs list -H -t volume -o name 2>/dev/null \
+        | grep "/proxmox/vm-${BASH_REMATCH[2]}-disk-${BASH_REMATCH[3]}$" \
+        | head -1)
     [[ -n "$zvol" ]] || {
         log_msg "FATAL: No zvol found for storage reference: $by_path"
         exit 1
     }
 else
     log_msg "FATAL: Unsupported efidisk0 volume ID format: $by_path"
-    log_msg "FATAL:   (for iSCSI by-path EFI disks, use this script instead of 'qm enroll-efi-keys')"
+    log_msg "FATAL:   (for iSCSI by-path EFI disks, use this script instead of" \
+        "'qm enroll-efi-keys')"
     exit 1
 fi
 

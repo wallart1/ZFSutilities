@@ -10,4 +10,6 @@ unset _local_bashinit
 
 source_helper bashsetx
 setx
-"$mydir/watchall" -n 30 -m 500 "zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health $1; zfs list -rt all -o name,creation,type,used,avail,refer $1"
+"$mydir/watchall" -n 30 -m 500 \
+    "zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health $1;" \
+    " zfs list -rt all -o name,creation,type,used,avail,refer $1"

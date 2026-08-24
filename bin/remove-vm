@@ -58,7 +58,10 @@ usage() {
 
 VMID="$1"
 [[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
-[[ $EUID -eq 0 || ${REMOVE_VM_TEST_NO_ROOT:-0} == "1" ]] || { log_msg "FATAL: Must run as root (use sudo)"; exit 1; }
+[[ $EUID -eq 0 || ${REMOVE_VM_TEST_NO_ROOT:-0} == "1" ]] || {
+    log_msg "FATAL: Must run as root (use sudo)"
+    exit 1
+}
 
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
@@ -157,7 +160,8 @@ if [[ ${#zvols[@]} -gt 0 ]]; then
     for i in "${!zvols[@]}"; do
         if is_two_node; then
             if [[ -n "${targets[$i]}" ]]; then
-                log_msg "INFO:     ${zvols[$i]} (size: ${sizes[$i]}, iSCSI: ${targets[$i]} LUN ${luns[$i]})"
+                log_msg "INFO:     ${zvols[$i]} (size: ${sizes[$i]}," \
+                    "iSCSI: ${targets[$i]} LUN ${luns[$i]})"
             else
                 log_msg "INFO:     ${zvols[$i]} (size: ${sizes[$i]}, iSCSI: not mapped)"
             fi

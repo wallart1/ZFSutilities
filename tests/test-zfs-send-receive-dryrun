@@ -190,7 +190,8 @@ pool/src/data2"
         test_fail "Expected read to be called once, got $read_calls"
         return
     fi
-    if [[ "$log" != *"Processing pool/src/data1"* || "$log" != *"Processing pool/src/data2"* ]]; then
+    if [[ "$log" != *"Processing pool/src/data1"* ]] ||\
+       [[ "$log" != *"Processing pool/src/data2"* ]]; then
         test_fail "Not all datasets were processed; log='$log'"
         return
     fi
@@ -453,7 +454,8 @@ test_do_transfer_forces_pv_when_log_inherit() {
 
     clear_log
     capture_stderr
-    ZFSUTILITIES_LOG_INHERIT="Y" do_transfer "-cw -i @snap" "-uv" "Y" "5000000" "Send/receive" < /dev/null
+    ZFSUTILITIES_LOG_INHERIT="Y" do_transfer "-cw -i @snap" "-uv" "Y" "5000000" "Send/receive" \
+        < /dev/null
     restore_stderr
 
     eval "$saved_zfs"
@@ -710,7 +712,8 @@ test_handle_commsnap_rc4_existing_dest() {
         rm -f "$__zfs_orig_file" "${__zfs_orig_file}.2"
 
         zfs() {
-            if [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" && "$4" == "name" && -n "$5" ]]; then
+            if [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" && "$4" == "name" ]] &&\
+               [[ -n "$5" ]]; then
                 if [[ -n "${_mock_zfs_datasets[$5]+x}" ]]; then
                     echo "$5"
                     return 0
@@ -734,7 +737,8 @@ test_handle_commsnap_rc4_existing_dest() {
     rc=$(echo "$log" | grep -o 'EXITCODE:[0-9]*' | cut -d: -f2)
     log=$(echo "$log" | grep -v '^EXITCODE:')
 
-    if [[ "$rc" -eq 0 && "$log" == *"WARN: No common snapshot found between $fs and pool/dest/data."* ]]; then
+    if [[ "$rc" -eq 0 ]] &&\
+       [[ "$log" == *"WARN: No common snapshot found between $fs and pool/dest/data."* ]]; then
         test_pass
     else
         test_fail "rc=$rc log='$log'"
@@ -761,7 +765,8 @@ test_handle_commsnap_rc4_new_dest() {
         rm -f "$__zfs_orig_file" "${__zfs_orig_file}.2"
 
         zfs() {
-            if [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" && "$4" == "name" && -n "$5" ]]; then
+            if [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" && "$4" == "name" ]] &&\
+               [[ -n "$5" ]]; then
                 if [[ -n "${_mock_zfs_datasets[$5]+x}" ]]; then
                     echo "$5"
                     return 0
@@ -785,7 +790,10 @@ test_handle_commsnap_rc4_new_dest() {
     rc=$(echo "$log" | grep -o 'EXITCODE:[0-9]*' | cut -d: -f2)
     log=$(echo "$log" | grep -v '^EXITCODE:')
 
-    if [[ "$rc" -eq 0 && "$log" == *"INFO: Destination pool/dest/data does not exist; creating new dataset from $fs."* ]]; then
+    if [[ "$rc" -eq 0 ]] &&\
+       local _wrap_rhs="INFO: Destination pool/dest/data does not exist; creating new dataset from "
+       _wrap_rhs+="$fs."
+       [[ "$log" == *"$_wrap_rhs"* ]]; then
         test_pass
     else
         test_fail "rc=$rc log='$log'"
@@ -948,8 +956,9 @@ test_handle_commsnap_rc16_scope_mismatch() {
     fs="pool/src/data"
     destfs="pool/dest"
     restorefs="/data"
-    _mock_zfs_snap_lists["pool/dest/data"]=\
-"pool/dest/data@offsite-2026-07-29T00:42-04:00-s\npool/dest/data@dailybackup-2026-07-28T06:00-04:00-d"
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@offsite-2026-07-29T00:42-04:00-s"
+    local _snap2=$'\n'"pool/dest/data@dailybackup-2026-07-28T06:00-04:00-d"
+    _mock_zfs_snap_lists["pool/dest/data"]+="$_snap2"
     clear_log
     capture_stderr
     handle_commsnap_rc 16 "$fs" "pool/dest/data"
@@ -1029,7 +1038,9 @@ test_clone_dataset_message_verb() {
 
     local log
     log=$(get_stderr_log)
-    if [[ "$log" == *"VERB: Dataset pool/src/clone is a ZFS clone. It will be backed up as a regular dataset."* ]]; then
+    local _wrap_rhs="VERB: Dataset pool/src/clone is a ZFS clone. It will be backed up as a "
+    _wrap_rhs+="regular dataset."
+    if [[ "$log" == *"$_wrap_rhs"* ]]; then
         test_pass
     else
         test_fail "log='$log'"
@@ -1271,7 +1282,8 @@ test_lock_before_snapshot_creation() {
 
     local src_lock_line dest_lock_line snap_line
     src_lock_line=$(echo "$log" | grep -n "LOCK_TEST acquired pool/src" | head -1 | cut -d: -f1)
-    dest_lock_line=$(echo "$log" | grep -n "LOCK_TEST acquired pool/dest/pool/src/data" | head -1 | cut -d: -f1)
+    dest_lock_line=$(echo "$log" | grep -n "LOCK_TEST acquired pool/dest/pool/src/data" \
+        | head -1 | cut -d: -f1)
     snap_line=$(echo "$log" | grep -n "Dry-run: Would create snapshot" | head -1 | cut -d: -f1)
 
     if [[ -z "$src_lock_line" || -z "$dest_lock_line" || -z "$snap_line" ]]; then

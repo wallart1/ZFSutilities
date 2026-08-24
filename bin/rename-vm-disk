@@ -45,13 +45,16 @@ ISCSI_ENCRYPTED="N"
 usage() {
     log_msg "INFO: Usage: rename-vm-disk <old-zvol-path> <new-zvol-path>"
     echo ""
-    log_msg "INFO:   old-zvol-path  Full path of the existing zvol (e.g. threeamigos/proxmox/vm-100-disk-0)"
+    log_msg "INFO:   old-zvol-path  Full path of the existing zvol (e.g." \
+        "threeamigos/proxmox/vm-100-disk-0)"
     log_msg "INFO:   new-zvol-path  Desired full path under the SAME pool"
     echo ""
-    log_msg "WARN: WARNING: Any VM referencing this zvol must be stopped before running this script."
+    log_msg "WARN: WARNING: Any VM referencing this zvol must be stopped before running this" \
+        "script."
     echo ""
     log_msg "INFO: Examples:"
-    log_msg "INFO:   rename-vm-disk threeamigos/proxmox/vm-100-disk-0 threeamigos/proxmox/vm-100-disk-1"
+    log_msg "INFO:   rename-vm-disk threeamigos/proxmox/vm-100-disk-0" \
+        "threeamigos/proxmox/vm-100-disk-1"
     log_msg "INFO:   rename-vm-disk threeamigos/proxmox/old-name threeamigos/proxmox/new-name"
     exit 1
 }

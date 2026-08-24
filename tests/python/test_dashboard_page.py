@@ -121,7 +121,10 @@ class TestGetPoolHealth(unittest.TestCase):
                 r"zpool list -H -o name,health,size,alloc,free,cap",
                 lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
             )
-            status = "  scan: scrub repaired 0B in 1 days 01:35:48 with 0 errors on Wed Jun  3 20:50:19 2026\n"
+            status = (
+                "  scan: scrub repaired 0B in 1 days 01:35:48 with 0 errors on "
+                "Wed Jun  3 20:50:19 2026\n"
+            )
             m.set_command_handler(r"zpool status", lambda *_a, **_k: m._completed(status))
             pools = dp._get_pool_health()
         self.assertEqual(pools[0]["scrub_date"], "Wed Jun  3 20:50:19 2026")

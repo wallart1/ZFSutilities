@@ -113,8 +113,9 @@ test_ignore_dryrun_lists_only() {
     ignore_retention_policies="Y"
     dryrun="Y"
     _mock_fsarray_pool1=("pool1/fs")
-    mock_zfs_snap_list_for "pool1/fs" \
-        $'pool1/fs@dailybackup-2025-03-28T10:00-04:00-d\npool1/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    local _snaplist=$'pool1/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _snaplist+=$'pool1/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_snap_list_for "pool1/fs" "$_snaplist"
     mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
     mock_zfs_prop "pool1/fs@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
     mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "used" "1073741824"
@@ -162,8 +163,9 @@ test_ignore_approval_yes_deletes() {
     ignore_retention_policies="Y"
     releaseholds="Y"
     _mock_fsarray_pool1=("pool1/fs")
-    mock_zfs_snap_list_for "pool1/fs" \
-        $'pool1/fs@dailybackup-2025-03-28T10:00-04:00-d\npool1/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    local _snaplist=$'pool1/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _snaplist+=$'pool1/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_snap_list_for "pool1/fs" "$_snaplist"
     mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
     mock_zfs_prop "pool1/fs@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
     mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "used" "1073741824"
@@ -347,8 +349,9 @@ test_estimate_space_freed_nonnumeric() {
     ignore_retention_policies="Y"
     dryrun="Y"
     _mock_fsarray_pool1=("pool1/fs")
-    mock_zfs_snap_list_for "pool1/fs" \
-        $'pool1/fs@dailybackup-2025-03-28T10:00-04:00-d\npool1/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    local _snaplist=$'pool1/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _snaplist+=$'pool1/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_snap_list_for "pool1/fs" "$_snaplist"
     mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
     mock_zfs_prop "pool1/fs@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
     mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "used" "notanumber"

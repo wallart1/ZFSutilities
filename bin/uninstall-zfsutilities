@@ -97,8 +97,10 @@ load_uninstall_config() {
     PROFILE_LOCK_DIR="${ZFSUTILITIES_PROFILE_LOCK_DIR:-/run/lock/zfsutilities/profiles}"
     ZFSLOCK_DIR="${ZFSUTILITIES_ZFSLOCK_DIR:-/run/lock/zfsutilities}"
     SYSTEMD_DIR="${ZFSUTILITIES_SYSTEMD_DIR:-/etc/systemd/system}"
-    ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_ISCSI_ENCRYPTED_CONF:-${SYSTEM_CONFIG_DIR}/iscsi-encrypted-luns.conf}"
-    LEGACY_ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF:-/etc/iscsi-encrypted-luns.conf}"
+    local _def_iscsi_enc="${SYSTEM_CONFIG_DIR}/iscsi-encrypted-luns.conf"
+    ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_ISCSI_ENCRYPTED_CONF:-$_def_iscsi_enc}"
+    local _d_legacy_iscsi="/etc/iscsi-encrypted-luns.conf"
+    LEGACY_ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF:-$_d_legacy_iscsi}"
     LUKS_KEYFILE="${ZFSUTILITIES_LUKS_KEYFILE:-/root/.luks-key}"
     PVE_ISCSI_PLUGIN="${ZFSUTILITIES_PVE_ISCSI_PLUGIN:-/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm}"
     CACHE_WARM_LOG_GLOB="${ZFSUTILITIES_CACHE_WARM_LOG_GLOB:-/var/log/zfs-cache-warm*.log}"
@@ -370,7 +372,8 @@ present_interactive_dialog() {
 
     local choice
     while true; do
-        read -rp "Choose 1 (software only) or 2 (clean up everything), or c to cancel [1/2/c]: " choice
+        read -rp "Choose 1 (software only) or 2 (clean up everything)," \
+            " or c to cancel [1/2/c]: " choice
         case "${choice,,}" in
             1|software)
                 DO_PURGE="false"
@@ -404,10 +407,22 @@ present_interactive_dialog() {
 confirm_uninstall() {
     log_msg "INFO:"
     log_msg "INFO: === Summary of actions ==="
-    log_msg "INFO:   Mode:            $([[ "$DO_PURGE" == "true" ]] && echo "Remove software and clean up everything" || echo "Remove software only")"
+    local _mode_text
+    if [[ "$DO_PURGE" == "true" ]]; then
+        _mode_text="Remove software and clean up everything"
+    else
+        _mode_text="Remove software only"
+    fi
+    log_msg "INFO:   Mode:            $_mode_text"
     local peer
     peer=$(peer_host)
-    log_msg "INFO:   Peer node:       $([[ "$DO_ALL_NODES" == "true" ]] && echo "$peer" || echo "(local only)")"
+    local _peer_text
+    if [[ "$DO_ALL_NODES" == "true" ]]; then
+        _peer_text="$peer"
+    else
+        _peer_text="(local only)"
+    fi
+    log_msg "INFO:   Peer node:       $_peer_text"
     log_msg "INFO:   Dry run:         $DO_DRY_RUN"
     log_msg "INFO:"
 

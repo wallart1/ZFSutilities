@@ -17,10 +17,14 @@ chmod +x "$RSYNC_HELPER_DIR/rsync-dailybackup"
 rm -f /run/zfsutilities/nextsnap_zfsdailybackup /run/zfsutilities/nextsnap_zfssnapbuild
 
 # Disable everything except the Rocky remote pull step.
-readonly DISABLE_ALL_BUT_ROCKY="pull_tweety='N'; pull_stewie='N'; backup_threeamigos_proxmox='N'; backup_NVME1='N'; prune='N'"
+_zfsdaily_disabled="pull_tweety='N'; pull_stewie='N'; backup_threeamigos_proxmox='N'; "
+_zfsdaily_disabled+="backup_NVME1='N'; prune='N'"
+readonly DISABLE_ALL_BUT_ROCKY="$_zfsdaily_disabled"
 
 # Disable all backup steps so helper functions can be exercised in isolation.
-readonly DISABLE_ALL_STEPS="pull_rocky='N'; pull_tweety='N'; pull_stewie='N'; backup_threeamigos_proxmox='N'; backup_NVME1='N'; prune='N'"
+_zfsdaily_alloff="pull_rocky='N'; pull_tweety='N'; pull_stewie='N'; "
+_zfsdaily_alloff+="backup_threeamigos_proxmox='N'; backup_NVME1='N'; prune='N'"
+readonly DISABLE_ALL_STEPS="$_zfsdaily_alloff"
 
 # Common mocks used inside every subshell that sources zfsdailybackup.
 _mock_interactive() {

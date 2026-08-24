@@ -69,7 +69,8 @@ cmd_list() {
 
         # Format timestamp for display
         local display_time
-        display_time=$(date -d "$acquired" "+%Y-%m-%d %H:%M" 2>/dev/null) || display_time="$acquired"
+        display_time=$(date -d "$acquired" "+%Y-%m-%d %H:%M" 2>/dev/null) ||
+            display_time="$acquired"
 
         printf "%-40s %-6s %-8s %-20s %s\n" "$dataset" "$type_name" "$pid" "$script" "$display_time"
         ((found++))
@@ -239,7 +240,7 @@ cmd_release() {
         log_msg "INFO: PID $pid is no longer running (safe to release)"
     fi
 
-    read -p "Are you sure you want to release this lock? [y/N]: " confirm
+    read -rp "Are you sure you want to release this lock? [y/N]: " confirm
 
     if [[ "${confirm,,}" == "y" ]]; then
         rm -f "$lockfile"
@@ -363,7 +364,8 @@ cmd_wait() {
         local conflict_pid
         conflict_pid=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "pid")
 
-        log_msg "INFO: [$attempts] Blocked by: $conflict_dataset ($conflict_type) - $conflict_script (PID $conflict_pid)"
+        log_msg "INFO: [$attempts] Blocked by: $conflict_dataset ($conflict_type) -" \
+            "$conflict_script (PID $conflict_pid)"
         log_msg "INFO:     Retrying in $_wait_interval seconds..."
 
         sleep "$_wait_interval"
@@ -378,9 +380,11 @@ cmd_help() {
     log_msg "INFO:   zfslockctl <command> [arguments]"
     log_msg "INFO:"
     log_msg "INFO: Commands:"
-    log_msg "INFO:   list [dataset]        List active locks. Optionally filter by dataset substring."
+    log_msg "INFO:   list [dataset]        List active locks. Optionally filter by dataset" \
+        "substring."
     log_msg "INFO:"
-    log_msg "INFO:   status <dataset>      Check lock status for a specific dataset. Shows lock details"
+    log_msg "INFO:   status <dataset>      Check lock status for a specific dataset. Shows lock" \
+        "details"
     log_msg "INFO:                         and any related ancestor/descendant locks."
     log_msg "INFO:"
     log_msg "INFO:   release <target>      Force release a lock. Target can be a lock file path or"
@@ -397,7 +401,8 @@ cmd_help() {
     log_msg "INFO:"
     log_msg "INFO: Lock Types:"
     log_msg "INFO:   r - Shared Read       For reading metadata, listing. Conflicts with w, x."
-    log_msg "INFO:   w - Exclusive Write   For creating/modifying snapshots. Conflicts with r, w, x."
+    log_msg "INFO:   w - Exclusive Write   For creating/modifying snapshots. Conflicts with r, w," \
+        "x."
     log_msg "INFO:   x - Exclusive Destroy For destroying datasets/snapshots. Conflicts with all."
     log_msg "INFO:"
     log_msg "INFO: Examples:"
@@ -409,7 +414,8 @@ cmd_help() {
     log_msg "INFO:   zfslockctl release pool/dataset       # Force release lock on dataset"
     log_msg "INFO:"
     log_msg "INFO: Lock Storage:"
-    log_msg "INFO:   Locks are stored in /run/lock/zfsutilities/.locks/ and are automatically cleared on reboot."
+    log_msg "INFO:   Locks are stored in /run/lock/zfsutilities/.locks/ and are automatically" \
+        "cleared on reboot."
 }
 
 # ==============================================================================

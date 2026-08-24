@@ -37,7 +37,7 @@ if [[ $1 != '' ]]; then overrides "$1"; fi
 
 log_msg "INFO: zfsoffsiteretain starting."
 
-# ── Discover all online pools that contain @offsite snapshots ────────────────
+# Discover online pools that contain @offsite snapshots
 readarray -t offsite_pools < <(
     zfs list -t snapshot -H -o name 2>/dev/null \
     | awk '/@offsite-/ { split($0,a,"/"); print a[1] }' \

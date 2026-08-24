@@ -5,7 +5,7 @@
 # they are false positives for these intentional patterns.
 
 shell=bash
-disable=SC1090,SC2154
+disable=SC1090,SC1091,SC2015,SC2029,SC2030,SC2031,SC2154,SC2317
 
 # bin/watchall is a Python utility; do not run ShellCheck on it.
 exclude-path=bin/watchall

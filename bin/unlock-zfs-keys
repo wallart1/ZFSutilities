@@ -44,7 +44,8 @@ if mountpoint -q "$KEY_MOUNT" 2>/dev/null; then
     log_msg "INFO: Using already-mounted keys at $KEY_MOUNT"
     keys_already_available=true
 elif [[ -d "$KEY_MOUNT" ]] && [[ -n "$(ls -A "$KEY_MOUNT" 2>/dev/null)" ]]; then
-    log_msg "INFO: $KEY_MOUNT already contains files; leaving them untouched and attempting to load keys"
+    log_msg "INFO: $KEY_MOUNT already contains files; leaving them untouched and attempting to" \
+        "load keys"
     keys_already_available=true
 fi
 
@@ -60,7 +61,8 @@ if [[ "$keys_already_available" != true ]]; then
         DEVICE=$(blkid -t PARTLABEL=ZFSkeys -o device 2>/dev/null | head -1 || true)
         if [[ -z "$DEVICE" ]]; then
             log_msg "FATAL: No USB drive found with PARTLABEL=ZFSkeys"
-            log_msg "INFO: Plug in the key USB drive and try again, or specify device manually: unlock-zfs-keys /dev/sdX1"
+            log_msg "INFO: Plug in the key USB drive and try again, or specify device manually:" \
+                "unlock-zfs-keys /dev/sdX1"
             exit 1
         fi
         log_msg "INFO: Found key USB: $DEVICE"

@@ -17,7 +17,7 @@ source_helper zfsdelallholds
 source_helper zfslockmanager
 
 function delholds {
-    local zfsdelholds_subtree zfsdelholds_match zfsdelholds_depth
+    local zfsdelholds_subtree zfsdelholds_match
     local snap i l snapsnap
     local autoproceed="Y"
     declare -a snaparray
@@ -36,13 +36,13 @@ function delholds {
     fi
     local _delholds_lock="$ZFSLOCK_ID"
     zfsdelholds_match=$2
-    if [[ $3 = '' ]]; then
-        zfsdelholds_depth=""
-    else
-        zfsdelholds_depth="-d$3"
+    local -a zfsdelholds_depth_args=()
+    if [[ $3 != '' ]]; then
+        zfsdelholds_depth_args=(-d "$3")
     fi
 
-    readarray -t snaparray < <(zfs list $zfsdelholds_depth -Ho name -rt snapshot "$zfsdelholds_subtree")
+    readarray -t snaparray < <(zfs list "${zfsdelholds_depth_args[@]}" -Ho name -rt snapshot \
+        "$zfsdelholds_subtree")
 
     if [[ ${#snaparray[@]} = 0 ]]; then
         log_msg "INFO: $zfsdelholds_subtree has no snapshots and therefore no holds."
@@ -67,11 +67,12 @@ function delholds {
     fi
 
     if [[ $autoproceed != "Y" ]]; then
-        log_msg "INFO: About to release holds for the following ${#snaparray[@]} snapshots in $zfsdelholds_subtree."
+        log_msg "INFO: About to release holds for the following ${#snaparray[@]} snapshots in" \
+            "$zfsdelholds_subtree."
         for snap in "${snaparray[@]}"; do
             echo "$snap"
         done
-        read -p "Press enter to continue."
+        read -rp "Press enter to continue."
     fi
 
     for snap in "${snaparray[@]}"; do

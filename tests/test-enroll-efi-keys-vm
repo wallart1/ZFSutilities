@@ -29,7 +29,9 @@ EOF
     local parsed by_path size has_ms_cert
     parsed=$(parse_efidisk_line "$conf_file")
     read -r by_path size has_ms_cert <<< "$parsed"
-    assert_equals "/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13" "$by_path"
+    local _wrap_expected="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:th"
+    _wrap_expected+="reeamigos-lun-13"
+    assert_equals "$_wrap_expected" "$by_path"
     assert_equals "1M" "$size"
     assert_equals "no" "$has_ms_cert"
 }

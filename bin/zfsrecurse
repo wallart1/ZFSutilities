@@ -37,9 +37,9 @@ startwith=''
 
 log_msg "INFO: Command:   $command"
 log_msg "INFO: DS:        $sourcefs"
-read -p 'Press enter to continue.'
+read -rp 'Press enter to continue.'
 
-buildfsarray $sourcefs 'bottomup'
+buildfsarray "$sourcefs" 'bottomup'
 
 if [[ ${#fsarray[@]} -gt 0 ]]; then
     log_msg 'INFO: Commands to be issued.'
@@ -48,7 +48,7 @@ if [[ ${#fsarray[@]} -gt 0 ]]; then
     done
     
     if [[ $autoproceed != 'Y' ]]; then
-        read -p 'Press enter to proceed.'
+        read -rp 'Press enter to proceed.'
     fi
 
     for fs in "${fsarray[@]}"; do

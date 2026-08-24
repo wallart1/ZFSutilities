@@ -28,7 +28,9 @@ fi
 # $3    Name of the Proxmox storage where the new disk will reside.
 # $4    Size of the new disk in GiB.
 
-log_msg "INFO: Command to be issued: qm set $1 --scsi$2 $3:$4"
-read -p 'Press enter to continue.'
+_cmd=''
+printf -v _cmd 'qm set %s --scsi%s %s:%s' "$1" "$2" "$3" "$4"
+log_msg "INFO: Command to be issued: $_cmd"
+read -rp 'Press enter to continue.'
 
-qm set $1 --scsi$2 $3:$4
+$_cmd

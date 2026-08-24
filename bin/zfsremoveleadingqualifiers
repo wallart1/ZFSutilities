@@ -1,6 +1,10 @@
 #!/bin/bash
 
-# Remove the first i leading qualifiers from a ZFS fully-qualified dataset name, where the pool name is included in the qualifier count. For a dataset like poolname/qualifier1/qualifier2/.../qualifierN, the pool name counts as the first qualifier, and the script removes the first i qualifiers (including the pool name if i ≥ 1).
+# Remove the first i leading qualifiers from a ZFS fully-qualified dataset name,
+# where the pool name is included in the qualifier count. For a dataset like
+# poolname/qualifier1/qualifier2/.../qualifierN, the pool name counts as the
+# first qualifier, and the script removes the first i qualifiers (including the
+# pool name if i ≥ 1).
 
 # For example:
 # sourcefs="threeamigos/proxmox"

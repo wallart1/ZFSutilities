@@ -63,8 +63,14 @@ SRCVMID="$1"
 DSTVMID="$2"
 NEW_NAME="$3"
 
-[[ "$SRCVMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: src_vmid must be a number, got: $SRCVMID"; exit 1; }
-[[ "$DSTVMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: dst_vmid must be a number, got: $DSTVMID"; exit 1; }
+if [[ ! "$SRCVMID" =~ ^[0-9]+$ ]]; then
+    log_msg "FATAL: src_vmid must be a number, got: $SRCVMID"
+    exit 1
+fi
+if [[ ! "$DSTVMID" =~ ^[0-9]+$ ]]; then
+    log_msg "FATAL: dst_vmid must be a number, got: $DSTVMID"
+    exit 1
+fi
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
     REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "zfsclone-vm")
@@ -77,12 +83,18 @@ src_conf="$PVE_CONF_DIR/${SRCVMID}.conf"
 dst_conf="$PVE_CONF_DIR/${DSTVMID}.conf"
 
 [[ -f "$src_conf" ]]   || { log_msg "FATAL: Source VM config not found: $src_conf"; exit 1; }
-[[ ! -f "$dst_conf" ]] || { log_msg "FATAL: Destination VM config already exists: $dst_conf"; exit 1; }
+if [[ -f "$dst_conf" ]]; then
+    log_msg "FATAL: Destination VM config already exists: $dst_conf"
+    exit 1
+fi
 
 # --- Check source VM is stopped ---
 vm_status=$(qm status "$SRCVMID" 2>/dev/null | awk '{print $2}')
 [[ "$vm_status" == "stopped" ]] \
-    || { log_msg "FATAL: VM $SRCVMID must be stopped before cloning (status: ${vm_status:-unknown})"; exit 1; }
+    || {
+        log_msg "FATAL: VM $SRCVMID must be stopped before cloning (status: ${vm_status:-unknown})"
+        exit 1
+    }
 
 # === Single-node ZFS clone path ===
 if is_single_node; then
@@ -107,7 +119,10 @@ if is_single_node; then
         fi
     done < "$src_conf"
 
-    [[ ${#sn_disk_keys[@]} -gt 0 ]] || { log_msg "FATAL: No ZFS disk zvols found for VM $SRCVMID"; exit 1; }
+    if [[ ${#sn_disk_keys[@]} -eq 0 ]]; then
+        log_msg "FATAL: No ZFS disk zvols found for VM $SRCVMID"
+        exit 1
+    fi
 
     SNAP_SUFFIX="@clone-$(date -Iminutes)-c"
 
@@ -238,7 +253,8 @@ while IFS= read -r line; do
     # Group 1: disk key    e.g. "scsi0"
     # Group 2: full IQN    e.g. "iqn.2024-01.com.vendor:threeamigos"
     # Group 3: LUN number  e.g. "0"
-    if [[ "$line" =~ ^([a-z]+[0-9]+):.*ip-${STORAGE_IP}:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+) ]]; then
+    _clone_re="^([a-z]+[0-9]+):.*ip-${STORAGE_IP}:3260-iscsi-(iqn\\.[^,]+)-lun-([0-9]+)"
+    if [[ "$line" =~ $_clone_re ]]; then
         key="${BASH_REMATCH[1]}"
         disk_keys+=("$key")
         disk_targets["$key"]="${BASH_REMATCH[2]}"
@@ -246,7 +262,10 @@ while IFS= read -r line; do
     fi
 done < "$src_conf"
 
-[[ ${#disk_keys[@]} -gt 0 ]] || { log_msg "FATAL: No iSCSI disks found in source VM config"; exit 1; }
+if [[ ${#disk_keys[@]} -eq 0 ]]; then
+    log_msg "FATAL: No iSCSI disks found in source VM config"
+    exit 1
+fi
 
 # Snapshot name — same for all disks in this operation, kept as clone origin
 SNAP_SUFFIX="@clone-$(date -Iminutes)-c"
@@ -275,7 +294,8 @@ for key in "${disk_keys[@]}"; do
 
     log_msg "INFO: Cloning ${key} (target=${target}, LUN ${old_lun})..."
 
-    new_lun=$(ssh root@"$STORAGE_HOST" bash -s "$target" "$SRCVMID" "$DSTVMID" "$old_lun" "$SNAP_SUFFIX" \
+    new_lun=$(ssh root@"$STORAGE_HOST" bash -s "$target" "$SRCVMID" "$DSTVMID" \
+        "$old_lun" "$SNAP_SUFFIX" \
     << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
@@ -369,7 +389,10 @@ targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
 SSHEOF
     ) || { log_msg "FATAL: Failed to clone ${key}"; exit 1; }
 
-    [[ -n "$new_lun" ]] || { log_msg "FATAL: Could not determine new LUN number for ${key}"; exit 1; }
+    if [[ -z "$new_lun" ]]; then
+        log_msg "FATAL: Could not determine new LUN number for ${key}"
+        exit 1
+    fi
     disk_new_luns["$key"]="$new_lun"
     log_msg "INFO: ✓ ${key}: LUN ${old_lun} → LUN ${new_lun}"
     echo ""
@@ -434,7 +457,11 @@ while IFS= read -r line; do
         # Group 1: prefix up to =    e.g. "net0: virtio="
         # Group 2: MAC address       e.g. "BC:24:11:AA:BB:CC"
         # Group 3: trailing params   e.g. ",bridge=vmbr0"
-        if [[ "$line" =~ ^(net[0-9]+:.*=)([0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f])(,.*)$ ]]; then
+        _mac_re='^(net[0-9]+:.*=)('
+        _mac_re+='[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:'
+        _mac_re+='[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:'
+        _mac_re+='[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f])(,.*)$'
+        if [[ "$line" =~ $_mac_re ]]; then
             echo "${BASH_REMATCH[1]}${new_mac}${BASH_REMATCH[3]}"
         else
             echo "$line"

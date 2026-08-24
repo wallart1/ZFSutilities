@@ -64,7 +64,8 @@ test_fullcopy_applies_overrides() {
     rc=$(cat "$_state_dir/rc")
     assert_rc 0 "$rc"
     if [[ -f "$_state_dir/overrides.calls" ]]; then
-        assert_contains "$(cat "$_state_dir/overrides.calls")" "overrides called with: someoverride=1"
+        local _expected="overrides called with: someoverride=1"
+        assert_contains "$(cat "$_state_dir/overrides.calls")" "$_expected"
     else
         test_fail "overrides was not called"
     fi

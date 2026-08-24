@@ -101,7 +101,9 @@ zfs() {
         return "$_zfscheckagainst_snap_exists"
     fi
     # Destination GUID list: "zfs list -t snapshot -H -o guid -d1 <dataset>".
-    if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" && "$4" == "-H" && "$5" == "-o" && "$6" == "guid" && "$7" == "-d1" ]]; then
+    if [[ "$1" == "list" ]] && [[ "$2" == "-t" ]] && [[ "$3" == "snapshot" ]] &&
+        [[ "$4" == "-H" ]] && [[ "$5" == "-o" ]] && [[ "$6" == "guid" ]] &&\
+       [[ "$7" == "-d1" ]]; then
         echo "$_zfscheckagainst_dest_guids"
         return 0
     fi
@@ -114,7 +116,8 @@ zfs() {
         done
         return 1
     fi
-    if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" && "$5" == "guid" ]]; then
+    if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" ]] &&\
+       [[ "$5" == "guid" ]]; then
         echo "$_zfscheckagainst_guid"
         return 0
     fi
@@ -125,7 +128,9 @@ zfs() {
         done <<< "$_zfscheckagainst_holds"
         return 0
     fi
-    if [[ "$1" == "list" && "$2" == "-Ht" && "$3" == "snapshot" && "$4" == "-o" && "$5" == "name" && "$6" == "-s" && "$7" == "creation" ]]; then
+    if [[ "$1" == "list" ]] && [[ "$2" == "-Ht" ]] && [[ "$3" == "snapshot" ]] &&
+        [[ "$4" == "-o" ]] && [[ "$5" == "name" ]] && [[ "$6" == "-s" ]] &&\
+       [[ "$7" == "creation" ]]; then
         echo "$_zfscheckagainst_source_snaps"
         return 0
     fi
@@ -211,9 +216,11 @@ test_offsite_placeholder_offline_hold_verified() {
     reset_mocks
     _zfscheckagainst_offsite_candidates=(z22tb z40tb)
     set_online_pools
-    _zfscheckagainst_source_snaps=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\npoolA/data@offsite-2025-01-02T10:00-05:00-s'
+    _zfscheckagainst_source_snaps=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\n'
+    _zfscheckagainst_source_snaps+=$'poolA/data@offsite-2025-01-02T10:00-05:00-s'
     # Hold on the OTHER snapshot for z40tb.
-    _zfscheckagainst_holds=$'poolA/data@offsite-2025-01-02T10:00-05:00-s\toffsite-z40tb\t2025-01-02T10:00'
+    _zfscheckagainst_holds=$'poolA/data@offsite-2025-01-02T10:00-05:00-s\t'
+    _zfscheckagainst_holds+=$'offsite-z40tb\t2025-01-02T10:00'
 
     local rc=0
     checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
@@ -225,7 +232,8 @@ test_offsite_placeholder_offline_no_hold_blocks() {
     reset_mocks
     _zfscheckagainst_offsite_candidates=(z22tb z40tb)
     set_online_pools
-    _zfscheckagainst_source_snaps=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\npoolA/data@offsite-2025-01-02T10:00-05:00-s'
+    _zfscheckagainst_source_snaps=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\n'
+    _zfscheckagainst_source_snaps+=$'poolA/data@offsite-2025-01-02T10:00-05:00-s'
     _zfscheckagainst_holds=""
 
     local rc=0
@@ -383,8 +391,10 @@ test_offline_hold_excludes_candidate() {
     reset_mocks
     _zfscheckagainst_offsite_candidates=(z22tb)
     set_online_pools
-    _zfscheckagainst_source_snaps=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\npoolA/data@offsite-2025-01-02T10:00-05:00-s'
-    _zfscheckagainst_holds=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\toffsite-z22tb\t2025-01-01T10:00'
+    _zfscheckagainst_source_snaps=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\n'
+    _zfscheckagainst_source_snaps+=$'poolA/data@offsite-2025-01-02T10:00-05:00-s'
+    _zfscheckagainst_holds=$'poolA/data@offsite-2025-01-01T10:00-05:00-s\t'
+    _zfscheckagainst_holds+=$'offsite-z22tb\t2025-01-01T10:00'
     local rc=0
     checkagainst "poolA/data@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
     assert_rc 6 "$rc"

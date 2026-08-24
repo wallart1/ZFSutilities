@@ -134,7 +134,8 @@ test_multi_lock_acquisition() {
         return
     fi
     local rc
-    rc=$(zfslock_acquire_multiple w "test/a" "test/multi/conflict" "test/b" >/dev/null 2>&1; echo $?)
+    rc=$(zfslock_acquire_multiple w "test/a" "test/multi/conflict" "test/b" >/dev/null 2>&1;\
+        echo $?)
     assert_rc 1 "$rc"
     _bg_lock_kill
     zfslock_release_all
@@ -148,7 +149,8 @@ test_multi_lock_acquisition() {
         test_fail "Background lock could not be acquired (rc=$bg_rc)"
         return
     fi
-    rc=$(zfslock_acquire_multiple w "test/first" "test/multi/late" "test/last" >/dev/null 2>&1; echo $?)
+    rc=$(zfslock_acquire_multiple w "test/first" "test/multi/late" "test/last" >/dev/null 2>&1;\
+        echo $?)
     local first_lock
     first_lock=$(_zfslock_file "test/first")
     if [[ "$rc" -eq 1 && ! -f "$first_lock" ]]; then
@@ -208,11 +210,13 @@ test_basic_acquire_release() {
     local multi_lock1="$ZFSLOCK_ID"
     zfslock_acquire "test/dataset2" "r" "second lock"
     local multi_lock2="$ZFSLOCK_ID"
-    [[ -f "$multi_lock1" && -f "$multi_lock2" ]] && test_pass || test_fail "Not all lock files created"
+    [[ -f "$multi_lock1" ]] &&\
+    [[ -f "$multi_lock2" ]] && test_pass || test_fail "Not all lock files created"
 
     test_start "Release all locks"
     zfslock_release_all
-    [[ ! -f "$multi_lock1" && ! -f "$multi_lock2" ]] && test_pass || test_fail "Lock files still exist"
+    [[ ! -f "$multi_lock1" ]] &&\
+    [[ ! -f "$multi_lock2" ]] && test_pass || test_fail "Lock files still exist"
 
     test_start "Acquire writes lock file atomically"
     cleanup_test_locks
@@ -366,7 +370,9 @@ test_stale_detection() {
 
     test_start "Live process with empty cmdline is not stale"
     local fake_lockfile="$ZFSLOCK_LOCKS_DIR/empty%2Fcmdline.lock"
-    printf '{"dataset":"empty/cmdline","type":"w","pid":%s,"script":"%s","acquired":"2026-01-01T00:00:00-05:00","description":"test"}\n' "$$" "$0" > "$fake_lockfile"
+    local _wrap_fmt='{"dataset":"empty/cmdline","type":"w","pid":%s,"script":"%s","acquired":"2026-'
+    _wrap_fmt+='01-01T00:00:00-05:00","description":"test"}\n'
+    printf "$_wrap_fmt" "$$" "$0" > "$fake_lockfile"
     # Simulate a live process whose /proc/<pid>/cmdline is temporarily empty
     # (e.g., right after fork before exec).  The lock must not be removed.
     tr() { echo ""; }
@@ -511,7 +517,8 @@ test_noninteractive_abort() {
     local rcfile="$_mock_zfs_state_dir/headless_rc"
     local output
     output=$(
-        ZFSUTILITIES_HEADLESS=Y zfslock_wait_or_resolve "test/noninteractive" "w" "test" </dev/null 2>&1
+        ZFSUTILITIES_HEADLESS=Y zfslock_wait_or_resolve "test/noninteractive" "w" "test" \
+            </dev/null 2>&1
         echo $? > "$rcfile"
     )
     local rc
@@ -538,7 +545,9 @@ test_stale_conflict_retry() {
 
     test_start "Stale conflicting lock is removed before prompting"
     local fake_lockfile="$ZFSLOCK_LOCKS_DIR/stale%2Fconflict.lock"
-    printf '{"dataset":"stale/conflict","type":"w","pid":99999999,"script":"fake","acquired":"2026-01-01T00:00:00-05:00","description":"stale"}\n' > "$fake_lockfile"
+    local _wrap_fmt='{"dataset":"stale/conflict","type":"w","pid":99999999,"script":"fake","acquire'
+    _wrap_fmt+='d":"2026-01-01T00:00:00-05:00","description":"stale"}\n'
+    printf "$_wrap_fmt" > "$fake_lockfile"
     if zfslock_wait_or_resolve "stale/conflict" "w" "test" >/dev/null 2>&1; then
         local new_pid
         new_pid=$(_zfslock_read_field "$fake_lockfile" "pid")
@@ -579,7 +588,10 @@ test_conflict_message() {
     test_start "CONFLICT banner explains dataset is in use"
     local output
     output=$(zfslock_wait_or_resolve "test/message" "w" "test" <<< "a" 2>&1)
-    if [[ "$output" == *"A lock could not be acquired for 'test/message' because another task is using the dataset or a related dataset"* && "$output" == *"[R] Retry now"* ]]; then
+    local _conflict_msg="A lock could not be acquired for 'test/message' because another task "
+    _conflict_msg+="is using the dataset or a related dataset"
+    if [[ "$output" == *"$_conflict_msg"* ]] &&\
+       [[ "$output" == *"[R] Retry now"* ]]; then
         test_pass
     else
         test_fail "Expected improved CONFLICT message and retry option not found in output"
@@ -604,7 +616,9 @@ test_wait_loop() {
     _bg_lock_start "test/waitloop" "w" "background lock" 3
     sleep 0.5
     local rc
-    rc=$(ZFSLOCK_WAIT_INTERVAL=1 zfslock_wait_or_resolve "test/waitloop" "w" "test" <<< "w" >/dev/null 2>&1; echo $?)
+    rc=$(ZFSLOCK_WAIT_INTERVAL=1 zfslock_wait_or_resolve "test/waitloop" "w" "test" <<< "w" \
+        >/dev/null 2>&1;
+        echo $?)
     _bg_lock_kill
     if [[ "$rc" -eq 0 ]]; then
         test_pass
@@ -631,7 +645,9 @@ test_retry_option() {
     _bg_lock_start "test/retry" "w" "background lock" 3
     sleep 0.5
     local rc
-    rc=$(ZFSLOCK_WAIT_INTERVAL=1 zfslock_wait_or_resolve "test/retry" "w" "test" <<< $'r\nw\n' >/dev/null 2>&1; echo $?)
+    rc=$(ZFSLOCK_WAIT_INTERVAL=1 zfslock_wait_or_resolve "test/retry" "w" "test" <<< $'r\nw\n' \
+        >/dev/null 2>&1;
+        echo $?)
     _bg_lock_kill
     if [[ "$rc" -eq 0 ]]; then
         test_pass
@@ -659,7 +675,9 @@ test_wait_interval_minimum() {
     sleep 0.5
     local start end elapsed rc
     start=$(date +%s)
-    rc=$(ZFSLOCK_WAIT_INTERVAL=0 zfslock_wait_or_resolve "test/zerowait" "w" "test" <<< "w" >/dev/null 2>&1; echo $?)
+    rc=$(ZFSLOCK_WAIT_INTERVAL=0 zfslock_wait_or_resolve "test/zerowait" "w" "test" <<< "w" \
+        >/dev/null 2>&1;
+        echo $?)
     end=$(date +%s)
     _bg_lock_kill
     elapsed=$((end - start))

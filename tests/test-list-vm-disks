@@ -219,10 +219,13 @@ EOF
     build_vm_disk_map
 
     # The zvol is vm-100-disk-0 but the disk is attached to VM 300.
-    if [[ "${VM_MAP_VMID[threeamigos:0]}" == "300" && "${VM_MAP_NAME[threeamigos:0]}" == "moved-here" ]]; then
+    if [[ "${VM_MAP_VMID[threeamigos:0]}" == "300" ]] &&\
+       [[ "${VM_MAP_NAME[threeamigos:0]}" == "moved-here" ]]; then
         test_pass
     else
-        test_fail "Expected VMID 300, got ${VM_MAP_VMID[threeamigos:0]} / ${VM_MAP_NAME[threeamigos:0]}"
+        local _wrap_msg="Expected VMID 300, got ${VM_MAP_VMID[threeamigos:0]} / "
+        _wrap_msg+="${VM_MAP_NAME[threeamigos:0]}"
+        test_fail "$_wrap_msg"
     fi
 }
 
@@ -234,7 +237,9 @@ test_build_host_device_map() {
 
     local ok=1
     [[ "${HOST_DEV[threeamigos:0]}" == "/dev/loop0" ]] || ok=0
-    [[ "${HOST_BYPATH[threeamigos:0]}" == "$by_path_dir/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0" ]] || ok=0
+    local _wrap_rhs="$by_path_dir/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos"
+    _wrap_rhs+="-lun-0"
+    [[ "${HOST_BYPATH[threeamigos:0]}" == "$_wrap_rhs" ]] || ok=0
     [[ "${HOST_DEV[threeamigos:1]}" == "/dev/loop1" ]] || ok=0
 
     if [[ $ok -eq 1 ]]; then
@@ -267,7 +272,9 @@ test_build_guest_device_map_running() {
     build_running_vm_set
     build_guest_device_map
 
-    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" && "${GUEST_BYPATH[threeamigos:0]}" == "/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0" ]]; then
+    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" ]] &&\
+       local _wrap_rhs="/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
+       [[ "${GUEST_BYPATH[threeamigos:0]}" == "$_wrap_rhs" ]]; then
         test_pass
     else
         test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
@@ -295,13 +302,16 @@ test_build_guest_device_map_base64() {
     test_start "build_guest_device_map decodes base64 out-data"
     reset_mocks
     write_two_node_configs
-    _qm_guest_output=$(printf '/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n' | base64 -w0)
+    local _guest_lines=$'/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n'
+    _qm_guest_output=$(printf '%s' "$_guest_lines" | base64 -w0)
 
     build_vm_disk_map
     build_running_vm_set
     build_guest_device_map
 
-    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" && "${GUEST_BYPATH[threeamigos:0]}" == "/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0" ]]; then
+    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" ]] &&\
+       local _wrap_rhs="/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
+       [[ "${GUEST_BYPATH[threeamigos:0]}" == "$_wrap_rhs" ]]; then
         test_pass
     else
         test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
@@ -319,7 +329,9 @@ test_build_guest_device_map_exited_one() {
     build_running_vm_set
     build_guest_device_map
 
-    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" && "${GUEST_BYPATH[threeamigos:0]}" == "/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0" ]]; then
+    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" ]] &&\
+       local _wrap_rhs="/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
+       [[ "${GUEST_BYPATH[threeamigos:0]}" == "$_wrap_rhs" ]]; then
         test_pass
     else
         test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
@@ -331,13 +343,16 @@ test_build_guest_device_map_immediate_status() {
     reset_mocks
     write_two_node_configs
     _qm_exec_returns_status=true
-    _qm_guest_output=$(printf '/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n' | base64 -w0)
+    local _guest_lines=$'/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n'
+    _qm_guest_output=$(printf '%s' "$_guest_lines" | base64 -w0)
 
     build_vm_disk_map
     build_running_vm_set
     build_guest_device_map
 
-    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" && "${GUEST_BYPATH[threeamigos:0]}" == "/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0" ]]; then
+    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" ]] &&\
+       local _wrap_rhs="/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
+       [[ "${GUEST_BYPATH[threeamigos:0]}" == "$_wrap_rhs" ]]; then
         test_pass
     else
         test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
@@ -382,7 +397,8 @@ test_two_node_output_storage_host() {
     local output
     output=$(run_two_node 2>&1)
 
-    if [[ "$output" == *"VMID:   100"* && "$output" == *"Name:   webserver"* && "$output" == *"Host:   /dev/loop0"* ]]; then
+    if [[ "$output" == *"VMID:   100"* && "$output" == *"Name:   webserver"* ]] &&\
+       [[ "$output" == *"Host:   /dev/loop0"* ]]; then
         test_pass
     else
         test_fail "Storage-host output missing expected fields:\n$output"
@@ -449,7 +465,8 @@ test_emit_vm_data_machine_readable() {
     [[ "$output" == *"VM|threeamigos:0|100|webserver|scsi0"* ]] || ok=0
     [[ "$output" == *"HOST|threeamigos:0|/dev/loop0|"* ]] || ok=0
     [[ "$output" == *"RUNNING|100"* ]] || ok=0
-    [[ "$output" == *"GUEST|threeamigos:0|/dev/sda|/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"* ]] || ok=0
+    local _wrap_rhs="GUEST|threeamigos:0|/dev/sda|/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
+    [[ "$output" == *"$_wrap_rhs"* ]] || ok=0
 
     if [[ $ok -eq 1 ]]; then
         test_pass
@@ -467,7 +484,8 @@ test_emit_lun_data_machine_readable() {
     local output
     output=$(emit_lun_data)
 
-    if [[ "$output" == *"LUN|threeamigos|0|vm-100-disk-0|threeamigos/proxmox/vm-100-disk-0|50G"* ]]; then
+    local _wrap_rhs="LUN|threeamigos|0|vm-100-disk-0|threeamigos/proxmox/vm-100-disk-0|50G"
+    if [[ "$output" == *"$_wrap_rhs"* ]]; then
         test_pass
     else
         test_fail "Machine-readable LUN output:\n$output"
@@ -485,7 +503,8 @@ test_emit_lun_data_clone_origin_full_name() {
     local output
     output=$(emit_lun_data)
 
-    if [[ "$output" == *"[clone of threeamigos/proxmox/vm-100-disk-0@clone-2026-07-30T12:00-0400-c]"* ]]; then
+    local _wrap_rhs="[clone of threeamigos/proxmox/vm-100-disk-0@clone-2026-07-30T12:00-0400-c]"
+    if [[ "$output" == *"$_wrap_rhs"* ]]; then
         test_pass
     else
         test_fail "Expected full origin snapshot name in output:\n$output"
@@ -519,7 +538,8 @@ EOF
     export NODE_CONF="$node_conf_two"
     source "$mydir/lib/node-lib.sh"
 
-    if [[ "$output" == *"[clone of threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c]"* ]]; then
+    local _wrap_rhs="[clone of threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c]"
+    if [[ "$output" == *"$_wrap_rhs"* ]]; then
         test_pass
     else
         test_fail "Expected full origin snapshot name in single-node output:\n$output"

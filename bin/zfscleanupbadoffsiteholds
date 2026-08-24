@@ -83,7 +83,8 @@ function cleanupbadoffsiteholds {
         log_msg "INFO: No self-referencing offsite holds found on $pool."
     else
         if [[ $dryrun = "dryrun" ]]; then
-            log_msg "INFO: Found $count self-referencing holds. Run without 'dryrun' to remove them."
+            log_msg "INFO: Found $count self-referencing holds. Run without 'dryrun' to remove" \
+                "them."
         else
             log_msg "INFO: Removed $count self-referencing holds from $pool."
         fi

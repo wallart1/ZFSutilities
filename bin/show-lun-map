@@ -67,7 +67,7 @@ while IFS= read -r link; do
     DEV=$(basename "$DEVPATH")
 
     LUN_TO_DEV["${TARGET}:${LUN}"]="$DEV"
-done < <(ls /dev/disk/by-path/ip-${STORAGE_IP}* 2>/dev/null)
+done < <(find /dev/disk/by-path/ -maxdepth 1 -name "ip-${STORAGE_IP}*" -print 2>/dev/null)
 
 if [[ ${#LUN_TO_DEV[@]} -eq 0 ]]; then
     log_msg "FATAL: No iSCSI devices found. Is the storage network up?"

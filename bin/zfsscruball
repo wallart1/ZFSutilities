@@ -173,6 +173,7 @@ function do_scrubs {
     #   The _ is a placeholder for $0 (unneeded script name).
     #   {} becomes $1 inside the shell.
 
+    # shellcheck disable=SC2016
     printf '%s\n' "${pools[@]}" \
         | xargs -P$parallel -I{} \
             bash -c '

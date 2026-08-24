@@ -69,7 +69,8 @@ if [[ "$USE_EXISTING_MOUNT" != true ]]; then
     done
 
     if [[ -z "$DEVICE" ]]; then
-        log_msg "WARN: ZFS keys USB not found after ${TIMEOUT}s — encrypted LUNs will remain offline."
+        log_msg "WARN: ZFS keys USB not found after ${TIMEOUT}s — encrypted LUNs will remain" \
+            "offline."
         log_msg "WARN:   Insert the USB and run unlock-zfs-keys to load keys manually."
         exit 0
     fi

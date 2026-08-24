@@ -336,7 +336,8 @@ class TestDocsViewerNavigation(unittest.TestCase):
         from unittest.mock import MagicMock
 
         decision = MagicMock()
-        decision.get_navigation_action.return_value.get_request.return_value.get_uri.return_value = uri
+        decision.get_navigation_action.return_value.get_request.return_value.get_uri.return_value \
+            = uri
         return decision
 
     def test_on_decide_policy_uses_navigation_action(self):

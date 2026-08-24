@@ -28,7 +28,7 @@ source_helper bashsetx
 if [[ $1 != '' ]]; then
     sourcefs=$1
 else
-    log_msg 'FATAL: A dataset must be given as $1.'
+    log_msg "FATAL: A dataset must be given as \$1."
     exit 8
 fi
 
@@ -57,7 +57,10 @@ function editsize {
 
 autoproceed='N'
 if [[ $1 != '' ]]; then sourcefs=$1; fi
-if [[ $sourcefs = '' ]]; then log_msg 'FATAL: A dataset must be given as $1 or $sourcefs.'; exit 8; fi
+if [[ $sourcefs = '' ]]; then
+    log_msg "FATAL: A dataset must be given as \$1 or \$sourcefs."
+    exit 8
+fi
 # shellcheck disable=SC2034
 # Intentionally set for sourced zfsbuildfsarray helper.
 depth=''
@@ -89,43 +92,43 @@ for fs in "${fsarray[@]}"; do
     log_msg "INFO: $fs"
 done
 if [[ $autoproceed != 'Y' ]]; then
-    read -p 'Press enter to continue.'
+    read -rp 'Press enter to continue.'
 fi
 
 firstsnap=${fsarray[0]}
 lastsnap=${fsarray[fsarraylen-1]}
 
 # Part 1: Full read-through to $firstsnap/oldest snapshot.
-log_msg 'INFO: Part one: Full read-through to then $firstsnap/oldest snapshot.'
+log_msg "INFO: Part one: Full read-through to then \$firstsnap/oldest snapshot."
 
-size=$(sudo zfs send -wnvc $firstsnap 2>/dev/null | tail -1 | awk '{print $5}')
-edited_size=$(editsize $size)
+size=$(sudo zfs send -wnvc "$firstsnap" 2>/dev/null | tail -1 | awk '{print $5}')
+edited_size=$(editsize "$size")
 log_msg "INFO: Reading $firstsnap.\n\tEstimated amount of data to read: $size bytes."
 log_msg "INFO: zfs send -wc $firstsnap"
 if [[ $autoproceed != 'Y' ]]; then
-    read -p "Press enter to proceed."
+    read -rp "Press enter to proceed."
 fi
 
-if ! sudo zfs send -wc $firstsnap \
-    | pv -s $edited_size -pterb \
+if ! sudo zfs send -wc "$firstsnap" \
+    | pv -s "$edited_size" -pterb \
     | cat > /dev/null; then
         exit 8
 fi
 
 # Part 2: Read-through to $lastsnap/newest snapshot.
 autoproceed='Y'
-log_msg 'INFO: Part two: Read-through from the above snapshot to the $lastsnap/newest snapshot.'
+log_msg "INFO: Part two: Read-through from the above snapshot to the \$lastsnap/newest snapshot."
 
-size=$(sudo zfs send -wnvc -I $firstsnap $lastsnap 2>/dev/null | tail -1 | awk '{print $5}')
-edited_size=$(editsize $size)
+size=$(sudo zfs send -wnvc -I "$firstsnap" "$lastsnap" 2>/dev/null | tail -1 | awk '{print $5}')
+edited_size=$(editsize "$size")
 log_msg "INFO: Reading $firstsnap to $lastsnap.\n\tEstimated amount of data to read: $size bytes."
 log_msg "INFO: zfs send -wc -I $firstsnap $lastsnap"
 if [[ $autoproceed != 'Y' ]]; then
-    read -p "Press enter to proceed."
+    read -rp "Press enter to proceed."
 fi
 
-if ! sudo zfs send -wc -I $firstsnap $lastsnap\
-    | pv -s $edited_size -pterb \
+if ! sudo zfs send -wc -I "$firstsnap" "$lastsnap" \
+    | pv -s "$edited_size" -pterb \
     | cat > /dev/null; then
         exit 8
 fi

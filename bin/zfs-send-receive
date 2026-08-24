@@ -50,56 +50,72 @@ function send-receive {
         else
             zfs receive -A "$dest"
         fi
-        zfslock_release "$lock_source"; zfslock_release "$lock_dest"; ((i--))
+        zfslock_release "$lock_source"
+        zfslock_release "$lock_dest"; ((i--))
     }
 
     do_transfer() {
         local sendopts="$1" recvopts="$2" use_pv="$3" datatosend="$4" desc="$5"
         if [[ $dryrun != 'N' ]]; then
-            local _sz=""; [[ -n "$datatosend" && "$datatosend" -gt 0 ]] && _sz=" (~$(echo $datatosend | numfmt --to=iec-i))"
+            local _sz=""
+            [[ -n "$datatosend" && "$datatosend" -gt 0 ]] \
+                && _sz=" (~$(echo "$datatosend" | numfmt --to=iec-i))"
             log_msg "INFO: Dry-run: Would $desc$_sz"
             return
         fi
 
-        local _pv_args=""
+        local -a _pv_args=()
         local _pv_progress_desired="N"
         # Progress display: natural in terminal, forced in GUI, suppressed otherwise
         if [[ "$use_pv" = 'Y' ]]; then
             if [[ -t 2 ]]; then
                 # Terminal available — natural progress display
-                _pv_args="-pterb -s $datatosend"
+                _pv_args=(-pterb -s "$datatosend")
                 _pv_progress_desired="Y"
             elif [[ "${ZFSUTILITIES_LOG_INHERIT:-}" = "Y" ]]; then
                 # Parent runner is capturing output — force output for parser
-                _pv_args="-fpterb -s $datatosend"
+                _pv_args=(-fpterb -s "$datatosend")
                 _pv_progress_desired="Y"
             fi
         fi
         # Rate limit: visible in terminal/GUI, quiet in headless/non-interactive
         if [[ -n "$pv_rate_limit" ]]; then
             if [[ "$_pv_progress_desired" = "Y" ]]; then
-                _pv_args="$_pv_args -L $pv_rate_limit"
+                _pv_args+=("-L" "$pv_rate_limit")
             else
-                _pv_args="-q -L $pv_rate_limit"
+                _pv_args=(-q -L "$pv_rate_limit")
             fi
         fi
 
         # When resuming via -t <token>, the token already encodes the snapshot,
         # so do not append "$fs$nextsnap" as an extra positional argument.
-        # shellcheck disable=SC2206
-        local -a send_cmd=(zfs send $sendopts)
+        local -a _sendopts=()
+        read -r -a _sendopts <<< "$sendopts"
+        local -a send_cmd=(zfs send "${_sendopts[@]}")
         [[ "$sendopts" != *"-t"* ]] && send_cmd+=("$fs$nextsnap")
 
-        if [[ -n "$_pv_args" ]]; then
-            if ! "${send_cmd[@]}" | pv $_pv_args | zfs receive $recvopts "$destfs$restorefs"; then
+        local -a _recvopts=()
+        read -r -a _recvopts <<< "$recvopts"
+
+        if [[ ${#_pv_args[@]} -gt 0 ]]; then
+            if ! "${send_cmd[@]}" | pv "${_pv_args[@]}" \
+                    | zfs receive "${_recvopts[@]}" "$destfs$restorefs"; then
                 log_msg "FATAL: $desc failed. RC=$?"
-                [[ "$desc" == "Send/receive"* ]] && { log_msg "Are there holds on $destfs$restorefs snapshots?"; holds "$destfs" 1; holds "$destfs$restorefs" 1; }
+                if [[ "$desc" == "Send/receive"* ]]; then
+                    log_msg "Are there holds on $destfs$restorefs snapshots?"
+                    holds "$destfs" 1
+                    holds "$destfs$restorefs" 1
+                fi
                 zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8
             fi
         else
-            if ! "${send_cmd[@]}" | zfs receive $recvopts "$destfs$restorefs"; then
+            if ! "${send_cmd[@]}" | zfs receive "${_recvopts[@]}" "$destfs$restorefs"; then
                 log_msg "FATAL: $desc failed. RC=$?"
-                [[ "$desc" == "Send/receive"* ]] && { log_msg "Are there holds on $destfs$restorefs snapshots?"; holds "$destfs" 1; holds "$destfs$restorefs" 1; }
+                if [[ "$desc" == "Send/receive"* ]]; then
+                    log_msg "Are there holds on $destfs$restorefs snapshots?"
+                    holds "$destfs" 1
+                    holds "$destfs$restorefs" 1
+                fi
                 zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8
             fi
         fi
@@ -145,9 +161,9 @@ function send-receive {
         local space_needed=$(( datatosend + safety_margin ))
         [[ $dest_avail -ge $space_needed ]] && return 0
         log_msg "WARN: Insufficient space on destination pool '$dest_pool'." \
-            "\n\tData to send: $(echo $datatosend | numfmt --to=iec-i)" \
+            "\n\tData to send: $(echo "$datatosend" | numfmt --to=iec-i)" \
             "\n\tSpace needed (with 10% margin): $(echo $space_needed | numfmt --to=iec-i)" \
-            "\n\tSpace available: $(echo $dest_avail | numfmt --to=iec-i)"
+            "\n\tSpace available: $(echo "$dest_avail" | numfmt --to=iec-i)"
         if [[ $autoproceed = 'Y' ]] || ! ask_yn "Do you want to attempt the transfer anyway?"; then
             log_msg "INFO: Skipping $fs (insufficient space)."; return 1
         fi
@@ -157,7 +173,10 @@ function send-receive {
     check_running_vms_or_skip() {
         local dest="$1" vm_check_rc
         checkrunningvms "$dest"; vm_check_rc=$?
-        [[ $vm_check_rc -eq 2 ]] && { log_msg "INFO: Proxmox tools not available - cannot check for running VMs."; return 0; }
+        if [[ $vm_check_rc -eq 2 ]]; then
+            log_msg "INFO: Proxmox tools not available - cannot check for running VMs."
+            return 0
+        fi
         [[ $vm_check_rc -ne 1 ]] && return 0
         log_msg "WARN: Running VMs detected on destination dataset $dest!" \
             "\n\tThe following VMs must be stopped before restore:"
@@ -172,11 +191,14 @@ function send-receive {
     prepare_destination_for_full_copy() {
         local dest="$1" fs="$2"
         if [[ $allow_destructive = 'Y' || $force = 'Y' ]]; then
-            [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: Would destroy destination dataset $dest and all children"
+            [[ $dryrun != 'N' ]] && log_msg \
+                "INFO: Dry-run: Would destroy destination dataset $dest and all children"
             [[ $dryrun != 'N' ]] && return 0
             if [[ $autoproceed != 'Y' ]]; then
-                log_msg "WARN: About to destroy destination dataset $dest AND all of its child datasets and snapshots, ignoring holds, in preparation for a full transfer from $fs."
-                read -p "Press enter to continue."
+                log_msg "WARN: About to destroy destination dataset $dest AND all of its child" \
+                    "datasets and snapshots, ignoring holds, in preparation for a full transfer" \
+                    "from $fs."
+                read -rp "Press enter to continue."
             fi
             local saved_fsarray=("${fsarray[@]}")
             if ! autoproceed="$autoproceed" delfs "$dest"; then
@@ -187,8 +209,10 @@ function send-receive {
             [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: Would delete all snapshots of $dest"
             [[ $dryrun != 'N' ]] && return 0
             if [[ $autoproceed != 'Y' ]]; then
-                log_msg "WARN: About to delete all snapshots of destination dataset $dest, ignoring holds, in preparation for a full transfer from $fs.\n\t(Child datasets will NOT be touched.)"
-                read -p "Press enter to continue."
+                log_msg "WARN: About to delete all snapshots of destination dataset $dest," \
+                    "ignoring holds, in preparation for a full transfer from $fs.\n\t(Child" \
+                    "datasets will NOT be touched.)"
+                read -rp "Press enter to continue."
             fi
             local _save_releaseholds_tags=("${releaseholds_tags[@]}")
             releaseholds_tags=('offsite-*')
@@ -206,7 +230,12 @@ function send-receive {
         local rc="$1" fs="$2" destfs_restorefs="$3"
         if [[ $commsnap = "" ]]; then
             log_msg "WARN: No snapshots were found for $fs."
-            ask_yn "Should a full copy be done instead?" && doincrementals="N" || { log_msg "INFO: Skipping $fs."; return 1; }
+            if ask_yn "Should a full copy be done instead?"; then
+                doincrementals="N"
+            else
+                log_msg "INFO: Skipping $fs."
+                return 1
+            fi
         elif [[ $rc = 0 ]]; then
             [[ $commsnap_mostrecent = 'OLDEST' ]] && nextsnap=$commsnap
         elif [[ $rc = 4 ]]; then
@@ -215,24 +244,42 @@ function send-receive {
             if zfs list -H -o name "$destfs_restorefs" >/dev/null 2>&1; then
                 log_msg "WARN: No common snapshot found between $fs and $destfs_restorefs."
             else
-                log_msg "INFO: Destination $destfs_restorefs does not exist; creating new dataset from $fs."
+                log_msg "INFO: Destination $destfs_restorefs does not exist; creating new dataset" \
+                    "from $fs."
             fi
-            { [[ $autoproceed = "Y" ]] || ask_yn "Do you want to do a full copy of $fs?"; } && doincrementals="N" || { log_msg "INFO: Skipping $fs."; return 1; }
+            if [[ $autoproceed = "Y" ]] || ask_yn "Do you want to do a full copy of $fs?"; then
+                doincrementals="N"
+            else
+                log_msg "INFO: Skipping $fs."
+                return 1
+            fi
         elif [[ $rc = 16 ]]; then
-            readarray -t snaparray_d < <(zfs list -t snap -o name -S createtxg -H -d1 "$destfs_restorefs" 2>/dev/null)
+            readarray -t snaparray_d < <(zfs list -t snap -o name -S createtxg -H -d1 \
+                "$destfs_restorefs" 2>/dev/null)
             local match_j
             for (( match_j=0; match_j<${#snaparray_d[@]}; match_j++ )); do
                 [[ "${snaparray_d[$match_j]}" == *"$commsnap" ]] && break
             done
             snaparray_d=("${snaparray_d[@]:0:$match_j}")
-            local rollback_incremental
-            [[ $dointermediates = "Y" ]] && rollback_incremental="-I $commsnap" || rollback_incremental="-i $commsnap"
+            local -a rollback_incremental_args
+            if [[ $dointermediates = "Y" ]]; then
+                rollback_incremental_args=(-I "$commsnap")
+            else
+                rollback_incremental_args=(-i "$commsnap")
+            fi
             # awk '/^size/ {print $2}'  —  Extract byte size from incremental rollback dry-run.
             local rollback_datatosend
-            rollback_datatosend=$(zfs send -nPc $rollback_incremental $fs$nextsnap 2>/dev/null | awk '/^size/ {print $2}')
+            rollback_datatosend=$(zfs send -nPc "${rollback_incremental_args[@]}" \
+                "$fs$nextsnap" 2>/dev/null | awk '/^size/ {print $2}')
             local _sz="(unknown)"
-            [[ -n "$rollback_datatosend" && "$rollback_datatosend" -gt 0 ]] && _sz=$(echo "$rollback_datatosend" | numfmt --to=iec-i)
-            log_msg "INFO: A common snapshot between $fs and $destfs_restorefs was found.\n\tHowever, the destination snapshot is not the most recent one.\n\tThis will roll back snapshot(s) and changes on the destination since the common snapshot, bypassing any holds.\n\tThe common snap is: $commsnap.\n\tApproximate transfer size: $_sz.\n\tThe snapshots to be rolled back are:"
+            if [[ -n "$rollback_datatosend" && "$rollback_datatosend" -gt 0 ]]; then
+                _sz=$(echo "$rollback_datatosend" | numfmt --to=iec-i)
+            fi
+            log_msg "INFO: A common snapshot between $fs and $destfs_restorefs was" \
+                "found.\n\tHowever, the destination snapshot is not the most recent one.\n\tThis" \
+                "will roll back snapshot(s) and changes on the destination since the common" \
+                "snapshot, bypassing any holds.\n\tThe common snap is: $commsnap.\n\tApproximate" \
+                "transfer size: $_sz.\n\tThe snapshots to be rolled back are:"
             for snap in "${snaparray_d[@]}"; do echo -e "\t\t$snap"; done
             local _sent_label="${nextsnap#@}"; _sent_label="${_sent_label%%-*}"
             local _mismatch_labels=""
@@ -250,37 +297,47 @@ function send-receive {
                 for _lbl in $_mismatch_labels; do
                     _label_list="$_label_list @$_lbl"
                 done
-                log_msg "INFO: This rollback is caused by a scope mismatch: the destination has newer${_label_list} snapshot(s), but the source does not. Align the source scopes of your overlapping backup and offsite profiles to avoid this."
+                log_msg "INFO: This rollback is caused by a scope mismatch: the destination has" \
+                    "newer${_label_list} snapshot(s), but the source does not. Align the source" \
+                    "scopes of your overlapping backup and offsite profiles to avoid this."
             fi
             local readprompt="Roll back and transfer? (y=proceed, n=skip this dataset): "
             local do_rollback='N'
             if [[ $autoproceed = 'Y' ]]; then
-                log_msg "WARN: autoproceed=Y — rolling back $destfs_restorefs to $commsnap and proceeding with transfer"
+                log_msg "WARN: autoproceed=Y — rolling back $destfs_restorefs to $commsnap and" \
+                    "proceeding with transfer"
                 do_rollback='Y'
             elif ! [[ -t 0 ]]; then
-                log_msg "WARN: Non-interactive mode — skipping $fs (rollback required for $destfs_restorefs)"
+                log_msg "WARN: Non-interactive mode — skipping $fs (rollback required for" \
+                    "$destfs_restorefs)"
                 return 1
             else
                 local response
                 local eof_count=0
                 while true; do
-                    read -p $'\t'"$readprompt" response
+                    read -rp $'\t'"$readprompt" response
                     if [[ -z "$response" ]]; then
                         ((eof_count++))
-                        if [[ $eof_count -ge 3 ]]; then
-                            log_msg "WARN: No interactive input — skipping $fs (rollback required)"
+                        if [[ $eof_count -ge 3 ]];
+                        then
+                            log_msg "WARN: No interactive input — skipping $fs" \
+                                "(rollback required)"
                             return 1
                         fi
                         continue
                     fi
                     [[ ${response,,} = 'y' ]] && { do_rollback='Y'; break; }
-                    [[ ${response,,} = 'n' ]] && { log_msg "INFO: Skipping $fs (rollback declined)."; return 1; }
+                    if [[ ${response,,} = 'n' ]]; then
+                        log_msg "INFO: Skipping $fs (rollback declined)."
+                        return 1
+                    fi
                     echo "Please enter 'y' or 'n'."
                 done
             fi
             if [[ $do_rollback = 'Y' ]]; then
                 if [[ $dryrun != 'N' ]]; then
-                    log_msg "INFO: Dry-run: Would release matching holds and rollback $destfs_restorefs to $commsnap"
+                    log_msg "INFO: Dry-run: Would release matching holds and rollback" \
+                        "$destfs_restorefs to $commsnap"
                 else
                     local _save_autoproceed="$autoproceed"
                     local _remaining_holds=""
@@ -288,7 +345,7 @@ function send-receive {
                     for snap in "${snaparray_d[@]}"; do
                         delallholds "$snap" 'offsite-*'
                         if [[ -n "$ZFS_DELALLHOLDS_REMAINING_TAGS" ]]; then
-                            _remaining_holds="$_remaining_holds $snap:$ZFS_DELALLHOLDS_REMAINING_TAGS"
+                            _remaining_holds+=" $snap:$ZFS_DELALLHOLDS_REMAINING_TAGS"
                         fi
                     done
                     autoproceed="$_save_autoproceed"
@@ -314,10 +371,10 @@ function send-receive {
 
     local entry_sourcefs="$sourcefs" entry_destfs="$destfs"
     [[ $1 != '' ]] && sourcefs=$1
-    [[ $sourcefs = '' ]] && { log_msg "FATAL: sourcefs "'($1)'" must be specified."; exit 8; }
+    [[ $sourcefs = '' ]] && { log_msg "FATAL: sourcefs (\$1) must be specified."; exit 8; }
     [[ $sourcefsremovequalifiers = '' ]] && sourcefsremovequalifiers=0
     [[ $2 != '' ]] && destfs=$2
-    [[ $destfs = '' ]] && { log_msg "FATAL: destfs "'($2)'" must be specified."; exit 8; }
+    [[ $destfs = '' ]] && { log_msg "FATAL: destfs (\$2) must be specified."; exit 8; }
     local overrides=''
     [[ $3 != '' ]] && overrides=$3
     [[ $nextsnap = "" ]] && nextsnap=$(zfssnapbuild)
@@ -353,17 +410,24 @@ function send-receive {
     for (( i=0; i<${#fsarray[@]}; i++)); do
         local _origin
         _origin=$(zfs list -H -o origin "${fsarray[$i]}" 2>/dev/null)
-        [[ "$_origin" != "-" && -n "$_origin" ]] && log_msg "VERB: Dataset ${fsarray[$i]} is a ZFS clone. It will be backed up as a regular dataset."
+        if [[ "$_origin" != "-" && -n "$_origin" ]]; then
+            log_msg "VERB: Dataset ${fsarray[$i]} is a ZFS clone." \
+                "It will be backed up as a regular dataset."
+        fi
     done
 
     log_msg "INFO: About to copy the following datasets to $destfs:"
     for (( i=0; i<${#fsarray[@]}; i++)); do echo "${fsarray[i]}"; done
-    [[ $autoproceed != "Y" ]] && read -p "Press enter to continue."
+    [[ $autoproceed != "Y" ]] && read -rp "Press enter to continue."
     autoproceed='Y'
 
-    save_doincrementals=$doincrementals save_receive_s_option=$receive_s_option save_nextsnap=$nextsnap
+    save_doincrementals=$doincrementals
+    save_receive_s_option=$receive_s_option
+    save_nextsnap=$nextsnap
     for (( i=0; i<${#fsarray[@]}; i++)); do
-        doincrementals=$save_doincrementals receive_s_option=$save_receive_s_option nextsnap=$save_nextsnap
+        doincrementals=$save_doincrementals
+        receive_s_option=$save_receive_s_option
+        nextsnap=$save_nextsnap
         fs=${fsarray[i]}
         echo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
         log_msg "INFO: Processing $fs."
@@ -382,25 +446,39 @@ function send-receive {
         fi
         lock_source="$ZFSLOCK_ID"
 
-        zfslock_wait_or_resolve "$destfs$restorefs" "w" "send-receive dest: $fs -> $destfs$restorefs"
+        zfslock_wait_or_resolve "$destfs$restorefs" "w" \
+            "send-receive dest: $fs -> $destfs$restorefs"
         lock_rc=$?
         if [[ $lock_rc -eq 1 ]]; then
-            log_msg "WARN: Backup operation aborted by user due to lock conflict on destination '$destfs$restorefs'."
+            log_msg "WARN: Backup operation aborted by user due to lock conflict on destination" \
+                "'$destfs$restorefs'."
             zfslock_release "$lock_source"
             exit "$ZFSLOCK_RC_ABORT_OPERATION"
         elif [[ $lock_rc -eq 2 ]]; then
-            log_msg "INFO: Skipping dataset $fs (lock conflict on destination)."; zfslock_release "$lock_source"; continue
+            log_msg "INFO: Skipping dataset $fs (lock conflict on destination)."
+            zfslock_release "$lock_source"
+            continue
         fi
         lock_dest="$ZFSLOCK_ID"
 
         if [[ "$nextsnap" == 'notneeded' ]]; then
             local _newest_snap
             _newest_snap=$(zfs list -t snap -o name -S createtxg -H -d1 "$fs" 2>/dev/null | head -1)
-            [[ -z "$_newest_snap" ]] && { log_msg "WARN: No snapshots found on $fs (nextsnap=notneeded). Skipping."; zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue; }
+            if [[ -z "$_newest_snap" ]]; then
+                log_msg "WARN: No snapshots found on $fs (nextsnap=notneeded). Skipping."
+                zfslock_release "$lock_source"
+                zfslock_release "$lock_dest"
+                continue
+            fi
             nextsnap="@${_newest_snap##*@}"
         elif ! zfs list -t snapshot "$fs""$nextsnap" > /dev/null 2>&1; then
             [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: Would create snapshot $fs$nextsnap"
-            [[ $dryrun = 'N' ]] && ! zfs snapshot "$fs""$nextsnap" && { log_msg "FATAL: Unable to create the required snapshot $fs$nextsnap."; zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8; }
+            if [[ $dryrun = 'N' ]] && ! zfs snapshot "$fs""$nextsnap"; then
+                log_msg "FATAL: Unable to create the required snapshot $fs$nextsnap."
+                zfslock_release "$lock_source"
+                zfslock_release "$lock_dest"
+                exit 8
+            fi
         fi
 
         if zfs list "$destfs""$restorefs" > /dev/null 2>&1; then
@@ -410,53 +488,86 @@ function send-receive {
                 log_msg "INFO: Found resume token for $destfs$restorefs." \
                     "Preparing to resume transfer."
                 if ! resumedata=$(zfs send -nP -t "$resumetoken" 2>&1); then
-                    if [[ $resumedata == *"no longer exists"* || $resumedata == *"@--head--"* || $resumedata == *"Invalid argument"* || $resumedata == *"does not match"* || $resumedata == *"destination has been modified"* ]]; then
+                    if [[ $resumedata == *"no longer exists"* \
+                        || $resumedata == *"@--head--"* \
+                        || $resumedata == *"Invalid argument"* \
+                        || $resumedata == *"does not match"* \
+                        || $resumedata == *"destination has been modified"* ]]; then
                         log_msg "WARN: Resume token is invalid or stale. Aborting resume token."
                         log_msg "WARN: $resumedata"
                         abort_resume_token "$destfs$restorefs"
                         continue
                     else
-                        log_msg "WARN: Resume token validation failed with unexpected error:\n\t$resumedata"
+                        log_msg "WARN: Resume token validation failed with unexpected" \
+                            "error:\n\t$resumedata"
                         if [[ $autoproceed = 'Y' ]]; then
                             log_msg "WARN: autoproceed=Y — aborting resume token and retrying..."
                             abort_resume_token "$destfs$restorefs"
                             continue
                         elif ! [[ -t 0 ]]; then
-                            log_msg "WARN: Non-interactive mode — skipping $fs (resume token error for $destfs$restorefs)"
-                            zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue
+                            log_msg "WARN: Non-interactive mode — skipping $fs" \
+                                "(resume token error for $destfs$restorefs)"
+                            zfslock_release "$lock_source"
+                            zfslock_release "$lock_dest"
+                            continue
                         else
-                            log_msg "INFO: Options:\n\t[A] Abort resume token and retry (may trigger full copy)\n\t[S] Skip this dataset\n\t[Q] Quit"
+                            log_msg "INFO: Options:\n\t[A] Abort resume token and retry" \
+                                "(may trigger full copy)\n\t[S] Skip this dataset\n\t[Q] Quit"
                             local choice
                             local eof_count=0
                             while true; do
-                                read -p "Choice [A/S/Q]: " choice
+                                read -rp "Choice [A/S/Q]: " choice
                                 if [[ -z "$choice" ]]; then
                                     ((eof_count++))
                                     if [[ $eof_count -ge 3 ]]; then
-                                        log_msg "WARN: No interactive input — skipping $fs (resume token error)"
-                                        zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue 2
+                                        log_msg "WARN: No interactive input — skipping $fs" \
+                                            "(resume token error)"
+                                        zfslock_release "$lock_source"
+                            zfslock_release "$lock_dest"
+                            continue 2
                                     fi
                                     continue
                                 fi
-                                [[ "${choice^^}" = 'A' ]] && { log_msg "INFO: Aborting resume token..."; abort_resume_token "$destfs$restorefs"; continue 2; }
-                                [[ "${choice^^}" = 'S' ]] && { log_msg "INFO: Skipping $fs."; zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue 2; }
-                                [[ "${choice^^}" = 'Q' ]] && { zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8; }
+                                if [[ "${choice^^}" = 'A' ]]; then
+                                    log_msg "INFO: Aborting resume token..."
+                                    abort_resume_token "$destfs$restorefs"
+                                    continue 2
+                                fi
+                                if [[ "${choice^^}" = 'S' ]]; then
+                                    log_msg "INFO: Skipping $fs."
+                                    zfslock_release "$lock_source"
+                                    zfslock_release "$lock_dest"
+                                    continue 2
+                                fi
+                                if [[ "${choice^^}" = 'Q' ]]; then
+                                    zfslock_release "$lock_source"
+                                    zfslock_release "$lock_dest"
+                                    exit 8
+                                fi
                                 echo "Please enter A, S, or Q."
                             done
                         fi
                     fi
                 else
                     log_msg "VERB: resumedata=$resumedata"
-                    # awk '/^size/ {print $2}'  —  Extract remaining byte count from resume token info.
+                    # awk '/^size/ {print $2}'  —  Extract remaining byte count from resume
+                    # token info.
                     datatosend=$(echo "$resumedata" | awk '/^size/ {print $2}')
                     log_msg "VERB: datatosend=$datatosend"
-                    log_msg "INFO: Remaining data to transfer: $(echo $datatosend | numfmt --to=iec-i)."
-                    [[ $datatosend -gt $pvthreshold ]] && pvcommand='Y' || { log_msg "INFO: Small transfer."; pvcommand='N'; }
+                    log_msg "INFO: Remaining data to transfer:" \
+                        "$(echo "$datatosend" | numfmt --to=iec-i)."
+                    if [[ $datatosend -gt $pvthreshold ]]; then
+                        pvcommand='Y'
+                    else
+                        log_msg "INFO: Small transfer."
+                        pvcommand='N'
+                    fi
                     sendoptions="-t $resumetoken"
                     receiveoptions=""
                     log_msg "INFO: zfs send $sendoptions"
                     log_msg "INFO: zfs receive $receiveoptions $destfs$restorefs"
-                    do_transfer "$sendoptions" "$receiveoptions" "$pvcommand" "$datatosend" "resume transfer for $destfs$restorefs"
+                    do_transfer "$sendoptions" "$receiveoptions" "$pvcommand" "$datatosend" \
+                        "resume transfer for $destfs$restorefs"
                     zfslock_release "$lock_source"; zfslock_release "$lock_dest"; ((i--)); continue
                 fi
             fi
@@ -468,7 +579,9 @@ function send-receive {
 
         if zfs list "$destfs""$restorefs""$nextsnap" > /dev/null 2>&1 && [[ $force != "Y" ]]; then
             log_msg "INFO: Destination snapshot $destfs$restorefs$nextsnap already exists."
-            zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue
+            zfslock_release "$lock_source"
+            zfslock_release "$lock_dest"
+            continue
         fi
 
         commsnap=$(getcommonsnap "$fs" "$destfs""$restorefs")
@@ -487,23 +600,33 @@ function send-receive {
         fi
 
         if zfs list "$destfs""$restorefs""$nextsnap" > /dev/null 2>&1 && [[ $force != "Y" ]]; then
-            log_msg "INFO: Destination snapshot $destfs$restorefs$nextsnap already exists. Skipping full copy of $fs."
-            zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue
+            log_msg "INFO: Destination snapshot $destfs$restorefs$nextsnap already exists." \
+                "Skipping full copy of $fs."
+            zfslock_release "$lock_source"
+            zfslock_release "$lock_dest"
+            continue
         fi
 
+        local -a incremental_args=()
         if [[ $doincrementals = "Y" ]]; then
-            [[ $dointermediates = "Y" ]] && intermediates="-I" || intermediates="-i"
-            incremental="$intermediates $commsnap"
+            if [[ $dointermediates = "Y" ]]; then
+                incremental_args=(-I "$commsnap")
+            else
+                incremental_args=(-i "$commsnap")
+            fi
+            incremental="${incremental_args[*]}"
         else
             incremental=""; receive_s_option='s'
             log_msg "VERB: Full copy — transfer of $destfs$restorefs will be resumable."
         fi
 
         # awk '/^size/ {print $2}'  —  Extract byte size from the actual transfer dry-run.
-        datatosend=$(zfs send -nPc $incremental $fs$nextsnap 2>/dev/null | awk '/^size/ {print $2}')
+        datatosend=$(zfs send -nPc "${incremental_args[@]}" "$fs$nextsnap" 2>/dev/null \
+            | awk '/^size/ {print $2}')
         if [[ -z "$datatosend" ]]; then
             if [[ $dryrun != 'N' ]]; then
-                log_msg "INFO: Dry-run: stream size estimate not available for $incremental $fs$nextsnap (snapshot not created)"
+                log_msg "INFO: Dry-run: stream size estimate not available for $incremental" \
+                    "$fs$nextsnap (snapshot not created)"
             else
                 log_msg "WARN: Unable to get stream size estimate of $incremental $fs$nextsnap."
             fi
@@ -511,11 +634,14 @@ function send-receive {
         fi
 
         if ! check_space_available "$datatosend" "${destfs%%/*}"; then
-            zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue
+            zfslock_release "$lock_source"
+            zfslock_release "$lock_dest"
+            continue
         fi
 
         if [[ $datatosend -gt $pvthreshold ]]; then
-            log_msg "INFO: Approximately $(echo $datatosend | numfmt --to=iec-i) bytes to transfer."
+            log_msg "INFO: Approximately $(echo "$datatosend" | numfmt --to=iec-i)" \
+                "bytes to transfer."
             pvcommand='Y'
         else
             log_msg "INFO: Small transfer."
@@ -524,17 +650,23 @@ function send-receive {
         if [[ $incremental = "" ]]; then
             log_msg "INFO: Doing a full copy of $fs to $destfs$restorefs."
             receive_F_option='F'
-            [[ $autoproceed != 'Y' ]] && read -p "Press enter to continue."
+            [[ $autoproceed != 'Y' ]] && read -rp "Press enter to continue."
         fi
 
         if [[ $receive_s_option != 's' && $datatosend -gt $resumablethreshold ]]; then
-            log_msg "VERB: Data to send is more than $(echo $resumablethreshold | numfmt --to=iec-i) bytes. Making transfer of $destfs$restorefs resumeable."
+            log_msg "VERB: Data to send is more than" \
+                "$(echo "$resumablethreshold" | numfmt --to=iec-i) bytes." \
+                "Making transfer of $destfs$restorefs resumeable."
             receive_s_option='s'
         fi
 
         if [[ $incremental = '' || $force = "Y" ]]; then
             if zfs list -t filesystem,volume "$destfs""$restorefs" > /dev/null 2>&1; then
-                if ! check_running_vms_or_skip "$destfs$restorefs"; then zfslock_release "$lock_source"; zfslock_release "$lock_dest"; continue; fi
+                if ! check_running_vms_or_skip "$destfs$restorefs"; then
+                    zfslock_release "$lock_source"
+                    zfslock_release "$lock_dest"
+                    continue
+                fi
                 # zfsdelfs acquires its own lock when force/allow_destructive is
                 # set. Release our destination lock so the child does not see a
                 # self-conflict, then re-acquire it after preparation.
@@ -568,7 +700,7 @@ function send-receive {
             fi
         fi
 
-        sendoptions="-cw $incremental"
+        sendoptions="-cw ${incremental_args[*]}"
         receiveoptions="-uv$receive_F_option$receive_s_option"
 
         log_msg "VERB: zfs send $sendoptions $fs$nextsnap"
@@ -576,10 +708,12 @@ function send-receive {
 
         if [[ $dryrun != 'N' ]]; then
             local _tt='' _od='' _sz=''
-            [[ -n "$incremental" ]] && _tt="incremental" || _tt="full copy"
+            [[ ${#incremental_args[@]} -gt 0 ]] && _tt="incremental" || _tt="full copy"
             [[ "$receive_F_option" = 'F' ]] && _od="$_od force-receive"
             [[ "$receive_s_option" = 's' ]] && _od="$_od resumable"
-            [[ -n "$datatosend" && "$datatosend" -gt 0 ]] && _sz=", ~$(echo $datatosend | numfmt --to=iec-i)"
+            if [[ -n "$datatosend" && "$datatosend" -gt 0 ]]; then
+                _sz=", ~$(echo "$datatosend" | numfmt --to=iec-i)"
+            fi
             log_msg "INFO: Dry-run: Would send $fs$nextsnap -> $destfs$restorefs ($_tt$_sz)"
             [[ -n "$_od" ]] && log_msg "INFO: Dry-run:   Options: $_od"
         else
@@ -592,15 +726,19 @@ function send-receive {
         if [[ $dryrun = 'N' ]]; then
             iscsi_rebuild_torn_down
         elif [[ $incremental = '' && ($allow_destructive = 'Y' || $force = 'Y') ]]; then
-            [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: Would rebuild iSCSI LUNs for $destfs$restorefs"
+            [[ $dryrun != 'N' ]] && log_msg \
+                "INFO: Dry-run: Would rebuild iSCSI LUNs for $destfs$restorefs"
         fi
 
         zfslock_release "$lock_source"; zfslock_release "$lock_dest"
 
     done
     echo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
-    doincrementals=$save_doincrementals; receive_s_option=$save_receive_s_option; nextsnap=$save_nextsnap
-    sourcefs="$entry_sourcefs"; destfs="$entry_destfs"
+    doincrementals=$save_doincrementals
+    receive_s_option=$save_receive_s_option
+    nextsnap=$save_nextsnap
+    sourcefs="$entry_sourcefs"
+    destfs="$entry_destfs"
     if [[ -n "${ZFSUTILITIES_LOG_FILE:-}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
         local _sr_duration=$((SECONDS - _sr_start_seconds))
         echo "# END: rc=0, duration=${_sr_duration}s" >> "$ZFSUTILITIES_LOG_FILE"

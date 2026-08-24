@@ -47,7 +47,8 @@ class Watchall(object):
                     self.first_showing_line =  max (0, self.first_showing_line - 1)
 
                 elif c == curses.KEY_DOWN:
-                    self.first_showing_line = min(self.cursor_position[0], self.first_showing_line + 1)
+                    self.first_showing_line = min(
+                        self.cursor_position[0], self.first_showing_line + 1)
 
                 elif c == curses.KEY_END:
                     self.first_showing_line = max(self.cursor_position[0] - y+1, 0)
@@ -113,8 +114,11 @@ class Watchall(object):
                 for i in range(0, len(self.cur_output_lines)):
                     line = self.cur_output_lines[i]
                     for j in range(0, len(line)):
-                        if self.differences and len(self.pre_output_lines) > i and len(self.pre_output_lines[i]) > j \
-                                and self.pre_output_lines[i][j] != self.cur_output_lines[i][j]:
+                        if (self.differences
+                                and len(self.pre_output_lines) > i
+                                and len(self.pre_output_lines[i]) > j
+                                and self.pre_output_lines[i][j]
+                                != self.cur_output_lines[i][j]):
                             self.pad.addch(self.cur_output_lines[i][j], curses.A_REVERSE)
                         else:
                             self.pad.addch(self.cur_output_lines[i][j])
@@ -123,8 +127,11 @@ class Watchall(object):
                 self.cursor_position = self.pad.getyx()
             try:
                 stdscr.clear()
-                stdscr.addstr(0, 0, "Every {}s: {}, first line: {}/{}".format(self.interval, self.cmd,
-                                                                              self.first_showing_line, self.cursor_position[0]))
+                stdscr.addstr(
+                    0, 0,
+                    "Every {}s: {}, first line: {}/{}".format(
+                        self.interval, self.cmd,
+                        self.first_showing_line, self.cursor_position[0]))
                 stdscr.refresh()
                 self.pad.refresh(self.first_showing_line, 0, 1, 0, y-1, x)
 
@@ -141,7 +148,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('-d', '--differences', action='store_true', help='highlight differences')
     parser.add_argument('-n', '--interval', type=int, help='interval', required=False, default=2)
-    parser.add_argument('-m', '--max_line_scroll', type=int, help='max_line_scroll', required=False, default=200)
+    parser.add_argument('-m', '--max_line_scroll', type=int,
+                        help='max_line_scroll', required=False, default=200)
     parser.add_argument('Command', metavar='Command', type=str, nargs=1, help='Command')
     parser.add_argument('Args', metavar='Arguments', type=str, nargs='*', help='Command arguments')
 

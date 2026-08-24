@@ -26,7 +26,16 @@ _setup_uninstall_version_env() {
     printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$_tmpdir/rootcheck"
     chmod +x "$_tmpdir/rootcheck"
     # Provide a minimal bashinit so subshells can source it from $HOME.
-    printf '#!/usr/bin/bash\nfunction bashinit {\n    mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")")\n}\nfunction log_msg { echo -e "$*" >&2; }\nfunction find_zfsutility_script {\n    local name="$1"\n    if [[ -f "$mydir/$name" ]]; then realpath "$mydir/$name"; return 0; fi\n    if [[ -f "$mydir/bin/$name" ]]; then realpath "$mydir/bin/$name"; return 0; fi\n    return 1\n}\nfunction source_helper {\n    local name="$1" path\n    path=$(find_zfsutility_script "$name")\n    [[ -n "$path" ]] && source "$path"\n}\nfunction die { log_msg "FATAL: $*"; source "$mydir/bin/bashfatal" "${1:-8}"; }\n' > "$HOME/bashinit"
+    local _wrap_fmt='#!/usr/bin/bash\nfunction bashinit {\n    mydir=$(dirname "$(realpath '
+    _wrap_fmt+='"${BASH_SOURCE[1]}")")\n}\nfunction log_msg { echo -e "$*" >&2; }\nfunction '
+    _wrap_fmt+='find_zfsutility_script {\n    local name="$1"\n    if [[ -f "$mydir/$name" '
+    _wrap_fmt+=']]; then realpath "$mydir/$name"; return 0; fi\n    if [[ -f '
+    _wrap_fmt+='"$mydir/bin/$name" ]]; then realpath "$mydir/bin/$name"; return 0; fi\n    '
+    _wrap_fmt+='return 1\n}\nfunction source_helper {\n    local name="$1" path\n    '
+    _wrap_fmt+='path=$(find_zfsutility_script "$name")\n    [[ -n "$path" ]] && source '
+    _wrap_fmt+='"$path"\n}\nfunction die { log_msg "FATAL: $*"; source "$mydir/bin/bashfatal" '
+    _wrap_fmt+='"${1:-8}"; }\n'
+    printf "$_wrap_fmt" > "$HOME/bashinit"
     printf 'exit "${1:-8}"\n' > "$_tmpdir/bashfatal"
 
     printf -v "$_varname" '%s' "$_tmpdir"

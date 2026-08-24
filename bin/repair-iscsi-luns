@@ -109,7 +109,10 @@ parse_backstores() {
     while IFS= read -r line; do
         # Match lines like:
         #   o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) ...]
-        if [[ "$line" =~ ^[[:space:]]+o-\ (vm-[0-9]+-disk-[0-9]+)[[:space:]].*\[(/dev/zvol/[^[:space:]]+) ]]; then
+        local _repair_bs_re
+        _repair_bs_re='^[[:space:]]+o-\ (vm-[0-9]+-disk-[0-9]+)[[:space:]].*'
+        _repair_bs_re+='\[(/dev/zvol/[^[:space:]]+)'
+        if [[ "$line" =~ $_repair_bs_re ]]; then
             name="${BASH_REMATCH[1]}"
             dev="${BASH_REMATCH[2]}"
             _bs_names+=("$name")
@@ -280,7 +283,8 @@ create_lun_mapping() {
         return 0
     fi
 
-    if targetcli "/iscsi/${iqn}/tpg1/luns" create "/backstores/block/${name}" "$idx" >/dev/null 2>&1; then
+    if targetcli "/iscsi/${iqn}/tpg1/luns" create \
+        "/backstores/block/${name}" "$idx" >/dev/null 2>&1; then
         log_msg "INFO:   ✓ Mapped $name to ${iqn}/tpg1/lun$idx"
         _used_indexes+=("$idx")
         _lun_indexes["$name"]="$idx"
@@ -494,14 +498,16 @@ if [[ ${#UNMAPPED_ZVOLS[@]} -gt 0 ]]; then
     for zvol in "${UNMAPPED_ZVOLS[@]}"; do
         log_msg "INFO:     $zvol"
     done
-    log_msg "INFO:   (They will not be exported. Use attach-vm-disk or new-vm-disk when you want to use them.)"
+    log_msg "INFO:   (They will not be exported. Use attach-vm-disk or new-vm-disk when you want" \
+        "to use them.)"
 fi
 
 # Persist changes
 if [[ "$TARGET_CHANGED" == true ]]; then
     echo ""
     if [[ "$DRY_RUN" == true ]]; then
-        log_msg "INFO: [dry-run] Would back up saveconfig.json, regenerate manifest, and save config"
+        log_msg "INFO: [dry-run] Would back up saveconfig.json, regenerate manifest, and save" \
+            "config"
     else
         backup_saveconfig
         regenerate_manifest
@@ -512,7 +518,8 @@ if [[ "$TARGET_CHANGED" == true ]]; then
                 log_msg "FATAL: safe-iscsi-save failed — configuration may not be persistent"
             fi
         else
-            log_msg "FATAL: safe-iscsi-save not available at $SAFE_ISCSI_SAVE — configuration may not be persistent"
+            log_msg "FATAL: safe-iscsi-save not available at $SAFE_ISCSI_SAVE —" \
+                "configuration may not be persistent"
         fi
     fi
 else

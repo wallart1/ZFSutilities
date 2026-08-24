@@ -253,7 +253,8 @@ n"
         return
     fi
 
-    if [[ "$out" == *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"* ]]; then
+    local _wrap_rhs="Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"
+    if [[ "$out" == *"$_wrap_rhs"* ]]; then
         test_pass
     else
         test_fail "Existing snapshot not used; output:\n$out"
@@ -328,7 +329,8 @@ n"
         return
     fi
 
-    if [[ "$out" == *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"* ]]; then
+    local _wrap_rhs="Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"
+    if [[ "$out" == *"$_wrap_rhs"* ]]; then
         test_pass
     else
         test_fail "Storage snapshot not used; output:\n$out"
@@ -466,11 +468,13 @@ n"
         return
     fi
 
-    if [[ "$out" != *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"* ]]; then
+    local _wrap_rhs="Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"
+    if [[ "$out" != *"$_wrap_rhs"* ]]; then
         test_fail "Disk 0 not archived; output:\n$out"
         return
     fi
-    if [[ "$out" != *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-1@dailybackup"* ]]; then
+    local _wrap_rhs="Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-1@dailybackup"
+    if [[ "$out" != *"$_wrap_rhs"* ]]; then
         test_fail "Disk 1 not archived; output:\n$out"
         return
     fi
@@ -503,15 +507,18 @@ n"
         return
     fi
 
-    if [[ "$out" != *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"* ]]; then
+    local _wrap_rhs="Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"
+    if [[ "$out" != *"$_wrap_rhs"* ]]; then
         test_fail "Referenced disk 0 not archived; output:\n$out"
         return
     fi
-    if [[ "$out" == *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-9@dailybackup"* ]]; then
+    local _wrap_rhs="Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-9@dailybackup"
+    if [[ "$out" == *"$_wrap_rhs"* ]]; then
         test_fail "Orphaned disk 9 was archived; output:\n$out"
         return
     fi
-    if [[ "$out" != *"Orphaned zvol not referenced in config: threeamigos/proxmox/vm-${vmid}-disk-9"* ]]; then
+    local _wrap_rhs="Orphaned zvol not referenced in config: threeamigos/proxmox/vm-${vmid}-disk-9"
+    if [[ "$out" != *"$_wrap_rhs"* ]]; then
         test_fail "Orphan warning missing; output:\n$out"
         return
     fi

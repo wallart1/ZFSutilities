@@ -94,7 +94,7 @@ generate_boot_config() {
         return
     fi
 
-    SKIP_NAMES="$csv" python3 - "$SAVEFILE" "$BOOTFILE" << 'PYEOF'
+    if SKIP_NAMES="$csv" python3 - "$SAVEFILE" "$BOOTFILE" << 'PYEOF'
 import json, os, sys
 
 skip = set(os.environ["SKIP_NAMES"].split(","))
@@ -120,8 +120,7 @@ for target in config.get("targets", []):
 with open(dst, "w") as f:
     json.dump(config, f, indent=2)
 PYEOF
-
-    if [[ $? -eq 0 ]]; then
+    then
         log_msg "INFO: ✓ Boot config generated ($count encrypted backstores excluded)"
     else
         log_msg "WARN: Failed to generate boot config"

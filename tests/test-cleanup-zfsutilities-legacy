@@ -49,7 +49,8 @@ _setup_cleanup_env() {
     export ZFSUTILITIES_LEGACY_HISTORY_PATH="$_tmpdir/root/.config/zfsutilities-history.json"
     export ZFSUTILITIES_LEGACY_PROFILES_DIR="$_tmpdir/root/.config/profiles"
     export ZFSUTILITIES_LEGACY_NEXTSNAP_FILE="$_tmpdir/root/.config/zfsutilities_nextsnap"
-    export ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE="$_tmpdir/root/.config/zfsutilities_offsite_nextsnap"
+    local _legacy_offsite_nextsnap="$_tmpdir/root/.config/zfsutilities_offsite_nextsnap"
+    export ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE="$_legacy_offsite_nextsnap"
     export ZFSUTILITIES_LEGACY_NODE_CONF="$_tmpdir/etc/zfsutilities-node.conf"
     export ZFSUTILITIES_LEGACY_DEPLOY_CONF="$_tmpdir/etc/zfsutilities-deploy.conf"
     export ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF="$_tmpdir/etc/iscsi-encrypted-luns.conf"
@@ -104,11 +105,15 @@ EOF
     if [[ "$is_new_layout" == "true" ]]; then
         touch "$version_base/versions/$version/lib/paths.sh"
         # shellcheck disable=SC2016
-        printf '#!/usr/bin/bash\nbashinit() { mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")"); }\nZFSUTILITIES_STATE_DIR=/var/lib/zfsutilities\n' > "$version_base/versions/$version/bin/bashinit"
+        local _wrap_fmt='#!/usr/bin/bash\nbashinit() { mydir=$(dirname "$(realpath '
+        _wrap_fmt+='"${BASH_SOURCE[1]}")"); }\nZFSUTILITIES_STATE_DIR=/var/lib/zfsutilities\n'
+        printf "$_wrap_fmt" > "$version_base/versions/$version/bin/bashinit"
         chmod +x "$version_base/versions/$version/bin/bashinit"
     else
         # shellcheck disable=SC2016
-        printf '#!/usr/bin/bash\nbashinit() { mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")"); }\n' > "$version_base/versions/$version/bin/bashinit"
+        local _wrap_fmt='#!/usr/bin/bash\nbashinit() { mydir=$(dirname "$(realpath '
+        _wrap_fmt+='"${BASH_SOURCE[1]}")"); }\n'
+        printf "$_wrap_fmt" > "$version_base/versions/$version/bin/bashinit"
         chmod +x "$version_base/versions/$version/bin/bashinit"
     fi
 }
@@ -116,13 +121,16 @@ EOF
 _create_legacy_symlinks() {
     local tmpdir="$1"
     ln -sfn "$tmpdir/var/lib/zfsutilities/config.json" "$tmpdir/root/.config/zfsutilities.json"
-    ln -sfn "$tmpdir/var/lib/zfsutilities/history.json" "$tmpdir/root/.config/zfsutilities-history.json"
+    ln -sfn "$tmpdir/var/lib/zfsutilities/history.json" \
+        "$tmpdir/root/.config/zfsutilities-history.json"
     ln -sfn "$tmpdir/var/lib/zfsutilities/profiles" "$tmpdir/root/.config/profiles"
     ln -sfn "$tmpdir/var/lib/zfsutilities/nextsnap" "$tmpdir/root/.config/zfsutilities_nextsnap"
-    ln -sfn "$tmpdir/var/lib/zfsutilities/nextsnap_offsite" "$tmpdir/root/.config/zfsutilities_offsite_nextsnap"
+    ln -sfn "$tmpdir/var/lib/zfsutilities/nextsnap_offsite" \
+        "$tmpdir/root/.config/zfsutilities_offsite_nextsnap"
     ln -sfn "$tmpdir/etc/zfsutilities/node.conf" "$tmpdir/etc/zfsutilities-node.conf"
     ln -sfn "$tmpdir/etc/zfsutilities/deploy.conf" "$tmpdir/etc/zfsutilities-deploy.conf"
-    ln -sfn "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf" "$tmpdir/etc/iscsi-encrypted-luns.conf"
+    ln -sfn "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf" \
+        "$tmpdir/etc/iscsi-encrypted-luns.conf"
     ln -sfn "$tmpdir/etc/zfsutilities/two-node.conf" "$tmpdir/etc/two-node.conf"
 }
 

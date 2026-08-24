@@ -15,13 +15,13 @@ if [[ $1 = '' ]]; then
 fi
 
 # For parseable format:
-if ! sendsize=$(zfs send -nPc $1 | awk '{if (NR > 1) printf "\n"; printf "%s", $3}'); then
+if ! sendsize=$(zfs send -nPc "$1" | awk '{if (NR > 1) printf "\n"; printf "%s", $3}'); then
     unset sendsize
     log_msg "WARN: Unable to get send size for $1."
     echo ''
 else
     # For human-readable format:
-    sendsize_h=$(echo $sendsize | numfmt --to=iec-i)
+    sendsize_h=$(echo "$sendsize" | numfmt --to=iec-i)
     echo "$sendsize $sendsize_h"
 fi
 

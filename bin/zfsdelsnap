@@ -146,7 +146,7 @@ function delsnap {
         return 1
     fi
 
-    if ! zfs destroy $snaptoremove; then
+    if ! zfs destroy "$snaptoremove"; then
         rc=$?
         diagnose_dataset_busy "$snaptoremove"
         if [[ $skipbusy = 'Y' ]]; then

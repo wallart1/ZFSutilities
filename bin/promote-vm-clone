@@ -78,7 +78,10 @@ SSHEOF
 fi
 
 [[ -n "$clone_info" ]] \
-    || { log_msg "FATAL: No clone zvols found for VM ${VMID} — already promoted or not a ZFS clone"; exit 1; }
+    || {
+        log_msg "FATAL: No clone zvols found for VM ${VMID} — already promoted or not a ZFS clone"
+        exit 1
+    }
 
 log_msg "INFO: === promote-vm-clone ==="
 log_msg "INFO:   VM: ${VMID}"
@@ -111,7 +114,8 @@ if is_single_node; then
     done < <(zfs list -H -o name,origin \
         | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
 else
-    ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF' || { log_msg "FATAL: Promotion failed on $STORAGE_HOST"; exit 1; }
+    run_remote_promote() {
+        ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
@@ -133,6 +137,12 @@ while IFS=$'\t' read -r zvol origin; do
 done < <(zfs list -H -o name,origin \
     | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
 SSHEOF
+    }
+
+    if ! run_remote_promote; then
+        log_msg "FATAL: Promotion failed on $STORAGE_HOST"
+        exit 1
+    fi
 fi
 
 echo ""

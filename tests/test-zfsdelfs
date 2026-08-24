@@ -94,7 +94,8 @@ setup_manifests() {
     ISCSI_MANIFEST="$_mock_zfs_state_dir/expected-backstores.txt"
     ISCSI_ENCRYPTED_CONF="$_mock_zfs_state_dir/iscsi-encrypted-luns.conf"
     echo "vm-100-disk-0" > "$ISCSI_MANIFEST"
-    echo "vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos" > "$ISCSI_ENCRYPTED_CONF"
+    local _enc_line="vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos"
+    echo "$_enc_line" > "$ISCSI_ENCRYPTED_CONF"
 }
 
 # ------------------------------------------------------------------
@@ -189,9 +190,12 @@ test_encrypted_conf_add_backstore() {
     echo "" > "$ISCSI_ENCRYPTED_CONF"
     test_start "encrypted_conf_add_backstore adds backstore to encrypted-luns config"
 
-    encrypted_conf_add_backstore "vm-100-disk-0" "/dev/zvol/threeamigos/proxmox/vm-100-disk-0" "threeamigos"
+    encrypted_conf_add_backstore "vm-100-disk-0" \
+        "/dev/zvol/threeamigos/proxmox/vm-100-disk-0" \
+        "threeamigos"
 
-    if grep -q "^vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos" "$ISCSI_ENCRYPTED_CONF"; then
+    local _enc_pat="^vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos"
+    if grep -q "$_enc_pat" "$ISCSI_ENCRYPTED_CONF"; then
         test_pass
     else
         test_fail "Backstore not added to encrypted-luns config"
@@ -276,10 +280,13 @@ test_delfs_acquires_destroy_lock() {
     local rc
     rc=$(cat "$_state_dir/rc")
     test_start "delfs acquires an x lock on the top-level dataset"
-    if [[ "$rc" -eq 0 && -f "$_state_dir/lock.log" ]] && grep -q '^pool/data x$' "$_state_dir/lock.log"; then
+    if [[ "$rc" -eq 0 ]] && [[ -f "$_state_dir/lock.log" ]] &&
+        grep -q '^pool/data x$' "$_state_dir/lock.log"; then
         test_pass
     else
-        test_fail "Expected rc=0 and x lock on pool/data, got rc=$rc, log=$(cat "$_state_dir/lock.log" 2>/dev/null)"
+        local _log
+        _log=$(cat "$_state_dir/lock.log" 2>/dev/null)
+        test_fail "Expected rc=0 and x lock on pool/data, got rc=$rc, log=$_log"
     fi
 }
 

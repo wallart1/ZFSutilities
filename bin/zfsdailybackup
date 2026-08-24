@@ -85,7 +85,7 @@ if [[ "$1" != '' ]]; then overrides "$1"; fi
 if [[ ${nextsnap:0:1} != '@' ]]; then nextsnap='@'$nextsnap; fi
 
 log_msg "INFO: New snapshot: $nextsnap."
-read -p 'Press enter to continue.'
+read -rp 'Press enter to continue.'
 
 # Pre-backup script
 if [[ $pre_backup_script_enabled = 'Y' && $pre_backup_script != '' ]]; then

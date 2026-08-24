@@ -221,7 +221,8 @@ if is_two_node; then
     disk_line="${DSTKEY}: ${by_path},format=raw,discard=on,iothread=1,size=${ZVOL_SIZE}"
 else
     # Single-node: use Proxmox storage reference
-    disk_line="${DSTKEY}: ${POOL}:vm-${SRCVMID}-disk-${DISKNUM},format=raw,discard=on,iothread=1,size=${ZVOL_SIZE}"
+    disk_line="${DSTKEY}: ${POOL}:vm-${SRCVMID}-disk-${DISKNUM},"\
+        "format=raw,discard=on,iothread=1,size=${ZVOL_SIZE}"
 fi
 
 # --- Confirmation ---

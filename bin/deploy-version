@@ -42,8 +42,10 @@ usage() {
     log_msg "INFO:            groups are deployed."
     log_msg "INFO:"
     log_msg "INFO: Examples:"
-    log_msg "INFO:   sudo ./bin/deploy-version                  # deploy current VERSION to all groups"
-    log_msg "INFO:   sudo ./bin/deploy-version 1.2.0            # deploy specific version to all groups"
+    log_msg "INFO:   sudo ./bin/deploy-version                  # deploy current VERSION to all" \
+        "groups"
+    log_msg "INFO:   sudo ./bin/deploy-version 1.2.0            # deploy specific version to all" \
+        "groups"
     log_msg "INFO:   sudo ./bin/deploy-version 1.2.0 production # deploy only 'production' group"
     log_msg "INFO:"
     if [[ -f /etc/zfsutilities-deploy.conf ]]; then
@@ -141,7 +143,8 @@ validate_critical_scripts() {
         fi
     done
     if [[ $missing -gt 0 ]]; then
-        log_msg "WARN: $missing critical script(s) missing from deployment. Ensure deploy-version is run from the repository root."
+        log_msg "WARN: $missing critical script(s) missing from deployment. Ensure deploy-version" \
+            "is run from the repository root."
     fi
 }
 
@@ -240,10 +243,10 @@ _sync_to_host() {
 
     log_msg "INFO: Syncing to $host..."
     local ssh_ctrl="/tmp/.deploy-version-ssh-${host}-$$"
-    local ssh_opts="-o ControlMaster=auto -o ControlPath=${ssh_ctrl} -o ControlPersist=60"
+    local ssh_opts=(-o ControlMaster=auto -o ControlPath="${ssh_ctrl}" -o ControlPersist=60)
 
-    ssh $ssh_opts root@"$host" "mkdir -p '$VERSION_DIR'"
-    rsync -az --delete -e "ssh $ssh_opts" "$VERSION_DIR/" "root@$host:$VERSION_DIR/"
+    ssh "${ssh_opts[@]}" root@"$host" "mkdir -p '$VERSION_DIR'"
+    rsync -az --delete -e "ssh ${ssh_opts[*]}" "$VERSION_DIR/" "root@$host:$VERSION_DIR/"
     ssh -O exit -o ControlPath="$ssh_ctrl" root@"$host" 2>/dev/null || true
     rm -f "$ssh_ctrl"
     log_msg "INFO:   ✓ $host files synced (run switch-version on $host to activate)"

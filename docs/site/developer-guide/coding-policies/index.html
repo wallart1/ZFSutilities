@@ -2301,12 +2301,19 @@ for callbacks, cleanup, and worker threads).</p>
 <p>The Bash code base is checked with <strong><a href="https://www.shellcheck.net/">ShellCheck</a></strong>.
 Configuration lives in <code>.shellcheckrc</code> at the repository root.  A few rules are
 disabled project-wide because they are false positives for the project's
-dynamic-sourcing pattern:</p>
+intentional patterns:</p>
 <ul>
-<li><code>SC1090</code> — ShellCheck cannot follow sources resolved at runtime by helpers
-  such as <code>find_zfsutility_script</code> and <code>source_helper</code>.</li>
+<li><code>SC1090</code> / <code>SC1091</code> — ShellCheck cannot follow sources resolved at runtime by
+  helpers such as <code>find_zfsutility_script</code> and <code>source_helper</code>.</li>
+<li><code>SC2015</code> — Compact <code>A &amp;&amp; B || C</code> constructs are used intentionally.</li>
+<li><code>SC2029</code> — <code>echo</code>/<code>printf</code> strings contain intentional escape sequences and
+  SSH command payloads.</li>
+<li><code>SC2030</code> / <code>SC2031</code> — Variables are intentionally modified inside subshells
+  and function overrides used by the test harness.</li>
 <li><code>SC2154</code> — Globals such as <code>mydir</code> and <code>fsarray</code> are assigned by sourced
   libraries (<code>bashinit</code>, <code>node-lib.sh</code>, <code>zfsbuildfsarray</code>, etc.).</li>
+<li><code>SC2317</code> — Functions appear unreachable when they are invoked indirectly
+  (e.g. by name from a sourced helper or heredoc).</li>
 </ul>
 <p>Run ShellCheck from the repository root on the bash modules and tests
 (<code>bin/watchall</code> is a Python script and is excluded by <code>.shellcheckrc</code>):</p>
@@ -2353,7 +2360,7 @@ a shell option string), suppress it with a per-line
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.85.1
+      ZFS Utilities v0.85.2
     </div>
   
   
@@ -2378,7 +2385,7 @@ a shell option string), suppress it with a per-line
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.85.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.85.2"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

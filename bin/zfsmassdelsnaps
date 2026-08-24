@@ -99,9 +99,11 @@ function _mass_delete_respect_retention {
         echo "$preview" >&2
         while IFS= read -r line; do
             if [[ "$line" == *"Would remove"* ]]; then
-                snap=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="remove"){print $(i+1); break}}')
+                snap=$(echo "$line" | awk '{for(i=1;i<=NF;i++)
+                    if($i=="remove"){print $(i+1); break}}')
             elif [[ "$line" == *"Would: Remove"* ]]; then
-                snap=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="Remove"){print $(i+1); break}}')
+                snap=$(echo "$line" | awk '{for(i=1;i<=NF;i++)
+                    if($i=="Remove"){print $(i+1); break}}')
             else
                 continue
             fi

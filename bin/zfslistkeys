@@ -13,12 +13,12 @@ source_helper bashdebug
 bashdebugon
 
 if [[ $1 != '' ]]; then
-    zfs list -r -o name,keystatus,keylocation $1 | grep available | grep -v prompt
+    zfs list -r -o name,keystatus,keylocation "$1" | grep available | grep -v prompt
 else
     readarray -t importedpoolarray < <(zpool list -Ho name)
     for pool in "${importedpoolarray[@]}"; do
         echo "Keys for pool: $pool."
-        zfs list -r -o name,keystatus,keylocation $pool | grep available | grep -v prompt
+        zfs list -r -o name,keystatus,keylocation "$pool" | grep available | grep -v prompt
     done        
 fi        
 

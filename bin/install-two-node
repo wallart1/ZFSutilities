@@ -58,7 +58,7 @@ _check_zfs_root() {
     root_fs_type=$(findmnt -n -o FSTYPE / 2>/dev/null || true)
     if [[ "$root_fs_type" == "zfs" ]]; then
         echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "  ⚠  WARNING: ZFS root filesystem detected"
         echo ""
         echo "  ZFS Utilities has NOT been tested on systems where the root"
@@ -68,7 +68,7 @@ _check_zfs_root() {
         echo "  scripts may interact with the root pool in unexpected ways."
         echo ""
         echo "  Proceed at your own risk."
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
         read -rp "Press Enter to continue, or Ctrl-C to abort..."
     fi
@@ -345,7 +345,8 @@ ensure_retention_profiles
 # Warnings only on failure so the install can continue.
 ensure_retention_profiles_remote() {
     local host="$1"
-    local config_path="${ZFSCONFIG_PATH:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
+    local config_path
+    config_path="${ZFSCONFIG_PATH:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
     local state_dir
     state_dir="$(dirname "$config_path")"
     local helper="/usr/local/lib/zfsutilities/current/python/installer_retention.py"
@@ -357,8 +358,11 @@ ensure_retention_profiles_remote() {
     fi
 
     echo "=== Retention Profiles on $host ==="
-    ssh -o ConnectTimeout=5 "root@$host" \
-        "install -d -m 0755 '$state_dir' && PYTHONPATH='$python_src' python3 '$helper' --config-path '$config_path' $new_install_flag" \
+    local _retention_cmd
+    _retention_cmd="install -d -m 0755 '$state_dir' && "
+    _retention_cmd+="PYTHONPATH='$python_src' python3 '$helper' "
+    _retention_cmd+="--config-path '$config_path' $new_install_flag"
+    ssh -o ConnectTimeout=5 "root@$host" "$_retention_cmd" \
         || echo "  ⚠ Could not initialize retention profiles on $host" >&2
 }
 
@@ -544,8 +548,9 @@ if ssh -o ConnectTimeout=5 "root@${COMPUTE_HOST}" "[[ -f '${PVE_ISCSI_PLUGIN}' ]
 
     # Apply the 86400-second (24-hour) rate limit via sed
     # (avoids $ escaping by matching only the numeric part)
-    ssh -o ConnectTimeout=5 "root@${COMPUTE_HOST}" \
-        "sed -i 's/tdiff > 10)/tdiff > 86400)/' '${PVE_ISCSI_PLUGIN}' && grep -q 'tdiff > 86400' '${PVE_ISCSI_PLUGIN}'" \
+    _patch_cmd="sed -i 's/tdiff > 10)/tdiff > 86400)/' '${PVE_ISCSI_PLUGIN}'"
+    _patch_cmd+=" && grep -q 'tdiff > 86400' '${PVE_ISCSI_PLUGIN}'"
+    ssh -o ConnectTimeout=5 "root@${COMPUTE_HOST}" "$_patch_cmd" \
         && echo "  ✓ Patched ${PVE_ISCSI_PLUGIN} (86400 s rate limit)" \
         || echo "  ⚠ Patch may already be applied or file differs from expected"
 

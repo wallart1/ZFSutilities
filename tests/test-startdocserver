@@ -191,7 +191,9 @@ test_main_restarts_stale_server() {
     if [[ "$_stop_server_called" == "99999" && "$_start_server_called" == "yes" ]]; then
         test_pass
     else
-        test_fail "Expected stop+restart, got stop='$_stop_server_called' start='$_start_server_called'"
+        local _wrap_msg="Expected stop+restart, got stop='$_stop_server_called' "
+        _wrap_msg+="start='$_start_server_called'"
+        test_fail "$_wrap_msg"
     fi
 }
 
@@ -205,7 +207,9 @@ test_main_leaves_correct_server() {
     if [[ -z "$_stop_server_called" && -z "$_start_server_called" ]]; then
         test_pass
     else
-        test_fail "Expected no action, got stop='$_stop_server_called' start='$_start_server_called'"
+        local _wrap_msg="Expected no action, got stop='$_stop_server_called' "
+        _wrap_msg+="start='$_start_server_called'"
+        test_fail "$_wrap_msg"
     fi
 }
 
@@ -217,7 +221,9 @@ test_main_starts_when_not_running() {
     if [[ -z "$_stop_server_called" && "$_start_server_called" == "yes" ]]; then
         test_pass
     else
-        test_fail "Expected start only, got stop='$_stop_server_called' start='$_start_server_called'"
+        local _wrap_msg="Expected start only, got stop='$_stop_server_called' "
+        _wrap_msg+="start='$_start_server_called'"
+        test_fail "$_wrap_msg"
     fi
 }
 
@@ -231,7 +237,9 @@ test_main_restart_flag_stops_running_server() {
     if [[ "$_stop_server_called" == "99999" && "$_start_server_called" == "yes" ]]; then
         test_pass
     else
-        test_fail "Expected stop+start, got stop='$_stop_server_called' start='$_start_server_called'"
+        local _wrap_msg="Expected stop+start, got stop='$_stop_server_called' "
+        _wrap_msg+="start='$_start_server_called'"
+        test_fail "$_wrap_msg"
     fi
 }
 
@@ -243,7 +251,9 @@ test_main_restart_flag_starts_when_not_running() {
     if [[ -z "$_stop_server_called" && "$_start_server_called" == "yes" ]]; then
         test_pass
     else
-        test_fail "Expected start only, got stop='$_stop_server_called' start='$_start_server_called'"
+        local _wrap_msg="Expected start only, got stop='$_stop_server_called' "
+        _wrap_msg+="start='$_start_server_called'"
+        test_fail "$_wrap_msg"
     fi
 }
 

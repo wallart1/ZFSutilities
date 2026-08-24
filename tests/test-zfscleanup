@@ -170,7 +170,8 @@ test_continues_to_next_pool_after_retain_error() {
     _mock_fsarray_pool2=(pool2/a pool2/b)
     _mock_retain_error="pool1/a"
     cleanup "" "" "dailybackup"
-    assert_equals "pool1/b @dailybackup pool2/a @dailybackup pool2/b @dailybackup" "${zfscleanup_processed[*]}"
+    local _wrap_expected="pool1/b @dailybackup pool2/a @dailybackup pool2/b @dailybackup"
+    assert_equals "$_wrap_expected" "${zfscleanup_processed[*]}"
 }
 
 test_releaseholds_tags_default() {

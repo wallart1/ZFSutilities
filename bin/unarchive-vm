@@ -69,8 +69,14 @@ prompt_new_vmid() {
         log_msg "INFO: Aborted."
         exit 0
     fi
-    [[ "$response" =~ ^[0-9]+$ ]] || { log_msg "FATAL: new VMID must be a number, got: $response"; exit 1; }
-    [[ "$response" != "$VMID" ]] || { log_msg "FATAL: new VMID must differ from the original VMID"; exit 1; }
+    if [[ ! "$response" =~ ^[0-9]+$ ]]; then
+        log_msg "FATAL: new VMID must be a number, got: $response"
+        exit 1
+    fi
+    if [[ "$response" == "$VMID" ]]; then
+        log_msg "FATAL: new VMID must differ from the original VMID"
+        exit 1
+    fi
     NEWVMID="$response"
 }
 
@@ -128,9 +134,18 @@ VMID="${POS_ARGS[0]}"
 ARCHIVE_BASE="${POS_ARGS[1]:-}"
 
 [[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
-[[ -z "$NEWVMID" || "$NEWVMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: new-vmid must be a number, got: $NEWVMID"; exit 1; }
-[[ -z "$NEWVMID" || "$NEWVMID" != "$VMID" ]] || { log_msg "FATAL: new-vmid must differ from vmid"; exit 1; }
-[[ $EUID -eq 0 || ${UNARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || { log_msg "FATAL: Must run as root (use sudo)"; exit 1; }
+if [[ -n "$NEWVMID" && ! "$NEWVMID" =~ ^[0-9]+$ ]]; then
+    log_msg "FATAL: new-vmid must be a number, got: $NEWVMID"
+    exit 1
+fi
+if [[ -n "$NEWVMID" && "$NEWVMID" == "$VMID" ]]; then
+    log_msg "FATAL: new-vmid must differ from vmid"
+    exit 1
+fi
+if [[ $EUID -ne 0 && ${UNARCHIVE_VM_TEST_NO_ROOT:-0} != "1" ]]; then
+    log_msg "FATAL: Must run as root (use sudo)"
+    exit 1
+fi
 
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
@@ -155,18 +170,27 @@ if [[ -z "$ARCHIVE_BASE" ]]; then
 fi
 
 [[ -n "$ARCHIVE_BASE" ]] \
-    || { log_msg "FATAL: Archive base path is required (provide as argument or save in JSON config)"; exit 1; }
+    || {
+        log_msg "FATAL: Archive base path is required (provide as argument or save in JSON config)"
+        exit 1
+    }
 
 # Validate the base exists as a ZFS dataset
 if is_single_node; then
     if ! zfs list -H -o name "$ARCHIVE_BASE" 2>/dev/null \
             | grep -q "^${ARCHIVE_BASE}$"; then
-        { log_msg "FATAL: Not a ZFS dataset: $ARCHIVE_BASE"; exit 1; }
+        {
+            log_msg "FATAL: Not a ZFS dataset: $ARCHIVE_BASE"
+            exit 1
+        }
     fi
 else
     if ! ssh root@"$STORAGE_HOST" "zfs list -H -o name '$ARCHIVE_BASE' 2>/dev/null \
             | grep -q '^${ARCHIVE_BASE}$'"; then
-        { log_msg "FATAL: Not a ZFS dataset on $STORAGE_HOST: $ARCHIVE_BASE"; exit 1; }
+        {
+            log_msg "FATAL: Not a ZFS dataset on $STORAGE_HOST: $ARCHIVE_BASE"
+            exit 1
+        }
     fi
 fi
 
@@ -204,7 +228,10 @@ SSHEOF
     ) || { log_msg "FATAL: SSH to $STORAGE_HOST failed"; exit 1; }
 fi
 
-[[ -n "$archived_zvols" ]] || { log_msg "FATAL: No archived zvols found for VM ${VMID} under ${ARCHIVE_BASE}"; exit 1; }
+if [[ -z "$archived_zvols" ]]; then
+    log_msg "FATAL: No archived zvols found for VM ${VMID} under ${ARCHIVE_BASE}"
+    exit 1
+fi
 
 # Build arrays of archive datasets and their original zvol paths
 declare -a archive_datasets=()
@@ -215,7 +242,7 @@ declare -a disk_nums=()
 dataset_count=0
 while IFS= read -r arc_zvol; do
     # Original zvol path is the suffix after ARCHIVE_BASE/
-    orig_zvol="${arc_zvol#${ARCHIVE_BASE}/}"
+    orig_zvol="${arc_zvol#"${ARCHIVE_BASE}"/}"
     disknum=$(echo "$orig_zvol" | grep -oP 'disk-\K[0-9]+$')
 
     archive_datasets+=("$arc_zvol")
@@ -243,12 +270,19 @@ for i in "${!archive_datasets[@]}"; do
 done
 
 [[ ${#missing_sidecars[@]} -eq 0 ]] \
-    || { log_msg "FATAL: Missing sidecar files:" "$(printf '%s\n  ' "${missing_sidecars[@]}")"; exit 1; }
+    || {
+        log_msg "FATAL: Missing sidecar files:"
+        printf '  %s\n' "${missing_sidecars[@]}" >&2
+        exit 1
+    }
 
 # Resolve new VMID if the original is in use and none was supplied
 if [[ -n "$NEWVMID" ]]; then
     if vmid_in_use "$NEWVMID"; then
-        { log_msg "FATAL: Requested new VMID ${NEWVMID} is already in use"; exit 1; }
+        {
+            log_msg "FATAL: Requested new VMID ${NEWVMID} is already in use"
+            exit 1
+        }
     fi
 elif vmid_in_use "$VMID"; then
     while true; do
@@ -264,7 +298,8 @@ NEWVMID="${NEWVMID:-$VMID}"
 
 # Build new zvol paths using the (possibly changed) VMID
 for i in "${!original_zvols[@]}"; do
-    new_zvols+=("${original_zvols[$i]/%vm-${VMID}-disk-${disk_nums[$i]}/vm-${NEWVMID}-disk-${disk_nums[$i]}}")
+    new_zvols+=("${original_zvols[$i]/%vm-${VMID}-disk-${disk_nums[$i]}/\
+vm-${NEWVMID}-disk-${disk_nums[$i]}}")
 done
 
 # Verify destination zvols do not already exist
@@ -284,21 +319,34 @@ for i in "${!new_zvols[@]}"; do
 done
 
 [[ ${#existing_dest[@]} -eq 0 ]] \
-    || { log_msg "FATAL: Destination zvols already exist:" "$(printf '%s\n  ' "${existing_dest[@]}")"; exit 1; }
+    || {
+        log_msg "FATAL: Destination zvols already exist:"
+        printf '  %s\n' "${existing_dest[@]}" >&2
+        exit 1
+    }
 
 # Verify archived config exists
 archived_config="${ARCHIVE_MOUNT}/${PVE_CONF_DIR}/${VMID}.conf"
 if is_single_node; then
-    [[ -f "$archived_config" ]] || { log_msg "FATAL: Archived config not found: $archived_config"; exit 1; }
+    if [[ ! -f "$archived_config" ]]; then
+        log_msg "FATAL: Archived config not found: $archived_config"
+        exit 1
+    fi
 else
     if ! ssh root@"$STORAGE_HOST" "[[ -f '$archived_config' ]]"; then
-        { log_msg "FATAL: Archived config not found on $STORAGE_HOST: $archived_config"; exit 1; }
+        {
+            log_msg "FATAL: Archived config not found on $STORAGE_HOST: $archived_config"
+            exit 1
+        }
     fi
 fi
 
 # Verify destination config does not already exist
 dest_config="${PVE_CONF_DIR}/${NEWVMID}.conf"
-[[ ! -f "$dest_config" ]] || { log_msg "FATAL: Destination Proxmox config already exists: $dest_config"; exit 1; }
+if [[ -f "$dest_config" ]]; then
+    log_msg "FATAL: Destination Proxmox config already exists: $dest_config"
+    exit 1
+fi
 
 # =======================================================================
 # Show summary and confirm
@@ -343,7 +391,10 @@ if is_single_node; then
         vbs_file="${ARCHIVE_MOUNT}/${orig_zvol}.original_volblocksize"
 
         snap=$(zfs list -H -t snapshot -o name -S creation "$arc_dataset" 2>/dev/null | head -1)
-        [[ -n "$snap" ]] || { log_msg "FATAL: No snapshots found on archive dataset: $arc_dataset"; exit 1; }
+        if [[ -z "$snap" ]]; then
+            log_msg "FATAL: No snapshots found on archive dataset: $arc_dataset"
+            exit 1
+        fi
 
         snap_name="@${snap##*@}"
         orig_vbs=$(cat "$vbs_file")
@@ -369,8 +420,8 @@ if is_single_node; then
     done
 else
     # Two-node: run restoration on storage host via SSH
-    ssh root@"$STORAGE_HOST" bash -s "$ARCHIVE_MOUNT" "$dataset_count" \
-        "${archive_datasets[@]}" "${original_zvols[@]}" "${new_zvols[@]}" << 'SSHEOF'
+    if ! ssh root@"$STORAGE_HOST" bash -s "$ARCHIVE_MOUNT" "$dataset_count" \
+            "${archive_datasets[@]}" "${original_zvols[@]}" "${new_zvols[@]}" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
@@ -416,7 +467,10 @@ for i in "${!archive_datasets[@]}"; do
     log_msg "INFO:   ✓ Restored: ${new_zvol}"
 done
 SSHEOF
-    [[ $? -eq 0 ]] || { log_msg "FATAL: Zvol restoration failed on $STORAGE_HOST"; exit 1; }
+    then
+        log_msg "FATAL: Zvol restoration failed on $STORAGE_HOST"
+        exit 1
+    fi
 fi
 
 echo ""
@@ -519,7 +573,10 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 "$mydir/safe-iscsi-save"
 echo "CONFIG_SAVED"
 SSHEOF
-    ) || { log_msg "FATAL: iSCSI reconstruction failed on $STORAGE_HOST"; exit 1; }
+    ) || {
+        log_msg "FATAL: iSCSI reconstruction failed on $STORAGE_HOST"
+        exit 1
+    }
 
     # Parse results
     current_target=""
@@ -567,7 +624,8 @@ for i in "${!original_zvols[@]}"; do
     if is_single_node; then
         disk_key=$(grep '^DISK_KEY=' "$info_file" 2>/dev/null | cut -d= -f2)
     else
-        disk_key=$(ssh root@"$STORAGE_HOST" "grep '^DISK_KEY=' '$info_file' 2>/dev/null | cut -d= -f2")
+        disk_key=$(ssh root@"$STORAGE_HOST" \
+            "grep '^DISK_KEY=' '$info_file' 2>/dev/null | cut -d= -f2")
     fi
     disknum="${disk_nums[$i]}"
     [[ -n "$disk_key" ]] && key_to_disknum["$disk_key"]="$disknum"
@@ -578,7 +636,10 @@ if is_single_node; then
 else
     archived_content=$(ssh root@"$STORAGE_HOST" "cat '$archived_config'")
 fi
-[[ -n "$archived_content" ]] || { log_msg "FATAL: Failed to read archived config"; exit 1; }
+if [[ -z "$archived_content" ]]; then
+    log_msg "FATAL: Failed to read archived config"
+    exit 1
+fi
 
 rewrite_needed=false
 [[ "$NEWVMID" != "$VMID" ]] && rewrite_needed=true
@@ -642,7 +703,9 @@ else
 
     if [[ "$rewrite_needed" == "true" ]]; then
         [[ "$vmgenid_written" == "true" ]] || echo "vmgenid: $new_vmgenid" >> "$dest_config"
-        [[ "$smbios1_written" == "true" ]] || echo "smbios1: uuid=${new_smbios_uuid}" >> "$dest_config"
+        if [[ "$smbios1_written" != "true" ]]; then
+            echo "smbios1: uuid=${new_smbios_uuid}" >> "$dest_config"
+        fi
     fi
 
     log_msg "INFO:   ✓ Config restored: $dest_config"

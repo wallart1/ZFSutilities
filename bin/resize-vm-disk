@@ -80,7 +80,8 @@ if is_two_node; then
     }
 else
     zpool list -H -o name "$POOL" >/dev/null 2>&1 || {
-        log_msg "FATAL: Pool '$POOL' not found. Available pools: $(zpool list -H -o name 2>/dev/null | paste -sd ' ' -)"
+        log_msg "FATAL: Pool '$POOL' not found. Available pools:" \
+            "$(zpool list -H -o name 2>/dev/null | paste -sd ' ' -)"
         exit 1
     }
 fi
@@ -113,7 +114,8 @@ if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
     else
         REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
         ssh root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1 \
-            || log_msg "WARN: Could not rescan $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+            || log_msg "WARN: Could not rescan $COMPUTE_HOST — run 'sudo rescan-storage'" \
+                "on $COMPUTE_HOST manually"
     fi
     exit 0
 fi
@@ -159,7 +161,8 @@ if is_two_node && [[ "$SKIP_RESCAN" == false ]]; then
     if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1; then
         log_msg "INFO: ✓ Rescan triggered"
     else
-        log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+        log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage'" \
+            "on $COMPUTE_HOST manually"
     fi
 fi
 

@@ -80,7 +80,8 @@ match_i=''; match_j=''
 
 for (( i=0; i<snaparraylen_s; i++ )); do     # For each source snap ...
     if [[ $commsnap_find_another = 'Y' ]] \
-      && [[ ${snaparray_s[$i]} = "$fs_s" ]]; then  # Ignore the snap that was given. Find another one.
+      && [[ ${snaparray_s[$i]} = "$fs_s" ]]; then
+        # Ignore the snap that was given. Find another one.
         continue
     fi
     if [[ $commsnap_find_another = 'Y' ]]; then     # Check the age of the snap.
@@ -128,13 +129,14 @@ if [[ $found_a_match = true ]]; then
         echo "$snapseparator""$(echo "${snaparray_d[$match_j]}" | awk -F'[@#]' '{print $2}')"
         return 0
     else
-        echo "$snapseparator""$(echo "${snaparray_d[$match_j]}" | awk -F'[@#]' '{print $2}')"  # Send back the common snapshot name.
+        # Send back the common snapshot name.
+        echo "$snapseparator""$(echo "${snaparray_d[$match_j]}" | awk -F'[@#]' '{print $2}')"
         return 16     # The destination snapshot is not the most recent one.
     fi
 fi
 # if no common snap, return the most recent source snap
 # awk '{print $3}'  —  Extract type from zfs get output (see comment above).
-snaptype=$(zfs get -H type ${snaparray_s[0]} | awk '{print $3}')
+snaptype=$(zfs get -H type "${snaparray_s[0]}" | awk '{print $3}')
 if [[ $snaptype = 'snapshot' ]]; then snapseparator='@'
 elif [[ $snaptype = 'bookmark' ]]; then snapseparator='#'
 else

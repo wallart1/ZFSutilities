@@ -133,7 +133,9 @@ test_source_helper_fallback_returns_when_sourced() {
     tmp_bin=$(mktemp -d)
 
     # Provide bashreturn but deliberately omit bashfatal in the search paths.
-    printf '#!/usr/bin/bash\nif [[ "${BASH_SOURCE[1]}" != "${0}" ]]; then return "${1:-0}"; else exit "${1:-0}"; fi\n' > "$tmp_bin/bashreturn"
+    local _wrap_fmt='#!/usr/bin/bash\nif [[ "${BASH_SOURCE[1]}" != "${0}" ]]; then return '
+    _wrap_fmt+='"${1:-0}"; else exit "${1:-0}"; fi\n'
+    printf "$_wrap_fmt" > "$tmp_bin/bashreturn"
     chmod +x "$tmp_bin/bashreturn"
 
     local caller="$tmp_bin/caller"
@@ -186,7 +188,8 @@ test_remote_zfsutilities_bin_success() {
     assert_equals "/usr/local/lib/zfsutilities/versions/v1.0.0/bin" "$(cat "$result_file")"
     local call
     call=$(head -n1 "$_test_ssh_log")
-    if [[ "$call" == *"root@stewie"* && "$call" == *"realpath /usr/local/lib/zfsutilities/current/bin"* ]]; then
+    if [[ "$call" == *"root@stewie"* ]] &&\
+       [[ "$call" == *"realpath /usr/local/lib/zfsutilities/current/bin"* ]]; then
         test_pass
     else
         test_fail "SSH invocation did not contain expected arguments: $call"
@@ -292,7 +295,8 @@ test_single_node_config_loading() {
 test_pool_to_target_known() {
     test_start "pool_to_target returns full IQN for a known pool"
     local result
-    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh"; pool_to_target "threeamigos")
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        pool_to_target "threeamigos")
     assert_equals "iqn.2025-01.com.zfsutilities:threeamigos" "$result"
 }
 
@@ -300,7 +304,8 @@ test_pool_to_target_unknown() {
     test_start "pool_to_target fails for an unknown pool"
     clear_test_log_file
     local result rc
-    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh"; pool_to_target "unknownpool" 2>/dev/null)
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        pool_to_target "unknownpool" 2>/dev/null)
     rc=$?
     assert_rc 1 "$rc"
     assert_equals "" "$result"
@@ -429,7 +434,8 @@ test_find_script_returns_absolute_path() {
     mkdir -p "$script_dir"
     touch "$script_dir/relative-script"
     rel_dir=$(realpath --relative-to="$mydir" "$tmp_dir")
-    result=$(cd "$mydir" || exit; mydir="$rel_dir/absolute" find_zfsutility_script "relative-script")
+    result=$(cd "$mydir" || exit;
+        mydir="$rel_dir/absolute" find_zfsutility_script "relative-script")
     expected="$tmp_dir/absolute/relative-script"
     assert_equals "$expected" "$result"
 }
@@ -461,7 +467,8 @@ test_find_script_current_version_bin() {
     current_bin_dir="$tmp_dir/current-bin"
     mkdir -p "$current_bin_dir"
     touch "$current_bin_dir/versioned-script"
-    result=$(ZFSUTILITIES_CURRENT_BIN_DIR="$current_bin_dir" find_zfsutility_script "versioned-script")
+    result=$(ZFSUTILITIES_CURRENT_BIN_DIR="$current_bin_dir" \
+        find_zfsutility_script "versioned-script")
     assert_equals "$current_bin_dir/versioned-script" "$result"
 }
 

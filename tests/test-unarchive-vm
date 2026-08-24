@@ -192,7 +192,9 @@ test_new_vmid_regenerates_uuids() {
         test_fail "Original smbios1 uuid still present"
         return
     fi
-    if grep -qE "^vmgenid: [0-9a-f-]{36}$" "$new_conf" && grep -qE "^smbios1: uuid=[0-9a-f-]{36}$" "$new_conf"; then
+    local _vmgenid_re="^vmgenid: [0-9a-f-]{36}$"
+    local _smbios_re="^smbios1: uuid=[0-9a-f-]{36}$"
+    if grep -qE "$_vmgenid_re" "$new_conf" && grep -qE "$_smbios_re" "$new_conf"; then
         test_pass
     else
         test_fail "New UUIDs not present; content:\n$(cat "$new_conf")"

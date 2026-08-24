@@ -352,12 +352,19 @@ for callbacks, cleanup, and worker threads).
 The Bash code base is checked with **[ShellCheck](https://www.shellcheck.net/)**.
 Configuration lives in `.shellcheckrc` at the repository root.  A few rules are
 disabled project-wide because they are false positives for the project's
-dynamic-sourcing pattern:
+intentional patterns:
 
-- `SC1090` — ShellCheck cannot follow sources resolved at runtime by helpers
-  such as `find_zfsutility_script` and `source_helper`.
+- `SC1090` / `SC1091` — ShellCheck cannot follow sources resolved at runtime by
+  helpers such as `find_zfsutility_script` and `source_helper`.
+- `SC2015` — Compact `A && B || C` constructs are used intentionally.
+- `SC2029` — `echo`/`printf` strings contain intentional escape sequences and
+  SSH command payloads.
+- `SC2030` / `SC2031` — Variables are intentionally modified inside subshells
+  and function overrides used by the test harness.
 - `SC2154` — Globals such as `mydir` and `fsarray` are assigned by sourced
   libraries (`bashinit`, `node-lib.sh`, `zfsbuildfsarray`, etc.).
+- `SC2317` — Functions appear unreachable when they are invoked indirectly
+  (e.g. by name from a sourced helper or heredoc).
 
 Run ShellCheck from the repository root on the bash modules and tests
 (`bin/watchall` is a Python script and is excluded by `.shellcheckrc`):

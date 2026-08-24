@@ -293,7 +293,8 @@ fi
 
 if [[ $WARN -gt 0 ]]; then
     echo ""
-    echo "⚠ $WARN optional item(s) missing — installation can continue but some features may be unavailable."
+    echo "⚠ $WARN optional item(s) missing — installation can continue" \
+        "but some features may be unavailable."
 fi
 
 echo ""

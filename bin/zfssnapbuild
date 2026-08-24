@@ -4,7 +4,9 @@
 # @<label>-<yyyy-mm-dd>T<hh:mm><timezone>-<bucket>
 # For example: @dailybackup-2025-06-28T11:58-04:00-d
 
-# $1 = Optional label value, with or without a leading "@". $label may also be set before sourcing this script. Default = "@dailybackup". Empty label is not allowed.
+# $1 = Optional label value, with or without a leading "@". $label may also be
+# set before sourcing this script. Default = "@dailybackup". Empty label is not
+# allowed.
 
 # Paths for the global snapshot-name reservation mechanism. These can be
 # overridden by callers/tests via environment variables.

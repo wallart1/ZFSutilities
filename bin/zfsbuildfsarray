@@ -91,9 +91,12 @@ function buildfsarray {
         unset depth
     fi
 
+    local -a depth_args=()
+    [[ -n "${depth:-}" ]] && depth_args=("$depth")
+
     if [[ $buildfsarraytype != 'pool' ]]; then
-        readarray -t fsarray < <(zfs list $depth -Hrt $buildfsarraytype -o name \
-            $sequence $sortby "$sourcefs")
+        readarray -t fsarray < <(zfs list "${depth_args[@]}" -Hrt "$buildfsarraytype" -o name \
+            "$sequence" "$sortby" "$sourcefs")
 
         # Optionally filter out ZFS clones
         if [[ $skipclones = 'Y' ]]; then
@@ -191,7 +194,8 @@ function buildfsarray {
             fi
         done
         if [[ ${#fsarray[@]} = 0 ]]; then       # All the array items were deleted!
-            log_msg "FATAL: startwith: \"$startwith\" was not found in any of the eligible dataset names."
+            log_msg "FATAL: startwith: \"$startwith\" was not found in any of the" \
+                "eligible dataset names."
             exit 8
         fi
     fi
@@ -208,14 +212,16 @@ function buildfsarray {
         for (( i=0; i<${#fsarray[@]}; i++)); do     # Look for "endwith" substring in fsarray
             fs=${fsarray[i]}
 
-            if [[ $fs == $anywhereinfs"$endwith"$anywhereinfs ]]; then   # Note pattern-matching syntax
+            # Note pattern-matching syntax in the comparison below.
+            if [[ $fs == $anywhereinfs"$endwith"$anywhereinfs ]]; then
                 fsarray=("${fsarray[@]:0:$((i+1))}")  # Keep items 0 through i (inclusive).
                 found=1
                 break
             fi
         done
         if [[ $found = 0 ]]; then
-            log_msg "FATAL: endwith: \"$endwith\" was not found in any of the eligible dataset names."
+            log_msg "FATAL: endwith: \"$endwith\" was not found in any of the" \
+                "eligible dataset names."
             exit 8
         fi
     fi

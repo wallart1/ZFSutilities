@@ -93,7 +93,7 @@ if [[ $dopart1 = 'Y' ]]; then
 
     if [[ $1 != '' ]]; then overrides "$1"; fi
 
-    send-receive $restoresourcefs
+    send-receive "$restoresourcefs"
     if [[ $dopart2 != 'Y' ]]; then
         ensure_restored_iscsi
     fi
@@ -122,7 +122,8 @@ if [[ $dopart2 = 'Y' ]]; then
     if [[ $autoproceed != 'Y' ]]; then
         while :; do
             overrides=''
-            read -p 'Press enter to continue with part two. Or enter overrides.: ' overrides
+            read -rp 'Press enter to continue with part two.'\
+                ' Or enter overrides.: ' overrides
             if [[ $overrides != '' ]]; then overrides "$overrides"
             else break
             fi

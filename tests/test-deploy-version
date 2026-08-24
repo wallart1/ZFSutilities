@@ -115,7 +115,8 @@ test_rsync_deletes_stale_files() {
     mkdir -p "$tmpdir/versions/v1/bin"
     echo 'stale' > "$tmpdir/versions/v1/bin/oldscript"
     _test_rsync_copy "$tmpdir/bin" "$tmpdir/versions/v1/bin"
-    if [[ -f "$tmpdir/versions/v1/bin/newscript" && ! -f "$tmpdir/versions/v1/bin/oldscript" ]]; then
+    if [[ -f "$tmpdir/versions/v1/bin/newscript" ]] &&\
+       [[ ! -f "$tmpdir/versions/v1/bin/oldscript" ]]; then
         test_pass
     else
         test_fail "rsync did not remove stale file or copy new file correctly"
@@ -477,13 +478,16 @@ test_deploy_version_does_not_wire() {
     deploy_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/deploy-version"
 
     local fail_reason=""
-    if grep -qE "setup_bashinit_symlink|setup_path_config|cleanup_old_symlinks" "$deploy_script"; then
+    local _wiring_re="setup_bashinit_symlink|setup_path_config|cleanup_old_symlinks"
+    local _symlink_re="ln -s[^\n]*(/root/bashinit|/usr/local/lib/node-lib\.sh|"
+    _symlink_re+="/usr/local/lib/two-node-lib\.sh|/usr/local/lib/zfsutilities/bin)"
+    if grep -qE "$_wiring_re" "$deploy_script"; then
         fail_reason="deploy-version still defines/calls wiring helpers"
     elif grep -q "/etc/profile.d/zfsutilities.sh" "$deploy_script"; then
         fail_reason="deploy-version still references profile.d config"
     elif grep -q "/etc/sudoers.d/zfsutilities" "$deploy_script"; then
         fail_reason="deploy-version still references sudoers config"
-    elif grep -qE "ln -s[^\n]*(/root/bashinit|/usr/local/lib/node-lib\.sh|/usr/local/lib/two-node-lib\.sh|/usr/local/lib/zfsutilities/bin)" "$deploy_script"; then
+    elif grep -qE "$_symlink_re" "$deploy_script"; then
         fail_reason="deploy-version still creates production symlinks"
     fi
 

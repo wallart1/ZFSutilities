@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 0.85.2
+
+*Released 2026-08-23*
+
+### Changed
+
+- **Bash code-style and ShellCheck compliance cleanup** — Many operational scripts
+  were reformatted for the 100-column limit, had variables quoted more consistently,
+  and had compact `A && B || C` constructs expanded to explicit `if`/`then`/`else`
+  blocks where readability improved. Dynamic command arguments (notably `pv`,
+  `zfs send`, and `zfs receive` option strings in `zfs-send-receive`) are now built
+  in arrays to avoid accidental word splitting.
+- **`.shellcheckrc` expanded** — Additional intentionally-disabled rules
+  (`SC1091`, `SC2015`, `SC2029`, `SC2030`, `SC2031`, `SC2317`) now document the
+  project's dynamic-sourcing, SSH-payload, and test-override patterns.
+
+### Tests
+
+- Reformatted existing bash and Python test suites to meet the 100-column policy
+  and fixed ShellCheck warnings introduced by that reformatting.
+
+### Documentation
+
+- Updated `docs/docs/developer-guide/coding-policies.md` to list all disabled
+  ShellCheck rules and their rationales.
+
 ## 0.85.1
 
 *Released 2026-08-21*

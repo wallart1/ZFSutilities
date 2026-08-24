@@ -39,8 +39,10 @@ ZFSLOCK_DIR="${ZFSLOCK_DIR:-${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}}"
 
 # Legacy fallback: if the new path does not exist and the old path does, use
 # the old path so existing installs keep working before the Step 5 migration.
-if [[ ! -e "$ZFSCONFIG_PATH" && -f "${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}" ]]; then
-    log_msg "WARN: zfsconfig: config not found at $ZFSCONFIG_PATH; using legacy path ${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
+if [[ ! -e "$ZFSCONFIG_PATH" \
+    && -f "${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}" ]]; then
+    log_msg "WARN: zfsconfig: config not found at $ZFSCONFIG_PATH; using legacy path" \
+        "${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
     ZFSCONFIG_PATH="${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
 fi
 

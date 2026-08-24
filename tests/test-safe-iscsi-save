@@ -77,7 +77,8 @@ test_zero_active_backstores_refuses_save() {
     printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$tmpdir/expected-backstores.txt"
 
     local output rc=0
-    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 0) || rc=$?
+    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 0) \
+        || rc=$?
 
     if [[ "$rc" -ne 0 ]] && [[ "$output" != *"SAVECONFIG_CALLED"* ]]; then
         test_pass
@@ -95,7 +96,8 @@ test_active_count_equals_expected_saves() {
     printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$tmpdir/expected-backstores.txt"
 
     local output rc=0
-    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 2) || rc=$?
+    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 2) \
+        || rc=$?
 
     if [[ "$rc" -eq 0 ]] && [[ "$output" == *"SAVECONFIG_CALLED"* ]]; then
         test_pass
@@ -113,7 +115,8 @@ test_active_less_than_expected_refuses_save() {
     printf 'vm-100-disk-0\nvm-101-disk-0\nvm-102-disk-0\n' > "$tmpdir/expected-backstores.txt"
 
     local output rc=0
-    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 2) || rc=$?
+    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 2) \
+        || rc=$?
 
     if [[ "$rc" -ne 0 ]] && [[ "$output" != *"SAVECONFIG_CALLED"* ]]; then
         test_pass
@@ -131,7 +134,8 @@ test_empty_manifest_refuses_save() {
     printf '# empty manifest\n' > "$tmpdir/expected-backstores.txt"
 
     local output rc=0
-    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 0) || rc=$?
+    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 0) \
+        || rc=$?
 
     if [[ "$rc" -ne 0 ]] && [[ "$output" != *"SAVECONFIG_CALLED"* ]]; then
         test_pass

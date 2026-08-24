@@ -16,7 +16,7 @@ source_helper rootcheck
 source_helper zfslockmanager
 
 if [[ $1 != 'mount' ]] && [[ $1 != 'unmount' ]]; then
-    log_msg 'FATAL: $1 must be either "mount" or "unmount"'
+    log_msg "FATAL: \$1 must be either \"mount\" or \"unmount\""
     exit 8
 fi
 command=$1
@@ -33,7 +33,7 @@ rootcheck
 
 zfslock_init
 
-readarray -t mountarray < <(zfs list -Hrt $dstype -o name "$subtree")
+readarray -t mountarray < <(zfs list -Hrt "$dstype" -o name "$subtree")
 
 if [[ ${#mountarray[@]} -gt 0 ]]; then
     log_msg "INFO: About to $command the following datasets:"
@@ -41,11 +41,11 @@ if [[ ${#mountarray[@]} -gt 0 ]]; then
     for fs in "${mountarray[@]}"; do
         if [[ $(zfs get -H mounted "$fs" | awk '{print $3}') = "$mountedcondition" ]]; then
             echo "$fs"
-            x=$(($x+1))
+            x=$((x+1))
         fi
     done
     if [[ $x -gt 0 ]]; then
-        read -p "Press enter to proceed."
+        read -rp "Press enter to proceed."
     else
         log_msg "WARN: No eligible datasets were found in $subtree."
         exit 4

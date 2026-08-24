@@ -53,7 +53,8 @@ iscsiadm -m session --rescan 2>&1 | sed 's/^/  /'
 log_msg "INFO: ✓ Rescan complete"
 
 # --- Show device count ---
-DEVICE_COUNT=$(ls /dev/disk/by-path/ip-${STORAGE_IP}* 2>/dev/null | wc -l)
+DEVICE_COUNT=$(find /dev/disk/by-path/ -maxdepth 1 -name "ip-${STORAGE_IP}*" \
+    -print 2>/dev/null | wc -l)
 log_msg "INFO: Total iSCSI devices visible: $DEVICE_COUNT"
 
 if [[ "$DEVICE_COUNT" -lt 31 ]]; then

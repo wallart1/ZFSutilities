@@ -19,14 +19,18 @@ eval "$func_text"
 test_build_efidisk_line_secure_boot() {
     test_start "build_efidisk_line includes ms-cert=2023k with Secure Boot"
     local line
-    line=$(build_efidisk_line "/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.storage-host:tank-lun-5" 1 true)
+    local _efi_path="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-"
+    _efi_path+="iqn.2026-02.local.storage-host:tank-lun-5"
+    line=$(build_efidisk_line "$_efi_path" 1 true)
     assert_contains "$line" "ms-cert=2023k"
 }
 
 test_build_efidisk_line_no_secure_boot() {
     test_start "build_efidisk_line omits ms-cert without Secure Boot"
     local line
-    line=$(build_efidisk_line "/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.storage-host:tank-lun-5" 0 false)
+    local _efi_path="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-"
+    _efi_path+="iqn.2026-02.local.storage-host:tank-lun-5"
+    line=$(build_efidisk_line "$_efi_path" 0 false)
     if [[ "$line" != *"ms-cert"* ]]; then
         test_pass
     else

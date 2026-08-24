@@ -89,13 +89,23 @@ reset_mocks() {
 test_phase1_same_day() {
     echo "=== Phase 1: Same-day dedup ==="
     reset_mocks
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-30T12:00-04:00-d\tSun Mar 30 12:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T12:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T12:00-04:00-d\tSun Mar 30 12:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T12:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     retain "pool/fs" "dailybackup"
     test_start "Removes older same-day snapshot, keeps newer"
-    if [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@dailybackup-2025-03-30T10:00-04:00-d"* ]] \
-        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2025-03-30T12:00-04:00-d"* ]] \
-        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2025-03-31T10:00-04:00-d"* ]]; then
+    local _removed _kept1 _kept2
+    _removed="pool/fs@dailybackup-2025-03-30T10:00-04:00-d"
+    _kept1="pool/fs@dailybackup-2025-03-30T12:00-04:00-d"
+    _kept2="pool/fs@dailybackup-2025-03-31T10:00-04:00-d"
+    if [[ "${_mock_delsnap_calls[*]}" == *"$_removed"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_kept1"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_kept2"* ]]; then
         test_pass
     else
         test_fail "Unexpected deletions: ${_mock_delsnap_calls[*]}"
@@ -105,8 +115,16 @@ test_phase1_same_day() {
 test_phase2_bucket_overflow() {
     echo "=== Phase 2: Bucket overflow ==="
     reset_mocks
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
@@ -123,17 +141,29 @@ test_phase2_bucket_overflow() {
 test_phase2_oldest_first() {
     echo "=== Phase 2: Oldest snapshot deleted first ==="
     reset_mocks
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "0"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-31T10:00-04:00-d" "written" "1024"
     retain "pool/fs" "dailybackup"
     test_start "Deletes oldest snapshot even when a newer empty snapshot exists"
-    if [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@dailybackup-2025-03-28T10:00-04:00-d"* ]] \
-        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2025-03-29T10:00-04:00-d"* ]] \
-        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2025-03-31T10:00-04:00-d"* ]]; then
+    local _removed _kept1 _kept2
+    _removed="pool/fs@dailybackup-2025-03-28T10:00-04:00-d"
+    _kept1="pool/fs@dailybackup-2025-03-29T10:00-04:00-d"
+    _kept2="pool/fs@dailybackup-2025-03-31T10:00-04:00-d"
+    if [[ "${_mock_delsnap_calls[*]}" == *"$_removed"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_kept1"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_kept2"* ]]; then
         test_pass
     else
         test_fail "Expected oldest non-empty snap deleted, got: ${_mock_delsnap_calls[*]}"
@@ -143,8 +173,16 @@ test_phase2_oldest_first() {
 test_phase2_protect_most_recent() {
     echo "=== Phase 2: Protect most recent ==="
     reset_mocks
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
@@ -161,8 +199,14 @@ test_phase2_protect_most_recent() {
 test_skip_clone_and_c_bucket() {
     echo "=== Skip clone and 'c' bucket ==="
     reset_mocks
-    mock_zfs_snap_list_creation $'pool/fs@clone-2025-03-28T10:00-04:00-c\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@clone-2025-03-28T10:00-04:00-c\npool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@clone-2025-03-28T10:00-04:00-c\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@clone-2025-03-28T10:00-04:00-c\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
     retain "pool/fs" "dailybackup"
@@ -177,15 +221,24 @@ test_skip_clone_and_c_bucket() {
 test_phase2_old_nonempty_weekly() {
     echo "=== Phase 2: Old non-empty weekly deleted before newer empty weekly ==="
     reset_mocks
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2026-02-28T09:18-05:00-w\tSat Feb 28 09:18 2026\npool/fs@dailybackup-2026-06-07T07:48-04:00-w\tSun Jun  7 07:48 2026\npool/fs@dailybackup-2026-06-14T07:48-04:00-w\tSun Jun 14 07:48 2026'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2026-02-28T09:18-05:00-w\npool/fs@dailybackup-2026-06-07T07:48-04:00-w\npool/fs@dailybackup-2026-06-14T07:48-04:00-w'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-02-28T09:18-05:00-w\tSat Feb 28 09:18 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-06-07T07:48-04:00-w\tSun Jun  7 07:48 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-06-14T07:48-04:00-w\tSun Jun 14 07:48 2026'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-02-28T09:18-05:00-w\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-06-07T07:48-04:00-w\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-06-14T07:48-04:00-w'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2026-02-28T09:18-05:00-w" "written" "102400"
     mock_zfs_prop "pool/fs@dailybackup-2026-06-07T07:48-04:00-w" "written" "0"
     mock_zfs_prop "pool/fs@dailybackup-2026-06-14T07:48-04:00-w" "written" "0"
     retain "pool/fs" "dailybackup"
     test_start "Old non-empty weekly is deleted; most recent weekly is protected"
-    if [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@dailybackup-2026-02-28T09:18-05:00-w"* ]] \
-        && [[ "${_mock_delsnap_calls[*]}" != *"pool/fs@dailybackup-2026-06-14T07:48-04:00-w"* ]]; then
+    local _removed _kept
+    _removed="pool/fs@dailybackup-2026-02-28T09:18-05:00-w"
+    _kept="pool/fs@dailybackup-2026-06-14T07:48-04:00-w"
+    if [[ "${_mock_delsnap_calls[*]}" == *"$_removed"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_kept"* ]]; then
         test_pass
     else
         test_fail "Expected old weekly deleted, got: ${_mock_delsnap_calls[*]}"
@@ -197,8 +250,16 @@ test_phase2_empty_tag_logged() {
     reset_mocks
     local _logfile
     _logfile=$(mktemp)
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "0"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
@@ -221,15 +282,23 @@ test_phase2_retain_zero_deletes_most_recent() {
     mock_retention_policy() {
         echo "bktname[0]='d'; bktretain[0]=0; minage[0]=0"
     }
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
     retain "pool/fs" "dailybackup"
     test_start "Deletes all daily snapshots including the most recent when retain=0"
+    local _removed
+    _removed="pool/fs@dailybackup-2025-03-30T10:00-04:00-d"
     if [[ "${#_mock_delsnap_calls[@]}" -eq 3 ]] \
-        && [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@dailybackup-2025-03-30T10:00-04:00-d"* ]]; then
+        && [[ "${_mock_delsnap_calls[*]}" == *"$_removed"* ]]; then
         test_pass
     else
         test_fail "Expected all three daily snaps deleted, got: ${_mock_delsnap_calls[*]}"
@@ -244,8 +313,14 @@ test_phase2_retain_zero_deletes_most_recent() {
 test_phase0_offsite_monthly() {
     echo "=== Phase 0: Offsite monthly dedup ==="
     reset_mocks
-    mock_zfs_snap_list_creation $'pool/fs@offsite-2025-03-15T10:00-04:00-s\tSun Mar 15 10:00 2025\npool/fs@offsite-2025-03-20T10:00-04:00-s\tThu Mar 20 10:00 2025\npool/fs@offsite-2025-04-01T10:00-04:00-s\tTue Apr  1 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@offsite-2025-03-15T10:00-04:00-s\npool/fs@offsite-2025-03-20T10:00-04:00-s\npool/fs@offsite-2025-04-01T10:00-04:00-s'
+    local _wrap_snaplist=$'pool/fs@offsite-2025-03-15T10:00-04:00-s\tSun Mar 15 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@offsite-2025-03-20T10:00-04:00-s\tThu Mar 20 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@offsite-2025-04-01T10:00-04:00-s\tTue Apr  1 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@offsite-2025-03-15T10:00-04:00-s\n'
+    _wrap_snaplist+=$'pool/fs@offsite-2025-03-20T10:00-04:00-s\n'
+    _wrap_snaplist+=$'pool/fs@offsite-2025-04-01T10:00-04:00-s'
+    mock_zfs_snap_list "$_wrap_snaplist"
     retain "pool/fs" "offsite"
     test_start "Keeps only most recent offsite per month"
     if [[ "${_mock_delsnap_calls[*]}" == *"pool/fs@offsite-2025-03-15T10:00-04:00-s"* ]] \
@@ -260,8 +335,14 @@ test_phase0_offsite_monthly() {
 test_wrong_label_skipped() {
     echo "=== Wrong label skipped ==="
     reset_mocks
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@weeklybackup-2025-03-28T10:00-04:00-w\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@weeklybackup-2025-03-28T10:00-04:00-w\npool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@weeklybackup-2025-03-28T10:00-04:00-w\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@weeklybackup-2025-03-28T10:00-04:00-w\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
     retain "pool/fs" "dailybackup"
@@ -276,8 +357,12 @@ test_wrong_label_skipped() {
 test_retain_acquires_write_lock() {
     echo "=== Locking: acquires write lock ==="
     reset_mocks
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
     retain "pool/fs" "dailybackup"
@@ -293,15 +378,22 @@ test_retain_skips_when_locked() {
     echo "=== Locking: skips dataset when lock conflict ==="
     reset_mocks
     _mock_lock_conflict="pool/fs"
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     retain "pool/fs" "dailybackup"
     local rc=$?
     test_start "Skips pruning when lock is already held"
-    if [[ $rc -eq 1 && ${#_mock_delsnap_calls[@]} -eq 0 && "${_mock_lock_acquisitions[*]}" == *"pool/fs w"* ]]; then
+    if [[ $rc -eq 1 && ${#_mock_delsnap_calls[@]} -eq 0 ]] &&\
+       [[ "${_mock_lock_acquisitions[*]}" == *"pool/fs w"* ]]; then
         test_pass
     else
-        test_fail "Expected skip rc=1 with no deletions, got rc=$rc, deletions=${_mock_delsnap_calls[*]}"
+        local _wrap_msg="Expected skip rc=1 with no deletions, got rc=$rc, "
+        _wrap_msg+="deletions=${_mock_delsnap_calls[*]}"
+        test_fail "$_wrap_msg"
     fi
 }
 
@@ -311,7 +403,9 @@ test_retain_returns_on_missing_policy() {
     mock_retention_policy() {
         true  # no output
     }
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025'
+    local _snaplist=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\t'
+    _snaplist+=$'Sun Mar 30 10:00 2025'
+    mock_zfs_snap_list_creation "$_snaplist"
     mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d'
     retain "pool/fs" "dailybackup"
     local rc=$?
@@ -333,12 +427,15 @@ test_retain_returns_on_lock_error() {
     echo "=== Lock error: returns instead of exiting ==="
     reset_mocks
     _mock_lock_error="pool/fs"
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025'
+    local _snaplist=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\t'
+    _snaplist+=$'Sun Mar 30 10:00 2025'
+    mock_zfs_snap_list_creation "$_snaplist"
     mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d'
     retain "pool/fs" "dailybackup"
     local rc=$?
     test_start "retain returns 1 on unexpected lock acquisition error"
-    if [[ $rc -eq 1 && ${#_mock_delsnap_calls[@]} -eq 0 && "${_mock_lock_acquisitions[*]}" == *"pool/fs w"* ]]; then
+    if [[ $rc -eq 1 && ${#_mock_delsnap_calls[@]} -eq 0 ]] &&\
+       [[ "${_mock_lock_acquisitions[*]}" == *"pool/fs w"* ]]; then
         test_pass
     else
         test_fail "Expected rc=1 with no deletions, got rc=$rc, deletions=${_mock_delsnap_calls[*]}"
@@ -349,8 +446,12 @@ test_releaseholds_tags_default() {
     echo "=== releaseholds_tags default ==="
     reset_mocks
     releaseholds="Y"
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-30T12:00-04:00-d\tSun Mar 30 12:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T12:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T12:00-04:00-d\tSun Mar 30 12:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T12:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     retain "pool/fs" "dailybackup"
     test_start "Defaults releaseholds_tags to offsite-*"
     if [[ "${_mock_delsnap_tags[*]}" == *"offsite-*"* ]]; then
@@ -366,16 +467,28 @@ test_verb_messages_enabled() {
     retain_verb="Y"
     local _logfile
     _logfile=$(mktemp)
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-31T10:00-04:00-d" "written" "1024"
     retain "pool/fs" "dailybackup" 2>"$_logfile"
     test_start "Emits VERB messages explaining kept snapshots"
-    if grep -q "VERB: Keeping pool/fs@dailybackup-2025-03-31T10:00-04:00-d — most recent snapshot in bucket 'd' is protected as incremental base" "$_logfile" \
-        && grep -q "VERB: Keeping pool/fs@dailybackup-2025-03-30T10:00-04:00-d — within retention count for bucket 'd'" "$_logfile"; then
+    local _pat1 _pat2
+    _pat1="VERB: Keeping pool/fs@dailybackup-2025-03-31T10:00-04:00-d — most recent snapshot in "
+    _pat1+="bucket 'd' is protected as incremental base"
+    _pat2="VERB: Keeping pool/fs@dailybackup-2025-03-30T10:00-04:00-d — within retention count "
+    _pat2+="for bucket 'd'"
+    if grep -q "$_pat1" "$_logfile" && grep -q "$_pat2" "$_logfile"; then
         test_pass
     else
         test_fail "Expected VERB retention messages in log, got: $(cat "$_logfile")"
@@ -388,8 +501,16 @@ test_verb_messages_disabled() {
     reset_mocks
     local _logfile
     _logfile=$(mktemp)
-    mock_zfs_snap_list_creation $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\npool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
-    mock_zfs_snap_list $'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\npool/fs@dailybackup-2025-03-29T10:00-04:00-d\npool/fs@dailybackup-2025-03-30T10:00-04:00-d\npool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d\tMon Mar 31 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-31T10:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"

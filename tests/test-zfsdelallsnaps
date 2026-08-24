@@ -54,12 +54,14 @@ test_all_success_returns_zero() {
         export ZFSUTILITIES_BIN_DIR="$tmpdir"
         bash -c '
             zfs() {
-                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
+                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" ]] &&\
+                   [[ "$5" == "snapshot" ]]; then
                     echo "tank/fs@snap1"
                     echo "tank/fs@snap2"
                     return 0
                 fi
-                if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" && "$5" == "creation" ]]; then
+                if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" ]] &&\
+                   [[ "$5" == "creation" ]]; then
                     echo "1750000000"
                     return 0
                 fi
@@ -94,12 +96,14 @@ test_any_failure_returns_one() {
         export ZFSUTILITIES_BIN_DIR="$tmpdir"
         bash -c '
             zfs() {
-                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
+                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" ]] &&\
+                   [[ "$5" == "snapshot" ]]; then
                     echo "tank/fs@snap1"
                     echo "tank/fs@snap2"
                     return 0
                 fi
-                if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" && "$5" == "creation" ]]; then
+                if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" ]] &&\
+                   [[ "$5" == "creation" ]]; then
                     echo "1750000000"
                     return 0
                 fi
@@ -134,7 +138,8 @@ test_no_snapshots_returns_zero() {
         export ZFSUTILITIES_BIN_DIR="$tmpdir"
         bash -c '
             zfs() {
-                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
+                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" ]] &&\
+                   [[ "$5" == "snapshot" ]]; then
                     return 0
                 fi
                 command zfs "$@"
@@ -168,7 +173,8 @@ test_filtered_no_match_returns_zero() {
         export ZFSUTILITIES_BIN_DIR="$tmpdir"
         bash -c '
             zfs() {
-                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
+                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" ]] &&\
+                   [[ "$5" == "snapshot" ]]; then
                     echo "tank/fs@snap1"
                     return 0
                 fi
@@ -209,11 +215,13 @@ test_releaseholds_tags_default() {
         export ZFSUTILITIES_BIN_DIR="$tmpdir"
         bash -c '
             zfs() {
-                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" && "$5" == "snapshot" ]]; then
+                if [[ "$1" == "list" && "$2" == "-Ho" && "$3" == "name" && "$4" == "-t" ]] &&\
+                   [[ "$5" == "snapshot" ]]; then
                     echo "tank/fs@snap1"
                     return 0
                 fi
-                if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" && "$5" == "creation" ]]; then
+                if [[ "$1" == "get" && "$2" == "-Hp" && "$3" == "-o" && "$4" == "value" ]] &&\
+                   [[ "$5" == "creation" ]]; then
                     echo "1750000000"
                     return 0
                 fi

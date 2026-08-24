@@ -1623,7 +1623,9 @@ class TestConditionField(unittest.TestCase):
             },
         }
         for key in app.schedule_cron_entries:
-            app.schedule_cron_entries[key].get_text.return_value = saved_profile["cron"].get(key, "")
+            app.schedule_cron_entries[key].get_text.return_value = saved_profile["cron"].get(
+                key, ""
+            )
         app.schedule_cron_entries["condition"].get_text.return_value = "[ $(date +%d) -ge 28 ]"
 
         with patch("schedule_page.load_profile", return_value=saved_profile):
