@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## 0.86.0
+
+*Released 2026-08-23*
+
+### Added
+
+- **`--long-prefix` option for `log_msg`** — Bash `log_msg`, `warn`, `die`, and `msg_prefix`
+  now accept `--long-prefix` to force the `file:line:` prefix even when stderr is a terminal.
+  Python `log_msg` accepts `--long-prefix` as a first positional argument or `long_prefix=True`
+  as a keyword argument with the same semantics.
+
+### Changed
+
+- **Terminal output defaults to short prefix** — When stderr is a terminal, messages now show
+  only the message text (e.g., `INFO: ...`) by default. Non-terminal output, session log files,
+  and GUI sinks continue to use the long `file:line:` prefix.
+
+### Tests
+
+- Extended `tests/test-logging` with `--long-prefix` coverage for `warn` and `msg_prefix`.
+- Extended `tests/python/test_logging_config.py` with `--long-prefix` and terminal/redirect
+  behavior tests, and moved the `if __name__ == "__main__"` block to the end of the file.
+- Fixed a few remaining 100-column overflows in `lib/desktop-launcher-lib.sh`,
+  `tests/test-zfsdailybackup`, and `tests/test-zfsfullcopy`.
+
+### Documentation
+
+- Updated `docs/docs/messages/index.md` to describe the new `--long-prefix` behavior and
+  examples for Bash and Python.
+- Updated `docs/docs/developer-guide/coding-policies.md` to document the `--long-prefix` option.
+
 ## 0.85.2
 
 *Released 2026-08-23*

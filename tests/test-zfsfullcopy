@@ -21,7 +21,8 @@ _run_zfsfullcopy() {
     cat > "$_mock_bin/zfs-send-receive" <<'EOF'
 send-receive() {
     echo "send-receive called with: $*" >> "$ZFSFULLCOPY_STATE/send-receive.calls"
-    echo "sourcefsremovequalifiers=$sourcefsremovequalifiers" >> "$ZFSFULLCOPY_STATE/send-receive.calls"
+    echo "sourcefsremovequalifiers=$sourcefsremovequalifiers" \
+        >> "$ZFSFULLCOPY_STATE/send-receive.calls"
 }
 EOF
     cat > "$_mock_bin/zfsoverrides" <<'EOF'

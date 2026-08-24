@@ -367,8 +367,6 @@ class TestViewerShouldShow(unittest.TestCase):
         self.assertTrue(viewer_should_show("INFO", "BOGUS"))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestTruncateSessionLog(unittest.TestCase):
@@ -466,3 +464,5 @@ class TestTruncateSessionLog(unittest.TestCase):
             self.assertIn("last line", content)
         finally:
             os.unlink(path)
+if __name__ == "__main__":
+    unittest.main()

@@ -9,7 +9,8 @@ setup_test_env
 # shipped. Provide a minimal stub via ZFSUTILITIES_BIN_DIR so the script can
 # load without finding the production deployment copy.
 RSYNC_HELPER_DIR=$(mktemp -d)
-printf '#!/usr/bin/bash\nfunction rsync-dailybackup { :; }\n' > "$RSYNC_HELPER_DIR/rsync-dailybackup"
+printf '#!/usr/bin/bash\nfunction rsync-dailybackup { :; }\n' \
+    > "$RSYNC_HELPER_DIR/rsync-dailybackup"
 chmod +x "$RSYNC_HELPER_DIR/rsync-dailybackup"
 
 # zfsdailybackup / zfssnapbuild stores its nextsnap file under the caller script

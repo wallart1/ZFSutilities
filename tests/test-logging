@@ -218,6 +218,56 @@ test_log_msg_long_prefix_with_flag_on_terminal
 test_log_msg_long_prefix_off_terminal
 test_log_msg_log_file_always_long_prefix
 
+test_warn_long_prefix_on_terminal() {
+    test_start "warn --long-prefix uses long prefix on a terminal"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            export ZFSUTILITIES_LOG_INHERIT="Y"
+            bashinit
+            __log_msg_terminal_p() { return 0; }
+            warn --long-prefix "long warning"
+        ) 2>&1 >/dev/null
+    )"
+    assert_contains "$stderr" "WARN: long warning"
+    assert_contains "$stderr" ": WARN: long warning"
+}
+
+test_msg_prefix_short_on_terminal() {
+    test_start "msg_prefix omits prefix on a terminal by default"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            export ZFSUTILITIES_LOG_INHERIT="Y"
+            bashinit
+            __log_msg_terminal_p() { return 0; }
+            msg_prefix
+        ) 2>&1 >/dev/null
+    )"
+    assert_equals "" "$stderr"
+}
+
+test_msg_prefix_long_prefix_on_terminal() {
+    test_start "msg_prefix --long-prefix emits prefix on a terminal"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            export ZFSUTILITIES_LOG_INHERIT="Y"
+            bashinit
+            __log_msg_terminal_p() { return 0; }
+            msg_prefix --long-prefix
+        ) 2>&1 >/dev/null
+    )"
+    assert_contains "$stderr" ":"
+}
+
+test_warn_long_prefix_on_terminal
+test_msg_prefix_short_on_terminal
+test_msg_prefix_long_prefix_on_terminal
+
 # ------------------------------------------------------------------------------
 # ask_yn
 # -----------------------------------------------------------------------------

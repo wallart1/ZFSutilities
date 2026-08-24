@@ -111,7 +111,8 @@ remove_desktop_symlinks() {
 
     home=$(get_user_home "${user}")
     if [[ -z "${home}" || ! -d "${home}" ]]; then
-        warn "  ⚠ Home directory for '${user}' not found; skipping home-directory symlink removal."
+        warn "  ⚠ Home directory for '${user}' not found;" \
+            "skipping home-directory symlink removal."
         return 1
     fi
 
