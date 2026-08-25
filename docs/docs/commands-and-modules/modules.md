@@ -929,6 +929,9 @@ Suppresses "tag already exists" errors — safe to call repeatedly.
 
 Core dataset lock management. Provides acquire, release, and conflict-checking
 functions. Used by `zfs-send-receive`, `zfsdelsnap`, `clone-vm`, and others.
+In two-node mode, storage-owned dataset locks are forwarded to
+`zfslockmanager-remote` on the storage node; see
+[Two-Node Operation](../developer-guide/lock-manager.md#two-node-operation).
 
 ```bash
 source_helper zfslockmanager
@@ -966,6 +969,32 @@ Lock files are stored in `/run/lock/zfsutilities/.locks/` (cleared on reboot).
 | `w` on ancestor   | `w`, `x` on descendants |
 | `x` on ancestor   | any lock on descendants |
 | Any lock on child | `x` on ancestors        |
+
+---
+
+### `zfslockmanager-remote`
+
+Remote agent for two-node lock management. Runs on the storage node and is
+invoked by the compute node's `zfslockmanager` over SSH. Not intended for direct
+interactive use.
+
+```text
+zfslockmanager-remote hold <dataset> <type> [description]
+zfslockmanager-remote check <dataset> <type>
+zfslockmanager-remote list
+zfslockmanager-remote release <lockfile>
+zfslockmanager-remote cleanup
+```
+
+- `hold` acquires the lock, prints `LOCKED <lockfile>`, then holds the lock
+  until stdin closes or the process is terminated.
+- `check` returns JSON indicating whether the lock is available.
+- `list` returns a JSON array of active (non-stale) locks.
+- `release` force-removes a lock file.
+- `cleanup` removes stale locks.
+
+See [Two-Node Operation](../developer-guide/lock-manager.md#two-node-operation)
+for details.
 
 **Re-entrant locking:** If the current PID already holds a lock on a dataset
 (or its ancestor/descendant), subsequent acquire attempts succeed without

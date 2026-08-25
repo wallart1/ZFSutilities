@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+## 0.87.0
+
+*Released 2026-08-24*
+
+### Added
+
+- **Two-node dataset locking** — In a two-node configuration, locks for
+  storage-owned datasets are now held on the storage node. The compute node
+  forwards `acquire`, `check`, `release`, and cleanup operations to the storage
+  node over the existing root-SSH path. Single-node behaviour is unchanged.
+- **`bin/zfslockmanager-remote`** — New remote lock agent that runs on the
+  storage node and provides `hold`, `check`, `list`, `release`, and `cleanup`
+  subcommands used by the compute-side lock manager.
+- **`python/node_config.py`** — New shared module that parses
+  `/etc/zfsutilities/node.conf` (with legacy fallbacks) for the Python layer,
+  exposing node mode, host identities, and the pool-to-target map. The
+  Dashboard now uses this module instead of duplicating the parsing logic.
+- **Environment overrides for lock-manager testing and non-standard installs** —
+  `ZFSLOCK_REMOTE_DISABLED`, `ZFSLOCK_REMOTE_HOST`, `ZFSLOCK_REMOTE_POOLS`,
+  `ZFSLOCK_REMOTE_BIN`, `ZFSLOCK_THIS_HOST`, and `ZFSUTILITIES_NODE_CONF`.
+
+### Changed
+
+- **`zfslockctl list`** output now includes a `HOST` column, and in two-node
+  mode the command merges local locks with locks queried from the storage node.
+- **`python/zfs_lock_manager.list_active_locks()`** now returns a `host` key in
+  each lock dict and includes remote locks in two-node mode.
+- **Lock IDs** may now carry a `REMOTE:` prefix when a lock is held on the
+  storage node.
+
+### Fixed
+
+- **`zfsshowbigstuff`** no longer aborts after the first sort section when
+  `head` receives `SIGPIPE`; all eight sort sections are now emitted reliably.
+
+### Tests
+
+- Added `tests/test-zfslockmanager-remote` to verify the remote lock agent
+  subcommands.
+- Extended `tests/test-zfslockmanager` with remote acquire, release, and
+  conflict tests.
+- Extended `tests/test-zfsshowbigstuff` to verify all eight sort sections are
+  emitted.
+- Added `tests/python/test_node_config.py` and extended
+  `tests/python/test_zfs_lock_manager.py` for two-node Python locking.
+- Updated `tests/python/test_dashboard_page.py` for the new `Host` column and
+  the shared `node_config` module.
+
+### Documentation
+
+- Updated `docs/docs/developer-guide/lock-manager.md` with the two-node
+  operation section, environment overrides, and new `host` field.
+- Updated `docs/docs/commands-and-modules/modules.md` to document
+  `zfslockmanager-remote` and the two-node behaviour of `zfslockmanager`.
+
 ## 0.86.0
 
 *Released 2026-08-23*

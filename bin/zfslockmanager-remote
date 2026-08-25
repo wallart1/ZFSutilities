@@ -1,0 +1,170 @@
+#!/usr/bin/bash
+# zfslockmanager-remote - Remote lock agent for two-node ZFS lock manager.
+#
+# This script runs on the lock-authority node (usually the storage node). It is
+# invoked by the compute node's zfslockmanager over SSH and provides the
+# subcommands needed to acquire, check, list, and release locks remotely.
+#
+# Subcommands:
+#   hold <dataset> <type> [description]
+#       Acquire a lock and hold it until stdin closes or the process is
+#       terminated. Prints "LOCKED <lockfile>" on success, or "CONFLICT ..."
+#       and exits 1 if the lock cannot be acquired immediately.
+#   check <dataset> <type>
+#       Check whether a lock can be acquired. Prints JSON:
+#         {"available": true}
+#         {"available": false, "conflict": {...}}
+#   list
+#       Print a JSON array of active (non-stale) locks.
+#   release <lockfile>
+#       Force-remove a lock file.
+#   cleanup
+#       Remove stale locks and print the count removed.
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+source_helper rootcheck
+rootcheck
+source_helper zfslockmanager
+
+# Cleanup handler for the hold subcommand.
+_remote_agent_cleanup() {
+    zfslock_release_all
+}
+
+# Print a JSON object describing a lock file.
+_remote_agent_lock_json() {
+    local lockfile="$1"
+    local dataset type pid script acquired description
+    dataset=$(_zfslock_read_field "$lockfile" "dataset") || dataset=""
+    type=$(_zfslock_read_field "$lockfile" "type") || type=""
+    pid=$(_zfslock_read_field "$lockfile" "pid") || pid=""
+    script=$(_zfslock_read_field "$lockfile" "script") || script=""
+    acquired=$(_zfslock_read_field "$lockfile" "acquired") || acquired=""
+    description=$(_zfslock_read_field "$lockfile" "description") || description=""
+    printf '  {"dataset":"%s","type":"%s","pid":"%s","script":"%s","acquired":"%s","description":"%s"}' \
+        "$dataset" "$type" "$pid" "$script" "$acquired" "$description"
+}
+
+cmd_hold() {
+    local dataset="$1"
+    local type="$2"
+    local description="${3:-}"
+
+    if [[ -z "$dataset" || -z "$type" ]]; then
+        echo "ERROR: hold requires dataset and type" >&2
+        exit 2
+    fi
+
+    zfslock_init
+
+    if ! zfslock_acquire "$dataset" "$type" "$description"; then
+        local conflict=""
+        conflict=${ZFSLOCK_CONFLICT_INFO:-}
+        if [[ -n "$conflict" ]]; then
+            local c_dataset c_type c_pid c_script
+            c_dataset=$(_zfslock_read_field "$conflict" "dataset") || c_dataset=""
+            c_type=$(_zfslock_read_field "$conflict" "type") || c_type=""
+            c_pid=$(_zfslock_read_field "$conflict" "pid") || c_pid=""
+            c_script=$(_zfslock_read_field "$conflict" "script") || c_script=""
+            echo "CONFLICT dataset=$c_dataset type=$c_type pid=$c_pid script=$c_script"
+        else
+            echo "CONFLICT"
+        fi
+        exit 1
+    fi
+
+    echo "LOCKED $ZFSLOCK_ID"
+
+    # Hold the lock until stdin closes or we receive a signal.
+    trap _remote_agent_cleanup EXIT INT TERM HUP
+    cat >/dev/null
+}
+
+cmd_check() {
+    local dataset="$1"
+    local type="$2"
+
+    if [[ -z "$dataset" || -z "$type" ]]; then
+        echo "ERROR: check requires dataset and type" >&2
+        exit 2
+    fi
+
+    if zfslock_check "$dataset" "$type"; then
+        echo '{"available": true}'
+        return 0
+    fi
+
+    local conflict=""
+    conflict=${ZFSLOCK_CONFLICT_INFO:-}
+    if [[ -n "$conflict" && -f "$conflict" ]]; then
+        echo -n '{"available": false, "conflict": '
+        _remote_agent_lock_json "$conflict"
+        echo '}'
+    else
+        echo '{"available": false}'
+    fi
+}
+
+cmd_list() {
+    zfslock_cleanup_stale 2>/dev/null
+
+    local lockfile first=1
+    echo "["
+    for lockfile in "$ZFSLOCK_LOCKS_DIR"/*.lock; do
+        [[ -f "$lockfile" ]] || continue
+        if [[ $first -eq 1 ]]; then
+            first=0
+        else
+            echo ","
+        fi
+        _remote_agent_lock_json "$lockfile"
+    done
+    echo ""
+    echo "]"
+}
+
+cmd_release() {
+    local lockfile="$1"
+    if [[ -z "$lockfile" ]]; then
+        echo "ERROR: release requires a lock file path" >&2
+        exit 2
+    fi
+    rm -f "$lockfile"
+}
+
+cmd_cleanup() {
+    zfslock_cleanup_stale
+}
+
+case "${1:-}" in
+    hold)
+        shift
+        cmd_hold "$@"
+        ;;
+    check)
+        shift
+        cmd_check "$@"
+        ;;
+    list)
+        cmd_list
+        ;;
+    release)
+        shift
+        cmd_release "$@"
+        ;;
+    cleanup)
+        cmd_cleanup
+        ;;
+    *)
+        echo "Usage: $0 {hold|check|list|release|cleanup} ..." >&2
+        exit 2
+        ;;
+esac

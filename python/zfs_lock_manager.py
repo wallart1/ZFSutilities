@@ -7,9 +7,13 @@ default; the base directory can be overridden with the `ZFSLOCK_DIR`
 environment variable for testing.
 """
 
+import atexit
 import glob
 import json
 import os
+import select
+import shlex
+import subprocess
 import sys
 import tempfile
 import threading
@@ -17,7 +21,9 @@ import urllib.parse
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+import node_config
 from backup_config import log_msg
+from path_utils import resolve_remote_bin
 
 # ---------------------------------------------------------------------------
 # Constants and module state
@@ -32,6 +38,12 @@ ZFSLOCK_PIDS_DIR = os.path.join(ZFSLOCK_DIR, ".pids")
 # reference is released.
 _lock_refcounts: dict = {}
 _refcount_lock = threading.Lock()
+
+# Two-node state.  _remote_holds maps remote lock file paths to the live SSH
+# Popen processes that keep those locks held on the storage node.
+_node_config_cache: dict | None = None
+_remote_holds: dict = {}
+_remote_hold_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +233,206 @@ def _pool(dataset: str) -> str | None:
     return None
 
 
+def _get_node_config() -> dict:
+    """Return the cached node configuration."""
+    global _node_config_cache
+    if _node_config_cache is None:
+        _node_config_cache = node_config.load_node_config()
+    return _node_config_cache
+
+
+def _is_remote_dataset(dataset: str) -> bool:
+    """Return True if *dataset* should be locked on a remote storage node."""
+    if os.environ.get("ZFSLOCK_REMOTE_DISABLED") == "1":
+        return False
+    host = node_config.get_lock_authority_host(dataset, _get_node_config())
+    if host:
+        return True
+    env_host = os.environ.get("ZFSLOCK_REMOTE_HOST")
+    if env_host and env_host != node_config._local_hostname():
+        # Test override: treat configured pools as remote if not on the storage host.
+        pool = _pool(dataset) or dataset
+        if pool in (os.environ.get("ZFSLOCK_REMOTE_POOLS", "").split()):
+            return True
+    return False
+
+
+def _get_lock_authority_host(dataset: str) -> str | None:
+    """Return the remote host for *dataset*, or None if local."""
+    if os.environ.get("ZFSLOCK_REMOTE_DISABLED") == "1":
+        return None
+    host = node_config.get_lock_authority_host(dataset, _get_node_config())
+    if host:
+        return host
+    env_host = os.environ.get("ZFSLOCK_REMOTE_HOST")
+    if env_host and env_host != node_config._local_hostname():
+        pool = _pool(dataset) or dataset
+        if pool in (os.environ.get("ZFSLOCK_REMOTE_POOLS", "").split()):
+            return env_host
+    return None
+
+
+def _remote_bin(host: str) -> str:
+    """Return the remote bin directory for the given host."""
+    env_bin = os.environ.get("ZFSLOCK_REMOTE_BIN")
+    if env_bin:
+        return env_bin
+    resolved = resolve_remote_bin(host)
+    if resolved:
+        return resolved
+    return "/usr/local/lib/zfsutilities/current/bin"
+
+
+def _remote_agent_cmd(host: str, *args: str) -> list[str]:
+    """Build an SSH command that runs the remote lock agent with *args*."""
+    remote_bin = _remote_bin(host)
+    remote_args = " ".join(shlex.quote(a) for a in args)
+    remote_cmd = f"{remote_bin}/zfslockmanager-remote {remote_args}"
+    return [
+        "ssh",
+        "-n",
+        "-T",
+        "-o",
+        "ConnectTimeout=10",
+        f"root@{host}",
+        remote_cmd,
+    ]
+
+
+def _run_remote(host: str, *args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    """Run a single-shot remote lock-agent command and return its result."""
+    cmd = _remote_agent_cmd(host, *args)
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _acquire_remote(dataset: str, lock_type: str, description: str = "") -> str:
+    """Acquire a lock on the remote storage node.
+
+    Returns a lock id of the form ``REMOTE:<remote_lockfile>``.
+    """
+    host = _get_lock_authority_host(dataset)
+    if not host:
+        raise RuntimeError(f"no remote lock authority for {dataset}")
+
+    canonical_remote = f"{ZFSLOCK_LOCKS_DIR}/{_encode(dataset)}.lock"
+    with _remote_hold_lock:
+        if canonical_remote in _remote_holds:
+            lock_id = f"REMOTE:{canonical_remote}"
+            with _refcount_lock:
+                _lock_refcounts[lock_id] = _lock_refcounts.get(lock_id, 0) + 1
+            return lock_id
+
+    cmd = _remote_agent_cmd(host, "hold", dataset, lock_type, description)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        text=True,
+    )
+
+    ready, _, _ = select.select([proc.stdout], [], [], 30)
+    if not ready:
+        proc.kill()
+        proc.wait()
+        raise RuntimeError(f"remote lock acquisition timeout for {dataset}")
+
+    line = proc.stdout.readline()
+    if line.startswith("LOCKED "):
+        remote_lockfile = line[len("LOCKED ") :].strip()
+        with _remote_hold_lock:
+            _remote_holds[remote_lockfile] = proc
+        atexit.register(_release_remote_atexit, remote_lockfile)
+        return f"REMOTE:{remote_lockfile}"
+
+    proc.kill()
+    proc.wait()
+    if line.startswith("CONFLICT"):
+        raise RuntimeError(f"conflict: cannot acquire {lock_type} lock on {dataset} on {host}")
+    raise RuntimeError(f"remote lock acquisition failed for {dataset}: {line.strip()}")
+
+
+def _check_remote(dataset: str, lock_type: str) -> bool:
+    """Return True if *lock_type* can be acquired on *dataset* remotely."""
+    host = _get_lock_authority_host(dataset)
+    if not host:
+        return False
+    result = _run_remote(host, "check", dataset, lock_type, timeout=30)
+    if result.returncode != 0:
+        return False
+    return '"available": true' in result.stdout
+
+
+def _release_remote(lock_id: str) -> bool:
+    """Release a remote lock by terminating its SSH holder process."""
+    remote_lockfile = lock_id[len("REMOTE:") :]
+    with _remote_hold_lock:
+        proc = _remote_holds.pop(remote_lockfile, None)
+    if proc is None:
+        return True
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    return True
+
+
+def _release_remote_atexit(remote_lockfile: str) -> None:
+    """atexit helper that releases a single remote hold if still present."""
+    lock_id = f"REMOTE:{remote_lockfile}"
+    with _refcount_lock:
+        refcount = _lock_refcounts.get(lock_id, 0)
+        if refcount > 1:
+            _lock_refcounts[lock_id] = 1
+    _release_remote(lock_id)
+
+
+def _list_remote_locks() -> list[dict]:
+    """Return active locks from the remote storage node."""
+    cfg = _get_node_config()
+    host = cfg.get("storage_host")
+    if not host or node_config.is_storage_host(cfg):
+        return []
+    result = _run_remote(host, "list", timeout=30)
+    if result.returncode != 0:
+        return []
+
+    locks: list[dict] = []
+    for line in result.stdout.splitlines():
+        line = line.rstrip(",").strip()
+        if '"dataset"' not in line:
+            continue
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        pid = data.get("pid")
+        try:
+            pid = int(pid) if pid is not None else 0
+        except ValueError:
+            pid = 0
+        locks.append(
+            {
+                "dataset": data.get("dataset", ""),
+                "type": data.get("type", ""),
+                "pid": pid,
+                "script": data.get("script", ""),
+                "acquired": data.get("acquired", ""),
+                "description": data.get("description", ""),
+                "host": host,
+            }
+        )
+    return locks
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -235,6 +447,9 @@ def check(dataset: str, lock_type: str) -> bool:
     if not dataset or lock_type not in ("r", "w", "x"):
         log_msg("WARN: zfs_lock_manager.check requires dataset and valid type")
         return False
+
+    if _is_remote_dataset(dataset):
+        return _check_remote(dataset, lock_type)
 
     _cleanup_stale()
 
@@ -265,44 +480,56 @@ def list_active_locks() -> list[dict]:
     """Return all currently active ZFS dataset locks.
 
     Reads ``ZFSLOCK_LOCKS_DIR/*.lock``, parses each JSON lock file, and
-    skips stale entries (owner PID is dead).  Returns a list of dicts
-    with keys: dataset, type, pid, script, acquired, description.
+    skips stale entries (owner PID is dead).  In two-node mode, locks from
+    the storage node are also included.  Returns a list of dicts with keys:
+    dataset, type, pid, script, acquired, description, host.
     """
+    cfg = _get_node_config()
+    this_host = cfg.get("this_host", node_config._local_hostname())
+
     locks: list[dict] = []
-    if not os.path.isdir(ZFSLOCK_LOCKS_DIR):
-        return locks
+    if os.path.isdir(ZFSLOCK_LOCKS_DIR):
+        for lock_path in glob.glob(os.path.join(ZFSLOCK_LOCKS_DIR, "*.lock")):
+            # Skip remote-conflict markers created by the bash lock manager.
+            if os.path.basename(lock_path).startswith(".remote-conflict."):
+                continue
+            try:
+                with open(lock_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                continue
 
-    for lock_path in glob.glob(os.path.join(ZFSLOCK_LOCKS_DIR, "*.lock")):
+            pid = data.get("pid")
+            if not isinstance(pid, int) or pid <= 0:
+                continue
+
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                continue
+
+            dataset = data.get("dataset")
+            if not dataset:
+                encoded_name = os.path.basename(lock_path)[:-5]
+                dataset = urllib.parse.unquote(encoded_name)
+
+            locks.append(
+                {
+                    "dataset": dataset,
+                    "type": data.get("type", ""),
+                    "pid": pid,
+                    "script": data.get("script", ""),
+                    "acquired": data.get("acquired", ""),
+                    "description": data.get("description", ""),
+                    "host": this_host,
+                }
+            )
+
+    if node_config.is_two_node(cfg) and not node_config.is_storage_host(cfg):
         try:
-            with open(lock_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            continue
-
-        pid = data.get("pid")
-        if not isinstance(pid, int) or pid <= 0:
-            continue
-
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            continue
-
-        dataset = data.get("dataset")
-        if not dataset:
-            encoded_name = os.path.basename(lock_path)[:-5]
-            dataset = urllib.parse.unquote(encoded_name)
-
-        locks.append(
-            {
-                "dataset": dataset,
-                "type": data.get("type", ""),
-                "pid": pid,
-                "script": data.get("script", ""),
-                "acquired": data.get("acquired", ""),
-                "description": data.get("description", ""),
-            }
-        )
+            locks.extend(_list_remote_locks())
+        except Exception as exc:
+            log_msg(f"WARN: could not list remote locks: {exc}")
 
     locks.sort(key=lambda lock: (lock["dataset"], lock["type"], lock["pid"]))
     return locks
@@ -319,6 +546,13 @@ def acquire(dataset: str, lock_type: str, description: str = "") -> str:
 
     _ensure_dirs()
     _cleanup_stale()
+
+    # Two-node: storage-owned dataset locks are held on the storage node.
+    if _is_remote_dataset(dataset):
+        lock_id = _acquire_remote(dataset, lock_type, description)
+        with _refcount_lock:
+            _lock_refcounts[lock_id] = _lock_refcounts.get(lock_id, 0) + 1
+        return lock_id
 
     lockfile = _lock_file(dataset)
 
@@ -437,6 +671,16 @@ def release(lock_id: str) -> bool:
 
     if lock_id.startswith("REENTRY:"):
         return True
+
+    # Remote locks are held by an SSH session on the storage node.
+    if lock_id.startswith("REMOTE:"):
+        with _refcount_lock:
+            refcount = _lock_refcounts.get(lock_id, 1)
+            if refcount > 1:
+                _lock_refcounts[lock_id] = refcount - 1
+                return True
+            _lock_refcounts.pop(lock_id, None)
+        return _release_remote(lock_id)
 
     if not os.path.isfile(lock_id):
         with _refcount_lock:

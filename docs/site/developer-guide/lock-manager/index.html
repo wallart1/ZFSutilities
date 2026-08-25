@@ -1589,6 +1589,78 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#two-node-operation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two-Node Operation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Two-Node Operation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-dataset-ownership-is-decided" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How dataset ownership is decided
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#remote-lock-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remote lock agent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compute-side-forwarding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compute-side forwarding
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#environment-overrides-for-tests-and-non-standard-installs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment overrides (for tests and non-standard installs)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#integration-points" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2215,16 +2287,19 @@ If it is stale, it is removed and acquisition is retried automatically.</p>
 <code>zfslock_cleanup_stale</code></p>
 <h3 id="zfslockctl">zfslockctl<a class="headerlink" href="#zfslockctl" title="Permanent link">&para;</a></h3>
 <h5 id="standalone-cli-tool">Standalone CLI tool:<a class="headerlink" href="#standalone-cli-tool" title="Permanent link">&para;</a></h5>
-<p><code>zfslockctl list [dataset]</code>                  List active locks</p>
+<div class="highlight"><pre><span></span><code>zfslockctl list [dataset]           List active locks (HOST column in two-node mode)
+zfslockctl status &lt;dataset&gt;         Check lock status
+zfslockctl release &lt;lock_id&gt;        Force release a lock
+zfslockctl cleanup                  Remove stale locks
+zfslockctl wait &lt;dataset&gt; &lt;type&gt;    Wait for lock availability
+</code></pre></div>
+<p>In two-node mode, <code>status</code>, <code>wait</code>, <code>release</code>, and <code>cleanup</code> forward to the
+storage node when the dataset is storage-owned.</p>
 <h3 id="python-client">Python client<a class="headerlink" href="#python-client" title="Permanent link">&para;</a></h3>
 <p><code>python/zfs_lock_manager.py</code> provides <code>list_active_locks()</code>, which returns all
 currently active (non-stale) locks as a list of dicts with <code>dataset</code>, <code>type</code>,
-<code>pid</code>, <code>script</code>, <code>acquired</code>, and <code>description</code> keys. The Dashboard uses this to
-populate its <strong>Active Locks</strong> section.</p>
-<p><code>zfslockctl status &lt;dataset&gt;</code>            Check lock status</p>
-<p><code>zfslockctl release &lt;lock_id&gt;</code>          Force release a lock</p>
-<p><code>zfslockctl cleanup</code>                               Remove stale locks</p>
-<p><code>zfslockctl wait &lt;dataset&gt; &lt;type&gt;</code>    Wait for lock availability</p>
+<code>pid</code>, <code>script</code>, <code>acquired</code>, <code>description</code>, and <code>host</code> keys. The Dashboard uses
+this to populate its <strong>Active Locks</strong> section.</p>
 <h2 id="key-implementation-details">Key Implementation Details<a class="headerlink" href="#key-implementation-details" title="Permanent link">&para;</a></h2>
 <h3 id="exit-trap-for-automatic-cleanup">EXIT Trap for Automatic Cleanup<a class="headerlink" href="#exit-trap-for-automatic-cleanup" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code>_zfslock_cleanup_trap<span class="o">()</span><span class="w"> </span><span class="o">{</span>
@@ -2333,6 +2408,80 @@ deterministic order to avoid deadlocks. Use:</p>
 <li><code>/</code> → <code>%2F</code></li>
 <li><code>@</code> → <code>%40</code> (for snapshots)</li>
 </ul>
+<h2 id="two-node-operation">Two-Node Operation<a class="headerlink" href="#two-node-operation" title="Permanent link">&para;</a></h2>
+<p>In a two-node configuration, all ZFS dataset locks are held on the storage node.
+The compute node forwards lock operations for storage-owned datasets to the
+storage node over the existing root-SSH path. Single-node behaviour is unchanged.</p>
+<h3 id="how-dataset-ownership-is-decided">How dataset ownership is decided<a class="headerlink" href="#how-dataset-ownership-is-decided" title="Permanent link">&para;</a></h3>
+<p>The lock manager reads <code>/etc/zfsutilities/node.conf</code> (with legacy fallbacks) and
+compares the local short hostname with the configured <code>STORAGE_HOST</code>. If the
+local host is the compute node and the dataset's pool appears in <code>POOL_TARGET</code>,
+the lock is forwarded to <code>STORAGE_HOST</code>.</p>
+<h3 id="remote-lock-agent">Remote lock agent<a class="headerlink" href="#remote-lock-agent" title="Permanent link">&para;</a></h3>
+<p><code>bin/zfslockmanager-remote</code> runs on the storage node and provides the subcommands
+used by the compute side:</p>
+<ul>
+<li><code>hold &lt;dataset&gt; &lt;type&gt; [description]</code> — acquire the lock, print the lock file
+  path, then sleep until the SSH session ends.</li>
+<li><code>check &lt;dataset&gt; &lt;type&gt;</code> — return JSON indicating whether the lock is
+  available.</li>
+<li><code>list</code> — return a JSON array of active locks.</li>
+<li><code>release &lt;lockfile&gt;</code> — force-remove a lock file.</li>
+<li><code>cleanup</code> — remove stale locks.</li>
+</ul>
+<h3 id="compute-side-forwarding">Compute-side forwarding<a class="headerlink" href="#compute-side-forwarding" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>zfslock_acquire</code> spawns <code>zfslockmanager-remote hold ...</code> via SSH, records the
+  SSH session PID, and returns a <code>REMOTE:&lt;lockfile&gt;</code> lock id.</li>
+<li><code>zfslock_release</code> terminates the SSH session and also sends a <code>release</code>
+  command to the storage node to ensure the lock file is removed.</li>
+<li><code>zfslock_check</code> runs the remote <code>check</code> command and converts a conflict into a
+  local temporary lock file so the existing interactive prompt can display it.</li>
+<li><code>zfslock_wait_or_resolve</code> polls the remote lock authority; force-release of a
+  remote lock is forwarded to the storage node.</li>
+</ul>
+<p>The Python client (<code>python/zfs_lock_manager.py</code>) uses the same SSH-based remote
+agent. Remote holds are kept alive by a <code>subprocess.Popen</code> instance; an
+<code>atexit</code> handler terminates them when the Python process exits.</p>
+<h3 id="environment-overrides-for-tests-and-non-standard-installs">Environment overrides (for tests and non-standard installs)<a class="headerlink" href="#environment-overrides-for-tests-and-non-standard-installs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ZFSLOCK_REMOTE_DISABLED=1</code></td>
+<td>Force local-only locking.</td>
+</tr>
+<tr>
+<td><code>ZFSLOCK_REMOTE_HOST</code></td>
+<td>Override the storage hostname.</td>
+</tr>
+<tr>
+<td><code>ZFSLOCK_REMOTE_POOLS</code></td>
+<td>Space-separated list of pools to treat as remote.</td>
+</tr>
+<tr>
+<td><code>ZFSLOCK_REMOTE_BIN</code></td>
+<td>Override the remote <code>bin/</code> directory.</td>
+</tr>
+<tr>
+<td><code>ZFSLOCK_THIS_HOST</code></td>
+<td>Override the local hostname.</td>
+</tr>
+<tr>
+<td><code>ZFSUTILITIES_NODE_CONF</code></td>
+<td>Path to the node configuration file.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h3>
+<p>The Dashboard's <strong>Active Locks</strong> list includes a <code>Host</code> column. In two-node mode,
+<code>list_active_locks()</code> merges local locks with locks queried from the storage
+node, so the Dashboard shows cluster-wide locks.</p>
 <h2 id="integration-points">Integration Points<a class="headerlink" href="#integration-points" title="Permanent link">&para;</a></h2>
 <p>Scripts and modules that have lock integration:</p>
 <table>
@@ -2521,7 +2670,7 @@ deterministic order to avoid deadlocks. Use:</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.86.0
+      ZFS Utilities v0.87.0
     </div>
   
   
@@ -2546,7 +2695,7 @@ deterministic order to avoid deadlocks. Use:</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.86.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.87.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

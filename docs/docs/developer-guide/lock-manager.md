@@ -118,26 +118,23 @@ If it is stale, it is removed and acquisition is retried automatically.
 
 ##### Standalone CLI tool:
 
-`zfslockctl list [dataset]`                  List active locks
+```text
+zfslockctl list [dataset]           List active locks (HOST column in two-node mode)
+zfslockctl status <dataset>         Check lock status
+zfslockctl release <lock_id>        Force release a lock
+zfslockctl cleanup                  Remove stale locks
+zfslockctl wait <dataset> <type>    Wait for lock availability
+```
+
+In two-node mode, `status`, `wait`, `release`, and `cleanup` forward to the
+storage node when the dataset is storage-owned.
 
 ### Python client
 
 `python/zfs_lock_manager.py` provides `list_active_locks()`, which returns all
 currently active (non-stale) locks as a list of dicts with `dataset`, `type`,
-`pid`, `script`, `acquired`, and `description` keys. The Dashboard uses this to
-populate its **Active Locks** section.
-
-
-`zfslockctl status <dataset> `            Check lock status
-
-
-`zfslockctl release <lock_id> `          Force release a lock
-
-
-`zfslockctl cleanup`                               Remove stale locks
-
-
-`zfslockctl wait <dataset> <type>`    Wait for lock availability
+`pid`, `script`, `acquired`, `description`, and `host` keys. The Dashboard uses
+this to populate its **Active Locks** section.
 
 ## Key Implementation Details
 
@@ -272,6 +269,64 @@ Dataset paths are URL-encoded for safe filenames:
 
 - `/` → `%2F`
 - `@` → `%40` (for snapshots)
+
+## Two-Node Operation
+
+In a two-node configuration, all ZFS dataset locks are held on the storage node.
+The compute node forwards lock operations for storage-owned datasets to the
+storage node over the existing root-SSH path. Single-node behaviour is unchanged.
+
+### How dataset ownership is decided
+
+The lock manager reads `/etc/zfsutilities/node.conf` (with legacy fallbacks) and
+compares the local short hostname with the configured `STORAGE_HOST`. If the
+local host is the compute node and the dataset's pool appears in `POOL_TARGET`,
+the lock is forwarded to `STORAGE_HOST`.
+
+### Remote lock agent
+
+`bin/zfslockmanager-remote` runs on the storage node and provides the subcommands
+used by the compute side:
+
+- `hold <dataset> <type> [description]` — acquire the lock, print the lock file
+  path, then sleep until the SSH session ends.
+- `check <dataset> <type>` — return JSON indicating whether the lock is
+  available.
+- `list` — return a JSON array of active locks.
+- `release <lockfile>` — force-remove a lock file.
+- `cleanup` — remove stale locks.
+
+### Compute-side forwarding
+
+- `zfslock_acquire` spawns `zfslockmanager-remote hold ...` via SSH, records the
+  SSH session PID, and returns a `REMOTE:<lockfile>` lock id.
+- `zfslock_release` terminates the SSH session and also sends a `release`
+  command to the storage node to ensure the lock file is removed.
+- `zfslock_check` runs the remote `check` command and converts a conflict into a
+  local temporary lock file so the existing interactive prompt can display it.
+- `zfslock_wait_or_resolve` polls the remote lock authority; force-release of a
+  remote lock is forwarded to the storage node.
+
+The Python client (`python/zfs_lock_manager.py`) uses the same SSH-based remote
+agent. Remote holds are kept alive by a `subprocess.Popen` instance; an
+`atexit` handler terminates them when the Python process exits.
+
+### Environment overrides (for tests and non-standard installs)
+
+| Variable | Purpose |
+| --- | --- |
+| `ZFSLOCK_REMOTE_DISABLED=1` | Force local-only locking. |
+| `ZFSLOCK_REMOTE_HOST` | Override the storage hostname. |
+| `ZFSLOCK_REMOTE_POOLS` | Space-separated list of pools to treat as remote. |
+| `ZFSLOCK_REMOTE_BIN` | Override the remote `bin/` directory. |
+| `ZFSLOCK_THIS_HOST` | Override the local hostname. |
+| `ZFSUTILITIES_NODE_CONF` | Path to the node configuration file. |
+
+### Dashboard
+
+The Dashboard's **Active Locks** list includes a `Host` column. In two-node mode,
+`list_active_locks()` merges local locks with locks queried from the storage
+node, so the Dashboard shows cluster-wide locks.
 
 ## Integration Points
 

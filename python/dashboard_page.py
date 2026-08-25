@@ -4,12 +4,12 @@ import json
 import os
 import re
 import signal
-import socket
 import subprocess
 import threading
 from datetime import datetime
 
 import gi
+import node_config
 import paths
 
 gi.require_version("Gtk", "3.0")
@@ -312,88 +312,21 @@ def _get_recent_entries(limit=10):
     return entries[:limit]
 
 
+def _local_hostname():
+    """Return the short hostname of this machine."""
+    return node_config._local_hostname()
+
+
 def _get_node_config():
     """Parse node configuration and return mode + host identities.
 
-    Mirrors the logic in /usr/local/lib/node-lib.sh:
-      1. Reads /etc/zfsutilities-node.conf, falls back to /etc/two-node.conf
-      2. Defaults NODE_MODE to "two-node" when unset (legacy compat)
-      3. In single-node mode, STORAGE_HOST = COMPUTE_HOST = THIS_HOST
-
-    Returns a dict:
-        {
-            "mode": "single-node" | "two-node",
-            "this_host": <hostname>,
-            "storage_host": <hostname>,
-            "compute_host": <hostname>,
-            "storage_ip": <ip> | "",
-        }
-    If no config file exists, returns single-node with the local hostname.
+    Wraps :func:`node_config.load_node_config` so the Dashboard uses the same
+    logic as the rest of the Python layer.  The returned ``this_host`` is
+    always the local short hostname.
     """
-    result = {
-        "mode": "single-node",
-        "this_host": _local_hostname(),
-        "storage_host": _local_hostname(),
-        "compute_host": _local_hostname(),
-        "storage_ip": "",
-    }
-
-    conf_path = None
-    for path in ("/etc/zfsutilities-node.conf", "/etc/two-node.conf"):
-        if os.path.exists(path):
-            conf_path = path
-            break
-
-    if not conf_path:
-        return result
-
-    node_mode = None
-    storage_host = ""
-    compute_host = ""
-    storage_ip = ""
-
-    try:
-        with open(conf_path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("NODE_MODE="):
-                    value = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    node_mode = value
-                elif line.startswith("STORAGE_HOST="):
-                    storage_host = line.split("=", 1)[1].strip().strip('"').strip("'")
-                elif line.startswith("COMPUTE_HOST="):
-                    compute_host = line.split("=", 1)[1].strip().strip('"').strip("'")
-                elif line.startswith("STORAGE_IP="):
-                    storage_ip = line.split("=", 1)[1].strip().strip('"').strip("'")
-    except OSError:
-        pass
-
-    # Default to two-node when unset (matches node-lib.sh behavior)
-    if node_mode is None:
-        node_mode = "two-node"
-
-    result["mode"] = node_mode
-    if node_mode == "single-node":
-        result["storage_host"] = result["this_host"]
-        result["compute_host"] = result["this_host"]
-        result["storage_ip"] = ""
-    else:
-        if storage_host:
-            result["storage_host"] = storage_host
-        if compute_host:
-            result["compute_host"] = compute_host
-        if storage_ip:
-            result["storage_ip"] = storage_ip
-
-    return result
-
-
-def _local_hostname():
-    """Return the short hostname of this machine."""
-    try:
-        return socket.gethostname().split(".")[0]
-    except OSError:
-        return "unknown"
+    cfg = node_config.load_node_config()
+    cfg["this_host"] = _local_hostname()
+    return cfg
 
 
 def _get_host_version(host):
@@ -579,7 +512,7 @@ def _get_host_role_list(cfg):
 
 def _is_two_node():
     """Return True if the system is configured for two-node mode."""
-    return _get_node_config()["mode"] == "two-node"
+    return node_config.is_two_node()
 
 
 def _get_peer_host():
@@ -588,23 +521,7 @@ def _get_peer_host():
     Returns None in single-node mode, when no configuration is present, or
     when the local host cannot be distinguished from the peer.
     """
-    cfg = _get_node_config()
-    if cfg["mode"] != "two-node":
-        return None
-
-    local = cfg["this_host"]
-    storage = cfg["storage_host"]
-    compute = cfg["compute_host"]
-
-    if local == storage and compute and compute != local:
-        return compute
-    if local == compute and storage and storage != local:
-        return storage
-    if storage and storage != local:
-        return storage
-    if compute and compute != local:
-        return compute
-    return None
+    return node_config.get_peer_host()
 
 
 def _log_peer_version_result(local_version, peer_host, peer_version):
@@ -1048,7 +965,7 @@ def create_dashboard_page(app):
 
     # --- Section 3a: Active Locks ---
     app.dashboard_locks_frame = _make_section_frame("Active Locks")
-    app.dashboard_locks_store = Gtk.ListStore(str, str, str, str, str, str)
+    app.dashboard_locks_store = Gtk.ListStore(str, str, str, str, str, str, str)
     app.dashboard_locks_view = Gtk.TreeView(model=app.dashboard_locks_store)
     app.dashboard_locks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.dashboard_locks_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
@@ -1058,8 +975,9 @@ def create_dashboard_page(app):
         (1, "Type", 60),
         (2, "PID", 70),
         (3, "Script", 120),
-        (4, "Acquired", 150),
-        (5, "Description", 200),
+        (4, "Host", 100),
+        (5, "Acquired", 150),
+        (6, "Description", 200),
     ]:
         r = Gtk.CellRendererText()
         r.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
@@ -1857,7 +1775,7 @@ def _refresh_active_locks_section(app, locks):
     app.dashboard_locks_store.clear()
 
     if not locks:
-        app.dashboard_locks_store.append(["No active locks", "", "", "", "", ""])
+        app.dashboard_locks_store.append(["No active locks", "", "", "", "", "", ""])
         return
 
     for lock in locks:
@@ -1867,6 +1785,7 @@ def _refresh_active_locks_section(app, locks):
                 lock.get("type", ""),
                 str(lock.get("pid", "")),
                 lock.get("script", ""),
+                lock.get("host", ""),
                 lock.get("acquired", ""),
                 lock.get("description", ""),
             ]

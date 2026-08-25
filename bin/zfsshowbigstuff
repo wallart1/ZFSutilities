@@ -51,17 +51,20 @@ log_msg "INFO: Number of datasets=${numberofdatasets}."
 zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health "$pool"
 zfs get -o name,property,value recordsize "$target"
 
+# Show top datasets for each sort column. head truncates the zfs list output,
+# so append || true to keep set -e/o pipefail from aborting the loop after the
+# first section when zfs list receives SIGPIPE.
 sortbys=('used' 'usedds' 'usedsnap' 'written' 'quota' 'refer' 'refquota' 'reservation')
 for sortby in "${sortbys[@]}"; do
     log_msg "INFO: Sorted by: $sequence $sortby"
     if [[ $sequence = 'largest' ]]; then
         zfs list -rt all -S "$sortby" \
             -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$target" \
-            | head -n 5
+            | head -n 5 || true
     elif [[ $sequence = 'smallest' ]]; then
         zfs list -rt all -s "$sortby" \
             -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$target" \
-            | head -n "$numberofdatasets"
+            | head -n "$numberofdatasets" || true
     else
         die "Unexpected sort sequence '${sequence}'."
     fi

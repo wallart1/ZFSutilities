@@ -1907,6 +1907,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#zfslockmanager-remote" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        zfslockmanager-remote
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#zfsoverrides" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3730,7 +3741,10 @@ zfshold<span class="w"> </span>&lt;hold-tag&gt;<span class="w"> </span>&lt;datas
 <hr />
 <h3 id="zfslockmanager"><code>zfslockmanager</code><a class="headerlink" href="#zfslockmanager" title="Permanent link">&para;</a></h3>
 <p>Core dataset lock management. Provides acquire, release, and conflict-checking
-functions. Used by <code>zfs-send-receive</code>, <code>zfsdelsnap</code>, <code>clone-vm</code>, and others.</p>
+functions. Used by <code>zfs-send-receive</code>, <code>zfsdelsnap</code>, <code>clone-vm</code>, and others.
+In two-node mode, storage-owned dataset locks are forwarded to
+<code>zfslockmanager-remote</code> on the storage node; see
+<a href="../../developer-guide/lock-manager/#two-node-operation">Two-Node Operation</a>.</p>
 <div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfslockmanager
 zfslock_init
 zfslock_acquire<span class="w"> </span>&lt;dataset&gt;<span class="w"> </span>&lt;type&gt;<span class="w"> </span><span class="o">[</span>description<span class="o">]</span><span class="w">   </span><span class="c1"># 0=ok, 1=conflict, 2=error</span>
@@ -3816,6 +3830,27 @@ zfslock_check<span class="w"> </span>&lt;dataset&gt;<span class="w"> </span>&lt;
 </tr>
 </tbody>
 </table>
+<hr />
+<h3 id="zfslockmanager-remote"><code>zfslockmanager-remote</code><a class="headerlink" href="#zfslockmanager-remote" title="Permanent link">&para;</a></h3>
+<p>Remote agent for two-node lock management. Runs on the storage node and is
+invoked by the compute node's <code>zfslockmanager</code> over SSH. Not intended for direct
+interactive use.</p>
+<div class="highlight"><pre><span></span><code>zfslockmanager-remote hold &lt;dataset&gt; &lt;type&gt; [description]
+zfslockmanager-remote check &lt;dataset&gt; &lt;type&gt;
+zfslockmanager-remote list
+zfslockmanager-remote release &lt;lockfile&gt;
+zfslockmanager-remote cleanup
+</code></pre></div>
+<ul>
+<li><code>hold</code> acquires the lock, prints <code>LOCKED &lt;lockfile&gt;</code>, then holds the lock
+  until stdin closes or the process is terminated.</li>
+<li><code>check</code> returns JSON indicating whether the lock is available.</li>
+<li><code>list</code> returns a JSON array of active (non-stale) locks.</li>
+<li><code>release</code> force-removes a lock file.</li>
+<li><code>cleanup</code> removes stale locks.</li>
+</ul>
+<p>See <a href="../../developer-guide/lock-manager/#two-node-operation">Two-Node Operation</a>
+for details.</p>
 <p><strong>Re-entrant locking:</strong> If the current PID already holds a lock on a dataset
 (or its ancestor/descendant), subsequent acquire attempts succeed without
 creating a new lock file. The lock is released only when the original holder
@@ -4714,7 +4749,7 @@ steps.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.86.0
+      ZFS Utilities v0.87.0
     </div>
   
   
@@ -4739,7 +4774,7 @@ steps.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.86.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.87.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

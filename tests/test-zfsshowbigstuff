@@ -97,12 +97,24 @@ test_log_messages_routed_through_log_msg() {
     fi
 }
 
+test_all_sort_sections_emitted() {
+    test_start "all eight sort sections are emitted"
+    local output rc count
+    output=$(
+        _run_showbig "threeamigos/proxmox" "largest"
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    count=$(grep -c "INFO: Sorted by:" <<< "$output")
+    assert_equals "8" "$count"
+}
+
 test_missing_dataset_shows_usage_and_fails
 test_invalid_sort_option_shows_usage_and_fails
 test_largest_uses_descending_sort
 test_smallest_uses_ascending_sort
 test_smallest_honors_count
 test_log_messages_routed_through_log_msg
+test_all_sort_sections_emitted
 
 test_summary
 teardown_test_env

@@ -775,6 +775,192 @@ test_headless_wait_times_out() {
 }
 
 # ---------------------------------------------------------------------------
+# Two-node / remote locking tests
+# ---------------------------------------------------------------------------
+
+setup_remote_agent() {
+    _remote_lock_dir="$_mock_zfs_state_dir/remote_locks"
+    mkdir -p "$_remote_lock_dir/.locks" "$_remote_lock_dir/.pids"
+
+    _remote_bin_dir="$_mock_zfs_state_dir/remote_bin"
+    mkdir -p "$_remote_bin_dir"
+    _remote_agent="$_remote_bin_dir/zfslockmanager-remote"
+
+    cat > "$_remote_agent" <<EOF
+#!/usr/bin/bash
+# Run as the "storage node" in this test; do not inherit the compute-side
+# two-node override variables, or the agent will try to forward recursively.
+unset ZFSLOCK_REMOTE_HOST ZFSLOCK_REMOTE_POOLS ZFSLOCK_REMOTE_BIN ZFSLOCK_THIS_HOST ZFSLOCK_REMOTE_DISABLED
+export ZFSLOCK_DIR="$_remote_lock_dir"
+export ZFSLOCK_LOCKS_DIR="$_remote_lock_dir/.locks"
+export ZFSLOCK_PIDS_DIR="$_remote_lock_dir/.pids"
+source "$mydir/bin/bashinit"
+bashinit
+source "$mydir/bin/zfslockmanager"
+
+cmd_hold() {
+    local dataset="\$1" type="\$2" description="\${3:-}"
+    zfslock_init
+    if ! zfslock_acquire "\$dataset" "\$type" "\$description"; then
+        local c_dataset c_type c_pid c_script
+        c_dataset=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "dataset") || c_dataset=""
+        c_type=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "type") || c_type=""
+        c_pid=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "pid") || c_pid=""
+        c_script=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "script") || c_script=""
+        echo "CONFLICT dataset=\$c_dataset type=\$c_type pid=\$c_pid script=\$c_script"
+        exit 1
+    fi
+    echo "LOCKED \$ZFSLOCK_ID"
+    sleep 3600
+}
+
+cmd_check() {
+    local dataset="\$1" type="\$2"
+    if zfslock_check "\$dataset" "\$type"; then
+        echo '{"available": true}'
+    else
+        local c_dataset c_type c_pid c_script
+        c_dataset=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "dataset") || c_dataset=""
+        c_type=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "type") || c_type=""
+        c_pid=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "pid") || c_pid=""
+        c_script=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "script") || c_script=""
+        printf '{"available": false, "conflict": {"dataset":"%s","type":"%s","pid":"%s","script":"%s","acquired":"","description":""}}\n' \
+            "\$c_dataset" "\$c_type" "\$c_pid" "\$c_script"
+    fi
+}
+
+cmd_release() {
+    rm -f "\$1"
+}
+
+case "\${1:-}" in
+    hold) shift; cmd_hold "\$@" ;;
+    check) shift; cmd_check "\$@" ;;
+    release) shift; cmd_release "\$@" ;;
+    *) echo "ERROR: unknown command \$1" >&2; exit 2 ;;
+esac
+EOF
+    chmod +x "$_remote_agent"
+}
+
+test_remote_acquire_and_release() {
+    echo ""
+    echo "=== Remote Lock Acquire/Release Tests ==="
+    cleanup_test_locks
+    setup_remote_agent
+
+    # Make the lock manager believe this is the compute node and remotepool lives on remotehost.
+    local _orig_remote_exec
+    _orig_remote_exec=$(declare -f _zfslock_remote_exec)
+    _zfslock_remote_exec() {
+        shift
+        eval "$*"
+    }
+
+    export ZFSLOCK_REMOTE_DISABLED=0
+    export ZFSLOCK_REMOTE_HOST="remotehost"
+    export ZFSLOCK_REMOTE_POOLS="remotepool"
+    export ZFSLOCK_REMOTE_BIN="$_remote_bin_dir"
+    export ZFSLOCK_THIS_HOST="compute"
+
+    # Force re-load of node config with the test overrides.
+    _ZFSLOCK_THIS_HOST=""
+    _zfslock_load_node_config
+
+    test_start "Remote acquire creates lock on storage node"
+    if zfslock_acquire "remotepool/dataset" "w" "remote test"; then
+        local remote_lockfile="${ZFSLOCK_ID#REMOTE:}"
+        if [[ -f "$remote_lockfile" ]]; then
+            test_pass
+        else
+            test_fail "Remote lock file $remote_lockfile was not created"
+        fi
+    else
+        test_fail "zfslock_acquire returned $rc"
+    fi
+
+    test_start "Remote release removes lock on storage node"
+    local remote_lockfile="${ZFSLOCK_ID#REMOTE:}"
+    zfslock_release "$ZFSLOCK_ID"
+    if [[ ! -f "$remote_lockfile" ]]; then
+        test_pass
+    else
+        test_fail "Remote lock file $remote_lockfile still exists after release"
+    fi
+
+    # Restore original remote exec function.
+    if [[ -n "$_orig_remote_exec" ]]; then
+        eval "$_orig_remote_exec"
+    else
+        unset -f _zfslock_remote_exec 2>/dev/null || true
+    fi
+    zfslock_release_all
+    cleanup_test_locks
+}
+
+test_remote_conflict() {
+    echo ""
+    echo "=== Remote Lock Conflict Tests ==="
+    cleanup_test_locks
+    setup_remote_agent
+
+    local _orig_remote_exec
+    _orig_remote_exec=$(declare -f _zfslock_remote_exec)
+    _zfslock_remote_exec() {
+        shift
+        eval "$*"
+    }
+
+    export ZFSLOCK_REMOTE_DISABLED=0
+    export ZFSLOCK_REMOTE_HOST="remotehost"
+    export ZFSLOCK_REMOTE_POOLS="remotepool"
+    export ZFSLOCK_REMOTE_BIN="$_remote_bin_dir"
+    export ZFSLOCK_THIS_HOST="compute"
+    _ZFSLOCK_THIS_HOST=""
+    _zfslock_load_node_config
+
+    # Pre-create a remote lock by running the agent directly.
+    local holder_script="$_mock_zfs_state_dir/remote_holder.sh"
+    cat > "$holder_script" <<EOF
+#!/usr/bin/bash
+unset ZFSLOCK_REMOTE_HOST ZFSLOCK_REMOTE_POOLS ZFSLOCK_REMOTE_BIN ZFSLOCK_THIS_HOST ZFSLOCK_REMOTE_DISABLED
+export ZFSLOCK_DIR="$_remote_lock_dir"
+export ZFSLOCK_LOCKS_DIR="$_remote_lock_dir/.locks"
+export ZFSLOCK_PIDS_DIR="$_remote_lock_dir/.pids"
+source "$mydir/bin/bashinit"
+bashinit
+source "$mydir/bin/zfslockmanager"
+zfslock_init
+zfslock_acquire "remotepool/conflict" "w" "holder"
+sleep 3600
+EOF
+    bash "$holder_script" >/dev/null 2>&1 &
+    local holder_pid=$!
+    # Give the holder a moment to acquire.
+    sleep 0.5
+
+    test_start "Remote acquire detects conflict on storage node"
+    local rc
+    rc=$(zfslock_acquire "remotepool/conflict" "w" "contender" >/dev/null 2>&1; echo $?)
+    if [[ "$rc" -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=1 (conflict), got rc=$rc"
+    fi
+
+    kill "$holder_pid" 2>/dev/null
+    wait "$holder_pid" 2>/dev/null
+
+    if [[ -n "$_orig_remote_exec" ]]; then
+        eval "$_orig_remote_exec"
+    else
+        unset -f _zfslock_remote_exec 2>/dev/null || true
+    fi
+    zfslock_release_all
+    cleanup_test_locks
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -793,5 +979,7 @@ test_wait_interval_minimum
 test_multi_lock_acquisition
 test_headless_wait_acquires
 test_headless_wait_times_out
+test_remote_acquire_and_release
+test_remote_conflict
 
 test_summary

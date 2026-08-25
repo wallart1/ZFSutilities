@@ -184,34 +184,17 @@ class TestGetRecentEntries(unittest.TestCase):
 
 class TestIsTwoNode(unittest.TestCase):
     def test_single_node_conf(self):
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(['NODE_MODE="single-node"\n'])
-                result = dp._is_two_node()
-                self.assertFalse(result)
+        with patch.object(dp.node_config, "load_node_config", return_value={"mode": "single-node"}):
+            result = dp._is_two_node()
+            self.assertFalse(result)
 
     def test_two_node_conf(self):
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(['NODE_MODE="two-node"\n'])
-                result = dp._is_two_node()
-                self.assertTrue(result)
-
-    def test_legacy_conf_no_node_mode_defaults_two_node(self):
-        """Legacy /etc/two-node.conf without NODE_MODE= defaults to two-node."""
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(
-                    [
-                        'STORAGE_HOST="storage1"\n',
-                        'COMPUTE_HOST="compute1"\n',
-                    ]
-                )
-                result = dp._is_two_node()
-                self.assertTrue(result)
+        with patch.object(dp.node_config, "load_node_config", return_value={"mode": "two-node"}):
+            result = dp._is_two_node()
+            self.assertTrue(result)
 
     def test_no_conf(self):
-        with patch.object(dp.os.path, "exists", return_value=False):
+        with patch.object(dp.node_config, "load_node_config", return_value={"mode": "single-node"}):
             result = dp._is_two_node()
             self.assertFalse(result)
 
@@ -219,7 +202,17 @@ class TestIsTwoNode(unittest.TestCase):
 class TestGetNodeConfig(unittest.TestCase):
     @patch("dashboard_page._local_hostname", return_value="myhost")
     def test_no_conf_defaults_single_node(self, _mock):
-        with patch.object(dp.os.path, "exists", return_value=False):
+        with patch.object(
+            dp.node_config,
+            "load_node_config",
+            return_value={
+                "mode": "single-node",
+                "storage_host": "myhost",
+                "compute_host": "myhost",
+                "storage_ip": "",
+                "pools": set(),
+            },
+        ):
             cfg = dp._get_node_config()
         self.assertEqual(cfg["mode"], "single-node")
         self.assertEqual(cfg["this_host"], "myhost")
@@ -228,124 +221,121 @@ class TestGetNodeConfig(unittest.TestCase):
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
     def test_single_node_conf(self, _mock):
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(
-                    [
-                        'NODE_MODE="single-node"\n',
-                        'THIS_HOST="myhost"\n',
-                    ]
-                )
-                cfg = dp._get_node_config()
+        with patch.object(
+            dp.node_config,
+            "load_node_config",
+            return_value={
+                "mode": "single-node",
+                "storage_host": "myhost",
+                "compute_host": "myhost",
+                "storage_ip": "",
+                "pools": set(),
+            },
+        ):
+            cfg = dp._get_node_config()
         self.assertEqual(cfg["mode"], "single-node")
         self.assertEqual(cfg["storage_host"], "myhost")
         self.assertEqual(cfg["compute_host"], "myhost")
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
     def test_two_node_conf(self, _mock):
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(
-                    [
-                        'NODE_MODE="two-node"\n',
-                        'THIS_HOST="storage1"\n',
-                        'STORAGE_HOST="storage1"\n',
-                        'COMPUTE_HOST="compute1"\n',
-                        'STORAGE_IP="192.168.1.10"\n',
-                    ]
-                )
-                cfg = dp._get_node_config()
+        with patch.object(
+            dp.node_config,
+            "load_node_config",
+            return_value={
+                "mode": "two-node",
+                "storage_host": "storage1",
+                "compute_host": "compute1",
+                "storage_ip": "192.168.1.10",
+                "pools": {"threeamigos", "fivebays"},
+            },
+        ):
+            cfg = dp._get_node_config()
         self.assertEqual(cfg["mode"], "two-node")
         self.assertEqual(cfg["storage_host"], "storage1")
         self.assertEqual(cfg["compute_host"], "compute1")
         self.assertEqual(cfg["storage_ip"], "192.168.1.10")
 
-    @patch("dashboard_page._local_hostname", return_value="myhost")
-    def test_legacy_conf_defaults_two_node(self, _mock):
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(
-                    [
-                        'STORAGE_HOST="storage1"\n',
-                        'COMPUTE_HOST="compute1"\n',
-                    ]
-                )
-                cfg = dp._get_node_config()
-        self.assertEqual(cfg["mode"], "two-node")
-        self.assertEqual(cfg["storage_host"], "storage1")
-        self.assertEqual(cfg["compute_host"], "compute1")
-
 
 class TestGetPeerHost(unittest.TestCase):
-    @patch("dashboard_page._local_hostname", return_value="storage1")
-    def test_storage_peer_is_compute(self, _mock):
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(
-                    [
-                        'NODE_MODE="two-node"\n',
-                        'STORAGE_HOST="storage1"\n',
-                        'COMPUTE_HOST="compute1"\n',
-                    ]
-                )
-                self.assertEqual(dp._get_peer_host(), "compute1")
+    def test_storage_peer_is_compute(self):
+        with patch.object(
+            dp.node_config,
+            "load_node_config",
+            return_value={
+                "mode": "two-node",
+                "this_host": "storage1",
+                "storage_host": "storage1",
+                "compute_host": "compute1",
+            },
+        ):
+            self.assertEqual(dp._get_peer_host(), "compute1")
 
-    @patch("dashboard_page._local_hostname", return_value="compute1")
-    def test_compute_peer_is_storage(self, _mock):
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(
-                    [
-                        'NODE_MODE="two-node"\n',
-                        'STORAGE_HOST="storage1"\n',
-                        'COMPUTE_HOST="compute1"\n',
-                    ]
-                )
-                self.assertEqual(dp._get_peer_host(), "storage1")
+    def test_compute_peer_is_storage(self):
+        with patch.object(
+            dp.node_config,
+            "load_node_config",
+            return_value={
+                "mode": "two-node",
+                "this_host": "compute1",
+                "storage_host": "storage1",
+                "compute_host": "compute1",
+            },
+        ):
+            self.assertEqual(dp._get_peer_host(), "storage1")
 
-    @patch("dashboard_page._local_hostname", return_value="myhost")
-    def test_single_node_returns_none(self, _mock):
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(
-                    [
-                        'NODE_MODE="single-node"\n',
-                        'THIS_HOST="myhost"\n',
-                    ]
-                )
-                self.assertIsNone(dp._get_peer_host())
-
-    @patch("dashboard_page._local_hostname", return_value="myhost")
-    def test_no_conf_returns_none(self, _mock):
-        with patch.object(dp.os.path, "exists", return_value=False):
+    def test_single_node_returns_none(self):
+        with patch.object(
+            dp.node_config,
+            "load_node_config",
+            return_value={
+                "mode": "single-node",
+                "this_host": "myhost",
+                "storage_host": "myhost",
+                "compute_host": "myhost",
+            },
+        ):
             self.assertIsNone(dp._get_peer_host())
 
-    @patch("dashboard_page._local_hostname", return_value="unexpected")
-    def test_unknown_local_returns_non_local_host(self, _mock):
-        """If the local host matches neither role, return a non-local host."""
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(
-                    [
-                        'NODE_MODE="two-node"\n',
-                        'STORAGE_HOST="storage1"\n',
-                        'COMPUTE_HOST="compute1"\n',
-                    ]
-                )
-                self.assertEqual(dp._get_peer_host(), "storage1")
+    def test_no_conf_returns_none(self):
+        with patch.object(
+            dp.node_config,
+            "load_node_config",
+            return_value={
+                "mode": "single-node",
+                "this_host": "myhost",
+                "storage_host": "myhost",
+                "compute_host": "myhost",
+            },
+        ):
+            self.assertIsNone(dp._get_peer_host())
 
-    @patch("dashboard_page._local_hostname", return_value="storage1")
-    def test_both_roles_local_returns_none(self, _mock):
-        with patch.object(dp.os.path, "exists", return_value=True):
-            with patch("builtins.open", create=True) as mock_open:
-                mock_open.return_value.__enter__.return_value = iter(
-                    [
-                        'NODE_MODE="two-node"\n',
-                        'STORAGE_HOST="storage1"\n',
-                        'COMPUTE_HOST="storage1"\n',
-                    ]
-                )
-                self.assertIsNone(dp._get_peer_host())
+    def test_unknown_local_returns_non_local_host(self):
+        """If the local host matches neither role, return a non-local host."""
+        with patch.object(
+            dp.node_config,
+            "load_node_config",
+            return_value={
+                "mode": "two-node",
+                "this_host": "unexpected",
+                "storage_host": "storage1",
+                "compute_host": "compute1",
+            },
+        ):
+            self.assertEqual(dp._get_peer_host(), "storage1")
+
+    def test_both_roles_local_returns_none(self):
+        with patch.object(
+            dp.node_config,
+            "load_node_config",
+            return_value={
+                "mode": "two-node",
+                "this_host": "storage1",
+                "storage_host": "storage1",
+                "compute_host": "storage1",
+            },
+        ):
+            self.assertIsNone(dp._get_peer_host())
 
 
 class TestLogPeerVersionResult(unittest.TestCase):
@@ -1899,7 +1889,7 @@ class TestRefreshProcessesSection(unittest.TestCase):
 class TestRefreshActiveLocksSection(unittest.TestCase):
     """_refresh_active_locks_section populates the Active Locks list."""
 
-    def test_empty_locks_placeholder_has_six_columns(self):
+    def test_empty_locks_placeholder_has_seven_columns(self):
         with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
             app = MagicMock()
             store = MagicMock()
@@ -1908,7 +1898,7 @@ class TestRefreshActiveLocksSection(unittest.TestCase):
 
         store.append.assert_called_once()
         appended = store.append.call_args[0][0]
-        self.assertEqual(len(appended), 6)
+        self.assertEqual(len(appended), 7)
         self.assertEqual(appended[0], "No active locks")
 
     def test_populates_store_from_lock_dicts(self):
@@ -1922,6 +1912,7 @@ class TestRefreshActiveLocksSection(unittest.TestCase):
                     "type": "w",
                     "pid": 1234,
                     "script": "zfsdailybackup",
+                    "host": "storage1",
                     "acquired": "2026-06-01T12:00:00",
                     "description": "daily backup",
                 }
@@ -1937,6 +1928,7 @@ class TestRefreshActiveLocksSection(unittest.TestCase):
                 "w",
                 "1234",
                 "zfsdailybackup",
+                "storage1",
                 "2026-06-01T12:00:00",
                 "daily backup",
             ],
