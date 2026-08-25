@@ -237,12 +237,12 @@ sample policy files are not shipped so they cannot be re-imported later.
 `deploy-version` copies the entire `share/` tree into the deployed version, so any
 pool-specific files accidentally added to `share/retention/` would also be
 deployed. Use the GUI Retention tab or `backup_config.get_retention` /
-`save_retention` to add or edit per-pool policies. The Prune list only shows
-online pools that have an explicit retention policy; pools without a policy are
-not pruned. When `zfscleanup` is run without a specific pool argument, it
-iterates over the pools registered in the JSON config (`config.pools`). If that
-list is empty, it falls back to all online pools so retention is not silently
-skipped.
+`save_retention` to add or edit per-pool policies. The Prune list matches the
+pool selection semantics of `zfscleanup`: it uses the pools registered in the
+JSON config (`config.pools`) when that list is non-empty, and falls back to all
+online pools when it is empty. Offline configured pools are omitted. Pools
+without an explicit retention policy are pruned using the `default` policy, so
+they are still listed when they would be pruned by `zfscleanup`.
 
 ### Parameter Override System
 

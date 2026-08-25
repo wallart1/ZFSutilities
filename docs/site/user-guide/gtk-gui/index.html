@@ -4614,7 +4614,7 @@ candidates. The checkbox state is saved with the registry when you click
 </tr>
 <tr>
 <td><strong>Details</strong></td>
-<td>Writes <code>zpool status</code> output for the single selected pool to the log panel</td>
+<td>Writes <code>zpool status</code> output and <code>zpool get all</code> output for the single selected pool to the log panel</td>
 </tr>
 <tr>
 <td><strong>Add</strong></td>
@@ -4655,9 +4655,9 @@ enabled only for <code>IMPORTABLE</code> pools.</p>
 seconds so the table stays responsive. Click <strong>Refresh</strong> to force an
 immediate rescan.</p>
 <p>Right-click any cell to open a context menu with <strong>Copy</strong> actions (cell value
-or full row, tab-separated) and <strong>Send details to log</strong>, which writes all
-<code>zpool get all</code> properties for the selected pool to the log panel. <strong>Send
-details to log</strong> requires a single selected pool.</p>
+or full row, tab-separated) and <strong>Send details to log</strong>, which writes the raw
+<code>zpool get all</code> output for the selected pool to the log panel. <strong>Send details
+to log</strong> requires a single selected pool.</p>
 <h3 id="scrub-manager">Scrub Manager<a class="headerlink" href="#scrub-manager" title="Permanent link">&para;</a></h3>
 <p>Below the pool registry is the Scrub Manager, separated by a draggable
 divider. It maintains a queue of pending, active, paused, and finished
@@ -5139,7 +5139,7 @@ or when a Min Age is set on a bucket whose Retain Count is 0.</p>
 </tr>
 <tr>
 <td><strong>Remove Policy</strong></td>
-<td>Deletes the currently-selected pool's entry (after confirmation). Blocked for <code>default</code>. The pool is removed from the Prune list and falls back to the <code>default</code> policy.</td>
+<td>Deletes the currently-selected pool's entry (after confirmation). Blocked for <code>default</code>. The pool is removed from the policy editor and falls back to the <code>default</code> policy.</td>
 </tr>
 <tr>
 <td><strong>Add Bucket</strong></td>
@@ -5168,12 +5168,13 @@ or when a Min Age is set on a bucket whose Retain Count is 0.</p>
 </tbody>
 </table>
 <h3 id="prune-runner">Prune runner<a class="headerlink" href="#prune-runner" title="Permanent link">&para;</a></h3>
-<p>Below the editor, a multi-select list shows online pools that have an explicit
-retention policy. Drag rows to reorder the pool list. Select one or more, set
-the snapshot label (default <code>dailybackup</code>), and click <strong>Prune</strong> to run a prune
-job for each pool in sequence. Pools without an explicit policy are not shown
-here; they are pruned according to the <code>default</code> policy only when called from
-<code>zfsdailybackup</code>.</p>
+<p>Below the editor, a multi-select list shows the pools that <code>zfscleanup</code> would
+prune: the pools registered in the JSON config (<code>config.pools</code>) that are
+currently online, or all online pools when <code>config.pools</code> is empty. Drag rows to
+reorder the pool list. Select one or more, set the snapshot label (default
+<code>dailybackup</code>), and click <strong>Prune</strong> to run a prune job for each pool in
+sequence. Pools without an explicit policy are pruned using the <code>default</code>
+policy.</p>
 <p>The label is persisted in the JSON config under <code>prune_label</code> and survives
 across GUI restarts. Changing the label marks the page dirty; click <strong>Save</strong>
 to persist it, or <strong>Revert</strong> to restore the saved value.</p>
@@ -5281,7 +5282,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.87.2
+      ZFS Utilities v0.88.0
     </div>
   
   
@@ -5306,7 +5307,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.87.2"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.88.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

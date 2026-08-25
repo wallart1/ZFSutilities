@@ -665,7 +665,7 @@ class TestRetentionPageNewInstallCleanup(unittest.TestCase):
 
 
 class TestRetentionPagePruneList(unittest.TestCase):
-    """Verify the prune list only shows online pools with retention policies."""
+    """Verify the prune list matches zfscleanup pool selection semantics."""
 
     def _fresh_module(self):
         _clear_cached_modules("retention_page")
@@ -674,7 +674,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
 
             return rp
 
-    def test_prune_list_includes_online_pools_with_policies(self):
+    def test_prune_list_includes_online_configured_pools(self):
         with temp_config_dir():
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=["tank", "archive"])
@@ -684,9 +684,11 @@ class TestRetentionPagePruneList(unittest.TestCase):
                 config={
                     "retention": {
                         "default": [{"name": "d", "retain": 3, "minage": 0}],
-                        "tank": [{"name": "d", "retain": 3, "minage": 0}],
-                        "archive": [{"name": "d", "retain": 3, "minage": 0}],
-                    }
+                    },
+                    "pools": [
+                        {"name": "tank", "offsite_candidate": False},
+                        {"name": "archive", "offsite_candidate": False},
+                    ],
                 },
                 script_dir="",
                 parent_dir="",
@@ -700,7 +702,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
             self.assertEqual(pools, ["archive", "tank"])
             self.assertTrue(all(row[1] == "ONLINE" for row in app._ret_prune_store))
 
-    def test_prune_list_excludes_pools_without_policy(self):
+    def test_prune_list_uses_config_pools(self):
         with temp_config_dir():
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=["tank", "nopolicy"])
@@ -711,7 +713,10 @@ class TestRetentionPagePruneList(unittest.TestCase):
                     "retention": {
                         "default": [{"name": "d", "retain": 3, "minage": 0}],
                         "tank": [{"name": "d", "retain": 3, "minage": 0}],
-                    }
+                    },
+                    "pools": [
+                        {"name": "tank", "offsite_candidate": False},
+                    ],
                 },
                 script_dir="",
                 parent_dir="",
@@ -725,7 +730,30 @@ class TestRetentionPagePruneList(unittest.TestCase):
             self.assertIn("tank", pools)
             self.assertNotIn("nopolicy", pools)
 
-    def test_prune_list_excludes_offline_pools_with_policy(self):
+    def test_prune_list_falls_back_to_all_online_pools(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=["tank", "nopolicy"])
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={
+                    "retention": {
+                        "default": [{"name": "d", "retain": 3, "minage": 0}],
+                    }
+                },
+                script_dir="",
+                parent_dir="",
+                version="dev",
+            )
+            app._ret_prune_store = _FakeStore()
+
+            rp.refresh_prune_pools(app)
+
+            pools = [row[0] for row in app._ret_prune_store]
+            self.assertEqual(pools, ["nopolicy", "tank"])
+
+    def test_prune_list_excludes_offline_configured_pool(self):
         with temp_config_dir():
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=["tank"])
@@ -735,9 +763,11 @@ class TestRetentionPagePruneList(unittest.TestCase):
                 config={
                     "retention": {
                         "default": [{"name": "d", "retain": 3, "minage": 0}],
-                        "tank": [{"name": "d", "retain": 3, "minage": 0}],
-                        "offline": [{"name": "d", "retain": 3, "minage": 0}],
-                    }
+                    },
+                    "pools": [
+                        {"name": "tank", "offsite_candidate": False},
+                        {"name": "offline", "offsite_candidate": False},
+                    ],
                 },
                 script_dir="",
                 parent_dir="",
@@ -761,9 +791,11 @@ class TestRetentionPagePruneList(unittest.TestCase):
                 config={
                     "retention": {
                         "default": [{"name": "d", "retain": 3, "minage": 0}],
-                        "tank": [{"name": "d", "retain": 3, "minage": 0}],
-                        "archive": [{"name": "d", "retain": 3, "minage": 0}],
-                    }
+                    },
+                    "pools": [
+                        {"name": "tank", "offsite_candidate": False},
+                        {"name": "archive", "offsite_candidate": False},
+                    ],
                 },
                 script_dir="",
                 parent_dir="",
@@ -786,9 +818,11 @@ class TestRetentionPagePruneList(unittest.TestCase):
                 config={
                     "retention": {
                         "default": [{"name": "d", "retain": 3, "minage": 0}],
-                        "tank": [{"name": "d", "retain": 3, "minage": 0}],
-                        "archive": [{"name": "d", "retain": 3, "minage": 0}],
                     },
+                    "pools": [
+                        {"name": "tank", "offsite_candidate": False},
+                        {"name": "archive", "offsite_candidate": False},
+                    ],
                     "prune_pools_order": ["archive", "tank"],
                 },
                 script_dir="",
@@ -829,9 +863,11 @@ class TestRetentionPagePruneList(unittest.TestCase):
                 config={
                     "retention": {
                         "default": [{"name": "d", "retain": 3, "minage": 0}],
-                        "tank": [{"name": "d", "retain": 3, "minage": 0}],
-                        "archive": [{"name": "d", "retain": 3, "minage": 0}],
-                    }
+                    },
+                    "pools": [
+                        {"name": "tank", "offsite_candidate": False},
+                        {"name": "archive", "offsite_candidate": False},
+                    ],
                 },
                 script_dir="",
                 parent_dir="",
@@ -868,9 +904,11 @@ class TestRetentionPagePruneList(unittest.TestCase):
                 config={
                     "retention": {
                         "default": [{"name": "d", "retain": 3, "minage": 0}],
-                        "tank": [{"name": "d", "retain": 3, "minage": 0}],
-                        "archive": [{"name": "d", "retain": 3, "minage": 0}],
-                    }
+                    },
+                    "pools": [
+                        {"name": "tank", "offsite_candidate": False},
+                        {"name": "archive", "offsite_candidate": False},
+                    ],
                 },
                 script_dir="",
                 parent_dir="",
@@ -904,9 +942,9 @@ class TestRetentionPagePruneList(unittest.TestCase):
                     "retention": {
                         "default": [{"name": "d", "retain": 3, "minage": 0}],
                         "<offsite>": [{"name": "s", "retain": 4, "minage": 65}],
-                        "tank": [{"name": "d", "retain": 3, "minage": 0}],
                     },
                     "pools": [
+                        {"name": "tank", "offsite_candidate": False},
                         {"name": "z22tb", "offsite_candidate": True},
                         {"name": "z40tb", "offsite_candidate": True},
                     ],

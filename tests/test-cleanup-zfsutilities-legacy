@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-# shellcheck disable=SC1090,SC2034,SC2154
+# shellcheck disable=SC1090,SC2016,SC2034,SC2154
 # test-cleanup-zfsutilities-legacy — Verify the legacy cleanup script.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
@@ -107,13 +107,13 @@ EOF
         # shellcheck disable=SC2016
         local _wrap_fmt='#!/usr/bin/bash\nbashinit() { mydir=$(dirname "$(realpath '
         _wrap_fmt+='"${BASH_SOURCE[1]}")"); }\nZFSUTILITIES_STATE_DIR=/var/lib/zfsutilities\n'
-        printf "$_wrap_fmt" > "$version_base/versions/$version/bin/bashinit"
+        printf '%b' "$_wrap_fmt" > "$version_base/versions/$version/bin/bashinit"
         chmod +x "$version_base/versions/$version/bin/bashinit"
     else
         # shellcheck disable=SC2016
         local _wrap_fmt='#!/usr/bin/bash\nbashinit() { mydir=$(dirname "$(realpath '
         _wrap_fmt+='"${BASH_SOURCE[1]}")"); }\n'
-        printf "$_wrap_fmt" > "$version_base/versions/$version/bin/bashinit"
+        printf '%b' "$_wrap_fmt" > "$version_base/versions/$version/bin/bashinit"
         chmod +x "$version_base/versions/$version/bin/bashinit"
     fi
 }

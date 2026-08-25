@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# shellcheck disable=SC2016
 # test-node-lib — Unit tests for lib/node-lib.sh helpers.
 
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
@@ -135,7 +136,7 @@ test_source_helper_fallback_returns_when_sourced() {
     # Provide bashreturn but deliberately omit bashfatal in the search paths.
     local _wrap_fmt='#!/usr/bin/bash\nif [[ "${BASH_SOURCE[1]}" != "${0}" ]]; then return '
     _wrap_fmt+='"${1:-0}"; else exit "${1:-0}"; fi\n'
-    printf "$_wrap_fmt" > "$tmp_bin/bashreturn"
+    printf '%b' "$_wrap_fmt" > "$tmp_bin/bashreturn"
     chmod +x "$tmp_bin/bashreturn"
 
     local caller="$tmp_bin/caller"

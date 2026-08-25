@@ -771,7 +771,7 @@ list.
 | -------- | ------- |
 | `create_retention_page()` | Build the Retention tab widget |
 | `collect_retention_profile_config()` / `load_retention_profile_config()` | Profile support |
-| `refresh_prune_pools()` | Refresh the prune list with online pools that have policies |
+| `refresh_prune_pools()` | Refresh the prune list with pools that `zfscleanup` would prune |
 | `_on_ret_save()` / `_on_ret_revert()` | Persist or revert policy changes |
 | `_clear_non_default_policies_on_new_install()` | Fresh-install cleanup |
 

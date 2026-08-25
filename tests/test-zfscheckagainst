@@ -472,6 +472,40 @@ test_counterpart_offsite_not_at_start() {
     assert_rc 0 "$rc"
 }
 
+test_literal_counterpart_child_dataset() {
+    test_start "Literal counterpart maps child dataset correctly"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=("threeamigos/proxmox fivebays/threeamigos/proxmox dailybackup")
+    set_online_pools fivebays
+    set_existing_datasets fivebays/threeamigos/proxmox/Rocky
+    local rc=0
+    checkagainst "threeamigos/proxmox/Rocky@dailybackup-2026-08-23T06:00-04:00-w" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_offsite_counterpart_child_dataset() {
+    test_start "<offsite> counterpart maps child dataset correctly"
+    reset_mocks
+    _zfscheckagainst_offsite_candidates=(z22tb z40tb)
+    _zfscheckagainst_checkagainst_lines=("temp <offsite>/temp offsite")
+    set_online_pools z22tb z40tb temp
+    set_existing_datasets z22tb/temp/child z40tb/temp/child temp
+    local rc=0
+    checkagainst "temp/child@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
+test_literal_counterpart_deeply_nested_child() {
+    test_start "Literal counterpart maps deeply nested child dataset"
+    reset_mocks
+    _zfscheckagainst_checkagainst_lines=("poolA/data fivebays/poolA/data offsite")
+    set_online_pools fivebays
+    set_existing_datasets fivebays/poolA/data/x/y
+    local rc=0
+    checkagainst "poolA/data/x/y@offsite-2025-01-01T10:00-05:00-s" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+}
+
 # ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
@@ -502,6 +536,9 @@ test_dataset_offsite_placeholder_reverse_check
 test_dataset_offsite_placeholder_no_candidates
 test_dataset_and_counterpart_offsite_placeholder
 test_counterpart_offsite_not_at_start
+test_literal_counterpart_child_dataset
+test_offsite_counterpart_child_dataset
+test_literal_counterpart_deeply_nested_child
 
 rm -rf "$mock_base"
 

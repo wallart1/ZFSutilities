@@ -27,7 +27,7 @@ _make_fake_version() {
     touch "$version_base/versions/$version/lib/node-lib.sh"
     touch "$version_base/versions/$version/lib/iscsi-lib.sh"
     local _wrap_fmt='#!/usr/bin/bash\nrootcheck() { true; }\n'
-    printf "$_wrap_fmt" > "$version_base/versions/$version/bin/rootcheck"
+    printf '%b' "$_wrap_fmt" > "$version_base/versions/$version/bin/rootcheck"
     chmod +x "$version_base/versions/$version/bin/rootcheck"
 
     # Default fake switch-version does nothing.  A custom body can be supplied

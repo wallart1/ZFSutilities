@@ -1,6 +1,19 @@
 #!/usr/bin/bash
 # shellcheck disable=SC1090,SC2034,SC2154
 
+# Build the counterpart destination dataset for a given source dataset,
+# source root, and destination root.  Removes the source-root prefix (and
+# its trailing slash) from the source dataset and appends the remaining
+# suffix to the destination root, avoiding double or trailing slashes.
+_compute_checkagainst_counterpart() {
+    local _dst="$1" _src="$2" _root="$3"
+    if [[ $_src == "$_root" ]]; then
+        printf '%s\n' "$_dst"
+    else
+        printf '%s/%s\n' "$_dst" "${_src#"${_root}/"}"
+    fi
+}
+
 function checkagainst {
 # Before deleting a snapshot, this script checks to ensure that the proposed snapshot to delete
 #   is not the last one in common with its counterpart(s) in one or more other datasets. This is
@@ -183,11 +196,7 @@ function checkagainst {
                 # Compute the counterpart dataset by replacing the source-root
                 # prefix with the destination-root prefix.
                 local _src_dataset="${snaptocheck%%@*}"
-                if [[ $_src_dataset == "$source_root" ]]; then
-                    _candidate_dstocheck="$dest_root"
-                else
-                    _candidate_dstocheck="${dest_root}/${_src_dataset#"${source_root}"}/"
-                fi
+                _candidate_dstocheck="$(_compute_checkagainst_counterpart "$dest_root" "$_src_dataset" "$source_root")"
 
                 # Expand <offsite> placeholder in the destination root.
                 local _ca_dest_roots=("$dest_root")
@@ -222,11 +231,7 @@ function checkagainst {
                 for dest_root in "${_ca_dest_roots[@]}"; do
                     # Recompute counterpart with the expanded dest_root.
                     _src_dataset="${snaptocheck%%@*}"
-                    if [[ $_src_dataset == "$source_root" ]]; then
-                        _candidate_dstocheck="$dest_root"
-                    else
-                        _candidate_dstocheck="${dest_root}/${_src_dataset#"${source_root}"}/"
-                    fi
+                    _candidate_dstocheck="$(_compute_checkagainst_counterpart "$dest_root" "$_src_dataset" "$source_root")"
 
                     _candidate_pool=$(echo "$dest_root" | awk -F'/' '{print $1}')
 

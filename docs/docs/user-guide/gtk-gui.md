@@ -1168,7 +1168,7 @@ candidates. The checkbox state is saved with the registry when you click
 | Button      | Behavior                                                                                                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------- |
 | **Watch**   | Opens a [Pool Watch window](#pool-watch-windows) for each selected online registered pool                  |
-| **Details** | Writes `zpool status` output for the single selected pool to the log panel                                 |
+| **Details** | Writes `zpool status` output and `zpool get all` output for the single selected pool to the log panel |
 | **Add**     | Adds the selected unregistered pool to the registry (or opens a dialog to type a name if none is selected) |
 | **Remove**  | Removes all selected registered pools from the registry (not from ZFS) after confirmation                  |
 | **Import**  | Enabled only when at least one selected pool is `IMPORTABLE`. Imports those pools directly, or opens a dialog listing importable pools if none are selected |
@@ -1188,9 +1188,9 @@ seconds so the table stays responsive. Click **Refresh** to force an
 immediate rescan.
 
 Right-click any cell to open a context menu with **Copy** actions (cell value
-or full row, tab-separated) and **Send details to log**, which writes all
-`zpool get all` properties for the selected pool to the log panel. **Send
-details to log** requires a single selected pool.
+or full row, tab-separated) and **Send details to log**, which writes the raw
+`zpool get all` output for the selected pool to the log panel. **Send details
+to log** requires a single selected pool.
 
 ### Scrub Manager
 
@@ -1534,7 +1534,7 @@ or when a Min Age is set on a bucket whose Retain Count is 0.
 | Action                      | Behavior                                                                                                                                                                                                          |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Add Policy**              | Creates a new pool-level retention entry seeded from `default`. A dialog offers a drop-down list of known and online pools that do not already have a policy, or a free-form entry if all candidates are covered. |
-| **Remove Policy**           | Deletes the currently-selected pool's entry (after confirmation). Blocked for `default`. The pool is removed from the Prune list and falls back to the `default` policy.                                          |
+| **Remove Policy**           | Deletes the currently-selected pool's entry (after confirmation). Blocked for `default`. The pool is removed from the policy editor and falls back to the `default` policy.                                       |
 | **Add Bucket**              | Adds a new bucket row to the editor table                                                                                                                                                                         |
 | **Remove Bucket**           | Removes the selected bucket row                                                                                                                                                                                   |
 | **Save**                    | Saves the policy for the currently-selected pool, any pending bucket edits made to other pools, the prune snapshot label, and the advanced prune options                                                          |
@@ -1544,12 +1544,13 @@ or when a Min Age is set on a bucket whose Retain Count is 0.
 
 ### Prune runner
 
-Below the editor, a multi-select list shows online pools that have an explicit
-retention policy. Drag rows to reorder the pool list. Select one or more, set
-the snapshot label (default `dailybackup`), and click **Prune** to run a prune
-job for each pool in sequence. Pools without an explicit policy are not shown
-here; they are pruned according to the `default` policy only when called from
-`zfsdailybackup`.
+Below the editor, a multi-select list shows the pools that `zfscleanup` would
+prune: the pools registered in the JSON config (`config.pools`) that are
+currently online, or all online pools when `config.pools` is empty. Drag rows to
+reorder the pool list. Select one or more, set the snapshot label (default
+`dailybackup`), and click **Prune** to run a prune job for each pool in
+sequence. Pools without an explicit policy are pruned using the `default`
+policy.
 
 The label is persisted in the JSON config under `prune_label` and survives
 across GUI restarts. Changing the label marks the page dirty; click **Save**

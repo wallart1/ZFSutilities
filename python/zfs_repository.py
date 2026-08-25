@@ -191,6 +191,11 @@ class ZfsRepository:
         result = self._run(self._zpool("status", pool), check=False, timeout=timeout)
         return result.stdout
 
+    def pool_get_all(self, pool: str, timeout: int | None = None) -> str:
+        """Return raw `zpool get all` text for *pool* (empty on failure)."""
+        result = self._run(self._zpool("get", "all", pool), check=False, timeout=timeout)
+        return result.stdout
+
     def pool_status_errors(self, pool: str, timeout: int | None = None) -> dict:
         """Parse `zpool status` and return a structured error report.
 
@@ -495,18 +500,6 @@ class ZfsRepository:
     def get_all_properties(self, dataset: str) -> dict[str, str]:
         """Return all ZFS properties for *dataset* as a property->value dict."""
         result = self._run(self._zfs("get", "-H", "-o", "property,value", "all", dataset))
-        props = {}
-        for line in result.stdout.strip().split("\n"):
-            if not line:
-                continue
-            parts = line.split("\t", 1)
-            if len(parts) == 2:
-                props[parts[0]] = parts[1]
-        return props
-
-    def get_all_pool_properties(self, pool: str) -> dict[str, str]:
-        """Return all zpool properties for *pool* as a property->value dict."""
-        result = self._run(self._zpool("get", "-H", "-o", "property,value", "all", pool))
         props = {}
         for line in result.stdout.strip().split("\n"):
             if not line:

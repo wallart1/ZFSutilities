@@ -57,7 +57,7 @@ def on_pools_watch(app):
 
 
 def on_pools_details(app):
-    """Write zpool status output for the selected pool to the GUI log."""
+    """Write zpool status and zpool get all output for the selected pool to the GUI log."""
     selection = app.pool_view.get_selection()
     model, pathlist = selection.get_selected_rows()
     if not pathlist:
@@ -66,6 +66,7 @@ def on_pools_details(app):
 
     tree_iter = model.get_iter(pathlist[0])
     pool_name = model.get_value(tree_iter, COL_NAME)
+
     status_text = app.ctx.zfs_repository.pool_status(pool_name)
     if not status_text:
         log_msg(f"WARN: Error getting status for '{pool_name}'")
@@ -73,6 +74,16 @@ def on_pools_details(app):
 
     log_msg(f"INFO: Pool details for {pool_name}:")
     for line in status_text.splitlines():
+        if line.strip():
+            log_msg(f"INFO: {line}")
+
+    props_text = app.ctx.zfs_repository.pool_get_all(pool_name)
+    if not props_text:
+        log_msg(f"WARN: Error reading properties for '{pool_name}'")
+        return
+
+    log_msg(f"INFO: zpool get all output for {pool_name}:")
+    for line in props_text.splitlines():
         if line.strip():
             log_msg(f"INFO: {line}")
 

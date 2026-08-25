@@ -15,6 +15,7 @@ from feature_config import (
     MASS_DELETE_DEFAULTS,
     get_all_retention,
     get_offsite_candidate_names,
+    get_pool_names,
     get_prune_label,
     get_prune_pools_order,
     get_retention,
@@ -166,6 +167,9 @@ def _clear_non_default_policies_on_new_install(app, ctx):
 
 def create_retention_page(app, ctx):
     """Build and return the Retention Policies page widget."""
+    # Ensure the page can reach the context later (e.g. during refreshes) even
+    # if the caller only passed it as an argument.
+    app.ctx = ctx
     imported = import_legacy_retention(ctx.config, ctx.parent_dir)
     if imported:
         try:
@@ -457,7 +461,11 @@ def create_retention_page(app, ctx):
 
 
 def refresh_prune_pools(app):
-    """Refresh the prune list with online pools that have retention policies.
+    """Refresh the prune list with pools that zfscleanup would prune.
+
+    Candidate pools match the semantics of ``bin/zfscleanup`` when run without
+    a pool argument: use ``config["pools"]`` when configured, otherwise fall
+    back to all currently-online pools. Offline configured pools are omitted.
 
     The order is driven by the persisted ``prune_pools_order`` key, then by
     any in-session reorder, and finally by sorted pool name for newcomers.
@@ -471,15 +479,20 @@ def refresh_prune_pools(app):
     if not hasattr(app, "_ret_prune_store") or not hasattr(app, "ctx"):
         return
     retention = get_all_retention(app.ctx.config)
-    policy_pools = {p for p in retention if p != "default"}
     online = set(_get_online_pool_names())
-    has_offsite_policy = "<offsite>" in policy_pools
+    configured = set(get_pool_names(app.ctx.config))
+    has_offsite_policy = "<offsite>" in retention
     offsite_pools = []
     if has_offsite_policy:
         offsite_pools = detect_offsite_pools(get_offsite_candidate_names(app.ctx.config))
 
-    # Concrete pools with a policy that are currently online.
-    candidates = policy_pools & online
+    # Match zfscleanup semantics: configured pools when available, otherwise
+    # all online pools. Skip any configured pool that is currently offline.
+    if configured:
+        candidates = configured & online
+    else:
+        candidates = set(online)
+
     # The <offsite> placeholder is eligible if it has a policy, regardless of
     # whether any offsite pool is online right now.
     if has_offsite_policy:

@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# shellcheck disable=SC2016
 # test-uninstall-some-versions — Verify the bulk version-removal helper.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
@@ -41,7 +42,7 @@ _setup_bulk_uninstall_env() {
     _wrap_fmt+='path=$(find_zfsutility_script "$name")\n    [[ -n "$path" ]] && source '
     _wrap_fmt+='"$path"\n}\nfunction die { log_msg "FATAL: $*"; source "$mydir/bin/bashfatal" '
     _wrap_fmt+='"${1:-8}"; }\n'
-    printf "$_wrap_fmt" > "$HOME/bashinit"
+    printf '%b' "$_wrap_fmt" > "$HOME/bashinit"
     printf 'exit "${1:-8}"\n' > "$_tmpdir/bashfatal"
 
     printf -v "$_varname" '%s' "$_tmpdir"

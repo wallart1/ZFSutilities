@@ -104,19 +104,18 @@ class TestZfsRepositoryReads(unittest.TestCase):
         props = repo.get_all_properties("tank/data")
         self.assertEqual(props, {"type": "filesystem", "used": "100G"})
 
-    def test_get_all_pool_properties_parses_tab_separated_output(self):
-        stdout = "size\t10T\ncapacity\t50%\nhealth\tONLINE\n"
+    def test_pool_get_all_returns_stdout(self):
+        stdout = "NAME\tPROPERTY\tVALUE\tSOURCE\ntank\tsize\t10T\t-\n"
         repo = self._repo(stdout)
-        props = repo.get_all_pool_properties("tank")
-        self.assertEqual(props["size"], "10T")
-        self.assertEqual(props["capacity"], "50%")
-        self.assertEqual(props["health"], "ONLINE")
+        self.assertEqual(repo.pool_get_all("tank"), stdout)
 
-    def test_get_all_pool_properties_ignores_blank_lines(self):
-        stdout = "size\t10T\n\ncapacity\t50%\n\n"
-        repo = self._repo(stdout)
-        props = repo.get_all_pool_properties("tank")
-        self.assertEqual(props, {"size": "10T", "capacity": "50%"})
+    def test_pool_get_all_returns_empty_on_failure(self):
+        result = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="no such pool"
+        )
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: result
+        self.assertEqual(repo.pool_get_all("tank"), "")
 
     def test_get_clones_reads_clones_property(self):
         repo = self._repo("tank/data/clone1\n")

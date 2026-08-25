@@ -73,8 +73,13 @@ _bg_lock_wait_rc() {
 
 # Terminate the background process and clean up its rc file.
 _bg_lock_kill() {
-    kill "$_BG_LOCK_PID" 2>/dev/null
-    wait "$_BG_LOCK_PID" 2>/dev/null
+    if [[ -n "$_BG_LOCK_PID" ]]; then
+        # Kill the foreground sleep child first so it is not orphaned when the
+        # parent bash process exits.
+        pkill -P "$_BG_LOCK_PID" 2>/dev/null || true
+        kill "$_BG_LOCK_PID" 2>/dev/null || true
+        wait "$_BG_LOCK_PID" 2>/dev/null || true
+    fi
     rm -f "$_BG_LOCK_RCFILE"
 }
 

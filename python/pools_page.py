@@ -1054,7 +1054,7 @@ def _on_pool_button_press(treeview, event, app):
 
 
 def _send_pool_details_to_log(app):
-    """Gather detailed zpool properties for the selected pool and log them."""
+    """Gather detailed zpool output for the selected pool and log it."""
     selection = app.pool_view.get_selection()
     model, pathlist = selection.get_selected_rows()
     if not pathlist:
@@ -1068,12 +1068,12 @@ def _send_pool_details_to_log(app):
     pool_name = model.get_value(tree_iter, COL_NAME)
     repo = app.ctx.zfs_repository
 
-    try:
-        props = repo.get_all_pool_properties(pool_name)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"WARN: Error reading details for {pool_name}: {e}")
+    props_text = repo.pool_get_all(pool_name)
+    if not props_text:
+        log_msg(f"WARN: Error reading details for {pool_name}")
         return
 
     log_msg(f"INFO: Details for {pool_name} (pool)")
-    for prop in sorted(props):
-        log_msg(f"  {prop}: {props[prop]}")
+    for line in props_text.splitlines():
+        if line.strip():
+            log_msg(f"INFO: {line}")

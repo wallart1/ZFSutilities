@@ -88,7 +88,7 @@ def _patch_entry(pa, pool_name):
 
 
 class TestOnPoolsDetails(unittest.TestCase):
-    """on_pools_details shows zpool status for the first selected pool."""
+    """on_pools_details shows zpool status and zpool get all for the first selected pool."""
 
     def test_warns_when_nothing_selected(self):
         pa = _import_pool_actions()
@@ -106,12 +106,32 @@ class TestOnPoolsDetails(unittest.TestCase):
             [{"name": "tank", "flag": "registered"}],
         )
         app.ctx.zfs_repository.pool_status.return_value = "mock status"
+        app.ctx.zfs_repository.pool_get_all.return_value = "size\t10T\ncapacity\t50%\n"
         with patch.object(pa, "log_msg") as mock_log:
             pa.on_pools_details(app)
         mock_log.assert_called()
         messages = [call[0][0] for call in mock_log.call_args_list]
         self.assertTrue(any("Pool details for tank" in m for m in messages))
         self.assertTrue(any("mock status" in m for m in messages))
+        self.assertTrue(any("zpool get all output for tank" in m for m in messages))
+        self.assertTrue(any("size\t10T" in m for m in messages))
+        self.assertTrue(any("capacity\t50%" in m for m in messages))
+
+    def test_warns_when_pool_get_all_fails(self):
+        pa = _import_pool_actions()
+        app = _make_app_with_pool_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            [{"name": "tank", "flag": "registered"}],
+        )
+        app.ctx.zfs_repository.pool_status.return_value = "mock status"
+        app.ctx.zfs_repository.pool_get_all.return_value = ""
+        with patch.object(pa, "log_msg") as mock_log:
+            pa.on_pools_details(app)
+        messages = [call[0][0] for call in mock_log.call_args_list]
+        self.assertTrue(any("Pool details for tank" in m for m in messages))
+        self.assertTrue(any("mock status" in m for m in messages))
+        self.assertTrue(any("Error reading properties for 'tank'" in m for m in messages))
 
 
 class TestOnPoolsAdd(unittest.TestCase):
@@ -373,9 +393,7 @@ class TestOnPoolsImport(unittest.TestCase):
             patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh,
             patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst,
             patch.object(app.ctx.zfs_repository, "import_pool") as mock_import,
-            patch.object(
-                app.ctx.zfs_repository, "importable_pools_raw", return_value=""
-            ),
+            patch.object(app.ctx.zfs_repository, "importable_pools_raw", return_value=""),
         ):
             pa.Gtk.MessageDialog = msg_dialog
             pa.on_pools_import(app)

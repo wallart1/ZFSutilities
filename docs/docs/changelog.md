@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.88.0
+
+*Released 2026-08-25*
+
+### Fixed
+
+- **Retention tab Prune list** — The Prune Snapshots list now matches the pool
+  selection semantics of `zfscleanup`: it uses the pools registered in
+  `config.pools` when that list is non-empty, and falls back to all online pools
+  when it is empty. Offline configured pools are omitted. Previously the list
+  only showed pools that had an explicit retention policy entry, which could
+  leave the list empty even though `zfscleanup` would prune those same pools
+  using the `default` policy.
+- **`zfscheckagainst` child-dataset counterpart mapping** — Counterpart
+  destination paths are now computed with a dedicated helper that correctly
+  handles child and deeply-nested datasets, avoiding double or trailing slashes.
+
+### Changed
+
+- **Pools tab Details button** — The **Details** button now writes both
+  `zpool status` and `zpool get all` output for the selected pool to the GUI log
+  panel.
+- **Pools tab context menu** — **Send details to log** now writes the raw
+  `zpool get all` output for the selected pool, replacing the previous sorted
+  property/value rendering.
+
+### Removed
+
+- **`ZfsRepository.get_all_pool_properties()`** — Removed from the Python
+  repository interface. Callers should use `pool_get_all()` instead, which
+  returns the raw `zpool get all` text.
+
+### Tests
+
+- Updated `tests/python/test_retention_page.py` to verify the Prune list follows
+  `config.pools` (with fallback to all online pools) and omits offline configured
+  pools.
+- Updated `tests/python/test_pool_actions.py`, `tests/python/test_pools_page.py`,
+  and `tests/python/test_zfs_repository.py` for the new `pool_get_all` repository
+  method and raw property output.
+- Extended `tests/test-zfscheckagainst` with child-dataset and deeply-nested
+  counterpart mapping cases.
+- Hardened cleanup in `tests/test-zfslockmanager` and fixed escape-sequence
+  handling in several test-suite wrapper generators.
+
 ## 0.87.2
 
 *Released 2026-08-25*

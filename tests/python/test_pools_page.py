@@ -956,7 +956,7 @@ class TestPoolContextMenu(unittest.TestCase):
 class TestSendPoolDetailsToLog(unittest.TestCase):
     """Pool Registry "Send details to log" handler."""
 
-    def _make_app(self, names=None, props=None, error=None):
+    def _make_app(self, names=None, raw_output=None):
         app = MagicMock()
         names = names or []
         pathlist = [MagicMock() for _ in names]
@@ -971,10 +971,7 @@ class TestSendPoolDetailsToLog(unittest.TestCase):
         app.pool_view.get_selection.return_value = selection
 
         repo = MagicMock()
-        if error is not None:
-            repo.get_all_pool_properties.side_effect = error
-        else:
-            repo.get_all_pool_properties.return_value = props or {}
+        repo.pool_get_all.return_value = raw_output or ""
         app.ctx.zfs_repository = repo
         return app
 
@@ -992,28 +989,22 @@ class TestSendPoolDetailsToLog(unittest.TestCase):
             pp._send_pool_details_to_log(app)
         mock_log.assert_called_once_with("WARN: Send details to log requires a single selection")
 
-    def test_logs_pool_properties_line_by_line(self):
+    def test_logs_pool_details_line_by_line(self):
         pp = _import_pools_page()
-        app = self._make_app(
-            names=["tank"],
-            props={"size": "10T", "capacity": "50%", "health": "ONLINE"},
-        )
+        raw = "NAME\tPROPERTY\tVALUE\tSOURCE\ntank\tsize\t10T\t-\n"
+        app = self._make_app(names=["tank"], raw_output=raw)
         with patch.object(pp, "log_msg") as mock_log:
             pp._send_pool_details_to_log(app)
 
-        app.ctx.zfs_repository.get_all_pool_properties.assert_called_once_with("tank")
+        app.ctx.zfs_repository.pool_get_all.assert_called_once_with("tank")
         logged = [call[0][0] for call in mock_log.call_args_list]
         self.assertIn("INFO: Details for tank (pool)", logged)
-        self.assertIn("  capacity: 50%", logged)
-        self.assertIn("  health: ONLINE", logged)
-        self.assertIn("  size: 10T", logged)
+        self.assertIn("INFO: NAME\tPROPERTY\tVALUE\tSOURCE", logged)
+        self.assertIn("INFO: tank\tsize\t10T\t-", logged)
 
-    def test_handles_repository_error(self):
+    def test_handles_empty_repository_output(self):
         pp = _import_pools_page()
-        app = self._make_app(
-            names=["tank"],
-            error=FileNotFoundError("zpool not found"),
-        )
+        app = self._make_app(names=["tank"], raw_output="")
         with patch.object(pp, "log_msg") as mock_log:
             pp._send_pool_details_to_log(app)
 
