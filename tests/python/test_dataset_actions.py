@@ -447,5 +447,113 @@ class TestUnmountSnapshot(unittest.TestCase):
             )
 
 
+class TestDeleteSnapshots(unittest.TestCase):
+    """_delete_snapshots releases selected holds before deleting snapshots."""
+
+    def setUp(self):
+        zlm._lock_refcounts.clear()
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+
+            return da
+
+    def test_releases_selected_holds_then_deletes(self):
+        da = self._import_under_mock()
+        app = _make_app()
+        snap = {"dataset": "tank/vm-100", "name": "snap-1", "type": "snapshot"}
+        hold = {"dataset": "tank/vm-100", "snapshot": "snap-1", "tag": "keep"}
+        app.ctx.zfs_repository.list_holds.return_value = [
+            MagicMock(snapshot="tank/vm-100@snap-1", tag="keep")
+        ]
+        app.ctx.zfs_repository.release.return_value = True
+        app.ctx.zfs_repository.destroy.return_value = True
+
+        with _patch_module(), patch.object(da, "_confirm_yes_no", return_value=True):
+            da._delete_snapshots(app, [snap], selected_holds=[hold])
+            patched_log = da.log_msg
+
+        app.ctx.zfs_repository.release.assert_called_once_with(
+            "keep", "tank/vm-100@snap-1"
+        )
+        app.ctx.zfs_repository.destroy.assert_called_once_with("tank/vm-100@snap-1")
+        patched_log.assert_any_call("INFO: Released 'keep' on tank/vm-100@snap-1")
+        patched_log.assert_any_call("INFO: Deleted: tank/vm-100@snap-1")
+
+    def test_aborts_when_unselected_hold_exists(self):
+        da = self._import_under_mock()
+        app = _make_app()
+        snap = {"dataset": "tank/vm-100", "name": "snap-1", "type": "snapshot"}
+        hold = {"dataset": "tank/vm-100", "snapshot": "snap-1", "tag": "keep"}
+        app.ctx.zfs_repository.list_holds.return_value = [
+            MagicMock(snapshot="tank/vm-100@snap-1", tag="keep"),
+            MagicMock(snapshot="tank/vm-100@snap-1", tag="other"),
+        ]
+
+        with _patch_module(), patch.object(da, "_confirm_yes_no", return_value=True):
+            da._delete_snapshots(app, [snap], selected_holds=[hold])
+            patched_log = da.log_msg
+
+        app.ctx.zfs_repository.release.assert_not_called()
+        app.ctx.zfs_repository.destroy.assert_not_called()
+        warning = patched_log.call_args[0][0]
+        self.assertIn("tank/vm-100@snap-1", warning)
+        self.assertIn("other", warning)
+
+    def test_aborts_when_holds_exist_and_none_selected(self):
+        da = self._import_under_mock()
+        app = _make_app()
+        snap = {"dataset": "tank/vm-100", "name": "snap-1", "type": "snapshot"}
+        app.ctx.zfs_repository.list_holds.return_value = [
+            MagicMock(snapshot="tank/vm-100@snap-1", tag="keep"),
+        ]
+
+        with _patch_module():
+            da._delete_snapshots(app, [snap])
+            patched_log = da.log_msg
+
+        app.ctx.zfs_repository.release.assert_not_called()
+        app.ctx.zfs_repository.destroy.assert_not_called()
+        warning = patched_log.call_args[0][0]
+        self.assertIn("tank/vm-100@snap-1", warning)
+        self.assertIn("keep", warning)
+
+    def test_deletes_snapshot_and_releases_holds_on_other_snapshots(self):
+        da = self._import_under_mock()
+        app = _make_app()
+        snap = {"dataset": "tank/vm-100", "name": "snap-1", "type": "snapshot"}
+        hold = {"dataset": "tank/vm-100", "snapshot": "snap-2", "tag": "keep"}
+        app.ctx.zfs_repository.list_holds.return_value = []
+        app.ctx.zfs_repository.release.return_value = True
+        app.ctx.zfs_repository.destroy.return_value = True
+
+        with _patch_module(), patch.object(da, "_confirm_yes_no", return_value=True):
+            da._delete_snapshots(app, [snap], selected_holds=[hold])
+
+        app.ctx.zfs_repository.release.assert_called_once_with(
+            "keep", "tank/vm-100@snap-2"
+        )
+        app.ctx.zfs_repository.destroy.assert_called_once_with("tank/vm-100@snap-1")
+
+    def test_locks_include_both_snapshot_and_hold_parents(self):
+        da = self._import_under_mock()
+        app = _make_app()
+        snap = {"dataset": "tank/vm-100", "name": "snap-1", "type": "snapshot"}
+        hold = {"dataset": "tank/vm-200", "snapshot": "snap-2", "tag": "keep"}
+        app.ctx.zfs_repository.list_holds.return_value = []
+        app.ctx.zfs_repository.release.return_value = True
+        app.ctx.zfs_repository.destroy.return_value = True
+
+        with _patch_module(), patch.object(da, "_confirm_yes_no", return_value=True):
+            da._delete_snapshots(app, [snap], selected_holds=[hold])
+            zlm_mock = da.zlm
+
+        zlm_mock.locks.assert_called_once()
+        parents = zlm_mock.locks.call_args[0][1]
+        self.assertIn("tank/vm-100", parents)
+        self.assertIn("tank/vm-200", parents)
+
+
 if __name__ == "__main__":
     unittest.main()

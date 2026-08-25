@@ -13,6 +13,22 @@ SHOWBIG_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/zfsshowbigs
 _run_showbig() {
     source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
     setup_test_env
+
+    # The script prefixes zfs list with stdbuf -oL for line buffering.  In a
+    # shell function context stdbuf would bypass our zfs mock, so shadow it
+    # with a pass-through that invokes the mocked command directly.
+    stdbuf() {
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -oL) shift ;;
+                -*) shift ;;
+                *) break ;;
+            esac
+        done
+        "$@"
+    }
+    export -f stdbuf
+
     mock_zpool_list "threeamigos"
     mock_zfs_fs_list "threeamigos\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-100-disk-0"
     mock_zfs_dataset_exists "threeamigos"
@@ -108,6 +124,15 @@ test_all_sort_sections_emitted() {
     assert_equals "8" "$count"
 }
 
+test_zfs_list_uses_line_buffering() {
+    test_start "zfs list commands are prefixed with stdbuf -oL"
+    local largest_count smallest_count
+    largest_count=$(grep -c "stdbuf -oL zfs list -rt all -S" "$SHOWBIG_SCRIPT")
+    smallest_count=$(grep -c "stdbuf -oL zfs list -rt all -s" "$SHOWBIG_SCRIPT")
+    assert_equals "1" "$largest_count"
+    assert_equals "1" "$smallest_count"
+}
+
 test_missing_dataset_shows_usage_and_fails
 test_invalid_sort_option_shows_usage_and_fails
 test_largest_uses_descending_sort
@@ -115,6 +140,7 @@ test_smallest_uses_ascending_sort
 test_smallest_honors_count
 test_log_messages_routed_through_log_msg
 test_all_sort_sections_emitted
+test_zfs_list_uses_line_buffering
 
 test_summary
 teardown_test_env

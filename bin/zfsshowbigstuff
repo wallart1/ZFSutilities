@@ -53,16 +53,17 @@ zfs get -o name,property,value recordsize "$target"
 
 # Show top datasets for each sort column. head truncates the zfs list output,
 # so append || true to keep set -e/o pipefail from aborting the loop after the
-# first section when zfs list receives SIGPIPE.
+# first section when zfs list receives SIGPIPE.  stdbuf -oL forces line
+# buffering so rows are not lost when stdout is a pipe.
 sortbys=('used' 'usedds' 'usedsnap' 'written' 'quota' 'refer' 'refquota' 'reservation')
 for sortby in "${sortbys[@]}"; do
     log_msg "INFO: Sorted by: $sequence $sortby"
     if [[ $sequence = 'largest' ]]; then
-        zfs list -rt all -S "$sortby" \
+        stdbuf -oL zfs list -rt all -S "$sortby" \
             -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$target" \
             | head -n 5 || true
     elif [[ $sequence = 'smallest' ]]; then
-        zfs list -rt all -s "$sortby" \
+        stdbuf -oL zfs list -rt all -s "$sortby" \
             -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$target" \
             | head -n "$numberofdatasets" || true
     else

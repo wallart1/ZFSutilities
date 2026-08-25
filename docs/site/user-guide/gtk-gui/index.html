@@ -4761,8 +4761,9 @@ from being mistakenly marked finished while ZFS is still initializing them.</p>
 <hr />
 <h2 id="log-panel">Log Panel<a class="headerlink" href="#log-panel" title="Permanent link">&para;</a></h2>
 <p>The bottom panel shows a scrollable log of all operations. Every line is
-prefixed with a <code>YYYY-MM-DD HH:MM:SS</code> timestamp. The divider between
-the main content area and the log panel can be dragged to resize the log.</p>
+prefixed with a <code>YYYY-MM-DD HH:MM:SS</code> timestamp in the system's local time.
+The divider between the main content area and the log panel can be dragged to
+resize the log.</p>
 <p>A <strong>Pop Out</strong> button (window icon) next to the <strong>Log</strong> level dropdown detaches the
 log viewer (search controls + text view + Show More) into an independent window.
 While popped out, the viewer pane is removed from the Logs tab; it is restored
@@ -5033,7 +5034,7 @@ based on what is selected.</p>
 <tr>
 <td><strong>Delete</strong></td>
 <td>Only snapshots and/or holds selected</td>
-<td>Holds are released (<code>zfs release</code>); snapshots are destroyed (<code>zfs destroy</code>). Mixed selections are supported: holds are released first, then snapshots deleted. Snapshots with remaining holds won't be deleted.</td>
+<td>Releases the selected hold tags, then destroys the selected snapshots (<code>zfs destroy</code>). If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well.</td>
 </tr>
 <tr>
 <td><strong>Add Hold</strong></td>
@@ -5280,7 +5281,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.87.1
+      ZFS Utilities v0.87.2
     </div>
   
   
@@ -5305,7 +5306,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.87.1"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.87.2"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

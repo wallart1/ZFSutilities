@@ -1269,8 +1269,9 @@ from being mistakenly marked finished while ZFS is still initializing them.
 ## Log Panel
 
 The bottom panel shows a scrollable log of all operations. Every line is
-prefixed with a `YYYY-MM-DD HH:MM:SS` timestamp. The divider between
-the main content area and the log panel can be dragged to resize the log.
+prefixed with a `YYYY-MM-DD HH:MM:SS` timestamp in the system's local time.
+The divider between the main content area and the log panel can be dragged to
+resize the log.
 
 A **Pop Out** button (window icon) next to the **Log** level dropdown detaches the
 log viewer (search controls + text view + Show More) into an independent window.
@@ -1468,7 +1469,7 @@ based on what is selected.
 | Button               | Enabled when                                     | Behavior                                                                                                                                                                                                         |
 | -------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Snapshot**         | Exactly one pool or dataset selected             | Creates a new snapshot (prompts for name; suggests `manual-YYYY-mm-ddTHH:MM`)                                                                                                                                    |
-| **Delete**           | Only snapshots and/or holds selected             | Holds are released (`zfs release`); snapshots are destroyed (`zfs destroy`). Mixed selections are supported: holds are released first, then snapshots deleted. Snapshots with remaining holds won't be deleted. |
+| **Delete**           | Only snapshots and/or holds selected             | Releases the selected hold tags, then destroys the selected snapshots (`zfs destroy`). If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well. |
 | **Add Hold**         | At least one snapshot selected                   | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                      |
 | **Rollback**         | Exactly one snapshot selected                    | Rolls the dataset back to that snapshot (destroys newer snapshots)                                                                                                                                               |
 | **Show Files**       | Exactly one mounted filesystem selected          | Opens the dataset's mountpoint in the default file manager (via `xdg-open`). Disabled for pools, volumes, snapshots, holds, and unmounted filesystems.                                                           |

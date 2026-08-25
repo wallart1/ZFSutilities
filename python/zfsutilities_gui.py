@@ -381,11 +381,11 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         """
         if not hasattr(self, "info_text"):
             return
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from logging_config import parse_msg_level
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
         level = parse_msg_level(message)
 
         self._info_panel_lines.append((timestamp, level, message))

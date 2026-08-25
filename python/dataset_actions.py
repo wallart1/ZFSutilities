@@ -149,7 +149,7 @@ def on_datasets_delete(app):
     if datasets:
         _delete_datasets(app, datasets)
     elif snaps:
-        _delete_snapshots(app, snaps)
+        _delete_snapshots(app, snaps, selected_holds=holds)
     elif holds:
         _release_holds(app, holds)
 
@@ -274,32 +274,67 @@ def _delete_datasets(app, datasets):
     runner.start(on_complete=_on_delete_complete)
 
 
-def _delete_snapshots(app, snaps):
-    """Delete selected snapshots after checking for holds."""
+def _delete_snapshots(app, snaps, selected_holds=None):
+    """Delete selected snapshots, releasing any selected holds first.
+
+    If *selected_holds* is provided and a selected snapshot still has holds
+    that were not selected, the operation is aborted with a clear warning.
+    Hold-only selections should be handled by :func:`_release_holds`.
+    """
     repo = _repo(app)
-    held = []
+    selected_holds = selected_holds or []
+
+    selected_hold_keys = {
+        (f"{h['dataset']}@{h['snapshot']}", h["tag"]) for h in selected_holds
+    }
+
+    blocked = []
     for s in snaps:
         full = f"{s['dataset']}@{s['name']}"
         try:
-            if repo.list_holds(full):
-                held.append(s["name"])
+            existing_holds = repo.list_holds(full)
         except subprocess.CalledProcessError:
-            pass
+            existing_holds = []
+        unselected = [h for h in existing_holds if (h.snapshot, h.tag) not in selected_hold_keys]
+        if unselected:
+            tags = ", ".join(h.tag for h in unselected)
+            blocked.append(f"{full}: {tags}")
 
-    if held:
-        log_msg(f"WARN: Cannot delete: {', '.join(held)} still have holds. Delete the holds first.")
+    if blocked:
+        log_msg(
+            "WARN: Cannot delete: the following snapshots have holds that were not selected:\n  "
+            + "\n  ".join(blocked)
+        )
         return
 
     snap_names = [f"{s['dataset']}@{s['name']}" for s in snaps]
-    display = "\n  ".join(snap_names)
+    lines = ["Snapshots to delete:"]
+    lines.extend(f"  {name}" for name in snap_names)
+    if selected_holds:
+        lines.append("")
+        lines.append("Holds to release:")
+        lines.extend(
+            f"  {h['tag']} on {h['dataset']}@{h['snapshot']}" for h in selected_holds
+        )
+    display = "\n".join(lines)
     if not _confirm_yes_no(
-        app, f"Delete {len(snap_names)} snapshot(s)?", f"  {display}\n\nThis cannot be undone."
+        app,
+        f"Delete {len(snap_names)} snapshot(s)"
+        + (f" and release {len(selected_holds)} hold(s)?" if selected_holds else "?"),
+        f"{display}\n\nThis cannot be undone.",
     ):
         return
 
-    parents = _unique_parent_datasets(snaps)
+    parents = _unique_parent_datasets(snaps + selected_holds)
     try:
         with zlm.locks("w", parents):
+            for h in selected_holds:
+                full = f"{h['dataset']}@{h['snapshot']}"
+                if repo.release(h["tag"], full):
+                    log_msg(f"INFO: Released '{h['tag']}' on {full}")
+                else:
+                    log_msg(f"WARN: Error releasing '{h['tag']}' on {full}")
+
             errors = 0
             for full in snap_names:
                 if repo.destroy(full):

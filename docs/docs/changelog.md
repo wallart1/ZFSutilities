@@ -1,6 +1,29 @@
 # Changelog
 
-## Unreleased
+## 0.87.2
+
+*Released 2026-08-25*
+
+### Fixed
+
+- **GUI log timestamps use local time** — The info panel previously prefixed
+  every line with a UTC timestamp; it now uses the local system time.
+- **Datasets tab: delete snapshots with selected holds** — Selecting snapshots
+  and their hold tags together now releases the selected holds and destroys the
+  snapshots in one operation. If a selected snapshot has holds that were not
+  selected, the operation is aborted with a warning naming the snapshot and the
+  unselected hold(s).
+- **`zfsshowbigstuff` line buffering** — The script now runs `zfs list` through
+  `stdbuf -oL` so rows are not lost to block buffering when stdout is a pipe,
+  ensuring all sort sections appear reliably in the GUI log.
+
+### Tests
+
+- Extended `tests/python/test_dataset_actions.py` with cases for releasing
+  selected holds before deleting snapshots, blocking when unselected holds
+  remain, and locking both snapshot and hold parent datasets.
+- Added a static check to `tests/test-zfsshowbigstuff` verifying that the
+  emitted `zfs list` commands include `stdbuf -oL`.
 
 ## 0.87.1
 
