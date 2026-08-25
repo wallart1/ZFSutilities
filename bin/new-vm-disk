@@ -167,8 +167,9 @@ build_efidisk_line() {
     local by_path="$1"
     local pre_enrolled="$2"
     local secure_boot="$3"
-    local line="efidisk0: ${by_path},efitype=4m,"\
-        "pre-enrolled-keys=${pre_enrolled},size=4M,format=raw"
+    local line
+    printf -v line 'efidisk0: %s,efitype=4m,pre-enrolled-keys=%s,size=4M,format=raw' \
+        "$by_path" "$pre_enrolled"
     if [[ "$secure_boot" == true ]]; then
         line+=",ms-cert=2023k"
     fi

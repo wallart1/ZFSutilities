@@ -10,6 +10,12 @@
 mydir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export mydir
 
+# Point helper resolution at the repo copy instead of any deployed version.
+# Individual tests can still override ZFSUTILITIES_BIN_DIR to inject mocks.
+: "${ZFSUTILITIES_BIN_DIR:=$mydir/bin}"
+: "${ZFSUTILITIES_CURRENT_BIN_DIR:=$mydir/bin}"
+export ZFSUTILITIES_BIN_DIR ZFSUTILITIES_CURRENT_BIN_DIR
+
 # Disable the automatic Step-5 migration so tests do not touch production paths.
 export ZFSUTILITIES_DISABLE_MIGRATION=1
 
@@ -84,13 +90,14 @@ test_start() {
     ((TESTS_RUN++))
     _CURRENT_TEST_NAME="$1"
     _CURRENT_TEST_COUNTED=0
+    _CURRENT_TEST_FAILED=0
     if [[ -z "$_ZFSUTILITIES_TESTS_QUIET" && -z "$_ZFSUTILITIES_TESTS_FAILURES_ONLY" ]]; then
         echo -n "  Test $TESTS_RUN: $1... "
     fi
 }
 
 test_pass() {
-    if [[ "$_CURRENT_TEST_COUNTED" -eq 0 ]]; then
+    if [[ "$_CURRENT_TEST_COUNTED" -eq 0 && "${_CURRENT_TEST_FAILED:-0}" -eq 0 ]]; then
         ((TESTS_PASSED++))
         _CURRENT_TEST_COUNTED=1
     fi
@@ -100,8 +107,14 @@ test_pass() {
 }
 
 test_fail() {
-    if [[ "$_CURRENT_TEST_COUNTED" -eq 0 ]]; then
+    if [[ "${_CURRENT_TEST_FAILED:-0}" -eq 0 ]]; then
+        if [[ "$_CURRENT_TEST_COUNTED" -ne 0 ]]; then
+            # A previous assertion already counted this test as passed; correct
+            # the tally because the final result is a failure.
+            ((TESTS_PASSED--))
+        fi
         ((TESTS_FAILED++))
+        _CURRENT_TEST_FAILED=1
         _CURRENT_TEST_COUNTED=1
     fi
     local reason="$1"
@@ -184,7 +197,7 @@ teardown_test_env() {
     local rc=${_TEST_SUMMARY_RC:-0}
     local prefix="${ZFSUTILITIES_RUN_NEXTSNAP_PREFIX:-/run/zfsutilities/nextsnap_}"
     rm -f "${prefix}$(basename "$0" | tr -c 'A-Za-z0-9_' '_')"
-    return $rc
+    return "$rc"
 }
 
 # =============================================================================

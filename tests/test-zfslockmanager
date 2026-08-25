@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-# shellcheck disable=SC1090,SC2034,SC2154
+# shellcheck disable=SC1090,SC2034,SC2153,SC2154
 # test-zfslockmanager — Adapted from zfslockmanager-test for the test harness.
 # Uses a temporary lock directory so tests do not interfere with production
 # locks and do not require root.
@@ -370,9 +370,9 @@ test_stale_detection() {
 
     test_start "Live process with empty cmdline is not stale"
     local fake_lockfile="$ZFSLOCK_LOCKS_DIR/empty%2Fcmdline.lock"
-    local _wrap_fmt='{"dataset":"empty/cmdline","type":"w","pid":%s,"script":"%s","acquired":"2026-'
-    _wrap_fmt+='01-01T00:00:00-05:00","description":"test"}\n'
-    printf "$_wrap_fmt" "$$" "$0" > "$fake_lockfile"
+    printf '{"dataset":"empty/cmdline","type":"w","pid":%s,"script":"%s",'\
+'"acquired":"2026-01-01T00:00:00-05:00","description":"test"}\n' \
+        "$$" "$0" > "$fake_lockfile"
     # Simulate a live process whose /proc/<pid>/cmdline is temporarily empty
     # (e.g., right after fork before exec).  The lock must not be removed.
     tr() { echo ""; }
@@ -545,9 +545,8 @@ test_stale_conflict_retry() {
 
     test_start "Stale conflicting lock is removed before prompting"
     local fake_lockfile="$ZFSLOCK_LOCKS_DIR/stale%2Fconflict.lock"
-    local _wrap_fmt='{"dataset":"stale/conflict","type":"w","pid":99999999,"script":"fake","acquire'
-    _wrap_fmt+='d":"2026-01-01T00:00:00-05:00","description":"stale"}\n'
-    printf "$_wrap_fmt" > "$fake_lockfile"
+    printf '{"dataset":"stale/conflict","type":"w","pid":99999999,"script":"fake","acquire'\
+'d":"2026-01-01T00:00:00-05:00","description":"stale"}\n' > "$fake_lockfile"
     if zfslock_wait_or_resolve "stale/conflict" "w" "test" >/dev/null 2>&1; then
         local new_pid
         new_pid=$(_zfslock_read_field "$fake_lockfile" "pid")
@@ -854,7 +853,7 @@ test_remote_acquire_and_release() {
     _orig_remote_exec=$(declare -f _zfslock_remote_exec)
     _zfslock_remote_exec() {
         shift
-        eval "$*"
+        bash -c "$*"
     }
 
     export ZFSLOCK_REMOTE_DISABLED=0
@@ -908,7 +907,7 @@ test_remote_conflict() {
     _orig_remote_exec=$(declare -f _zfslock_remote_exec)
     _zfslock_remote_exec() {
         shift
-        eval "$*"
+        bash -c "$*"
     }
 
     export ZFSLOCK_REMOTE_DISABLED=0

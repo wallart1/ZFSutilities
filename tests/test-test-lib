@@ -40,8 +40,21 @@ test_skip_counter_is_idempotent() {
 }
 
 
+test_late_failure_counts_as_failure() {
+    test_start "late failure after early pass counts as failure"
+    local result
+    result=$(
+        TESTS_PASSED=0 TESTS_FAILED=0
+        { test_start "inner"; test_pass; test_fail "oops"; } >/dev/null 2>&1
+        echo "PASSED=$TESTS_PASSED FAILED=$TESTS_FAILED"
+    )
+    assert_equals "PASSED=0 FAILED=1" "$result"
+}
+
+
 test_pass_counter_is_idempotent
 test_fail_counter_is_idempotent
 test_skip_counter_is_idempotent
+test_late_failure_counts_as_failure
 
 test_summary

@@ -14,8 +14,6 @@ REMOTE_LOCK_DIR="$_mock_zfs_state_dir/remote_locks"
 mkdir -p "$REMOTE_LOCK_DIR/.locks" "$REMOTE_LOCK_DIR/.pids"
 
 _run_agent() {
-    ZFSUTILITIES_BIN_DIR="$mydir/bin" \
-    ZFSUTILITIES_CURRENT_BIN_DIR="$mydir/bin" \
     ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs" \
     ZFSLOCK_DIR="$REMOTE_LOCK_DIR" \
     ZFSLOCK_LOCKS_DIR="$REMOTE_LOCK_DIR/.locks" \
@@ -44,8 +42,6 @@ _start_holder() {
     ) &
     _HOLDER_WRITER_PID=$!
 
-    ZFSUTILITIES_BIN_DIR="$mydir/bin" \
-    ZFSUTILITIES_CURRENT_BIN_DIR="$mydir/bin" \
     ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs" \
     ZFSLOCK_DIR="$REMOTE_LOCK_DIR" \
     ZFSLOCK_LOCKS_DIR="$REMOTE_LOCK_DIR/.locks" \

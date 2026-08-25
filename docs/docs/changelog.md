@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## 0.87.1
+
+*Released 2026-08-24*
+
+### Fixed
+
+- **`new-vm-disk` EFI line construction** — `build_efidisk_line` no longer
+  splits a `local` assignment across a line continuation in a way that caused
+  bash to reject `pre-enrolled-keys` as a variable name. EFI disks now reliably
+  include the required `pre-enrolled-keys`, `size=4M`, and `format=raw` options.
+
+### Changed
+
+- **Test harness helper resolution** — `tests/test-lib.sh` now defaults
+  `ZFSUTILITIES_BIN_DIR` and `ZFSUTILITIES_CURRENT_BIN_DIR` to the repository
+  `bin/` directory, so suites always exercise the checkout copy instead of any
+  deployed version unless a suite explicitly overrides the variables.
+- **Test result counting** — `test_fail` now correctly decrements the pass
+  counter when an earlier assertion already marked the current test as passed,
+  so a late failure is reported as a failure rather than a pass.
+- **Remote lock test mock** — `tests/test-zfslockmanager` runs mocked remote
+  commands with `bash -c` instead of `eval`, matching the safer execution model
+  used elsewhere.
+
+### Tests
+
+- Added `tests/test-test-lib` coverage verifying that a late failure after an
+  early pass is counted as a failure.
+- Removed redundant `ZFSUTILITIES_BIN_DIR` overrides from
+  `tests/test-zfslockmanager-remote` now that `test-lib.sh` sets them.
+
 ## 0.87.0
 
 *Released 2026-08-24*
