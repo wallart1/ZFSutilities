@@ -4263,6 +4263,11 @@ resume tokens, space validation, VM checks, and dataset locking.  Locks are
 acquired on the source and destination datasets before a snapshot is created
 or selected, so concurrent jobs cannot insert a newer snapshot after the
 common snapshot has been chosen.</p>
+<p>A full copy (<code>$doincrementals='N'</code>) is performed as a two-step transfer:
+first the oldest source snapshot is sent as a full stream, then an incremental
+stream (<code>-I &lt;oldest&gt;</code>) sends every snapshot from that oldest base up to the
+target snapshot. This preserves the complete snapshot history on the
+destination.</p>
 <div class="highlight"><pre><span></span><code>source_helper<span class="w"> </span>zfs-send-receive
 <span class="c1"># Set parameters, then:</span>
 send-receive
@@ -4296,7 +4301,7 @@ arguments. Callers set the variables below, then invoke <code>send-receive</code
 </tr>
 <tr>
 <td><code>$doincrementals</code></td>
-<td><code>'Y'</code> = incremental from common snap; <code>'N'</code> = full copy</td>
+<td><code>'Y'</code> = incremental from common snap; <code>'N'</code> = full copy (two-step: oldest snapshot + incremental catch-up)</td>
 <td><a href="../../developer-guide/global-variables/#zfs-sendreceive">Send/Receive</a></td>
 </tr>
 </tbody>
@@ -4511,12 +4516,17 @@ steps.</p>
    e. For full copies (<code>$doincrementals='N'</code>), check for running VMs on the
       destination and either delete destination snapshots (<code>allow_destructive</code>)
       or the whole destination dataset (<code>force</code>). Snapshots with non-matching
-      user holds are skipped with a warning.
-   f. Estimate stream size with <code>zfs send -nP</code>. If the destination pool has
-      insufficient space, prompt or skip (depending on <code>$autoproceed</code>).
+      user holds are skipped with a warning. The same preparation covers both
+      steps of the two-step full transfer.
+   f. Estimate stream size with <code>zfs send -nP</code>. For full copies, the estimate
+      is the sum of the full stream (oldest snapshot) and the incremental
+      stream (oldest to target). If the destination pool has insufficient
+      space, prompt or skip (depending on <code>$autoproceed</code>).
    g. Build send options (<code>-cw</code>, plus <code>-i</code>/<code>-I</code> for incrementals) and receive
       options (<code>-uv</code>, plus <code>-F</code> and/or <code>-s</code> as configured). Large transfers
-      automatically enable resumable receives (<code>-s</code>).
+      automatically enable resumable receives (<code>-s</code>). Full copies run
+      <code>do_transfer</code> twice: once for the oldest snapshot and once for the
+      incremental catch-up.
    h. Execute <code>zfs send | [pv] | zfs receive</code>. On failure, release locks and
       exit fatally.
    i. If <code>$verify_after_transfer='Y'</code>, compare source and destination snapshot
@@ -4749,7 +4759,7 @@ steps.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.88.0
+      ZFS Utilities v0.89.0
     </div>
   
   
@@ -4774,7 +4784,7 @@ steps.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.88.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.89.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

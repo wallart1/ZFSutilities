@@ -366,7 +366,8 @@ zfs list -r zfstest1 zfstest2
 
 | Scenario | What it exercises |
 |----------|-------------------|
-| Full copy to empty destination | `doincrementals='N'`, snapshot creation, destination dataset created |
+| Full copy to empty destination | `doincrementals='N'` two-step transfer: full copy of oldest snapshot + incremental catch-up to target |
+| Full copy with one source snapshot | `doincrementals='N'` degenerates to a single full transfer |
 | Incremental copy with common snapshot | `doincrementals='Y'` with `dointermediates='Y'` |
 | Incremental copy without intermediates | `doincrementals='Y'` with `dointermediates='N'` |
 | Destination rollback | `handle_commsnap_rc` rc=16 with `autoproceed='Y'` |

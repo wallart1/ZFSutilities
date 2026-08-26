@@ -1566,10 +1566,10 @@ sudo zfsdelholds <subtree> [snap-prefix] [depth]
 
 Performs a two-step full dataset restore. Intended to be called by other
 scripts (not run directly — use [`zfsrestore`](#zfsrestore) for interactive use).
+The two-step copy (full copy of the oldest snapshot followed by an incremental
+catch-up to the target) is performed internally by `zfs-send-receive`.
 
-Step 1: Full copy from the oldest available snapshot
-
-Step 2: Incremental copy to pull in all remaining snapshots
+Result: all source snapshots are restored to the destination.
 
 **Arguments:** none (configured via globals).
 
@@ -1588,7 +1588,7 @@ Step 2: Incremental copy to pull in all remaining snapshots
 
 | Module | Purpose in this command |
 | ------ | ----------------------- |
-| [zfs-send-receive](modules.md#zfs-send-receive) | Perform full then incremental copy |
+| [zfs-send-receive](modules.md#zfs-send-receive) | Perform two-step full copy |
 | [zfsoverrides](modules.md#zfsoverrides) | Apply command-line parameter overrides |
 
 **Data structures consumed / produced:**
@@ -1599,12 +1599,13 @@ Step 2: Incremental copy to pull in all remaining snapshots
 
 **Internal flow:**
 
-1. If `$nextsnap` is empty, generate one with `zfssnapbuild`.
-2. **Part 1** — full copy from the oldest snapshot (`doincrementals='N'`,
+1. If `$nextsnap` is empty, default it to `'notneeded'` so `zfs-send-receive`
+   uses the most recent existing source snapshot.
+2. Set full-copy parameters (`doincrementals='N'`,
    `commsnap_mostrecent='OLDEST'`, `force='Y'`, `releaseholds='Y'`,
    `releaseholds_tags=('offsite-*')`).
-3. **Part 2** — incremental copy with intermediates to catch up to the newest snapshot (`doincrementals='Y'`, `dointermediates='Y'`).
-4. Re-apply caller overrides between parts so Part 1 defaults do not leak into Part 2.
+3. Call `send-receive` once. `zfs-send-receive` performs the full copy of the
+   oldest snapshot and the incremental catch-up to the target internally.
 
 
 **Return codes:**
@@ -2153,14 +2154,15 @@ Interactive two-step full dataset restore. Configured by editing variables
 inside the script.
 
 ```bash
-sudo zfsrestore [overrides-part1]
+sudo zfsrestore [overrides]
 ```
 
 **Arguments:**
 
 | Argument | Description                                    |
 | -------- | ---------------------------------------------- |
-| `$1`     | Optional override string applied before Step 1 |
+| `$1`     | Optional override string applied before the restore |
+| `$2`     | Optional additional override string (legacy Part 2 overrides, applied after `$1`) |
 
 **In-script variables** (edit before running):
 
@@ -2173,10 +2175,10 @@ sudo zfsrestore [overrides-part1]
 | `$includes`, `$excludes`    | Dataset filters                                                           | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$nextsnap`                 | Snapshot name limit (optional; `'notneeded'` to look up newest on source) | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 
-Step 1 does a full copy from the oldest snapshot. 
-
-Step 2 does an incremental-with-intermediates
-to catch up to the newest.
+The restore sends the oldest source snapshot as a full stream, then sends
+an incremental stream with intermediates to catch up to the newest source
+snapshot. Both steps are performed inside a single `zfs-send-receive`
+invocation.
 
 **Called modules:**
 
@@ -2184,7 +2186,7 @@ to catch up to the newest.
 | ------ | ----------------------- |
 | [zfssnapbuild](modules.md#zfssnapbuild) | Inhibited (`$nextsnap='notneeded'`) |
 | [zfs-send-receive](modules.md#zfs-send-receive) | Perform full then incremental copy |
-| [zfsoverrides](modules.md#zfsoverrides) | Apply Part 1 / Part 2 overrides |
+| [zfsoverrides](modules.md#zfsoverrides) | Apply override string(s) |
 | [zfsremoveleadingqualifiers](modules.md#zfsremoveleadingqualifiers) | Strip leading qualifiers when building destination zvol paths |
 | [`ensure-restored-vm-iscsi`](#ensure-restored-vm-iscsi) (two-node) | Re-export restored VM disk zvols as iSCSI LUNs after the final send-receive |
 
@@ -2196,14 +2198,13 @@ to catch up to the newest.
 
 **Internal flow:**
 
-1. Apply Part 1 overrides from `$1`.
-2. **Part 1** — full copy from oldest snapshot (`doincrementals='N'`,
+1. Apply overrides from `$1` and `$2`.
+2. Set full-copy parameters (`doincrementals='N'`,
    `force='Y'`, `releaseholds='Y'`, `releaseholds_tags=('offsite-*')`,
    `commsnap_mostrecent='OLDEST'`).
-3. Re-apply `$1` and apply `$2` overrides for Part 2.
-4. **Part 2** — incremental copy with intermediates to newest snapshot (`doincrementals='Y'`, `dointermediates='Y'`); `autoproceed` is forced to `'Y'` so Part 2 proceeds automatically.
-5. (No interactive prompt between parts.)
-6. In two-node mode, call `ensure-restored-vm-iscsi` after the final send-receive
+3. Call `send-receive` once. `zfs-send-receive` performs the full copy of the
+   oldest snapshot and the incremental catch-up to the target internally.
+4. In two-node mode, call `ensure-restored-vm-iscsi` after the send-receive
    to recreate missing iSCSI LUNs for restored VM disk zvols.  EFI disks are matched
    to the `efidisk0:` entry by their 4 MiB size, independent of the zvol disk number.
 

@@ -641,6 +641,48 @@ test_prepare_dest_dryrun_nonforce() {
 }
 
 # ---------------------------------------------------------------------------
+# Test prepare_destination_for_full_copy with pool-root destination
+# ---------------------------------------------------------------------------
+
+test_prepare_dest_pool_root_uses_delallsnaps() {
+    test_start "prepare_destination_for_full_copy falls back to delallsnaps for pool root"
+
+    local _delfs_calls="" _delallsnaps_calls=""
+    delfs() {
+        _delfs_calls+="$*;"
+        return 0
+    }
+    delallsnaps() {
+        _delallsnaps_calls+="$*;"
+        return 0
+    }
+
+    set_msg_level INFO
+    dryrun='N'
+    force='Y'
+    allow_destructive='Y'
+    autoproceed='Y'
+    clear_log
+    capture_stderr
+    prepare_destination_for_full_copy "destpool" "srcpool/data"
+    local rc=$?
+    restore_stderr
+
+    unset -f delfs delallsnaps
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$rc" -eq 0 \
+          && "$_delallsnaps_calls" == *"destpool"* \
+          && "$_delfs_calls" == "" \
+          && "$log" == *"pool root"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc delfs='$_delfs_calls' delallsnaps='$_delallsnaps_calls' log='$log'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Test abort_resume_token in dry-run mode
 # ---------------------------------------------------------------------------
 
@@ -871,7 +913,7 @@ test_full_copy_resumable_verb() {
 
     local log
     log=$(get_stderr_log)
-    if [[ "$log" == *"VERB: Full copy — transfer of pool/dest will be resumable."* ]]; then
+    if [[ "$log" == *"VERB: Full copy — transfer of pool/dest/data will be resumable."* ]]; then
         test_pass
     else
         test_fail "log='$log'"
@@ -1328,10 +1370,18 @@ _setup_full_copy_lock_test() {
 
 _create_mock_zfsdelfs() {
     local mock_delfs="$1" op_trace="$2" exit_code="${3:-0}"
+    # The helper is sourced by send-receive, so the mock must define the
+    # functions the full-copy path calls rather than executing top-level code.
     cat > "$mock_delfs" <<EOF
 #!/usr/bin/bash
-echo "zfsdelfs \$*" >> "$op_trace"
-exit $exit_code
+delfs() {
+    echo "zfsdelfs \$*" >> "$op_trace"
+    return $exit_code
+}
+delallsnaps() {
+    echo "delallsnaps \$*" >> "$op_trace"
+    return $exit_code
+}
 EOF
     chmod +x "$mock_delfs"
 }
@@ -1500,6 +1550,140 @@ test_full_copy_releases_dest_lock_zfsdelfs_failure() {
 }
 
 # ---------------------------------------------------------------------------
+# Test two-step full copy with multiple source snapshots
+# ---------------------------------------------------------------------------
+
+test_two_step_full_copy_multiple_snaps() {
+    test_start "Full copy with multiple snapshots uses two-step transfer"
+
+    reset_mocks
+    set_msg_level INFO
+
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_datasets["pool/src/data"]=1
+    _mock_zfs_snaps["pool/src/data@snap2"]=1
+    _mock_zfs_snaps["pool/src/data@snap1"]=1
+    # Newest first, as returned by zfs list -S createtxg.
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap2
+pool/src/data@snap1"
+    _mock_zfs_send_size="1000000"
+    nextsnap="@snap2"
+
+    clear_log
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2; doincrementals='N'" || true
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+
+    if [[ "$log" != *"Doing a full copy of pool/src/data to pool/dest/data"* ]]; then
+        test_fail "Missing full-copy announcement; log='$log'"
+        return
+    fi
+    if [[ "$log" != *"Would send pool/src/data@snap1 -> pool/dest/data (full copy"* ]]; then
+        test_fail "Missing Step 1 full-copy dry-run log; log='$log'"
+        return
+    fi
+    if [[ "$log" != *"Would send pool/src/data@snap2 -> pool/dest/data (incremental"* ]]; then
+        test_fail "Missing Step 2 incremental dry-run log; log='$log'"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Test two-step full copy degenerates to one step with a single snapshot
+# ---------------------------------------------------------------------------
+
+test_two_step_full_copy_single_snap() {
+    test_start "Full copy with one snapshot performs a single transfer"
+
+    reset_mocks
+    set_msg_level INFO
+
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_datasets["pool/src/data"]=1
+    _mock_zfs_snaps["pool/src/data@snap1"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_send_size="1000000"
+    nextsnap="@snap1"
+
+    clear_log
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2; doincrementals='N'" || true
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+
+    if [[ "$log" != *"Would send pool/src/data@snap1 -> pool/dest/data (full copy"* ]]; then
+        test_fail "Missing full-copy dry-run log; log='$log'"
+        return
+    fi
+    if [[ "$log" == *"Would send pool/src/data@snap1 -> pool/dest/data (incremental"* ]]; then
+        test_fail "Unexpected incremental dry-run log for single-snapshot dataset; log='$log'"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Test two-step full copy preserves target when commsnap_mostrecent=OLDEST
+# ---------------------------------------------------------------------------
+
+test_two_step_full_copy_oldest_common_snap() {
+    test_start "Full copy with OLDEST common snapshot still catches up to target"
+
+    reset_mocks
+    set_msg_level INFO
+
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_datasets["pool/src/data"]=1
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_snaps["pool/src/data@snap2"]=1
+    _mock_zfs_snaps["pool/src/data@snap1"]=1
+    _mock_zfs_snaps["pool/dest/data@snap1"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap2
+pool/src/data@snap1"
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid2
+guid1"
+    _mock_zfs_guid_lists["pool/dest/data"]="guid1"
+    _mock_zfs_send_size="1000000"
+    nextsnap="@snap2"
+
+    clear_log
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2;"\
+        " doincrementals='N'; force='Y'; commsnap_mostrecent='OLDEST'" || true
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+
+    if [[ "$log" != *"Would send pool/src/data@snap1 -> pool/dest/data (full copy"* ]]; then
+        test_fail "Missing Step 1 full-copy dry-run log; log='$log'"
+        return
+    fi
+    if [[ "$log" != *"Would send pool/src/data@snap2 -> pool/dest/data (incremental"* ]]; then
+        test_fail "Missing Step 2 incremental dry-run log; log='$log'"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1518,6 +1702,7 @@ test_check_space_min_buffer_override
 test_check_space_default_min_buffer
 test_prepare_dest_dryrun_force
 test_prepare_dest_dryrun_nonforce
+test_prepare_dest_pool_root_uses_delallsnaps
 test_abort_resume_token_dryrun
 test_handle_commsnap_rc4
 test_handle_commsnap_rc4_existing_dest
@@ -1538,5 +1723,8 @@ test_lock_before_snapshot_creation
 test_full_copy_releases_dest_lock_around_zfsdelfs
 test_full_copy_keeps_dest_lock_in_dryrun
 test_full_copy_releases_dest_lock_zfsdelfs_failure
+test_two_step_full_copy_multiple_snaps
+test_two_step_full_copy_single_snap
+test_two_step_full_copy_oldest_common_snap
 
 test_summary

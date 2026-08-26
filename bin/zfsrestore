@@ -6,9 +6,13 @@
 # full copy is performed using the oldest available
 # snapshot. Then an incremental copy is performed
 # to get the remaining snapshots.
+# The two-step copy is now performed internally by
+# zfs-send-receive; this wrapper makes a single call
+# with the appropriate full-copy parameters.
 
-# $1    (Required) Overrides for Part 1.
-# $2    (Optional) Overrides for Part 2. Part 1 overrides carry over to Part 2.
+# $1    (Optional) Overrides for the restore.
+# $2    (Optional) Additional overrides (legacy Part 2 overrides). These are
+#       applied after $1 for compatibility with older two-call workflows.
 
 # Required overrides:
 # 'restoresourcefs=<source dataset>; sourcefsremovequalifiers=<n>; destfs=<destination dataset>'
@@ -27,6 +31,8 @@ source_helper zfs-send-receive
 source_helper zfsremoveleadingqualifiers
 source_helper zfsoverrides
 
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfs-send-receive helper.
 autoproceed='N'
 
 # Post-restore helper: ensure restored VM disk zvols are exported as iSCSI LUNs.
@@ -71,67 +77,41 @@ endwith=''
 # shellcheck disable=SC2034
 # Intentionally set for sourced zfs-send-receive helper.
 nextsnap='notneeded'            # Inhibit creation of a new snapshot name.
-dopart1='Y'
-dopart2='Y'
 
 if [[ $1 != '' ]]; then overrides "$1"; fi
+if [[ $2 != '' ]]; then overrides "$2"; fi
 
-if [[ $dopart1 = 'Y' ]]; then
-    # Part 1: do a full copy using the oldest available snapshot.
-    log_msg "INFO: Part one: Full copy using the oldest available snapshot."
-    # shellcheck disable=SC2034
-    # Intentionally set for sourced zfs-send-receive helper.
-    force='Y'                       # Do full copy even if common snapshots are found.
-    # shellcheck disable=SC2034
-    releaseholds='Y'                # Release matching holds before restoring.
-    if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
-        releaseholds_tags=('offsite-*')
-    fi
-    doincrementals='N'              # 'N' means do full copies.
-    dointermediates='N'             # Don't try to do any other shapshots.
-    commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
+# Part 1: do a full copy using the oldest available snapshot.
+# zfs-send-receive performs the subsequent incremental step internally.
+log_msg "INFO: Restoring with full copy using the oldest available snapshot."
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfs-send-receive helper.
+force='Y'                       # Do full copy even if common snapshots are found.
+# shellcheck disable=SC2034
+releaseholds='Y'                # Release matching holds before restoring.
+if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
+    releaseholds_tags=('offsite-*')
+fi
+# shellcheck disable=SC2034
+doincrementals='N'              # 'N' means do full copies.
+# shellcheck disable=SC2034
+dointermediates='N'             # Intermediate snapshots are handled internally.
+# shellcheck disable=SC2034
+commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
 
-    if [[ $1 != '' ]]; then overrides "$1"; fi
+if [[ $1 != '' ]]; then overrides "$1"; fi
+if [[ $2 != '' ]]; then overrides "$2"; fi
 
-    send-receive "$restoresourcefs"
-    if [[ $dopart2 != 'Y' ]]; then
-        ensure_restored_iscsi
-    fi
+if [[ $restoresourcefs == '' || $restoresourcefs == 'notgiven' ]]; then
+    log_msg "FATAL: \$restoresourcefs was not specified."
+    source "$(find_zfsutility_script bashfatal)" 8
+fi
+if [[ $destfs == '' || $destfs == 'notgiven' ]]; then
+    log_msg "FATAL: \$destfs was not specified."
+    source "$(find_zfsutility_script bashfatal)" 8
 fi
 
-if [[ $dopart2 = 'Y' ]]; then
-    # Part 2: do the rest of the snapshots incrementally.
-    log_msg "INFO: Part two: The rest of the snapshots incrementally."
-    autoproceed='Y'
-    # shellcheck disable=SC2034
-    # Intentionally set for sourced zfs-send-receive helper.
-    force='N'
-    # shellcheck disable=SC2034
-    releaseholds='N'
-    # shellcheck disable=SC2034
-    doincrementals='Y'              # Do incremental copies.
-    # shellcheck disable=SC2034
-    dointermediates='Y'             # Do all the remaining snapshots.
-    # shellcheck disable=SC2034
-    commsnap_mostrecent=''          # Finish by copying the remaining snapshots.
-
-    # Re-apply $1 overrides so that includes, excludes, and other caller-specified
-    # parameters are restored after Part One's delfs calls may have clobbered them.
-    if [[ $1 != '' ]]; then overrides "$1"; fi
-    if [[ $2 != '' ]]; then overrides "$2"; fi
-    if [[ $autoproceed != 'Y' ]]; then
-        while :; do
-            overrides=''
-            read -rp 'Press enter to continue with part two.'\
-                ' Or enter overrides.: ' overrides
-            if [[ $overrides != '' ]]; then overrides "$overrides"
-            else break
-            fi
-        done
-    fi
-
-    send-receive $restoresourcefs
-    ensure_restored_iscsi
-fi
+send-receive "$restoresourcefs"
+ensure_restored_iscsi
 
 log_msg "INFO: zfsrestore completed."

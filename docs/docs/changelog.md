@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.89.0
+
+*Released 2026-08-26*
+
+### Changed
+
+- **`zfs-send-receive` full copies now preserve snapshot history** — A full copy
+  (`doincrementals='N'`) is now performed as a two-step transfer internally:
+  first the oldest available source snapshot is sent as a full stream, then an
+  incremental stream (`-I <oldest>`) sends every snapshot from that base up to
+  the target snapshot. This preserves the complete snapshot history on the
+  destination instead of collapsing it to a single snapshot.
+- **`zfsfullcopy` and `zfsrestore` are now thin wrappers** — Both scripts make a
+  single call to `zfs-send-receive` with the appropriate full-copy parameters.
+  The old explicit Part 1 / Part 2 logic, the interactive prompt between parts
+  in `zfsrestore`, and the `$dopart1` / `$dopart2` control variables have been
+  removed.
+
+### Fixed
+
+- **`zfsrestore` required-argument validation** — `zfsrestore` now fatals early
+  when `restoresourcefs` or `destfs` is missing or still set to the placeholder
+  default `notgiven`.
+- **`zfs-send-receive` option parsing with overridden `read`** — Send/receive
+  option strings are no longer parsed with `read`, so callers (or test mocks)
+  that override `read` cannot corrupt the option arrays.
+- **`zfsremoveleadingqualifiers` parsing with overridden `read`** — Path
+  components are now stripped with `cut` instead of `read`, preventing the same
+  corruption scenario.
+- **Pool-root full-copy safety** — When the destination is a pool root,
+  `prepare_destination_for_full_copy` deletes only snapshots rather than
+  attempting to destroy the whole pool.
+- **`zfscheckrunningvms` missing-tool message level** — The message logged when
+  Proxmox tools are not found is now `DEBUG` instead of `INFO`.
+
+### Tests
+
+- Extended `tests/test-zfs-send-receive-dryrun` with two-step full-copy cases:
+  multiple source snapshots, single-snapshot degenerate case, and
+  `commsnap_mostrecent='OLDEST'` preservation.
+- Added pool-root destination fallback test to
+  `tests/test-zfs-send-receive-dryrun`.
+- Extended `tests/test-zfsfullcopy` to verify single `send-receive` invocation
+  and full-copy parameter forwarding.
+- Added `tests/test-zfsrestore` covering overrides, legacy second overrides,
+  required-parameter validation, single `send-receive` invocation, and
+  full-copy parameter forwarding.
+- Updated `tests/test-zfscheckrunningvms` for the new `DEBUG`-level missing-tool
+  message.
+
 ## 0.88.0
 
 *Released 2026-08-25*

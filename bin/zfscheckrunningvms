@@ -27,7 +27,7 @@ function checkrunningvms {
     # Check if Proxmox tools are available
     if ! command -v qm &>/dev/null && ! command -v pct &>/dev/null; then
         # Not a Proxmox system, can't check
-        log_msg "INFO: Proxmox tools (qm/pct) not found; cannot check for running VMs"
+        log_msg "DEBUG: Proxmox tools (qm/pct) not found; cannot check for running VMs"
         return 2
     fi
 

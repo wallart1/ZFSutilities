@@ -369,8 +369,8 @@ Key branches:
 - **Destination newer (rc=16)** — The destination has snapshots newer than the common one. The user is prompted to roll back; if accepted, intervening snapshots are destroyed and the common snapshot is rolled back to. After rollback, the transfer continues on the **incremental** path (`$doincrementals='Y'`).
 - **Space check** — Before any transfer, `check_space_available` compares the dry-run size against destination pool free space plus a 10 % margin (minimum 1 GB). If space is insufficient, the user may skip or proceed anyway.
 - **Running VMs** — On Proxmox hosts, `zfscheckrunningvms` scans the destination dataset for running VMs. If any are found, the user must confirm before proceeding.
-- **Full-copy preparation** — Only on the full-copy path (`$doincrementals='N'`). Depending on `$force` / `$allow_destructive`, the destination is either destroyed entirely (`zfs destroy -r`) or only its snapshots are removed (`zfs destroy -d`).
-- **Transfer** — Both paths execute `do_transfer`, but the `zfs send` options differ: incremental uses `-i` or `-I <commsnap>`; full copy uses neither.
+- **Full-copy preparation** — Only on the full-copy path (`$doincrementals='N'`). Depending on `$force` / `$allow_destructive`, the destination is either destroyed entirely (`zfs destroy -r`) or only its snapshots are removed (`zfs destroy -d`). The same preparation covers both steps of the two-step full transfer.
+- **Transfer** — The incremental path executes `do_transfer` once with `-i` or `-I <commsnap>`. The full-copy path executes `do_transfer` twice: first a full stream of the oldest source snapshot, then an incremental stream (`-I <oldest>`) from that oldest snapshot to the intended target snapshot. This preserves intermediate snapshots on the destination.
 - **Verification** — When `$verify_after_transfer='Y'`, `verify_transfer` compares the GUID of the received snapshot against the source. A mismatch is fatal.
 
 ---
@@ -446,34 +446,24 @@ incrementally.
 
 ## Restore Flow
 
-A full restore is always a **two-step** operation. [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore) automates this pair of [`zfs-send-receive`](../commands-and-modules/modules.md#zfs-send-receive) invocations:
+A full restore is always a **two-step** operation. [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore) makes a single call to [`zfs-send-receive`](../commands-and-modules/modules.md#zfs-send-receive), which performs both steps internally:
 
 ```mermaid
 flowchart LR
-    A["zfsrestore"] --> B["Part 1: Full copy"]
-    B --> C["Oldest common snapshot<br/>force='Y'<br/>releaseholds='Y'<br/>doincrementals='N'"]
-    C --> D["send-receive"]
-    D --> E["Part 2: Incremental catch-up"]
-    E --> F["All intermediate snapshots<br/>doincrementals='Y'<br/>dointermediates='Y'"]
-    F --> G["send-receive"]
+    A["zfsrestore"] --> B["Full copy request"]
+    B --> C["Oldest snapshot<br/>force='Y'<br/>releaseholds='Y'<br/>doincrementals='N'<br/>commsnap_mostrecent='OLDEST'"]
+    C --> D["send-receive<br/>full + incremental internally"]
 ```
 
 **Why two steps?**
 
-- **Part 1** sends the oldest available snapshot as a full stream. Because `force='Y'`, the destination dataset may be destroyed and recreated. `releaseholds='Y'` ensures holds do not block the destruction.
-- **Part 2** sends every snapshot from the common base up to the newest one (`-I` mode). This restores the complete snapshot history, not just the latest state.
-- **After the final send-receive**, `ensure-restored-vm-iscsi` re-exports any restored
+- **Step 1** sends the oldest available snapshot as a full stream. Because `force='Y'`, the destination dataset may be destroyed and recreated. `releaseholds='Y'` ensures holds do not block the destruction.
+- **Step 2** sends every snapshot from the oldest base up to the newest one (`-I` mode). This restores the complete snapshot history, not just the latest state.
+- **`zfs-send-receive` now executes both steps** inside a single invocation, so wrappers such as `zfsrestore` and `zfsfullcopy` no longer need to call it twice.
+- **After the send-receive**, `ensure-restored-vm-iscsi` re-exports any restored
   VM disk zvols that are referenced by a Proxmox VM config but no longer have an
   iSCSI LUN. This handles restores to a missing/detached disk while preserving the
   LUN index recorded in the VM config.
-
-If you only need the most recent state, you can run Part 1 alone; however, you will lose the ability to roll back to earlier snapshots. If you use this method, be sure to change
-
-```bash
-commsnap_mostrecent='OLDEST'
-    to
-commsnap_mostrecent=''
-```
 
 
 

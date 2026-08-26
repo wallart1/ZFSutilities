@@ -21,6 +21,11 @@ _run_zfsfullcopy() {
     cat > "$_mock_bin/zfs-send-receive" <<'EOF'
 send-receive() {
     echo "send-receive called with: $*" >> "$ZFSFULLCOPY_STATE/send-receive.calls"
+    echo "doincrementals=$doincrementals" \
+        >> "$ZFSFULLCOPY_STATE/send-receive.calls"
+    echo "force=$force" >> "$ZFSFULLCOPY_STATE/send-receive.calls"
+    echo "commsnap_mostrecent=$commsnap_mostrecent" \
+        >> "$ZFSFULLCOPY_STATE/send-receive.calls"
     echo "sourcefsremovequalifiers=$sourcefsremovequalifiers" \
         >> "$ZFSFULLCOPY_STATE/send-receive.calls"
 }
@@ -122,6 +127,41 @@ test_fullcopy_requires_destfs() {
     assert_rc 8 "$rc"
 }
 
+test_fullcopy_calls_send_receive_once() {
+    test_start "zfsfullcopy invokes send-receive once"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/fullcopy_once"
+    mkdir -p "$_state_dir"
+    restoresourcefs="pool/src" destfs="pool/dest" _run_zfsfullcopy "$_state_dir"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+    local calls
+    calls=$(grep -c "send-receive called with" \
+        "$_state_dir/send-receive.calls" 2>/dev/null || echo 0)
+    if [[ "$calls" -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Expected 1 send-receive call, got $calls"
+    fi
+}
+
+test_fullcopy_sets_full_copy_parameters() {
+    test_start "zfsfullcopy sets full-copy parameters for send-receive"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/fullcopy_params"
+    mkdir -p "$_state_dir"
+    restoresourcefs="pool/src" destfs="pool/dest" _run_zfsfullcopy "$_state_dir"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_state_dir/send-receive.calls")" \
+        "doincrementals=N"
+    assert_contains "$(cat "$_state_dir/send-receive.calls")" "force=Y"
+    assert_contains "$(cat "$_state_dir/send-receive.calls")" \
+        "commsnap_mostrecent=OLDEST"
+}
+
 # ------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------
@@ -131,6 +171,8 @@ test_fullcopy_skips_overrides_when_empty
 test_fullcopy_defaults_remove_qualifiers
 test_fullcopy_requires_restoresourcefs
 test_fullcopy_requires_destfs
+test_fullcopy_calls_send_receive_once
+test_fullcopy_sets_full_copy_parameters
 
 teardown_test_env
 test_summary

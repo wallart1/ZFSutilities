@@ -1,0 +1,195 @@
+#!/usr/bin/bash
+# test-zfsrestore — Unit tests for the zfsrestore command.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+
+_run_zfsrestore() {
+    local _state_dir="$1"
+    shift
+    local _mock_bin="$_state_dir/mockbin"
+    mkdir -p "$_mock_bin"
+
+    # Copy the script under test into the mock bin directory so helper
+    # resolution (via $mydir) finds our stubs instead of the real ones.
+    cp "$mydir/bin/zfsrestore" "$_mock_bin/zfsrestore"
+
+    cat > "$_mock_bin/zfs-send-receive" <<'EOF'
+send-receive() {
+    echo "send-receive called with: $*" >> "$ZFSRESTORE_STATE/send-receive.calls"
+    echo "doincrementals=$doincrementals" \
+        >> "$ZFSRESTORE_STATE/send-receive.calls"
+    echo "force=$force" >> "$ZFSRESTORE_STATE/send-receive.calls"
+    echo "commsnap_mostrecent=$commsnap_mostrecent" \
+        >> "$ZFSRESTORE_STATE/send-receive.calls"
+    echo "sourcefsremovequalifiers=$sourcefsremovequalifiers" \
+        >> "$ZFSRESTORE_STATE/send-receive.calls"
+}
+EOF
+    cat > "$_mock_bin/zfsoverrides" <<'EOF'
+overrides() {
+    echo "overrides called with: $*" >> "$ZFSRESTORE_STATE/overrides.calls"
+    if [[ $# -gt 0 ]]; then
+        local overrides="$*"
+        eval "$overrides"
+    fi
+}
+EOF
+    cat > "$_mock_bin/zfssnapbuild" <<'EOF'
+zfssnapbuild() {
+    echo "@test-snap"
+}
+EOF
+    cat > "$_mock_bin/zfsremoveleadingqualifiers" <<'EOF'
+remove_leading_qualifiers() {
+    echo "$2"
+}
+EOF
+    cat > "$_mock_bin/bashfatal" <<'EOF'
+exit "${1:-8}"
+EOF
+    cat > "$_mock_bin/ensure-restored-vm-iscsi" <<'EOF'
+#!/usr/bin/bash
+echo "ensure-restored-vm-iscsi called with: $*" \
+    >> "$ZFSRESTORE_STATE/iscsi.calls"
+EOF
+    chmod +x "$_mock_bin/ensure-restored-vm-iscsi"
+
+    (
+        # shellcheck disable=SC2034
+        # Intentionally set for sourced zfsrestore script.
+        ZFSRESTORE_STATE="$_state_dir"
+        mydir="$_mock_bin"
+        # Inhibit the iSCSI post-restore helper by using an empty fsarray.
+        # shellcheck disable=SC2034
+        # Intentionally set for sourced zfsrestore script.
+        fsarray=()
+        # shellcheck source=/dev/null
+        source "$_mock_bin/zfsrestore"
+    ) >"$_state_dir/out" 2>"$_state_dir/err"
+    echo $? > "$_state_dir/rc"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_zfsrestore_applies_overrides() {
+    test_start "zfsrestore applies overrides when provided"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/zfsrestore_overrides"
+    mkdir -p "$_state_dir"
+    _run_zfsrestore "$_state_dir" \
+        "restoresourcefs=pool/src; destfs=pool/dest; someoverride=1"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+    if [[ -f "$_state_dir/overrides.calls" ]]; then
+        assert_contains "$(cat "$_state_dir/overrides.calls")" "someoverride=1"
+    else
+        test_fail "overrides was not called"
+    fi
+}
+
+test_zfsrestore_applies_second_overrides() {
+    test_start "zfsrestore applies legacy second overrides"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/zfsrestore_second_overrides"
+    mkdir -p "$_state_dir"
+    _run_zfsrestore "$_state_dir" \
+        "restoresourcefs=pool/src; destfs=pool/dest; first=1" "second=2"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_state_dir/overrides.calls")" "first=1"
+    assert_contains "$(cat "$_state_dir/overrides.calls")" "second=2"
+}
+
+test_zfsrestore_defaults_remove_qualifiers() {
+    test_start "zfsrestore defaults sourcefsremovequalifiers to 0"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/zfsrestore_default_qualifiers"
+    mkdir -p "$_state_dir"
+    _run_zfsrestore "$_state_dir" "restoresourcefs=pool/src; destfs=pool/dest"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_state_dir/send-receive.calls")" \
+        "sourcefsremovequalifiers=0"
+}
+
+test_zfsrestore_requires_restoresourcefs() {
+    test_start "zfsrestore is fatal when restoresourcefs is missing"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/zfsrestore_missing_source"
+    mkdir -p "$_state_dir"
+    destfs="pool/dest" _run_zfsrestore "$_state_dir"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 8 "$rc"
+}
+
+test_zfsrestore_requires_destfs() {
+    test_start "zfsrestore is fatal when destfs is missing"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/zfsrestore_missing_dest"
+    mkdir -p "$_state_dir"
+    _run_zfsrestore "$_state_dir" "restoresourcefs=pool/src"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 8 "$rc"
+}
+
+test_zfsrestore_calls_send_receive_once() {
+    test_start "zfsrestore invokes send-receive once"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/zfsrestore_once"
+    mkdir -p "$_state_dir"
+    _run_zfsrestore "$_state_dir" "restoresourcefs=pool/src; destfs=pool/dest"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+    local calls
+    calls=$(grep -c "send-receive called with" \
+        "$_state_dir/send-receive.calls" 2>/dev/null || echo 0)
+    if [[ "$calls" -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Expected 1 send-receive call, got $calls"
+    fi
+}
+
+test_zfsrestore_sets_full_copy_parameters() {
+    test_start "zfsrestore sets full-copy parameters for send-receive"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/zfsrestore_full_copy_params"
+    mkdir -p "$_state_dir"
+    _run_zfsrestore "$_state_dir" "restoresourcefs=pool/src; destfs=pool/dest"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_state_dir/send-receive.calls")" \
+        "doincrementals=N"
+    assert_contains "$(cat "$_state_dir/send-receive.calls")" "force=Y"
+    assert_contains "$(cat "$_state_dir/send-receive.calls")" \
+        "commsnap_mostrecent=OLDEST"
+}
+
+# ------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------
+
+test_zfsrestore_applies_overrides
+test_zfsrestore_applies_second_overrides
+test_zfsrestore_defaults_remove_qualifiers
+test_zfsrestore_requires_restoresourcefs
+test_zfsrestore_requires_destfs
+test_zfsrestore_calls_send_receive_once
+test_zfsrestore_sets_full_copy_parameters
+
+teardown_test_env
+test_summary

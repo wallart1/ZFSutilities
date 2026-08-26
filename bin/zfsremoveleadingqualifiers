@@ -44,7 +44,6 @@ remove_leading_qualifiers() {
 
     # Assign arguments to variables
     local i="$1" \
-        j \
         dataset="$2" \
         num="$1" \
         ds="$2"
@@ -81,20 +80,8 @@ remove_leading_qualifiers() {
         return
     fi
 
-    # Split dataset into components
-    IFS='/' read -ra components <<< "$ds"
-
-    # Start from the i-th component (0-based index)
-    local new_ds=""
-    for ((j=num; j<qualifier_count; j++)); do
-        if [ -z "$new_ds" ]; then
-            new_ds="${components[j]}"
-        else
-            new_ds="$new_ds/${components[j]}"
-        fi
-    done
-
-    # Output the result (will be empty if no components remain)
-    echo "$new_ds"
+    # Use cut instead of read so callers that override read (e.g. test mocks
+    # that auto-answer prompts) cannot corrupt the qualifier parsing.
+    echo "$ds" | cut -d'/' -f$((num + 1))-
 }
 

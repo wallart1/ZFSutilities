@@ -39,6 +39,11 @@ test_returns_two_when_tools_missing() {
         return
     fi
 
+    if [[ "$log_output" != DEBUG:* ]]; then
+        test_fail "Expected DEBUG-level message about missing Proxmox tools, got: $log_output"
+        return
+    fi
+
     test_pass
 }
 

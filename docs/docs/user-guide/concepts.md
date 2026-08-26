@@ -191,8 +191,8 @@ ZFSutilities restores a dataset by performing:
 1. **Full copy** from the oldest available snapshot
 2. **Incremental copy** with intermediates to bring the destination up to date
 
-This is automated by [zfsrestore](../commands-and-modules/commands.md#zfsrestore).
-For the internal details, see the
+[`zfs-send-receive`](../commands-and-modules/modules.md#zfs-send-receive) performs
+both steps automatically whenever a full copy is requested. [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore) and [`zfsfullcopy`](../commands-and-modules/commands.md#zfsfullcopy) make a single call to `zfs-send-receive` with the appropriate full-copy parameters. For the internal details, see the
 [Architecture - Restore Flow](../developer-guide/architecture.md#restore-flow).
 
 ---

@@ -89,13 +89,28 @@ function send-receive {
 
         # When resuming via -t <token>, the token already encodes the snapshot,
         # so do not append "$fs$nextsnap" as an extra positional argument.
-        local -a _sendopts=()
-        read -r -a _sendopts <<< "$sendopts"
+        # Build option arrays without using read, so callers that override read
+        # (for example, test mocks that auto-answer prompts) cannot corrupt the
+        # option parsing. Briefly disable globbing and then restore the prior
+        # shell option state.
+        local _save_glob
+        _save_glob=$(shopt -p nullglob extglob failglob)
+        local _noglob_was_set=0
+        [[ "$-" == *f* ]] && _noglob_was_set=1
+        set -f
+        # shellcheck disable=SC2206
+        # Intentional word splitting: $sendopts is a space-separated option string.
+        local -a _sendopts=($sendopts)
         local -a send_cmd=(zfs send "${_sendopts[@]}")
         [[ "$sendopts" != *"-t"* ]] && send_cmd+=("$fs$nextsnap")
 
-        local -a _recvopts=()
-        read -r -a _recvopts <<< "$recvopts"
+        # shellcheck disable=SC2206
+        # Intentional word splitting: $recvopts is a space-separated option string.
+        local -a _recvopts=($recvopts)
+        if [[ $_noglob_was_set -eq 0 ]]; then
+            set +f
+        fi
+        eval "$_save_glob"
 
         if [[ ${#_pv_args[@]} -gt 0 ]]; then
             if ! "${send_cmd[@]}" | pv "${_pv_args[@]}" \
@@ -144,6 +159,45 @@ function send-receive {
         log_msg "VERB: Verified $dest_snap — GUID matches source."
     }
 
+    transfer_step() {
+        local _step_datatosend="$1"
+        if [[ $_step_datatosend -gt $pvthreshold ]]; then
+            log_msg "INFO: Approximately $(echo "$_step_datatosend" | numfmt --to=iec-i)" \
+                "bytes to transfer."
+            pvcommand='Y'
+        else
+            log_msg "INFO: Small transfer."
+            pvcommand=''
+        fi
+        if [[ $receive_s_option != 's' && $_step_datatosend -gt $resumablethreshold ]]; then
+            log_msg "VERB: Data to send is more than" \
+                "$(echo "$resumablethreshold" | numfmt --to=iec-i) bytes." \
+                "Making transfer of $destfs$restorefs resumeable."
+            receive_s_option='s'
+        fi
+
+        sendoptions="-cw ${incremental_args[*]}"
+        receiveoptions="-uv$receive_F_option$receive_s_option"
+
+        log_msg "VERB: zfs send $sendoptions $fs$nextsnap"
+        log_msg "VERB: zfs receive $receiveoptions $destfs$restorefs"
+
+        if [[ $dryrun != 'N' ]]; then
+            local _tt='' _od='' _sz=''
+            [[ ${#incremental_args[@]} -gt 0 ]] && _tt="incremental" || _tt="full copy"
+            [[ "$receive_F_option" = 'F' ]] && _od="$_od force-receive"
+            [[ "$receive_s_option" = 's' ]] && _od="$_od resumable"
+            if [[ -n "$_step_datatosend" && "$_step_datatosend" -gt 0 ]]; then
+                _sz=", ~$(echo "$_step_datatosend" | numfmt --to=iec-i)"
+            fi
+            log_msg "INFO: Dry-run: Would send $fs$nextsnap -> $destfs$restorefs ($_tt$_sz)"
+            [[ -n "$_od" ]] && log_msg "INFO: Dry-run:   Options: $_od"
+        else
+            do_transfer "$sendoptions" "$receiveoptions" "$pvcommand" "$_step_datatosend" \
+                "Send/receive"
+        fi
+    }
+
     check_space_available() {
         local datatosend="$1" dest_pool="$2"
         [[ $datatosend -le 0 ]] && return 0
@@ -174,7 +228,7 @@ function send-receive {
         local dest="$1" vm_check_rc
         checkrunningvms "$dest"; vm_check_rc=$?
         if [[ $vm_check_rc -eq 2 ]]; then
-            log_msg "INFO: Proxmox tools not available - cannot check for running VMs."
+            log_msg "DEBUG: Proxmox tools not available - cannot check for running VMs."
             return 0
         fi
         [[ $vm_check_rc -ne 1 ]] && return 0
@@ -190,7 +244,19 @@ function send-receive {
 
     prepare_destination_for_full_copy() {
         local dest="$1" fs="$2"
+        local wants_destructive=false
         if [[ $allow_destructive = 'Y' || $force = 'Y' ]]; then
+            wants_destructive=true
+        fi
+        local dest_is_pool_root=false
+        [[ "$dest" != */* ]] && dest_is_pool_root=true
+
+        if [[ $dest_is_pool_root = true && $wants_destructive = true ]]; then
+            log_msg "INFO: Destination $dest is a pool root; deleting snapshots only" \
+                "(pool cannot be destroyed)."
+        fi
+
+        if [[ $wants_destructive = true && $dest_is_pool_root = false ]]; then
             [[ $dryrun != 'N' ]] && log_msg \
                 "INFO: Dry-run: Would destroy destination dataset $dest and all children"
             [[ $dryrun != 'N' ]] && return 0
@@ -367,6 +433,15 @@ function send-receive {
             return 2
         fi
         return 0
+    }
+
+    get_oldest_source_snap() {
+        local dataset="$1"
+        local -a snaparray=()
+        readarray -t snaparray < \
+            <(zfs list -t snapshot -o name -S createtxg -H -d1 "$dataset" 2>/dev/null)
+        [[ ${#snaparray[@]} -eq 0 ]] && return 1
+        echo "@${snaparray[-1]##*@}"
     }
 
     local entry_sourcefs="$sourcefs" entry_destfs="$destfs"
@@ -584,6 +659,10 @@ function send-receive {
             continue
         fi
 
+        # Preserve the intended target snapshot; handle_commsnap_rc may change
+        # $nextsnap when $commsnap_mostrecent='OLDEST'.
+        local target_snap="$nextsnap"
+
         commsnap=$(getcommonsnap "$fs" "$destfs""$restorefs")
         rc=$?
 
@@ -608,6 +687,7 @@ function send-receive {
         fi
 
         local -a incremental_args=()
+        local do_prepare=0
         if [[ $doincrementals = "Y" ]]; then
             if [[ $dointermediates = "Y" ]]; then
                 incremental_args=(-I "$commsnap")
@@ -615,15 +695,42 @@ function send-receive {
                 incremental_args=(-i "$commsnap")
             fi
             incremental="${incremental_args[*]}"
+            [[ $force = "Y" ]] && do_prepare=1
         else
             incremental=""; receive_s_option='s'
             log_msg "VERB: Full copy — transfer of $destfs$restorefs will be resumable."
+            do_prepare=1
         fi
 
-        # awk '/^size/ {print $2}'  —  Extract byte size from the actual transfer dry-run.
-        datatosend=$(zfs send -nPc "${incremental_args[@]}" "$fs$nextsnap" 2>/dev/null \
-            | awk '/^size/ {print $2}')
-        if [[ -z "$datatosend" ]]; then
+        local base_snap=""
+        if [[ $doincrementals != "Y" ]]; then
+            if [[ $commsnap_mostrecent = 'OLDEST' && -n "$commsnap" ]]; then
+                base_snap="$commsnap"
+            else
+                base_snap=$(get_oldest_source_snap "$fs")
+            fi
+            if [[ -z "$base_snap" ]]; then
+                log_msg "WARN: No source snapshots available for full copy of $fs."
+                zfslock_release "$lock_source"; zfslock_release "$lock_dest"
+                continue
+            fi
+        fi
+
+        # awk '/^size/ {print $2}'  —  Extract byte size from the transfer dry-run.
+        local _size_unavailable=0
+        if [[ $doincrementals = "Y" ]]; then
+            datatosend=$(zfs send -nPc "${incremental_args[@]}" "$fs$nextsnap" 2>/dev/null \
+                | awk '/^size/ {print $2}')
+            [[ -z "$datatosend" ]] && _size_unavailable=1
+        else
+            local full_size incr_size
+            full_size=$(zfs send -nPcw "$fs$base_snap" 2>/dev/null | awk '/^size/ {print $2}')
+            incr_size=$(zfs send -nPcw -I "$fs$base_snap" "$fs$target_snap" 2>/dev/null \
+                | awk '/^size/ {print $2}')
+            datatosend=$(( ${full_size:-0} + ${incr_size:-0} ))
+            [[ -z "$full_size" && -z "$incr_size" ]] && _size_unavailable=1
+        fi
+        if [[ $_size_unavailable -eq 1 ]]; then
             if [[ $dryrun != 'N' ]]; then
                 log_msg "INFO: Dry-run: stream size estimate not available for $incremental" \
                     "$fs$nextsnap (snapshot not created)"
@@ -639,28 +746,13 @@ function send-receive {
             continue
         fi
 
-        if [[ $datatosend -gt $pvthreshold ]]; then
-            log_msg "INFO: Approximately $(echo "$datatosend" | numfmt --to=iec-i)" \
-                "bytes to transfer."
-            pvcommand='Y'
-        else
-            log_msg "INFO: Small transfer."
-            pvcommand=''
-        fi
-        if [[ $incremental = "" ]]; then
+        if [[ $doincrementals != "Y" ]]; then
             log_msg "INFO: Doing a full copy of $fs to $destfs$restorefs."
             receive_F_option='F'
             [[ $autoproceed != 'Y' ]] && read -rp "Press enter to continue."
         fi
 
-        if [[ $receive_s_option != 's' && $datatosend -gt $resumablethreshold ]]; then
-            log_msg "VERB: Data to send is more than" \
-                "$(echo "$resumablethreshold" | numfmt --to=iec-i) bytes." \
-                "Making transfer of $destfs$restorefs resumeable."
-            receive_s_option='s'
-        fi
-
-        if [[ $incremental = '' || $force = "Y" ]]; then
+        if [[ $do_prepare -eq 1 ]]; then
             if zfs list -t filesystem,volume "$destfs""$restorefs" > /dev/null 2>&1; then
                 if ! check_running_vms_or_skip "$destfs$restorefs"; then
                     zfslock_release "$lock_source"
@@ -700,27 +792,36 @@ function send-receive {
             fi
         fi
 
-        sendoptions="-cw ${incremental_args[*]}"
-        receiveoptions="-uv$receive_F_option$receive_s_option"
-
-        log_msg "VERB: zfs send $sendoptions $fs$nextsnap"
-        log_msg "VERB: zfs receive $receiveoptions $destfs$restorefs"
-
-        if [[ $dryrun != 'N' ]]; then
-            local _tt='' _od='' _sz=''
-            [[ ${#incremental_args[@]} -gt 0 ]] && _tt="incremental" || _tt="full copy"
-            [[ "$receive_F_option" = 'F' ]] && _od="$_od force-receive"
-            [[ "$receive_s_option" = 's' ]] && _od="$_od resumable"
-            if [[ -n "$datatosend" && "$datatosend" -gt 0 ]]; then
-                _sz=", ~$(echo "$datatosend" | numfmt --to=iec-i)"
-            fi
-            log_msg "INFO: Dry-run: Would send $fs$nextsnap -> $destfs$restorefs ($_tt$_sz)"
-            [[ -n "$_od" ]] && log_msg "INFO: Dry-run:   Options: $_od"
-        else
-            do_transfer "$sendoptions" "$receiveoptions" "$pvcommand" "$datatosend" "Send/receive"
-            if [[ "$verify_after_transfer" = 'Y' ]]; then
+        if [[ $doincrementals = "Y" ]]; then
+            transfer_step "$datatosend"
+            if [[ $dryrun = 'N' && "$verify_after_transfer" = 'Y' ]]; then
                 verify_transfer "$fs" "$destfs$restorefs" "$nextsnap"
             fi
+        else
+            # Step 1: full copy of the oldest snapshot.
+            nextsnap="$base_snap"
+            incremental_args=()
+            transfer_step "${full_size:-0}"
+
+            # Step 2: incremental copy from oldest snapshot to target snapshot.
+            if [[ "$base_snap" != "$target_snap" ]]; then
+                nextsnap="$target_snap"
+                incremental_args=(-I "$base_snap")
+                incremental="${incremental_args[*]}"
+                local saved_receive_F_option="$receive_F_option"
+                receive_F_option=''
+                transfer_step "${incr_size:-0}"
+                receive_F_option="$saved_receive_F_option"
+                if [[ $dryrun = 'N' && "$verify_after_transfer" = 'Y' ]]; then
+                    verify_transfer "$fs" "$destfs$restorefs" "$nextsnap"
+                fi
+            else
+                if [[ $dryrun = 'N' && "$verify_after_transfer" = 'Y' ]]; then
+                    verify_transfer "$fs" "$destfs$restorefs" "$nextsnap"
+                fi
+            fi
+
+            nextsnap="$target_snap"
         fi
 
         if [[ $dryrun = 'N' ]]; then

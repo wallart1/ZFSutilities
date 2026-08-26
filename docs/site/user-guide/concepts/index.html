@@ -2315,8 +2315,8 @@ recent state.</p>
 <li><strong>Full copy</strong> from the oldest available snapshot</li>
 <li><strong>Incremental copy</strong> with intermediates to bring the destination up to date</li>
 </ol>
-<p>This is automated by <a href="../../commands-and-modules/commands/#zfsrestore">zfsrestore</a>.
-For the internal details, see the
+<p><a href="../../commands-and-modules/modules/#zfs-send-receive"><code>zfs-send-receive</code></a> performs
+both steps automatically whenever a full copy is requested. <a href="../../commands-and-modules/commands/#zfsrestore"><code>zfsrestore</code></a> and <a href="../../commands-and-modules/commands/#zfsfullcopy"><code>zfsfullcopy</code></a> make a single call to <code>zfs-send-receive</code> with the appropriate full-copy parameters. For the internal details, see the
 <a href="../../developer-guide/architecture/#restore-flow">Architecture - Restore Flow</a>.</p>
 <hr />
 <h2 id="the-backup-chain">The Backup Chain<a class="headerlink" href="#the-backup-chain" title="Permanent link">&para;</a></h2>
@@ -2576,7 +2576,7 @@ one snapshot's dependency chain.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.88.0
+      ZFS Utilities v0.89.0
     </div>
   
   
@@ -2601,7 +2601,7 @@ one snapshot's dependency chain.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.88.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.89.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

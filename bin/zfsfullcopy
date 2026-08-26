@@ -6,6 +6,9 @@
 # full copy is performed using the oldest available
 # snapshot. Then an incremental copy is performed
 # to get the remaining snapshots.
+# The two-step copy is now performed internally by
+# zfs-send-receive; this wrapper makes a single call
+# with the appropriate full-copy parameters.
 
 # NOTE: This script (zfsfullcopy) is designed to be called by other scripts. If you want a more
 #       flexible version that you can run yourself, see the zfsrestore script.
@@ -23,7 +26,7 @@
 #                                           the newest snapshot to be copied.
 #                                           Default: Newest available snapshot.
 
-# $1                            (Optional.) Overrides for Part 1.
+# $1                            (Optional.) Overrides.
 
 function zfsfullcopy {
     local _local_bashinit
@@ -39,13 +42,16 @@ function zfsfullcopy {
     source_helper zfs-send-receive
     source_helper zfsoverrides
 
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfs-send-receive helper.
     local autoproceed='Y'
     if [[ $1 != '' ]]; then local overrides=$1; else local overrides=''; fi
 
     # ========================== Global arguments ===============================
     if [[ $nextsnap = '' ]]; then
-        local nextsnap
-        nextsnap=$(zfssnapbuild)
+        # shellcheck disable=SC2034
+        # Intentionally set for sourced zfs-send-receive helper.
+        local nextsnap='notneeded'
     fi
     # shellcheck disable=SC2034
     # Intentionally set for sourced zfs-send-receive helper.
@@ -56,76 +62,37 @@ function zfsfullcopy {
     local includes=()
     # shellcheck disable=SC2034
     local excludes=()
-    local nextsnapsave=$nextsnap
-    local dopart1='Y'
-    local dopart2='Y'
 
-    if [[ $dopart1 = 'Y' ]]; then
-        # Part 1: do a full copy using the oldest available snapshot.
-        log_msg "INFO: Part one: Full copy using the oldest available snapshot."
-        # shellcheck disable=SC2034
-        # Intentionally set for sourced zfs-send-receive helper.
-        local startwith=''              # Substring of fs name. All preceeding fs's will be skipped.
-        # shellcheck disable=SC2034
-        local force='Y'                 # Do full copy even if common snapshots are found.
-        # shellcheck disable=SC2034
-        local releaseholds='Y'          # Release matching holds before restoring.
-        # shellcheck disable=SC2034
-        local releaseholds_tags=('offsite-*')
-        # shellcheck disable=SC2034
-        local doincrementals='N'        # 'N' means do full copies.
-        # shellcheck disable=SC2034
-        local dointermediates='N'       # Don't try to do any other shapshots.
-        local nextsnap=$nextsnapsave    # Just in case it gets clobbered.
-        # shellcheck disable=SC2034
-        local commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfs-send-receive helper.
+    local startwith=''              # Substring of fs name. All preceeding fs's will be skipped.
+    # shellcheck disable=SC2034
+    local force='Y'                 # Do full copy even if common snapshots are found.
+    # shellcheck disable=SC2034
+    local releaseholds='Y'          # Release matching holds before restoring.
+    # shellcheck disable=SC2034
+    local releaseholds_tags=('offsite-*')
+    # shellcheck disable=SC2034
+    local doincrementals='N'        # 'N' means do full copies.
+    # shellcheck disable=SC2034
+    local dointermediates='N'       # Intermediate snapshots are handled internally.
+    # shellcheck disable=SC2034
+    local commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
 
-        if [[ $overrides != '' ]]; then overrides "$overrides"; fi
-        
-        if [[ $restoresourcefs == '' ]]; then           # Dataset to be source of restore.
-            log_msg "FATAL: \$restoresourcefs was not specified."
-            source "$(find_zfsutility_script bashfatal)" 8
-        fi
-        if [[ $sourcefsremovequalifiers == '' ]]; then
-            local sourcefsremovequalifiers='0'
-        fi                          # '0' = Keep the full sourcefs name in the destfs name.
-        if [[ $destfs == '' ]]; then # Add the dest pool name and '/' at the beginning of the
-                                    # sourcefs name, giving the destination filesystem.
-            log_msg "FATAL: \$destfs was not specified."
-            source "$(find_zfsutility_script bashfatal)" 8
-        fi
-
-        send-receive "$restoresourcefs"
+    if [[ $overrides != '' ]]; then overrides "$overrides"; fi
+    
+    if [[ $restoresourcefs == '' ]]; then           # Dataset to be source of restore.
+        log_msg "FATAL: \$restoresourcefs was not specified."
+        source "$(find_zfsutility_script bashfatal)" 8
+    fi
+    if [[ $sourcefsremovequalifiers == '' ]]; then
+        local sourcefsremovequalifiers='0'
+    fi                          # '0' = Keep the full sourcefs name in the destfs name.
+    if [[ $destfs == '' ]]; then # Add the dest pool name and '/' at the beginning of the
+                                # sourcefs name, giving the destination filesystem.
+        log_msg "FATAL: \$destfs was not specified."
+        source "$(find_zfsutility_script bashfatal)" 8
     fi
 
-    if [[ $dopart2 = 'Y' ]]; then
-        # Part 2: do the rest of the snapshots incrementally.
-        log_msg "INFO: Part two: Copy the rest of the snapshots incrementally."
-        # shellcheck disable=SC2034
-        # Intentionally set for sourced zfs-send-receive helper.
-        local startwith=''
-        # shellcheck disable=SC2034
-        local force='N'
-        # shellcheck disable=SC2034
-        local releaseholds='N'
-        # shellcheck disable=SC2034
-        local doincrementals='Y'              # Do incremental rather than full copies.
-        # shellcheck disable=SC2034
-        local dointermediates='Y'             # Do all the remaining snapshots.
-        local nextsnap=$nextsnapsave          # Just in case it gets clobbered.
-        # shellcheck disable=SC2034
-        local commsnap_mostrecent=''          # Finish by copying the remaining snapshots.
-
-        if [[ $autoproceed != 'Y' ]]; then
-            while :; do
-                read -rp "${msg_prefix}Press enter to continue with part two."\
-                    " Or enter overrides.: " overrides
-                if [[ $overrides != '' ]]; then overrides "$overrides"
-                else break
-                fi
-            done
-        fi
-
-        send-receive "$restoresourcefs"
-    fi
-}    
+    send-receive "$restoresourcefs"
+}

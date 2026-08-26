@@ -5414,9 +5414,10 @@ report the specific cause — holds, open files, iSCSI LUNs, running VMs, etc.</
 <hr />
 <h3 id="zfsfullcopy"><code>zfsfullcopy</code><a class="headerlink" href="#zfsfullcopy" title="Permanent link">&para;</a></h3>
 <p>Performs a two-step full dataset restore. Intended to be called by other
-scripts (not run directly — use <a href="#zfsrestore"><code>zfsrestore</code></a> for interactive use).</p>
-<p>Step 1: Full copy from the oldest available snapshot</p>
-<p>Step 2: Incremental copy to pull in all remaining snapshots</p>
+scripts (not run directly — use <a href="#zfsrestore"><code>zfsrestore</code></a> for interactive use).
+The two-step copy (full copy of the oldest snapshot followed by an incremental
+catch-up to the target) is performed internally by <code>zfs-send-receive</code>.</p>
+<p>Result: all source snapshots are restored to the destination.</p>
 <p><strong>Arguments:</strong> none (configured via globals).</p>
 <p><strong>Globals:</strong></p>
 <table>
@@ -5478,7 +5479,7 @@ scripts (not run directly — use <a href="#zfsrestore"><code>zfsrestore</code><
 <tbody>
 <tr>
 <td><a href="../modules/#zfs-send-receive">zfs-send-receive</a></td>
-<td>Perform full then incremental copy</td>
+<td>Perform two-step full copy</td>
 </tr>
 <tr>
 <td><a href="../modules/#zfsoverrides">zfsoverrides</a></td>
@@ -5505,12 +5506,13 @@ scripts (not run directly — use <a href="#zfsrestore"><code>zfsrestore</code><
 </table>
 <p><strong>Internal flow:</strong></p>
 <ol>
-<li>If <code>$nextsnap</code> is empty, generate one with <code>zfssnapbuild</code>.</li>
-<li><strong>Part 1</strong> — full copy from the oldest snapshot (<code>doincrementals='N'</code>,
+<li>If <code>$nextsnap</code> is empty, default it to <code>'notneeded'</code> so <code>zfs-send-receive</code>
+   uses the most recent existing source snapshot.</li>
+<li>Set full-copy parameters (<code>doincrementals='N'</code>,
    <code>commsnap_mostrecent='OLDEST'</code>, <code>force='Y'</code>, <code>releaseholds='Y'</code>,
    <code>releaseholds_tags=('offsite-*')</code>).</li>
-<li><strong>Part 2</strong> — incremental copy with intermediates to catch up to the newest snapshot (<code>doincrementals='Y'</code>, <code>dointermediates='Y'</code>).</li>
-<li>Re-apply caller overrides between parts so Part 1 defaults do not leak into Part 2.</li>
+<li>Call <code>send-receive</code> once. <code>zfs-send-receive</code> performs the full copy of the
+   oldest snapshot and the incremental catch-up to the target internally.</li>
 </ol>
 <p><strong>Return codes:</strong></p>
 <table>
@@ -6357,7 +6359,7 @@ exits immediately with an error message if run.</strong></p>
 <h3 id="zfsrestore"><code>zfsrestore</code><a class="headerlink" href="#zfsrestore" title="Permanent link">&para;</a></h3>
 <p>Interactive two-step full dataset restore. Configured by editing variables
 inside the script.</p>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>zfsrestore<span class="w"> </span><span class="o">[</span>overrides-part1<span class="o">]</span>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>zfsrestore<span class="w"> </span><span class="o">[</span>overrides<span class="o">]</span>
 </code></pre></div>
 <p><strong>Arguments:</strong></p>
 <table>
@@ -6370,7 +6372,11 @@ inside the script.</p>
 <tbody>
 <tr>
 <td><code>$1</code></td>
-<td>Optional override string applied before Step 1</td>
+<td>Optional override string applied before the restore</td>
+</tr>
+<tr>
+<td><code>$2</code></td>
+<td>Optional additional override string (legacy Part 2 overrides, applied after <code>$1</code>)</td>
 </tr>
 </tbody>
 </table>
@@ -6416,9 +6422,10 @@ inside the script.</p>
 </tr>
 </tbody>
 </table>
-<p>Step 1 does a full copy from the oldest snapshot. </p>
-<p>Step 2 does an incremental-with-intermediates
-to catch up to the newest.</p>
+<p>The restore sends the oldest source snapshot as a full stream, then sends
+an incremental stream with intermediates to catch up to the newest source
+snapshot. Both steps are performed inside a single <code>zfs-send-receive</code>
+invocation.</p>
 <p><strong>Called modules:</strong></p>
 <table>
 <thead>
@@ -6438,7 +6445,7 @@ to catch up to the newest.</p>
 </tr>
 <tr>
 <td><a href="../modules/#zfsoverrides">zfsoverrides</a></td>
-<td>Apply Part 1 / Part 2 overrides</td>
+<td>Apply override string(s)</td>
 </tr>
 <tr>
 <td><a href="../modules/#zfsremoveleadingqualifiers">zfsremoveleadingqualifiers</a></td>
@@ -6469,14 +6476,13 @@ to catch up to the newest.</p>
 </table>
 <p><strong>Internal flow:</strong></p>
 <ol>
-<li>Apply Part 1 overrides from <code>$1</code>.</li>
-<li><strong>Part 1</strong> — full copy from oldest snapshot (<code>doincrementals='N'</code>,
+<li>Apply overrides from <code>$1</code> and <code>$2</code>.</li>
+<li>Set full-copy parameters (<code>doincrementals='N'</code>,
    <code>force='Y'</code>, <code>releaseholds='Y'</code>, <code>releaseholds_tags=('offsite-*')</code>,
    <code>commsnap_mostrecent='OLDEST'</code>).</li>
-<li>Re-apply <code>$1</code> and apply <code>$2</code> overrides for Part 2.</li>
-<li><strong>Part 2</strong> — incremental copy with intermediates to newest snapshot (<code>doincrementals='Y'</code>, <code>dointermediates='Y'</code>); <code>autoproceed</code> is forced to <code>'Y'</code> so Part 2 proceeds automatically.</li>
-<li>(No interactive prompt between parts.)</li>
-<li>In two-node mode, call <code>ensure-restored-vm-iscsi</code> after the final send-receive
+<li>Call <code>send-receive</code> once. <code>zfs-send-receive</code> performs the full copy of the
+   oldest snapshot and the incremental catch-up to the target internally.</li>
+<li>In two-node mode, call <code>ensure-restored-vm-iscsi</code> after the send-receive
    to recreate missing iSCSI LUNs for restored VM disk zvols.  EFI disks are matched
    to the <code>efidisk0:</code> entry by their 4 MiB size, independent of the zvol disk number.</li>
 </ol>
@@ -8195,7 +8201,7 @@ only the <code>zfs rename</code> is performed.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.88.0
+      ZFS Utilities v0.89.0
     </div>
   
   
@@ -8220,7 +8226,7 @@ only the <code>zfs rename</code> is performed.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.88.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.89.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

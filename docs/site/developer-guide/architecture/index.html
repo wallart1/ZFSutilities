@@ -2603,8 +2603,8 @@ copying or deleting files; with the symlink model, rollback is instantaneous and
 <li><strong>Destination newer (rc=16)</strong> — The destination has snapshots newer than the common one. The user is prompted to roll back; if accepted, intervening snapshots are destroyed and the common snapshot is rolled back to. After rollback, the transfer continues on the <strong>incremental</strong> path (<code>$doincrementals='Y'</code>).</li>
 <li><strong>Space check</strong> — Before any transfer, <code>check_space_available</code> compares the dry-run size against destination pool free space plus a 10 % margin (minimum 1 GB). If space is insufficient, the user may skip or proceed anyway.</li>
 <li><strong>Running VMs</strong> — On Proxmox hosts, <code>zfscheckrunningvms</code> scans the destination dataset for running VMs. If any are found, the user must confirm before proceeding.</li>
-<li><strong>Full-copy preparation</strong> — Only on the full-copy path (<code>$doincrementals='N'</code>). Depending on <code>$force</code> / <code>$allow_destructive</code>, the destination is either destroyed entirely (<code>zfs destroy -r</code>) or only its snapshots are removed (<code>zfs destroy -d</code>).</li>
-<li><strong>Transfer</strong> — Both paths execute <code>do_transfer</code>, but the <code>zfs send</code> options differ: incremental uses <code>-i</code> or <code>-I &lt;commsnap&gt;</code>; full copy uses neither.</li>
+<li><strong>Full-copy preparation</strong> — Only on the full-copy path (<code>$doincrementals='N'</code>). Depending on <code>$force</code> / <code>$allow_destructive</code>, the destination is either destroyed entirely (<code>zfs destroy -r</code>) or only its snapshots are removed (<code>zfs destroy -d</code>). The same preparation covers both steps of the two-step full transfer.</li>
+<li><strong>Transfer</strong> — The incremental path executes <code>do_transfer</code> once with <code>-i</code> or <code>-I &lt;commsnap&gt;</code>. The full-copy path executes <code>do_transfer</code> twice: first a full stream of the oldest source snapshot, then an incremental stream (<code>-I &lt;oldest&gt;</code>) from that oldest snapshot to the intended target snapshot. This preserves intermediate snapshots on the destination.</li>
 <li><strong>Verification</strong> — When <code>$verify_after_transfer='Y'</code>, <code>verify_transfer</code> compares the GUID of the received snapshot against the source. A mismatch is fatal.</li>
 </ul>
 <hr />
@@ -2694,28 +2694,21 @@ API from the three split modules so existing callers can be migrated
 incrementally.</p>
 <hr />
 <h2 id="restore-flow">Restore Flow<a class="headerlink" href="#restore-flow" title="Permanent link">&para;</a></h2>
-<p>A full restore is always a <strong>two-step</strong> operation. <a href="../../commands-and-modules/commands/#zfsrestore"><code>zfsrestore</code></a> automates this pair of <a href="../../commands-and-modules/modules/#zfs-send-receive"><code>zfs-send-receive</code></a> invocations:</p>
+<p>A full restore is always a <strong>two-step</strong> operation. <a href="../../commands-and-modules/commands/#zfsrestore"><code>zfsrestore</code></a> makes a single call to <a href="../../commands-and-modules/modules/#zfs-send-receive"><code>zfs-send-receive</code></a>, which performs both steps internally:</p>
 <pre class="mermaid"><code>flowchart LR
-    A["zfsrestore"] --&gt; B["Part 1: Full copy"]
-    B --&gt; C["Oldest common snapshot&lt;br/&gt;force='Y'&lt;br/&gt;releaseholds='Y'&lt;br/&gt;doincrementals='N'"]
-    C --&gt; D["send-receive"]
-    D --&gt; E["Part 2: Incremental catch-up"]
-    E --&gt; F["All intermediate snapshots&lt;br/&gt;doincrementals='Y'&lt;br/&gt;dointermediates='Y'"]
-    F --&gt; G["send-receive"]</code></pre>
+    A["zfsrestore"] --&gt; B["Full copy request"]
+    B --&gt; C["Oldest snapshot&lt;br/&gt;force='Y'&lt;br/&gt;releaseholds='Y'&lt;br/&gt;doincrementals='N'&lt;br/&gt;commsnap_mostrecent='OLDEST'"]
+    C --&gt; D["send-receive&lt;br/&gt;full + incremental internally"]</code></pre>
 <p><strong>Why two steps?</strong></p>
 <ul>
-<li><strong>Part 1</strong> sends the oldest available snapshot as a full stream. Because <code>force='Y'</code>, the destination dataset may be destroyed and recreated. <code>releaseholds='Y'</code> ensures holds do not block the destruction.</li>
-<li><strong>Part 2</strong> sends every snapshot from the common base up to the newest one (<code>-I</code> mode). This restores the complete snapshot history, not just the latest state.</li>
-<li><strong>After the final send-receive</strong>, <code>ensure-restored-vm-iscsi</code> re-exports any restored
+<li><strong>Step 1</strong> sends the oldest available snapshot as a full stream. Because <code>force='Y'</code>, the destination dataset may be destroyed and recreated. <code>releaseholds='Y'</code> ensures holds do not block the destruction.</li>
+<li><strong>Step 2</strong> sends every snapshot from the oldest base up to the newest one (<code>-I</code> mode). This restores the complete snapshot history, not just the latest state.</li>
+<li><strong><code>zfs-send-receive</code> now executes both steps</strong> inside a single invocation, so wrappers such as <code>zfsrestore</code> and <code>zfsfullcopy</code> no longer need to call it twice.</li>
+<li><strong>After the send-receive</strong>, <code>ensure-restored-vm-iscsi</code> re-exports any restored
   VM disk zvols that are referenced by a Proxmox VM config but no longer have an
   iSCSI LUN. This handles restores to a missing/detached disk while preserving the
   LUN index recorded in the VM config.</li>
 </ul>
-<p>If you only need the most recent state, you can run Part 1 alone; however, you will lose the ability to roll back to earlier snapshots. If you use this method, be sure to change</p>
-<div class="highlight"><pre><span></span><code><span class="nv">commsnap_mostrecent</span><span class="o">=</span><span class="s1">&#39;OLDEST&#39;</span>
-<span class="w">    </span>to
-<span class="nv">commsnap_mostrecent</span><span class="o">=</span><span class="s1">&#39;&#39;</span>
-</code></pre></div>
 <hr />
 <h2 id="offsite-backup-flow">Offsite Backup Flow<a class="headerlink" href="#offsite-backup-flow" title="Permanent link">&para;</a></h2>
 <p><a href="../../commands-and-modules/commands/#zfssendoffsite"><code>zfssendoffsite</code></a> copies data through a multi-step chain before applying ZFS holds that act as offline-safe receipts. This is an example and must be customized to your environment.</p>
@@ -2856,7 +2849,7 @@ zvols are not keyed to a specific disk index.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.88.0
+      ZFS Utilities v0.89.0
     </div>
   
   
@@ -2881,7 +2874,7 @@ zvols are not keyed to a specific disk index.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.88.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.89.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

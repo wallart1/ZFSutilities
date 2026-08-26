@@ -1239,6 +1239,12 @@ acquired on the source and destination datasets before a snapshot is created
 or selected, so concurrent jobs cannot insert a newer snapshot after the
 common snapshot has been chosen.
 
+A full copy (`$doincrementals='N'`) is performed as a two-step transfer:
+first the oldest source snapshot is sent as a full stream, then an incremental
+stream (`-I <oldest>`) sends every snapshot from that oldest base up to the
+target snapshot. This preserves the complete snapshot history on the
+destination.
+
 ```bash
 source_helper zfs-send-receive
 # Set parameters, then:
@@ -1255,7 +1261,7 @@ arguments. Callers set the variables below, then invoke `send-receive`.
 | `$sourcefs`       | Source dataset                                                                               | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive) |
 | `$destfs`         | Destination pool/dataset                                                                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive) |
 | `$nextsnap`       | Snapshot name to create on source, or `'notneeded'` to use the most recent existing snapshot | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive) |
-| `$doincrementals` | `'Y'` = incremental from common snap; `'N'` = full copy                                      | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive) |
+| `$doincrementals` | `'Y'` = incremental from common snap; `'N'` = full copy (two-step: oldest snapshot + incremental catch-up) | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive) |
 
 **Optional tuning variables:**
 
@@ -1333,12 +1339,17 @@ steps.
    e. For full copies (`$doincrementals='N'`), check for running VMs on the
       destination and either delete destination snapshots (`allow_destructive`)
       or the whole destination dataset (`force`). Snapshots with non-matching
-      user holds are skipped with a warning.
-   f. Estimate stream size with `zfs send -nP`. If the destination pool has
-      insufficient space, prompt or skip (depending on `$autoproceed`).
+      user holds are skipped with a warning. The same preparation covers both
+      steps of the two-step full transfer.
+   f. Estimate stream size with `zfs send -nP`. For full copies, the estimate
+      is the sum of the full stream (oldest snapshot) and the incremental
+      stream (oldest to target). If the destination pool has insufficient
+      space, prompt or skip (depending on `$autoproceed`).
    g. Build send options (`-cw`, plus `-i`/`-I` for incrementals) and receive
       options (`-uv`, plus `-F` and/or `-s` as configured). Large transfers
-      automatically enable resumable receives (`-s`).
+      automatically enable resumable receives (`-s`). Full copies run
+      `do_transfer` twice: once for the oldest snapshot and once for the
+      incremental catch-up.
    h. Execute `zfs send | [pv] | zfs receive`. On failure, release locks and
       exit fatally.
    i. If `$verify_after_transfer='Y'`, compare source and destination snapshot

@@ -283,10 +283,14 @@ Offsite pools: `z22tb`, `z40tb`
 3. Snapshot and copy `NVME1` → `fivebays`
 4. Apply retention policies
 
-**Two-step restore** (`zfsfullcopy` or manual):
+**Two-step restore** (`zfsfullcopy` or `zfs-send-receive` with `doincrementals='N'`):
 
-1. Full copy with `doincrementals='N'`, `commsnap_mostrecent='OLDEST'`
-2. Incremental copy with `doincrementals='Y'`, `dointermediates='Y'`
+`zfs-send-receive` performs both steps internally when asked to do a full copy:
+
+1. Full copy of the oldest available snapshot (`doincrementals='N'`, `commsnap_mostrecent='OLDEST'`)
+2. Incremental copy with intermediates from that oldest snapshot to the target
+
+`zfsfullcopy` and `zfsrestore` make a single `send-receive` call; the two-step behavior is now internal to `zfs-send-receive`.
 
 **Clone handling:** Cloned datasets are backed up as regular datasets.
 `zfs-send-receive` treats them as independent datasets because ZFS clones cannot be
@@ -420,10 +424,11 @@ tests/run-tests test-zfsretain test-zfsbuildfsarray
 | `test-zfs-diagnose-busy`       | 8     | Diagnostic output from `zfs-diagnose-busy` — busy dataset causes                                              |
 | `test-zfsdelfs`                | 10     | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs`                                                        |
 | `test-zfsdelsnap`              | 6     | Snapshot deletion safety checks, hold release, `zfscheckagainst` dependency sourcing, user-hold blocking        |
+| `test-zfsfullcopy`             | 7     | `zfsfullcopy` full-copy wrapper: overrides, required parameters, single `send-receive` invocation, parameter forwarding |
 | `test-ensure-restored-vm-iscsi` | 24    | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding |
 | `test-zfslockmanager`          | 43    | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition, headless timed wait |
 | `test-zfsretain`               | 17    | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
-| `test-zfs-send-receive-dryrun` | 35    | Dry-run logging, space checks, resume-token helpers (including non-existent destination), clone messages, pv quiet in headless mode, full-copy lock hand-off |
+| `test-zfs-send-receive-dryrun` | 39    | Dry-run logging, space checks, resume-token helpers (including non-existent destination), clone messages, pv quiet in headless mode, full-copy lock hand-off, two-step full transfers, pool-root full-copy fallback |
 | `test-zfssnapbuild`            | 13     | Snapshot name generation, bucket logic, snapfile handling                                                     |
 | `test-lock-coverage`           | 1     | Static checks that locked scripts source zfslockmanager, initialize it, and acquire locks                    |
 | `test-unarchive-vm`            | 6     | `--new-vmid` rewriting, UUID regeneration, conflict handling                                                  |
@@ -431,6 +436,7 @@ tests/run-tests test-zfsretain test-zfsbuildfsarray
 | `test-zfsdelallsnaps`          | 5     | Return-code behavior and lock acquisition around snapshot deletion                                            |
 | `test-zfsmassdelsnaps`         | 16    | Mass snapshot deletion: ignore/respect retention, dry-run, approval, releaseholds forwarding                  |
 | `test-zfsmount`                | 2     | Lock acquisition before mount/unmount per dataset                                                             |
+| `test-zfsrestore`              | 7     | `zfsrestore` full-copy wrapper: overrides, legacy second overrides, required parameters, single `send-receive` invocation, parameter forwarding |
 | `test-zfsrestoresendstream`    | 1     | Lock acquisition before each zfs receive destination                                                          |
 | `test-zfsresume`               | 1     | Lock acquisition before reading resume token                                                                  |
 | `test-zfsunmount`              | 1     | Lock acquisition before unmount per dataset                                                                   |
