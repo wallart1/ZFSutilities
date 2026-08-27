@@ -39,7 +39,10 @@ MY_HOST=$(hostname -s)
 PVE_CONF_DIR="/etc/pve/qemu-server"
 STATE_DIR="/tmp"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
-ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+fi
 
 # Build reverse target-short → pool lookup and target regex (two-node only)
 declare -A TARGET_POOL=()
@@ -214,7 +217,10 @@ SRCZVOL="$1"; DSTZVOL="$2"
 SRCBACKSTORE="$3"; DSTBACKSTORE="$4"
 TARGET="$5"; SRCLUN="$6"; ENCRYPTED="$7"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
-ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+fi
 
 manifest_remove() {
     [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" \
@@ -430,7 +436,10 @@ SRCZVOL="$1"; DSTZVOL="$2"
 SRCBACKSTORE="$3"; DSTBACKSTORE="$4"
 TARGET="$5"; SRCLUN="$6"; ENCRYPTED="$7"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
-ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+fi
 
 manifest_remove() {
     [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" \

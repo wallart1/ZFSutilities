@@ -50,7 +50,6 @@ DROPIN_DIR="/etc/systemd/system/rtslib-fb-targetctl.service.d"
 DROPINS=(
     "rtslib-fb-targetctl-pre-start-backup.conf:pre-start-backup.conf"
     "rtslib-fb-targetctl-boot-config.conf:boot-config.conf"
-    "rtslib-fb-targetctl-wait-for-zfs-keys.conf:wait-for-zfs-keys.conf"
 )
 
 _check_zfs_root() {
@@ -391,17 +390,20 @@ for dropin_entry in "${DROPINS[@]}"; do
 done
 systemctl daemon-reload
 
-# Install zfs-keys-unlock.service on the storage host
-ZFS_KEYS_SERVICE="zfs-keys-unlock.service"
-ZFS_KEYS_SERVICE_SRC="${TWO_NODE_DIR}/${ZFS_KEYS_SERVICE}"
-if [[ -f "$ZFS_KEYS_SERVICE_SRC" ]]; then
+# Remove obsolete systemd artifacts left by older versions
+OBSOLETE_SERVICE="/etc/systemd/system/zfs-keys-unlock.service"
+OBSOLETE_DROPIN="/etc/systemd/system/rtslib-fb-targetctl.service.d/wait-for-zfs-keys.conf"
+if [[ -f "$OBSOLETE_SERVICE" || -f "$OBSOLETE_DROPIN" ]]; then
     echo ""
-    echo "Installing $ZFS_KEYS_SERVICE on $STORAGE_HOST..."
-    install -m 0644 "$ZFS_KEYS_SERVICE_SRC" "/etc/systemd/system/${ZFS_KEYS_SERVICE}"
-    echo "  ✓ /etc/systemd/system/${ZFS_KEYS_SERVICE}"
+    echo "Removing obsolete automatic LUKS-key systemd artifacts..."
+    if [[ -f "$OBSOLETE_SERVICE" ]]; then
+        systemctl disable zfs-keys-unlock.service 2>/dev/null || true
+        rm -f "$OBSOLETE_SERVICE"
+        echo "  ✓ Removed $OBSOLETE_SERVICE"
+    fi
+    rm -f "$OBSOLETE_DROPIN"
+    [[ -f "$OBSOLETE_DROPIN" ]] || echo "  ✓ Removed $OBSOLETE_DROPIN"
     systemctl daemon-reload
-    systemctl enable "$ZFS_KEYS_SERVICE"
-    echo "  ✓ Enabled $ZFS_KEYS_SERVICE"
 fi
 
 # Install encrypted LUNs conf if not already present
@@ -419,103 +421,6 @@ elif grep -q 'ENCRYPTED_LUNS=' "$ENCRYPTED_CONF" 2>/dev/null; then
 fi
 
 echo ""
-
-# ------------------------------------------------------------------
-# Optional: configure /root/.luks-key for unattended boot unlocking
-# ------------------------------------------------------------------
-if [[ -f "$ENCRYPTED_CONF" ]] && grep -qvE '^\s*(#|$)' "$ENCRYPTED_CONF" 2>/dev/null; then
-    echo "=== Encrypted LUNs detected ==="
-    echo ""
-    echo "You can enable unattended boot unlocking by creating a root-owned"
-    echo "LUKS keyfile (/root/.luks-key). The boot service will then unlock the"
-    echo "ZFS keys USB automatically when it is inserted at boot."
-    echo ""
-    read -rp "Create /root/.luks-key now? [y/N]: " setup_luks_key
-    if [[ "$setup_luks_key" =~ ^[Yy]$ ]]; then
-        echo ""
-        echo "Please insert the ZFS keys USB drive(s)."
-        read -rp "Press Enter when ready..."
-        echo ""
-
-        # Find all ZFSkeys LUKS partitions
-        mapfile -t key_devices < <(blkid -t PARTLABEL=ZFSkeys -o device 2>/dev/null || true)
-
-        if [[ ${#key_devices[@]} -eq 0 ]]; then
-            echo "⚠ No USB drive found with PARTLABEL=ZFSkeys. Skipping keyfile setup."
-        else
-            echo "Found ZFS keys device(s):"
-            for i in "${!key_devices[@]}"; do
-                echo "  $((i + 1)). ${key_devices[$i]}"
-            done
-            echo ""
-            read -rp "Add keyfile to all devices? [Y/n]: " add_to_all
-
-            selected_devices=()
-            if [[ "$add_to_all" =~ ^[Nn]$ ]]; then
-                read -rp "Enter device number(s) to use (e.g. 1 3): " selections
-                for n in $selections; do
-                    idx=$((n - 1))
-                    if [[ $idx -ge 0 && $idx -lt ${#key_devices[@]} ]]; then
-                        selected_devices+=("${key_devices[$idx]}")
-                    else
-                        echo "⚠ Invalid selection: $n"
-                    fi
-                done
-            else
-                selected_devices=("${key_devices[@]}")
-            fi
-
-            if [[ ${#selected_devices[@]} -gt 0 ]]; then
-                # Generate keyfile once
-                mkdir -p /root
-                chmod 700 /root
-                dd if=/dev/urandom of=/root/.luks-key bs=4096 count=1 status=none
-                chmod 400 /root/.luks-key
-                echo "✓ Created /root/.luks-key"
-
-                for dev in "${selected_devices[@]}"; do
-                    echo ""
-                    echo "Adding keyfile to $dev..."
-                    cryptsetup luksAddKey "$dev" /root/.luks-key
-                    echo "  ✓ $dev"
-                done
-
-                # Verify on the first selected device
-                echo ""
-                echo "Verifying keyfile works..."
-                verify_dev="${selected_devices[0]}"
-                if cryptsetup luksOpen "$verify_dev" keys --key-file /root/.luks-key; then
-                    cryptsetup luksClose keys
-                    echo "✓ Keyfile verified on $verify_dev"
-                else
-                    echo "⚠ Keyfile verification failed on $verify_dev"
-                fi
-            else
-                echo "⚠ No devices selected. Keyfile not created."
-            fi
-        fi
-    else
-        echo ""
-        echo "Skipped /root/.luks-key setup. To enable unattended boot later, run:"
-        echo ""
-        echo "  # Generate a random keyfile"
-        echo "  sudo dd if=/dev/urandom of=/root/.luks-key bs=4096 count=1"
-        echo "  sudo chmod 400 /root/.luks-key"
-        echo ""
-        echo "  # Add it to each ZFS keys USB device"
-        echo "  for dev in \$(sudo blkid -t PARTLABEL=ZFSkeys -o device); do"
-        echo "      sudo cryptsetup luksAddKey \"\$dev\" /root/.luks-key"
-        echo "  done"
-        echo ""
-        echo "  # To remove the keyfile later"
-        echo "  for dev in \$(sudo blkid -t PARTLABEL=ZFSkeys -o device); do"
-        echo "      sudo cryptsetup luksRemoveKey \"\$dev\" /root/.luks-key"
-        echo "  done"
-        echo "  sudo rm -f /root/.luks-key"
-        echo ""
-    fi
-    echo ""
-fi
 
 # ------------------------------------------------------------------
 # Step 6: Copy node config to compute host if missing

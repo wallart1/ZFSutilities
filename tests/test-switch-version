@@ -505,5 +505,77 @@ test_switch_version_tolerates_missing_desktop_lib() {
 test_list_shows_versions
 test_switch_version_tolerates_missing_desktop_lib
 
+test_cleanup_obsolete_systemd_artifacts() {
+    test_start "install_wiring removes obsolete LUKS-key systemd artifacts"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    local systemd_dir="$tmpdir/etc/systemd/system"
+    local dropin_dir="$systemd_dir/rtslib-fb-targetctl.service.d"
+    mkdir -p "$dropin_dir"
+    touch "$systemd_dir/zfs-keys-unlock.service"
+    touch "$dropin_dir/wait-for-zfs-keys.conf"
+
+    _make_fake_version "$tmpdir" "A" ""
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    export SUDO_USER="testuser"
+    export HOME="$tmpdir/home/testuser"
+    mkdir -p "$tmpdir/home/testuser"
+    getent() {
+        if [[ "$1" == "passwd" && "$2" == "testuser" ]]; then
+            echo "testuser:x:1000:1000:test:/$tmpdir/home/testuser:/bin/bash"
+        fi
+    }
+    chown() { true; }
+
+    export ZFSUTILITIES_SYSTEMD_DIR="$systemd_dir"
+    local _systemctl_calls=()
+    systemctl() {
+        _systemctl_calls+=("$*")
+        return 0
+    }
+
+    install_wiring >/dev/null 2>&1
+    local rc=$?
+    unset -f systemctl getent chown 2>/dev/null || true
+    unset ZFSUTILITIES_SYSTEMD_DIR SUDO_USER HOME
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc"
+    fi
+    if [[ -f "$systemd_dir/zfs-keys-unlock.service" ]]; then
+        failed=1
+        echo "    obsolete zfs-keys-unlock.service still present"
+    fi
+    if [[ -f "$dropin_dir/wait-for-zfs-keys.conf" ]]; then
+        failed=1
+        echo "    obsolete wait-for-zfs-keys.conf still present"
+    fi
+    local found_reload=0
+    local call
+    for call in "${_systemctl_calls[@]}"; do
+        if [[ "$call" == "daemon-reload" ]]; then
+            found_reload=1
+        fi
+    done
+    if [[ $found_reload -eq 0 ]]; then
+        failed=1
+        echo "    expected systemctl daemon-reload to be called"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Obsolete systemd artifacts were not cleaned up"
+    fi
+}
+
+test_cleanup_obsolete_systemd_artifacts
+
 test_summary
 teardown_test_env

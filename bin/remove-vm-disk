@@ -184,7 +184,10 @@ if is_two_node; then
     fi
 
     # --- Remove from encrypted LUNs conf if present ---
-    ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+    ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+    if [[ ! -e "$ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+        ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+    fi
     if [[ -f "$ENCRYPTED_CONF" ]] && grep -q "^${BACKSTORE_NAME}:" "$ENCRYPTED_CONF"; then
         sed -i "/^${BACKSTORE_NAME}:/d" "$ENCRYPTED_CONF"
         log_msg "INFO: ✓ Removed from encrypted LUNs config"

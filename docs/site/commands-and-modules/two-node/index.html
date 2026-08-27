@@ -1708,17 +1708,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#lock-zfs-keys-storage-node" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        lock-zfs-keys (storage node)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#attach-vm-disk-both" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1888,28 +1877,6 @@
     <span class="md-ellipsis">
       
         uninstall-version (any host)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#unlock-zfs-keys-storage-node" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        unlock-zfs-keys (storage node)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#unlock-zfs-keys-auto-storage-node" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        unlock-zfs-keys-auto (storage node)
       
     </span>
   </a>
@@ -2291,7 +2258,6 @@ detached unless you later re-attach them with <code>attach-vm-disk</code> or <co
 <li><a href="#iscsi-restore-luns-storage-node"><code>iscsi-restore-luns</code> (storage node)</a></li>
 <li><a href="#list-vm-disks-both"><code>list-vm-disks</code> (both)</a></li>
 <li><a href="#repair-iscsi-luns-storage-node"><code>repair-iscsi-luns</code> (storage node)</a></li>
-<li><a href="#lock-zfs-keys-storage-node"><code>lock-zfs-keys</code> (storage node)</a></li>
 <li><a href="#move-vm-disk-both"><code>move-vm-disk</code> (both)</a></li>
 <li><a href="#new-vm-disk-both"><code>new-vm-disk</code> (both)</a></li>
 <li><a href="#switch-version-any-host"><code>switch-version</code> (any host)</a></li>
@@ -2307,8 +2273,6 @@ detached unless you later re-attach them with <code>attach-vm-disk</code> or <co
 <li><a href="#safe-iscsi-save-storage-node"><code>safe-iscsi-save</code> (storage node)</a></li>
 <li><a href="#setup-iscsi-targets-storage-node"><code>setup-iscsi-targets</code> (storage node)</a></li>
 <li><a href="#show-lun-map-compute-node"><code>show-lun-map</code> (compute node)</a></li>
-<li><a href="#unlock-zfs-keys-storage-node"><code>unlock-zfs-keys</code> (storage node)</a></li>
-<li><a href="#unlock-zfs-keys-auto-storage-node"><code>unlock-zfs-keys-auto</code> (storage node)</a></li>
 <li><a href="#zfsclone-vm-both"><code>zfsclone-vm</code> (both)</a></li>
 </ul>
 <hr />
@@ -2599,10 +2563,10 @@ available for future deployments.</p>
 <p>See <a href="../../installation/">Installation</a> for the full workflow.</p>
 <hr />
 <h3 id="iscsi-add-encrypted-luns-storage-node"><code>iscsi-add-encrypted-luns</code> (storage node)<a class="headerlink" href="#iscsi-add-encrypted-luns-storage-node" title="Permanent link">&para;</a></h3>
-<p>Adds iSCSI backstores and LUNs for encrypted zvols whose keys are currently loaded. ZFS encryption keys are not available at boot-time (when iSCSI is initiated), so the encrypted backstores are added separately when the encryption keys are available and loaded by ZFS.
-Called automatically by <a href="#unlock-zfs-keys-storage-node"><code>unlock-zfs-keys</code></a> after
-manual key loading and by <a href="#restart-iscsi-services-storage-node"><code>restart-iscsi-services</code></a>
-at service startup.</p>
+<p>Adds iSCSI backstores and LUNs for encrypted zvols whose keys are currently loaded. ZFS encryption keys are not available at boot time (when iSCSI is initiated), so the encrypted backstores are added separately after the operator has loaded the keys with <code>zfs load-key</code>.
+Called explicitly by the operator after loading keys and by
+<a href="#restart-iscsi-services-storage-node"><code>restart-iscsi-services</code></a> after it restarts
+the iSCSI target service.</p>
 <p><strong>Arguments:</strong> none.</p>
 <p><strong>Globals:</strong> node-config globals only.</p>
 <p><strong>Called modules / commands:</strong></p>
@@ -2995,41 +2959,6 @@ guest.</p>
 <p>Guest device information is best-effort: it is shown only when the VM is
 running and the QEMU guest agent responds.  Stopped VMs or guests without the
 agent show <code>-</code> for guest device names.</p>
-<hr />
-<h3 id="lock-zfs-keys-storage-node"><code>lock-zfs-keys</code> (storage node)<a class="headerlink" href="#lock-zfs-keys-storage-node" title="Permanent link">&para;</a></h3>
-<p>Safely unmounts <code>/mnt/ZFSkeys</code> and closes the LUKS mapper opened by the unlock
-scripts. Run this before physically removing the USB drive. If udisksd opened a
-different mapper name, it is left alone.</p>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>lock-zfs-keys
-</code></pre></div>
-<p><strong>Arguments:</strong> none.</p>
-<p><strong>Globals:</strong> none.</p>
-<p><strong>Called modules / commands:</strong> none.</p>
-<p><strong>Data structures consumed / produced:</strong> none.</p>
-<p><strong>Internal flow / algorithm:</strong></p>
-<ol>
-<li>Remove a legacy <code>/mnt/ZFSkeys</code> symlink if present.</li>
-<li>Unmount <code>/mnt/ZFSkeys</code> if it is a mount point.</li>
-<li>Close <code>/dev/mapper/keys</code> if the LUKS container exists.</li>
-</ol>
-<p><strong>Return codes / side effects:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Code</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>0</code></td>
-<td>Keys locked / USB safe to remove</td>
-</tr>
-</tbody>
-</table>
-<p>Side effects: unmounts the key filesystem; closes the LUKS mapper. ZFS keys
-already loaded into kernel memory remain loaded.</p>
-<p>See <a href="../../installation/zfs-keys/">ZFS Key Handling</a>.</p>
 <hr />
 <h3 id="attach-vm-disk-both"><code>attach-vm-disk</code> (both)<a class="headerlink" href="#attach-vm-disk-both" title="Permanent link">&para;</a></h3>
 <p>Attaches an existing zvol to a Proxmox VM. In two-node mode, rebuilds the iSCSI
@@ -3448,8 +3377,8 @@ config.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
-<td>Source removed, destination added if encrypted</td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td>Source removed, destination added if encrypted (legacy <code>/etc/iscsi-encrypted-luns.conf</code> fallback)</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
 <tr>
@@ -3472,7 +3401,7 @@ config.</p>
 <li><strong>Storage-node operations (two-node), skipped when <code>--no-rename</code> is used:</strong><ul>
 <li>Tear down the old LUN and backstore.</li>
 <li>Remove the source entry from <code>expected-backstores.txt</code> and
-  <code>/etc/iscsi-encrypted-luns.conf</code> if encrypted.</li>
+  <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code> if encrypted.</li>
 <li><code>zfs rename</code> the zvol to the destination name.</li>
 <li>The destination zvol is placed in the same parent dataset as the source
   zvol (for example, <code>pool/custom/vm-100-disk-0</code> → <code>pool/custom/vm-200-disk-0</code>).</li>
@@ -3562,7 +3491,7 @@ the disk line to the VM config on the compute node.</p>
 </tr>
 <tr>
 <td><code>--encrypted</code></td>
-<td>Optional. Create as an encrypted zvol; records the backstore in <code>/etc/iscsi-encrypted-luns.conf</code></td>
+<td>Optional. Create as an encrypted zvol; prompts for an already-accessible absolute key-file path and records the backstore in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
 </tr>
 </tbody>
 </table>
@@ -3576,10 +3505,6 @@ the disk line to the VM config on the compute node.</p>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td><code>lock-zfs-keys</code></td>
-<td>Secure the key USB after encrypted zvol creation</td>
-</tr>
 <tr>
 <td><code>safe-iscsi-save</code></td>
 <td>Persist new backstore/LUN</td>
@@ -3610,8 +3535,8 @@ the disk line to the VM config on the compute node.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
-<td>Entry added with <code>--encrypted</code></td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td>Entry added with <code>--encrypted</code> (legacy <code>/etc/iscsi-encrypted-luns.conf</code> fallback)</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
 <tr>
@@ -3626,14 +3551,14 @@ the disk line to the VM config on the compute node.</p>
 <li>Validate arguments and delegate storage work to the storage host via SSH in
    two-node mode.</li>
 <li>If <code>--encrypted</code>:<ul>
-<li>Mount the ZFS keys USB if needed.</li>
 <li>Auto-detect encryption algorithm/keyformat from existing encrypted LUNs.</li>
-<li>Prompt for the key file name.</li>
+<li>Prompt for the absolute path to an already-accessible key file.</li>
+<li>Validate that the file exists, is readable, is not group-/world-readable,
+  and does not reside on the pool/dataset being created.</li>
 </ul>
 </li>
 <li>Create the zvol (<code>zfs create -V ... -s -o compression=lz4</code>); for encrypted
    zvols, also set <code>encryption</code>, <code>keyformat</code>, and <code>keylocation</code>.</li>
-<li>For encrypted zvols, immediately secure the keys with <code>lock-zfs-keys</code>.</li>
 <li>In two-node mode:<ul>
 <li>Create the iSCSI backstore and LUN.</li>
 <li>Add the backstore to <code>expected-backstores.txt</code>.</li>
@@ -3689,15 +3614,15 @@ manifests; appends disk lines to the VM config.</p>
 <tbody>
 <tr>
 <td><code>encryption</code></td>
-<td><code>aes-256-gcm</code> by default; auto-detected from an existing entry in <code>/etc/iscsi-encrypted-luns.conf</code> if available</td>
+<td><code>aes-256-gcm</code> by default; auto-detected from an existing entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code> if available</td>
 </tr>
 <tr>
 <td><code>keyformat</code></td>
-<td><code>raw</code> by default; auto-detected from an existing entry in <code>/etc/iscsi-encrypted-luns.conf</code> if available</td>
+<td><code>raw</code> by default; auto-detected from an existing entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code> if available</td>
 </tr>
 <tr>
 <td><code>keylocation</code></td>
-<td><code>file:///mnt/ZFSkeys/&lt;keyname&gt;</code> (the script checks the file exists but never reads its contents)</td>
+<td><code>file://&lt;absolute-key-path&gt;</code> (the script checks the file exists but never reads its contents)</td>
 </tr>
 </tbody>
 </table>
@@ -3824,8 +3749,8 @@ for the full workflow.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
-<td>Entry removed if present</td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td>Entry removed if present (legacy <code>/etc/iscsi-encrypted-luns.conf</code> fallback)</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
 </tbody>
@@ -3840,7 +3765,7 @@ for the full workflow.</p>
 <li>Find and remove the LUN mapping.</li>
 <li>Remove the block backstore.</li>
 <li>Remove entries from <code>expected-backstores.txt</code> and
-  <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
+  <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>.</li>
 <li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
 <li>Trigger a compute-host rescan.</li>
 </ul>
@@ -3934,8 +3859,8 @@ each restored zvol and rewrites the Proxmox config disk lines with new LUN numbe
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
-<td>Encrypted restored LUNs added</td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td>Encrypted restored LUNs added (legacy <code>/etc/iscsi-encrypted-luns.conf</code> fallback)</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
 <tr>
@@ -3965,7 +3890,7 @@ each restored zvol and rewrites the Proxmox config disk lines with new LUN numbe
    new VMID.</li>
 <li>Restore each archived zvol with <code>zfs send -cw | zfs receive -o volblocksize=&lt;original&gt;</code>.</li>
 <li>In two-node mode, create backstores and LUNs for each restored zvol and
-   update <code>expected-backstores.txt</code> and <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
+   update <code>expected-backstores.txt</code> and <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>.</li>
 <li>Save iSCSI config via <code>safe-iscsi-save</code>.</li>
 <li>Restore/rewrite the Proxmox config:<ul>
 <li>Single-node: rewrite VMID in disk lines if <code>--new-vmid</code> was used.</li>
@@ -4138,7 +4063,7 @@ VE is <strong>not</strong> required on the storage host.</p>
 <tbody>
 <tr>
 <td><code>iscsi-add-encrypted-luns</code></td>
-<td>Re-add encrypted LUNs after service start (called via service drop-in)</td>
+<td>Re-add encrypted LUNs after service start (called explicitly by this script)</td>
 </tr>
 <tr>
 <td><code>safe-iscsi-save</code></td>
@@ -4157,8 +4082,8 @@ VE is <strong>not</strong> required on the storage host.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
-<td>Lists encrypted backstores to restore</td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td>Lists encrypted backstores to restore (legacy <code>/etc/iscsi-encrypted-luns.conf</code> fallback)</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
 <tr>
@@ -4173,10 +4098,11 @@ VE is <strong>not</strong> required on the storage host.</p>
 <li>Check whether any VMs attached to exported LUNs are running on the compute
    host; abort if any are running.</li>
 <li>Stop <code>rtslib-fb-targetctl</code>.</li>
-<li>Start <code>rtslib-fb-targetctl</code>. The systemd drop-in restores
-   <code>saveconfig-boot.json</code> (encrypted backstores excluded), then runs
-   <code>iscsi-add-encrypted-luns</code> to add encrypted LUNs whose devices are available.</li>
-<li>Display encrypted LUN status from <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
+<li>Start <code>rtslib-fb-targetctl</code>. The boot-config.conf drop-in restores
+   <code>saveconfig-boot.json</code> (encrypted backstores excluded).</li>
+<li>Explicitly call <code>iscsi-add-encrypted-luns</code> to add encrypted LUNs whose
+   devices are available.</li>
+<li>Display encrypted LUN status from <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>.</li>
 <li>Save the config via <code>safe-iscsi-save</code>.</li>
 </ol>
 <p><strong>Return codes / side effects:</strong></p>
@@ -4226,8 +4152,8 @@ preventing a degraded state from overwriting a good config.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">Expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
-<td>Backstores to exclude from boot config</td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td>Backstores to exclude from boot config (legacy <code>/etc/iscsi-encrypted-luns.conf</code> fallback)</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
 </tr>
 <tr>
@@ -4251,7 +4177,7 @@ preventing a degraded state from overwriting a good config.</p>
 <li>If active &gt; expected, warn but save anyway.</li>
 <li>Run <code>targetcli saveconfig</code>.</li>
 <li>Generate <code>saveconfig-boot.json</code> by stripping encrypted backstores listed in
-   <code>/etc/iscsi-encrypted-luns.conf</code>.</li>
+   <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>.</li>
 <li>Regenerate <code>expected-backstores.txt</code> from the current list of loaded
    backstores so the manifest stays authoritative after LUN moves or repairs.</li>
 </ol>
@@ -4680,196 +4606,6 @@ version.</p>
 <p>Side effects: deletes the version directory under
 <code>/usr/local/lib/zfsutilities/versions/&lt;version&gt;/</code>.</p>
 <hr />
-<h3 id="unlock-zfs-keys-storage-node"><code>unlock-zfs-keys</code> (storage node)<a class="headerlink" href="#unlock-zfs-keys-storage-node" title="Permanent link">&para;</a></h3>
-<p>Unlocks the LUKS-encrypted USB key drive, mounts the key files at <code>/mnt/ZFSkeys</code>,
-loads ZFS encryption keys for all encrypted zvols, and adds any missing encrypted
-iSCSI LUNs without restarting the target service. This keeps running VMs connected.</p>
-<p>If <code>/mnt/ZFSkeys</code> is already mounted (for example by Cinnamon/udisksd after the
-USB was inserted post-boot), the script reuses the existing mount. If
-<code>/mnt/ZFSkeys</code> already contains files, they are left untouched and the script
-attempts to load keys from there.</p>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>unlock-zfs-keys<span class="w"> </span><span class="o">[</span>device<span class="o">]</span>
-</code></pre></div>
-<p><strong>Arguments:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Argument</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>device</code></td>
-<td>Optional LUKS partition path. If omitted, auto-detects the USB drive by partition label <code>ZFSkeys</code>.</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Globals:</strong> none.</p>
-<p><strong>Called modules / commands:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Script</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>lock-zfs-keys</code></td>
-<td>Secure the key USB after keys are loaded</td>
-</tr>
-<tr>
-<td><code>iscsi-add-encrypted-luns</code></td>
-<td>Add encrypted LUNs without restarting the target</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Data structures consumed / produced:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Structure</th>
-<th>Role</th>
-<th>Reference</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
-<td>Lists encrypted datasets to load keys for</td>
-<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
-</tr>
-<tr>
-<td><code>/mnt/ZFSkeys</code></td>
-<td>Mount point for the LUKS-encrypted USB</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>/dev/mapper/keys</code></td>
-<td>LUKS mapper for the key USB</td>
-<td>—</td>
-</tr>
-<tr>
-<td><code>/root/.luks-key</code></td>
-<td>Optional unattended unlock keyfile</td>
-<td>—</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Internal flow / algorithm:</strong></p>
-<ol>
-<li>If <code>/mnt/ZFSkeys</code> is not already usable, locate the USB device by
-   <code>PARTLABEL=ZFSkeys</code> (or use the supplied device).</li>
-<li>Unlock the LUKS container (using <code>/root/.luks-key</code> if present).</li>
-<li>Mount the key filesystem at <code>/mnt/ZFSkeys</code>.</li>
-<li>For each entry in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>, derive the dataset name
-   and load its ZFS key if <code>keystatus</code> is <code>unavailable</code>.</li>
-<li>Secure the keys with <code>lock-zfs-keys</code> (unmount and close LUKS).</li>
-<li>Add missing encrypted LUNs with <code>iscsi-add-encrypted-luns</code>.</li>
-</ol>
-<p><strong>Return codes / side effects:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Code</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>0</code></td>
-<td>Keys loaded and encrypted LUNs added</td>
-</tr>
-<tr>
-<td><code>1</code></td>
-<td>Device not found, LUKS failure, or <code>iscsi-add-encrypted-luns</code> failure</td>
-</tr>
-</tbody>
-</table>
-<p>Side effects: loads ZFS encryption keys into kernel memory; may create encrypted
-iSCSI backstores/LUNs.</p>
-<p>See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for the full workflow.</p>
-<hr />
-<h3 id="unlock-zfs-keys-auto-storage-node"><code>unlock-zfs-keys-auto</code> (storage node)<a class="headerlink" href="#unlock-zfs-keys-auto-storage-node" title="Permanent link">&para;</a></h3>
-<p>Automatic version of <a href="#unlock-zfs-keys-storage-node"><code>unlock-zfs-keys</code></a>. Waits
-for USB insertion and auto-detects the drive by partition label <code>ZFSkeys</code>. Uses
-<code>/root/.luks-key</code> to unlock the LUKS volume non-interactively. Intended for
-systemd service use.</p>
-<p>If the USB is not present at boot, or <code>/root/.luks-key</code> does not exist, the
-script exits cleanly so iSCSI can start without the encrypted LUNs.</p>
-<p><strong>Arguments:</strong> none.</p>
-<p><strong>Globals:</strong> none.</p>
-<p><strong>Called modules / commands:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Script</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>lock-zfs-keys</code></td>
-<td>Secure the key USB after keys are loaded</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Data structures consumed / produced:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Structure</th>
-<th>Role</th>
-<th>Reference</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
-<td>Lists encrypted datasets to load keys for</td>
-<td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">Encrypted-LUNs config</a></td>
-</tr>
-<tr>
-<td><code>/root/.luks-key</code></td>
-<td>Unattended LUKS unlock keyfile</td>
-<td>—</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Internal flow / algorithm:</strong></p>
-<ol>
-<li>Reuse an existing <code>/mnt/ZFSkeys</code> mount if present.</li>
-<li>If no keyfile exists, exit cleanly (encrypted LUNs stay offline).</li>
-<li>Wait up to 60 seconds for a USB device with <code>PARTLABEL=ZFSkeys</code>.</li>
-<li>If not found, exit cleanly.</li>
-<li>Unlock LUKS with the keyfile, mount <code>/mnt/ZFSkeys</code>, load ZFS keys, then
-   secure the keys with <code>lock-zfs-keys</code>.</li>
-</ol>
-<p><strong>Return codes / side effects:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Code</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>0</code></td>
-<td>Keys loaded, or clean exit because USB/keyfile was unavailable</td>
-</tr>
-<tr>
-<td><code>1</code></td>
-<td>Mount or key-load failure</td>
-</tr>
-</tbody>
-</table>
-<p>Side effects: loads ZFS encryption keys into kernel memory; unmounts and closes
-the LUKS container.</p>
-<p>See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for how to create
-<code>/root/.luks-key</code>.</p>
-<hr />
 <h3 id="zfsclone-vm-both"><code>zfsclone-vm</code> (both)<a class="headerlink" href="#zfsclone-vm-both" title="Permanent link">&para;</a></h3>
 <p>Creates a new Proxmox VM by ZFS-cloning the source VM's disk zvols. The new VM initially shares all blocks with the source via
 copy-on-write.</p>
@@ -5020,7 +4756,7 @@ to cut dependencies before retiring the source VM.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.89.0
+      ZFS Utilities v0.90.0
     </div>
   
   
@@ -5045,7 +4781,7 @@ to cut dependencies before retiring the source VM.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.89.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.90.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

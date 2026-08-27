@@ -186,14 +186,42 @@ cleanup_old_symlinks() {
     fi
 }
 
+cleanup_obsolete_systemd_artifacts() {
+    local systemd_dir="${ZFSUTILITIES_SYSTEMD_DIR:-/etc/systemd/system}"
+    local dropin_dir="${systemd_dir}/rtslib-fb-targetctl.service.d"
+    local obsolete_dropin="${dropin_dir}/wait-for-zfs-keys.conf"
+    local obsolete_service="${systemd_dir}/zfs-keys-unlock.service"
+    local removed=0
+
+    if [[ -f "$obsolete_dropin" ]]; then
+        rm -f "$obsolete_dropin"
+        removed=1
+        log_msg "INFO:   Removed obsolete ${obsolete_dropin}"
+    fi
+
+    if [[ -f "$obsolete_service" ]]; then
+        systemctl disable zfs-keys-unlock.service 2>/dev/null || true
+        rm -f "$obsolete_service"
+        removed=1
+        log_msg "INFO:   Removed obsolete ${obsolete_service}"
+    fi
+
+    if [[ $removed -eq 1 ]]; then
+        systemctl daemon-reload 2>/dev/null || true
+        log_msg "INFO:   Reloaded systemd daemon"
+    fi
+}
+
 install_wiring() {
     load_switch_config
     log_msg "INFO: === Wiring version into active production ==="
+    cleanup_obsolete_systemd_artifacts
     setup_bin_symlink
     setup_path_config
     setup_bashinit_symlink
     setup_library_symlinks
     cleanup_old_symlinks
+    cleanup_obsolete_systemd_artifacts
 
     local desktop_user
     desktop_user=$(get_desktop_user)

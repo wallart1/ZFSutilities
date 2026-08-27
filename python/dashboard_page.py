@@ -97,7 +97,7 @@ _CAP_RE = re.compile(r"^\s*(\d+)\s*%")
 
 # ---------------------------------------------------------------------------
 # Regex: ^([^#\s][^:]*):([^:]+):(.+)$
-# Purpose: Parse a line from /etc/iscsi-encrypted-luns.conf.
+# Purpose: Parse a line from /etc/zfsutilities/iscsi-encrypted-luns.conf.
 # Group 1: Backstore name  e.g. "vm-300-disk-1"
 # Group 2: Device path    e.g. "/dev/zvol/threeamigos/proxmox/vm-300-disk-1"
 # Group 3: Target short   e.g. "threeamigos"
@@ -560,7 +560,8 @@ def _format_history_timestamp(ts):
         return str(ts)
 
 
-_ISCSI_CONF = "/etc/iscsi-encrypted-luns.conf"
+_ISCSI_CONF = os.path.join(paths.get_system_config_dir(), "iscsi-encrypted-luns.conf")
+_LEGACY_ISCSI_CONF = "/etc/iscsi-encrypted-luns.conf"
 
 
 def _get_iscsi_missing_luns():
@@ -578,6 +579,8 @@ def _get_iscsi_missing_luns():
 
     manifest_path = "/etc/rtslib-fb-target/expected-backstores.txt"
     fallback_path = _ISCSI_CONF
+    if not os.path.exists(fallback_path) and os.path.exists(_LEGACY_ISCSI_CONF):
+        fallback_path = _LEGACY_ISCSI_CONF
 
     expected_names = []
     use_manifest = os.path.exists(manifest_path)

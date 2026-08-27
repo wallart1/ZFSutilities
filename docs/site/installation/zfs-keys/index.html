@@ -590,10 +590,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#why-there-is-no-automatic-unlock" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        Why there is no automatic unlock
       
     </span>
   </a>
@@ -612,10 +612,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#preparing-the-usb-device" class="md-nav__link">
+  <a href="#preparing-a-luks-encrypted-usb-key-store-optional" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Preparing the USB device
+        Preparing a LUKS-encrypted USB key store (optional)
       
     </span>
   </a>
@@ -653,33 +653,27 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Boot-time behaviour">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#with-rootluks-key-unattended-boot" class="md-nav__link">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bringing-encrypted-zvols-online-after-boot" class="md-nav__link">
     <span class="md-ellipsis">
       
-        With /root/.luks-key (unattended boot)
+        Bringing encrypted zvols online after boot
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#without-rootluks-key-manual-boot" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#restarting-iscsi-services" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Without /root/.luks-key (manual boot)
+        Restarting iSCSI services
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -695,32 +689,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#enabling-unattended-boot-later" class="md-nav__link">
+  <a href="#interaction-with-the-desktop" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Enabling unattended boot later
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#disabling-unattended-boot" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Disabling unattended boot
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#interaction-with-the-cinnamon-desktop" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Interaction with the Cinnamon desktop
+        Interaction with the desktop
       
     </span>
   </a>
@@ -1943,35 +1915,49 @@
 
 
 <h1 id="zfs-key-handling-for-two-node-installations">ZFS Key Handling for Two-Node Installations<a class="headerlink" href="#zfs-key-handling-for-two-node-installations" title="Permanent link">&para;</a></h1>
-<p>In a two-node setup the Proxmox VM disks are stored as encrypted ZFS zvols on
-the storage node (<code>stewie</code>). The encryption keys themselves are stored on a
-removable USB device that is protected by LUKS full-disk encryption. This
-guide explains how to prepare the USB device, create keys, create encrypted
-zvols, and recover from a boot where the USB was not inserted.</p>
+<p>In a two-node setup the Proxmox VM disks can be stored as encrypted ZFS zvols on
+the storage node (<code>stewie</code>). ZFS Utilities does <strong>not</strong> provide automatic
+unlocking or automatic mounting of a LUKS-protected key store. Instead, the
+operator manually unlocks the key store, loads the ZFS keys, and brings the
+encrypted LUNs online.</p>
+<p>This guide explains how to prepare key files, create encrypted zvols, and bring
+them online after a reboot.</p>
 <p>For an overview of all documentation sections, return to the
 <a href="../../">ZFS Utilities home page</a>.</p>
-<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>┌─────────────────┐      LUKS       ┌─────────────────┐      ZFS       ┌─────────────┐
-│  USB drive with │  ─────────────► │  decrypted key  │  ────────────► │ encrypted   │
-│  key files      │   passphrase    │  files          │   load-key     │ zvols       │
-└─────────────────┘                 └─────────────────┘                └─────────────┘
-</code></pre></div>
+<h2 id="why-there-is-no-automatic-unlock">Why there is no automatic unlock<a class="headerlink" href="#why-there-is-no-automatic-unlock" title="Permanent link">&para;</a></h2>
+<p>Earlier versions of ZFS Utilities shipped with <code>zfs-keys-unlock.service</code>,
+<code>unlock-zfs-keys</code>, and <code>/root/.luks-key</code> to automate LUKS USB detection and ZFS
+key loading. That automation was removed because it created several production
+problems:</p>
 <ul>
-<li><strong>ZFS native encryption</strong> protects the zvols at rest.</li>
-<li><strong>LUKS encryption</strong> protects the USB device that holds the ZFS keys.</li>
-<li>At boot, the <code>zfs-keys-unlock.service</code> unlocks the LUKS volume and loads the
-  ZFS keys into kernel memory. The USB can then be removed.</li>
-<li>If the USB is not present at boot, the storage node still starts iSCSI, but
-  the encrypted LUNs remain offline until keys are loaded manually.</li>
+<li><strong>Ordering race</strong> — iSCSI target startup and ZFS key loading had to be
+  sequenced exactly. On many systems the race was invisible until a slow boot or
+  a missing USB caused <code>rtslib-fb-targetctl</code> to fail entirely.</li>
+<li><strong>USB availability race</strong> — The boot service waited for a USB device with
+  <code>PARTLABEL=ZFSkeys</code>. If the device was on a hub that enumerated late, or was
+  not inserted, the service would time out or leave iSCSI in a failed state.</li>
+<li><strong><code>keylocation=prompt</code> console block</strong> — If any encrypted dataset used
+  <code>keylocation=prompt</code>, <code>zfs load-key -a</code> blocked on the physical console. In
+  headless or remote environments this could hang the boot indefinitely.</li>
+<li><strong>Root-on-ZFS mismatch</strong> — On systems where <code>/</code> is on ZFS, the encrypted root
+  dataset needed its key before userspace could run, but the helper scripts ran
+  from <code>/root/bashinit</code> after root was already supposed to be mounted.</li>
+<li><strong><code>/root/.luks-key</code> undermined the theft model</strong> — A root-readable keyfile that
+  unlocks the LUKS container holding the ZFS keys is only slightly harder to
+  steal than the keys themselves. Automatic unattended boot with that keyfile
+  was convenient but reduced the security benefit of keeping keys on a separate,
+  removable device.</li>
 </ul>
+<p>The replacement is a small, explicit manual workflow that keeps encrypted-zvol
+support intact without any of the boot-time races.</p>
 <h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
 <ul>
-<li>A USB drive (or multiple USB drives) large enough to hold a few small key
-  files. A few megabytes is plenty.</li>
+<li>A secure location for ZFS key files. A LUKS-encrypted USB drive is a common
+  choice, but any path the operator can make available at runtime will work.</li>
 <li>Root access to the storage node.</li>
-<li>The <code>cryptsetup</code> package installed.</li>
+<li>The <code>cryptsetup</code> package installed if you use LUKS.</li>
 </ul>
-<h2 id="preparing-the-usb-device">Preparing the USB device<a class="headerlink" href="#preparing-the-usb-device" title="Permanent link">&para;</a></h2>
+<h2 id="preparing-a-luks-encrypted-usb-key-store-optional">Preparing a LUKS-encrypted USB key store (optional)<a class="headerlink" href="#preparing-a-luks-encrypted-usb-key-store-optional" title="Permanent link">&para;</a></h2>
 <p>These commands run on the storage node as root. Replace <code>/dev/sdX1</code> with the
 actual partition you want to use.</p>
 <div class="admonition warning">
@@ -1991,27 +1977,19 @@ mkfs.ext4<span class="w"> </span>/dev/mapper/zfskeys-setup<span class="w"> </spa
 <span class="c1"># Close the LUKS volume</span>
 cryptsetup<span class="w"> </span>luksClose<span class="w"> </span>zfskeys-setup
 </code></pre></div>
-<p>Set the partition label to <code>ZFSkeys</code> as well so the boot scripts can find the
-USB:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Set the partition label (optional but recommended)</span>
-parted<span class="w"> </span>/dev/sdX<span class="w"> </span>--name<span class="w"> </span><span class="m">1</span><span class="w"> </span>ZFSkeys
-</code></pre></div>
 <h2 id="generating-and-storing-zfs-keys">Generating and storing ZFS keys<a class="headerlink" href="#generating-and-storing-zfs-keys" title="Permanent link">&para;</a></h2>
-<p>Each encrypted dataset needs its own key file. Generate random key files on
-the USB:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Mount the USB</span>
-mkdir<span class="w"> </span>-p<span class="w"> </span>/mnt/ZFSkeys
-cryptsetup<span class="w"> </span>luksOpen<span class="w"> </span>/dev/sdX1<span class="w"> </span>keys
-mount<span class="w"> </span><span class="nv">LABEL</span><span class="o">=</span>ZFSkeys<span class="w"> </span>/mnt/ZFSkeys
+<p>Each encrypted dataset needs its own key file. Generate random key files on the
+unlocked key store:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Mount the key store</span>
+sudo<span class="w"> </span>cryptsetup<span class="w"> </span>luksOpen<span class="w"> </span>/dev/sdX1<span class="w"> </span>keys
+sudo<span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/mnt/ZFSkeys
+sudo<span class="w"> </span>mount<span class="w"> </span>/dev/mapper/keys<span class="w"> </span>/mnt/ZFSkeys
 
-<span class="c1"># Generate a key file for each encrypted dataset</span>
-dd<span class="w"> </span><span class="k">if</span><span class="o">=</span>/dev/urandom<span class="w"> </span><span class="nv">of</span><span class="o">=</span>/mnt/ZFSkeys/key1<span class="w"> </span><span class="nv">bs</span><span class="o">=</span><span class="m">32</span><span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">1</span>
-dd<span class="w"> </span><span class="k">if</span><span class="o">=</span>/dev/urandom<span class="w"> </span><span class="nv">of</span><span class="o">=</span>/mnt/ZFSkeys/key2<span class="w"> </span><span class="nv">bs</span><span class="o">=</span><span class="m">32</span><span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">1</span>
-chmod<span class="w"> </span><span class="m">400</span><span class="w"> </span>/mnt/ZFSkeys/key1<span class="w"> </span>/mnt/ZFSkeys/key2
-
-<span class="c1"># Unmount and lock</span>
-umount<span class="w"> </span>/mnt/ZFSkeys
-cryptsetup<span class="w"> </span>luksClose<span class="w"> </span>keys
+<span class="c1"># Generate a key file for each encrypted pool/dataset</span>
+sudo<span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/mnt/ZFSkeys/keys
+sudo<span class="w"> </span>dd<span class="w"> </span><span class="k">if</span><span class="o">=</span>/dev/urandom<span class="w"> </span><span class="nv">of</span><span class="o">=</span>/mnt/ZFSkeys/keys/threeamigos.key<span class="w"> </span><span class="nv">bs</span><span class="o">=</span><span class="m">32</span><span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">1</span>
+sudo<span class="w"> </span>dd<span class="w"> </span><span class="k">if</span><span class="o">=</span>/dev/urandom<span class="w"> </span><span class="nv">of</span><span class="o">=</span>/mnt/ZFSkeys/keys/NVME1.key<span class="w"> </span><span class="nv">bs</span><span class="o">=</span><span class="m">32</span><span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">1</span>
+sudo<span class="w"> </span>chmod<span class="w"> </span><span class="m">400</span><span class="w"> </span>/mnt/ZFSkeys/keys/*.key
 </code></pre></div>
 <p>Keep offline backups of:</p>
 <ul>
@@ -2022,110 +2000,82 @@ cryptsetup<span class="w"> </span>luksClose<span class="w"> </span>keys
 zvols cannot be recovered.</p>
 <h2 id="creating-an-encrypted-zvol">Creating an encrypted zvol<a class="headerlink" href="#creating-an-encrypted-zvol" title="Permanent link">&para;</a></h2>
 <p>Use <code>new-vm-disk</code> with the <code>--encrypted</code> flag. The script will prompt for the
-key file on <code>/mnt/ZFSkeys</code>:</p>
+absolute path to an already-accessible key file:</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>new-vm-disk<span class="w"> </span>threeamigos<span class="w"> </span><span class="m">300</span><span class="w"> </span><span class="m">0</span><span class="w"> </span>50G<span class="w"> </span>--encrypted
 </code></pre></div>
 <p>The script:</p>
 <ol>
-<li>Asks you to insert the ZFS keys USB.</li>
-<li>Unlocks the LUKS volume (prompting for the passphrase if no
-   <code>/root/.luks-key</code> exists).</li>
-<li>Mounts the decrypted filesystem at <code>/mnt/ZFSkeys</code>.</li>
-<li>Lists the available key files and asks which one to use.</li>
-<li>Creates the zvol with <code>keylocation=file:///mnt/ZFSkeys/&lt;keyname&gt;</code>.</li>
+<li>Asks for the absolute key-file path (e.g. <code>/mnt/ZFSkeys/keys/threeamigos.key</code>).</li>
+<li>Verifies the file exists, is readable, and is not group- or world-readable.</li>
+<li>Verifies the key file does not reside on the pool or dataset being created.</li>
+<li>Creates the zvol with <code>keylocation=file:///mnt/ZFSkeys/keys/threeamigos.key</code>.</li>
 <li>Records the zvol in <code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code>.</li>
-<li>Secures the keys (unmounts and closes the LUKS volume).</li>
 </ol>
+<p>The key file must already be accessible when you run <code>new-vm-disk --encrypted</code>.</p>
 <h2 id="boot-time-behaviour">Boot-time behaviour<a class="headerlink" href="#boot-time-behaviour" title="Permanent link">&para;</a></h2>
-<h3 id="with-rootluks-key-unattended-boot">With <code>/root/.luks-key</code> (unattended boot)<a class="headerlink" href="#with-rootluks-key-unattended-boot" title="Permanent link">&para;</a></h3>
-<p>If you created <code>/root/.luks-key</code> during installation (or manually afterward),
-the boot process is fully automatic:</p>
+<p>At boot:</p>
 <ol>
-<li><code>zfs-keys-unlock.service</code> waits for the USB device.</li>
-<li>It unlocks the LUKS volume using <code>/root/.luks-key</code>.</li>
-<li>It mounts the filesystem at <code>/mnt/ZFSkeys</code>.</li>
-<li>It loads the ZFS keys for all encrypted zvols.</li>
-<li>It unmounts and closes the LUKS volume.</li>
-<li><code>rtslib-fb-targetctl.service</code> starts and adds the encrypted LUNs back to
-   the iSCSI target.</li>
+<li><code>rtslib-fb-targetctl.service</code> starts and restores the boot-safe config
+   (<code>saveconfig-boot.json</code>), which excludes encrypted backstores. This lets the
+   storage node come online without the encrypted LUNs.</li>
+<li>Encrypted LUNs remain offline until you manually load their keys and run
+   <code>iscsi-add-encrypted-luns</code>.</li>
 </ol>
-<p>The USB can be removed once the service reports success.</p>
-<h3 id="without-rootluks-key-manual-boot">Without <code>/root/.luks-key</code> (manual boot)<a class="headerlink" href="#without-rootluks-key-manual-boot" title="Permanent link">&para;</a></h3>
-<p>If no keyfile exists, the boot service exits cleanly and iSCSI starts without
-the encrypted LUNs. To bring them online:</p>
+<h2 id="bringing-encrypted-zvols-online-after-boot">Bringing encrypted zvols online after boot<a class="headerlink" href="#bringing-encrypted-zvols-online-after-boot" title="Permanent link">&para;</a></h2>
+<p>To bring encrypted zvols online:</p>
 <ol>
-<li>Insert the ZFS keys USB.</li>
-<li>If Cinnamon/udisksd prompts for the LUKS passphrase, you can enter it
-   (the device will be mounted at <code>/mnt/ZFSkeys</code>), or cancel and let the
-   script handle unlocking.</li>
-<li>Run:
-   <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>unlock-zfs-keys
+<li>Unlock and mount the key store:
+   <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>cryptsetup<span class="w"> </span>luksOpen<span class="w"> </span>/dev/sdX1<span class="w"> </span>keys
+sudo<span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/mnt/ZFSkeys
+sudo<span class="w"> </span>mount<span class="w"> </span>/dev/mapper/keys<span class="w"> </span>/mnt/ZFSkeys
 </code></pre></div></li>
-<li>The script prompts for the LUKS passphrase if needed, loads the ZFS keys,
-   and adds the encrypted LUNs to the iSCSI target without restarting it.</li>
+<li>Load all ZFS keys:
+   <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>zfs<span class="w"> </span>load-key<span class="w"> </span>-a
+</code></pre></div>
+   Note: <code>-a</code> loads keys for all pools and blocks on any <code>keylocation=prompt</code>
+   dataset. Use <code>zfs load-key &lt;pool/dataset&gt;</code> for a single dataset if needed.</li>
+<li>Add the encrypted LUNs to the running iSCSI target:
+   <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>iscsi-add-encrypted-luns
+</code></pre></div></li>
+<li>Unmount and lock the key store:
+   <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>umount<span class="w"> </span>/mnt/ZFSkeys
+sudo<span class="w"> </span>cryptsetup<span class="w"> </span>luksClose<span class="w"> </span>keys
+</code></pre></div></li>
 </ol>
+<h2 id="restarting-iscsi-services">Restarting iSCSI services<a class="headerlink" href="#restarting-iscsi-services" title="Permanent link">&para;</a></h2>
+<p>If you restart the iSCSI target service (<code>restart-iscsi-services</code>), it restores
+<code>saveconfig-boot.json</code> and then explicitly calls <code>iscsi-add-encrypted-luns</code> to
+re-add encrypted LUNs whose zvols are already available.</p>
 <h2 id="recovery-after-a-boot-without-the-usb">Recovery after a boot without the USB<a class="headerlink" href="#recovery-after-a-boot-without-the-usb" title="Permanent link">&para;</a></h2>
-<p>If the storage node booted without the USB:</p>
+<p>If the storage node booted without the key store:</p>
 <ol>
 <li>Verify the non-encrypted LUNs are online:
    <div class="highlight"><pre><span></span><code>targetcli<span class="w"> </span>/backstores/block<span class="w"> </span>ls
 </code></pre></div></li>
-<li>Insert the USB.</li>
-<li>Run <code>sudo unlock-zfs-keys</code> (or <code>sudo unlock-zfs-keys-auto</code> if
-   <code>/root/.luks-key</code> exists).</li>
+<li>Make the key store accessible.</li>
+<li>Run <code>sudo zfs load-key -a</code> and <code>sudo iscsi-add-encrypted-luns</code>.</li>
 <li>Verify the encrypted LUNs are online:
    <div class="highlight"><pre><span></span><code>targetcli<span class="w"> </span>/backstores/block<span class="w"> </span>ls<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;vm-101-disk-1|vm-202-disk-5&#39;</span>
 </code></pre></div></li>
 </ol>
-<h2 id="enabling-unattended-boot-later">Enabling unattended boot later<a class="headerlink" href="#enabling-unattended-boot-later" title="Permanent link">&para;</a></h2>
-<p>To create <code>/root/.luks-key</code> after installation:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Generate a random keyfile</span>
-sudo<span class="w"> </span>dd<span class="w"> </span><span class="k">if</span><span class="o">=</span>/dev/urandom<span class="w"> </span><span class="nv">of</span><span class="o">=</span>/root/.luks-key<span class="w"> </span><span class="nv">bs</span><span class="o">=</span><span class="m">4096</span><span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">1</span>
-sudo<span class="w"> </span>chmod<span class="w"> </span><span class="m">400</span><span class="w"> </span>/root/.luks-key
-
-<span class="c1"># Add it to each ZFS keys USB device</span>
-<span class="k">for</span><span class="w"> </span>dev<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>sudo<span class="w"> </span>blkid<span class="w"> </span>-t<span class="w"> </span><span class="nv">PARTLABEL</span><span class="o">=</span>ZFSkeys<span class="w"> </span>-o<span class="w"> </span>device<span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
-<span class="w">    </span>sudo<span class="w"> </span>cryptsetup<span class="w"> </span>luksAddKey<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$dev</span><span class="s2">&quot;</span><span class="w"> </span>/root/.luks-key
-<span class="k">done</span>
-</code></pre></div>
-<p>Verify it works on each device:</p>
-<div class="highlight"><pre><span></span><code><span class="k">for</span><span class="w"> </span>dev<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>sudo<span class="w"> </span>blkid<span class="w"> </span>-t<span class="w"> </span><span class="nv">PARTLABEL</span><span class="o">=</span>ZFSkeys<span class="w"> </span>-o<span class="w"> </span>device<span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
-<span class="w">    </span>sudo<span class="w"> </span>cryptsetup<span class="w"> </span>luksOpen<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$dev</span><span class="s2">&quot;</span><span class="w"> </span>keys<span class="w"> </span>--key-file<span class="w"> </span>/root/.luks-key
-<span class="w">    </span>sudo<span class="w"> </span>cryptsetup<span class="w"> </span>luksClose<span class="w"> </span>keys
-<span class="w">    </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;OK: </span><span class="nv">$dev</span><span class="s2">&quot;</span>
-<span class="k">done</span>
-</code></pre></div>
-<h2 id="disabling-unattended-boot">Disabling unattended boot<a class="headerlink" href="#disabling-unattended-boot" title="Permanent link">&para;</a></h2>
-<p>To remove the keyfile from all devices and delete it:</p>
-<div class="highlight"><pre><span></span><code><span class="k">for</span><span class="w"> </span>dev<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>sudo<span class="w"> </span>blkid<span class="w"> </span>-t<span class="w"> </span><span class="nv">PARTLABEL</span><span class="o">=</span>ZFSkeys<span class="w"> </span>-o<span class="w"> </span>device<span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
-<span class="w">    </span>sudo<span class="w"> </span>cryptsetup<span class="w"> </span>luksRemoveKey<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$dev</span><span class="s2">&quot;</span><span class="w"> </span>/root/.luks-key
-<span class="k">done</span>
-sudo<span class="w"> </span>rm<span class="w"> </span>-f<span class="w"> </span>/root/.luks-key
-</code></pre></div>
-<h2 id="interaction-with-the-cinnamon-desktop">Interaction with the Cinnamon desktop<a class="headerlink" href="#interaction-with-the-cinnamon-desktop" title="Permanent link">&para;</a></h2>
-<p>The Cinnamon desktop includes <code>udisksd</code>, which may prompt for the LUKS
-passphrase when the USB is inserted after boot. This is not a problem:</p>
-<ul>
-<li>At boot, <code>zfs-keys-unlock.service</code> runs before the desktop and is in full
-  control.</li>
-<li>After boot, you can use the Cinnamon prompt to unlock and mount the USB, or
-  cancel it and use <code>unlock-zfs-keys</code> instead. The script detects an
-  already-mounted <code>/mnt/ZFSkeys</code> and reuses it.</li>
-</ul>
+<h2 id="interaction-with-the-desktop">Interaction with the desktop<a class="headerlink" href="#interaction-with-the-desktop" title="Permanent link">&para;</a></h2>
+<p>The Cinnamon desktop includes <code>udisksd</code>, which may prompt for the LUKS passphrase
+when the USB is inserted after boot. You can use that prompt to unlock and mount
+the key store, then run the commands above.</p>
 <h2 id="multiple-usb-keys">Multiple USB keys<a class="headerlink" href="#multiple-usb-keys" title="Permanent link">&para;</a></h2>
-<p>You can maintain multiple LUKS-encrypted USB devices with the same label
-(<code>ZFSkeys</code>). The boot scripts use the first one found. Add <code>/root/.luks-key</code> to
-all of them if you want any one of them to work for unattended boot.</p>
+<p>You can maintain multiple LUKS-encrypted USB devices with the same key files.
+There is no automation that selects among them; mount whichever device you have
+available and use its path when loading keys or creating zvols.</p>
 <h2 id="security-notes">Security notes<a class="headerlink" href="#security-notes" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>/root/.luks-key</code> is root-readable only (<code>chmod 400</code>). It is required for
-  unattended boot. Anyone with root access or physical access to the unmounted
-  root filesystem can read it.</li>
-<li>The LUKS passphrase is still required to add or remove the keyfile. Store it
-  securely and separately from the USB devices.</li>
-<li>Key files on the USB are not encrypted by ZFSutilities; they are protected
-  by the LUKS container on the USB. Keep the USB physically secure.</li>
-<li>Remove the USB after boot once keys are loaded.</li>
+<li>Key files on the USB are not encrypted by ZFSutilities; they are protected by
+  the LUKS container on the USB. Keep the USB physically secure.</li>
+<li>Do not store key files on the same pool that they encrypt. <code>new-vm-disk</code>
+  rejects such paths.</li>
+<li>Keep key files readable only by root (<code>chmod 400</code>). <code>new-vm-disk</code> rejects
+  group- or world-readable keys.</li>
+<li>Remove the USB after keys are loaded.</li>
+<li>ZFS Utilities no longer creates or manages <code>/root/.luks-key</code>.</li>
 </ul>
 
 
@@ -2162,7 +2112,7 @@ all of them if you want any one of them to work for unattended boot.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.89.0
+      ZFS Utilities v0.90.0
     </div>
   
   
@@ -2187,7 +2137,7 @@ all of them if you want any one of them to work for unattended boot.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.89.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.90.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

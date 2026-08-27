@@ -1,14 +1,14 @@
 #!/usr/bin/bash
 # iscsi-add-encrypted-luns
 # Add encrypted LUNs to the iSCSI target if they are missing (e.g., after keys loaded).
-# Called as ExecStartPost by rtslib-fb-targetctl.service (via drop-in) and also by
-# restart-iscsi-services.
+# Called by restart-iscsi-services after the iSCSI target is started.
 #
 # Preserves original LUN numbers by reading them from saveconfig.json (the full config).
 # This is important because the compute host's by-path device symlinks depend on
 # stable LUN indexes.
 #
-# Reads encrypted zvol list from /etc/iscsi-encrypted-luns.conf (plain text, one per line).
+# Reads encrypted zvol list from /etc/zfsutilities/iscsi-encrypted-luns.conf,
+# falling back to the legacy /etc/iscsi-encrypted-luns.conf.
 # Format: backstore_name:device_path:target_short_name
 #
 # Install to: /usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns on the storage host
@@ -32,7 +32,10 @@ is_single_node && exit 0
 
 sleep 2  # Brief wait for device nodes to appear after zfs load-key
 
-CONF="/etc/iscsi-encrypted-luns.conf"
+CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    CONF="/etc/iscsi-encrypted-luns.conf"
+fi
 SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
 
 if [[ ! -f "$CONF" ]]; then

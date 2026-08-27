@@ -53,7 +53,6 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsgetsnapage`](#zfsgetsnapage)
 - [`zfsholds`](#zfsholds)
 - [`zfslistkeys`](#zfslistkeys)
-- [`zfsloadkeys`](#zfsloadkeys)
 - [`zfslockctl`](#zfslockctl)
 - [`zfslockmanager-test`](#zfslockmanager-test)
 - [`zfsmassdelsnaps`](#zfsmassdelsnaps)
@@ -470,8 +469,7 @@ The installer:
 6. Ensures the iSCSI target/initiator packages are present.
 7. Deploys and activates the versioned installation on both nodes.
 8. Installs systemd drop-ins and the encrypted-LUNs config.
-9. Optionally creates `/root/.luks-key` for unattended boot unlocking.
-10. Patches the Proxmox iSCSI rescan rate limit on the compute host.
+9. Patches the Proxmox iSCSI rescan rate limit on the compute host.
 
 Can also re-run on an existing single-node host to switch it to two-node mode.
 
@@ -840,7 +838,7 @@ sudo uninstall-zfsutilities [OPTIONS]
 
 | Argument | Description |
 | -------- | ----------- |
-| `--purge` | Also remove configs, logs, history, cron, systemd integration, cache-warm, and LUKS keyfile |
+| `--purge` | Also remove configs, logs, history, cron, systemd integration, and cache-warm |
 | `--all-nodes` | In two-node mode, also run the uninstall on the peer host |
 | `--yes`, `-y` | Skip interactive confirmation prompts |
 | `--dry-run` | Print actions without executing them |
@@ -884,7 +882,6 @@ All default paths can be overridden via `ZFSUTILITIES_*` environment variables
 | `/var/log/zfsutilities/` | Preserved unless `--purge` |
 | `/etc/cron.d/zfsutilities` | Removed |
 | `/etc/systemd/system/rtslib-fb-targetctl.service.d/` | Removed |
-| `/etc/systemd/system/zfs-keys-unlock.service` | Removed |
 
 **Return codes:**
 
@@ -1811,40 +1808,6 @@ sudo zfslistkeys [dataset]
 | ---- | ------- |
 | `0` | Completed successfully. |
 | non-zero | Invalid input or command failure. |
-
----
-
-### `zfsloadkeys`
-
-Loads ZFS encryption keys from a USB key device labeled `ZFSkeys`.
-
-```bash
-sudo zfsloadkeys
-```
-
-**Arguments:** none.
-
-**Globals:** none.
-
-Mounts `/dev/disk/by-label/ZFSkeys` at `/mnt/ZFSkeys`, runs `zfs load-key -a`
-and `zfs mount -a`, then unmounts and LUKS-closes the key device.
-
-**Called modules:** none.
-
-**Data structures consumed / produced:** none.
-
-**Internal flow:**
-
-1. Mount the USB key device labeled `ZFSkeys` at `/mnt/ZFSkeys`.
-2. Run `zfs load-key -a` and `zfs mount -a`.
-3. Unmount the key device and close the LUKS mapping.
-
-
-**Return codes:**
-
-| Code | Meaning |
-| ---- | ------- |
-| `0` | Completed successfully. |
 
 ---
 
@@ -3010,7 +2973,7 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | Node config | Determines two-node iSCSI behavior | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | JSON config `archive_path` | Default archive base | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
 | `/etc/rtslib-fb-target/expected-backstores.txt` | Updated with restored backstores | [expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
-| `/etc/iscsi-encrypted-luns.conf` | Updated for restored encrypted LUNs | [encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Updated for restored encrypted LUNs (legacy `/etc/iscsi-encrypted-luns.conf` fallback) | [encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 
 **Internal flow:**
 

@@ -501,8 +501,7 @@ check_partial_uninstall() {
     # systemd/cron integration left behind without a deployed version also
     # indicates a partial uninstall.
     if [[ ! -d "$version_base/versions" ]]; then
-        if [[ -f "$systemd_dir/zfs-keys-unlock.service" || \
-              -d "$systemd_dir/rtslib-fb-targetctl.service.d" || \
+        if [[ -d "$systemd_dir/rtslib-fb-targetctl.service.d" || \
               -f "/etc/cron.d/zfsutilities" ]]; then
             partial=1
         fi

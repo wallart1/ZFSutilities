@@ -1,38 +1,53 @@
 # ZFS Key Handling for Two-Node Installations
 
-In a two-node setup the Proxmox VM disks are stored as encrypted ZFS zvols on
-the storage node (`stewie`). The encryption keys themselves are stored on a
-removable USB device that is protected by LUKS full-disk encryption. This
-guide explains how to prepare the USB device, create keys, create encrypted
-zvols, and recover from a boot where the USB was not inserted.
+In a two-node setup the Proxmox VM disks can be stored as encrypted ZFS zvols on
+the storage node (`stewie`). ZFS Utilities does **not** provide automatic
+unlocking or automatic mounting of a LUKS-protected key store. Instead, the
+operator manually unlocks the key store, loads the ZFS keys, and brings the
+encrypted LUNs online.
+
+This guide explains how to prepare key files, create encrypted zvols, and bring
+them online after a reboot.
 
 For an overview of all documentation sections, return to the
 [ZFS Utilities home page](../index.md).
 
-## Overview
+## Why there is no automatic unlock
 
-```
-┌─────────────────┐      LUKS       ┌─────────────────┐      ZFS       ┌─────────────┐
-│  USB drive with │  ─────────────► │  decrypted key  │  ────────────► │ encrypted   │
-│  key files      │   passphrase    │  files          │   load-key     │ zvols       │
-└─────────────────┘                 └─────────────────┘                └─────────────┘
-```
+Earlier versions of ZFS Utilities shipped with `zfs-keys-unlock.service`,
+`unlock-zfs-keys`, and `/root/.luks-key` to automate LUKS USB detection and ZFS
+key loading. That automation was removed because it created several production
+problems:
 
-- **ZFS native encryption** protects the zvols at rest.
-- **LUKS encryption** protects the USB device that holds the ZFS keys.
-- At boot, the `zfs-keys-unlock.service` unlocks the LUKS volume and loads the
-  ZFS keys into kernel memory. The USB can then be removed.
-- If the USB is not present at boot, the storage node still starts iSCSI, but
-  the encrypted LUNs remain offline until keys are loaded manually.
+- **Ordering race** — iSCSI target startup and ZFS key loading had to be
+  sequenced exactly. On many systems the race was invisible until a slow boot or
+  a missing USB caused `rtslib-fb-targetctl` to fail entirely.
+- **USB availability race** — The boot service waited for a USB device with
+  `PARTLABEL=ZFSkeys`. If the device was on a hub that enumerated late, or was
+  not inserted, the service would time out or leave iSCSI in a failed state.
+- **`keylocation=prompt` console block** — If any encrypted dataset used
+  `keylocation=prompt`, `zfs load-key -a` blocked on the physical console. In
+  headless or remote environments this could hang the boot indefinitely.
+- **Root-on-ZFS mismatch** — On systems where `/` is on ZFS, the encrypted root
+  dataset needed its key before userspace could run, but the helper scripts ran
+  from `/root/bashinit` after root was already supposed to be mounted.
+- **`/root/.luks-key` undermined the theft model** — A root-readable keyfile that
+  unlocks the LUKS container holding the ZFS keys is only slightly harder to
+  steal than the keys themselves. Automatic unattended boot with that keyfile
+  was convenient but reduced the security benefit of keeping keys on a separate,
+  removable device.
+
+The replacement is a small, explicit manual workflow that keeps encrypted-zvol
+support intact without any of the boot-time races.
 
 ## Requirements
 
-- A USB drive (or multiple USB drives) large enough to hold a few small key
-  files. A few megabytes is plenty.
+- A secure location for ZFS key files. A LUKS-encrypted USB drive is a common
+  choice, but any path the operator can make available at runtime will work.
 - Root access to the storage node.
-- The `cryptsetup` package installed.
+- The `cryptsetup` package installed if you use LUKS.
 
-## Preparing the USB device
+## Preparing a LUKS-encrypted USB key store (optional)
 
 These commands run on the storage node as root. Replace `/dev/sdX1` with the
 actual partition you want to use.
@@ -55,33 +70,22 @@ mkfs.ext4 /dev/mapper/zfskeys-setup -L ZFSkeys
 cryptsetup luksClose zfskeys-setup
 ```
 
-Set the partition label to `ZFSkeys` as well so the boot scripts can find the
-USB:
-
-```bash
-# Set the partition label (optional but recommended)
-parted /dev/sdX --name 1 ZFSkeys
-```
-
 ## Generating and storing ZFS keys
 
-Each encrypted dataset needs its own key file. Generate random key files on
-the USB:
+Each encrypted dataset needs its own key file. Generate random key files on the
+unlocked key store:
 
 ```bash
-# Mount the USB
-mkdir -p /mnt/ZFSkeys
-cryptsetup luksOpen /dev/sdX1 keys
-mount LABEL=ZFSkeys /mnt/ZFSkeys
+# Mount the key store
+sudo cryptsetup luksOpen /dev/sdX1 keys
+sudo mkdir -p /mnt/ZFSkeys
+sudo mount /dev/mapper/keys /mnt/ZFSkeys
 
-# Generate a key file for each encrypted dataset
-dd if=/dev/urandom of=/mnt/ZFSkeys/key1 bs=32 count=1
-dd if=/dev/urandom of=/mnt/ZFSkeys/key2 bs=32 count=1
-chmod 400 /mnt/ZFSkeys/key1 /mnt/ZFSkeys/key2
-
-# Unmount and lock
-umount /mnt/ZFSkeys
-cryptsetup luksClose keys
+# Generate a key file for each encrypted pool/dataset
+sudo mkdir -p /mnt/ZFSkeys/keys
+sudo dd if=/dev/urandom of=/mnt/ZFSkeys/keys/threeamigos.key bs=32 count=1
+sudo dd if=/dev/urandom of=/mnt/ZFSkeys/keys/NVME1.key bs=32 count=1
+sudo chmod 400 /mnt/ZFSkeys/keys/*.key
 ```
 
 Keep offline backups of:
@@ -95,7 +99,7 @@ zvols cannot be recovered.
 ## Creating an encrypted zvol
 
 Use `new-vm-disk` with the `--encrypted` flag. The script will prompt for the
-key file on `/mnt/ZFSkeys`:
+absolute path to an already-accessible key file:
 
 ```bash
 sudo new-vm-disk threeamigos 300 0 50G --encrypted
@@ -103,124 +107,90 @@ sudo new-vm-disk threeamigos 300 0 50G --encrypted
 
 The script:
 
-1. Asks you to insert the ZFS keys USB.
-2. Unlocks the LUKS volume (prompting for the passphrase if no
-   `/root/.luks-key` exists).
-3. Mounts the decrypted filesystem at `/mnt/ZFSkeys`.
-4. Lists the available key files and asks which one to use.
-5. Creates the zvol with `keylocation=file:///mnt/ZFSkeys/<keyname>`.
-6. Records the zvol in `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
-7. Secures the keys (unmounts and closes the LUKS volume).
+1. Asks for the absolute key-file path (e.g. `/mnt/ZFSkeys/keys/threeamigos.key`).
+2. Verifies the file exists, is readable, and is not group- or world-readable.
+3. Verifies the key file does not reside on the pool or dataset being created.
+4. Creates the zvol with `keylocation=file:///mnt/ZFSkeys/keys/threeamigos.key`.
+5. Records the zvol in `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
+
+The key file must already be accessible when you run `new-vm-disk --encrypted`.
 
 ## Boot-time behaviour
 
-### With `/root/.luks-key` (unattended boot)
+At boot:
 
-If you created `/root/.luks-key` during installation (or manually afterward),
-the boot process is fully automatic:
+1. `rtslib-fb-targetctl.service` starts and restores the boot-safe config
+   (`saveconfig-boot.json`), which excludes encrypted backstores. This lets the
+   storage node come online without the encrypted LUNs.
+2. Encrypted LUNs remain offline until you manually load their keys and run
+   `iscsi-add-encrypted-luns`.
 
-1. `zfs-keys-unlock.service` waits for the USB device.
-2. It unlocks the LUKS volume using `/root/.luks-key`.
-3. It mounts the filesystem at `/mnt/ZFSkeys`.
-4. It loads the ZFS keys for all encrypted zvols.
-5. It unmounts and closes the LUKS volume.
-6. `rtslib-fb-targetctl.service` starts and adds the encrypted LUNs back to
-   the iSCSI target.
+## Bringing encrypted zvols online after boot
 
-The USB can be removed once the service reports success.
+To bring encrypted zvols online:
 
-### Without `/root/.luks-key` (manual boot)
-
-If no keyfile exists, the boot service exits cleanly and iSCSI starts without
-the encrypted LUNs. To bring them online:
-
-1. Insert the ZFS keys USB.
-2. If Cinnamon/udisksd prompts for the LUKS passphrase, you can enter it
-   (the device will be mounted at `/mnt/ZFSkeys`), or cancel and let the
-   script handle unlocking.
-3. Run:
+1. Unlock and mount the key store:
    ```bash
-   sudo unlock-zfs-keys
+   sudo cryptsetup luksOpen /dev/sdX1 keys
+   sudo mkdir -p /mnt/ZFSkeys
+   sudo mount /dev/mapper/keys /mnt/ZFSkeys
    ```
-4. The script prompts for the LUKS passphrase if needed, loads the ZFS keys,
-   and adds the encrypted LUNs to the iSCSI target without restarting it.
+2. Load all ZFS keys:
+   ```bash
+   sudo zfs load-key -a
+   ```
+   Note: `-a` loads keys for all pools and blocks on any `keylocation=prompt`
+   dataset. Use `zfs load-key <pool/dataset>` for a single dataset if needed.
+3. Add the encrypted LUNs to the running iSCSI target:
+   ```bash
+   sudo iscsi-add-encrypted-luns
+   ```
+4. Unmount and lock the key store:
+   ```bash
+   sudo umount /mnt/ZFSkeys
+   sudo cryptsetup luksClose keys
+   ```
+
+## Restarting iSCSI services
+
+If you restart the iSCSI target service (`restart-iscsi-services`), it restores
+`saveconfig-boot.json` and then explicitly calls `iscsi-add-encrypted-luns` to
+re-add encrypted LUNs whose zvols are already available.
 
 ## Recovery after a boot without the USB
 
-If the storage node booted without the USB:
+If the storage node booted without the key store:
 
 1. Verify the non-encrypted LUNs are online:
    ```bash
    targetcli /backstores/block ls
    ```
-2. Insert the USB.
-3. Run `sudo unlock-zfs-keys` (or `sudo unlock-zfs-keys-auto` if
-   `/root/.luks-key` exists).
+2. Make the key store accessible.
+3. Run `sudo zfs load-key -a` and `sudo iscsi-add-encrypted-luns`.
 4. Verify the encrypted LUNs are online:
    ```bash
    targetcli /backstores/block ls | grep -E 'vm-101-disk-1|vm-202-disk-5'
    ```
 
-## Enabling unattended boot later
+## Interaction with the desktop
 
-To create `/root/.luks-key` after installation:
-
-```bash
-# Generate a random keyfile
-sudo dd if=/dev/urandom of=/root/.luks-key bs=4096 count=1
-sudo chmod 400 /root/.luks-key
-
-# Add it to each ZFS keys USB device
-for dev in $(sudo blkid -t PARTLABEL=ZFSkeys -o device); do
-    sudo cryptsetup luksAddKey "$dev" /root/.luks-key
-done
-```
-
-Verify it works on each device:
-
-```bash
-for dev in $(sudo blkid -t PARTLABEL=ZFSkeys -o device); do
-    sudo cryptsetup luksOpen "$dev" keys --key-file /root/.luks-key
-    sudo cryptsetup luksClose keys
-    echo "OK: $dev"
-done
-```
-
-## Disabling unattended boot
-
-To remove the keyfile from all devices and delete it:
-
-```bash
-for dev in $(sudo blkid -t PARTLABEL=ZFSkeys -o device); do
-    sudo cryptsetup luksRemoveKey "$dev" /root/.luks-key
-done
-sudo rm -f /root/.luks-key
-```
-
-## Interaction with the Cinnamon desktop
-
-The Cinnamon desktop includes `udisksd`, which may prompt for the LUKS
-passphrase when the USB is inserted after boot. This is not a problem:
-
-- At boot, `zfs-keys-unlock.service` runs before the desktop and is in full
-  control.
-- After boot, you can use the Cinnamon prompt to unlock and mount the USB, or
-  cancel it and use `unlock-zfs-keys` instead. The script detects an
-  already-mounted `/mnt/ZFSkeys` and reuses it.
+The Cinnamon desktop includes `udisksd`, which may prompt for the LUKS passphrase
+when the USB is inserted after boot. You can use that prompt to unlock and mount
+the key store, then run the commands above.
 
 ## Multiple USB keys
 
-You can maintain multiple LUKS-encrypted USB devices with the same label
-(`ZFSkeys`). The boot scripts use the first one found. Add `/root/.luks-key` to
-all of them if you want any one of them to work for unattended boot.
+You can maintain multiple LUKS-encrypted USB devices with the same key files.
+There is no automation that selects among them; mount whichever device you have
+available and use its path when loading keys or creating zvols.
 
 ## Security notes
 
-- `/root/.luks-key` is root-readable only (`chmod 400`). It is required for
-  unattended boot. Anyone with root access or physical access to the unmounted
-  root filesystem can read it.
-- The LUKS passphrase is still required to add or remove the keyfile. Store it
-  securely and separately from the USB devices.
-- Key files on the USB are not encrypted by ZFSutilities; they are protected
-  by the LUKS container on the USB. Keep the USB physically secure.
-- Remove the USB after boot once keys are loaded.
+- Key files on the USB are not encrypted by ZFSutilities; they are protected by
+  the LUKS container on the USB. Keep the USB physically secure.
+- Do not store key files on the same pool that they encrypt. `new-vm-disk`
+  rejects such paths.
+- Keep key files readable only by root (`chmod 400`). `new-vm-disk` rejects
+  group- or world-readable keys.
+- Remove the USB after keys are loaded.
+- ZFS Utilities no longer creates or manages `/root/.luks-key`.

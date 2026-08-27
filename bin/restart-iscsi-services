@@ -3,11 +3,12 @@
 # Restart iSCSI target services after ZFS keys are loaded.
 #
 # Does systemctl stop/start. The boot-config.conf drop-in causes ExecStart to
-# restore from saveconfig-boot.json (encrypted backstores excluded). Then
-# ExecStartPost runs iscsi-add-encrypted-luns which adds them back if keys
-# are loaded. This script then reports the final status.
+# restore from saveconfig-boot.json (encrypted backstores excluded). After the
+# service is up, this script explicitly calls iscsi-add-encrypted-luns to add
+# encrypted LUNs back if their backing zvols are available (keys loaded).
 #
-# Reads encrypted zvol list from /etc/iscsi-encrypted-luns.conf (plain text, one per line).
+# Reads encrypted zvol list from /etc/zfsutilities/iscsi-encrypted-luns.conf,
+# falling back to the legacy /etc/iscsi-encrypted-luns.conf.
 # Format: backstore_name:device_path:target_short_name
 #
 # Install to: /usr/local/lib/zfsutilities/bin/restart-iscsi-services on the storage host
@@ -42,7 +43,10 @@ if ! systemctl cat rtslib-fb-targetctl >/dev/null 2>&1; then
     exit 1
 fi
 
-CONF="/etc/iscsi-encrypted-luns.conf"
+CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    CONF="/etc/iscsi-encrypted-luns.conf"
+fi
 
 # ------------------------------------------------------------------
 # Safety check: warn if any VMs are running before tearing down iSCSI
@@ -118,9 +122,20 @@ main() {
     systemctl stop rtslib-fb-targetctl
 
     # Start the iSCSI target service
-    # ExecStart restores boot config; ExecStartPost adds encrypted LUNs if available
+    # ExecStart restores boot config (encrypted backstores excluded)
     log_msg "INFO: Starting rtslib-fb-targetctl..."
     systemctl start rtslib-fb-targetctl
+
+    # Add encrypted LUNs back if their zvols are now available
+    echo ""
+    log_msg "INFO: Adding encrypted LUNs if keys are loaded..."
+    local add_encrypted_luns
+    add_encrypted_luns=$(find_zfsutility_script iscsi-add-encrypted-luns 2>/dev/null || true)
+    if [[ -n "$add_encrypted_luns" ]]; then
+        "$add_encrypted_luns" || log_msg "WARN: iscsi-add-encrypted-luns returned non-zero"
+    else
+        log_msg "WARN: iscsi-add-encrypted-luns not found; encrypted LUNs were not added"
+    fi
 
     # Show encrypted LUN status
     echo ""

@@ -1595,17 +1595,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#wait-for-zfs-keysconf" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        wait-for-zfs-keys.conf
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -2310,9 +2299,8 @@ config must be present on every host that runs the script:</p>
    and pool-to-target mappings (auto-detects online pools)</li>
 <li>Generates <code>/etc/zfsutilities/node.conf</code></li>
 <li>Installs scripts on both hosts via SSH</li>
-<li>Installs systemd drop-ins, <code>zfs-keys-unlock.service</code>, and the encrypted
-   LUNs config</li>
-<li>Optionally creates <code>/root/.luks-key</code> for unattended LUKS unlocking</li>
+<li>Installs systemd drop-ins (<code>boot-config.conf</code> and <code>pre-start-backup.conf</code>)
+   and the encrypted-LUNs registry</li>
 <li>Verifies SSH key authorization between hosts</li>
 <li>If PVE is present on the compute host, patches
    <code>/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm</code> to limit automatic iSCSI
@@ -2331,7 +2319,7 @@ workflow.</p>
 </ul>
 <p>Both installers assume that ZFS pools are already installed and active on the single node (for single-node mode) and on the storage node (for two-node mode). When switching modes, please move the storage beforehand. </p>
 <h2 id="systemd-drop-ins">systemd Drop-ins<a class="headerlink" href="#systemd-drop-ins" title="Permanent link">&para;</a></h2>
-<p>Two-node mode installs three systemd drop-ins for
+<p>Two-node mode installs two systemd drop-ins for
 <code>rtslib-fb-targetctl.service</code> under
 <code>/etc/systemd/system/rtslib-fb-targetctl.service.d/</code>:</p>
 <h3 id="boot-configconf"><code>boot-config.conf</code><a class="headerlink" href="#boot-configconf" title="Permanent link">&para;</a></h3>
@@ -2344,13 +2332,9 @@ at boot when encrypted zvol device nodes don't exist yet.</p>
 <p>Backs up <code>saveconfig.json</code> to <code>saveconfig.json.pre-start</code> before each
 restore. If something later saves a degraded config, the last-known-good
 copy is always available.</p>
-<h3 id="wait-for-zfs-keysconf"><code>wait-for-zfs-keys.conf</code><a class="headerlink" href="#wait-for-zfs-keysconf" title="Permanent link">&para;</a></h3>
-<p>Ensures <code>zfs-keys-unlock.service</code> completes before the iSCSI target starts,
-and runs <a href="../../commands-and-modules/two-node/#iscsi-add-encrypted-luns-storage-node">iscsi-add-encrypted-luns</a> as an <code>ExecStartPost</code> to re-add encrypted
-LUNs after keys are loaded.</p>
-<p>If the ZFS keys USB is not present or <code>/root/.luks-key</code> does not exist,
-<code>zfs-keys-unlock.service</code> exits cleanly and iSCSI starts without the encrypted
-LUNs. See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for recovery.</p>
+<p>The older <code>wait-for-zfs-keys.conf</code> drop-in and the <code>zfs-keys-unlock.service</code>
+unit have been removed. Encrypted LUNs are added manually after the key store
+is unlocked; see <a href="../../installation/zfs-keys/">ZFS Key Handling</a>.</p>
 <h2 id="script-by-script-mode-behavior">Script-by-Script Mode Behavior<a class="headerlink" href="#script-by-script-mode-behavior" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -2550,7 +2534,7 @@ LUNs. See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for recove
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.89.0
+      ZFS Utilities v0.90.0
     </div>
   
   
@@ -2575,7 +2559,7 @@ LUNs. See <a href="../../installation/zfs-keys/">ZFS Key Handling</a> for recove
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.89.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.90.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

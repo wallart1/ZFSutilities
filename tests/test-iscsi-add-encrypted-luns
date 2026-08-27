@@ -1,0 +1,130 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-iscsi-add-encrypted-luns — Verify config-path handling and targetcli calls.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Run a temp copy of iscsi-add-encrypted-luns with paths/env mocked.
+# ------------------------------------------------------------------
+_run_iscsi_add_encrypted_luns() {
+    local confdir="$1"
+    local legacy_file="$2"
+    local savefile="$3"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local script_copy="$tmpdir/iscsi-add-encrypted-luns"
+
+    sed \
+        -e "s|/etc/rtslib-fb-target/saveconfig\.json|$savefile|g" \
+        -e "s|source ~/bashinit|source \"$mydir/bin/bashinit\"|g" \
+        -e "s|sleep 2|true|g" \
+        "$mydir/bin/iscsi-add-encrypted-luns" > "$script_copy"
+
+    if [[ -n "$legacy_file" ]]; then
+        sed -i -e "s|/etc/iscsi-encrypted-luns\.conf|$legacy_file|g" "$script_copy"
+    fi
+
+    local node_lib="$tmpdir/node-lib.sh"
+    cat > "$node_lib" <<'EOF'
+is_single_node() { return 1; }
+is_two_node() { return 0; }
+IQN_PREFIX="iqn.2026-02.local.stewie"
+EOF
+
+    cat > "$tmpdir/safe-iscsi-save" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$tmpdir/safe-iscsi-save"
+
+    cat > "$tmpdir/node.conf" <<'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="tweety"
+EOF
+
+    cat > "$tmpdir/runner" << RUNNEREOF
+#!/bin/bash
+export NODE_CONF="$tmpdir/node.conf"
+export NODE_LIB="$node_lib"
+export mydir="$tmpdir"
+export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$confdir"
+find_zfsutility_script() { echo "/dev/null"; }
+targetcli() { echo "\$*" >> "$tmpdir/targetcli-calls"; return 0; }
+sleep() { true; }
+rootcheck() { true; }
+source "$script_copy"
+RUNNEREOF
+    chmod +x "$tmpdir/runner"
+
+    bash "$tmpdir/runner" >/dev/null 2>&1
+    cat "$tmpdir/targetcli-calls" 2>/dev/null || true
+    rm -rf "$tmpdir"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_uses_modern_config_path() {
+    test_start "Uses /etc/zfsutilities/iscsi-encrypted-luns.conf when present"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/etc/zfsutilities"
+    printf 'vm-100-disk-0:%s/dev:threeamigos\n' "$tmpdir" \
+        > "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
+    touch "$tmpdir/dev"
+    local output
+    output=$(_run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "" "$tmpdir/save.json")
+    rm -rf "$tmpdir"
+
+    if [[ "$output" == *"backstores/block create vm-100-disk-0"* ]]; then
+        test_pass
+    else
+        test_fail "Expected backstore creation for vm-100-disk-0, got: $output"
+    fi
+}
+
+test_falls_back_to_legacy_config_path() {
+    test_start "Falls back to legacy /etc/iscsi-encrypted-luns.conf"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local legacy="$tmpdir/iscsi-encrypted-luns.conf"
+    printf 'vm-200-disk-0:%s/dev:threeamigos\n' "$tmpdir" > "$legacy"
+    touch "$tmpdir/dev"
+    local output
+    output=$(_run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "$legacy" "$tmpdir/save.json")
+    rm -rf "$tmpdir"
+
+    if [[ "$output" == *"backstores/block create vm-200-disk-0"* ]]; then
+        test_pass
+    else
+        test_fail "Expected backstore creation for vm-200-disk-0, got: $output"
+    fi
+}
+
+test_exits_silently_when_no_config() {
+    test_start "Exits silently when no encrypted-LUN config exists"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local output
+    output=$(_run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "" "$tmpdir/save.json")
+    rm -rf "$tmpdir"
+
+    if [[ -z "$output" ]]; then
+        test_pass
+    else
+        test_fail "Expected no targetcli calls, got: $output"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_uses_modern_config_path
+test_falls_back_to_legacy_config_path
+test_exits_silently_when_no_config
+
+test_summary

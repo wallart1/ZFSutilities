@@ -57,7 +57,6 @@ _setup_uninstall_env() {
     export ZFSUTILITIES_ZFSLOCK_DIR="$_tmpdir/run/lock/zfsutilities"
     export ZFSUTILITIES_SYSTEMD_DIR="$_tmpdir/etc/systemd/system"
     export ZFSUTILITIES_ISCSI_ENCRYPTED_CONF="$_tmpdir/etc/iscsi-encrypted-luns.conf"
-    export ZFSUTILITIES_LUKS_KEYFILE="$_tmpdir/root/.luks-key"
     export ZFSUTILITIES_PVE_ISCSI_PLUGIN="$_tmpdir/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm"
     export ZFSUTILITIES_CACHE_WARM_LOG_GLOB="$_tmpdir/var/log/zfs-cache-warm*.log"
 
@@ -105,7 +104,6 @@ _teardown_uninstall_env() {
     unset ZFSUTILITIES_ZFSLOCK_DIR
     unset ZFSUTILITIES_SYSTEMD_DIR
     unset ZFSUTILITIES_ISCSI_ENCRYPTED_CONF
-    unset ZFSUTILITIES_LUKS_KEYFILE
     unset ZFSUTILITIES_PVE_ISCSI_PLUGIN
     unset ZFSUTILITIES_CACHE_WARM_LOG_GLOB
     rm -rf "$tmpdir"
@@ -160,7 +158,6 @@ test_default_uninstall_removes_software_preserves_config() {
     touch "$tmpdir/etc/profile.d/zfsutilities.sh"
     touch "$tmpdir/etc/sudoers.d/zfsutilities"
     touch "$tmpdir/etc/cron.d/zfsutilities"
-    touch "$tmpdir/etc/systemd/system/zfs-keys-unlock.service"
     mkdir -p "$tmpdir/etc/systemd/system/rtslib-fb-targetctl.service.d"
     touch "$tmpdir/var/lib/zfsutilities/config.json"
     touch "$tmpdir/var/log/zfsutilities/session.log"
@@ -287,14 +284,10 @@ test_purge_removes_config_logs_cachewarm() {
     touch "$tmpdir/root/.cache/zfsutilities/lock"
     touch "$tmpdir/var/log/zfsutilities/session.log"
     touch "$tmpdir/var/log/zfsutilities/cron.log"
-    touch "$tmpdir/root/.luks-key"
     touch "$tmpdir/usr/local/bin/warm-cache.sh"
     touch "$tmpdir/usr/local/bin/identify-hot-vms.sh"
     touch "$tmpdir/usr/local/bin/monitor-cache.sh"
     touch "$tmpdir/var/log/zfs-cache-warm.log"
-
-    # LUKS keyfile removal is confirmed with ask_yn; mock yes.
-    mock_ask_yn 0
 
     export SUDO_USER="testuser"
     export HOME="$tmpdir/home/testuser"
@@ -333,8 +326,6 @@ test_purge_removes_config_logs_cachewarm() {
         "$tmpdir/root/.config/zfsutilities-history.json" \
         "$tmpdir/root/.cache/zfsutilities" \
         "$tmpdir/var/log/zfsutilities" \
-        "$tmpdir/etc/iscsi-encrypted-luns.conf" \
-        "$tmpdir/root/.luks-key" \
         "$tmpdir/usr/local/bin/warm-cache.sh" \
         "$tmpdir/usr/local/bin/identify-hot-vms.sh" \
         "$tmpdir/usr/local/bin/monitor-cache.sh" \

@@ -7,9 +7,9 @@
 # yet loaded, ZFS pool not imported, device nodes not yet visible after zfs load-key).
 #
 # Also generates saveconfig-boot.json — a copy of the config with encrypted backstores
-# stripped out. This is used at boot time (via systemd drop-in) so that targetctl restore
-# does not encounter missing device nodes for encrypted zvols whose keys haven't been
-# loaded yet.
+# stripped out. This is used at boot time (via the boot-config.conf systemd drop-in) so
+# that targetctl restore does not encounter missing device nodes for encrypted zvols
+# whose keys haven't been loaded yet.
 #
 # IMPORTANT: Expected LUN count is derived from the authoritative manifest file,
 # NOT from saveconfig.json or ZFS. This prevents a corrupted config from becoming
@@ -42,7 +42,10 @@ rootcheck
 SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
 BOOTFILE="/etc/rtslib-fb-target/saveconfig-boot.json"
 MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
-ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+fi
 
 # Generate saveconfig-boot.json by stripping encrypted backstores from saveconfig.json.
 # This config is safe to restore at boot when encryption keys haven't been loaded.

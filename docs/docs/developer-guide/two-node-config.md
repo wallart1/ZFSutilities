@@ -237,10 +237,9 @@ Interactive installer for two-node mode:
    and pool-to-target mappings (auto-detects online pools)
 3. Generates `/etc/zfsutilities/node.conf`
 4. Installs scripts on both hosts via SSH
-5. Installs systemd drop-ins, `zfs-keys-unlock.service`, and the encrypted
-   LUNs config
-6. Optionally creates `/root/.luks-key` for unattended LUKS unlocking
-7. Verifies SSH key authorization between hosts
+5. Installs systemd drop-ins (`boot-config.conf` and `pre-start-backup.conf`)
+   and the encrypted-LUNs registry
+6. Verifies SSH key authorization between hosts
 8. If PVE is present on the compute host, patches
    `/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm` to limit automatic iSCSI
    rescans to once per day (eliminates kernel log spam on the storage host)
@@ -262,7 +261,7 @@ Both installers assume that ZFS pools are already installed and active on the si
 
 ## systemd Drop-ins
 
-Two-node mode installs three systemd drop-ins for
+Two-node mode installs two systemd drop-ins for
 `rtslib-fb-targetctl.service` under
 `/etc/systemd/system/rtslib-fb-targetctl.service.d/`:
 
@@ -281,15 +280,9 @@ Backs up `saveconfig.json` to `saveconfig.json.pre-start` before each
 restore. If something later saves a degraded config, the last-known-good
 copy is always available.
 
-### `wait-for-zfs-keys.conf`
-
-Ensures `zfs-keys-unlock.service` completes before the iSCSI target starts,
-and runs [iscsi-add-encrypted-luns](../commands-and-modules/two-node.md#iscsi-add-encrypted-luns-storage-node) as an `ExecStartPost` to re-add encrypted
-LUNs after keys are loaded.
-
-If the ZFS keys USB is not present or `/root/.luks-key` does not exist,
-`zfs-keys-unlock.service` exits cleanly and iSCSI starts without the encrypted
-LUNs. See [ZFS Key Handling](../installation/zfs-keys.md) for recovery.
+The older `wait-for-zfs-keys.conf` drop-in and the `zfs-keys-unlock.service`
+unit have been removed. Encrypted LUNs are added manually after the key store
+is unlocked; see [ZFS Key Handling](../installation/zfs-keys.md).
 
 ## Script-by-Script Mode Behavior
 

@@ -8,12 +8,12 @@
 #   Example: new-vm-disk threeamigos 300 0 EFI
 #
 # --encrypted option:
-#   Creates an encrypted zvol. Prompts for the key file path (e.g. /mnt/ZFSkeys/key3).
-#   The path is passed to zfs create as keylocation — this script never reads the key.
-#   The ZFS keys USB must be mounted when this runs. After creation, the keys are
-#   immediately unmounted via lock-zfs-keys.
-#   Registers the zvol in /etc/iscsi-encrypted-luns.conf so boot/unlock scripts know
-#   about it. remove-vm-disk automatically deregisters on deletion.
+#   Creates an encrypted zvol. Prompts for the absolute path to an already-accessible
+#   ZFS key file (e.g. /mnt/ZFSkeys/keys/threeamigos.key). The path is passed to
+#   zfs create as keylocation — this script never reads the key.
+#   Registers the zvol in /etc/zfsutilities/iscsi-encrypted-luns.conf (legacy
+#   /etc/iscsi-encrypted-luns.conf fallback) so iscsi-add-encrypted-luns knows about
+#   it. remove-vm-disk automatically deregisters on deletion.
 #   Example: new-vm-disk threeamigos 300 1 50G --encrypted
 #
 # Install to: /usr/local/lib/zfsutilities/bin/new-vm-disk on BOTH the storage and compute hosts
@@ -60,7 +60,7 @@ usage() {
     log_msg "INFO:             Use EFI to create an EFI firmware disk (4M, UEFI boot)"
     echo ""
     log_msg "INFO: Options:"
-    log_msg "INFO:   --encrypted  Create an encrypted zvol (requires /mnt/ZFSkeys mounted)"
+    log_msg "INFO:   --encrypted  Create an encrypted zvol (key file must already be accessible)"
     echo ""
     log_msg "INFO: Examples:"
     log_msg "INFO:   new-vm-disk threeamigos 300 0 EFI   # EFI firmware disk (create first)"
@@ -353,7 +353,10 @@ fi
 
 # === Running on the storage host ===
 
-ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+fi
 
 log_msg "INFO: === new-vm-disk ==="
 log_msg "INFO:   Zvol:      $ZVOL_NAME ($SIZE)"
@@ -375,7 +378,7 @@ if targetcli /backstores/block ls 2>/dev/null | grep -q " ${BACKSTORE_NAME} "; t
     exit 1
 fi
 
-# --- Encrypted zvol setup: mount keys, prompt for key file ---
+# --- Encrypted zvol setup: prompt for an already-accessible key file ---
 ENC_KEYLOCATION=""
 if [[ "$ENCRYPTED_FLAG" == true ]]; then
     # Detect encryption defaults from existing encrypted zvols
@@ -394,61 +397,60 @@ if [[ "$ENCRYPTED_FLAG" == true ]]; then
     [[ -z "$ENC_ALGO" || "$ENC_ALGO" == "-" ]] && ENC_ALGO="aes-256-gcm"
     [[ -z "$ENC_KEYFMT" || "$ENC_KEYFMT" == "-" ]] && ENC_KEYFMT="raw"
 
-    KEY_MOUNT="/mnt/ZFSkeys"
+    DEFAULT_KEY_PATH="/mnt/ZFSkeys/keys/${POOL}.key"
 
-    # Mount the keys USB if not already mounted
-    if ! mountpoint -q "$KEY_MOUNT" 2>/dev/null; then
-        log_msg "INFO: The ZFS keys USB drive must be inserted to create an encrypted zvol."
-        read -rp "Insert the keys USB drive and press Enter to continue..."
-        echo ""
-
-        # Auto-detect the device
-        KEY_DEVICE=$(blkid -t PARTLABEL=ZFSkeys -o device 2>/dev/null | head -1 || true)
-        if [[ -z "$KEY_DEVICE" ]]; then
-            log_msg "FATAL: No USB drive found with PARTLABEL=ZFSkeys. Insert the drive and try" \
-                "again."
-            exit 1
-        fi
-        log_msg "INFO: Found key USB: $KEY_DEVICE"
-
-        # Unlock LUKS if needed
-        if [[ ! -e /dev/mapper/keys ]]; then
-            log_msg "INFO: Unlocking LUKS partition..."
-            if [[ -f /root/.luks-key ]]; then
-                cryptsetup luksOpen "$KEY_DEVICE" keys --key-file /root/.luks-key
-            else
-                cryptsetup luksOpen "$KEY_DEVICE" keys
-            fi
-        fi
-
-        # Remove legacy symlink if present
-        if [[ -L "$KEY_MOUNT" ]]; then
-            rm "$KEY_MOUNT"
-        fi
-
-        # Mount
-        mkdir -p "$KEY_MOUNT"
-        mount LABEL=ZFSkeys "$KEY_MOUNT"
-        log_msg "INFO: Mounted at $KEY_MOUNT"
-    fi
-
-    # Prompt for key file
-    log_msg "INFO: Available key files on /mnt/ZFSkeys:"
-    find /mnt/ZFSkeys/ -mindepth 1 -maxdepth 1 -printf '  %f\n' 2>/dev/null | sort
     echo ""
-    read -rp "Enter key file name (e.g. key3): " KEY_NAME
-    [[ -n "$KEY_NAME" ]] || {
-        log_msg "FATAL: No key file specified"
+    log_msg "INFO: Encrypted zvol creation requires an already-accessible key file."
+    log_msg "INFO:   Conventional default: $DEFAULT_KEY_PATH"
+    echo ""
+    read -rp "Enter absolute key-file path [$DEFAULT_KEY_PATH]: " KEY_PATH
+    KEY_PATH="${KEY_PATH:-$DEFAULT_KEY_PATH}"
+
+    # Basic sanity checks
+    [[ "$KEY_PATH" == /* ]] || {
+        log_msg "FATAL: Key file path must be absolute, got: $KEY_PATH"
+        exit 1
+    }
+    [[ -e "$KEY_PATH" ]] || {
+        log_msg "FATAL: Key file not found: $KEY_PATH"
+        exit 1
+    }
+    [[ -r "$KEY_PATH" ]] || {
+        log_msg "FATAL: Key file is not readable: $KEY_PATH"
         exit 1
     }
 
-    ENC_KEYLOCATION="file:///mnt/ZFSkeys/${KEY_NAME}"
+    # Permission check: reject group- or world-readable keys
+    perms=$(stat -c '%a' "$KEY_PATH" 2>/dev/null || stat -f '%Lp' "$KEY_PATH" 2>/dev/null)
+    if [[ -n "$perms" ]]; then
+        group_read=${perms:1:1}
+        world_read=${perms:2:1}
+        if [[ "$group_read" != [01237] || "$world_read" != [01237] ]]; then
+            log_msg "FATAL: Key file permissions are too permissive: $perms"
+            log_msg "FATAL:   Group and world must not be able to read $KEY_PATH"
+            exit 1
+        fi
+    fi
 
-    # Verify the key file exists (checking path, not reading contents)
-    if [[ ! -e "/mnt/ZFSkeys/${KEY_NAME}" ]]; then
-        log_msg "FATAL: Key file not found: /mnt/ZFSkeys/${KEY_NAME}"
+    # Avoid placing the key on the same pool/dataset that is being created.
+    # The canonical path check prevents a chicken-and-egg lockout where the
+    # newly-encrypted dataset would need its own key to load its key.
+    resolved_key_path=$(realpath "$KEY_PATH" 2>/dev/null || echo "$KEY_PATH")
+    pool_mount=$(zfs get -H -o value mountpoint "$POOL" 2>/dev/null || true)
+    if [[ -n "$pool_mount" && "$pool_mount" != "-" && "$pool_mount" != "/" ]]; then
+        if [[ "$resolved_key_path" == "$pool_mount"/* || "$resolved_key_path" == "$pool_mount" ]]; then
+            log_msg "FATAL: Key file must not reside on the pool being encrypted: $POOL"
+            log_msg "FATAL:   Move $KEY_PATH outside of $pool_mount and try again."
+            exit 1
+        fi
+    fi
+    # Also catch paths literally under /dev/zvol or the dataset itself.
+    if [[ "$resolved_key_path" == "/dev/zvol/${POOL}/"* || "$resolved_key_path" == "/dev/zvol/${ZVOL_NAME}"* ]]; then
+        log_msg "FATAL: Key file must not reside on the zvol being created."
         exit 1
     fi
+
+    ENC_KEYLOCATION="file://${KEY_PATH}"
 
     echo ""
     log_msg "INFO: Encryption settings:"
@@ -473,10 +475,6 @@ if [[ "$ENCRYPTED_FLAG" == true ]]; then
         -o keylocation="$ENC_KEYLOCATION" \
         "$ZVOL_NAME"
     log_msg "INFO: ✓ Encrypted zvol created"
-
-    # Immediately secure the keys — they're in ZFS kernel memory now
-    log_msg "INFO: Securing keys..."
-    "$mydir/lock-zfs-keys"
 else
     log_msg "INFO: Creating zvol $ZVOL_NAME ($SIZE)..."
     zfs create -V "$SIZE" -s -o compression=lz4 "$ZVOL_NAME"

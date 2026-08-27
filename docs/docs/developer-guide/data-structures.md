@@ -477,8 +477,11 @@ Consumed by [iscsi-add-encrypted-luns](../commands-and-modules/two-node.md#iscsi
 [safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node) to generate the boot-safe config. Maintained by
 `new-vm-disk --encrypted` (adds) and [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both) (removes).
 
-See [ZFS Key Handling](../installation/zfs-keys.md) for how keys are stored on
-the LUKS-encrypted USB and how unattended boot is configured.
+Legacy installs may still use `/etc/iscsi-encrypted-luns.conf`; current scripts
+fall back to that path when the modern path does not exist.
+
+See [ZFS Key Handling](../installation/zfs-keys.md) for the manual key-store
+workflow.
 
 ## Session log index (`/var/log/zfsutilities/sessions/.log_index.json`)
 

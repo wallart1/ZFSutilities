@@ -265,6 +265,97 @@ test_script_fails_without_target_service() {
 }
 
 # ------------------------------------------------------------------
+# Full-script main() tests
+# ------------------------------------------------------------------
+
+test_main_calls_iscsi_add_encrypted_luns() {
+    test_start "main calls iscsi-add-encrypted-luns after starting target"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/safe-iscsi-save" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$tmpdir/safe-iscsi-save"
+
+    cat > "$tmpdir/iscsi-add-encrypted-luns" <<'EOF'
+#!/bin/bash
+echo "ADD_ENCRYPTED_LUNS_CALLED"
+exit 0
+EOF
+    chmod +x "$tmpdir/iscsi-add-encrypted-luns"
+
+    local output rc=0
+    output=$(
+        NODE_MODE="single-node"
+        NODE_LIB="/dev/null"
+        mydir="$tmpdir"
+        find_zfsutility_script() {
+            if [[ "$1" == "rootcheck" ]]; then
+                echo "/dev/null"
+            else
+                echo "$tmpdir/iscsi-add-encrypted-luns"
+            fi
+        }
+        targetcli() { return 0; }
+        systemctl() { return 0; }
+        log_msg() { echo "$*" >&2; }
+        RESTART_ISCSI_SERVICES_TEST_MODE="Y"
+        source "$old_mydir/bin/restart-iscsi-services"
+        main 2>&1
+    ) || rc=$?
+
+    rm -rf "$tmpdir"
+
+    if [[ $rc -eq 0 ]] && [[ "$output" == *"ADD_ENCRYPTED_LUNS_CALLED"* ]]; then
+        test_pass
+    else
+        test_fail "Expected main to call iscsi-add-encrypted-luns, rc=$rc output='$output'"
+    fi
+}
+
+test_main_warns_when_helper_missing() {
+    test_start "main warns when iscsi-add-encrypted-luns is missing"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/safe-iscsi-save" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$tmpdir/safe-iscsi-save"
+
+    local output rc=0
+    output=$(
+        NODE_MODE="single-node"
+        NODE_LIB="/dev/null"
+        mydir="$tmpdir"
+        find_zfsutility_script() {
+            if [[ "$1" == "rootcheck" ]]; then
+                echo "/dev/null"
+            else
+                echo ""
+            fi
+        }
+        targetcli() { return 0; }
+        systemctl() { return 0; }
+        log_msg() { echo "$*" >&2; }
+        RESTART_ISCSI_SERVICES_TEST_MODE="Y"
+        source "$old_mydir/bin/restart-iscsi-services"
+        main 2>&1
+    ) || rc=$?
+
+    rm -rf "$tmpdir"
+
+    if [[ $rc -eq 0 ]] && [[ "$output" == *"iscsi-add-encrypted-luns not found"* ]]; then
+        test_pass
+    else
+        test_fail "Expected missing-helper warning, rc=$rc output='$output'"
+    fi
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_single_node_skips_check
@@ -278,5 +369,7 @@ test_aborts_tells_user_to_stop_vms
 test_script_loads_without_qm
 test_script_fails_without_targetcli
 test_script_fails_without_target_service
+test_main_calls_iscsi_add_encrypted_luns
+test_main_warns_when_helper_missing
 
 test_summary

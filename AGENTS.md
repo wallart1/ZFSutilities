@@ -414,10 +414,11 @@ tests/run-tests test-zfsretain test-zfsbuildfsarray
 | `test-installer-checks`        | 29    | Installer prerequisite checks and desktop-launcher helper functions                                           |
 | `test-installer-retention`     | 3     | Installer default retention profile initialization and preservation of existing user profiles                 |
 | `test-move-vm-disk`            | 14    | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove, validation helpers, state round-trip, heredoc bootstrap |
-| `test-restart-iscsi-services`  | 11     | VM running-state detection before iSCSI target restart                                                        |
+| `test-restart-iscsi-services`  | 13     | VM running-state detection before iSCSI target restart and main() helper invocation                           |
+| `test-safe-iscsi-save`         | 6     | Degraded-config guard for iSCSI saveconfig and encrypted-backstore boot-config stripping                    |
 | `test-startdocserver`          | 13    | Server health checks, PID discovery, CWD mismatch, restart logic                                              |
-| `test-switch-version`          | 7     | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, and `--list`          |
-| `test-unlock-zfs-keys`         | 9     | ZFS key file loading and unlock helper functions                                                              |
+| `test-iscsi-add-encrypted-luns`| 3     | Encrypted-LUN config path resolution (modern + legacy fallback) and targetcli invocation                      |
+| `test-switch-version`          | 8     | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, `--list`, and obsolete systemd artifact cleanup |
 | `test-zfsbuildfsarray`         | 10    | Dataset array building with includes/excludes/depth/sorting                                                   |
 | `test-zfscommsnap`             | 6     | Common snapshot detection by GUID, most-recent/oldest modes                                                   |
 | `test-zfscleanup`              | 9     | Pool selection: config pools, explicit argument, fallback to online pools, offline skip                       |

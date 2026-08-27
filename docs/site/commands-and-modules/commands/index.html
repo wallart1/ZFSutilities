@@ -1994,17 +1994,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#zfsloadkeys" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        zfsloadkeys
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#zfslockctl" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2545,7 +2534,6 @@ arrays and on-disk tables are on <a href="../../developer-guide/data-structures/
 <li><a href="#zfsgetsnapage"><code>zfsgetsnapage</code></a></li>
 <li><a href="#zfsholds"><code>zfsholds</code></a></li>
 <li><a href="#zfslistkeys"><code>zfslistkeys</code></a></li>
-<li><a href="#zfsloadkeys"><code>zfsloadkeys</code></a></li>
 <li><a href="#zfslockctl"><code>zfslockctl</code></a></li>
 <li><a href="#zfslockmanager-test"><code>zfslockmanager-test</code></a></li>
 <li><a href="#zfsmassdelsnaps"><code>zfsmassdelsnaps</code></a></li>
@@ -3197,7 +3185,6 @@ compute host). Run as root on the storage host from a repository checkout.</p>
 <li>Ensures the iSCSI target/initiator packages are present.</li>
 <li>Deploys and activates the versioned installation on both nodes.</li>
 <li>Installs systemd drop-ins and the encrypted-LUNs config.</li>
-<li>Optionally creates <code>/root/.luks-key</code> for unattended boot unlocking.</li>
 <li>Patches the Proxmox iSCSI rescan rate limit on the compute host.</li>
 </ol>
 <p>Can also re-run on an existing single-node host to switch it to two-node mode.</p>
@@ -3959,7 +3946,7 @@ mode, <code>--all-nodes</code> runs the same uninstall on the peer host.</p>
 <tbody>
 <tr>
 <td><code>--purge</code></td>
-<td>Also remove configs, logs, history, cron, systemd integration, cache-warm, and LUKS keyfile</td>
+<td>Also remove configs, logs, history, cron, systemd integration, and cache-warm</td>
 </tr>
 <tr>
 <td><code>--all-nodes</code></td>
@@ -4109,10 +4096,6 @@ mode, <code>--all-nodes</code> runs the same uninstall on the peer host.</p>
 </tr>
 <tr>
 <td><code>/etc/systemd/system/rtslib-fb-targetctl.service.d/</code></td>
-<td>Removed</td>
-</tr>
-<tr>
-<td><code>/etc/systemd/system/zfs-keys-unlock.service</code></td>
 <td>Removed</td>
 </tr>
 </tbody>
@@ -5796,38 +5779,6 @@ keylocation != prompt).</p>
 <tr>
 <td>non-zero</td>
 <td>Invalid input or command failure.</td>
-</tr>
-</tbody>
-</table>
-<hr />
-<h3 id="zfsloadkeys"><code>zfsloadkeys</code><a class="headerlink" href="#zfsloadkeys" title="Permanent link">&para;</a></h3>
-<p>Loads ZFS encryption keys from a USB key device labeled <code>ZFSkeys</code>.</p>
-<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>zfsloadkeys
-</code></pre></div>
-<p><strong>Arguments:</strong> none.</p>
-<p><strong>Globals:</strong> none.</p>
-<p>Mounts <code>/dev/disk/by-label/ZFSkeys</code> at <code>/mnt/ZFSkeys</code>, runs <code>zfs load-key -a</code>
-and <code>zfs mount -a</code>, then unmounts and LUKS-closes the key device.</p>
-<p><strong>Called modules:</strong> none.</p>
-<p><strong>Data structures consumed / produced:</strong> none.</p>
-<p><strong>Internal flow:</strong></p>
-<ol>
-<li>Mount the USB key device labeled <code>ZFSkeys</code> at <code>/mnt/ZFSkeys</code>.</li>
-<li>Run <code>zfs load-key -a</code> and <code>zfs mount -a</code>.</li>
-<li>Unmount the key device and close the LUKS mapping.</li>
-</ol>
-<p><strong>Return codes:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Code</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>0</code></td>
-<td>Completed successfully.</td>
 </tr>
 </tbody>
 </table>
@@ -7849,8 +7800,8 @@ config with updated disk lines.</p>
 <td><a href="../../developer-guide/data-structures/#iscsi-expected-backstores-manifest">expected-backstores manifest</a></td>
 </tr>
 <tr>
-<td><code>/etc/iscsi-encrypted-luns.conf</code></td>
-<td>Updated for restored encrypted LUNs</td>
+<td><code>/etc/zfsutilities/iscsi-encrypted-luns.conf</code></td>
+<td>Updated for restored encrypted LUNs (legacy <code>/etc/iscsi-encrypted-luns.conf</code> fallback)</td>
 <td><a href="../../developer-guide/data-structures/#iscsi-encrypted-luns-config">encrypted-LUNs config</a></td>
 </tr>
 </tbody>
@@ -8201,7 +8152,7 @@ only the <code>zfs rename</code> is performed.</p>
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.89.0
+      ZFS Utilities v0.90.0
     </div>
   
   
@@ -8226,7 +8177,7 @@ only the <code>zfs rename</code> is performed.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.89.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.90.0"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

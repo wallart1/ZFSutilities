@@ -101,7 +101,6 @@ load_uninstall_config() {
     ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_ISCSI_ENCRYPTED_CONF:-$_def_iscsi_enc}"
     local _d_legacy_iscsi="/etc/iscsi-encrypted-luns.conf"
     LEGACY_ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF:-$_d_legacy_iscsi}"
-    LUKS_KEYFILE="${ZFSUTILITIES_LUKS_KEYFILE:-/root/.luks-key}"
     PVE_ISCSI_PLUGIN="${ZFSUTILITIES_PVE_ISCSI_PLUGIN:-/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm}"
     CACHE_WARM_LOG_GLOB="${ZFSUTILITIES_CACHE_WARM_LOG_GLOB:-/var/log/zfs-cache-warm*.log}"
 }
@@ -321,7 +320,6 @@ detect_installed_state() {
     fi
 
     if [[ -d "$SYSTEMD_DIR/rtslib-fb-targetctl.service.d" || \
-          -f "$SYSTEMD_DIR/zfs-keys-unlock.service" || \
           -f "$SYSTEMD_DIR/zfs-cache-warm.service" ]]; then
         HAS_SYSTEMD="true"
     fi
@@ -437,7 +435,6 @@ confirm_uninstall() {
         log_msg "INFO:   - $SUDOERS_FILE"
         log_msg "INFO:   - $CRON_FILE"
         log_msg "INFO:   - $SYSTEMD_DIR/rtslib-fb-targetctl.service.d/"
-        log_msg "INFO:   - $SYSTEMD_DIR/zfs-keys-unlock.service"
         log_msg "INFO:   - $SYSTEMD_DIR/zfs-cache-warm.service"
         log_msg "INFO:   - $SYSTEM_CONFIG_DIR/"
         log_msg "INFO:   - $STATE_DIR/"
@@ -452,7 +449,6 @@ confirm_uninstall() {
         log_msg "INFO:   - $LOG_DIR"
         log_msg "INFO:   - $ISCSI_ENCRYPTED_CONF"
         log_msg "INFO:   - Cache-warm scripts in $LOCAL_BIN_DIR and related logs"
-        log_msg "INFO:   - $LUKS_KEYFILE (will ask for extra confirmation)"
         log_msg "INFO:   - Desktop shortcuts for the GUI and documentation viewer"
     else
         log_msg "INFO: The following will be removed:"
@@ -465,7 +461,6 @@ confirm_uninstall() {
         log_msg "INFO:   - $SUDOERS_FILE"
         log_msg "INFO:   - $CRON_FILE"
         log_msg "INFO:   - $SYSTEMD_DIR/rtslib-fb-targetctl.service.d/"
-        log_msg "INFO:   - $SYSTEMD_DIR/zfs-keys-unlock.service"
         log_msg "INFO:   - $SYSTEMD_DIR/zfs-cache-warm.service"
         log_msg "INFO:   - Desktop shortcuts for the GUI and documentation viewer"
         log_msg "INFO:"
@@ -504,11 +499,6 @@ uninstall_software() {
     # Stop/disable services before removing their units.
     systemctl_cmd stop zfs-cache-warm.service
     systemctl_cmd disable zfs-cache-warm.service
-    systemctl_cmd stop zfs-keys-unlock.service
-    systemctl_cmd disable zfs-keys-unlock.service
-    systemctl_cmd disable zfs-cache-warm.service
-    systemctl_cmd stop zfs-keys-unlock.service
-    systemctl_cmd disable zfs-keys-unlock.service
 
     # Remove active-version wiring via switch-version if it is still present.
     local switch_version="$VERSION_BASE/current/bin/switch-version"
@@ -548,7 +538,6 @@ uninstall_software() {
 
     # Remove systemd integration.
     remove_dir "$SYSTEMD_DIR/rtslib-fb-targetctl.service.d"
-    remove_file "$SYSTEMD_DIR/zfs-keys-unlock.service"
     remove_file "$SYSTEMD_DIR/zfs-cache-warm.service"
 
     reload_systemd
@@ -597,18 +586,6 @@ uninstall_purge() {
     for log in $CACHE_WARM_LOG_GLOB; do
         remove_file "$log"
     done
-
-    # LUKS keyfile requires explicit confirmation even with --yes.
-    if [[ -f "$LUKS_KEYFILE" ]]; then
-        log_msg "INFO:"
-        log_msg "INFO: The LUKS keyfile $LUKS_KEYFILE was created during installation."
-        log_msg "INFO: Removing it will prevent unattended boot unlocking of encrypted ZFS keys."
-        if ask_yn "Remove $LUKS_KEYFILE?" "N"; then
-            remove_file "$LUKS_KEYFILE"
-        else
-            log_msg "INFO:   Kept $LUKS_KEYFILE"
-        fi
-    fi
 
     # Remove the base lock directory only if it is empty. Do not remove it
     # if other ZFSutilities processes are still running or if it contains

@@ -46,12 +46,11 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-datesubtract` | 4 | `datesubtract` argument validation, day/month/year output, and `log_msg` routing |
 | `test-installer-checks` | 17 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal; partial-uninstall detection; `install_doc_server` pins `mkdocs<2` |
 | `test-move-vm-disk` | 14 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove, validation helpers, state round-trip, heredoc bootstrap |
-| `test-switch-version` | 6 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, and `--list` |
+| `test-switch-version` | 8 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, `--list`, and obsolete LUKS-key systemd artifact cleanup |
 | `test-repair-iscsi-luns` | 9 | Backstore/LUN parsing, zvol discovery, gap-free LUN index allocation, missing backstore/LUN creation, dry-run mode, and compute-host rescan |
 | `test-restart-iscsi-services` | 8 | VM running-state detection before iSCSI target restart |
 | `test-safe-iscsi-save` | 5 | Degraded-config guard: refuses save when active backstores are missing, saves when counts match, and regenerates the manifest after a successful save |
 | `test-startdocserver` | 15 | Server health checks (`curl`), PID discovery (`lsof` / `fuser` / `pgrep` / `http.server`), CWD mismatch detection, `--restart` logic |
-| `test-unlock-zfs-keys` | 9 | ZFS key file loading and unlock helper functions |
 | `test-zfsbuildfsarray` | 14 | Dataset array building with includes, excludes, exact-match (`=` prefix), depth limits, `startwith` / `endwith`, clone skipping |
 | `test-zfscommsnap` | 6 | Common snapshot detection by GUID, most-recent / oldest modes, return codes (0, 4, 8, 16) |
 | `test-zfscleanup` | 5 | Pool selection: configured pools, explicit argument, fallback to online pools, offline-pool skipping |

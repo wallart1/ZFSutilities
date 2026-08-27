@@ -405,7 +405,6 @@ test_partial_uninstall_detects_systemd_cron_remnants() {
     export ZFSUTILITIES_VERSION_BASE="$tmpdir/version_base"
     mkdir -p "$tmpdir/etc/systemd/system/rtslib-fb-targetctl.service.d"
     mkdir -p "$tmpdir/etc/cron.d"
-    touch "$tmpdir/etc/systemd/system/zfs-keys-unlock.service"
     touch "$tmpdir/etc/cron.d/zfsutilities"
 
     local output

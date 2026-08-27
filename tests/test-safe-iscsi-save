@@ -165,6 +165,98 @@ test_manifest_regenerated_after_save() {
 }
 
 # ------------------------------------------------------------------
+# Run safe-iscsi-save end-to-end against a temp copy and verify that
+# generate_boot_config strips encrypted backstores using the modern
+# /etc/zfsutilities/iscsi-encrypted-luns.conf path.
+# ------------------------------------------------------------------
+test_encrypted_backstores_excluded_from_boot_config() {
+    test_start "Encrypted backstores are excluded from saveconfig-boot.json"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local savefile="$tmpdir/saveconfig.json"
+    local bootfile="$tmpdir/saveconfig-boot.json"
+    local manifest="$tmpdir/expected-backstores.txt"
+    local confdir="$tmpdir/etc/zfsutilities"
+    mkdir -p "$confdir"
+
+    cat > "$savefile" <<'EOF'
+{
+  "storage_objects": [
+    {"name": "vm-100-disk-0", "dev": "/dev/zvol/threeamigos/proxmox/vm-100-disk-0"},
+    {"name": "vm-101-disk-0", "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0"}
+  ],
+  "targets": [
+    {
+      "tpgs": [
+        {
+          "luns": [
+            {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
+            {"storage_object": "/backstores/block/vm-101-disk-0", "index": 1}
+          ]
+        }
+      ]
+    }
+  ]
+}
+EOF
+    printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$manifest"
+    printf 'vm-100-disk-0:/dev/zvol/threeamigos/proxmox/vm-100-disk-0:threeamigos\n' \
+        > "$confdir/iscsi-encrypted-luns.conf"
+
+    local script_copy="$tmpdir/safe-iscsi-save"
+    sed \
+        -e "s|/etc/rtslib-fb-target/saveconfig\.json|$savefile|g" \
+        -e "s|/etc/rtslib-fb-target/saveconfig-boot\.json|$bootfile|g" \
+        -e "s|/etc/rtslib-fb-target/expected-backstores\.txt|$manifest|g" \
+        -e "s|source ~/bashinit|source \"$mydir/bin/bashinit\"|g" \
+        "$mydir/bin/safe-iscsi-save" > "$script_copy"
+
+    local node_conf="$tmpdir/node.conf"
+    cat > "$node_conf" <<'EOF'
+NODE_MODE="single-node"
+EOF
+
+    cat > "$tmpdir/runner" << RUNNEREOF
+#!/bin/bash
+export NODE_CONF="$node_conf"
+export mydir="$mydir"
+export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$confdir"
+targetcli() {
+    case "\$*" in
+        "/backstores/block ls")
+            echo "  vm-100-disk-0     /dev/zvol/threeamigos/proxmox/vm-100-disk-0   50G"
+            echo "  vm-101-disk-0     /dev/zvol/threeamigos/proxmox/vm-101-disk-0   50G"
+            ;;
+        "saveconfig")
+            true
+            ;;
+        *)
+            true
+            ;;
+    esac
+}
+rootcheck() { true; }
+source "$script_copy"
+RUNNEREOF
+
+    bash "$tmpdir/runner" >/dev/null 2>&1
+    local rc=$?
+
+    local names
+    names=$(python3 -c "import json; print(' '.join([so['name'] for so in json.load(open('$bootfile')).get('storage_objects', [])]))" 2>/dev/null || true)
+
+    rm -rf "$tmpdir"
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "safe-iscsi-save failed, rc=$rc"
+    elif [[ "$names" != "vm-101-disk-0" ]]; then
+        test_fail "Expected only vm-101-disk-0 in boot config, got: $names"
+    else
+        test_pass
+    fi
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_zero_active_backstores_refuses_save
@@ -172,5 +264,6 @@ test_active_count_equals_expected_saves
 test_active_less_than_expected_refuses_save
 test_empty_manifest_refuses_save
 test_manifest_regenerated_after_save
+test_encrypted_backstores_excluded_from_boot_config
 
 test_summary

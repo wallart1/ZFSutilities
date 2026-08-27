@@ -557,7 +557,10 @@ except Exception as e:
     # Check encryption status and add to encrypted-luns.conf if needed
     enc_status=$(zfs get -H -o value encryption "$new_zvol" 2>/dev/null || echo "-")
     if [[ "$enc_status" != "-" && "$enc_status" != "off" ]]; then
-        enc_conf="/etc/iscsi-encrypted-luns.conf"
+        enc_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+        if [[ ! -e "$enc_conf" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+            enc_conf="/etc/iscsi-encrypted-luns.conf"
+        fi
         target_short="${target##*:}"
         if [[ -f "$enc_conf" ]] && grep -q "^${backstore}:" "$enc_conf"; then
             echo "ENCRYPTED_ALREADY:${backstore}"

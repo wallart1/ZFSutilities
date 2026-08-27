@@ -221,7 +221,6 @@ This also removes:
 - `/root/.cache/zfsutilities/`
 - `/var/log/zfsutilities/` (session logs, cron log, rsync-backup log)
 - Scripts, service, and logs from `share/cache-warm/`
-- `/root/.luks-key` (with an explicit confirmation prompt)
 
 ### Two-node deployments
 
@@ -322,10 +321,8 @@ and activated via symlink:
 | ---------------------------------------------------- | -------------------------------------- |
 | `/etc/systemd/system/rtslib-fb-targetctl.service.d/` | systemd drop-ins for boot config       |
 | `/etc/zfsutilities/iscsi-encrypted-luns.conf`        | Encrypted LUN registry (if applicable) |
-| `/root/.luks-key`                                    | Optional LUKS keyfile for unattended boot |
 
-See [ZFS Key Handling](zfs-keys.md) for how to prepare the LUKS USB device and
-configure unattended boot.
+See [ZFS Key Handling](zfs-keys.md) for the manual encrypted-zvol workflow.
 
 ### Two-node only (compute host)
 
@@ -382,7 +379,7 @@ After installation:
 - **Single-node**: See [Proxmox Integration](../user-guide/proxmox-integration.md)
   for how to manage VM disks
 - **Two-node**:
-  - If you have encrypted zvols, read [ZFS Key Handling](zfs-keys.md).
+  - If you have encrypted zvols, read [ZFS Key Handling](zfs-keys.md) for the manual workflow.
   - Run [safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node) to generate the boot config.
   - See [Proxmox Integration](../user-guide/proxmox-integration.md).
 - Configure the [GTK GUI](../user-guide/gtk-gui.md) for backup and

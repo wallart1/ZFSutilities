@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+## 0.90.0
+
+*Released 2026-08-27*
+
+### Changed
+
+- **Removed automatic LUKS key-store and ZFS key loading** — `lock-zfs-keys`,
+  `unlock-zfs-keys`, `unlock-zfs-keys-auto`, and `zfsloadkeys` have been
+  removed.  The `zfs-keys-unlock.service` systemd unit and the
+  `rtslib-fb-targetctl-wait-for-zfs-keys.conf` drop-in have also been removed.
+  Encrypted zvols are still fully supported, but keys must be provided
+  manually using the workflow documented in
+  [ZFS Key Handling](installation/zfs-keys.md):
+  unlock the LUKS key store, mount it, run `zfs load-key -a`, run
+  `iscsi-add-encrypted-luns`, then unmount/close the key store.  New encrypted
+  zvols created with `new-vm-disk --encrypted` now prompt for an absolute key
+  file path instead of attempting to auto-mount a LUKS USB.
+- **Encrypted-LUN registry moved to `/etc/zfsutilities/iscsi-encrypted-luns.conf`**
+  — The FHS-aligned path is now preferred; scripts fall back to the legacy
+  `/etc/iscsi-encrypted-luns.conf` path when the modern path does not exist.
+  `restart-iscsi-services` now calls `iscsi-add-encrypted-luns` directly after
+  starting `rtslib-fb-targetctl`, since the wait-for-zfs-keys drop-in is gone.
+  `iscsi-add-encrypted-luns`, `move-vm-disk`, and `rename-vm-disk` were also
+  updated to read and write the modern path with the legacy fallback.
+- **`install-two-node` no longer configures unattended ZFS key loading** — The
+  `/root/.luks-key` setup block and related systemd units/drop-ins have been
+  removed.  Fresh two-node installs use the manual key-store workflow.
+- **`switch-version` cleans up obsolete LUKS key-management artifacts** — During
+  wiring, the script removes any leftover `zfs-keys-unlock.service` unit and
+  the `wait-for-zfs-keys.conf` drop-in and reloads systemd when needed.
+
+### Removed
+
+- **`bin/lock-zfs-keys`**, **`bin/unlock-zfs-keys`**, **`bin/unlock-zfs-keys-auto`**,
+  **`bin/zfsloadkeys`**, **`share/two-node/zfs-keys-unlock.service`**, and
+  **`share/two-node/rtslib-fb-targetctl-wait-for-zfs-keys.conf`**.
+- **`tests/test-unlock-zfs-keys`**.
+
 ## 0.89.0
 
 *Released 2026-08-26*

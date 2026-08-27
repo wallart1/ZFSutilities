@@ -228,7 +228,10 @@ OLD_BS="$4"
 LUN="$5"
 ENCRYPTED="$6"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
-ISCSI_ENCRYPTED_CONF="/etc/zfsutilities/iscsi-encrypted-luns.conf"
+ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+fi
 
 NEW_BS="${NEW_ZVOL##*/}"
 TARGETSHORT="${TARGET##*:}"
