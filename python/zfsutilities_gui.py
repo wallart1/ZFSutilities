@@ -223,10 +223,10 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self.add_stack_page("offsite", "Offsite", create_offsite_page(self, self.ctx))
         self.add_stack_page("restore", "Restore", create_restore_page(self, self.ctx))
         self.add_stack_page("schedule", "Schedule", create_schedule_page(self))
-        self.add_stack_page("checkagainst", "Checkagainst", create_checkagainst_page(self))
         self.add_stack_page("pools", "Pools", create_pools_page(self))
         self.add_stack_page("datasets", "Datasets", create_datasets_page(self))
         self.add_stack_page("retention", "Retention", create_retention_page(self, self.ctx))
+        self.add_stack_page("checkagainst", "Checkagainst", create_checkagainst_page(self))
         self.add_stack_page("logs", "Logs", create_logs_page(self))
 
         # Connect to stack page changes to update action panel

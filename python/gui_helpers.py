@@ -977,13 +977,25 @@ class EditableListView:
 
 
 def add_var_row(
-    grid, row, key, variables, widgets_dict, yn_vars=None, topic_map=None, tooltip=None
+    grid,
+    row,
+    key,
+    variables,
+    widgets_dict,
+    yn_vars=None,
+    topic_map=None,
+    tooltip=None,
+    block_scroll=False,
 ):
     """Add a label + widget row to a grid for the given variable key.
 
     If key is in yn_vars, a Y/N ComboBoxText is created.
     Otherwise a Gtk.Entry is created.
     The widget is stored in widgets_dict[key].
+
+    When *block_scroll* is True, the widget's scroll-event is consumed so the
+    mouse wheel cannot change ComboBox/SpinButton values; the event still
+    propagates to the parent ScrolledWindow to scroll the page.
     """
     lbl = Gtk.Label(label=key)
     lbl.set_halign(Gtk.Align.END)
@@ -1002,6 +1014,9 @@ def add_var_row(
         widget.set_text(variables.get(key, ""))
         widget.set_hexpand(True)
         widget.set_width_chars(1)
+
+    if block_scroll:
+        widget.connect("scroll-event", lambda _w, _e: True)
 
     grid.attach(widget, 1, row, 1, 1)
     widgets_dict[key] = widget

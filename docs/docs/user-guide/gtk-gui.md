@@ -93,10 +93,10 @@ The sidebar tabs are:
 | [Offsite](#offsite-tab) | Configure and run offsite backups |
 | [Restore](#restore-tab) | Restore datasets from backups |
 | [Schedule](#schedule-tab) | Manage scheduled profiles |
-| [Checkagainst](#checkagainst-tab) | Edit snapshot safety checks |
 | [Pools](#pools-tab) | Register pools and manage scrubs |
 | [Datasets](#datasets-tab) | Browse datasets and manage snapshots/holds |
 | [Retention](#retention-tab) | Per-pool retention policies and pruning |
+| [Checkagainst](#checkagainst-tab) | Edit snapshot safety checks |
 | [Logs](#logs-tab) | Browse, search, and delete session log files |
 
 ### Bottom panel
@@ -132,8 +132,8 @@ warnings for each missing section. Configure them through the relevant tabs:
    to register them. Check the **Offsite** box for any registered pool that will spend time offline. Use the Scrub Manager below the registry to queue, start, pause, resume, and stop scrubs.
 3. **[Backup](#backup-tab)** — add rsync pull steps and send/receive steps
 4. **[Offsite](#offsite-tab)** — review the automatically detected offsite pool and add offsite backup steps
-5. **[Checkagainst](#checkagainst-tab)** — add dataset-counterpart mappings
-6. **[Retention](#retention-tab)** — a `default` policy is auto-created. Add per-pool policies with **Add Policy** when needed.
+5. **[Retention](#retention-tab)** — a `default` policy is auto-created. Add per-pool policies with **Add Policy** when needed.
+6. **[Checkagainst](#checkagainst-tab)** — add dataset-counterpart mappings
 
 ## Startup Version Check (Two-Node)
 
@@ -337,10 +337,10 @@ The sidebar exposes these pages:
 | [Offsite](#offsite-tab)           | Configure and run [`zfssendoffsite`](../commands-and-modules/commands.md#zfssendoffsite) |
 | [Restore](#restore-tab)           | Configure and run [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore)         |
 | [Schedule](#schedule-tab)         | Manage scheduled jobs                                                                    |
-| [Checkagainst](#checkagainst-tab) | Edit the [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst) table   |
 | [Pools](#pools-tab)               | Pool registry + live `zpool list` status + scrub manager                                 |
 | [Datasets](#datasets-tab)         | Collapsible dataset tree with inline snapshot/hold management                            |
 | [Retention](#retention-tab)       | Per-pool retention policies + prune runner                                               |
+| [Checkagainst](#checkagainst-tab) | Edit the [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst) table   |
 | [Logs](#logs-tab)                 | Browse, search, and prune session log files                                              |
 
 ## Dataset Selection Criteria

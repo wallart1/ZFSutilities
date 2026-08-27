@@ -2398,6 +2398,45 @@ class TestRefreshConfigSection(unittest.TestCase):
         )
         self.assertTrue(self._find_label_with_text(gtk_mock, expected_name))
 
+    def test_config_labels_align_to_top_of_values(self):
+        """Column-0 Configuration labels are top-aligned to match value first line."""
+        cfg = {
+            "mode": "two-node",
+            "this_host": "host-a",
+            "storage_host": "host-b",
+            "compute_host": "host-c",
+        }
+        app, gtk_mock = self._run_refresh(
+            cfg,
+            versions={"host-a": "1.0", "host-b": "1.0", "host-c": "1.0"},
+            zfs_versions={
+                "host-a": "zfs-2.2.2",
+                "host-b": "zfs-2.2.3",
+                "host-c": "zfs-2.2.4",
+            },
+            os_infos={
+                "host-a": ("Debian GNU/Linux", "12 (bookworm)"),
+                "host-b": ("Debian GNU/Linux", "12 (bookworm)"),
+                "host-c": ("Debian GNU/Linux", "12 (bookworm)"),
+            },
+        )
+        col0_labels = []
+        for call in app.dashboard_config_grid.attach.call_args_list:
+            widget, left, _top, _width, _height = call.args
+            if left == 0:
+                col0_labels.append(widget)
+
+        self.assertGreater(len(col0_labels), 0)
+        for widget in col0_labels:
+            self.assertTrue(
+                widget.set_valign.called,
+                "column-0 Configuration label should set vertical alignment",
+            )
+            self.assertEqual(
+                widget.set_valign.call_args[0][0],
+                gtk_mock.Align.START,
+            )
+
 
 class TestGetHostOsInfo(unittest.TestCase):
     """_get_host_os_info() detects OS name and version per host."""

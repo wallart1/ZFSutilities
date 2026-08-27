@@ -133,6 +133,64 @@ test_zfs_list_uses_line_buffering() {
     assert_equals "1" "$smallest_count"
 }
 
+test_largest_shows_requested_number_of_datasets() {
+    test_start "largest mode shows the requested number of datasets per section"
+    local output rc count
+    output=$(
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+        setup_test_env
+
+        stdbuf() {
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    -oL) shift ;;
+                    -*) shift ;;
+                    *) break ;;
+                esac
+            done
+            "$@"
+        }
+        export -f stdbuf
+
+        mock_zpool_list "threeamigos"
+        mock_zfs_fs_list $'NAME\tUSED\tUSEDDS\tUSEDSNAP\tWRITTEN\tQUOTA\tREFER\tREFQUOTA\tRESERVATION\nthreeamigos\t100G\t50G\t50G\t0\t-\t50G\t-\t-\nthreeamigos/a\t90G\t45G\t45G\t0\t-\t45G\t-\t-\nthreeamigos/b\t80G\t40G\t40G\t0\t-\t40G\t-\t-\nthreeamigos/c\t70G\t35G\t35G\t0\t-\t35G\t-\t-\nthreeamigos/d\t60G\t30G\t30G\t0\t-\t30G\t-\t-\nthreeamigos/e\t50G\t25G\t25G\t0\t-\t25G\t-\t-\nthreeamigos/f\t40G\t20G\t20G\t0\t-\t20G\t-\t-'
+        mock_zfs_dataset_exists "threeamigos"
+        source "$SHOWBIG_SCRIPT" "threeamigos" "largest" 5 2>&1
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    count=$(awk '/INFO: Sorted by:/{p=1} p && /^threeamigos/{c++} END{print c}' <<< "$output")
+    assert_equals "40" "$count"
+}
+
+test_smallest_shows_requested_number_of_datasets() {
+    test_start "smallest mode shows the requested number of datasets per section"
+    local output rc count
+    output=$(
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+        setup_test_env
+
+        stdbuf() {
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    -oL) shift ;;
+                    -*) shift ;;
+                    *) break ;;
+                esac
+            done
+            "$@"
+        }
+        export -f stdbuf
+
+        mock_zpool_list "threeamigos"
+        mock_zfs_fs_list $'NAME\tUSED\tUSEDDS\tUSEDSNAP\tWRITTEN\tQUOTA\tREFER\tREFQUOTA\tRESERVATION\nthreeamigos\t100G\t50G\t50G\t0\t-\t50G\t-\t-\nthreeamigos/a\t90G\t45G\t45G\t0\t-\t45G\t-\t-\nthreeamigos/b\t80G\t40G\t40G\t0\t-\t40G\t-\t-\nthreeamigos/c\t70G\t35G\t35G\t0\t-\t35G\t-\t-\nthreeamigos/d\t60G\t30G\t30G\t0\t-\t30G\t-\t-\nthreeamigos/e\t50G\t25G\t25G\t0\t-\t25G\t-\t-\nthreeamigos/f\t40G\t20G\t20G\t0\t-\t20G\t-\t-'
+        mock_zfs_dataset_exists "threeamigos"
+        source "$SHOWBIG_SCRIPT" "threeamigos" "smallest" 3 2>&1
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    count=$(awk '/INFO: Sorted by:/{p=1} p && /^threeamigos/{c++} END{print c}' <<< "$output")
+    assert_equals "24" "$count"
+}
+
 test_missing_dataset_shows_usage_and_fails
 test_invalid_sort_option_shows_usage_and_fails
 test_largest_uses_descending_sort
@@ -141,6 +199,8 @@ test_smallest_honors_count
 test_log_messages_routed_through_log_msg
 test_all_sort_sections_emitted
 test_zfs_list_uses_line_buffering
+test_largest_shows_requested_number_of_datasets
+test_smallest_shows_requested_number_of_datasets
 
 test_summary
 teardown_test_env

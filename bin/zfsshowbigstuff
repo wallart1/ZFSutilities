@@ -61,11 +61,11 @@ for sortby in "${sortbys[@]}"; do
     if [[ $sequence = 'largest' ]]; then
         stdbuf -oL zfs list -rt all -S "$sortby" \
             -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$target" \
-            | head -n 5 || true
+            | head -n "$((numberofdatasets + 1))" || true
     elif [[ $sequence = 'smallest' ]]; then
         stdbuf -oL zfs list -rt all -s "$sortby" \
             -o name,used,usedds,usedsnap,written,quota,refer,refquota,reservation "$target" \
-            | head -n "$numberofdatasets" || true
+            | head -n "$((numberofdatasets + 1))" || true
     else
         die "Unexpected sort sequence '${sequence}'."
     fi

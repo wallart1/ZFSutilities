@@ -2976,10 +2976,6 @@ middle, and the log panel at the bottom.</p>
 <td>Manage scheduled profiles</td>
 </tr>
 <tr>
-<td><a href="#checkagainst-tab">Checkagainst</a></td>
-<td>Edit snapshot safety checks</td>
-</tr>
-<tr>
 <td><a href="#pools-tab">Pools</a></td>
 <td>Register pools and manage scrubs</td>
 </tr>
@@ -2990,6 +2986,10 @@ middle, and the log panel at the bottom.</p>
 <tr>
 <td><a href="#retention-tab">Retention</a></td>
 <td>Per-pool retention policies and pruning</td>
+</tr>
+<tr>
+<td><a href="#checkagainst-tab">Checkagainst</a></td>
+<td>Edit snapshot safety checks</td>
 </tr>
 <tr>
 <td><a href="#logs-tab">Logs</a></td>
@@ -3028,8 +3028,8 @@ warnings for each missing section. Configure them through the relevant tabs:</p>
    to register them. Check the <strong>Offsite</strong> box for any registered pool that will spend time offline. Use the Scrub Manager below the registry to queue, start, pause, resume, and stop scrubs.</li>
 <li><strong><a href="#backup-tab">Backup</a></strong> — add rsync pull steps and send/receive steps</li>
 <li><strong><a href="#offsite-tab">Offsite</a></strong> — review the automatically detected offsite pool and add offsite backup steps</li>
-<li><strong><a href="#checkagainst-tab">Checkagainst</a></strong> — add dataset-counterpart mappings</li>
 <li><strong><a href="#retention-tab">Retention</a></strong> — a <code>default</code> policy is auto-created. Add per-pool policies with <strong>Add Policy</strong> when needed.</li>
+<li><strong><a href="#checkagainst-tab">Checkagainst</a></strong> — add dataset-counterpart mappings</li>
 </ol>
 <h2 id="startup-version-check-two-node">Startup Version Check (Two-Node)<a class="headerlink" href="#startup-version-check-two-node" title="Permanent link">&para;</a></h2>
 <p>When the GUI starts on a host configured for two-node operation, it
@@ -3299,10 +3299,6 @@ confirmation before resizing the window.</p>
 <td>Manage scheduled jobs</td>
 </tr>
 <tr>
-<td><a href="#checkagainst-tab">Checkagainst</a></td>
-<td>Edit the <a href="../../commands-and-modules/modules/#zfscheckagainst"><code>zfscheckagainst</code></a> table</td>
-</tr>
-<tr>
 <td><a href="#pools-tab">Pools</a></td>
 <td>Pool registry + live <code>zpool list</code> status + scrub manager</td>
 </tr>
@@ -3313,6 +3309,10 @@ confirmation before resizing the window.</p>
 <tr>
 <td><a href="#retention-tab">Retention</a></td>
 <td>Per-pool retention policies + prune runner</td>
+</tr>
+<tr>
+<td><a href="#checkagainst-tab">Checkagainst</a></td>
+<td>Edit the <a href="../../commands-and-modules/modules/#zfscheckagainst"><code>zfscheckagainst</code></a> table</td>
 </tr>
 <tr>
 <td><a href="#logs-tab">Logs</a></td>
@@ -5282,7 +5282,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      ZFS Utilities v0.90.0
+      ZFS Utilities v0.90.1
     </div>
   
   
@@ -5307,7 +5307,7 @@ with <strong>Copy</strong> (current selection, or all text if nothing is selecte
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.90.0"}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "toc.integrate", "content.code.copy", "content.action.edit"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": "0.90.1"}</script>
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>

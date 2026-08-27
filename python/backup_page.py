@@ -251,6 +251,7 @@ def create_backup_page(app, ctx):
             app.backup_var_widgets,
             yn_vars=YN_VARIABLES,
             topic_map=_BACKUP_TOPIC_MAP,
+            block_scroll=True,
         )
 
     other_grid = Gtk.Grid()
@@ -271,6 +272,7 @@ def create_backup_page(app, ctx):
             app.backup_var_widgets,
             yn_vars=YN_VARIABLES,
             topic_map=_BACKUP_TOPIC_MAP,
+            block_scroll=True,
         )
 
     # --- ZFS Keys Backup ---

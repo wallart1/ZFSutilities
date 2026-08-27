@@ -1097,6 +1097,19 @@ def _make_section_frame(title_text):
     return frame
 
 
+def _make_config_label(text):
+    """Create a bold label aligned to the top-left of its cell.
+
+    Labels in the Dashboard Configuration grid sit next to multi-line values;
+    valign=START keeps them even with the first line of the value.
+    """
+    lbl = Gtk.Label()
+    lbl.set_markup(f"<b>{text}:</b>")
+    lbl.set_halign(Gtk.Align.START)
+    lbl.set_valign(Gtk.Align.START)
+    return lbl
+
+
 def _gather_dashboard_data(app):
     """Collect all dashboard data. Intended to run in a background thread.
 
@@ -1327,9 +1340,7 @@ def _refresh_config_section_from_data(app, data):
     row = 0
 
     # Mode
-    mode_lbl = Gtk.Label()
-    mode_lbl.set_markup("<b>Mode:</b>")
-    mode_lbl.set_halign(Gtk.Align.START)
+    mode_lbl = _make_config_label("Mode")
     app.dashboard_config_grid.attach(mode_lbl, 0, row, 1, 1)
 
     mode_val = Gtk.Label(label=data["mode"])
@@ -1339,9 +1350,7 @@ def _refresh_config_section_from_data(app, data):
 
     # Hostnames
     for label, hostname in data["hosts"]:
-        lbl = Gtk.Label()
-        lbl.set_markup(f"<b>{label}:</b>")
-        lbl.set_halign(Gtk.Align.START)
+        lbl = _make_config_label(label)
         app.dashboard_config_grid.attach(lbl, 0, row, 1, 1)
 
         val = Gtk.Label(label=hostname)
@@ -1350,9 +1359,7 @@ def _refresh_config_section_from_data(app, data):
         row += 1
 
     # Operating system(s)
-    os_lbl = Gtk.Label()
-    os_lbl.set_markup("<b>Operating system(s):</b>")
-    os_lbl.set_halign(Gtk.Align.START)
+    os_lbl = _make_config_label("Operating system(s)")
     app.dashboard_config_grid.attach(os_lbl, 0, row, 1, 1)
 
     os_info_map = data["os_info_map"]
@@ -1373,9 +1380,7 @@ def _refresh_config_section_from_data(app, data):
     row += 1
 
     # Versions
-    ver_lbl = Gtk.Label()
-    ver_lbl.set_markup("<b>Version(s):</b>")
-    ver_lbl.set_halign(Gtk.Align.START)
+    ver_lbl = _make_config_label("Version(s)")
     app.dashboard_config_grid.attach(ver_lbl, 0, row, 1, 1)
 
     ver_val = Gtk.Label(label=data["versions"])
@@ -1384,9 +1389,7 @@ def _refresh_config_section_from_data(app, data):
     row += 1
 
     # ZFS versions
-    zfs_lbl = Gtk.Label()
-    zfs_lbl.set_markup("<b>ZFS version(s):</b>")
-    zfs_lbl.set_halign(Gtk.Align.START)
+    zfs_lbl = _make_config_label("ZFS version(s)")
     app.dashboard_config_grid.attach(zfs_lbl, 0, row, 1, 1)
 
     zfs_val = Gtk.Label(label=data["zfs_versions"])

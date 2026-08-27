@@ -262,6 +262,7 @@ def create_offsite_page(app, ctx):
             app.offsite_var_widgets,
             yn_vars=OFFSITE_YN_VARIABLES,
             topic_map=_OFFSITE_TOPIC_MAP,
+            block_scroll=True,
         )
 
     adv_grid = Gtk.Grid()
@@ -278,6 +279,7 @@ def create_offsite_page(app, ctx):
             app.offsite_var_widgets,
             yn_vars=OFFSITE_YN_VARIABLES,
             topic_map=_OFFSITE_TOPIC_MAP,
+            block_scroll=True,
         )
 
     app.offsite_pause_scrubs = Gtk.CheckButton(

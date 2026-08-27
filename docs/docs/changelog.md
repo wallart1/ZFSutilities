@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.90.1
+
+*Released 2026-08-27*
+
+### Fixed
+
+- **Dashboard Configuration alignment** — labels in the first column are now
+  top-aligned so they line up with the first line of multi-line values.
+- **Backup/Offsite Advanced scroll-wheel guard** — the mouse scroll wheel can
+  no longer change the values of input widgets in the Advanced sections; the
+  scroll event now scrolls the page instead.
+- **`zfsshowbigstuff` dataset count** — the script now shows the requested
+  number of datasets per section (5 by default) instead of one fewer because
+  of the `zfs list` header line.
+
 ## 0.90.0
 
 *Released 2026-08-27*
