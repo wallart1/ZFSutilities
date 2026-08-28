@@ -435,15 +435,6 @@ function send-receive {
         return 0
     }
 
-    get_oldest_source_snap() {
-        local dataset="$1"
-        local -a snaparray=()
-        readarray -t snaparray < \
-            <(zfs list -t snapshot -o name -S createtxg -H -d1 "$dataset" 2>/dev/null)
-        [[ ${#snaparray[@]} -eq 0 ]] && return 1
-        echo "@${snaparray[-1]##*@}"
-    }
-
     local entry_sourcefs="$sourcefs" entry_destfs="$destfs"
     [[ $1 != '' ]] && sourcefs=$1
     [[ $sourcefs = '' ]] && { log_msg "FATAL: sourcefs (\$1) must be specified."; exit 8; }
@@ -707,7 +698,14 @@ function send-receive {
             if [[ $commsnap_mostrecent = 'OLDEST' && -n "$commsnap" ]]; then
                 base_snap="$commsnap"
             else
-                base_snap=$(get_oldest_source_snap "$fs")
+                local -a _base_snaparray=()
+                readarray -t _base_snaparray < \
+                    <(zfs list -t snapshot -o name -S createtxg -H -d1 "$fs" 2>/dev/null)
+                if [[ ${#_base_snaparray[@]} -eq 0 ]]; then
+                    base_snap=""
+                else
+                    base_snap="@${_base_snaparray[-1]##*@}"
+                fi
             fi
             if [[ -z "$base_snap" ]]; then
                 log_msg "WARN: No source snapshots available for full copy of $fs."

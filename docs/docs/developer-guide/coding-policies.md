@@ -106,7 +106,7 @@ This initializes basic runtime variables and sources commonly-used functions.
 
 ### Functions and Modularity
 
-- **Use functions** to group related logic and improve readability. However, all functions must have more than one calling site.
+- **Use functions** to group related logic and improve readability. Functions should generally have more than one calling site. Small readability helpers or functions created for direct unit testing may have a single call site; avoid splitting out a helper when it only wraps a single expression used once.
 - **Declare variables as `local`** inside functions:
 
     ```bash

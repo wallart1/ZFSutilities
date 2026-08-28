@@ -21,6 +21,7 @@ htmlcov/
 
 # Large / working files not meant for version control
 *.png
+docs/site/
 *.pdf
 *.zip
 PROMPT

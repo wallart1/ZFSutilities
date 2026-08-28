@@ -993,9 +993,10 @@ def add_var_row(
     Otherwise a Gtk.Entry is created.
     The widget is stored in widgets_dict[key].
 
-    When *block_scroll* is True, the widget's scroll-event is consumed so the
-    mouse wheel cannot change ComboBox/SpinButton values; the event still
-    propagates to the parent ScrolledWindow to scroll the page.
+    When *block_scroll* is True, the widget's default scroll-event handling is
+    suppressed so the mouse wheel cannot change ComboBox/SpinButton values; the
+    event is allowed to propagate to the parent ScrolledWindow so the page still
+    scrolls.
     """
     lbl = Gtk.Label(label=key)
     lbl.set_halign(Gtk.Align.END)
@@ -1016,7 +1017,11 @@ def add_var_row(
         widget.set_width_chars(1)
 
     if block_scroll:
-        widget.connect("scroll-event", lambda _w, _e: True)
+        def _on_scroll_event(w, _event):
+            w.stop_emission_by_name("scroll-event")
+            return False
+
+        widget.connect("scroll-event", _on_scroll_event)
 
     grid.attach(widget, 1, row, 1, 1)
     widgets_dict[key] = widget

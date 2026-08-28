@@ -30,8 +30,12 @@ fi
 bashinit
 unset _local_bashinit
 
-source_helper rootcheck
-rootcheck
+if [[ "${ZFSLOCK_REMOTE_TEST_NO_ROOT:-}" == "1" ]]; then
+    rootcheck() { return 0; }
+else
+    source_helper rootcheck
+    rootcheck
+fi
 source_helper zfslockmanager
 
 # Cleanup handler for the hold subcommand.

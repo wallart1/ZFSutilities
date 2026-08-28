@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 0.90.2
+
+*Released 2026-08-28*
+
+### Changed
+
+- **Generated documentation site is no longer tracked in git** — `docs/site/`
+  is now built from `docs/docs/` by `deploy-version` at installation time and
+  is excluded from version control. Developers can still run `mkdocs build` in
+  `docs/` locally to preview the embedded docs viewer.
+- **Coding policy relaxation for single-call-site helpers** — `AGENTS.md` and
+  the developer coding policies now allow small readability helpers or helpers
+  created specifically for unit testing to have a single calling site.
+
+### Internal
+
+- **`zfs-send-receive` helper cleanup** — Removed the single-call-site
+  `get_oldest_source_snap` helper and inlined the small snapshot lookup where
+  it is used.
+- **Remote lock-manager tests no longer require root** —
+  `zfslockmanager-remote` skips its root check when
+  `ZFSLOCK_REMOTE_TEST_NO_ROOT=1` is set, allowing the test suite to run as a
+  regular user.
+- **`zfsshowbigstuff` line-buffering test** — The test now verifies at runtime
+  that `stdbuf -oL` is applied to `zfs list` invocations instead of statically
+  grepping the script source.
+
 ## 0.90.1
 
 *Released 2026-08-27*
@@ -12,7 +39,8 @@
   top-aligned so they line up with the first line of multi-line values.
 - **Backup/Offsite Advanced scroll-wheel guard** — the mouse scroll wheel can
   no longer change the values of input widgets in the Advanced sections; the
-  scroll event now scrolls the page instead.
+  scroll event is now suppressed at the widget and allowed to propagate so the
+  page still scrolls.
 - **`zfsshowbigstuff` dataset count** — the script now shows the requested
   number of datasets per section (5 by default) instead of one fewer because
   of the `zfs list` header line.

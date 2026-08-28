@@ -16,7 +16,9 @@ _run_showbig() {
 
     # The script prefixes zfs list with stdbuf -oL for line buffering.  In a
     # shell function context stdbuf would bypass our zfs mock, so shadow it
-    # with a pass-through that invokes the mocked command directly.
+    # with a pass-through that invokes the mocked command directly.  Also
+    # record when a line-buffered zfs list invocation is seen so tests can
+    # verify the prefix is applied at runtime.
     stdbuf() {
         while [[ $# -gt 0 ]]; do
             case "$1" in
@@ -125,12 +127,50 @@ test_all_sort_sections_emitted() {
 }
 
 test_zfs_list_uses_line_buffering() {
-    test_start "zfs list commands are prefixed with stdbuf -oL"
-    local largest_count smallest_count
-    largest_count=$(grep -c "stdbuf -oL zfs list -rt all -S" "$SHOWBIG_SCRIPT")
-    smallest_count=$(grep -c "stdbuf -oL zfs list -rt all -s" "$SHOWBIG_SCRIPT")
-    assert_equals "1" "$largest_count"
-    assert_equals "1" "$smallest_count"
+    test_start "zfs list commands are prefixed with stdbuf -oL at runtime"
+    local output rc modes
+
+    output=$(
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+        setup_test_env
+
+        rm -f /tmp/zfsutilities_showbig_linebuffer_marker_$$_*
+        stdbuf() {
+            local saw_linebuf=0 sort_flag="" a
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    -oL) saw_linebuf=1; shift ;;
+                    -*) shift ;;
+                    *) break ;;
+                esac
+            done
+            for a in "$@"; do
+                [[ "$a" == "-S" ]] && sort_flag="S"
+                [[ "$a" == "-s" ]] && sort_flag="s"
+            done
+            if [[ $saw_linebuf -eq 1 && -n "$sort_flag" ]]; then
+                echo "$sort_flag" > "/tmp/zfsutilities_showbig_linebuffer_marker_$$_${RANDOM}"
+            fi
+            "$@"
+        }
+        export -f stdbuf
+
+        mock_zpool_list "threeamigos"
+        mock_zfs_fs_list "threeamigos\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-100-disk-0"
+        mock_zfs_dataset_exists "threeamigos"
+        mock_zfs_dataset_exists "threeamigos/proxmox"
+        mock_zfs_dataset_exists "threeamigos/proxmox/vm-100-disk-0"
+        mock_zfs_prop "threeamigos/proxmox/vm-100-disk-0" "recordsize" "8K"
+        source "$SHOWBIG_SCRIPT" "threeamigos/proxmox" "largest" >/dev/null 2>&1
+        source "$SHOWBIG_SCRIPT" "threeamigos/proxmox" "smallest" >/dev/null 2>&1
+        for f in "/tmp/zfsutilities_showbig_linebuffer_marker_$$_"*; do
+            [[ -f "$f" ]] || continue
+            cat "$f" 2>/dev/null
+            rm -f "$f"
+        done | LC_ALL=C sort -u | tr -d '\n'
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    assert_equals "Ss" "$output"
 }
 
 test_largest_shows_requested_number_of_datasets() {

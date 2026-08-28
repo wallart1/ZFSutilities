@@ -184,8 +184,9 @@ Empty arrays: `includes=()`, `excludes=()`.
 ## Documentation Changes
 
 The rendered website under `docs/site/` is generated from the Markdown
-sources in `docs/docs/` by MkDocs. After editing any documentation source
-file, or after changing `VERSION`, run:
+sources in `docs/docs/` by MkDocs. Generated `docs/site/` files are not tracked
+in git. After editing any documentation source file, or after changing `VERSION`,
+run:
 
 ```bash
 cd "docs"
@@ -193,12 +194,18 @@ mkdocs build
 ```
 
 This updates `site/` (including the footer version stamp, which is injected
-from `VERSION` by `hooks/version_stamp.py`). Include the regenerated `site/`
-files in the same commit as the source changes.
+from `VERSION` by `hooks/version_stamp.py`). The generated files should not be
+committed.
 
 If you are still deciding the release version, you can delay the `mkdocs build`
-until after `VERSION` and `changelog.md` are final, then rebuild once and commit
-the result.
+until after `VERSION` and `changelog.md` are final, then rebuild once before
+testing the embedded docs viewer or deploying.
+
+The embedded docs viewer requires a built site. On a fresh repo checkout used
+for GUI development, run `mkdocs build` in `docs/` before opening the viewer.
+Production deployments do not require a manual build: `deploy-version` (called
+by both installers) rebuilds `docs/site/` in the versioned installation
+directory automatically.
 
 ## Committing Changes to `bashinit`
 

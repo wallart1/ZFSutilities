@@ -132,6 +132,46 @@ test_share_directory_copied
 test_rsync_deletes_stale_files
 
 # ------------------------------------------------------------------
+# Replicate the docs build step from deploy-version deploy_to_host
+# ------------------------------------------------------------------
+test_docs_site_is_built() {
+    test_start "deploy-version builds docs/site/ from mkdocs source"
+    if ! command -v mkdocs &>/dev/null; then
+        test_skip "mkdocs is not installed"
+        return
+    fi
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/docs/docs"
+    cat > "$tmpdir/docs/mkdocs.yml" <<'EOF'
+site_name: Test Deploy
+docs_dir: docs
+EOF
+    cat > "$tmpdir/docs/docs/index.md" <<'EOF'
+# Test
+EOF
+    mkdir -p "$tmpdir/versions/v1/docs"
+    _test_rsync_copy "$tmpdir/docs" "$tmpdir/versions/v1/docs"
+
+    if [[ -f "$tmpdir/versions/v1/docs/mkdocs.yml" ]]; then
+        if ! (cd "$tmpdir/versions/v1/docs" && mkdocs build >/dev/null 2>&1); then
+            rm -rf "$tmpdir"
+            test_fail "mkdocs build failed"
+            return
+        fi
+    fi
+
+    if [[ -f "$tmpdir/versions/v1/docs/site/index.html" ]]; then
+        test_pass
+    else
+        test_fail "docs/site/index.html was not generated"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_docs_site_is_built
+
+# ------------------------------------------------------------------
 # Replicate the validation logic from deploy-version validate_critical_scripts
 # ------------------------------------------------------------------
 _test_validate_logic() {

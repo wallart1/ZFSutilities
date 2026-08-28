@@ -19,6 +19,7 @@ _run_agent() {
     ZFSLOCK_LOCKS_DIR="$REMOTE_LOCK_DIR/.locks" \
     ZFSLOCK_PIDS_DIR="$REMOTE_LOCK_DIR/.pids" \
     ZFSLOCK_REMOTE_DISABLED=1 \
+    ZFSLOCK_REMOTE_TEST_NO_ROOT=1 \
     bash "$AGENT_SCRIPT" "$@" 2>&1
 }
 
@@ -32,12 +33,12 @@ _cleanup_remote_locks() {
 # Globals set: _HOLDER_AGENT_PID, _HOLDER_WRITER_PID
 _start_holder() {
     local dataset="$1" type="$2" description="$3"
-    local fifo="$_mock_zfs_state_dir/holder_$$_${RANDOM}.fifo"
-    mkfifo "$fifo" || return 1
+    _HOLDER_FIFO="$_mock_zfs_state_dir/holder_$$_${RANDOM}.fifo"
+    mkfifo "$_HOLDER_FIFO" || return 1
 
     # Hold the write end open with a sleeping subshell.
     (
-        exec 3>"$fifo"
+        exec 3>"$_HOLDER_FIFO"
         sleep 3600
     ) &
     _HOLDER_WRITER_PID=$!
@@ -47,10 +48,9 @@ _start_holder() {
     ZFSLOCK_LOCKS_DIR="$REMOTE_LOCK_DIR/.locks" \
     ZFSLOCK_PIDS_DIR="$REMOTE_LOCK_DIR/.pids" \
     ZFSLOCK_REMOTE_DISABLED=1 \
-    bash "$AGENT_SCRIPT" hold "$dataset" "$type" "$description" < "$fifo" >/dev/null 2>&1 &
+    ZFSLOCK_REMOTE_TEST_NO_ROOT=1 \
+    bash "$AGENT_SCRIPT" hold "$dataset" "$type" "$description" < "$_HOLDER_FIFO" >/dev/null 2>&1 &
     _HOLDER_AGENT_PID=$!
-
-    rm -f "$fifo"
 }
 
 _stop_holder() {
@@ -58,8 +58,10 @@ _stop_holder() {
     [[ -n "${_HOLDER_AGENT_PID:-}" ]] && kill "$_HOLDER_AGENT_PID" 2>/dev/null
     [[ -n "${_HOLDER_AGENT_PID:-}" ]] && wait "$_HOLDER_AGENT_PID" 2>/dev/null
     [[ -n "${_HOLDER_WRITER_PID:-}" ]] && wait "$_HOLDER_WRITER_PID" 2>/dev/null
+    [[ -n "${_HOLDER_FIFO:-}" ]] && rm -f "$_HOLDER_FIFO"
     _HOLDER_AGENT_PID=""
     _HOLDER_WRITER_PID=""
+    _HOLDER_FIFO=""
 }
 
 _wait_for_lock() {

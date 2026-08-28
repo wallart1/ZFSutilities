@@ -259,7 +259,7 @@ they are still listed when they would be pruned by `zfscleanup`.
 - `lib/` - Sourced shell libraries
 - `python/` - GTK/Python GUI source
 - `docs/docs/` - Documentation source (MkDocs)
-- `docs/site/` - Generated documentation site
+- `docs/site/` - Generated documentation site (not tracked; run `mkdocs build` in `docs/`)
 - `share/` - Static resources, templates, and sample configurations
 - `tests/` - Bash and Python test suites
 
@@ -602,7 +602,7 @@ This project uses **bash** (not sh). Follow these conventions:
 - **Declare `local` variables** inside functions.
   - **Exception**: output variables that callers read (like `$fsarray`) are intentionally global and should **not** be declared `local`.
 - **Apply Single Responsibility Principle**: each function should do one thing.
-- **No single-caller functions**: Functions should have at least two calling sites. Otherwise, keep the code inline.
+- **Single-call-site helpers**: Functions should generally have at least two calling sites. Small readability helpers or functions created for direct unit testing may have a single call site; avoid splitting out a helper when it only wraps a single expression used once.
 - **Never use absolute line numbers when editing files** Instead, use surrounding context to locate the editing target location.
 
 **Project-specific patterns:**
@@ -689,7 +689,7 @@ The GTK GUI code in `python/` follows standard Python conventions:
 - **Docstrings**: Triple quotes (`"""`) for modules, classes, and functions.
 - **Avoid mutable defaults** in function parameters.
 - **Comparisons to `None`**: Use `is None` / `is not None`.
-- **No single-caller functions**: Functions should have at least two calling sites. Otherwise, keep the code inline.
+- **Single-call-site helpers**: Functions should generally have at least two calling sites. Small readability helpers or functions created for direct unit testing may have a single call site; avoid splitting out a helper when it only wraps a single expression used once.
 - **Never use absolute line numbers when editing files** Instead, use surrounding context to locate the editing target location.
 
 **Logging:**
