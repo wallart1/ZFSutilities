@@ -92,7 +92,7 @@ def _update_logs_status_label(app, text):
 #   "2026-05-11_16-42-30_gui_offsite_backup.log"      -> type=gui, name=offsite_backup (legacy)
 _LOG_FILENAME_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_"
-    r"(backup|offsite|restore|prune|gui)_(.+)\.log$"
+    r"(backup|offsite|restore|prune|dataset|gui)_(.+)\.log$"
 )
 
 _CHUNK_READ_BYTES = 256 * 1024  # 256 KB per "Show More" click
@@ -272,7 +272,7 @@ def create_logs_page(app):
 
     cols = [
         (COL_DATETIME, "Date/Time", 160, "Session log timestamp"),
-        (COL_TYPE, "Type", 70, "Log type: backup, offsite, restore, prune, or gui"),
+        (COL_TYPE, "Type", 70, "Log type: backup, offsite, restore, prune, dataset, or gui"),
         (COL_NAME, "Name", 140, "Name of the operation or profile"),
         (COL_STATUS, "Status", 70, "Completion status"),
         (COL_SIZE, "Log Size", 65, "Size of the log file on disk"),

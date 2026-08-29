@@ -233,6 +233,8 @@ class BackupRunner:
             return "restore"
         elif "prune" in label_lower or "retention" in label_lower:
             return "prune"
+        elif "dataset" in label_lower:
+            return "dataset"
         return "backup"
 
     def _create_session_log_file(self):

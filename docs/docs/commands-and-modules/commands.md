@@ -2135,13 +2135,16 @@ sudo zfsrestore [overrides]
 | `$sourcefsremovequalifiers` | Leading qualifiers to strip                                               | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$destfs`                   | Pool/subpool to prepend after stripping leading qualifiers.               | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$label`                    | Snapshot label to restore                                                 | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
+| `$depth`                    | Recursion depth (`''` = full subtree, `0` = named dataset only)           | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$includes`, `$excludes`    | Dataset filters                                                           | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$nextsnap`                 | Snapshot name limit (optional; `'notneeded'` to look up newest on source) | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 
 The restore sends the oldest source snapshot as a full stream, then sends
 an incremental stream with intermediates to catch up to the newest source
 snapshot. Both steps are performed inside a single `zfs-send-receive`
-invocation.
+invocation. By default the dataset list is built with unlimited recursion,
+so the named dataset and all of its descendants are restored. Set `depth=0`
+to restore only the named dataset.
 
 **Called modules:**
 

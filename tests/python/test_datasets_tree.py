@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
@@ -18,7 +19,7 @@ from gui_helpers import build_full_dataset_name, on_row_expanded
 from zfs_repository import ZfsRepository
 
 SNAPSHOT_CMD = "zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones -d 1"
-DATASET_CMD = "zfs list -H -o name,creation,type,used,avail,refer,origin,clones -r -d 1"
+DATASET_CMD = "zfs list -H -o name,creation,type,used,avail,refer,origin,clones,mounted -r -d 1"
 
 
 def _make_repo(stdout_map):
@@ -38,10 +39,10 @@ class TestDatasetRowExpansion(unittest.TestCase):
     """Expanding a dataset row loads snapshots and sub-datasets."""
 
     def _tree_with_dataset(self):
-        store = Gtk.TreeStore(str, str, str, str, str, str, str, bool)
-        root = store.append(None, ["threeamigos", "", "", "", "", "", "", False])
-        ds = store.append(root, ["proxmox", "", "filesystem", "", "", "", "", False])
-        store.append(ds, ["(loading...)", "", "", "", "", "", "", True])
+        store = Gtk.TreeStore(str, str, str, str, str, str, str, bool, bool, str)
+        root = store.append(None, ["threeamigos", "", "", "", "", "", "", False, True, None])
+        ds = store.append(root, ["proxmox", "", "filesystem", "", "", "", "", False, True, None])
+        store.append(ds, ["(loading...)", "", "", "", "", "", "", True, False, None])
         view = Gtk.TreeView(model=store)
         return store, view, ds
 
@@ -56,8 +57,8 @@ class TestDatasetRowExpansion(unittest.TestCase):
                     "threeamigos/proxmox@snap1\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
                 ),
                 f"{DATASET_CMD} threeamigos/proxmox": (
-                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
-                    "threeamigos/proxmox/vm-100\t2025-01-01\tvolume\t5G\t-\t5G\t-\t-\n"
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\tyes\n"
+                    "threeamigos/proxmox/vm-100\t2025-01-01\tvolume\t5G\t-\t5G\t-\t-\tyes\n"
                 ),
             }
         )
@@ -88,8 +89,8 @@ class TestDatasetRowExpansion(unittest.TestCase):
                     "threeamigos/proxmox/sub@snap2\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
                 ),
                 f"{DATASET_CMD} threeamigos/proxmox": (
-                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
-                    "threeamigos/proxmox/sub\t2025-01-01\tfilesystem\t1G\t-\t1G\t-\t-\n"
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\tyes\n"
+                    "threeamigos/proxmox/sub\t2025-01-01\tfilesystem\t1G\t-\t1G\t-\t-\tyes\n"
                 ),
             }
         )
@@ -113,7 +114,7 @@ class TestDatasetRowExpansion(unittest.TestCase):
             {
                 f"{SNAPSHOT_CMD} threeamigos/proxmox": "",
                 f"{DATASET_CMD} threeamigos/proxmox": (
-                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\tyes\n"
                 ),
             }
         )
@@ -139,7 +140,7 @@ class TestDatasetRowExpansion(unittest.TestCase):
                     "threeamigos/proxmox/sub/deeper@snap3\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
                 ),
                 f"{DATASET_CMD} threeamigos/proxmox": (
-                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\tyes\n"
                 ),
             }
         )
@@ -149,6 +150,70 @@ class TestDatasetRowExpansion(unittest.TestCase):
 
         children = [store.get_value(c, 0) for c in self._iter_children(store, ds)]
         self.assertEqual(children, ["@snap1"])
+
+    def test_unmounted_dataset_gets_teal_foreground(self):
+        """An unmounted child dataset is tinted in the unmounted text color."""
+        repo = _make_repo(
+            {
+                f"{SNAPSHOT_CMD} threeamigos/proxmox": "",
+                f"{DATASET_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\tyes\n"
+                    "threeamigos/proxmox/sub\t2025-01-01\tfilesystem\t1G\t-\t1G\t-\t-\tno\n"
+                ),
+            }
+        )
+        store, view, ds = self._tree_with_dataset()
+        view._zfs_repo = repo
+        on_row_expanded(view, ds, store.get_path(ds))
+
+        sub = None
+        child = store.iter_children(ds)
+        while child:
+            if store.get_value(child, 0) == "sub":
+                sub = child
+                break
+            child = store.iter_next(child)
+        self.assertIsNotNone(sub)
+        self.assertFalse(store.get_value(sub, 8))
+        self.assertEqual(store.get_value(sub, 9), "#00797A")
+
+    def test_mounted_snapshot_is_not_tinted(self):
+        """A snapshot that is explicitly mounted is not tinted."""
+        repo = _make_repo(
+            {
+                f"{SNAPSHOT_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox@snap1\t2025-01-01\tsnapshot\t0B\t-\t50G\t-\t-\n"
+                ),
+                f"{DATASET_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\tyes\n"
+                ),
+            }
+        )
+        # Simulate the snapshot being explicitly mounted.
+        mount_output = "threeamigos/proxmox@snap1 on /threeamigos/proxmox/.zfs/snapshot/snap1"
+
+        def _mock_subprocess_run(cmd, **kwargs):
+            if cmd[:3] == ["mount", "-t", "zfs"]:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout=mount_output, stderr=""
+                )
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        store, view, ds = self._tree_with_dataset()
+        view._zfs_repo = repo
+        with patch("subprocess.run", side_effect=_mock_subprocess_run):
+            on_row_expanded(view, ds, store.get_path(ds))
+
+        snap = None
+        child = store.iter_children(ds)
+        while child:
+            if store.get_value(child, 0) == "@snap1":
+                snap = child
+                break
+            child = store.iter_next(child)
+        self.assertIsNotNone(snap)
+        self.assertTrue(store.get_value(snap, 8))
+        self.assertIsNone(store.get_value(snap, 9))
 
     def _iter_children(self, store, parent_iter):
         """Yield direct child iters of parent_iter."""

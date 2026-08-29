@@ -104,6 +104,7 @@ RESTORE_DEFAULTS = {
     "source": "",
     "dest": "",
     "auto_dest": False,
+    "recursive": False,
     "variables": {
         "depth": "",
         "label": "",
@@ -121,7 +122,15 @@ RESTORE_DEFAULTS = {
 def get_restore_config(config):
     defaults = _deep_copy(RESTORE_DEFAULTS)
     restore = config.get("restore", {})
-    for key in ("source", "dest", "auto_dest", "do_part1", "do_part2", "pause_scrubs"):
+    for key in (
+        "source",
+        "dest",
+        "auto_dest",
+        "recursive",
+        "do_part1",
+        "do_part2",
+        "pause_scrubs",
+    ):
         if key not in restore:
             restore[key] = defaults[key]
     merged_vars = dict(defaults["variables"])

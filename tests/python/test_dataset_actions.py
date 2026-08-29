@@ -321,8 +321,8 @@ class TestDeleteDatasetsRunner(unittest.TestCase):
         app.dataset_runner.start.assert_not_called()
 
 
-class TestUnmountSnapshot(unittest.TestCase):
-    """on_datasets_unmount_snapshot acquires a write lock before umount."""
+class TestUnmount(unittest.TestCase):
+    """on_datasets_unmount acquires a write lock before umount."""
 
     def setUp(self):
         zlm._lock_refcounts.clear()
@@ -362,7 +362,7 @@ class TestUnmountSnapshot(unittest.TestCase):
             patch.object(da, "zlm") as mock_zlm,
         ):
             mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
-            da.on_datasets_unmount_snapshot(app)
+            da.on_datasets_unmount(app)
 
             mock_zlm.lock.assert_called_once_with(
                 "tank/vm-100",
@@ -403,7 +403,7 @@ class TestUnmountSnapshot(unittest.TestCase):
             mock_zlm.lock.side_effect = RuntimeError(
                 "conflict: cannot acquire w lock on tank/vm-100"
             )
-            da.on_datasets_unmount_snapshot(app)
+            da.on_datasets_unmount(app)
 
             mock_zlm.lock.assert_called_once()
             mock_subprocess.run.assert_not_called()
@@ -438,13 +438,366 @@ class TestUnmountSnapshot(unittest.TestCase):
             mock_subprocess.run.return_value = MagicMock(
                 returncode=1, stderr="umount: target is busy"
             )
-            da.on_datasets_unmount_snapshot(app)
+            da.on_datasets_unmount(app)
 
             mock_subprocess.run.assert_called_once()
             mock_log.assert_any_call(
                 "WARN: Snapshot tank/vm-100@manual-2025-01-01 is busy. "
                 "Please close any file manager windows and try again."
             )
+
+
+class TestUnmountDataset(unittest.TestCase):
+    """on_datasets_unmount handles filesystem datasets."""
+
+    def setUp(self):
+        zlm._lock_refcounts.clear()
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+
+            return da
+
+    def _make_app(self):
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.get_property.return_value = "/tank/vm-100"
+        return app
+
+    def test_unmounts_filesystem_dataset(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "refresh_datasets_page") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_unmount(app)
+
+            mock_zlm.lock.assert_called_once_with("tank/vm-100", "w", "umount tank/vm-100")
+            mock_subprocess.run.assert_called_once_with(
+                ["sudo", "zfs", "unmount", "tank/vm-100"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            mock_log.assert_any_call("INFO: Unmounted tank/vm-100")
+            mock_refresh.assert_called_once_with(app)
+
+    def test_warns_when_dataset_unmount_busy(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[(123, "bash")]),
+            patch.object(da, "refresh_datasets_page") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm"),
+            patch.object(da, "Gtk") as mock_gtk,
+        ):
+            da.on_datasets_unmount(app)
+
+            mock_gtk.MessageDialog.assert_called_once()
+            mock_subprocess.run.assert_not_called()
+            mock_log.assert_not_called()
+            mock_refresh.assert_not_called()
+
+
+class TestMount(unittest.TestCase):
+    """on_datasets_mount handles filesystems and snapshots."""
+
+    def setUp(self):
+        zlm._lock_refcounts.clear()
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+
+            return da
+
+    def _make_app(self):
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        return app
+
+    def test_mounts_filesystem_dataset(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "refresh_datasets_page") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_mount(app)
+
+            mock_zlm.lock.assert_called_once_with("tank/vm-100", "w", "mount tank/vm-100")
+            mock_subprocess.run.assert_called_once_with(
+                ["sudo", "zfs", "mount", "tank/vm-100"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            mock_log.assert_any_call("INFO: Mounted tank/vm-100")
+            mock_refresh.assert_called_once_with(app)
+
+    def test_warns_when_filesystem_mount_fails(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "refresh_datasets_page") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm"),
+        ):
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=1, stderr="cannot mount 'tank/vm-100': mountpoint or dataset is busy"
+            )
+            da.on_datasets_mount(app)
+
+            mock_log.assert_any_call(
+                "WARN: Error mounting tank/vm-100: cannot mount 'tank/vm-100': "
+                "mountpoint or dataset is busy"
+            )
+            mock_refresh.assert_not_called()
+
+    def test_warns_when_filesystem_mount_lock_conflicts(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "refresh_datasets_page") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            mock_zlm.lock.side_effect = RuntimeError(
+                "conflict: cannot acquire w lock on tank/vm-100"
+            )
+            da.on_datasets_mount(app)
+
+            mock_zlm.lock.assert_called_once_with("tank/vm-100", "w", "mount tank/vm-100")
+            mock_subprocess.run.assert_not_called()
+            mock_log.assert_called_once_with(
+                "WARN: cannot mount tank/vm-100: conflict: cannot acquire w lock on tank/vm-100"
+            )
+            mock_refresh.assert_not_called()
+
+    def test_mounts_snapshot_by_auto_mount_path(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[{"type": "snapshot", "dataset": "tank/vm-100", "name": "snap1"}],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tank/vm-100/.zfs/snapshot/snap1",
+            ),
+            patch.object(da, "update_ds_button_sensitivity") as mock_update,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da.os.path, "isdir", return_value=False),
+            patch.object(da.os, "listdir", return_value=[]),
+        ):
+            app.ctx.zfs_repository.get_property.return_value = "yes"
+            da.on_datasets_mount(app)
+
+            mock_zlm.lock.assert_called_once_with(
+                "tank/vm-100", "w", "mount snapshot tank/vm-100@snap1"
+            )
+            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap1")
+            mock_update.assert_called_once_with(app)
+
+    def test_warns_when_snapshot_parent_not_mounted(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[{"type": "snapshot", "dataset": "tank/vm-100", "name": "snap1"}],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tank/vm-100/.zfs/snapshot/snap1",
+            ),
+            patch.object(da, "update_ds_button_sensitivity"),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da.os.path, "isdir", return_value=False),
+        ):
+            app.ctx.zfs_repository.get_property.return_value = "no"
+            da.on_datasets_mount(app)
+
+            mock_log.assert_any_call(
+                "WARN: Cannot mount tank/vm-100@snap1: parent dataset "
+                "tank/vm-100 is not mounted. Mount the parent first."
+            )
+            mock_zlm.lock.assert_called_once()
+
+    def test_warns_when_snapshot_mountpoint_resolution_fails(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[{"type": "snapshot", "dataset": "tank/vm-100", "name": "snap1"}],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                side_effect=FileNotFoundError("no such snapshot path"),
+            ),
+            patch.object(da, "update_ds_button_sensitivity"),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
+        ):
+            da.on_datasets_mount(app)
+
+            mock_log.assert_called_once_with(
+                "WARN: Error mounting snapshot tank/vm-100@snap1: no such snapshot path"
+            )
+
+
+class TestBrowse(unittest.TestCase):
+    """on_datasets_browse opens filesystems and snapshots."""
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+
+            return da
+
+    def _make_app(self):
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        return app
+
+    def test_opens_filesystem_mountpoint(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            app.ctx.zfs_repository.get_property.return_value = "/tank/vm-100"
+            da.on_datasets_browse(app)
+
+            mock_subprocess.Popen.assert_called_once_with(["xdg-open", "/tank/vm-100"])
+            mock_log.assert_any_call("INFO: Opened /tank/vm-100")
+
+    def test_browses_snapshot_via_zfs_path(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[{"type": "snapshot", "dataset": "tank/vm-100", "name": "snap1"}],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tank/vm-100/.zfs/snapshot/snap1",
+            ),
+            patch.object(da, "update_ds_button_sensitivity") as mock_update,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            da.on_datasets_browse(app)
+
+            mock_subprocess.Popen.assert_called_once_with(
+                ["xdg-open", "/tank/vm-100/.zfs/snapshot/snap1"]
+            )
+            mock_log.assert_any_call("INFO: Browsing snapshot tank/vm-100@snap1")
+            mock_update.assert_called_once_with(app)
 
 
 class TestDeleteSnapshots(unittest.TestCase):
@@ -474,9 +827,7 @@ class TestDeleteSnapshots(unittest.TestCase):
             da._delete_snapshots(app, [snap], selected_holds=[hold])
             patched_log = da.log_msg
 
-        app.ctx.zfs_repository.release.assert_called_once_with(
-            "keep", "tank/vm-100@snap-1"
-        )
+        app.ctx.zfs_repository.release.assert_called_once_with("keep", "tank/vm-100@snap-1")
         app.ctx.zfs_repository.destroy.assert_called_once_with("tank/vm-100@snap-1")
         patched_log.assert_any_call("INFO: Released 'keep' on tank/vm-100@snap-1")
         patched_log.assert_any_call("INFO: Deleted: tank/vm-100@snap-1")
@@ -531,9 +882,7 @@ class TestDeleteSnapshots(unittest.TestCase):
         with _patch_module(), patch.object(da, "_confirm_yes_no", return_value=True):
             da._delete_snapshots(app, [snap], selected_holds=[hold])
 
-        app.ctx.zfs_repository.release.assert_called_once_with(
-            "keep", "tank/vm-100@snap-2"
-        )
+        app.ctx.zfs_repository.release.assert_called_once_with("keep", "tank/vm-100@snap-2")
         app.ctx.zfs_repository.destroy.assert_called_once_with("tank/vm-100@snap-1")
 
     def test_locks_include_both_snapshot_and_hold_parents(self):

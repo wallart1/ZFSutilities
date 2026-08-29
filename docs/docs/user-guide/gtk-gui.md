@@ -725,6 +725,11 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   destination is also refreshed when the Restore tab is opened or when the
   source entry changes while auto-destination is enabled.
 
+  Enable **Restore entire subtree (recursive)** to restore the named dataset
+  and all of its descendants. When unchecked (the default), only the named
+  dataset is restored. The Advanced **depth** field overrides this checkbox if
+  set.
+
 - **Advanced** — Collapsible expander with
   [dataset-selection criteria](#dataset-selection-criteria)
   (`depth`, `includes`, `excludes`, `startwith`, `endwith`), the snapshot
@@ -1461,6 +1466,11 @@ The **Origin / Clones** column shows:
   dataset names
 - Empty for all other rows
 
+Unmounted filesystems and snapshots are shown in **teal** text so you can spot
+at a glance which items are not currently browseable. Each snapshot has its own
+mount indicator; the parent dataset's mount state is shown separately on the
+parent row.
+
 ### Snapshot and hold actions
 
 The list supports multi-select; action buttons are enabled or disabled
@@ -1472,9 +1482,9 @@ based on what is selected.
 | **Delete**           | Only snapshots and/or holds selected             | Releases the selected hold tags, then destroys the selected snapshots (`zfs destroy`). If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well. |
 | **Add Hold**         | At least one snapshot selected                   | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                      |
 | **Rollback**         | Exactly one snapshot selected                    | Rolls the dataset back to that snapshot (destroys newer snapshots)                                                                                                                                               |
-| **Show Files**       | Exactly one mounted filesystem selected          | Opens the dataset's mountpoint in the default file manager (via `xdg-open`). Disabled for pools, volumes, snapshots, holds, and unmounted filesystems.                                                           |
-| **Browse Snapshot**  | Exactly one snapshot selected, parent mounted    | Opens the snapshot via `.zfs/snapshot/<name>` in the default file manager. ZFS auto-mounts the snapshot on first access.                                                                                         |
-| **Unmount Snapshot** | Exactly one snapshot selected, currently mounted | Runs `sudo umount` on the snapshot's `.zfs/snapshot/<name>` path. If processes are still using the snapshot, a warning dialog lists them and asks you to close them before retrying.                             |
+| **Browse**           | Exactly one mounted filesystem or snapshot selected | Opens the selected item in the default file manager. Filesystems open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`.                                                                      |
+| **Mount**            | Exactly one unmounted filesystem or snapshot selected | Mounts the selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for a snapshot. Disabled for pools, volumes, and holds.                                                                          |
+| **Unmount**          | Exactly one mounted filesystem or snapshot selected | Unmounts the selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). If processes are still using it, a warning dialog lists them and asks you to close them before retrying. |
 | **Refresh**          | Always                                           | Re-reads all pools, datasets, snapshots, and holds while preserving the tree's vertical scroll position and current selection whenever possible                                                                  |
 | **Expand Selected**  | One or more pool/dataset/snapshot rows selected  | Recursively expands each selected row and its lazy-loaded descendants. Placeholder rows and hold tags are skipped.                                                                                               |
 | **Collapse All**     | Always                                           | Collapses the entire tree                                                                                                                                                                                        |

@@ -33,8 +33,22 @@ def bold_label(text):
 ACTIVE_COLUMN_WIDTH = 60
 TREEVIEW_MIN_WIDTH = 100
 
+# Foreground color for rows that are not mounted (visible in light and dark themes).
+UNMOUNTED_FG = "#00797A"
+
 # Placeholder rows used while lazy-loading tree children.
 PLACEHOLDER_NAMES = {"(loading...)", "(no datasets)", "(empty)", "(no holds)"}
+
+
+def _row_fg_color(mounted, ds_type):
+    """Return the foreground color for a dataset/snapshot row.
+
+    Unmounted filesystems and snapshots are tinted so users can spot them
+    immediately. Placeholders, holds, and pools keep the default color.
+    """
+    if not mounted and ds_type in ("filesystem", "snapshot"):
+        return UNMOUNTED_FG
+    return None
 
 
 def configure_treeview_column(col, width=None, min_width=20, resizable=True):
@@ -86,7 +100,12 @@ def setup_row_scroll(scrolled_window, treeview):
 
 def dataset_name_cell_func(column, renderer, model, tree_iter, data=None):
     """Style: bold for pools, italic for snapshots and holds, normal for datasets.
-    Clone datasets get a [clone] suffix. Placeholder rows are gray italic."""
+    Clone datasets get a [clone] suffix. Placeholder rows are gray italic.
+
+    Foreground color for unmounted rows is supplied by the `foreground` column
+    attribute on the Name renderer; this function only overrides it for gray
+    placeholder text.
+    """
     name = model.get_value(tree_iter, 0)
     if name in ("(loading...)", "(no datasets)", "(empty)", "(no holds)"):
         renderer.set_property("weight", Pango.Weight.NORMAL)
@@ -100,25 +119,21 @@ def dataset_name_cell_func(column, renderer, model, tree_iter, data=None):
     if model.iter_parent(tree_iter) is None:
         renderer.set_property("weight", Pango.Weight.BOLD)
         renderer.set_property("style", Pango.Style.NORMAL)
-        renderer.set_property("foreground", None)
         renderer.set_property("markup", None)
         renderer.set_property("text", name)
     elif ds_type == "hold" or name.startswith("@"):
         renderer.set_property("weight", Pango.Weight.NORMAL)
         renderer.set_property("style", Pango.Style.ITALIC)
-        renderer.set_property("foreground", None)
         renderer.set_property("markup", None)
         renderer.set_property("text", name)
     elif origin and ds_type in ("filesystem", "volume"):
         escaped = GLib.markup_escape_text(name)
         renderer.set_property("weight", Pango.Weight.NORMAL)
         renderer.set_property("style", Pango.Style.NORMAL)
-        renderer.set_property("foreground", None)
         renderer.set_property("markup", f'{escaped} <span foreground="gray">[clone]</span>')
     else:
         renderer.set_property("weight", Pango.Weight.NORMAL)
         renderer.set_property("style", Pango.Style.NORMAL)
-        renderer.set_property("foreground", None)
         renderer.set_property("markup", None)
         renderer.set_property("text", name)
 
@@ -331,7 +346,7 @@ def on_row_expanded(view, tree_iter, path, _data=None):
             label = "(no holds)"
         else:
             label = "(empty)"
-        store.append(tree_iter, [label, "", "", "", "", "", "", True])
+        store.append(tree_iter, [label, "", "", "", "", "", "", True, False, None])
 
     # Now safe to remove dummy — row still has at least one child
     child = store.iter_children(tree_iter)
@@ -349,6 +364,8 @@ def load_pool_children(store, pool_iter, pool_name, repo=None):
         for row in repo.list_datasets(pool=pool_name, depth=1):
             row_data = [row.creation, row.ds_type, row.used, row.avail, row.refer]
             origin_val = row.origin if row.origin != "-" else ""
+            mounted = row.mounted == "yes"
+            fg_color = _row_fg_color(mounted, row.ds_type)
 
             if row.name == pool_name:
                 # Update pool row with real data
@@ -366,21 +383,45 @@ def load_pool_children(store, pool_iter, pool_name, repo=None):
                     row_data[4],
                     6,
                     "",
+                    8,
+                    True,
+                    9,
+                    None,
                 )
                 continue
 
             short_name = row.name.rsplit("/", 1)[-1]
-            child_iter = store.append(pool_iter, [short_name] + row_data + [origin_val, False])
+            child_iter = store.append(
+                pool_iter,
+                [short_name] + row_data + [origin_val, False, mounted, fg_color],
+            )
             # Add dummy so dataset appears expandable
-            store.append(child_iter, ["(loading...)", "", "", "", "", "", "", True])
+            store.append(
+                child_iter,
+                ["(loading...)", "", "", "", "", "", "", True, False, None],
+            )
 
     except subprocess.CalledProcessError as e:
-        store.append(pool_iter, ["(error)", str(e), "", "", "", "", "", True])
+        store.append(pool_iter, ["(error)", str(e), "", "", "", "", "", True, False, None])
 
 
 def load_dataset_children(store, ds_iter, ds_name, repo=None):
     """Load snapshots and sub-datasets for a dataset (snapshots first)."""
     repo = repo or get_default_repository()
+
+    # Build a set of explicitly mounted ZFS snapshots so each snapshot row can
+    # show its own mount state independent of the parent dataset.
+    mounted_snaps = set()
+    try:
+        mount_result = subprocess.run(
+            ["mount", "-t", "zfs"], capture_output=True, text=True, check=False
+        )
+        for line in mount_result.stdout.splitlines():
+            parts = line.split()
+            if parts and "@" in parts[0]:
+                mounted_snaps.add(parts[0])
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
 
     # Load snapshots of this exact dataset (not descendants).
     # depth=1 is required because ZFS does not list a dataset's own snapshots
@@ -395,8 +436,16 @@ def load_dataset_children(store, ds_iter, ds_name, repo=None):
             snap_part = "@" + row.name.split("@")[1]
             row_data = [row.creation, row.ds_type, row.used, row.avail, row.refer]
             clones_val = row.clones if row.clones != "-" else ""
-            child_iter = store.append(ds_iter, [snap_part] + row_data + [clones_val, False])
-            store.append(child_iter, ["(loading...)", "", "", "", "", "", "", True])
+            mounted = row.name in mounted_snaps
+            fg_color = _row_fg_color(mounted, "snapshot")
+            child_iter = store.append(
+                ds_iter,
+                [snap_part] + row_data + [clones_val, False, mounted, fg_color],
+            )
+            store.append(
+                child_iter,
+                ["(loading...)", "", "", "", "", "", "", True, False, None],
+            )
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Could not load snapshots for {ds_name}: {e}")
 
@@ -409,8 +458,16 @@ def load_dataset_children(store, ds_iter, ds_name, repo=None):
             row_data = [row.creation, row.ds_type, row.used, row.avail, row.refer]
             origin_val = row.origin if row.origin != "-" else ""
             short_name = row.name.rsplit("/", 1)[-1]
-            child_iter = store.append(ds_iter, [short_name] + row_data + [origin_val, False])
-            store.append(child_iter, ["(loading...)", "", "", "", "", "", "", True])
+            mounted = row.mounted == "yes"
+            fg_color = _row_fg_color(mounted, row.ds_type)
+            child_iter = store.append(
+                ds_iter,
+                [short_name] + row_data + [origin_val, False, mounted, fg_color],
+            )
+            store.append(
+                child_iter,
+                ["(loading...)", "", "", "", "", "", "", True, False, None],
+            )
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Could not load children for {ds_name}: {e}")
 
@@ -420,7 +477,10 @@ def load_snapshot_children(store, snap_iter, snap_name, repo=None):
     repo = repo or get_default_repository()
     try:
         for hold in repo.list_holds(snap_name):
-            store.append(snap_iter, [hold.tag, hold.date, "hold", "", "", "", "", True])
+            store.append(
+                snap_iter,
+                [hold.tag, hold.date, "hold", "", "", "", "", True, False, None],
+            )
     except subprocess.CalledProcessError:
         pass
 
@@ -1017,6 +1077,7 @@ def add_var_row(
         widget.set_width_chars(1)
 
     if block_scroll:
+
         def _on_scroll_event(w, _event):
             w.stop_emission_by_name("scroll-event")
             return False
@@ -1293,10 +1354,12 @@ def get_tree_selection_items(view):
     """Get structured list of selected items from the datasets tree.
 
     Returns list of dicts:
-      {"type": "pool",     "name": pool_name}
-      {"type": "dataset",  "name": full_dataset_name}
-      {"type": "snapshot", "name": snap_short (without @), "dataset": full_dataset}
-      {"type": "hold",     "tag": tag, "snapshot": snap_short, "dataset": full_dataset}
+      {"type": "pool",     "name": pool_name, "mounted": bool}
+      {"type": "dataset",  "name": full_dataset_name, "mounted": bool}
+      {"type": "snapshot", "name": snap_short (without @),
+                            "dataset": full_dataset, "mounted": bool}
+      {"type": "hold",     "tag": tag, "snapshot": snap_short,
+                            "dataset": full_dataset, "mounted": bool}
     """
     selection = view.get_selection()
     model, paths = selection.get_selected_rows()
@@ -1307,6 +1370,7 @@ def get_tree_selection_items(view):
         if name in ("(loading...)", "(no datasets)", "(empty)", "(no holds)"):
             continue
         ds_type = model.get_value(tree_iter, 2)
+        mounted = model.get_value(tree_iter, 8)
 
         if ds_type == "hold":
             parent_iter = model.iter_parent(tree_iter)
@@ -1320,6 +1384,7 @@ def get_tree_selection_items(view):
                     "snapshot": snap_name,
                     "dataset": dataset,
                     "zfs_type": ds_type,
+                    "mounted": mounted,
                 }
             )
         elif name.startswith("@") or ds_type == "snapshot":
@@ -1331,16 +1396,18 @@ def get_tree_selection_items(view):
                     "name": name.lstrip("@"),
                     "dataset": dataset,
                     "zfs_type": ds_type,
+                    "mounted": mounted,
                 }
             )
         elif model.iter_parent(tree_iter) is None:
-            items.append({"type": "pool", "name": name, "zfs_type": ds_type})
+            items.append({"type": "pool", "name": name, "zfs_type": ds_type, "mounted": mounted})
         else:
             items.append(
                 {
                     "type": "dataset",
                     "name": build_full_dataset_name(model, tree_iter),
                     "zfs_type": ds_type,
+                    "mounted": mounted,
                 }
             )
     return items

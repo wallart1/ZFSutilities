@@ -60,13 +60,14 @@ class TestZfsRepositoryReads(unittest.TestCase):
         self.assertEqual(pools[0]["health"], "ONLINE")
         self.assertEqual(pools[0]["frag"], "5%")
 
-    def test_list_datasets_parses_eight_columns(self):
-        stdout = "tank/data\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\n"
+    def test_list_datasets_parses_nine_columns(self):
+        stdout = "tank/data\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\tyes\n"
         repo = self._repo(stdout)
         rows = repo.list_datasets(pool="tank")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].name, "tank/data")
         self.assertEqual(rows[0].ds_type, "filesystem")
+        self.assertEqual(rows[0].mounted, "yes")
 
     def test_list_snapshots_parses_eight_columns(self):
         stdout = "tank/data@snap1\t2025-01-01\tsnapshot\t100K\t-\t50G\t-\t-\n"

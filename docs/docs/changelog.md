@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+## 0.91.0
+
+*Released 2026-08-29*
+
+### Added
+
+- **GUI Restore recursion control** — The Restore tab now has a **Restore entire
+  subtree (recursive)** checkbox. When unchecked (the default), the GUI restores
+  only the named dataset by setting `depth="0"`; when checked, all descendants
+  are restored. An explicit value in the Advanced **depth** field still overrides
+  the checkbox.
+- **Unified dataset browse/mount/unmount actions** — The Datasets page replaces
+  the old *Show Files*, *Browse Snapshot*, and *Unmount Snapshot* buttons with
+  unified **Browse**, **Mount**, and **Unmount** buttons. These work for both
+  filesystems and snapshots: Browse opens the selected item in the file manager,
+  Mount mounts an unmounted filesystem or triggers ZFS auto-mount for a snapshot,
+  and Unmount unmounts either kind of item with a busy-process warning when
+  needed.
+- **Visual mount-state indicator** — Filesystems and snapshots that are not
+  currently mounted are shown in teal text so unmounted items stand out at a
+  glance. Each snapshot row has its own mount indicator independent of its
+  parent dataset.
+- **Dataset-action session-log type** — Dataset actions are now logged with the
+  `dataset` session-log and history type, so they appear correctly in the Logs
+  tab and history records.
+
+### Changed
+
+- `restore_runner.build_restore_command()` now takes a `recursive` argument and
+  emits `depth="0"` for non-recursive restores unless an explicit `depth` is set
+  in the Advanced variables.
+- `ZfsRepository.list_datasets()` now reads the `mounted` property from ZFS and
+  exposes it on `DatasetRow`.
+- `gui_helpers.get_tree_selection_items()` now includes a `mounted` boolean in
+  every returned item dict.
+
+### Fixed
+
+- Snapshot auto-mount path resolution in `dataset_actions.on_datasets_mount()` is
+  now wrapped in the same exception handler as the mount attempt, so a missing
+  snapshot path is reported gracefully instead of raising an unhandled
+  exception.
+
 ## 0.90.2
 
 *Released 2026-08-28*

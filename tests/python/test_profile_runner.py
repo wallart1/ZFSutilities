@@ -520,6 +520,26 @@ class TestRunRestoreProfile(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertTrue(any("Source and destination must be specified" in msg for msg in logs))
 
+    def test_recursive_flag_forwarded_to_command(self):
+        profile = {
+            "config": {
+                "source": "tank/vm/100",
+                "dest": "backup/vm/100",
+                "recursive": True,
+                "do_part1": True,
+                "do_part2": False,
+                "variables": {},
+            }
+        }
+        config = {}
+        with patch("profile_runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = _mock_popen_process(rc=0)
+            rc = profile_runner.run_restore_profile(profile, config, "/bin")
+        self.assertEqual(rc, 0)
+        script = mock_popen.call_args[0][0][2]
+        # recursive=True should leave depth empty (no depth=0 assignment).
+        self.assertNotIn('depth="0"', script)
+
 
 class TestRunRetentionProfile(unittest.TestCase):
     def test_no_pools_warns(self):

@@ -76,12 +76,13 @@ class _FakeApp:
     ctx.config: ClassVar[dict] = {"pools": [{"name": "threeamigos"}, {"name": "fivebays"}]}
 
 
-def _restore_app(source="", dest="", auto_dest=False):
+def _restore_app(source="", dest="", auto_dest=False, recursive=False):
     """Return an app mock with the widgets required by restore_page helpers."""
     app = _FakeApp()
     app.restore_source_entry = _FakeEntry(source)
     app.restore_dest_entry = _FakeEntry(dest)
     app.restore_auto_dest_check = _FakeCheckButton(auto_dest)
+    app.restore_recursive_check = _FakeCheckButton(recursive)
     app.restore_var_widgets = {}
     app.restore_part1_check = _FakeCheckButton()
     app.restore_part2_check = _FakeCheckButton()
@@ -209,6 +210,43 @@ class TestSourceChanged(unittest.TestCase):
         self.assertEqual(app.restore_dest_entry.get_text(), "manual-dest")
 
 
+class TestCollectRestoreConfig(unittest.TestCase):
+    """Tests for collect_restore_config."""
+
+    def test_collects_recursive_flag(self):
+        app = _restore_app(recursive=True)
+        app.restore_part1_check._active = True
+        app.restore_part2_check._active = False
+        cfg = rp.collect_restore_config(app)
+        self.assertTrue(cfg["recursive"])
+
+    def test_default_recursive_flag_is_false(self):
+        app = _restore_app()
+        cfg = rp.collect_restore_config(app)
+        self.assertFalse(cfg["recursive"])
+
+
+class TestLoadRestoreConfig(unittest.TestCase):
+    """Tests for load_restore_config."""
+
+    def test_loads_recursive_flag(self):
+        app = _restore_app()
+        rp.load_restore_config(
+            app,
+            {
+                "source": "a/b",
+                "dest": "c/b",
+                "auto_dest": False,
+                "recursive": True,
+                "variables": {},
+                "do_part1": True,
+                "do_part2": True,
+                "pause_scrubs": False,
+            },
+        )
+        self.assertTrue(app.restore_recursive_check.get_active())
+
+
 class TestRestoreRunDialog(unittest.TestCase):
     """Tests for on_restore_run() confirmation and start behaviour."""
 
@@ -247,6 +285,7 @@ class TestRestoreRunDialog(unittest.TestCase):
                     "source": "backuppool/threeamigos/data",
                     "dest": "threeamigos/data",
                     "auto_dest": False,
+                    "recursive": False,
                     "do_part1": True,
                     "do_part2": False,
                     "variables": {},

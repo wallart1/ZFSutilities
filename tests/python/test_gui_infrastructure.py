@@ -336,8 +336,7 @@ class TestDocsViewerNavigation(unittest.TestCase):
         from unittest.mock import MagicMock
 
         decision = MagicMock()
-        decision.get_navigation_action.return_value.get_request.return_value.get_uri.return_value \
-            = uri
+        decision.get_navigation_action.return_value.get_request.return_value.get_uri.return_value = uri
         return decision
 
     def test_on_decide_policy_uses_navigation_action(self):
@@ -1959,9 +1958,24 @@ class TestGuiHelpersMisc(unittest.TestCase):
                 [
                     {
                         "id": 0,
-                        "values": ["tank", "", "pool"],
+                        "values": ["tank", "", "pool", "", "", "", "", False, True, None],
                         "children": [
-                            {"id": 1, "values": ["data", "", "dataset"], "children": []},
+                            {
+                                "id": 1,
+                                "values": [
+                                    "data",
+                                    "",
+                                    "dataset",
+                                    "",
+                                    "",
+                                    "",
+                                    "",
+                                    False,
+                                    True,
+                                    None,
+                                ],
+                                "children": [],
+                            },
                         ],
                     },
                 ]
@@ -1976,8 +1990,10 @@ class TestGuiHelpersMisc(unittest.TestCase):
             self.assertEqual(len(items), 2)
             self.assertEqual(items[0]["type"], "pool")
             self.assertEqual(items[0]["name"], "tank")
+            self.assertTrue(items[0]["mounted"])
             self.assertEqual(items[1]["type"], "dataset")
             self.assertEqual(items[1]["name"], "tank/data")
+            self.assertTrue(items[1]["mounted"])
 
     def test_get_expanded_rows(self):
         with mock_gtk():

@@ -126,6 +126,31 @@ class TestPrepareSessionLog(unittest.TestCase):
                 del os.environ["ZFSUTILITIES_LOG_INHERIT"]
 
 
+class TestGetTabType(unittest.TestCase):
+    """Runner label maps to the correct session-log/history type."""
+
+    def _runner(self, label):
+        return br.BackupRunner(MagicMock(), MagicMock(), label=label)
+
+    def test_backup_label_returns_backup(self):
+        self.assertEqual(self._runner("Backup")._get_tab_type(), "backup")
+
+    def test_offsite_label_returns_offsite(self):
+        self.assertEqual(self._runner("Offsite backup")._get_tab_type(), "offsite")
+
+    def test_restore_label_returns_restore(self):
+        self.assertEqual(self._runner("Restore")._get_tab_type(), "restore")
+
+    def test_prune_label_returns_prune(self):
+        self.assertEqual(self._runner("Prune")._get_tab_type(), "prune")
+
+    def test_retention_label_returns_prune(self):
+        self.assertEqual(self._runner("Retention")._get_tab_type(), "prune")
+
+    def test_dataset_action_label_returns_dataset(self):
+        self.assertEqual(self._runner("Dataset action")._get_tab_type(), "dataset")
+
+
 class TestReceivedByteCounting(unittest.TestCase):
     """Byte counting works from stderr, stdout, and drain_remaining."""
 

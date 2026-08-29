@@ -70,6 +70,25 @@ class TestFilterLogText(unittest.TestCase):
         self.assertIn("# END:", result)
 
 
+class TestParseLogFilename(unittest.TestCase):
+    """_parse_log_filename extracts datetime, type, and name."""
+
+    def test_parses_backup_gui_filename(self):
+        result = lp._parse_log_filename("2026-06-21_10-00-00_backup_gui.log")
+        self.assertEqual(result, ("2026-06-21 10:00:00", "backup", "gui"))
+
+    def test_parses_offsite_profile_filename(self):
+        result = lp._parse_log_filename("2026-06-21_10-00-00_offsite_profile-Daily.log")
+        self.assertEqual(result, ("2026-06-21 10:00:00", "offsite", "profile-Daily"))
+
+    def test_parses_dataset_gui_filename(self):
+        result = lp._parse_log_filename("2026-06-21_10-00-00_dataset_gui.log")
+        self.assertEqual(result, ("2026-06-21 10:00:00", "dataset", "gui"))
+
+    def test_returns_none_for_unsupported_type(self):
+        self.assertIsNone(lp._parse_log_filename("2026-06-21_10-00-00_unknown_gui.log"))
+
+
 class TestSelectLogByPath(unittest.TestCase):
     def _make_app(self, rows):
         app = MagicMock()
@@ -751,7 +770,7 @@ class TestCreateLogsPage(unittest.TestCase):
 
         expected = {
             "Date/Time": "Session log timestamp",
-            "Type": "Log type: backup, offsite, restore, prune, or gui",
+            "Type": "Log type: backup, offsite, restore, prune, dataset, or gui",
             "Name": "Name of the operation or profile",
             "Status": "Completion status",
             "Log Size": "Size of the log file on disk",

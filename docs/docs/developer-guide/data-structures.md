@@ -549,7 +549,7 @@ Each entry is a dict with this schema:
 | Key                 | Type    | Description                                         |
 | ------------------- | ------- | --------------------------------------------------- |
 | `timestamp`         | string  | ISO-8601 datetime when the run finished             |
-| `type`              | string  | `backup`, `offsite`, `restore`, or `prune`          |
+| `type`              | string  | `backup`, `offsite`, `restore`, `prune`, or `dataset` |
 | `name`              | string  | GUI label or profile name (e.g. `Backup`, `Daily`)  |
 | `duration`          | float   | Elapsed time in seconds                             |
 | `result`            | string  | `success`, `failed`, or `cancelled`                 |

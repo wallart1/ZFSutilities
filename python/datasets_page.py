@@ -86,8 +86,9 @@ def create_datasets_page(app):
     box.pack_start(search_box, False, False, 0)
 
     # TreeStore: pools -> datasets -> snapshots -> holds
-    # Columns: name, creation, type, used, avail, refer, origin/clones, loaded
-    app.datasets_store = Gtk.TreeStore(str, str, str, str, str, str, str, bool)
+    # Columns: name, creation, type, used, avail, refer, origin/clones,
+    #          loaded, mounted, fg_color
+    app.datasets_store = Gtk.TreeStore(str, str, str, str, str, str, str, bool, bool, str)
     app.datasets_view = Gtk.TreeView(model=app.datasets_store)
     app.datasets_view._zfs_repo = app.ctx.zfs_repository
     app.datasets_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
@@ -117,7 +118,7 @@ def create_datasets_page(app):
         renderer = Gtk.CellRendererText()
         if title == "Created":
             set_monospace_font(renderer)
-        col = Gtk.TreeViewColumn(title, renderer, text=col_idx)
+        col = Gtk.TreeViewColumn(title, renderer, text=col_idx, foreground=9)
         if col_idx in (3, 4, 5):
             renderer.set_property("xalign", 1.0)
             col.set_alignment(1.0)
@@ -201,9 +202,13 @@ def refresh_datasets_page(app, pool_filter=None):
         pools_to_show = online_pools
 
     for pool in pools_to_show:
-        pool_iter = app.datasets_store.append(None, [pool, "", "", "", "", "", "", False])
+        pool_iter = app.datasets_store.append(
+            None, [pool, "", "", "", "", "", "", False, True, None]
+        )
         # Dummy child so the expand arrow appears
-        app.datasets_store.append(pool_iter, ["(loading...)", "", "", "", "", "", "", True])
+        app.datasets_store.append(
+            pool_iter, ["(loading...)", "", "", "", "", "", "", True, False, None]
+        )
 
     app.datasets_summary_label.set_text(f"{len(pools_to_show)} pools")
 
@@ -343,46 +348,13 @@ def update_ds_button_sensitivity(app):
     can_hold = "snapshot" in types and types <= {"snapshot", "hold"}
     can_rollback = len(items) == 1 and types == {"snapshot"}
 
-    can_show_files = False
-    if len(items) == 1 and items[0].get("zfs_type") == "filesystem":
-        try:
-            result = subprocess.run(
-                ["zfs", "get", "-H", "-o", "value", "mounted", items[0]["name"]],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            can_show_files = result.stdout.strip() == "yes"
-        except subprocess.CalledProcessError:
-            pass
+    single = items[0] if len(items) == 1 else None
+    single_browsable = single is not None and single["type"] in ("dataset", "snapshot")
+    single_mounted = single_browsable and single.get("mounted", False)
 
-    can_browse_snapshot = False
-    can_unmount_snapshot = False
-    if len(items) == 1 and items[0]["type"] == "snapshot":
-        dataset = items[0]["dataset"]
-        snap = items[0]["name"]
-        full_snap = f"{dataset}@{snap}"
-        try:
-            parent_mounted = subprocess.run(
-                ["zfs", "get", "-H", "-o", "value", "mounted", dataset],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            if parent_mounted.stdout.strip() == "yes":
-                can_browse_snapshot = True
-        except subprocess.CalledProcessError:
-            pass
-        try:
-            mount_result = subprocess.run(
-                ["mount", "-t", "zfs"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            can_unmount_snapshot = full_snap in mount_result.stdout
-        except subprocess.CalledProcessError:
-            pass
+    can_browse = single_mounted
+    can_mount = single_browsable and not single_mounted
+    can_unmount = single_mounted
 
     can_expand_selected = bool(items) and any(
         i["type"] in ("pool", "dataset", "snapshot") for i in items
@@ -395,9 +367,9 @@ def update_ds_button_sensitivity(app):
         ("_ds_delete_btn", can_delete),
         ("_ds_hold_btn", can_hold),
         ("_ds_rollback_btn", can_rollback),
-        ("_ds_showfiles_btn", can_show_files),
-        ("_ds_browsesnap_btn", can_browse_snapshot),
-        ("_ds_unmountsnap_btn", can_unmount_snapshot),
+        ("_ds_browse_btn", can_browse),
+        ("_ds_mount_btn", can_mount),
+        ("_ds_unmount_btn", can_unmount),
         ("_ds_expand_selected_btn", can_expand_selected),
         ("_ds_showbigstuff_btn", can_show_big_stuff),
     ]:

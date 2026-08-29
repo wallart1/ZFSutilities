@@ -90,7 +90,7 @@ class PoolRow:
 
 @dataclass
 class DatasetRow:
-    """One line from `zfs list -H -o name,creation,type,used,avail,refer,origin,clones`."""
+    """One line from `zfs list -H -o name,creation,type,used,avail,refer,origin,clones,mounted`."""
 
     name: str
     creation: str
@@ -100,6 +100,7 @@ class DatasetRow:
     refer: str
     origin: str
     clones: str
+    mounted: str = "-"
 
 
 @dataclass
@@ -398,7 +399,9 @@ class ZfsRepository:
         If *pool* is given, the listing is recursive under that pool/dataset.
         If *depth* is also given, recursion is limited to that depth.
         """
-        cmd = self._zfs("list", "-H", "-o", "name,creation,type,used,avail,refer,origin,clones")
+        cmd = self._zfs(
+            "list", "-H", "-o", "name,creation,type,used,avail,refer,origin,clones,mounted"
+        )
         if pool is not None:
             cmd.extend(["-r"])
             if depth is not None:
@@ -410,9 +413,9 @@ class ZfsRepository:
             if not line:
                 continue
             parts = line.split("\t")
-            if len(parts) < 8:
+            if len(parts) < 9:
                 continue
-            rows.append(DatasetRow(*parts[:8]))
+            rows.append(DatasetRow(*parts[:9]))
         return rows
 
     def list_dataset_info(self, pool: str | None = None) -> list[dict]:

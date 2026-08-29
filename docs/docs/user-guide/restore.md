@@ -45,6 +45,18 @@ destination up to date. Customize and use
 [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore), which automates
 this two-step process.
 
+### Recursive restores
+
+By default, the command-line `zfsrestore` and `zfsfullcopy` scripts restore the
+named dataset **and all of its descendants** (they use unlimited recursion when
+building the dataset list). In the GTK GUI, the Restore tab defaults to restoring
+**only the named dataset**; enable **Restore entire subtree (recursive)** to
+include all descendants.
+
+You can also limit or restore recursion from the command line by setting the
+`depth` variable. `depth=0` restores only the named dataset, `depth=1` includes
+one level of children, and `depth=""` (the default) includes the full subtree.
+
 In a two-node configuration, the restore pipeline also ensures that restored
 VM disk zvols are exported as iSCSI LUNs. It reads the LUN index from the
 existing Proxmox VM config and recreates the backstore/LUN if it is missing,

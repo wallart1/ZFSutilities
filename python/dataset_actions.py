@@ -4,6 +4,7 @@ Dataset action handlers — snapshot, delete, hold, rollback, browse, etc.
 Called exclusively through the action dispatch table in action_dispatch.py.
 """
 
+import os
 import shlex
 import subprocess
 from datetime import datetime
@@ -284,9 +285,7 @@ def _delete_snapshots(app, snaps, selected_holds=None):
     repo = _repo(app)
     selected_holds = selected_holds or []
 
-    selected_hold_keys = {
-        (f"{h['dataset']}@{h['snapshot']}", h["tag"]) for h in selected_holds
-    }
+    selected_hold_keys = {(f"{h['dataset']}@{h['snapshot']}", h["tag"]) for h in selected_holds}
 
     blocked = []
     for s in snaps:
@@ -313,9 +312,7 @@ def _delete_snapshots(app, snaps, selected_holds=None):
     if selected_holds:
         lines.append("")
         lines.append("Holds to release:")
-        lines.extend(
-            f"  {h['tag']} on {h['dataset']}@{h['snapshot']}" for h in selected_holds
-        )
+        lines.extend(f"  {h['tag']} on {h['dataset']}@{h['snapshot']}" for h in selected_holds)
     display = "\n".join(lines)
     if not _confirm_yes_no(
         app,
@@ -462,103 +459,226 @@ def on_datasets_show_big_stuff(app):
     runner.start()
 
 
-def on_datasets_show_files(app):
-    """Open the default file manager at the selected dataset's mountpoint."""
+def on_datasets_browse(app):
+    """Open the selected filesystem or snapshot in the default file manager."""
     repo = _repo(app)
     items = get_tree_selection_items(app.datasets_view)
-    ds_items = [i for i in items if i.get("zfs_type") == "filesystem"]
-    if len(ds_items) != 1:
-        log_msg("WARN: Select exactly one dataset to open")
+    if len(items) != 1:
+        log_msg("WARN: Select exactly one item to browse")
         return
 
-    dataset = ds_items[0]["name"]
-    try:
-        mountpoint = repo.get_property(dataset, "mountpoint")
-        if not mountpoint.startswith("/"):
-            log_msg(f"WARN: Cannot open {dataset}: mountpoint is {mountpoint}")
+    item = items[0]
+    item_type = item["type"]
+    if item_type == "dataset" and item.get("zfs_type") == "filesystem":
+        dataset = item["name"]
+        try:
+            mountpoint = repo.get_property(dataset, "mountpoint")
+            if not mountpoint.startswith("/"):
+                log_msg(f"WARN: Cannot open {dataset}: mountpoint is {mountpoint}")
+                return
+            subprocess.Popen(["xdg-open", mountpoint])
+            log_msg(f"INFO: Opened {mountpoint}")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"WARN: Error opening file manager: {e}")
+        return
+
+    if item_type == "snapshot":
+        full_snap = f"{item['dataset']}@{item['name']}"
+        try:
+            path = get_snapshot_mountpoint(item["dataset"], item["name"], repo=repo)
+            subprocess.Popen(["xdg-open", path])
+            log_msg(f"INFO: Browsing snapshot {full_snap}")
+            update_ds_button_sensitivity(app)
+            GLib.timeout_add_seconds(1, lambda a: update_ds_button_sensitivity(a) or False, app)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"WARN: Error browsing snapshot {full_snap}: {e}")
+        return
+
+    log_msg("WARN: Select a filesystem or snapshot to browse")
+
+
+def on_datasets_mount(app):
+    """Mount the selected filesystem or snapshot."""
+    repo = _repo(app)
+    items = get_tree_selection_items(app.datasets_view)
+    if len(items) != 1:
+        log_msg("WARN: Select exactly one item to mount")
+        return
+
+    item = items[0]
+    item_type = item["type"]
+    if item_type == "dataset" and item.get("zfs_type") == "filesystem":
+        dataset = item["name"]
+        try:
+            with zlm.lock(dataset, "w", f"mount {dataset}"):
+                result = subprocess.run(
+                    ["sudo", "zfs", "mount", dataset],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+        except RuntimeError as exc:
+            log_msg(f"WARN: cannot mount {dataset}: {exc}")
             return
-        subprocess.Popen(["xdg-open", mountpoint])
-        log_msg(f"INFO: Opened {mountpoint}")
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"WARN: Error opening file manager: {e}")
+
+        if result.returncode == 0:
+            log_msg(f"INFO: Mounted {dataset}")
+            refresh_datasets_page(app)
+            return
+
+        stderr = result.stderr.strip()
+        log_msg(f"WARN: Error mounting {dataset}: {stderr}")
+        return
+
+    if item_type == "snapshot":
+        full_snap = f"{item['dataset']}@{item['name']}"
+        try:
+            path = get_snapshot_mountpoint(item["dataset"], item["name"], repo=repo)
+            with zlm.lock(item["dataset"], "w", f"mount snapshot {full_snap}"):
+                # Trigger ZFS auto-mount by accessing the snapshot path. If the
+                # parent dataset is not mounted, the path will not exist.
+                if not os.path.isdir(path):
+                    parent_mounted = repo.get_property(item["dataset"], "mounted") == "yes"
+                    if not parent_mounted:
+                        log_msg(
+                            f"WARN: Cannot mount {full_snap}: parent dataset "
+                            f"{item['dataset']} is not mounted. Mount the parent first."
+                        )
+                        return
+                    # Force ZFS to create the .zfs/snapshot directory by listing it.
+                    try:
+                        os.listdir(path)
+                    except FileNotFoundError:
+                        log_msg(
+                            f"WARN: Cannot mount {full_snap}: snapshot path {path} "
+                            "is not accessible."
+                        )
+                        return
+                log_msg(f"INFO: Mounted snapshot {full_snap}")
+                update_ds_button_sensitivity(app)
+                GLib.timeout_add_seconds(1, lambda a: update_ds_button_sensitivity(a) or False, app)
+        except RuntimeError as exc:
+            log_msg(f"WARN: cannot mount {full_snap}: {exc}")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"WARN: Error mounting snapshot {full_snap}: {e}")
+        return
+
+    log_msg("WARN: Select a filesystem or snapshot to mount")
 
 
-def on_datasets_browse_snapshot(app):
-    """Open a snapshot in the default file manager via .zfs/snapshot/."""
+def on_datasets_unmount(app):
+    """Unmount the selected filesystem or snapshot, warning if busy."""
     repo = _repo(app)
     items = get_tree_selection_items(app.datasets_view)
-    snaps = [i for i in items if i["type"] == "snapshot"]
-    if len(snaps) != 1:
-        log_msg("WARN: Select exactly one snapshot to browse")
+    if len(items) != 1:
+        log_msg("WARN: Select exactly one item to unmount")
         return
 
-    s = snaps[0]
-    full_snap = f"{s['dataset']}@{s['name']}"
-    try:
-        path = get_snapshot_mountpoint(s["dataset"], s["name"], repo=repo)
-        subprocess.Popen(["xdg-open", path])
-        log_msg(f"INFO: Browsing snapshot {full_snap}")
-        update_ds_button_sensitivity(app)
-        GLib.timeout_add_seconds(1, lambda a: update_ds_button_sensitivity(a) or False, app)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"WARN: Error browsing snapshot {full_snap}: {e}")
+    item = items[0]
+    item_type = item["type"]
+    if item_type == "dataset" and item.get("zfs_type") == "filesystem":
+        dataset = item["name"]
+        try:
+            mountpoint = repo.get_property(dataset, "mountpoint")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"WARN: Error resolving mountpoint for {dataset}: {e}")
+            return
 
-
-def on_datasets_unmount_snapshot(app):
-    """Unmount a mounted ZFS snapshot, warning if busy."""
-    repo = _repo(app)
-    items = get_tree_selection_items(app.datasets_view)
-    snaps = [i for i in items if i["type"] == "snapshot"]
-    if len(snaps) != 1:
-        log_msg("WARN: Select exactly one snapshot to unmount")
-        return
-
-    s = snaps[0]
-    full_snap = f"{s['dataset']}@{s['name']}"
-    try:
-        path = get_snapshot_mountpoint(s["dataset"], s["name"], repo=repo)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"WARN: Error resolving mountpoint for {full_snap}: {e}")
-        return
-
-    procs = get_busy_processes(path)
-    if procs:
-        proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
-        detail = (
-            f"{full_snap} is currently in use by:\n\n{proc_list}\n\n"
-            "Please close the listed application(s), then try unmounting again."
-        )
-        dialog = Gtk.MessageDialog(
-            transient_for=app,
-            modal=True,
-            message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.OK,
-            text="Snapshot is busy",
-        )
-        dialog.format_secondary_text(detail)
-        dialog.run()
-        dialog.destroy()
-        return
-
-    try:
-        with zlm.lock(s["dataset"], "w", f"umount snapshot {full_snap}"):
-            result = subprocess.run(
-                ["sudo", "umount", path], capture_output=True, text=True, check=False
+        procs = get_busy_processes(mountpoint)
+        if procs:
+            proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
+            detail = (
+                f"{dataset} is currently in use by:\n\n{proc_list}\n\n"
+                "Please close the listed application(s), then try unmounting again."
             )
-    except RuntimeError as exc:
-        log_msg(f"WARN: cannot unmount {full_snap}: {exc}")
+            dialog = Gtk.MessageDialog(
+                transient_for=app,
+                modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.OK,
+                text="Dataset is busy",
+            )
+            dialog.format_secondary_text(detail)
+            dialog.run()
+            dialog.destroy()
+            return
+
+        try:
+            with zlm.lock(dataset, "w", f"umount {dataset}"):
+                result = subprocess.run(
+                    ["sudo", "zfs", "unmount", dataset],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+        except RuntimeError as exc:
+            log_msg(f"WARN: cannot unmount {dataset}: {exc}")
+            return
+
+        if result.returncode == 0:
+            log_msg(f"INFO: Unmounted {dataset}")
+            refresh_datasets_page(app)
+            return
+
+        stderr = result.stderr.strip()
+        if "busy" in stderr.lower():
+            log_msg(
+                f"WARN: Dataset {dataset} is busy. "
+                "Please close any file manager windows and try again."
+            )
+            return
+        log_msg(f"WARN: Error unmounting {dataset}: {stderr}")
         return
 
-    if result.returncode == 0:
-        log_msg(f"INFO: Unmounted snapshot {full_snap}")
-        update_ds_button_sensitivity(app)
+    if item_type == "snapshot":
+        full_snap = f"{item['dataset']}@{item['name']}"
+        try:
+            path = get_snapshot_mountpoint(item["dataset"], item["name"], repo=repo)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"WARN: Error resolving mountpoint for {full_snap}: {e}")
+            return
+
+        procs = get_busy_processes(path)
+        if procs:
+            proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
+            detail = (
+                f"{full_snap} is currently in use by:\n\n{proc_list}\n\n"
+                "Please close the listed application(s), then try unmounting again."
+            )
+            dialog = Gtk.MessageDialog(
+                transient_for=app,
+                modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.OK,
+                text="Snapshot is busy",
+            )
+            dialog.format_secondary_text(detail)
+            dialog.run()
+            dialog.destroy()
+            return
+
+        try:
+            with zlm.lock(item["dataset"], "w", f"umount snapshot {full_snap}"):
+                result = subprocess.run(
+                    ["sudo", "umount", path], capture_output=True, text=True, check=False
+                )
+        except RuntimeError as exc:
+            log_msg(f"WARN: cannot unmount {full_snap}: {exc}")
+            return
+
+        if result.returncode == 0:
+            log_msg(f"INFO: Unmounted snapshot {full_snap}")
+            update_ds_button_sensitivity(app)
+            return
+
+        stderr = result.stderr.strip()
+        if "busy" in stderr.lower():
+            log_msg(
+                f"WARN: Snapshot {full_snap} is busy. "
+                "Please close any file manager windows and try again."
+            )
+            return
+        log_msg(f"WARN: Error unmounting {full_snap}: {stderr}")
         return
 
-    stderr = result.stderr.strip()
-    if "busy" in stderr.lower():
-        log_msg(
-            f"WARN: Snapshot {full_snap} is busy. "
-            "Please close any file manager windows and try again."
-        )
-        return
-    log_msg(f"WARN: Error unmounting {full_snap}: {stderr}")
+    log_msg("WARN: Select a filesystem or snapshot to unmount")

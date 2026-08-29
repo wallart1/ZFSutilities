@@ -460,6 +460,7 @@ flowchart LR
 - **Step 1** sends the oldest available snapshot as a full stream. Because `force='Y'`, the destination dataset may be destroyed and recreated. `releaseholds='Y'` ensures holds do not block the destruction.
 - **Step 2** sends every snapshot from the oldest base up to the newest one (`-I` mode). This restores the complete snapshot history, not just the latest state.
 - **`zfs-send-receive` now executes both steps** inside a single invocation, so wrappers such as `zfsrestore` and `zfsfullcopy` no longer need to call it twice.
+- **Dataset selection** is controlled by `$depth` via `zfsbuildfsarray`. The GUI defaults to `depth='0'` (restore only the named dataset) unless **Restore entire subtree (recursive)** is enabled; the command-line scripts default to `depth=''` (full subtree). An explicit `$depth` set by the caller always takes precedence.
 - **After the send-receive**, `ensure-restored-vm-iscsi` re-exports any restored
   VM disk zvols that are referenced by a Proxmox VM config but no longer have an
   iSCSI LUN. This handles restores to a missing/detached disk while preserving the

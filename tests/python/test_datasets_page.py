@@ -235,30 +235,36 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         return app
 
     def test_single_dataset_enables_snapshot(self):
-        app = self._make_app([{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem"}])
+        app = self._make_app(
+            [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True}]
+        )
         app._ds_snapshot_btn.set_sensitive.assert_called_once_with(True)
         app._ds_delete_btn.set_sensitive.assert_called_once_with(True)
         app._ds_hold_btn.set_sensitive.assert_called_once_with(False)
         app._ds_rollback_btn.set_sensitive.assert_called_once_with(False)
 
     def test_single_snapshot_enables_rollback(self):
-        app = self._make_app([{"type": "snapshot", "name": "snap", "dataset": "tank/a"}])
+        app = self._make_app(
+            [{"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True}]
+        )
         app._ds_rollback_btn.set_sensitive.assert_called_once_with(True)
 
     def test_pool_disables_delete(self):
-        app = self._make_app([{"type": "pool", "name": "tank"}])
+        app = self._make_app([{"type": "pool", "name": "tank", "mounted": True}])
         app._ds_delete_btn.set_sensitive.assert_called_once_with(False)
 
     def test_expand_selected_enabled_for_pool(self):
-        app = self._make_app([{"type": "pool", "name": "tank"}])
+        app = self._make_app([{"type": "pool", "name": "tank", "mounted": True}])
         app._ds_expand_selected_btn.set_sensitive.assert_called_once_with(True)
 
     def test_expand_selected_enabled_for_dataset(self):
-        app = self._make_app([{"type": "dataset", "name": "tank/a"}])
+        app = self._make_app([{"type": "dataset", "name": "tank/a", "mounted": True}])
         app._ds_expand_selected_btn.set_sensitive.assert_called_once_with(True)
 
     def test_expand_selected_enabled_for_snapshot(self):
-        app = self._make_app([{"type": "snapshot", "name": "snap", "dataset": "tank/a"}])
+        app = self._make_app(
+            [{"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True}]
+        )
         app._ds_expand_selected_btn.set_sensitive.assert_called_once_with(True)
 
     def test_expand_selected_disabled_when_empty(self):
@@ -266,22 +272,54 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         app._ds_expand_selected_btn.set_sensitive.assert_called_once_with(False)
 
     def test_expand_selected_disabled_for_hold_only(self):
-        app = self._make_app([{"type": "hold", "tag": "x"}])
+        app = self._make_app([{"type": "hold", "tag": "x", "mounted": False}])
         app._ds_expand_selected_btn.set_sensitive.assert_called_once_with(False)
 
+    def test_mounted_filesystem_enables_browse_and_unmount(self):
+        app = self._make_app(
+            [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True}]
+        )
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_unmounted_filesystem_enables_mount(self):
+        app = self._make_app(
+            [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": False}]
+        )
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_mounted_snapshot_enables_browse_and_unmount(self):
+        app = self._make_app(
+            [{"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True}]
+        )
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_unmounted_snapshot_enables_mount(self):
+        app = self._make_app(
+            [{"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": False}]
+        )
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(False)
+
     def test_show_big_stuff_enabled_for_single_pool(self):
-        app = self._make_app([{"type": "pool", "name": "tank"}])
+        app = self._make_app([{"type": "pool", "name": "tank", "mounted": True}])
         app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(True)
 
     def test_show_big_stuff_disabled_for_dataset(self):
-        app = self._make_app([{"type": "dataset", "name": "tank/a"}])
+        app = self._make_app([{"type": "dataset", "name": "tank/a", "mounted": True}])
         app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(False)
 
     def test_show_big_stuff_disabled_for_multiple_selections(self):
         app = self._make_app(
             [
-                {"type": "pool", "name": "tank"},
-                {"type": "pool", "name": "backup"},
+                {"type": "pool", "name": "tank", "mounted": True},
+                {"type": "pool", "name": "backup", "mounted": True},
             ]
         )
         app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(False)

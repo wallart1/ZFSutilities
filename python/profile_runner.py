@@ -576,6 +576,7 @@ def run_restore_profile(profile, config, parent_dir, session_log_file=None):
         do_part1,
         do_part2,
         dryrun=dryrun,
+        recursive=cfg.get("recursive", False),
     )
     attach_step_scrub_callbacks(
         restore_step,

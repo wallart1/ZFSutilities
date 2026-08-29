@@ -110,6 +110,15 @@ def create_restore_page(app, ctx):
     )
     sd_grid.attach(app.restore_auto_dest_check, 1, 2, 1, 1)
 
+    app.restore_recursive_check = Gtk.CheckButton(label="Restore entire subtree (recursive)")
+    app.restore_recursive_check.set_active(restore_cfg.get("recursive", False))
+    app.restore_recursive_check.set_tooltip_text(
+        "Restore the named dataset and all of its descendants. "
+        "When unchecked, only the named dataset is restored. "
+        "The Advanced depth field overrides this setting if set."
+    )
+    sd_grid.attach(app.restore_recursive_check, 1, 3, 1, 1)
+
     sd_frame.add(sd_grid)
     box.pack_start(sd_frame, False, False, 0)
 
@@ -206,6 +215,7 @@ def create_restore_page(app, ctx):
         widget.connect("changed", lambda w, a=app: check_restore_dirty(a))
     app.restore_part1_check.connect("toggled", lambda w, a=app: check_restore_dirty(a))
     app.restore_part2_check.connect("toggled", lambda w, a=app: check_restore_dirty(a))
+    app.restore_recursive_check.connect("toggled", lambda w, a=app: check_restore_dirty(a))
     app.restore_pause_scrubs.connect("toggled", lambda w, a=app: check_restore_dirty(a))
 
     # Apply initial sensitivity state and auto-computed destination.
@@ -232,6 +242,7 @@ def collect_restore_config(app):
         "source": app.restore_source_entry.get_text().strip(),
         "dest": app.restore_dest_entry.get_text().strip(),
         "auto_dest": app.restore_auto_dest_check.get_active(),
+        "recursive": app.restore_recursive_check.get_active(),
         "variables": variables,
         "do_part1": app.restore_part1_check.get_active(),
         "do_part2": app.restore_part2_check.get_active(),
@@ -254,6 +265,7 @@ def load_restore_config(app, config):
     app.restore_source_entry.set_text(config.get("source", ""))
     app.restore_dest_entry.set_text(config.get("dest", ""))
     app.restore_auto_dest_check.set_active(config.get("auto_dest", False))
+    app.restore_recursive_check.set_active(config.get("recursive", False))
 
     for key, widget in app.restore_var_widgets.items():
         widget.set_text(config.get("variables", {}).get(key, ""))
@@ -391,6 +403,10 @@ def on_restore_run(app, ctx):
 
     secondary = "\n".join(parts_desc)
     secondary += f"\n\nsourcefsremovequalifiers={removequalifiers}, destfs={destfs}"
+    if restore_cfg.get("recursive", False):
+        secondary += "\n\nThe restore will include the named dataset and all of its descendants."
+    else:
+        secondary += "\n\nOnly the named dataset will be restored."
     if auto_dest:
         secondary += "\n\nDestination was auto-determined from the source."
     if do_part1:
@@ -430,6 +446,7 @@ def on_restore_run(app, ctx):
         do_part1,
         do_part2,
         dryrun=dryrun,
+        recursive=restore_cfg.get("recursive", False),
     )
     attach_step_scrub_callbacks(
         step,

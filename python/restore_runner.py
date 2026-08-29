@@ -99,7 +99,15 @@ def compute_restore_params(source, dest):
 
 
 def build_restore_command(
-    source, removequalifiers, destfs, parent_dir, advanced_vars, do_part1, do_part2, dryrun=False
+    source,
+    removequalifiers,
+    destfs,
+    parent_dir,
+    advanced_vars,
+    do_part1,
+    do_part2,
+    dryrun=False,
+    recursive=False,
 ):
     """Build the bash command for a restore operation.
 
@@ -116,9 +124,13 @@ def build_restore_command(
                        startwith, endwith (all strings, may be empty)
         do_part1: bool — run Part 1 (full copy)
         do_part2: bool — run Part 2 (incremental)
+        recursive: bool — when True, restore all descendant datasets;
+                         when False, restore only the named dataset unless
+                         an explicit depth is provided in advanced_vars
+        dryrun: bool — when True, append dry-run assignments
 
     Returns:
-        (command_list, description_string) tuple.
+        BashStep for the restore operation.
     """
     v = advanced_vars
 
@@ -131,8 +143,12 @@ def build_restore_command(
     includes = v.get("includes", "").strip()
     excludes = v.get("excludes", "").strip()
 
+    # A non-empty advanced depth overrides the recursive toggle so power users
+    # can still set partial recursion (e.g. depth="1").
     if depth:
         adv += f'depth="{depth}"; '
+    elif not recursive:
+        adv += 'depth="0"; '
     if label:
         adv += f'label="{label}"; '
     if startwith:

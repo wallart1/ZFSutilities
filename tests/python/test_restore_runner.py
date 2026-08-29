@@ -163,6 +163,50 @@ class TestBuildRestoreCommand(unittest.TestCase):
         self.assertIn("ensure_restored_iscsi", script)
         self.assertIn('[[ "${dryrun:-N}" == "Y" ]] && return 0', script)
 
+    def test_non_recursive_sets_depth_zero(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+            do_part1=True,
+            do_part2=False,
+            recursive=False,
+        )
+        script = " ".join(step.command)
+        self.assertIn('depth="0"', script)
+
+    def test_recursive_leaves_depth_unlimited(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+            do_part1=True,
+            do_part2=False,
+            recursive=True,
+        )
+        script = " ".join(step.command)
+        self.assertNotIn('depth="0"', script)
+        self.assertNotIn('depth=""', script)
+
+    def test_advanced_depth_overrides_recursive_toggle(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={"depth": "2"},
+            do_part1=True,
+            do_part2=False,
+            recursive=False,
+        )
+        script = " ".join(step.command)
+        self.assertIn('depth="2"', script)
+        self.assertNotIn('depth="0"', script)
+
 
 if __name__ == "__main__":
     unittest.main()
