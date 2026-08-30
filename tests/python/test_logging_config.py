@@ -367,8 +367,6 @@ class TestViewerShouldShow(unittest.TestCase):
         self.assertTrue(viewer_should_show("INFO", "BOGUS"))
 
 
-
-
 class TestTruncateSessionLog(unittest.TestCase):
     """truncate_session_log caps log files while preserving start and tail."""
 
@@ -464,5 +462,7 @@ class TestTruncateSessionLog(unittest.TestCase):
             self.assertIn("last line", content)
         finally:
             os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()

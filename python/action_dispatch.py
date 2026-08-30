@@ -47,6 +47,11 @@ from datasets_page import (
     refresh_datasets_page,
     update_ds_button_sensitivity,
 )
+from disk_actions import on_disks_smart_details
+from disks_page import (
+    refresh_disks_page,
+    update_disks_button_sensitivity,
+)
 from logs_page import (
     _on_delete_selected,
     _on_prune_old,
@@ -169,6 +174,13 @@ PAGE_SPECS = {
         ],
         "dirty_check": check_schedule_dirty,
         "dirty_attr": "_schedule_saved_state",
+    },
+    "disks": {
+        "buttons": [
+            ("SMART Details", "dialog-information", "_disks_smart_details_btn"),
+            ("Refresh", "view-refresh", "_disks_refresh_btn"),
+        ],
+        "post_setup": update_disks_button_sensitivity,
     },
     "pools": {
         "buttons": [
@@ -398,6 +410,10 @@ ACTION_HANDLERS = {
         "Recall Profile": lambda app: show_recall_profile_dialog(
             app, "restore", lambda p: load_restore_config(app, p["config"])
         ),
+    },
+    "disks": {
+        "SMART Details": on_disks_smart_details,
+        "Refresh": lambda app: (refresh_disks_page(app), log_msg("VERB: Disks refreshed")),
     },
     "pools": {
         "Watch": on_pools_watch,

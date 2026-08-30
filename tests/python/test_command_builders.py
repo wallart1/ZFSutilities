@@ -227,9 +227,7 @@ class TestBuildRsyncCommand(unittest.TestCase):
         self.assertIn("--exclude=**/.cache/doc/", step.command)
 
     def test_user_excludes_follow_defaults(self):
-        step = command_builders.build_rsync_command(
-            "/src", "/dst", excludes=["*.tmp"]
-        )
+        step = command_builders.build_rsync_command("/src", "/dst", excludes=["*.tmp"])
         gvfs_idx = step.command.index("--exclude=**/.gvfs/")
         cache_idx = step.command.index("--exclude=**/.cache/doc/")
         user_idx = step.command.index("--exclude=*.tmp")

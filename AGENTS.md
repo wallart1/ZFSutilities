@@ -861,6 +861,13 @@ log_msg("DEBUG: variable =", value)
   pool. The GUI Checkagainst tab notes and the documentation were updated
   accordingly; `tests/test-zfscheckagainst` was expanded to cover the new cases.
 
+## Disks Page Project Notes (active)
+
+- Design brief: `/NFS1/dan(NFS1)/zfsutilities-plan/Disks page/README.md`
+- Per-phase briefs: `/NFS1/dan(NFS1)/zfsutilities-plan/Disks page/`
+- Working progress notes: `python/.disks_page_progress.md`
+- Branch: `Disks-Page` (git does not allow spaces in branch names; the originally requested name "Disks Page" was adjusted to "Disks-Page").
+
 ## Recent Session Notes (2026-03-13)
 
 - `zfsretain`: Phase 2 now deletes the oldest snapshots first when a bucket overflows; empty snapshots (`written=0`) are still logged as `(empty)` but no longer receive deletion preference. Most recent snapshot in each bucket is always protected as incremental base

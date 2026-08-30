@@ -871,9 +871,10 @@ class TestBackupRestoreScrubCoordination(unittest.TestCase):
 
         step = BashStep([], "send")
         sm.attach_step_scrub_callbacks(step, "src/a", "dst/b", enabled=True, dry_run=False)
-        with patch.object(
-            sm, "pause_scrubs_for_pools", return_value=[]
-        ) as mock_pause, patch.object(sm, "resume_scrubs_for_pools") as mock_resume:
+        with (
+            patch.object(sm, "pause_scrubs_for_pools", return_value=[]) as mock_pause,
+            patch.object(sm, "resume_scrubs_for_pools") as mock_resume,
+        ):
             step.pre_callback()
             mock_pause.assert_called_once()
             step.post_callback()

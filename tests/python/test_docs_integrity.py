@@ -252,9 +252,7 @@ class TestMarkdownListIndentation(unittest.TestCase):
                         while stack and stack[-1][0] >= indent:
                             stack.pop()
 
-                        in_numbered_tree = is_numbered or (
-                            bool(stack) and stack[-1][3]
-                        )
+                        in_numbered_tree = is_numbered or (bool(stack) and stack[-1][3])
 
                         if stack and in_numbered_tree and indent < stack[-1][0] + 4:
                             rel = os.path.relpath(path, DOCS_DIR)
@@ -265,9 +263,7 @@ class TestMarkdownListIndentation(unittest.TestCase):
                                 f"{stack[-1][0]} + 4)"
                             )
 
-                        stack.append(
-                            (indent, content_indent, is_numbered, in_numbered_tree)
-                        )
+                        stack.append((indent, content_indent, is_numbered, in_numbered_tree))
                     else:
                         non_space_indent = len(line) - len(line.lstrip())
                         if non_space_indent == 0 and line.strip():

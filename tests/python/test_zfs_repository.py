@@ -14,6 +14,7 @@ if PYTHON_SRC not in sys.path:
 
 from test_support import capture_logs, mock_subprocess
 from zfs_repository import (
+    AshiftInfo,
     HoldRow,
     ImportablePoolCache,
     PoolRow,
@@ -550,3 +551,130 @@ class TestIsDatasetEncrypted(unittest.TestCase):
 
     def test_empty_path(self):
         self.assertFalse(is_dataset_encrypted(""))
+
+
+class TestZfsRepositoryVersion(unittest.TestCase):
+    """version_output returns raw `zfs version` text."""
+
+    def test_version_output_returns_stdout(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="zfs-2.3.1-1\nzfs-kmod-2.3.1-1\n", stderr=""
+        )
+        self.assertEqual(repo.version_output(), "zfs-2.3.1-1\nzfs-kmod-2.3.1-1\n")
+
+    def test_version_output_returns_empty_on_failure(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="boom"
+        )
+        self.assertEqual(repo.version_output(), "")
+
+
+class TestZfsRepositoryAshift(unittest.TestCase):
+    """get_ashift combines `zpool get` and `zdb -C` fallback."""
+
+    def test_configured_ashift_nonzero(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="12\n", stderr=""
+        )
+        self.assertEqual(repo.get_ashift("tank"), AshiftInfo("12", 12))
+
+    def test_zero_configured_falls_back_to_zdb(self):
+        repo = ZfsRepository(sudo=False)
+        calls = []
+
+        def _run(cmd, *args, **kwargs):
+            calls.append(" ".join(str(c) for c in cmd))
+            if "zpool get" in " ".join(str(c) for c in cmd):
+                return subprocess.CompletedProcess(args=[], returncode=0, stdout="0\n")
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="vdev_tree:\n  ashift: 13\n"
+            )
+
+        repo._run = _run
+        self.assertEqual(repo.get_ashift("tank"), AshiftInfo("0", 13))
+
+    def test_missing_configured_falls_back_to_zdb(self):
+        repo = ZfsRepository(sudo=False)
+
+        def _run(cmd, *args, **kwargs):
+            if "zpool get" in " ".join(str(c) for c in cmd):
+                return subprocess.CompletedProcess(args=[], returncode=0, stdout="-\n")
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="ashift: 14\n")
+
+        repo._run = _run
+        self.assertEqual(repo.get_ashift("tank"), AshiftInfo("-", 14))
+
+    def test_both_sources_fail(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="boom"
+        )
+        self.assertEqual(repo.get_ashift("tank"), AshiftInfo(None, None))
+
+
+class TestZfsRepositoryTopology(unittest.TestCase):
+    """pool_topology parses `zpool status -P` config into a typed tree."""
+
+    _SAMPLE_STATUS = """\
+  pool: fivebays
+ state: ONLINE
+config:
+
+        NAME                                          STATE     READ WRITE CKSUM
+        fivebays                                      ONLINE       0     0     0
+          mirror-0                                    ONLINE       0     0     0
+            /dev/disk/by-id/wwn-0x5000cca768cace55    ONLINE       0     0     0
+            /dev/disk/by-id/wwn-0x5000cca768cace56    ONLINE       0     0     0
+        logs
+          mirror-1                                    ONLINE       0     0     0
+            /dev/disk/by-id/wwn-0x5002538e41234567    ONLINE       0     0     0
+
+errors: No known data errors
+"""
+
+    def test_parse_topology_returns_pool_root(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=self._SAMPLE_STATUS, stderr=""
+        )
+        topo = repo.pool_topology("fivebays")
+        self.assertIsNotNone(topo)
+        self.assertEqual(topo.name, "fivebays")
+        self.assertEqual(topo.vdev_type, "pool")
+        self.assertEqual(topo.state, "ONLINE")
+        self.assertEqual(topo.read, 0)
+
+    def test_parse_topology_vdevs_and_disks(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=self._SAMPLE_STATUS, stderr=""
+        )
+        topo = repo.pool_topology("fivebays")
+        self.assertIsNotNone(topo)
+        self.assertEqual(len(topo.children), 2)
+
+        mirror = topo.children[0]
+        self.assertEqual(mirror.vdev_type, "mirror")
+        self.assertEqual(len(mirror.children), 2)
+        self.assertEqual(mirror.children[0].vdev_type, "disk")
+        self.assertTrue(mirror.children[0].name.startswith("/dev/disk/by-id"))
+
+        log_group = topo.children[1]
+        self.assertEqual(log_group.vdev_type, "log")
+        self.assertEqual(len(log_group.children), 1)
+        self.assertEqual(log_group.children[0].vdev_type, "mirror")
+
+    def test_parse_topology_empty_on_missing_config(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="pool: tank\nstate: ONLINE\n", stderr=""
+        )
+        self.assertIsNone(repo.pool_topology("tank"))
+
+    def test_parse_topology_static_helper(self):
+        root = ZfsRepository._parse_topology(self._SAMPLE_STATUS)
+        self.assertIsNotNone(root)
+        self.assertEqual(root.name, "fivebays")

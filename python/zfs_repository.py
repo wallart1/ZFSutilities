@@ -126,6 +126,44 @@ class HoldRow:
     date: str
 
 
+@dataclass
+class AshiftInfo:
+    """Configured and effective pool ashift values."""
+
+    configured: str | None
+    effective: int | None
+
+
+@dataclass
+class TopologyNode:
+    """One node in a `zpool status -P` vdev topology tree."""
+
+    name: str
+    vdev_type: str
+    state: str
+    read: int
+    write: int
+    cksum: int
+    ashift: int | None
+    children: list["TopologyNode"]
+
+
+# Regex: ^(\s*)(\S+)(?:\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+))?\s*$
+# Purpose: Parse a vdev/device row from `zpool status -P` config output.
+# Group 1: leading whitespace (indentation).
+# Group 2: name (vdev label or full device path).
+# Groups 3-6: optional state, read/write/checksum error counters.
+_TOPOLOGY_LINE_RE = re.compile(
+    r"^(\s*)(\S+)(?:\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+))?\s*$",
+    re.MULTILINE,
+)
+
+# Regex: ^\s*ashift:\s*(\d+)\s*$
+# Purpose: Extract the effective ashift value from `zdb -C` output.
+# Group 1: the ashift value as a decimal integer.
+_ASHIFT_RE = re.compile(r"^\s*ashift:\s*(\d+)\s*$", re.MULTILINE)
+
+
 class ZfsRepository:
     """Wrap zfs/zpool subprocess calls for testability and isolation."""
 
@@ -566,6 +604,142 @@ class ZfsRepository:
         """Rollback a dataset to a snapshot (-r)."""
         result = self._run(self._zfs("rollback", "-r", snapshot), check=False)
         return result.returncode == 0
+
+    # ------------------------------------------------------------------
+    # Version / topology reads
+    # ------------------------------------------------------------------
+
+    def version_output(self) -> str:
+        """Return raw `zfs version` text (empty on failure)."""
+        result = self._run(self._zfs("version"), check=False)
+        return result.stdout
+
+    def zdb_pool_config(self, pool: str) -> str:
+        """Return raw `zdb -C <pool>` text (empty on failure)."""
+        cmd = (["sudo"] if self.sudo else []) + ["zdb", "-C", pool]
+        result = self._run(cmd, check=False)
+        return result.stdout
+
+    def get_ashift(self, pool: str) -> AshiftInfo:
+        """Return configured and effective ashift for *pool*.
+
+        The configured value comes from `zpool get ashift`. When that value is
+        unset or auto-detected (0, -, default), the effective value is parsed
+        from `zdb -C <pool>`.
+        """
+        configured: str | None = None
+        effective: int | None = None
+
+        result = self._run(self._zpool("get", "-H", "-o", "value", "ashift", pool), check=False)
+        if result.returncode == 0:
+            configured = result.stdout.strip()
+
+        missing = ("0", "-", "default", "")
+        if configured and configured not in missing:
+            try:
+                effective = int(configured)
+            except ValueError:
+                effective = None
+        else:
+            raw = self.zdb_pool_config(pool)
+            if raw:
+                match = _ASHIFT_RE.search(raw)
+                if match:
+                    effective = int(match.group(1))
+
+        return AshiftInfo(configured, effective)
+
+    def pool_topology(self, pool: str) -> TopologyNode | None:
+        """Parse `zpool status -P <pool>` into a typed vdev topology tree."""
+        result = self._run(self._zpool("status", "-P", pool), check=False)
+        if not result.stdout:
+            return None
+        return self._parse_topology(result.stdout)
+
+    @staticmethod
+    def _classify_vdev(name: str, state: str | None, is_root: bool = False) -> str:
+        """Map a `zpool status -P` row name to a vdev type."""
+        if is_root:
+            return "pool"
+        if name.startswith("mirror"):
+            return "mirror"
+        if name.startswith("raidz1"):
+            return "raidz1"
+        if name.startswith("raidz2"):
+            return "raidz2"
+        if name.startswith("raidz3"):
+            return "raidz3"
+        if name.startswith("stripe"):
+            return "stripe"
+        # zpool status prints plural section headings; normalise them here.
+        if name == "logs":
+            return "log"
+        if name == "spares":
+            return "spare"
+        if name in ("special", "log", "cache", "spare"):
+            return name
+        if state is not None and "/" in name:
+            return "disk"
+        return "unknown"
+
+    @staticmethod
+    def _parse_topology(raw: str) -> TopologyNode | None:
+        """Build a TopologyNode tree from the config section of `zpool status`."""
+        if "config:" not in raw:
+            return None
+        section = raw.split("config:", 1)[1]
+        if "errors:" in section:
+            section = section.split("errors:", 1)[0]
+
+        root = TopologyNode("", "pool", "", 0, 0, 0, None, [])
+        stack: list[tuple[int, TopologyNode]] = [(-1, root)]
+        header_seen = False
+
+        for line in section.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if not header_seen:
+                if stripped.startswith("NAME"):
+                    header_seen = True
+                continue
+
+            match = _TOPOLOGY_LINE_RE.match(line)
+            if not match:
+                continue
+
+            indent_s, name, state, read_s, write_s, cksum_s = match.groups()
+            indent = len(indent_s)
+
+            while stack and stack[-1][0] >= indent:
+                stack.pop()
+            parent = stack[-1][1] if stack else root
+
+            is_root = not root.children
+            vdev_type = ZfsRepository._classify_vdev(name, state, is_root=is_root)
+            node = TopologyNode(
+                name=name,
+                vdev_type=vdev_type,
+                state=state or "-",
+                read=int(read_s) if read_s else 0,
+                write=int(write_s) if write_s else 0,
+                cksum=int(cksum_s) if cksum_s else 0,
+                ashift=None,
+                children=[],
+            )
+            parent.children.append(node)
+            stack.append((indent, node))
+
+        if not root.children:
+            return None
+        # Top-level headings such as `logs`, `cache`, and `spare` appear as
+        # siblings of the pool root in `zpool status` output. Attach them to
+        # the pool root so the returned tree reflects the pool topology.
+        if len(root.children) > 1:
+            pool_root = root.children[0]
+            pool_root.children.extend(root.children[1:])
+            root.children = [pool_root]
+        return root.children[0]
 
 
 class ImportablePoolCache:

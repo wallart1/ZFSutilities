@@ -38,8 +38,8 @@ so concurrent jobs do not collide on the same datasets.
 
 ## Highlights
 
-- **GTK3 GUI** — Ten tabs covering Dashboard, Backup, Offsite, Restore,
-  Schedule, Pools, Datasets, Retention, Checkagainst, and Logs. The GUI
+- **GTK3 GUI** — eleven tabs covering Dashboard, Backup, Offsite, Restore,
+  Schedule, Disks, Pools, Datasets, Retention, Checkagainst, and Logs. The GUI
   includes an embedded documentation viewer, live log panel, and session log
   browser.
 - **Profiles and scheduling** — Save many tab configurations as reusable

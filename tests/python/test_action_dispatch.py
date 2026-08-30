@@ -16,6 +16,37 @@ with mock_gtk():
     import action_dispatch
 
 
+class TestDisksPageSpec(unittest.TestCase):
+    """Disks page exposes SMART Details and Refresh buttons."""
+
+    def test_smart_details_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
+        self.assertIn(
+            ("SMART Details", "dialog-information", "_disks_smart_details_btn"),
+            buttons,
+        )
+
+    def test_refresh_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
+        self.assertIn(("Refresh", "view-refresh", "_disks_refresh_btn"), buttons)
+
+    def test_post_setup_is_update_sensitivity(self):
+        post_setup = action_dispatch.PAGE_SPECS["disks"].get("post_setup")
+        self.assertIs(post_setup, action_dispatch.update_disks_button_sensitivity)
+
+
+class TestDisksHandlers(unittest.TestCase):
+    """Disks action handlers are wired correctly."""
+
+    def test_smart_details_handler_registered(self):
+        handler = action_dispatch.ACTION_HANDLERS["disks"]["SMART Details"]
+        self.assertIs(handler, action_dispatch.on_disks_smart_details)
+
+    def test_refresh_handler_registered(self):
+        handler = action_dispatch.ACTION_HANDLERS["disks"]["Refresh"]
+        self.assertTrue(callable(handler))
+
+
 class TestCollectScrubConfig(unittest.TestCase):
     """_collect_scrub_config() gathers the current scrub-manager settings."""
 

@@ -255,6 +255,67 @@ and tests easy to mock.
 
 ---
 
+### `disk_repository.py`
+
+Isolates non-ZFS block-device commands used by the Disks tab: `lsblk`,
+`/dev/disk/by-id` resolution, and `smartctl`. Methods return typed dataclasses
+and degrade gracefully when `smartctl` is missing or a device does not support
+SMART.
+
+**Key classes:**
+
+| Class | Purpose |
+| ----- | ------- |
+| `DiskInfo` | One physical disk from `lsblk --json` |
+| `DiskInventory` | Full inventory plus a path -> `DiskInfo` index |
+| `DiskRepository` | Wraps `lsblk`, `find`, and `smartctl` subprocess calls |
+
+**Key methods:**
+
+| Method | Purpose |
+| ------ | ------- |
+| `list_disks()` | Return physical disks, excluding partitions, loops, and zvols |
+| `resolve_by_id()` | Map kernel device paths to the best `/dev/disk/by-id` name |
+| `smart_health(path)` | Return `PASSED`, `FAILED`, or `n/a` for a device |
+| `smart_details(path)` | Return raw `smartctl -a` text or `n/a` |
+| `disk_inventory()` | Combine the above into a single inventory object |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `backup_config` | `log_msg` for warnings |
+
+---
+
+### `zfs_capabilities.py`
+
+Runtime OpenZFS release-variation layer. Parses both userland and kernel-module
+versions from `zfs version`, gates features on the kernel-module version, and
+warns when the two differ.
+
+**Key classes:**
+
+| Class | Purpose |
+| ----- | ------- |
+| `ZfsVersion` | Parsed `(major, minor)` tuples for userland and kmod |
+| `ZfsCapabilities` | `supports(name)`, `requires(name)`, and pool-feature cross-checks |
+
+**Key constants:**
+
+| Constant | Purpose |
+| -------- | ------- |
+| `FEATURE_MIN_VERSION` | Mapping of feature name to minimum `(major, minor)` |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `backup_config` | `log_msg` for warnings |
+| `zfs_repository` | `ZfsRepository.version_output()` and `pool_get_all()` |
+
+---
+
 ### `zfsinfo.py`
 
 Small CLI helper that prints pool, dataset, and snapshot information. It is
@@ -625,6 +686,59 @@ handlers.
 | Structure | Reference |
 | --------- | --------- |
 | `AppContext` | [AppContext][ds-appctx] |
+
+---
+
+### `disk_actions.py`
+
+Action handlers for the **Disks** tab. Kept separate from `disks_page.py` so
+page layout and action logic can be tested independently.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `on_disks_smart_details(app)` | Dump `smartctl -a` for the selected disk to the GUI log |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `disks_page` | Column constants and selected-disk lookup |
+| `logging_config` | `log_msg` |
+
+---
+
+### `disks_page.py`
+
+The **Disks** tab UI: disk inventory TreeView, pool selector, and vdev topology
+TreeView. Slow block-device and ZFS calls are cached in a background loader
+following the `ImportablePoolCache` pattern.
+
+**Key classes:**
+
+| Class | Purpose |
+| ----- | ------- |
+| `DiskInventoryData` | Snapshot returned by the cache |
+| `DiskInventoryCache` | Async TTL cache for inventory + topology |
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `create_disks_page(app)` | Build and return the Disks tab widget |
+| `refresh_disks_page(app)` | Repopulate disk inventory and topology stores |
+| `on_disks_refresh(app)` | Invalidate cache and refresh the page |
+| `update_disks_button_sensitivity(app)` | Enable/disable SMART Details button |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `disk_repository` | `DiskRepository`, `DiskInfo` |
+| `zfs_repository` | `ZfsRepository`, `TopologyNode` |
+| `gui_helpers` | `bold_label`, `configure_treeview_column`, `setup_row_scroll` |
+| `logging_config` | `log_msg` |
 
 ---
 

@@ -103,9 +103,7 @@ class TestEnsureDefaultRetentionProfile(unittest.TestCase):
             if os.path.exists(lock_path):
                 os.remove(lock_path)
 
-            installer_retention.ensure_default_retention_profile(
-                config_path=path, new_install=True
-            )
+            installer_retention.ensure_default_retention_profile(config_path=path, new_install=True)
 
             self.assertTrue(
                 os.path.exists(lock_path),

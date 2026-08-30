@@ -39,6 +39,7 @@ from dashboard_page import (
     refresh_dashboard_page,
 )
 from datasets_page import create_datasets_page, refresh_datasets_page
+from disks_page import create_disks_page, on_disks_refresh
 from docs_viewer import DocsViewerWindow
 from feature_config import get_checkagainst, get_pools
 from gui_helpers import (
@@ -223,6 +224,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self.add_stack_page("offsite", "Offsite", create_offsite_page(self, self.ctx))
         self.add_stack_page("restore", "Restore", create_restore_page(self, self.ctx))
         self.add_stack_page("schedule", "Schedule", create_schedule_page(self))
+        self.add_stack_page("disks", "Disks", create_disks_page(self))
         self.add_stack_page("pools", "Pools", create_pools_page(self))
         self.add_stack_page("datasets", "Datasets", create_datasets_page(self))
         self.add_stack_page("retention", "Retention", create_retention_page(self, self.ctx))
@@ -775,6 +777,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         "restore": "restore-tab",
         "schedule": "schedule-tab",
         "checkagainst": "checkagainst-tab",
+        "disks": "disks-tab",
         "pools": "pools-tab",
         "datasets": "datasets-tab",
         "retention": "retention-tab",
@@ -816,6 +819,8 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         elif page == "schedule":
             refresh_schedule_page(self)
             log_msg("INFO: Schedule refreshed")
+        elif page == "disks":
+            on_disks_refresh(self)
         else:
             log_msg("INFO: Refreshing...")
 

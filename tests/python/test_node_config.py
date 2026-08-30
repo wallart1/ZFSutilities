@@ -37,7 +37,9 @@ class TestLoadNodeConfig(unittest.TestCase):
             f.write('STORAGE_HOST="stewie"\n')
             f.write('COMPUTE_HOST="tweety"\n')
             f.write('STORAGE_IP="10.0.0.1"\n')
-            f.write('declare -A POOL_TARGET=(["threeamigos"]="threeamigos" ["fivebays"]="fivebays")\n')
+            f.write(
+                'declare -A POOL_TARGET=(["threeamigos"]="threeamigos" ["fivebays"]="fivebays")\n'
+            )
             path = f.name
         try:
             cfg = node_config.load_node_config(path)

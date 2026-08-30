@@ -47,6 +47,37 @@
   `listdir()`, and verifies the snapshot's `mounted` property so users are
   warned when a snapshot fails to mount.
 
+## 0.93.0
+
+*Released 2026-08-30*
+
+### Added
+
+- **Disks tab** — New GTK GUI tab showing physical disk inventory and pool vdev
+  topology. Includes an upper pane listing block devices (name, by-id, model,
+  serial, size, type, sector sizes, transport, pool membership, and SMART health)
+  and a lower pane displaying `zpool status -P` topology with vdev type, state,
+  error counters, and effective ashift.
+- **`python/disk_repository.py`** — Isolates `lsblk`, `/dev/disk/by-id`
+  resolution, and `smartctl` calls behind typed `DiskInfo`/`DiskInventory`
+  dataclasses. Degrades gracefully when `smartctl` is missing or a device does
+  not support SMART.
+- **`python/disks_page.py` and `python/disk_actions.py`** — Disks tab UI and
+  action handlers. Slow block-device and ZFS calls are cached in a background
+  loader with a TTL cache.
+- **`python/zfs_capabilities.py`** — Runtime OpenZFS release-variation layer.
+  Parses userland and kernel-module versions from `zfs version`, gates features
+  on the kernel-module version, and warns when the two differ.
+- **`ZfsRepository` topology and version helpers** — Added `version_output()`,
+  `zdb_pool_config()`, `get_ashift()`, and `pool_topology()` methods plus
+  `AshiftInfo` and `TopologyNode` dataclasses.
+- **`AppContext` extensions** — Added `disk_repository` and `zfs_caps` fields.
+
+### Changed
+
+- Reformatted 11 pre-existing Python files to current `ruff format` rules.
+- README and GUI documentation now list the new Disks tab.
+
 ## 0.92.0
 
 *Released 2026-08-29*

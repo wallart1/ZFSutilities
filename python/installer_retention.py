@@ -42,9 +42,7 @@ def ensure_default_retention_profile(config_path=None, new_install=False):
     if config_path is not None:
         # Keep the advisory lock next to the overridden config file so tests
         # and alternate installs do not need write access to /run/lock.
-        file_locking.CONFIG_LOCK_PATH = os.path.join(
-            os.path.dirname(path), ".config.lock"
-        )
+        file_locking.CONFIG_LOCK_PATH = os.path.join(os.path.dirname(path), ".config.lock")
     try:
         config = load_config()
 

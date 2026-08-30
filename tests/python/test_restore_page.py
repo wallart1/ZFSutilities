@@ -303,9 +303,7 @@ class TestLoadRestoreConfig(unittest.TestCase):
                 "pause_scrubs": False,
             },
         )
-        self.assertEqual(
-            app.restore_var_widgets["verify_after_transfer"].get_active_text(), "N"
-        )
+        self.assertEqual(app.restore_var_widgets["verify_after_transfer"].get_active_text(), "N")
         self.assertEqual(app.restore_var_widgets["pv_rate_limit"].get_text(), "75M")
 
 

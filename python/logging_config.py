@@ -320,9 +320,7 @@ def log_msg(
                     break
                 frame = frame.f_back
             if frame is not None:
-                long_prefix_str = (
-                    f"{os.path.realpath(inspect.getfile(frame))}:{frame.f_lineno}:"
-                )
+                long_prefix_str = f"{os.path.realpath(inspect.getfile(frame))}:{frame.f_lineno}:"
             else:
                 long_prefix_str = "zfsutilities:"
         except (TypeError, OSError):

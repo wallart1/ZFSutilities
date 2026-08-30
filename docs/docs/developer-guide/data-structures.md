@@ -384,6 +384,15 @@ Cross-cutting, non-GTK state passed to GUI pages and action handlers.
 | `version` | `str` | Deployed/repository version string |
 | `is_new_install` | `bool` | `True` when the config file was created fresh this session; used by the Retention tab to clear legacy pool-specific policies |
 | `zfs_repository` | `ZfsRepository` | Repository for ZFS/zpool I/O |
+| `disk_repository` | `DiskRepository` | Repository for lsblk/by-id/smartctl I/O |
+| `zfs_caps` | `ZfsCapabilities` | Runtime OpenZFS capability gating built from `zfs_repository` |
+
+### `DiskRepository` dataclasses (`disk_repository.py`)
+
+| Class | Fields | Purpose |
+| ----- | ------ | ------- |
+| `DiskInfo` | `name`, `path`, `by_id`, `model`, `serial`, `size_bytes`, `size_human`, `disk_type`, `logical_sector`, `physical_sector`, `transport`, `pools`, `smart_health` | One physical block device from `lsblk` |
+| `DiskInventory` | `disks`, `by_path` | Full disk inventory plus a path -> `DiskInfo` index |
 
 ### `ZfsRepository` dataclasses (`zfs_repository.py`)
 
@@ -395,12 +404,18 @@ Read methods return typed rows instead of raw tab-separated strings.
 | `DatasetRow` | `name`, `creation`, `ds_type`, `used`, `avail`, `refer`, `origin`, `clones` | `zfs list -H -o name,creation,type,used,avail,refer,origin,clones` |
 | `SnapshotRow` | `name`, `creation`, `ds_type`, `used`, `avail`, `refer`, `origin`, `clones` | `zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones` |
 | `HoldRow` | `snapshot`, `tag`, `date` | `zfs holds -H <snapshot>` |
+| `AshiftInfo` | `configured`, `effective` | Configured and effective pool ashift values |
+| `TopologyNode` | `name`, `vdev_type`, `state`, `read`, `write`, `cksum`, `ashift`, `children` | One node in a `zpool status -P` vdev topology tree |
 
 Additional `ZfsRepository` methods:
 
 | Method | Return | Purpose |
 | ------ | ------ | ------- |
 | `pool_status_errors(pool)` | `dict` | Parses `zpool status <pool>` and returns `has_errors` (`bool`), `errors_summary` (`str`), `data_errors` (`list` of paths), and `vdev_errors` (`list` of `{name, read, write, cksum}` dicts). Used by the Dashboard and Pools tab to color the **Errors** column. |
+| `version_output()` | `str` | Raw `zfs version` text (empty on failure) |
+| `zdb_pool_config(pool)` | `str` | Raw `zdb -C <pool>` text (empty on failure) |
+| `get_ashift(pool)` | `AshiftInfo` | Configured and effective ashift for *pool* |
+| `pool_topology(pool)` | `TopologyNode` or `None` | Parsed `zpool status -P <pool>` vdev topology tree |
 
 ### Scrub state (`scrub_manager.py`)
 

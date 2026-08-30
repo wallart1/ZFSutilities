@@ -220,9 +220,7 @@ class DocsViewerWindow(Gtk.Window):
             user_state = _load_user_state()
             self._docs_state = user_state.get("docs_viewer", {})
             if not self._docs_state:
-                self._docs_state = get_ui_state(_load_system_config_raw()).get(
-                    "docs_viewer", {}
-                )
+                self._docs_state = get_ui_state(_load_system_config_raw()).get("docs_viewer", {})
             self._docs_editor = get_docs_editor(_load_system_config_raw())
 
         self._restore_geometry()

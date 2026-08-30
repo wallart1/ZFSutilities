@@ -93,6 +93,7 @@ The sidebar tabs are:
 | [Offsite](#offsite-tab) | Configure and run offsite backups |
 | [Restore](#restore-tab) | Restore datasets from backups |
 | [Schedule](#schedule-tab) | Manage scheduled profiles |
+| [Disks](#disks-tab) | Physical disk inventory and pool topology |
 | [Pools](#pools-tab) | Register pools and manage scrubs |
 | [Datasets](#datasets-tab) | Browse datasets and manage snapshots/holds |
 | [Retention](#retention-tab) | Per-pool retention policies and pruning |
@@ -134,6 +135,60 @@ warnings for each missing section. Configure them through the relevant tabs:
 4. **[Offsite](#offsite-tab)** — review the automatically detected offsite pool and add offsite backup steps
 5. **[Retention](#retention-tab)** — a `default` policy is auto-created. Add per-pool policies with **Add Policy** when needed.
 6. **[Checkagainst](#checkagainst-tab)** — add dataset-counterpart mappings
+
+## Disks Tab
+
+The **Disks** tab shows the physical storage layer underneath your ZFS pools.
+
+### Disk inventory
+
+The upper pane lists every physical block device detected on the system:
+
+| Column | Meaning |
+| --- | --- |
+| Name | Kernel device node (e.g. `/dev/sda`) |
+| by-id | Best `/dev/disk/by-id` symlink name for the device |
+| Model | Device model string from `lsblk` |
+| Serial | Device serial number |
+| Size | Capacity in human-readable units |
+| Type | `HDD`, `SSD`, `NVMe`, or `unknown` (derived from `ROTA` and `TRAN`) |
+| Log-sec | Logical sector size |
+| Phy-sec | Physical sector size |
+| Transport | Transport type (e.g. `sata`, `nvme`, `sas`) |
+| Pools | Pool membership determined from vdev topology |
+| SMART | Overall SMART health (`PASSED`, `FAILED`, or `n/a`) |
+
+Device scans and SMART probes can be slow, so the inventory is loaded in a
+background thread and cached for a few seconds. Select a disk to jump to its
+first pool in the topology view.
+
+### Pool topology
+
+The lower pane shows the vdev topology of the pool selected in the drop-down:
+
+| Column | Meaning |
+| --- | --- |
+| Name | Pool, vdev label, or full device path |
+| Type | `mirror`, `raidz1/2/3`, `stripe`, `disk`, `special`, `log`, `cache`, `spare` |
+| State | ZFS state for the vdev or device |
+| Read / Write / Cksum | Error counters from `zpool status` |
+| Ashift | Effective ashift for the vdev |
+
+### Actions
+
+- **SMART Details** — dumps `smartctl -a` output for the selected disk to the
+  GUI log panel. Requires a single disk to be selected and `smartctl` to be
+  installed; otherwise a warning is logged.
+- **Refresh** — reloads the disk inventory and topology from cache.
+
+### Feature requirements
+
+| Feature | Minimum OpenZFS |
+| --- | --- |
+| Read-only Disks views | 2.1+ |
+
+Later phases will extend this table as pool creation, workload profiles, and
+growth operations are added.
 
 ## Startup Version Check (Two-Node)
 
