@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+## 0.93.1
+
+*Released 2026-08-30*
+
+### Added
+
+- **Checkagainst auto-refresh on save** — Derived checkagainst rows are now
+  regenerated automatically whenever the Backup or Offsite configuration is
+  saved, so the derived list stays in sync with the current send/receive steps.
+- **Config migration 23 → 24** — Existing derived checkagainst rows are
+  regenerated on load to fix stale entries produced by the old destination-root
+  calculation.
+
+### Changed
+
+- **`<offsite>` destination-root handling** — A destination of just `<offsite>`
+  is now treated as an offsite pool root; the full source dataset tree is
+  appended under it (e.g. `fivebays` → `<offsite>/fivebays`). Previously this
+  was misinterpreted as a common suffix, producing incorrect counterpart paths.
+- **Release Holds in normal prune mode** — The Retention tab's **Release Holds**
+  option is now configurable in both normal (policy-respecting) prune and
+  **Ignore retention policies** prune. It was previously enabled only in ignore
+  mode.
+- **Move shared progress regex** — The `_PV_RATE_RE` regex used to parse `pv`
+  rate output was moved from `python/backup_runner.py` to
+  `python/command_builders.py` so all runners can import it from a single
+  location.
+- Downgraded retention policy save/add messages from `INFO` to `VERB` to reduce
+  log noise.
+
+### Fixed
+
+- **`zfsrestore` hold-preservation diagnostics** — On failure, `zfsrestore`
+  now preserves the captured-holds temp file and logs its path so the failure
+  can be diagnosed or the holds reapplied manually. Residual temp files left by
+  previous failed runs are cleaned up at startup, and the temp file is still
+  removed automatically on success.
+- **`zfsrestore` error propagation** — Failures in `send-receive`,
+  `ensure-restored-vm-iscsi`, and `reapplyholds_apply` now cause `zfsrestore`
+  to exit non-zero instead of continuing.
+- **GUI snapshot mount reliability** — The Datasets page snapshot mount action
+  now uses a read lock, unconditionally triggers ZFS auto-mount via
+  `listdir()`, and verifies the snapshot's `mounted` property so users are
+  warned when a snapshot fails to mount.
+
 ## 0.92.0
 
 *Released 2026-08-29*

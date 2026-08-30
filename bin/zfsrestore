@@ -32,11 +32,28 @@ source_helper zfsremoveleadingqualifiers
 source_helper zfsoverrides
 source_helper zfsreapplyholds
 
-# Remove any captured-holds temp file on exit so a fatal abort does not
-# leave it behind.
+# Remove any residual captured-holds temp file left by a previous failed run
+# before we create a new one.
+_cleanup_residual_target_holds() {
+    local _residual
+    for _residual in "${TMPDIR:-/tmp}"/zfsrestore-target-holds.*; do
+        [[ -e "$_residual" ]] || continue
+        log_msg "INFO: Removing residual captured-holds temp file from previous run: $_residual"
+        rm -f -- "$_residual"
+    done
+}
+_cleanup_residual_target_holds
+
+# On exit, remove the captured-holds temp file only if the script succeeded.
+# If it failed, preserve the file for diagnosis and tell the user where it is.
 _cleanup_target_holds() {
-    if [[ -n "${_target_holds_file:-}" ]]; then
-        rm -f -- "$_target_holds_file"
+    local _rc=$?
+    if [[ -n "${_target_holds_file:-}" && -e "$_target_holds_file" ]]; then
+        if [[ "$_rc" -eq 0 ]]; then
+            rm -f -- "$_target_holds_file"
+        else
+            log_msg "WARN: zfsrestore failed (exit $_rc); leaving captured-holds temp file for diagnosis: $_target_holds_file"
+        fi
     fi
 }
 trap _cleanup_target_holds EXIT
@@ -136,12 +153,11 @@ if [[ "$preserve_target_holds" == "Y" ]]; then
     fi
 fi
 
-send-receive "$restoresourcefs"
-ensure_restored_iscsi
+send-receive "$restoresourcefs" || exit $?
+ensure_restored_iscsi || exit $?
 
 if [[ -n "$_target_holds_file" && -s "$_target_holds_file" ]]; then
-    reapplyholds_apply "$destfs" "$_target_holds_file" "${dryrun:-N}"
+    reapplyholds_apply "$destfs" "$_target_holds_file" "${dryrun:-N}" || exit $?
 fi
-rm -f "$_target_holds_file"
 
 log_msg "INFO: zfsrestore completed."

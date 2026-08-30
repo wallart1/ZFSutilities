@@ -51,7 +51,10 @@ NVME1 ───────────────────┘
 | 4    | `fivebays`    | `<offsite>` | `threeamigos/proxmox` and `NVME1/proxmox` only |
 
 The `<offsite>` token is replaced at run time with the first online offsite
-pool marked as an offsite candidate in the pool registry.
+pool marked as an offsite candidate in the pool registry.  When the
+destination is just `<offsite>`, the source dataset tree is appended under
+that pool (for example, `temp` → `z22tb/temp` and `fivebays` →
+`z22tb/fivebays`).
 
 ### Scope alignment with daily backup
 

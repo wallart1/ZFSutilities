@@ -17,6 +17,7 @@ from feature_config import (
     get_backup_config,
     get_offsite_candidate_names,
     get_offsite_config,
+    refresh_checkagainst_derived,
     save_offsite_config,
 )
 from gi.repository import GLib, Gtk
@@ -543,6 +544,7 @@ def on_offsite_save(app, ctx):
         )
     try:
         save_offsite_config(ctx.config, offsite_data)
+        refresh_checkagainst_derived(ctx.config)
         if hasattr(app, "_offsite_tracker"):
             app._offsite_tracker.mark_clean()
         log_msg("INFO: Offsite config saved to /var/lib/zfsutilities/config.json")

@@ -12,7 +12,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 from backup_history import format_duration, get_success_rate, load_history
-from backup_runner import _PV_RATE_RE
+from command_builders import _PV_RATE_RE
 from config_core import (
     SESSION_LOG_DIR,
     get_history_retention_days,

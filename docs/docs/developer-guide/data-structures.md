@@ -107,6 +107,17 @@ The GUI's Checkagainst tab lets you refresh the derived lists manually
 with **Get Entries** or automatically seed them after a successful run,
 while the bottom section remains your editable `user_entries` table.
 
+Derived rows are also refreshed automatically when the Backup or Offsite
+configuration is saved, so they stay in sync with the current send/receive
+steps.
+
+!!! note "Destination root with `<offsite>`"
+    A destination of just `<offsite>` is treated as an offsite pool root.
+    The source path is appended to it (e.g. `source=fivebays`,
+    `dest=<offsite>` becomes `<offsite>/fivebays`).  Only when the
+    destination already ends with a real common suffix is the destination
+    used as-is.
+
 ### Legacy format (`zfscheckagainst.conf`)
 
 Before the JSON config, the fss table was stored in a plain text file at the

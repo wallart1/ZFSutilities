@@ -666,15 +666,15 @@ class TestMount(unittest.TestCase):
             patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess"),
             patch.object(da, "zlm") as mock_zlm,
-            patch.object(da.os.path, "isdir", return_value=False),
-            patch.object(da.os, "listdir", return_value=[]),
+            patch.object(da.os, "listdir", return_value=[]) as mock_listdir,
         ):
-            app.ctx.zfs_repository.get_property.return_value = "yes"
+            app.ctx.zfs_repository.get_property.side_effect = ["yes", "yes"]
             da.on_datasets_mount(app)
 
             mock_zlm.lock.assert_called_once_with(
-                "tank/vm-100", "w", "mount snapshot tank/vm-100@snap1"
+                "tank/vm-100", "r", "mount snapshot tank/vm-100@snap1"
             )
+            mock_listdir.assert_called_once_with("/tank/vm-100/.zfs/snapshot/snap1")
             mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap1")
             mock_update.assert_called_once_with(app)
 
@@ -696,7 +696,7 @@ class TestMount(unittest.TestCase):
             patch.object(da, "update_ds_button_sensitivity"),
             patch.object(da, "log_msg") as mock_log,
             patch.object(da, "zlm") as mock_zlm,
-            patch.object(da.os.path, "isdir", return_value=False),
+            patch.object(da.os, "listdir") as mock_listdir,
         ):
             app.ctx.zfs_repository.get_property.return_value = "no"
             da.on_datasets_mount(app)
@@ -705,7 +705,46 @@ class TestMount(unittest.TestCase):
                 "WARN: Cannot mount tank/vm-100@snap1: parent dataset "
                 "tank/vm-100 is not mounted. Mount the parent first."
             )
-            mock_zlm.lock.assert_called_once()
+            mock_zlm.lock.assert_called_once_with(
+                "tank/vm-100", "r", "mount snapshot tank/vm-100@snap1"
+            )
+            mock_listdir.assert_not_called()
+
+    def test_warns_when_snapshot_does_not_mount(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[{"type": "snapshot", "dataset": "tank/vm-100", "name": "snap1"}],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tank/vm-100/.zfs/snapshot/snap1",
+            ),
+            patch.object(da, "update_ds_button_sensitivity") as mock_update,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da.os, "listdir", return_value=[]),
+        ):
+            app.ctx.zfs_repository.get_property.side_effect = ["yes", "no"]
+            da.on_datasets_mount(app)
+
+            mock_zlm.lock.assert_called_once_with(
+                "tank/vm-100", "r", "mount snapshot tank/vm-100@snap1"
+            )
+            mock_log.assert_any_call(
+                "WARN: Cannot mount tank/vm-100@snap1: snapshot did not mount "
+                "at /tank/vm-100/.zfs/snapshot/snap1."
+            )
+            self.assertNotIn(
+                call("INFO: Mounted snapshot tank/vm-100@snap1"), mock_log.call_args_list
+            )
+            mock_update.assert_not_called()
 
     def test_warns_when_snapshot_mountpoint_resolution_fails(self):
         da = self._import_under_mock()
@@ -731,6 +770,36 @@ class TestMount(unittest.TestCase):
             mock_log.assert_called_once_with(
                 "WARN: Error mounting snapshot tank/vm-100@snap1: no such snapshot path"
             )
+
+    def test_warns_when_snapshot_path_not_accessible(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[{"type": "snapshot", "dataset": "tank/vm-100", "name": "snap1"}],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tank/vm-100/.zfs/snapshot/snap1",
+            ),
+            patch.object(da, "update_ds_button_sensitivity") as mock_update,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch.object(da.os, "listdir", side_effect=FileNotFoundError("no such file")),
+        ):
+            app.ctx.zfs_repository.get_property.return_value = "yes"
+            da.on_datasets_mount(app)
+
+            mock_log.assert_any_call(
+                "WARN: Cannot mount tank/vm-100@snap1: snapshot path "
+                "/tank/vm-100/.zfs/snapshot/snap1 is not accessible."
+            )
+            mock_update.assert_not_called()
 
 
 class TestBrowse(unittest.TestCase):

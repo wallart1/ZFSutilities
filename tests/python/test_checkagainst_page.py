@@ -1227,11 +1227,11 @@ class TestAutoDerivedLoad(unittest.TestCase):
         self.assertEqual(len(app._ca_offsite_store), 2)
         self.assertEqual(
             app._ca_offsite_store[0],
-            ["offsite", "poolB/poolA/a", "<offsite>", ""],
+            ["offsite", "poolB/poolA/a", "<offsite>/poolB/poolA/a", ""],
         )
         self.assertEqual(
             app._ca_offsite_store[1],
-            ["offsite", "<offsite>", "poolB/poolA/a", ""],
+            ["offsite", "<offsite>/poolB/poolA/a", "poolB/poolA/a", ""],
         )
 
     def test_load_starts_clean_when_derived_matches_backup_offsite(self):

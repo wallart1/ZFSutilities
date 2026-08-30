@@ -1223,7 +1223,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             app._ret_mass_delete_widgets = {key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES}
             app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")
             app._ret_mass_delete_widgets["releaseholds"] = MagicMock()
-            app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 1
+            app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 0
             app._ret_mass_delete_original = rp.MASS_DELETE_DEFAULTS.copy()
             app._ret_ignore_retention_check = MagicMock()
             app._ret_ignore_retention_check.get_active.return_value = False
@@ -1262,6 +1262,40 @@ class TestRetentionPageMassDelete(unittest.TestCase):
                 rp._on_ret_save(None, app, app.ctx)
 
             self.assertEqual(config["retention_mass_delete"]["snapshot_has"], "weekly")
+            self.assertEqual(config["retention_mass_delete"]["releaseholds"], "N")
+            self.assertFalse(rp._is_dirty(app))
+
+    def test_save_persists_releaseholds_in_respect_mode(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            config = {"retention": {"default": []}}
+            app = MagicMock()
+            app.ctx = AppContext(
+                config=config,
+                script_dir="",
+                parent_dir="",
+                version="dev",
+            )
+            app._ret_prune_label_entry = _FakeEntry("dailybackup")
+            app._ret_original_prune_label = "dailybackup"
+            app._ret_store = _FakeStore([])
+            app._ret_original = {"default": []}
+            app._ret_pool = "default"
+            app._ret_pending = {}
+            app._ret_mass_delete_widgets = {key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES}
+            app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")
+            rh = MagicMock()
+            rh.get_active.return_value = 0
+            app._ret_mass_delete_widgets["releaseholds"] = rh
+            app._ret_mass_delete_original = rp.MASS_DELETE_DEFAULTS.copy()
+            app._ret_mass_delete_original["releaseholds"] = "N"
+            app._ret_ignore_retention_check = MagicMock()
+            app._ret_ignore_retention_check.get_active.return_value = False
+
+            with patch.object(rp, "_update_ret_status"):
+                rp._on_ret_save(None, app, app.ctx)
+
+            self.assertEqual(config["retention_mass_delete"]["releaseholds"], "Y")
             self.assertFalse(rp._is_dirty(app))
 
     def _mass_delete_dirty_app(self, rp, ignore=False, releaseholds="N"):
@@ -1286,13 +1320,13 @@ class TestRetentionPageMassDelete(unittest.TestCase):
         app._ret_ignore_retention_check.get_active.return_value = ignore
         return app
 
-    def test_respect_mode_ignores_releaseholds_for_dirty(self):
+    def test_respect_mode_tracks_releaseholds_for_dirty(self):
         with temp_config_dir():
             rp = self._fresh_module()
             app = self._mass_delete_dirty_app(rp, ignore=False, releaseholds="N")
             self.assertFalse(rp._is_dirty(app))
             app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 0
-            self.assertFalse(rp._is_dirty(app))
+            self.assertTrue(rp._is_dirty(app))
 
     def test_ignore_mode_releaseholds_tracked_for_dirty(self):
         with temp_config_dir():
@@ -1302,7 +1336,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 0
             self.assertTrue(rp._is_dirty(app))
 
-    def test_releaseholds_disabled_when_not_ignoring(self):
+    def test_releaseholds_sensitive_when_not_ignoring(self):
         with temp_config_dir():
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=[])
@@ -1314,8 +1348,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
 
             rh_widget = app._ret_mass_delete_widgets["releaseholds"]
             app._ret_ignore_retention_check.set_active.assert_called_with(False)
-            rh_widget.set_sensitive.assert_called_with(False)
-            rh_widget.set_active.assert_called_with(1)
+            rh_widget.set_sensitive.assert_called_with(True)
 
     def test_releaseholds_enabled_when_ignoring(self):
         with temp_config_dir():
@@ -1340,8 +1373,8 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             rh_widget.set_sensitive.assert_called_with(True)
             rh_widget.set_active.assert_called_with(0)
 
-    def test_respect_mode_forces_releaseholds_off(self):
-        """If ignore is unchecked, releaseholds is forced to N on load."""
+    def test_respect_mode_preserves_releaseholds(self):
+        """If ignore is unchecked, releaseholds keeps its saved value."""
         with temp_config_dir():
             rp = self._fresh_module()
             rp._get_online_pool_names = MagicMock(return_value=[])
@@ -1361,8 +1394,8 @@ class TestRetentionPageMassDelete(unittest.TestCase):
                 rp.create_retention_page(app, app.ctx)
 
             rh_widget = app._ret_mass_delete_widgets["releaseholds"]
-            rh_widget.set_sensitive.assert_called_with(False)
-            rh_widget.set_active.assert_called_with(1)
+            rh_widget.set_sensitive.assert_called_with(True)
+            rh_widget.set_active.assert_called_with(0)
 
 
 class TestRetentionPageLayout(unittest.TestCase):
@@ -1473,7 +1506,7 @@ class TestRetentionVerbCheckbox(unittest.TestCase):
             app._ret_mass_delete_widgets = {key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES}
             app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")
             app._ret_mass_delete_widgets["releaseholds"] = MagicMock()
-            app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 1
+            app._ret_mass_delete_widgets["releaseholds"].get_active.return_value = 0
             app._ret_mass_delete_original = rp.MASS_DELETE_DEFAULTS.copy()
             app._ret_ignore_retention_check = MagicMock()
             app._ret_ignore_retention_check.get_active.return_value = False

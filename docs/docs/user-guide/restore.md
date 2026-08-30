@@ -113,6 +113,18 @@ This behavior is on by default. To disable it, set:
 sudo zfsrestore "preserve_target_holds='N'"
 ```
 
+If a restore fails after the holds have been captured, `zfsrestore` leaves the
+temporary holds file in place and logs its path. You can use that file to
+diagnose the failure or to reapply the holds manually once the problem is
+resolved:
+
+```bash
+sudo zfsreapplyholds --apply pool/dest /tmp/zfsrestore-target-holds.XXXXXX
+```
+
+The residual temp file is removed automatically the next time `zfsrestore`
+runs.
+
 You can also capture and reapply holds manually with the
 [`zfsreapplyholds`](../commands-and-modules/commands.md#zfsreapplyholds)
 helper:

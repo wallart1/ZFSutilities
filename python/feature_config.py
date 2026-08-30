@@ -278,10 +278,17 @@ def _compute_destination_root(source, destination):
         else:
             break
 
+    # A match made only of <offsite> wildcard segments is not a real common
+    # suffix; it just means the destination is a pool placeholder. In that
+    # case zfs-send-receive will append the full source path.
+    wildcard_only_match = max_suffix > 0 and all(
+        dst_parts[-i] == "<offsite>" for i in range(1, max_suffix + 1)
+    )
+
     # If the destination ends with the full source path, or the destination is
     # entirely a suffix of the source path, the destination root is the
     # destination itself; otherwise zfs-send-receive appends the source.
-    if max_suffix == len(src_parts) or max_suffix == len(dst_parts):
+    if (max_suffix == len(src_parts) or max_suffix == len(dst_parts)) and not wildcard_only_match:
         return destination
 
     return f"{destination}/{source}" if destination else source
@@ -364,6 +371,20 @@ def derive_checkagainst_entries(config):
         _dedupe_checkagainst_rows(backup_derived),
         _dedupe_checkagainst_rows(offsite_derived),
     )
+
+
+def refresh_checkagainst_derived(config):
+    """Recompute the stored backup- and offsite-derived checkagainst rows.
+
+    The derived rows are regenerated from the current Backup send/receive
+    steps and Offsite steps.  Active flags and user_entries are preserved.
+    The config is modified in place but not persisted; callers that want the
+    change saved must call save_config themselves.
+    """
+    backup_derived, offsite_derived = derive_checkagainst_entries(config)
+    data = get_checkagainst(config)
+    data["backup_derived"] = backup_derived
+    data["offsite_derived"] = offsite_derived
 
 
 def merge_checkagainst_entries(config):

@@ -607,11 +607,13 @@ class TestBackupSaveValidation(unittest.TestCase):
             patch.object(backup_page, "validate_gui_settings", return_value=[]),
             patch.object(backup_page, "show_warning_dialog") as mock_warn,
             patch.object(backup_page, "save_backup_config") as mock_save,
+            patch.object(backup_page, "refresh_checkagainst_derived") as mock_refresh,
         ):
             backup_page.on_backup_save(app, app.ctx)
 
         mock_warn.assert_not_called()
         mock_save.assert_called_once()
+        mock_refresh.assert_called_once_with(app.ctx.config)
 
     def test_save_shows_warning_on_scope_mismatch(self):
         with mock_gtk():
@@ -624,12 +626,14 @@ class TestBackupSaveValidation(unittest.TestCase):
             patch.object(backup_page, "validate_gui_settings", return_value=["mismatch"]),
             patch.object(backup_page, "show_warning_dialog") as mock_warn,
             patch.object(backup_page, "save_backup_config") as mock_save,
+            patch.object(backup_page, "refresh_checkagainst_derived") as mock_refresh,
         ):
             backup_page.on_backup_save(app, app.ctx)
 
         mock_warn.assert_called_once()
         self.assertIn("mismatch", mock_warn.call_args[0][1])
         mock_save.assert_called_once()
+        mock_refresh.assert_called_once_with(app.ctx.config)
 
 
 if __name__ == "__main__":

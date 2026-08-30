@@ -409,7 +409,8 @@ def create_retention_page(app, ctx):
         if key == "releaseholds":
             tooltip = (
                 "When enabled, only system offsite-* holds are released; "
-                "user-added holds are left in place and block deletion."
+                "user-added holds are left in place and block deletion. "
+                "Applies to both normal prune and ignore-retention prune."
             )
         add_var_row(
             danger_grid,
@@ -589,18 +590,17 @@ def _store_to_buckets(app):
 
 
 def _sync_releaseholds_widget(app, ignore_active):
-    """Enable releaseholds only when Ignore retention policies is checked."""
+    """Keep releaseholds sensitive in both prune modes.
+
+    Previously this dropdown was only enabled when Ignore retention policies
+    was checked.  It is now configurable in both modes, so the widget stays
+    sensitive and its value is preserved across toggles.
+    """
     widgets = getattr(app, "_ret_mass_delete_widgets", None)
     if not isinstance(widgets, dict):
         return
     rh_widget = widgets["releaseholds"]
-    if ignore_active:
-        rh_widget.set_sensitive(True)
-        if rh_widget.get_active() != 0:
-            rh_widget.set_active(0)
-    else:
-        rh_widget.set_sensitive(False)
-        rh_widget.set_active(1)
+    rh_widget.set_sensitive(True)
 
 
 def _mass_delete_is_dirty(app):
@@ -618,12 +618,9 @@ def _mass_delete_is_dirty(app):
     ignore_active = ignore_check.get_active() if ignore_check is not None else False
     if ignore_active != orig.get("ignore_retention_policies", False):
         return True
-    # releaseholds is only editable in ignore mode.
-    if ignore_active:
-        release_val = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
-        if release_val != orig.get("releaseholds", "N"):
-            return True
-    return False
+    # releaseholds is configurable in both ignore and normal prune modes.
+    release_val = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
+    return release_val != orig.get("releaseholds", "N")
 
 
 def _is_dirty(app):
@@ -822,9 +819,9 @@ def _on_ret_save(btn, app, ctx):
 
     if saved_pools:
         if len(saved_pools) == 1:
-            log_msg(f"INFO: Retention policy saved for pool: {saved_pools[0]}")
+            log_msg(f"VERB: Retention policy saved for pool: {saved_pools[0]}")
         else:
-            log_msg(f"INFO: Retention policies saved for pools: {', '.join(sorted(saved_pools))}")
+            log_msg(f"VERB: Retention policies saved for pools: {', '.join(sorted(saved_pools))}")
     _update_ret_status(app)
 
 

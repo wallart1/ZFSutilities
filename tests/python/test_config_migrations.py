@@ -173,8 +173,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_23(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 23)
+    def test_config_version_is_24(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 24)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -461,6 +461,73 @@ class TestRunMigrations(unittest.TestCase):
         self.assertEqual(row["dest_root"], "backup/a")
         self.assertEqual(row["label"], "daily")
 
+    def test_migrate_23_to_24_regenerates_checkagainst_derived_rows(self):
+        config = {
+            "config_version": 23,
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    {"active": True, "source": "threeamigos/proxmox", "dest": "fivebays"},
+                ],
+            },
+            "offsite": {
+                "steps": [
+                    {"active": True, "source": "fivebays", "dest": "<offsite>"},
+                ],
+            },
+            "checkagainst": {
+                "backup_derived_active": True,
+                "offsite_derived_active": True,
+                "backup_derived": [
+                    {"source_root": "stale", "dest_root": "stale", "label": "dailybackup"}
+                ],
+                "offsite_derived": [
+                    {"source_root": "<offsite>", "dest_root": "fivebays", "label": "offsite"}
+                ],
+                "user_entries": [
+                    {"source_root": "user/a", "dest_root": "user/b", "label": "offsite"}
+                ],
+            },
+        }
+        result = config_migrations._migrate_23_to_24(config)
+        self.assertEqual(result["config_version"], 24)
+        self.assertEqual(
+            result["checkagainst"]["backup_derived"],
+            [
+                {
+                    "source_root": "threeamigos/proxmox",
+                    "dest_root": "fivebays/threeamigos/proxmox",
+                    "label": "dailybackup",
+                },
+                {
+                    "source_root": "fivebays/threeamigos/proxmox",
+                    "dest_root": "threeamigos/proxmox",
+                    "label": "dailybackup",
+                },
+            ],
+        )
+        self.assertEqual(
+            result["checkagainst"]["offsite_derived"],
+            [
+                {
+                    "source_root": "fivebays",
+                    "dest_root": "<offsite>/fivebays",
+                    "label": "offsite",
+                },
+                {
+                    "source_root": "<offsite>/fivebays",
+                    "dest_root": "fivebays",
+                    "label": "offsite",
+                },
+            ],
+        )
+        self.assertEqual(
+            result["checkagainst"]["user_entries"],
+            [{"source_root": "user/a", "dest_root": "user/b", "label": "offsite"}],
+        )
+        self.assertTrue(result["checkagainst"]["backup_derived_active"])
+        self.assertTrue(result["checkagainst"]["offsite_derived_active"])
+
     def test_run_migrations_from_version_14(self):
         config = {
             "config_version": 14,
@@ -470,7 +537,7 @@ class TestRunMigrations(unittest.TestCase):
             "offsite": {"offsite_pools": ["z40tb"]},
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 23)
+        self.assertEqual(result["config_version"], 24)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))
         self.assertEqual(result["dashboard"]["refresh_seconds"], 30)
         row = result["checkagainst"]["user_entries"][0]
@@ -498,7 +565,7 @@ class TestRunMigrations(unittest.TestCase):
             },
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 23)
+        self.assertEqual(result["config_version"], 24)
         self.assertIn("retention_verb_messages", result)
         self.assertIs(result["retention_verb_messages"], False)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))

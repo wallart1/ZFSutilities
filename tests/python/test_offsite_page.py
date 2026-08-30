@@ -516,11 +516,13 @@ class TestOffsiteSaveValidation(unittest.TestCase):
             patch.object(op, "validate_gui_settings", return_value=[]),
             patch.object(op, "show_warning_dialog") as mock_warn,
             patch.object(op, "save_offsite_config") as mock_save,
+            patch.object(op, "refresh_checkagainst_derived") as mock_refresh,
         ):
             op.on_offsite_save(app, app.ctx)
 
         mock_warn.assert_not_called()
         mock_save.assert_called_once()
+        mock_refresh.assert_called_once_with(app.ctx.config)
 
     def test_save_shows_warning_on_scope_mismatch(self):
         op = _import_offsite_page()
@@ -531,12 +533,14 @@ class TestOffsiteSaveValidation(unittest.TestCase):
             patch.object(op, "validate_gui_settings", return_value=["mismatch"]),
             patch.object(op, "show_warning_dialog") as mock_warn,
             patch.object(op, "save_offsite_config") as mock_save,
+            patch.object(op, "refresh_checkagainst_derived") as mock_refresh,
         ):
             op.on_offsite_save(app, app.ctx)
 
         mock_warn.assert_called_once()
         self.assertIn("mismatch", mock_warn.call_args[0][1])
         mock_save.assert_called_once()
+        mock_refresh.assert_called_once_with(app.ctx.config)
 
 
 if __name__ == "__main__":

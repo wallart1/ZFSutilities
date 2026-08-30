@@ -472,6 +472,88 @@ class TestOnRetentionAddPolicyValidation(unittest.TestCase):
         mock_error.assert_not_called()
 
 
+class TestOnRetentionPruneReleaseHolds(unittest.TestCase):
+    """Release holds is configurable in both ignore and respect modes."""
+
+    def test_respect_mode_uses_configured_releaseholds_y(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["tank", "ONLINE"]],
+            selected_paths=[0],
+            ignore_retention=False,
+            releaseholds_active=0,
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        steps = app.retention_runner.set_steps.call_args[0][0]
+        cmd = steps[0].command[2]
+        self.assertIn('releaseholds="Y"', cmd)
+        self.assertIn('releaseholds_tags=("offsite-*")', cmd)
+
+    def test_respect_mode_uses_configured_releaseholds_n(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["tank", "ONLINE"]],
+            selected_paths=[0],
+            ignore_retention=False,
+            releaseholds_active=1,
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        steps = app.retention_runner.set_steps.call_args[0][0]
+        cmd = steps[0].command[2]
+        self.assertIn('releaseholds="N"', cmd)
+        self.assertNotIn('releaseholds_tags=("offsite-*")', cmd)
+
+    def test_ignore_mode_uses_configured_releaseholds_y(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["tank", "ONLINE"]],
+            selected_paths=[0],
+            ignore_retention=True,
+            releaseholds_active=0,
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        steps = app.retention_runner.set_steps.call_args[0][0]
+        cmd = steps[0].command[2]
+        self.assertIn('releaseholds="Y"', cmd)
+        self.assertIn('releaseholds_tags=("offsite-*")', cmd)
+        self.assertIn('ignore_retention_policies="Y"', cmd)
+
+    def test_ignore_mode_uses_configured_releaseholds_n(self):
+        ra = _import_retention_actions()
+        app, _model = _make_prune_app(
+            [["tank", "ONLINE"]],
+            selected_paths=[0],
+            ignore_retention=True,
+            releaseholds_active=1,
+        )
+        ctx = MagicMock()
+        ctx.parent_dir = "/bin"
+        with patch.object(ra, "show_error") as mock_error, patch.object(ra, "log_msg"):
+            ra.on_retention_prune(app, ctx)
+
+        mock_error.assert_not_called()
+        steps = app.retention_runner.set_steps.call_args[0][0]
+        cmd = steps[0].command[2]
+        self.assertIn('releaseholds="N"', cmd)
+        self.assertNotIn('releaseholds_tags=("offsite-*")', cmd)
+        self.assertIn('ignore_retention_policies="Y"', cmd)
+
+
 class TestOnRetentionPruneOffsite(unittest.TestCase):
     """<offsite> in the prune list expands to all online offsite pools."""
 

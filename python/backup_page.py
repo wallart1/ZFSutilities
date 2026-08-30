@@ -24,6 +24,7 @@ from feature_config import (
     get_backup_config,
     get_offsite_config,
     get_pool_names,
+    refresh_checkagainst_derived,
     remove_snapfile,
     save_backup_config,
 )
@@ -694,6 +695,7 @@ def on_backup_save(app, ctx):
         )
     try:
         save_backup_config(ctx.config, backup_data)
+        refresh_checkagainst_derived(ctx.config)
         if hasattr(app, "_backup_tracker"):
             app._backup_tracker.mark_clean()
         log_msg("INFO: Backup config saved to /var/lib/zfsutilities/config.json")

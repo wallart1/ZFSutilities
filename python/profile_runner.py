@@ -24,8 +24,8 @@ if _script_dir not in sys.path:
 
 import session_log
 from backup_history import _parse_human_size, add_history_entry, build_entry
-from backup_runner import _PV_RATE_RE
 from command_builders import (
+    _PV_RATE_RE,
     BashStep,
     _diagnose_rsync_failure,
     _dryrun_assignments,

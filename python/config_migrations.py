@@ -1,6 +1,6 @@
 """Config schema migrations. Bump CONFIG_VERSION when JSON structure changes."""
 
-CONFIG_VERSION = 23
+CONFIG_VERSION = 24
 
 
 def _migrate_1_to_2(config):
@@ -269,6 +269,20 @@ def _migrate_22_to_23(config):
     return config
 
 
+def _migrate_23_to_24(config):
+    """Regenerate checkagainst derived rows from current Backup/Offsite steps.
+
+    Fixes stale rows where a destination of just <offsite> was treated as a
+    full suffix match, producing incorrect counterpart paths like
+    fivebays/fivebays.
+    """
+    from feature_config import refresh_checkagainst_derived
+
+    refresh_checkagainst_derived(config)
+    config["config_version"] = 24
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -292,6 +306,7 @@ MIGRATIONS = [
     _migrate_20_to_21,
     _migrate_21_to_22,
     _migrate_22_to_23,
+    _migrate_23_to_24,
 ]
 
 

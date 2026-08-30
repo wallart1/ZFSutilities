@@ -9,6 +9,7 @@ from feature_config import (
     derive_checkagainst_entries,
     get_checkagainst,
     merge_checkagainst_entries,
+    refresh_checkagainst_derived,
 )
 from test_support import temp_config_dir
 
@@ -234,6 +235,78 @@ class TestDeriveCheckagainstEntries(unittest.TestCase):
                     "label": "dailybackup",
                 },
             ],
+        )
+
+    def test_offsite_pool_root_step_appends_source(self):
+        """Offsite step to bare <offsite> must produce <offsite>/source paths."""
+        config = {
+            "backup": {"variables": {"label": "dailybackup"}, "send_receive_steps": []},
+            "offsite": {
+                "steps": [
+                    {"active": True, "source": "fivebays", "dest": "<offsite>"},
+                ],
+            },
+        }
+        _, offsite_derived = derive_checkagainst_entries(config)
+        self.assertEqual(
+            offsite_derived,
+            [
+                {
+                    "source_root": "fivebays",
+                    "dest_root": "<offsite>/fivebays",
+                    "label": "offsite",
+                },
+                {
+                    "source_root": "<offsite>/fivebays",
+                    "dest_root": "fivebays",
+                    "label": "offsite",
+                },
+            ],
+        )
+
+
+class TestRefreshCheckagainstDerived(unittest.TestCase):
+    def test_refreshes_derived_rows_and_preserves_user_entries(self):
+        config = {
+            "backup": {
+                "variables": {"label": "dailybackup"},
+                "send_receive_steps": [
+                    {"active": True, "source": "threeamigos/proxmox", "dest": "fivebays"},
+                ],
+            },
+            "offsite": {"steps": []},
+            "checkagainst": {
+                "backup_derived_active": True,
+                "offsite_derived_active": True,
+                "backup_derived": [
+                    {"source_root": "stale", "dest_root": "stale", "label": "dailybackup"}
+                ],
+                "offsite_derived": [{"source_root": "old", "dest_root": "old", "label": "offsite"}],
+                "user_entries": [
+                    {"source_root": "user/a", "dest_root": "user/b", "label": "dailybackup"}
+                ],
+            },
+        }
+        refresh_checkagainst_derived(config)
+        self.assertEqual(
+            config["checkagainst"]["backup_derived"],
+            [
+                {
+                    "source_root": "threeamigos/proxmox",
+                    "dest_root": "fivebays/threeamigos/proxmox",
+                    "label": "dailybackup",
+                },
+                {
+                    "source_root": "fivebays/threeamigos/proxmox",
+                    "dest_root": "threeamigos/proxmox",
+                    "label": "dailybackup",
+                },
+            ],
+        )
+        self.assertEqual(config["checkagainst"]["offsite_derived"], [])
+        self.assertEqual(
+            config["checkagainst"]["user_entries"],
+            [{"source_root": "user/a", "dest_root": "user/b", "label": "dailybackup"}],
         )
 
 

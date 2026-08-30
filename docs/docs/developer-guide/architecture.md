@@ -418,7 +418,7 @@ sequenceDiagram
 `BackupRunner` uses two regexes to extract live transfer metrics from stdout and
 stderr:
 
-- **`_PV_RATE_RE`** — Matches `pv` progress output like `[28.1MiB/s]`. The match text is captured for the GUI progress indicator.
+- **`_PV_RATE_RE`** — Defined in `command_builders.py`; matches `pv` progress output like `[28.1MiB/s]`. The match text is captured for the GUI progress indicator.
 - **`_ZFS_RECEIVED_RE`** — Matches the final `zfs receive` summary line (`received 1.23GiB stream in 45.67 seconds`, plus bare suffix forms such as `received 319M stream in 8.46 seconds`). The captured byte count is accumulated across all datasets and written into the history JSON. It is checked both during live I/O watches and in the final `_drain_remaining()` pass so bytes are not lost if the line arrives after the process exits.
 
 `profile_runner.py` uses the same `_ZFS_RECEIVED_RE` regex when scanning the session log after completion to compute total bytes transferred.

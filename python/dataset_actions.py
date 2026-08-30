@@ -534,29 +534,36 @@ def on_datasets_mount(app):
         full_snap = f"{item['dataset']}@{item['name']}"
         try:
             path = get_snapshot_mountpoint(item["dataset"], item["name"], repo=repo)
-            with zlm.lock(item["dataset"], "w", f"mount snapshot {full_snap}"):
-                # Trigger ZFS auto-mount by accessing the snapshot path. If the
-                # parent dataset is not mounted, the path will not exist.
-                if not os.path.isdir(path):
-                    parent_mounted = repo.get_property(item["dataset"], "mounted") == "yes"
-                    if not parent_mounted:
-                        log_msg(
-                            f"WARN: Cannot mount {full_snap}: parent dataset "
-                            f"{item['dataset']} is not mounted. Mount the parent first."
-                        )
-                        return
-                    # Force ZFS to create the .zfs/snapshot directory by listing it.
-                    try:
-                        os.listdir(path)
-                    except FileNotFoundError:
-                        log_msg(
-                            f"WARN: Cannot mount {full_snap}: snapshot path {path} "
-                            "is not accessible."
-                        )
-                        return
-                log_msg(f"INFO: Mounted snapshot {full_snap}")
-                update_ds_button_sensitivity(app)
-                GLib.timeout_add_seconds(1, lambda a: update_ds_button_sensitivity(a) or False, app)
+            with zlm.lock(item["dataset"], "r", f"mount snapshot {full_snap}"):
+                parent_mounted = repo.get_property(item["dataset"], "mounted") == "yes"
+                if not parent_mounted:
+                    log_msg(
+                        f"WARN: Cannot mount {full_snap}: parent dataset "
+                        f"{item['dataset']} is not mounted. Mount the parent first."
+                    )
+                    return
+
+                # Trigger ZFS auto-mount by accessing the snapshot path. The
+                # .zfs/snapshot/<snap> directory exists as a virtual directory
+                # even when the snapshot is not mounted, so listdir() must be
+                # called unconditionally to actually mount it.
+                try:
+                    os.listdir(path)
+                except FileNotFoundError:
+                    log_msg(
+                        f"WARN: Cannot mount {full_snap}: snapshot path {path} is not accessible."
+                    )
+                    return
+
+                snap_mounted = repo.get_property(full_snap, "mounted") == "yes"
+                if snap_mounted:
+                    log_msg(f"INFO: Mounted snapshot {full_snap}")
+                    update_ds_button_sensitivity(app)
+                    GLib.timeout_add_seconds(
+                        1, lambda a: update_ds_button_sensitivity(a) or False, app
+                    )
+                else:
+                    log_msg(f"WARN: Cannot mount {full_snap}: snapshot did not mount at {path}.")
         except RuntimeError as exc:
             log_msg(f"WARN: cannot mount {full_snap}: {exc}")
         except (subprocess.CalledProcessError, FileNotFoundError) as e:

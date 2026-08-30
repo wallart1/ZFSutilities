@@ -14,7 +14,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 import cron_manager
-from backup_runner import _PV_RATE_RE
+from command_builders import _PV_RATE_RE
 from cron_manager import (
     format_next_runs,
     generate_cron_line,
@@ -939,9 +939,7 @@ def on_schedule_save(app):
             app.schedule_store.set_value(
                 tree_iter, COL_SCHEDULE, _format_cron(profile.get("cron", {}))
             )
-            app.schedule_store.set_value(
-                tree_iter, COL_COMMENT, profile.get("comment", "")
-            )
+            app.schedule_store.set_value(tree_iter, COL_COMMENT, profile.get("comment", ""))
             _update_next_run_for_iter(app, tree_iter)
 
     _regenerate_cron(app)
@@ -963,9 +961,7 @@ def on_schedule_revert(app):
                 app.schedule_store.set_value(
                     tree_iter, COL_SCHEDULE, _format_cron(profile.get("cron", {}))
                 )
-                app.schedule_store.set_value(
-                    tree_iter, COL_COMMENT, profile.get("comment", "")
-                )
+                app.schedule_store.set_value(tree_iter, COL_COMMENT, profile.get("comment", ""))
                 _update_next_run_for_iter(app, tree_iter)
         app._schedule_pending.clear()
 

@@ -162,8 +162,11 @@ The Retention tab's **Prune Snapshots** section has an optional checkbox:
 
 > **Verbose retention decisions (logs why each snapshot is kept)**
 
-When enabled, each prune run emits `VERB:`-level messages explaining why
-individual snapshots were **not** selected for deletion. Examples include:
+When enabled, each normal prune run (i.e. when **Ignore retention policies** is
+*not* checked) emits `VERB:`-level messages explaining why individual snapshots
+were **not** selected for deletion. This toggle has no effect when **Ignore
+retention policies** is checked, because ignore mode does not evaluate retention
+policies. Examples include:
 
 - `Keeping pool/fs@dailybackup-...-d — bucket 'd' count (2) is within retention limit (3).`
 - `Keeping pool/fs@dailybackup-...-d — most recent snapshot in bucket 'd' is protected as incremental base.`
@@ -203,7 +206,7 @@ retention counts.
 | **Start With**     | Skip datasets until this substring is seen                             |
 | **End With**       | Stop processing datasets after this substring                          |
 | **Snapshot Has**   | Only consider snapshots whose full name contains this substring        |
-| **Release Holds**  | Release ZFS holds before deleting; enabled only when **Ignore retention policies** is checked |
+| **Release Holds**  | Release ZFS holds before deleting; applies in both normal and ignore-retention prune |
 | **Ignore Retention Policies** | When enabled, the **Prune** button deletes all matching snapshots regardless of retention policy |
 
 ### Modes

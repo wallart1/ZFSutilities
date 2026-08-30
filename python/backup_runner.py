@@ -18,7 +18,7 @@ from datetime import datetime
 
 import session_log
 from backup_history import _parse_human_size, add_history_entry, build_entry
-from command_builders import _diagnose_rsync_failure
+from command_builders import _PV_RATE_RE, _diagnose_rsync_failure
 from gi.repository import GLib
 from logging_config import log_msg, restore_session_log, set_session_log
 
@@ -27,11 +27,6 @@ RSYNC_LOG_FILE = os.path.join(RSYNC_LOG_DIR, "rsync-backup.log")
 
 # How often to check the session log size while a runner is active.
 _SESSION_LOG_SIZE_CHECK_INTERVAL = 5  # seconds
-
-# Regex: \[\s*[\d.]+\s*[kKMGTP]?i?B/s\]
-# Purpose: Match pv progress output rate fields like [28.1MiB/s] or [ 148MiB/s].
-# Matches: [28.1MiB/s], [0.00  B/s], [1.5GiB/s]
-_PV_RATE_RE = re.compile(r"\[\s*[\d.]+\s*[kKMGTP]?i?B/s\]")
 
 # Regex: received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds
 # Purpose: Match the final summary line emitted by `zfs receive` on stderr,

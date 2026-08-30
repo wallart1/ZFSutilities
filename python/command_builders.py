@@ -1,10 +1,16 @@
 """Shared command builders for backup, offsite, restore, and retention operations."""
 
+import re
 import shlex
 import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+# Regex: \[\s*[\d.]+\s*[kKMGTP]?i?B/s\]
+# Purpose: Match pv progress output rate fields like [28.1MiB/s] or [ 148MiB/s].
+# Matches: [28.1MiB/s], [0.00  B/s], [1.5GiB/s]
+_PV_RATE_RE = re.compile(r"\[\s*[\d.]+\s*[kKMGTP]?i?B/s\]")
 
 # Common rsync exit-code meanings used to explain a failed step.
 # Rsync man page / `rsync --help` exit codes:

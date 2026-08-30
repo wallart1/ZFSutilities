@@ -550,6 +550,25 @@ class TestComputeDestinationRoot(unittest.TestCase):
             "<offsite>/threeamigos/proxmox",
         )
 
+    def test_offsite_pool_root_appends_source(self):
+        """A destination of just <offsite> is a pool root, not a suffix match."""
+        self.assertEqual(
+            feature_config._compute_destination_root("fivebays", "<offsite>"),
+            "<offsite>/fivebays",
+        )
+
+    def test_offsite_pool_root_appends_nested_source(self):
+        self.assertEqual(
+            feature_config._compute_destination_root("fivebays/threeamigos/proxmox", "<offsite>"),
+            "<offsite>/fivebays/threeamigos/proxmox",
+        )
+
+    def test_offsite_pool_root_appends_temp_source(self):
+        self.assertEqual(
+            feature_config._compute_destination_root("temp", "<offsite>"),
+            "<offsite>/temp",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

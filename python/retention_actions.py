@@ -114,7 +114,7 @@ def on_retention_add_policy(app, ctx):
         app._ret_combo.append_text(pool)
     idx = app._ret_pool_list.index(pool)
     app._ret_combo.set_active(idx)
-    log_msg(f"INFO: Created retention policy for pool: {pool}")
+    log_msg(f"VERB: Created retention policy for pool: {pool}")
 
     refresh_prune_pools(app)
 
@@ -283,17 +283,19 @@ def on_retention_prune(app, ctx):
     else:
         verb_check = getattr(app, "_ret_verb_check", None)
         retain_verb = "Y" if verb_check is not None and verb_check.get_active() else "N"
+        widgets = app._ret_mass_delete_widgets
+        releaseholds = "Y" if widgets["releaseholds"].get_active() == 0 else "N"
         for pool in pools:
             bash_cmd = (
                 f'source ~/bashinit; bashinit; mydir="{ctx.parent_dir}"; '
                 f'source "$mydir/zfscleanup"; '
                 f"{_dryrun_assignments(dryrun)}"
                 f'autoproceed="Y"; '
-                f'releaseholds="Y"; '
-                f'releaseholds_tags=("offsite-*"); '
-                f'retain_verb="{retain_verb}"; '
-                f'cleanup "{pool}" "" "{label}"'
+                f'releaseholds="{releaseholds}"; '
             )
+            if releaseholds == "Y":
+                bash_cmd += 'releaseholds_tags=("offsite-*"); '
+            bash_cmd += f'retain_verb="{retain_verb}"; cleanup "{pool}" "" "{label}"'
             steps.append(
                 BashStep(
                     ["bash", "-c", bash_cmd],
