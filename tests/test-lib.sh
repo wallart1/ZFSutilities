@@ -492,6 +492,18 @@ zfs() {
             return 0
             ;;
 
+        hold)
+            local tag="${args[1]}"
+            local snapshot="${args[2]}"
+            local current="${_mock_zfs_holds[$snapshot]:-}"
+            if [[ -n "$current" ]]; then
+                _mock_zfs_holds["$snapshot"]="$current $tag"
+            else
+                _mock_zfs_holds["$snapshot"]="$tag"
+            fi
+            return 0
+            ;;
+
         release)
             local tag="${args[1]}"
             local snapshot="${args[2]}"

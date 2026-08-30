@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+## 0.92.0
+
+*Released 2026-08-29*
+
+### Added
+
+- **`zfsreapplyholds` command** — New standalone helper and sourceable library
+  that captures all snapshot holds under a dataset subtree to a TSV file and
+  reapplies them later. It acquires the appropriate ZFS subtree lock during
+  capture/apply and supports `--dry-run`.
+- **Preserve destination holds across restores** — `zfsrestore` and
+  `zfsfullcopy` now capture existing holds on the destination before it is
+  destroyed and reapply them after the two-step full copy. This is controlled by
+  the new `$preserve_target_holds` override and defaults to `'Y'`.
+- **Restore tab transfer tuning** — The Restore tab's Advanced section now
+  exposes `verify_after_transfer` (Y/N) and `pv_rate_limit` (e.g. `100M`), the
+  same options already available on the Backup and Offsite tabs.
+- **Rsync failure diagnosis in headless runs** — `profile_runner.py` now logs a
+  human-readable explanation (for example, "Source files vanished during
+  transfer" for `rc=24`) alongside the raw rsync exit code, matching the GUI
+  runner behavior.
+
+### Changed
+
+- Moved the shared rsync failure-diagnosis helper from
+  `python/backup_runner.py` to `python/command_builders.py` so both the GUI
+  runner and the headless profile runner can use it.
+- Downgraded several routine GUI messages (dashboard refresh, dataset refresh,
+  clipboard copy, file-manager open) from `INFO` to `VERB` to reduce log noise.
+
+### Fixed
+
+- `bin/zfsrestore` now cleans up its captured-holds temp file via an `EXIT`
+  trap so a fatal abort does not leave it behind.
+
 ## 0.91.0
 
 *Released 2026-08-29*

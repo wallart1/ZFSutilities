@@ -477,7 +477,7 @@ def on_datasets_browse(app):
                 log_msg(f"WARN: Cannot open {dataset}: mountpoint is {mountpoint}")
                 return
             subprocess.Popen(["xdg-open", mountpoint])
-            log_msg(f"INFO: Opened {mountpoint}")
+            log_msg(f"VERB: Opened {mountpoint}")
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             log_msg(f"WARN: Error opening file manager: {e}")
         return
@@ -487,7 +487,7 @@ def on_datasets_browse(app):
         try:
             path = get_snapshot_mountpoint(item["dataset"], item["name"], repo=repo)
             subprocess.Popen(["xdg-open", path])
-            log_msg(f"INFO: Browsing snapshot {full_snap}")
+            log_msg(f"VERB: Browsing snapshot {full_snap}")
             update_ds_button_sensitivity(app)
             GLib.timeout_add_seconds(1, lambda a: update_ds_button_sensitivity(a) or False, app)
         except (subprocess.CalledProcessError, FileNotFoundError) as e:

@@ -112,6 +112,8 @@ RESTORE_DEFAULTS = {
         "excludes": "",
         "startwith": "",
         "endwith": "",
+        "verify_after_transfer": "Y",
+        "pv_rate_limit": "",
     },
     "do_part1": True,
     "do_part2": True,

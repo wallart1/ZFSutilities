@@ -59,6 +59,18 @@ echo "ensure-restored-vm-iscsi called with: $*" \
 EOF
     chmod +x "$_mock_bin/ensure-restored-vm-iscsi"
 
+    cat > "$_mock_bin/zfsreapplyholds" <<'EOF'
+reapplyholds_capture() {
+    echo "capture: $*" >> "$ZFSRESTORE_STATE/reapply.calls"
+    if [[ -n "$2" ]]; then
+        printf '%s\t%s\n' "${destfs}@placeholder" "kept" > "$2"
+    fi
+}
+reapplyholds_apply() {
+    echo "apply: $*" >> "$ZFSRESTORE_STATE/reapply.calls"
+}
+EOF
+
     (
         # shellcheck disable=SC2034
         # Intentionally set for sourced zfsrestore script.
@@ -179,6 +191,64 @@ test_zfsrestore_sets_full_copy_parameters() {
         "commsnap_mostrecent=OLDEST"
 }
 
+test_zfsrestore_preserves_target_holds() {
+    test_start "zfsrestore captures and reapplies target holds"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/zfsrestore_preserve_holds"
+    mkdir -p "$_state_dir"
+    _run_zfsrestore "$_state_dir" "restoresourcefs=pool/src; destfs=pool/dest"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+
+    local _calls
+    _calls=$(cat "$_state_dir/reapply.calls")
+    assert_contains "$_calls" "capture: pool/dest"
+    assert_contains "$_calls" "apply: pool/dest"
+    # Capture must run before apply.
+    local _cap_line _apply_line
+    _cap_line=$(grep -n "capture:" "$_state_dir/reapply.calls" | head -n1 | cut -d: -f1)
+    _apply_line=$(grep -n "apply:" "$_state_dir/reapply.calls" | head -n1 | cut -d: -f1)
+    if [[ "$_cap_line" -lt "$_apply_line" ]]; then
+        test_pass
+    else
+        test_fail "Capture should run before apply"
+    fi
+}
+
+test_zfsrestore_skips_hold_preservation_when_disabled() {
+    test_start "zfsrestore skips hold preservation when preserve_target_holds=N"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/zfsrestore_no_preserve_holds"
+    mkdir -p "$_state_dir"
+    _run_zfsrestore "$_state_dir" \
+        "restoresourcefs=pool/src; destfs=pool/dest; preserve_target_holds='N'"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+
+    if [[ -f "$_state_dir/reapply.calls" ]]; then
+        test_fail "Hold helpers should not be called when disabled"
+    else
+        test_pass
+    fi
+}
+
+test_zfsrestore_dry_run_applies_holds_logged() {
+    test_start "zfsrestore passes dry-run flag to hold reapply"
+    local _state_dir
+    _state_dir="$_mock_zfs_state_dir/zfsrestore_dryrun_holds"
+    mkdir -p "$_state_dir"
+    _run_zfsrestore "$_state_dir" \
+        "restoresourcefs=pool/src; destfs=pool/dest; dryrun='Y'"
+    local rc
+    rc=$(cat "$_state_dir/rc")
+    assert_rc 0 "$rc"
+
+    assert_contains "$(cat "$_state_dir/reapply.calls")" "apply: pool/dest"
+    assert_contains "$(cat "$_state_dir/reapply.calls")" "Y"
+}
+
 # ------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------
@@ -190,6 +260,9 @@ test_zfsrestore_requires_restoresourcefs
 test_zfsrestore_requires_destfs
 test_zfsrestore_calls_send_receive_once
 test_zfsrestore_sets_full_copy_parameters
+test_zfsrestore_preserves_target_holds
+test_zfsrestore_skips_hold_preservation_when_disabled
+test_zfsrestore_dry_run_applies_holds_logged
 
 teardown_test_env
 test_summary

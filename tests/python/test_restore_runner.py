@@ -207,6 +207,49 @@ class TestBuildRestoreCommand(unittest.TestCase):
         self.assertIn('depth="2"', script)
         self.assertNotIn('depth="0"', script)
 
+    def test_verify_after_transfer_defaults_to_y(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+            do_part1=True,
+            do_part2=False,
+        )
+        script = " ".join(step.command)
+        self.assertIn('verify_after_transfer="Y"', script)
+
+    def test_pv_rate_limit_defaults_to_empty(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+            do_part1=True,
+            do_part2=False,
+        )
+        script = " ".join(step.command)
+        self.assertIn('pv_rate_limit=""', script)
+
+    def test_custom_verify_after_transfer_and_pv_rate_limit(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={
+                "verify_after_transfer": "N",
+                "pv_rate_limit": "100M",
+            },
+            do_part1=True,
+            do_part2=False,
+        )
+        script = " ".join(step.command)
+        self.assertIn('verify_after_transfer="N"', script)
+        self.assertIn('pv_rate_limit="100M"', script)
+
 
 if __name__ == "__main__":
     unittest.main()

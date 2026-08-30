@@ -2195,7 +2195,7 @@ def append_treeview_copy_items(menu, treeview, path_info, app=None, datasets_vie
             display = Gdk.Display.get_default()
         clipboard = Gtk.Clipboard.get_default(display)
         clipboard.set_text(text, -1)
-        log_msg(f"INFO: Copied: {text}")
+        log_msg(f"VERB: Copied: {text}")
 
     path, column = path_info[0], path_info[1]
     model = treeview.get_model()

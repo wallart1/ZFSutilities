@@ -84,6 +84,9 @@ test_lock_patterns() {
         "zfsresume:source_helper zfslockmanager:sources lock manager"
         "zfsresume:zfslock_init:initializes lock manager"
         "zfsresume:zfsresume.*w:acquires resume write lock"
+        "zfsreapplyholds:source_helper zfslockmanager:sources lock manager"
+        "zfsreapplyholds:zfslock_init:initializes lock manager"
+        "zfsreapplyholds:reapplyholds.*w:acquires subtree write lock"
     )
 
     local failures=()

@@ -425,7 +425,7 @@ tests/run-tests test-zfsretain test-zfsbuildfsarray
 | `test-zfs-diagnose-busy`       | 8     | Diagnostic output from `zfs-diagnose-busy` — busy dataset causes                                              |
 | `test-zfsdelfs`                | 10     | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs`                                                        |
 | `test-zfsdelsnap`              | 6     | Snapshot deletion safety checks, hold release, `zfscheckagainst` dependency sourcing, user-hold blocking        |
-| `test-zfsfullcopy`             | 7     | `zfsfullcopy` full-copy wrapper: overrides, required parameters, single `send-receive` invocation, parameter forwarding |
+| `test-zfsfullcopy`             | 9     | `zfsfullcopy` full-copy wrapper: overrides, required parameters, single `send-receive` invocation, parameter forwarding |
 | `test-ensure-restored-vm-iscsi` | 24    | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding |
 | `test-zfslockmanager`          | 43    | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition, headless timed wait |
 | `test-zfsretain`               | 17    | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
@@ -437,7 +437,8 @@ tests/run-tests test-zfsretain test-zfsbuildfsarray
 | `test-zfsdelallsnaps`          | 5     | Return-code behavior and lock acquisition around snapshot deletion                                            |
 | `test-zfsmassdelsnaps`         | 16    | Mass snapshot deletion: ignore/respect retention, dry-run, approval, releaseholds forwarding                  |
 | `test-zfsmount`                | 2     | Lock acquisition before mount/unmount per dataset                                                             |
-| `test-zfsrestore`              | 7     | `zfsrestore` full-copy wrapper: overrides, legacy second overrides, required parameters, single `send-receive` invocation, parameter forwarding |
+| `test-zfsreapplyholds`         | 11    | Capture/apply snapshot holds, CLI argument parsing, dry-run apply                                             |
+| `test-zfsrestore`              | 10    | `zfsrestore` full-copy wrapper: overrides, legacy second overrides, required parameters, single `send-receive` invocation, parameter forwarding |
 | `test-zfsrestoresendstream`    | 1     | Lock acquisition before each zfs receive destination                                                          |
 | `test-zfsresume`               | 1     | Lock acquisition before reading resume token                                                                  |
 | `test-zfsunmount`              | 1     | Lock acquisition before unmount per dataset                                                                   |
@@ -530,8 +531,8 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_backup_config`      | 32    | Config load/save, defaults, pools, retention, UI state, snapshot name generation, log pruning, message level   |
 | `test_backup_history`     | 36    | History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting       |
 | `test_backup_page`        | 23     | Backup tab UI labels (including pre/post command labels), config load/collect helpers, and frame header widget support |
-| `test_backup_runner`      | 62    | Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and log size cap |
-| `test_command_builders`   | 42    | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
+| `test_backup_runner`      | 59    | Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and log size cap |
+| `test_command_builders`   | 51    | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
 | `test_config_migrations`  | 51    | Schema migrations 1→12, idempotency, missing migration errors                                                  |
 | `test_cron_manager`       | 41    | Cron line generation, condition support, human-readable interpretation, next-run computation                     |
 | `test_dashboard_page`     | 185   | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, async refresh loading state |
@@ -545,10 +546,11 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_page_runners`       | 10     | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation           |
 | `test_profile_manager`    | 20    | Profile CRUD, update, name validation, listing, existence checks, lifecycle logging, condition defaults          |
 | `test_profile_dialogs`    | 14    | Add/Recall profile dialogs, duplicate-name overwrite handling                                                  |
-| `test_profile_runner`     | 67    | Backup/offsite/restore/retention profile step building                                                         |
+| `test_profile_runner`     | 71    | Backup/offsite/restore/retention profile step building, rsync failure diagnosis in headless runs               |
 | `test_profile_runner_concurrency` | 10 | Per-profile advisory locks, duplicate-invocation suppression, and metadata                                  |
 | `test_profile_integration` | 3    | Concurrent profile execution: disjoint datasets, same-dataset conflict, backup+prune serialization             |
-| `test_restore_runner`     | 16    | Restore destination computation and zfs-send-receive parameter mapping                                         |
+| `test_restore_page`       | 15    | Restore tab UI widgets, config load/collect, auto-destination, advanced variables                            |
+| `test_restore_runner`     | 22    | Restore destination computation and zfs-send-receive parameter mapping                                         |
 | `test_schedule_page`      | 66    | Schedule page path resolution, dirty tracking, condition field, run-now child-watch handling, fatal-fallback logging, async refresh, and next-run caching |
 | `test_scrub_manager`      | 91    | Scrub state parsing, queue/target management, priority ordering, tick logic, systemd timers                      |
 | `test_scrub_page`         | 8     | Scrub page store schema, flicker-free refresh logic, and drag-and-drop priority ordering                         |

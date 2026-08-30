@@ -770,7 +770,7 @@ class TestBrowse(unittest.TestCase):
             da.on_datasets_browse(app)
 
             mock_subprocess.Popen.assert_called_once_with(["xdg-open", "/tank/vm-100"])
-            mock_log.assert_any_call("INFO: Opened /tank/vm-100")
+            mock_log.assert_any_call("VERB: Opened /tank/vm-100")
 
     def test_browses_snapshot_via_zfs_path(self):
         da = self._import_under_mock()
@@ -796,7 +796,7 @@ class TestBrowse(unittest.TestCase):
             mock_subprocess.Popen.assert_called_once_with(
                 ["xdg-open", "/tank/vm-100/.zfs/snapshot/snap1"]
             )
-            mock_log.assert_any_call("INFO: Browsing snapshot tank/vm-100@snap1")
+            mock_log.assert_any_call("VERB: Browsing snapshot tank/vm-100@snap1")
             mock_update.assert_called_once_with(app)
 
 

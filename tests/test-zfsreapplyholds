@@ -1,0 +1,238 @@
+#!/usr/bin/bash
+# test-zfsreapplyholds — Unit tests for the zfsreapplyholds helper.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# Make the helper functions available without running the CLI.
+source "$mydir/bin/zfsreapplyholds"
+
+# The helper re-sources rootcheck and zfslockmanager; re-stub them for tests.
+rootcheck() { true; }
+zfslock_init() { true; }
+zfslock_wait_or_resolve() {
+    # shellcheck disable=SC2034
+    # Mock lock ID returned for test stubs.
+    ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0;
+}
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+
+# ------------------------------------------------------------------
+# Capture tests
+# ------------------------------------------------------------------
+
+test_reapplyholds_capture_writes_tsv() {
+    test_start "reapplyholds_capture writes snapshot holds as TSV"
+    mock_zfs_dataset_exists "pool/dest"
+    mock_zfs_snap_exists "pool/dest@snap1"
+    mock_zfs_snap_exists "pool/dest@snap2"
+    mock_zfs_snap_list_for "pool/dest" $'pool/dest@snap1\npool/dest@snap2'
+    mock_zfs_holds "pool/dest@snap1" "tag1" "tag2"
+    mock_zfs_holds "pool/dest@snap2" "tag3"
+
+    local _out
+    _out="$_mock_zfs_state_dir/capture.tsv"
+    reapplyholds_capture "pool/dest" "$_out"
+    local rc=$?
+    assert_rc 0 "$rc"
+
+    local _content _expected
+    _content=$(sort < "$_out")
+    _expected=$(printf 'pool/dest@snap1\ttag1\npool/dest@snap1\ttag2\npool/dest@snap2\ttag3\n' | sort)
+    assert_equals "$_expected" "$_content"
+}
+
+test_reapplyholds_capture_to_stdout() {
+    test_start "reapplyholds_capture writes to stdout when no output file given"
+    mock_zfs_dataset_exists "pool/dest"
+    mock_zfs_snap_exists "pool/dest@snap1"
+    mock_zfs_snap_list_for "pool/dest" "pool/dest@snap1"
+    mock_zfs_holds "pool/dest@snap1" "keeptag"
+
+    local _out
+    _out=$(reapplyholds_capture "pool/dest")
+    assert_contains "$_out" "pool/dest@snap1"
+    assert_contains "$_out" "keeptag"
+}
+
+test_reapplyholds_capture_missing_dataset() {
+    test_start "reapplyholds_capture returns cleanly when dataset does not exist"
+    local _out
+    _out="$_mock_zfs_state_dir/missing.tsv"
+    reapplyholds_capture "pool/missing" "$_out"
+    local rc=$?
+    assert_rc 0 "$rc"
+    if [[ -f "$_out" ]]; then
+        assert_equals "" "$(cat "$_out")"
+    else
+        test_pass
+    fi
+}
+
+# ------------------------------------------------------------------
+# Apply tests
+# ------------------------------------------------------------------
+
+test_reapplyholds_apply_restores_holds() {
+    test_start "reapplyholds_apply applies captured holds"
+    mock_zfs_dataset_exists "pool/dest"
+    mock_zfs_snap_exists "pool/dest@snap1"
+    mock_zfs_snap_exists "pool/dest@snap2"
+    mock_zfs_snap_list_for "pool/dest" $'pool/dest@snap1\npool/dest@snap2'
+
+    local _in
+    _in="$_mock_zfs_state_dir/apply.tsv"
+    printf 'pool/dest@snap1\ttag1\npool/dest@snap2\ttag2\n' > "$_in"
+
+    reapplyholds_apply "pool/dest" "$_in"
+    local rc=$?
+    assert_rc 0 "$rc"
+
+    assert_contains "${_mock_zfs_holds[pool/dest@snap1]}" "tag1"
+    assert_contains "${_mock_zfs_holds[pool/dest@snap2]}" "tag2"
+}
+
+test_reapplyholds_apply_skips_missing_snapshots() {
+    test_start "reapplyholds_apply skips snapshots that no longer exist"
+    mock_zfs_dataset_exists "pool/dest"
+    mock_zfs_snap_exists "pool/dest@snap1"
+    mock_zfs_snap_list_for "pool/dest" "pool/dest@snap1"
+
+    local _in
+    _in="$_mock_zfs_state_dir/apply_missing.tsv"
+    printf 'pool/dest@snap1\ttag1\npool/dest@gone\ttag2\n' > "$_in"
+
+    reapplyholds_apply "pool/dest" "$_in"
+    local rc=$?
+    assert_rc 0 "$rc"
+
+    assert_contains "${_mock_zfs_holds[pool/dest@snap1]}" "tag1"
+    [[ -z "${_mock_zfs_holds[pool/dest@gone]:-}" ]]
+    if [[ $? -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Missing snapshot should not have a hold"
+    fi
+}
+
+test_reapplyholds_apply_dry_run() {
+    test_start "reapplyholds_apply dry-run logs without applying holds"
+    mock_zfs_dataset_exists "pool/dryrun"
+    mock_zfs_snap_exists "pool/dryrun@snap1"
+    mock_zfs_snap_list_for "pool/dryrun" "pool/dryrun@snap1"
+
+    local _in
+    _in="$_mock_zfs_state_dir/apply_dry.tsv"
+    printf 'pool/dryrun@snap1\tdrytag\n' > "$_in"
+
+    reapplyholds_apply "pool/dryrun" "$_in" "Y"
+    local rc=$?
+    assert_rc 0 "$rc"
+
+    [[ -z "${_mock_zfs_holds[pool/dryrun@snap1]:-}" ]]
+    if [[ $? -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Dry-run should not add holds"
+    fi
+}
+
+# ------------------------------------------------------------------
+# CLI tests
+# ------------------------------------------------------------------
+
+test_cli_help_exits_zero() {
+    test_start "CLI --help exits 0"
+    local rc
+    ( _zfsreapplyholds_main --help ) >"$_mock_zfs_state_dir/help.out" 2>&1
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_mock_zfs_state_dir/help.out")" "Usage:"
+}
+
+test_cli_unknown_option_fails() {
+    test_start "CLI unknown option fails"
+    local rc
+    ( _zfsreapplyholds_main --bogus ) >"$_mock_zfs_state_dir/bogus.out" 2>&1
+    rc=$?
+    assert_rc 8 "$rc"
+}
+
+test_cli_capture_invokes_helper() {
+    test_start "CLI --capture invokes reapplyholds_capture"
+    mock_zfs_dataset_exists "pool/cli"
+    mock_zfs_snap_exists "pool/cli@snap1"
+    mock_zfs_snap_list_for "pool/cli" "pool/cli@snap1"
+    mock_zfs_holds "pool/cli@snap1" "clitag"
+
+    local _out
+    _out="$_mock_zfs_state_dir/cli-capture.tsv"
+    local rc
+    ( _zfsreapplyholds_main --capture pool/cli "$_out" ) >"$_mock_zfs_state_dir/capture.out" 2>&1
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_out")" "pool/cli@snap1"
+    assert_contains "$(cat "$_out")" "clitag"
+}
+
+test_cli_apply_invokes_helper() {
+    test_start "CLI --apply invokes reapplyholds_apply"
+    mock_zfs_dataset_exists "pool/cli"
+    mock_zfs_snap_exists "pool/cli@snap1"
+    mock_zfs_snap_list_for "pool/cli" "pool/cli@snap1"
+
+    local _in
+    _in="$_mock_zfs_state_dir/cli-apply.tsv"
+    printf 'pool/cli@snap1\tappliedtag\n' > "$_in"
+
+    # Run in the current shell so the mock zfs hold state is visible here.
+    local rc=0
+    _zfsreapplyholds_main --apply pool/cli "$_in" >"$_mock_zfs_state_dir/apply.out" 2>&1 \
+        || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_mock_zfs_state_dir/apply.out")" "Applied hold appliedtag"
+    assert_contains "${_mock_zfs_holds[pool/cli@snap1]}" "appliedtag"
+}
+
+test_cli_apply_dry_run() {
+    test_start "CLI --apply --dry-run does not apply holds"
+    mock_zfs_dataset_exists "pool/dry"
+    mock_zfs_snap_exists "pool/dry@snap1"
+    mock_zfs_snap_list_for "pool/dry" "pool/dry@snap1"
+
+    local _in
+    _in="$_mock_zfs_state_dir/cli-dry.tsv"
+    printf 'pool/dry@snap1\tdrytag\n' > "$_in"
+
+    local rc
+    ( _zfsreapplyholds_main --dry-run --apply pool/dry "$_in" ) \
+        >"$_mock_zfs_state_dir/dry.out" 2>&1
+    rc=$?
+    assert_rc 0 "$rc"
+    [[ -z "${_mock_zfs_holds[pool/dry@snap1]:-}" ]]
+    if [[ $? -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Dry-run CLI should not add holds"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------
+
+test_reapplyholds_capture_writes_tsv
+test_reapplyholds_capture_to_stdout
+test_reapplyholds_capture_missing_dataset
+test_reapplyholds_apply_restores_holds
+test_reapplyholds_apply_skips_missing_snapshots
+test_reapplyholds_apply_dry_run
+test_cli_help_exits_zero
+test_cli_unknown_option_fails
+test_cli_capture_invokes_helper
+test_cli_apply_invokes_helper
+test_cli_apply_dry_run
+
+teardown_test_env
+test_summary

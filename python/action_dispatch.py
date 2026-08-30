@@ -303,7 +303,7 @@ def _handler_pools_revert(app):
 
 def _handler_datasets_refresh(app):
     refresh_datasets_page(app)
-    log_msg("INFO: Datasets refreshed")
+    log_msg("VERB: Datasets refreshed")
 
 
 def _handler_checkagainst_save(app):

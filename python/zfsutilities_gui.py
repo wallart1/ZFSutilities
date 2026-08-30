@@ -812,7 +812,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             log_msg("INFO: Pool data refreshed")
         elif page == "datasets":
             refresh_datasets_page(self)
-            log_msg("INFO: Datasets refreshed")
+            log_msg("VERB: Datasets refreshed")
         elif page == "schedule":
             refresh_schedule_page(self)
             log_msg("INFO: Schedule refreshed")

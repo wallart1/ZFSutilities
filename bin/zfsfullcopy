@@ -41,6 +41,7 @@ function zfsfullcopy {
 
     source_helper zfs-send-receive
     source_helper zfsoverrides
+    source_helper zfsreapplyholds
 
     # shellcheck disable=SC2034
     # Intentionally set for sourced zfs-send-receive helper.
@@ -78,6 +79,8 @@ function zfsfullcopy {
     local dointermediates='N'       # Intermediate snapshots are handled internally.
     # shellcheck disable=SC2034
     local commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
+    # Preserve existing holds on the destination before it is destroyed/recreated.
+    local preserve_target_holds='Y'
 
     if [[ $overrides != '' ]]; then overrides "$overrides"; fi
     
@@ -94,5 +97,22 @@ function zfsfullcopy {
         source "$(find_zfsutility_script bashfatal)" 8
     fi
 
+    local _target_holds_file=""
+    if [[ "$preserve_target_holds" == "Y" ]]; then
+        _target_holds_file=$(mktemp -t zfsfullcopy-target-holds.XXXXXX)
+        if ! reapplyholds_capture "$destfs" "$_target_holds_file"; then
+            rm -f "$_target_holds_file"
+            log_msg "FATAL: Could not capture existing holds on $destfs." \
+                "Aborting restore to avoid losing target hold tags." \
+                "Set preserve_target_holds='N' to skip hold preservation."
+            source "$(find_zfsutility_script bashfatal)" 8
+        fi
+    fi
+
     send-receive "$restoresourcefs"
+
+    if [[ -n "$_target_holds_file" && -s "$_target_holds_file" ]]; then
+        reapplyholds_apply "$destfs" "$_target_holds_file" "${dryrun:-N}"
+    fi
+    rm -f "$_target_holds_file"
 }

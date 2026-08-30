@@ -30,6 +30,16 @@ source_helper zfssnapbuild
 source_helper zfs-send-receive
 source_helper zfsremoveleadingqualifiers
 source_helper zfsoverrides
+source_helper zfsreapplyholds
+
+# Remove any captured-holds temp file on exit so a fatal abort does not
+# leave it behind.
+_cleanup_target_holds() {
+    if [[ -n "${_target_holds_file:-}" ]]; then
+        rm -f -- "$_target_holds_file"
+    fi
+}
+trap _cleanup_target_holds EXIT
 
 # shellcheck disable=SC2034
 # Intentionally set for sourced zfs-send-receive helper.
@@ -78,6 +88,9 @@ endwith=''
 # Intentionally set for sourced zfs-send-receive helper.
 nextsnap='notneeded'            # Inhibit creation of a new snapshot name.
 
+# Preserve existing holds on the destination before it is destroyed/recreated.
+preserve_target_holds='Y'
+
 if [[ $1 != '' ]]; then overrides "$1"; fi
 if [[ $2 != '' ]]; then overrides "$2"; fi
 
@@ -111,7 +124,24 @@ if [[ $destfs == '' || $destfs == 'notgiven' ]]; then
     source "$(find_zfsutility_script bashfatal)" 8
 fi
 
+_target_holds_file=""
+if [[ "$preserve_target_holds" == "Y" ]]; then
+    _target_holds_file=$(mktemp -t zfsrestore-target-holds.XXXXXX)
+    if ! reapplyholds_capture "$destfs" "$_target_holds_file"; then
+        rm -f "$_target_holds_file"
+        log_msg "FATAL: Could not capture existing holds on $destfs." \
+            "Aborting restore to avoid losing target hold tags." \
+            "Set preserve_target_holds='N' to skip hold preservation."
+        source "$(find_zfsutility_script bashfatal)" 8
+    fi
+fi
+
 send-receive "$restoresourcefs"
 ensure_restored_iscsi
+
+if [[ -n "$_target_holds_file" && -s "$_target_holds_file" ]]; then
+    reapplyholds_apply "$destfs" "$_target_holds_file" "${dryrun:-N}"
+fi
+rm -f "$_target_holds_file"
 
 log_msg "INFO: zfsrestore completed."

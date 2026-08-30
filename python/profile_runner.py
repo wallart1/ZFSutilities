@@ -27,6 +27,7 @@ from backup_history import _parse_human_size, add_history_entry, build_entry
 from backup_runner import _PV_RATE_RE
 from command_builders import (
     BashStep,
+    _diagnose_rsync_failure,
     _dryrun_assignments,
 )
 from command_builders import (
@@ -280,11 +281,16 @@ def _run_command(step, session_log_file=None):
                 text=True,
                 env=env,
             )
+            # Collect merged stdout/stderr for rsync steps so we can diagnose
+            # common failure modes (e.g., rc=24 "vanished source files").
+            step_lines = [] if step.is_rsync else None
             try:
                 with process.stdout:
                     for line in process.stdout:
                         line = line.rstrip("\n")
                         print(line, file=sys.stderr)
+                        if step.is_rsync:
+                            step_lines.append(line)
                         # pv progress lines update the GUI status bar via stderr
                         # but are not written to the session log, avoiding one
                         # line per second in the log file.
@@ -299,6 +305,10 @@ def _run_command(step, session_log_file=None):
                 returncode = process.wait()
             if returncode != 0:
                 log_msg(f"WARN: Step exited with rc={returncode}")
+                if step.is_rsync:
+                    diagnosis = _diagnose_rsync_failure(returncode, step_lines)
+                    if diagnosis:
+                        log_msg(f"WARN: {step.description} failed: {diagnosis}")
             return returncode
         except (OSError, ValueError, subprocess.SubprocessError) as e:
             log_msg(f"WARN: Error running step: {e}")

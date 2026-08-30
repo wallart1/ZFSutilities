@@ -1825,7 +1825,7 @@ def _update_fix_locks_button(app, stale_count):
 
 def on_dashboard_refresh(app):
     """Handler for the Refresh action button."""
-    log_msg("INFO: Refreshing dashboard...")
+    log_msg("VERB: Refreshing dashboard...")
     refresh_dashboard_page(app)
 
 

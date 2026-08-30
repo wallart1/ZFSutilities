@@ -870,6 +870,54 @@ class TestRunStepList(unittest.TestCase):
         self.assertTrue(any("Step exited with rc=1" in msg for msg in logs))
 
 
+class TestRsyncFailureDiagnosisInProfileRunner(unittest.TestCase):
+    """profile_runner logs human-readable explanations for failed rsync steps."""
+
+    def test_vanished_source_files_rc_24(self):
+        """rc=24 is described as vanished source files."""
+        with patch("profile_runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = _mock_popen_process(
+                stdout='file has vanished: "/src/foo"\n',
+                rc=24,
+            )
+            with capture_logs() as logs:
+                rc = profile_runner._run_command(
+                    BashStep(["rsync", "a", "b"], "rsync a -> b", is_rsync=True)
+                )
+        self.assertEqual(rc, 24)
+        self.assertTrue(any("Step exited with rc=24" in msg for msg in logs))
+        self.assertTrue(
+            any("vanished" in msg.lower() or "partial transfer" in msg.lower() for msg in logs)
+        )
+
+    def test_connection_refused_diagnosis(self):
+        """SSH connection failures are diagnosed from stderr content."""
+        with patch("profile_runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = _mock_popen_process(
+                stdout="ssh: connect to host tweety port 22: Connection refused\n",
+                rc=255,
+            )
+            with capture_logs() as logs:
+                rc = profile_runner._run_command(
+                    BashStep(["rsync", "a", "b"], "rsync a -> b", is_rsync=True)
+                )
+        self.assertEqual(rc, 255)
+        self.assertTrue(any("connection refused" in msg.lower() for msg in logs))
+
+    def test_non_rsync_step_does_not_diagnose(self):
+        """Non-rsync steps only log the raw return code."""
+        with patch("profile_runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = _mock_popen_process(stdout="boom", rc=24)
+            with capture_logs() as logs:
+                rc = profile_runner._run_command(
+                    BashStep(["bash", "-c", "exit 24"], "non-rsync step", is_rsync=False)
+                )
+        self.assertEqual(rc, 24)
+        self.assertTrue(any("Step exited with rc=24" in msg for msg in logs))
+        self.assertFalse(any("vanished" in msg.lower() for msg in logs))
+        self.assertFalse(any("partial transfer" in msg.lower() for msg in logs))
+
+
 class TestDryRunProfiles(unittest.TestCase):
     def test_backup_dry_run_skips_rsync_and_scripts(self):
         with temp_config_dir():

@@ -70,6 +70,31 @@ class _FakeCheckButton:
         pass
 
 
+class _FakeComboBoxText:
+    """ComboBoxText-like fake for Y/N advanced variables."""
+
+    def __init__(self, value="Y"):
+        self._items = []
+        self._active = 0 if value == "Y" else 1
+
+    def append_text(self, text):
+        self._items.append(text)
+
+    def set_active(self, active):
+        self._active = active
+
+    def get_active(self):
+        return self._active
+
+    def get_active_text(self):
+        if self._items and 0 <= self._active < len(self._items):
+            return self._items[self._active]
+        return "Y" if self._active == 0 else "N"
+
+    def connect(self, *args):
+        pass
+
+
 class _FakeApp:
     config: ClassVar[dict] = {}
     ctx = MagicMock()
@@ -225,6 +250,16 @@ class TestCollectRestoreConfig(unittest.TestCase):
         cfg = rp.collect_restore_config(app)
         self.assertFalse(cfg["recursive"])
 
+    def test_collects_verify_after_transfer_and_pv_rate_limit(self):
+        app = _restore_app()
+        app.restore_var_widgets = {
+            "verify_after_transfer": _FakeComboBoxText("N"),
+            "pv_rate_limit": _FakeEntry("50M"),
+        }
+        cfg = rp.collect_restore_config(app)
+        self.assertEqual(cfg["variables"]["verify_after_transfer"], "N")
+        self.assertEqual(cfg["variables"]["pv_rate_limit"], "50M")
+
 
 class TestLoadRestoreConfig(unittest.TestCase):
     """Tests for load_restore_config."""
@@ -245,6 +280,33 @@ class TestLoadRestoreConfig(unittest.TestCase):
             },
         )
         self.assertTrue(app.restore_recursive_check.get_active())
+
+    def test_loads_verify_after_transfer_and_pv_rate_limit(self):
+        app = _restore_app()
+        app.restore_var_widgets = {
+            "verify_after_transfer": _FakeComboBoxText("Y"),
+            "pv_rate_limit": _FakeEntry(),
+        }
+        rp.load_restore_config(
+            app,
+            {
+                "source": "a/b",
+                "dest": "c/b",
+                "auto_dest": False,
+                "recursive": False,
+                "variables": {
+                    "verify_after_transfer": "N",
+                    "pv_rate_limit": "75M",
+                },
+                "do_part1": True,
+                "do_part2": True,
+                "pause_scrubs": False,
+            },
+        )
+        self.assertEqual(
+            app.restore_var_widgets["verify_after_transfer"].get_active_text(), "N"
+        )
+        self.assertEqual(app.restore_var_widgets["pv_rate_limit"].get_text(), "75M")
 
 
 class TestRestoreRunDialog(unittest.TestCase):

@@ -84,6 +84,48 @@ when the restore finishes.
 - In dry-run mode the option logs what it would pause/resume but does not
   change scrub state.
 
+## Advanced Options
+
+The Restore tab's **Advanced** section exposes two transfer options that are
+also available on the Backup and Offsite tabs:
+
+- `verify_after_transfer` — Verify the ZFS stream after each transfer step
+  (default **Y**). When enabled, `zfs-send-receive` re-reads the received
+  stream to detect corruption. This applies to both Part 1 (full copy) and
+  Part 2 (incremental copy).
+- `pv_rate_limit` — Optional rate limit passed to `pv` during the transfer,
+  for example `100M` to cap throughput at 100 MB/s. Leave blank for no limit.
+
+## Preserving Target Holds During a Restore
+
+A ZFS send stream does not include snapshot holds, so a restore normally loses
+any hold tags that existed on the destination. `zfsrestore` and `zfsfullcopy`
+now preserve those target holds automatically:
+
+1. Before the destination dataset is destroyed/recreated, all holds on its
+   snapshots are captured to a temporary file.
+2. After the two-step restore finishes, the captured holds are reapplied to the
+   restored snapshots.
+
+This behavior is on by default. To disable it, set:
+
+```bash
+sudo zfsrestore "preserve_target_holds='N'"
+```
+
+You can also capture and reapply holds manually with the
+[`zfsreapplyholds`](../commands-and-modules/commands.md#zfsreapplyholds)
+helper:
+
+```bash
+sudo zfsreapplyholds --capture pool/dest /tmp/dest-holds.tsv
+# ... perform the restore ...
+sudo zfsreapplyholds --apply pool/dest /tmp/dest-holds.tsv
+```
+
+In dry-run mode, `zfsrestore`/`zfsfullcopy` log the holds that would be
+reapplied without modifying the destination.
+
 ## Checking Holds Before Deletion
 
 If a snapshot has holds, you must release them before it can be deleted:

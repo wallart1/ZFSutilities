@@ -18,6 +18,7 @@ from datetime import datetime
 
 import session_log
 from backup_history import _parse_human_size, add_history_entry, build_entry
+from command_builders import _diagnose_rsync_failure
 from gi.repository import GLib
 from logging_config import log_msg, restore_session_log, set_session_log
 
@@ -42,105 +43,6 @@ _PV_RATE_RE = re.compile(r"\[\s*[\d.]+\s*[kKMGTP]?i?B/s\]")
 #   "received 1.23GiB stream in 45.67 seconds" -> match
 #   "sending tank/data@snap" -> no match
 _ZFS_RECEIVED_RE = re.compile(r"received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds")
-
-
-# Common rsync exit-code meanings used to explain a failed step.
-# Rsync man page / `rsync --help` exit codes:
-#   0  Success
-#   1  Syntax or usage error
-#   2  Protocol incompatibility
-#   3  Errors selecting input/output files, dirs
-#   4  Requested action not supported
-#   5  Error starting client-server protocol
-#   6  Daemon unable to append to log-file
-#  10  Error in socket I/O
-#  11  Error in file I/O
-#  12  Error in rsync protocol data stream
-#  13  Errors with program diagnostics
-#  14  Error in IPC code
-#  20  Received SIGUSR1 or SIGINT
-#  21  Some error returned by waitpid()
-#  22  Error allocating core memory buffers
-#  23  Partial transfer due to error
-#  24  Partial transfer due to vanished source files
-#  25  The --max-delete limit stopped deletions
-#  30  Timeout in data send/receive
-#  35  Timeout waiting for daemon connection
-_RSYNC_EXIT_CODES = {
-    1: "syntax or usage error",
-    2: "protocol incompatibility",
-    3: "errors selecting input/output files or directories",
-    4: "requested action not supported",
-    5: "error starting client-server protocol",
-    6: "daemon unable to append to log-file",
-    10: "error in socket I/O",
-    11: "error in file I/O",
-    12: "error in rsync protocol data stream",
-    13: "errors with program diagnostics",
-    14: "error in IPC code",
-    20: "received SIGUSR1 or SIGINT",
-    21: "error returned by waitpid()",
-    22: "error allocating core memory buffers",
-    23: "partial transfer due to error",
-    24: "partial transfer due to vanished source files",
-    25: "the --max-delete limit stopped deletions",
-    30: "timeout in data send/receive",
-    35: "timeout waiting for daemon connection",
-}
-
-
-def _diagnose_rsync_failure(rc, stderr_lines):
-    """Return a human-readable diagnosis for a failed rsync step.
-
-    Args:
-        rc: The rsync process return code.
-        stderr_lines: Iterable of stripped stderr lines emitted by rsync.
-
-    Returns:
-        A short explanatory string, or an empty string if rc is 0.
-    """
-    if rc == 0:
-        return ""
-
-    text = "\n".join(stderr_lines).lower()
-
-    # Network/transport-level failures (SSH failed to connect or talk to rsync).
-    if rc in (5, 10, 255) or "ssh:" in text:
-        if "connection refused" in text or "no route to host" in text:
-            return (
-                "SSH connection refused — check that the remote host is "
-                "reachable, sshd is running, and the address is correct"
-            )
-        if "permission denied" in text or "authentication" in text:
-            return (
-                "Permission denied — verify SSH key access, root login "
-                "permissions, and filesystem permissions on the "
-                "source/destination"
-            )
-        if "timeout" in text:
-            return "Timeout waiting for data from the remote host"
-        if rc == 255:
-            return "SSH failed to start — check host reachability and SSH configuration"
-
-    # Destination disk full.
-    if "no space left" in text or "disk full" in text:
-        return "No space left on destination — free disk space and retry"
-
-    # Rsync-specific transfer outcomes.
-    if rc == 24 or "vanished" in text:
-        return "Source files vanished during transfer"
-    if rc == 23:
-        return "Partial transfer due to error"
-
-    # Generic timeout and disk I/O errors.
-    if rc == 30:
-        return "Timeout in data send/receive"
-    if rc == 35:
-        return "Timeout waiting for daemon connection"
-    if rc == 11:
-        return "Error in file I/O"
-
-    return f"rsync exit code {rc}: {_RSYNC_EXIT_CODES.get(rc, 'unknown error')}"
 
 
 def _ensure_rsync_log_dir():

@@ -495,6 +495,11 @@ as the GUI runners but writes its own session logs and history entries.
    as the GUI pages.
 6. Run each step, write the trailer, and append a history entry.
 
+Failed rsync steps log the raw exit code and a human-readable diagnosis
+(for example, `rc=24` is reported as "Source files vanished during transfer")
+so cron logs and session logs explain the failure without looking up rsync
+exit codes manually.
+
 **Called modules / imported helpers:**
 
 | Module | Purpose in this module |

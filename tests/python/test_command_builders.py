@@ -373,5 +373,80 @@ class TestBuildRetentionCommand(unittest.TestCase):
         self.assertIn('releaseholds_tags=("offsite-*")', bash_script)
 
 
+class TestRsyncFailureDiagnosis(unittest.TestCase):
+    """_diagnose_rsync_failure explains common rsync failure modes."""
+
+    def test_success_returns_empty(self):
+        self.assertEqual(command_builders._diagnose_rsync_failure(0, []), "")
+
+    def test_partial_transfer(self):
+        diagnosis = command_builders._diagnose_rsync_failure(
+            23,
+            [
+                'rsync: send_files failed to open "foo": Permission denied (13)',
+            ],
+        )
+        self.assertIn("Partial transfer due to error", diagnosis)
+
+    def test_vanished_source_files(self):
+        diagnosis = command_builders._diagnose_rsync_failure(
+            24,
+            [
+                'file has vanished: "/src/foo"',
+            ],
+        )
+        self.assertIn("vanished", diagnosis.lower())
+
+    def test_connection_refused(self):
+        diagnosis = command_builders._diagnose_rsync_failure(
+            255,
+            [
+                "ssh: connect to host tweety port 22: Connection refused",
+            ],
+        )
+        self.assertIn("connection refused", diagnosis.lower())
+
+    def test_no_route_to_host(self):
+        diagnosis = command_builders._diagnose_rsync_failure(
+            255,
+            [
+                "ssh: connect to host tweety port 22: No route to host",
+            ],
+        )
+        self.assertIn("reachable", diagnosis.lower())
+
+    def test_permission_denied(self):
+        diagnosis = command_builders._diagnose_rsync_failure(
+            255,
+            [
+                "root@tweety: Permission denied (publickey).",
+            ],
+        )
+        self.assertIn("permission denied", diagnosis.lower())
+
+    def test_timeout(self):
+        diagnosis = command_builders._diagnose_rsync_failure(
+            30,
+            [
+                "rsync error: timeout in data send/receive (code 30)",
+            ],
+        )
+        self.assertIn("timeout", diagnosis.lower())
+
+    def test_no_space_left(self):
+        diagnosis = command_builders._diagnose_rsync_failure(
+            11,
+            [
+                'rsync: write failed on "/dst/foo": No space left on device (28)',
+            ],
+        )
+        self.assertIn("no space left", diagnosis.lower())
+
+    def test_unknown_exit_code(self):
+        diagnosis = command_builders._diagnose_rsync_failure(99, ["rsync: unexplained failure"])
+        self.assertIn("exit code 99", diagnosis)
+        self.assertIn("unknown error", diagnosis)
+
+
 if __name__ == "__main__":
     unittest.main()

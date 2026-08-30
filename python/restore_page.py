@@ -24,7 +24,7 @@ from restore_runner import (
 )
 from scrub_manager import attach_step_scrub_callbacks
 
-# Advanced variables (all plain text entries)
+# Advanced variables (entry widgets; verify_after_transfer uses a Y/N combo)
 RESTORE_ADVANCED_VARIABLES = [
     "depth",
     "label",
@@ -32,6 +32,8 @@ RESTORE_ADVANCED_VARIABLES = [
     "excludes",
     "startwith",
     "endwith",
+    "verify_after_transfer",
+    "pv_rate_limit",
 ]
 
 
@@ -140,16 +142,35 @@ def create_restore_page(app, ctx):
         lbl.set_halign(Gtk.Align.END)
         adv_grid.attach(lbl, 0, row, 1, 1)
 
-        entry = Gtk.Entry()
-        entry.set_text(variables.get(key, ""))
-        entry.set_hexpand(True)
-        entry.set_width_chars(1)
-        if key in ("includes", "excludes"):
-            entry.set_tooltip_text(
-                "Space-separated list of substrings; prefix with = for exact match"
+        if key == "verify_after_transfer":
+            widget = Gtk.ComboBoxText()
+            widget.append_text("Y")
+            widget.append_text("N")
+            widget.set_active(0 if variables.get(key, "Y") == "Y" else 1)
+            widget.set_tooltip_text(
+                "Re-read the received ZFS stream to detect corruption after each transfer step"
             )
-        adv_grid.attach(entry, 1, row, 1, 1)
-        app.restore_var_widgets[key] = entry
+
+            def _on_scroll_event(w, _event):
+                w.stop_emission_by_name("scroll-event")
+                return False
+
+            widget.connect("scroll-event", _on_scroll_event)
+        else:
+            widget = Gtk.Entry()
+            widget.set_text(variables.get(key, ""))
+            widget.set_hexpand(True)
+            widget.set_width_chars(1)
+            if key in ("includes", "excludes"):
+                widget.set_tooltip_text(
+                    "Space-separated list of substrings; prefix with = for exact match"
+                )
+            elif key == "pv_rate_limit":
+                widget.set_tooltip_text(
+                    "Optional rate limit passed to pv, e.g. 100M (leave blank for no limit)"
+                )
+        adv_grid.attach(widget, 1, row, 1, 1)
+        app.restore_var_widgets[key] = widget
 
     app.restore_pause_scrubs = Gtk.CheckButton(
         label="Pause scrubs on source/destination pools during each step"
@@ -236,7 +257,10 @@ def collect_restore_config(app):
     """Collect current restore UI state into a config dict."""
     variables = {}
     for key, widget in app.restore_var_widgets.items():
-        variables[key] = widget.get_text()
+        if hasattr(widget, "get_active_text"):
+            variables[key] = widget.get_active_text() or "Y"
+        else:
+            variables[key] = widget.get_text()
 
     return {
         "source": app.restore_source_entry.get_text().strip(),
@@ -268,7 +292,11 @@ def load_restore_config(app, config):
     app.restore_recursive_check.set_active(config.get("recursive", False))
 
     for key, widget in app.restore_var_widgets.items():
-        widget.set_text(config.get("variables", {}).get(key, ""))
+        val = config.get("variables", {}).get(key, "")
+        if hasattr(widget, "set_active"):
+            widget.set_active(0 if val == "Y" else 1)
+        else:
+            widget.set_text(val)
 
     app.restore_part1_check.set_active(config.get("do_part1", True))
     app.restore_part2_check.set_active(config.get("do_part2", True))
