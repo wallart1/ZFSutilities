@@ -1,6 +1,8 @@
 """Config schema migrations. Bump CONFIG_VERSION when JSON structure changes."""
 
-CONFIG_VERSION = 24
+import copy
+
+CONFIG_VERSION = 25
 
 
 def _migrate_1_to_2(config):
@@ -283,6 +285,16 @@ def _migrate_23_to_24(config):
     return config
 
 
+def _migrate_24_to_25(config):
+    """Seed default workload profiles for the Disks tab Apply Profile feature."""
+    if "workload_profiles" not in config:
+        from feature_config import DEFAULT_WORKLOAD_PROFILES
+
+        config["workload_profiles"] = copy.deepcopy(DEFAULT_WORKLOAD_PROFILES)
+    config["config_version"] = 25
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -307,6 +319,7 @@ MIGRATIONS = [
     _migrate_21_to_22,
     _migrate_22_to_23,
     _migrate_23_to_24,
+    _migrate_24_to_25,
 ]
 
 

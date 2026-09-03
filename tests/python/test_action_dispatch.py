@@ -44,7 +44,7 @@ class TestDisksHandlers(unittest.TestCase):
 
     def test_refresh_handler_registered(self):
         handler = action_dispatch.ACTION_HANDLERS["disks"]["Refresh"]
-        self.assertTrue(callable(handler))
+        self.assertIs(handler, action_dispatch.on_disks_refresh)
 
 
 class TestCollectScrubConfig(unittest.TestCase):

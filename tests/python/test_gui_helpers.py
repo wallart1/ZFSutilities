@@ -6,6 +6,44 @@ from unittest.mock import MagicMock, patch
 from test_support import mock_gtk
 
 
+class TestGetMountedSnapshots(unittest.TestCase):
+    """get_mounted_snapshots parses mount(8) output for snapshot mount state."""
+
+    def _run_with_mount_output(self, stdout, returncode=0):
+        import gui_helpers
+
+        with patch.object(
+            gui_helpers.subprocess,
+            "run",
+            return_value=MagicMock(returncode=returncode, stdout=stdout),
+        ):
+            return gui_helpers.get_mounted_snapshots()
+
+    def test_returns_empty_set_when_mount_fails(self):
+        self.assertEqual(self._run_with_mount_output("", returncode=1), set())
+
+    def test_parses_snapshot_syntax(self):
+        stdout = "tank/a@snap1 on /tank/a/.zfs/snapshot/snap1 type zfs (ro)\n"
+        self.assertEqual(self._run_with_mount_output(stdout), {"tank/a@snap1"})
+
+    def test_parses_automount_path_syntax(self):
+        stdout = "tank/a/.zfs/snapshot/snap1 on /tank/a/.zfs/snapshot/snap1 type zfs (ro)\n"
+        self.assertEqual(self._run_with_mount_output(stdout), {"tank/a@snap1"})
+
+    def test_ignores_non_snapshot_entries(self):
+        stdout = (
+            "tank/a on /tank/a type zfs (rw)\n"
+            "tank/a@snap1 on /tank/a/.zfs/snapshot/snap1 type zfs (ro)\n"
+        )
+        self.assertEqual(self._run_with_mount_output(stdout), {"tank/a@snap1"})
+
+    def test_returns_empty_set_when_command_missing(self):
+        import gui_helpers
+
+        with patch.object(gui_helpers.subprocess, "run", side_effect=FileNotFoundError):
+            self.assertEqual(gui_helpers.get_mounted_snapshots(), set())
+
+
 class TestAddVarRow(unittest.TestCase):
     """add_var_row builds label + input rows with optional scroll blocking."""
 

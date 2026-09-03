@@ -525,6 +525,68 @@ class TestMaybeSeedCheckagainst(unittest.TestCase):
             self.assertEqual(entries, [])
 
 
+class TestWorkloadProfiles(unittest.TestCase):
+    """Workload profile config helpers."""
+
+    def test_get_workload_profiles_seeds_defaults(self):
+        config = {}
+        profiles = feature_config.get_workload_profiles(config)
+        self.assertIn("general", profiles)
+        self.assertIn("scratch", profiles)
+        self.assertEqual(len(profiles), 10)
+
+    def test_get_workload_profiles_preserves_user_edits(self):
+        config = {
+            "workload_profiles": {
+                "general": {
+                    "description": "Overridden",
+                    "applies_to": ["filesystem"],
+                    "properties": {"compression": "off"},
+                    "notes": "User override",
+                }
+            }
+        }
+        profiles = feature_config.get_workload_profiles(config)
+        self.assertEqual(profiles["general"]["description"], "Overridden")
+
+    def test_get_workload_profiles_returns_deep_copy(self):
+        config = {}
+        profiles = feature_config.get_workload_profiles(config)
+        profiles["general"]["description"] = "mutated"
+        self.assertNotEqual(
+            feature_config.get_workload_profiles(config)["general"]["description"],
+            "mutated",
+        )
+
+    def test_save_workload_profiles(self):
+        with temp_config_dir():
+            config = {}
+            feature_config.save_workload_profiles(config, {"custom": {}})
+            self.assertIn("custom", config["workload_profiles"])
+
+    def test_save_workload_profiles_rejects_non_dict(self):
+        with temp_config_dir():
+            config = {}
+            with self.assertRaises(TypeError):
+                feature_config.save_workload_profiles(config, ["not", "a", "dict"])
+
+    def test_delete_workload_profile(self):
+        with temp_config_dir():
+            config = {}
+            feature_config.get_workload_profiles(config)
+            self.assertTrue(feature_config.delete_workload_profile(config, "general"))
+            self.assertFalse(feature_config.delete_workload_profile(config, "general"))
+
+    def test_reset_workload_profiles(self):
+        with temp_config_dir():
+            config = {}
+            feature_config.get_workload_profiles(config)
+            feature_config.save_workload_profiles(config, {"custom": {"description": "x"}})
+            feature_config.reset_workload_profiles(config)
+            self.assertIn("general", config["workload_profiles"])
+            self.assertNotIn("custom", config["workload_profiles"])
+
+
 class TestComputeDestinationRoot(unittest.TestCase):
     """Checkagainst destination-root helper."""
 

@@ -13,12 +13,14 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     TreeSearch,
+    _row_fg_color,
     append_treeview_copy_items,
     build_full_dataset_name,
     configure_treeview_column,
     dataset_name_cell_func,
     expand_tree_recursively,
     get_expanded_rows,
+    get_mounted_snapshots,
     get_tree_selection_items,
     on_row_expanded,
     restore_expanded_rows,
@@ -165,8 +167,36 @@ def create_datasets_page(app):
 # ---------------------------------------------------------------------------
 
 
+def _append_root_dataset_row(app, pool):
+    """Append a top-level row for *pool*'s root dataset.
+
+    Uses the real root-dataset properties when available; falls back to a
+    minimal filesystem row so the user can still expand it.
+    """
+    repo = app.ctx.zfs_repository
+    try:
+        root_rows = repo.list_datasets(pool=pool, depth=0)
+        if root_rows:
+            root = root_rows[0]
+            row_data = [root.creation, root.ds_type, root.used, root.avail, root.refer]
+            origin_val = root.origin if root.origin != "-" else ""
+            mounted = root.mounted == "yes"
+            fg_color = _row_fg_color(mounted, root.ds_type)
+            return app.datasets_store.append(
+                None,
+                [pool] + row_data + [origin_val, False, mounted, fg_color],
+            )
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log_msg(f"WARN: Could not load root dataset for pool {pool}: {e}")
+
+    # Fallback: minimal row so the pool is still listed and expandable.
+    return app.datasets_store.append(
+        None, [pool, "", "filesystem", "", "", "", "", False, True, None]
+    )
+
+
 def refresh_datasets_page(app, pool_filter=None):
-    """Refresh dataset tree: load only pools initially; children load on demand."""
+    """Refresh dataset tree: load root datasets for each pool; children load on demand."""
     expanded = get_expanded_rows(app.datasets_store, app.datasets_view)
 
     # Remember vertical scroll offset so the view does not jump to top.
@@ -202,15 +232,13 @@ def refresh_datasets_page(app, pool_filter=None):
         pools_to_show = online_pools
 
     for pool in pools_to_show:
-        pool_iter = app.datasets_store.append(
-            None, [pool, "", "", "", "", "", "", False, True, None]
-        )
+        ds_iter = _append_root_dataset_row(app, pool)
         # Dummy child so the expand arrow appears
         app.datasets_store.append(
-            pool_iter, ["(loading...)", "", "", "", "", "", "", True, False, None]
+            ds_iter, ["(loading...)", "", "", "", "", "", "", True, False, None]
         )
 
-    app.datasets_summary_label.set_text(f"{len(pools_to_show)} pools")
+    app.datasets_summary_label.set_text(f"{len(pools_to_show)} datasets")
 
     # Restore expanded rows, loading children as we go
     restore_expanded_rows(app.datasets_store, app.datasets_view, expanded)
@@ -349,12 +377,16 @@ def update_ds_button_sensitivity(app):
     can_rollback = len(items) == 1 and types == {"snapshot"}
 
     single = items[0] if len(items) == 1 else None
-    single_browsable = single is not None and single["type"] in ("dataset", "snapshot")
+    single_browsable = single is not None and single["type"] in ("pool", "dataset", "snapshot")
     single_mounted = single_browsable and single.get("mounted", False)
 
+    all_browsable = bool(items) and all(i["type"] in ("pool", "dataset", "snapshot") for i in items)
+    any_mounted = any(i.get("mounted", False) for i in items)
+    any_unmounted = any(not i.get("mounted", False) for i in items)
+
     can_browse = single_mounted
-    can_mount = single_browsable and not single_mounted
-    can_unmount = single_mounted
+    can_mount = all_browsable and any_unmounted
+    can_unmount = all_browsable and any_mounted
 
     can_expand_selected = bool(items) and any(
         i["type"] in ("pool", "dataset", "snapshot") for i in items
@@ -376,6 +408,56 @@ def update_ds_button_sensitivity(app):
         btn = getattr(app, attr, None)
         if btn:
             btn.set_sensitive(sensitive)
+
+
+# ---------------------------------------------------------------------------
+# In-place mount-state refresh
+# ---------------------------------------------------------------------------
+
+
+def update_mounted_states(app):
+    """Refresh the mounted flag and foreground color of every visible tree row.
+
+    Unlike refresh_datasets_page, this does not clear the store or change
+    expansion/selection; it only updates the columns that depend on mount
+    state. This avoids the stale-row and selection-restoration issues that can
+    occur after a mount or unmount operation.
+    """
+    repo = app.ctx.zfs_repository
+    store = app.datasets_store
+    mounted_snaps = get_mounted_snapshots(repo=repo)
+
+    def _walk(tree_iter):
+        while tree_iter:
+            name = store.get_value(tree_iter, 0)
+            ds_type = store.get_value(tree_iter, 2)
+            mounted = False
+
+            if ds_type in ("filesystem", "volume", "pool"):
+                full_name = build_full_dataset_name(store, tree_iter)
+                try:
+                    mounted = repo.get_property(full_name, "mounted") == "yes"
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    pass
+            elif ds_type == "snapshot":
+                parent_iter = store.iter_parent(tree_iter)
+                if parent_iter is not None:
+                    dataset = build_full_dataset_name(store, parent_iter)
+                    snap_name = name.lstrip("@")
+                    mounted = f"{dataset}@{snap_name}" in mounted_snaps
+
+            fg_color = _row_fg_color(mounted, ds_type)
+            store.set(tree_iter, 8, mounted, 9, fg_color)
+
+            child = store.iter_children(tree_iter)
+            if child:
+                _walk(child)
+            tree_iter = store.iter_next(tree_iter)
+
+    root = store.get_iter_first()
+    if root is not None:
+        _walk(root)
+    update_ds_button_sensitivity(app)
 
 
 # ---------------------------------------------------------------------------

@@ -315,10 +315,7 @@ def on_row_expanded(view, tree_iter, path, _data=None):
     repo = getattr(view, "_zfs_repo", None) or get_default_repository()
 
     # Determine what to load based on node type
-    parent = store.iter_parent(tree_iter)
-    if parent is None:
-        load_pool_children(store, tree_iter, name, repo=repo)
-    elif ds_type in ("filesystem", "volume") or (not name.startswith("@") and ds_type != "hold"):
+    if ds_type in ("filesystem", "volume") or (not name.startswith("@") and ds_type != "hold"):
         full_name = build_full_dataset_name(store, tree_iter)
         load_dataset_children(store, tree_iter, full_name, repo=repo)
     elif name.startswith("@") or ds_type == "snapshot":
@@ -336,11 +333,7 @@ def on_row_expanded(view, tree_iter, path, _data=None):
         child = store.iter_next(child)
 
     if not has_real:
-        if parent is None:
-            label = "(no datasets)"
-        elif ds_type in ("filesystem", "volume") or (
-            not name.startswith("@") and ds_type != "hold"
-        ):
+        if ds_type in ("filesystem", "volume") or (not name.startswith("@") and ds_type != "hold"):
             label = "(empty)"
         elif name.startswith("@") or ds_type == "snapshot":
             label = "(no holds)"
@@ -357,52 +350,35 @@ def on_row_expanded(view, tree_iter, path, _data=None):
         child = next_child
 
 
-def load_pool_children(store, pool_iter, pool_name, repo=None):
-    """Load direct child datasets under a pool."""
-    repo = repo or get_default_repository()
+def get_mounted_snapshots(repo=None):
+    """Return the set of currently mounted ZFS snapshots.
+
+    Parses ``mount -t zfs`` output because the ``.zfs/snapshot/<snap>``
+    directory is an automount stub that exists (and can auto-mount on access)
+    even when the snapshot is not currently mounted.  Relying on the directory
+    alone therefore makes unmounted snapshots appear still mounted.
+    """
+    mounted = set()
     try:
-        for row in repo.list_datasets(pool=pool_name, depth=1):
-            row_data = [row.creation, row.ds_type, row.used, row.avail, row.refer]
-            origin_val = row.origin if row.origin != "-" else ""
-            mounted = row.mounted == "yes"
-            fg_color = _row_fg_color(mounted, row.ds_type)
-
-            if row.name == pool_name:
-                # Update pool row with real data
-                store.set(
-                    pool_iter,
-                    1,
-                    row_data[0],
-                    2,
-                    row_data[1],
-                    3,
-                    row_data[2],
-                    4,
-                    row_data[3],
-                    5,
-                    row_data[4],
-                    6,
-                    "",
-                    8,
-                    True,
-                    9,
-                    None,
-                )
+        result = subprocess.run(["mount", "-t", "zfs"], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return mounted
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if not parts:
                 continue
-
-            short_name = row.name.rsplit("/", 1)[-1]
-            child_iter = store.append(
-                pool_iter,
-                [short_name] + row_data + [origin_val, False, mounted, fg_color],
-            )
-            # Add dummy so dataset appears expandable
-            store.append(
-                child_iter,
-                ["(loading...)", "", "", "", "", "", "", True, False, None],
-            )
-
-    except subprocess.CalledProcessError as e:
-        store.append(pool_iter, ["(error)", str(e), "", "", "", "", "", True, False, None])
+            source = parts[0]
+            if "@" in source:
+                mounted.add(source)
+            elif "/.zfs/snapshot/" in source:
+                # Automounted snapshots are sometimes listed as
+                # dataset/.zfs/snapshot/snap instead of dataset@snap.
+                ds, _, snap = source.partition("/.zfs/snapshot/")
+                if ds and snap:
+                    mounted.add(f"{ds}@{snap}")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return mounted
 
 
 def load_dataset_children(store, ds_iter, ds_name, repo=None):
@@ -411,17 +387,7 @@ def load_dataset_children(store, ds_iter, ds_name, repo=None):
 
     # Build a set of explicitly mounted ZFS snapshots so each snapshot row can
     # show its own mount state independent of the parent dataset.
-    mounted_snaps = set()
-    try:
-        mount_result = subprocess.run(
-            ["mount", "-t", "zfs"], capture_output=True, text=True, check=False
-        )
-        for line in mount_result.stdout.splitlines():
-            parts = line.split()
-            if parts and "@" in parts[0]:
-                mounted_snaps.add(parts[0])
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
+    mounted_snaps = get_mounted_snapshots(repo=repo)
 
     # Load snapshots of this exact dataset (not descendants).
     # depth=1 is required because ZFS does not list a dataset's own snapshots

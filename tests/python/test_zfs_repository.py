@@ -106,6 +106,37 @@ class TestZfsRepositoryReads(unittest.TestCase):
         props = repo.get_all_properties("tank/data")
         self.assertEqual(props, {"type": "filesystem", "used": "100G"})
 
+    def test_get_properties_parses_multiple_properties(self):
+        stdout = "recordsize\t128K\ncompression\tzstd\n"
+        repo = self._repo(stdout)
+        props = repo.get_properties("tank/data", ["recordsize", "compression"])
+        self.assertEqual(props["recordsize"], "128K")
+        self.assertEqual(props["compression"], "zstd")
+
+    def test_get_properties_returns_dash_for_missing_properties(self):
+        stdout = "recordsize\t128K\n"
+        repo = self._repo(stdout)
+        props = repo.get_properties(
+            "tank/data", ["recordsize", "compression", "special_small_blocks"]
+        )
+        self.assertEqual(props["recordsize"], "128K")
+        self.assertEqual(props["compression"], "-")
+        self.assertEqual(props["special_small_blocks"], "-")
+
+    def test_get_properties_ignores_blank_lines(self):
+        stdout = "recordsize\t128K\n\ncompression\tzstd\n\n"
+        repo = self._repo(stdout)
+        props = repo.get_properties("tank/data", ["recordsize", "compression"])
+        self.assertEqual(props, {"recordsize": "128K", "compression": "zstd"})
+
+    def test_get_properties_raises_on_subprocess_error(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, "zfs get")
+        )
+        with self.assertRaises(subprocess.CalledProcessError):
+            repo.get_properties("tank/data", ["recordsize"])
+
     def test_pool_get_all_returns_stdout(self):
         stdout = "NAME\tPROPERTY\tVALUE\tSOURCE\ntank\tsize\t10T\t-\n"
         repo = self._repo(stdout)
@@ -177,6 +208,19 @@ class TestZfsRepositoryWrites(unittest.TestCase):
 
     def test_stop_scrub_returns_false_on_failure(self):
         self.assertFalse(self._repo(1).stop_scrub("tank"))
+
+    def test_set_property_returns_true_on_success(self):
+        self.assertTrue(self._repo(0).set_property("tank/data", "compression", "zstd"))
+
+    def test_set_property_returns_false_on_failure(self):
+        repo = self._repo(1)
+        self.assertFalse(repo.set_property("tank/data", "compression", "zstd"))
+
+    def test_set_property_logs_warning_on_failure(self):
+        repo = self._repo(1)
+        with capture_logs() as logs:
+            repo.set_property("tank/data", "compression", "zstd")
+        self.assertTrue(any("Failed to set compression=zstd on tank/data" in e for e in logs))
 
     def test_pool_status_returns_stdout(self):
         result = subprocess.CompletedProcess(args=[], returncode=0, stdout="status text", stderr="")

@@ -21,6 +21,30 @@ class _FakePoolRow:
         self.name = name
 
 
+class _FakeDatasetRow:
+    def __init__(
+        self,
+        name,
+        creation="",
+        ds_type="filesystem",
+        used="",
+        avail="",
+        refer="",
+        origin="-",
+        clones="-",
+        mounted="yes",
+    ):
+        self.name = name
+        self.creation = creation
+        self.ds_type = ds_type
+        self.used = used
+        self.avail = avail
+        self.refer = refer
+        self.origin = origin
+        self.clones = clones
+        self.mounted = mounted
+
+
 class _FakeStore:
     """Minimal TreeStore stand-in."""
 
@@ -92,6 +116,7 @@ class TestRefreshDatasetsPage(unittest.TestCase):
             _FakePoolRow("tank"),
             _FakePoolRow("backup"),
         ]
+        app.ctx.zfs_repository.list_datasets.side_effect = self._fake_list_datasets
         app.datasets_store = _FakeStore()
         app.datasets_view = MagicMock()
         app.datasets_view.get_selection.return_value.get_selected_rows.return_value = (None, [])
@@ -102,6 +127,14 @@ class TestRefreshDatasetsPage(unittest.TestCase):
         app.datasets_scrolled.get_vadjustment.return_value.get_value.return_value = 0.0
         return app
 
+    @staticmethod
+    def _fake_list_datasets(pool, depth=None):
+        return [
+            _FakeDatasetRow(
+                pool, creation="Mon Jan 1 00:00 2024", used="100G", avail="500G", refer="50G"
+            )
+        ]
+
     def test_loads_online_pools_and_summary(self):
         app = self._make_app()
         with (
@@ -111,10 +144,13 @@ class TestRefreshDatasetsPage(unittest.TestCase):
             dp.refresh_datasets_page(app)
 
         app.ctx.zfs_repository.list_pools.assert_called_once()
-        self.assertEqual(len(app.datasets_store._rows), 4)  # 2 pools + 2 dummy children
+        app.ctx.zfs_repository.list_datasets.assert_any_call(pool="tank", depth=0)
+        app.ctx.zfs_repository.list_datasets.assert_any_call(pool="backup", depth=0)
+        self.assertEqual(len(app.datasets_store._rows), 4)  # 2 root datasets + 2 dummy children
         self.assertEqual(app.datasets_store._rows[0]["values"][0], "tank")
+        self.assertEqual(app.datasets_store._rows[0]["values"][2], "filesystem")
         self.assertEqual(app.datasets_store._rows[2]["values"][0], "backup")
-        app.datasets_summary_label.set_text.assert_called_once_with("2 pools")
+        app.datasets_summary_label.set_text.assert_called_once_with("2 datasets")
 
     def test_pool_filter_restricts_list(self):
         app = self._make_app()
@@ -124,9 +160,9 @@ class TestRefreshDatasetsPage(unittest.TestCase):
         ):
             dp.refresh_datasets_page(app, pool_filter="backup")
 
-        self.assertEqual(len(app.datasets_store._rows), 2)  # backup + dummy child
+        self.assertEqual(len(app.datasets_store._rows), 2)  # backup root + dummy child
         self.assertEqual(app.datasets_store._rows[0]["values"][0], "backup")
-        app.datasets_summary_label.set_text.assert_called_once_with("1 pools")
+        app.datasets_summary_label.set_text.assert_called_once_with("1 datasets")
 
     def test_handles_pool_list_error(self):
         app = self._make_app()
@@ -139,6 +175,21 @@ class TestRefreshDatasetsPage(unittest.TestCase):
 
         self.assertEqual(len(app.datasets_store._rows), 0)
         app.datasets_summary_label.set_text.assert_not_called()
+
+    def test_falls_back_when_root_dataset_unavailable(self):
+        app = self._make_app()
+        app.ctx.zfs_repository.list_datasets.side_effect = FileNotFoundError("zfs not found")
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+        ):
+            dp.refresh_datasets_page(app)
+
+        self.assertEqual(len(app.datasets_store._rows), 4)  # 2 fallback rows + 2 dummy children
+        self.assertEqual(app.datasets_store._rows[0]["values"][0], "tank")
+        self.assertEqual(app.datasets_store._rows[0]["values"][2], "filesystem")
+        self.assertEqual(app.datasets_store._rows[2]["values"][0], "backup")
+        app.datasets_summary_label.set_text.assert_called_once_with("2 datasets")
 
     def test_preserves_scroll_position(self):
         app = self._make_app()
@@ -307,6 +358,65 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
         app._ds_unmount_btn.set_sensitive.assert_called_once_with(False)
 
+    def test_mounted_pool_root_enables_browse_and_unmount(self):
+        app = self._make_app(
+            [{"type": "pool", "name": "tank", "zfs_type": "filesystem", "mounted": True}]
+        )
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_unmounted_pool_root_enables_mount(self):
+        app = self._make_app(
+            [{"type": "pool", "name": "tank", "zfs_type": "filesystem", "mounted": False}]
+        )
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_multiple_unmounted_items_enables_mount(self):
+        app = self._make_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": False},
+                {"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": False},
+            ]
+        )
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_multiple_mounted_items_enables_unmount(self):
+        app = self._make_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+                {"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True},
+            ]
+        )
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_mixed_mounted_unmounted_enables_mount_and_unmount(self):
+        app = self._make_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": False},
+                {"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True},
+            ]
+        )
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_non_browsable_selection_disables_mount_and_unmount(self):
+        app = self._make_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": False},
+                {"type": "hold", "tag": "x", "mounted": False},
+            ]
+        )
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(False)
+
     def test_show_big_stuff_enabled_for_single_pool(self):
         app = self._make_app([{"type": "pool", "name": "tank", "mounted": True}])
         app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(True)
@@ -436,6 +546,78 @@ class TestExpandSelectedDatasets(unittest.TestCase):
         dp.expand_selected_datasets(app)
 
         mock_expand.assert_called_once_with(app.datasets_view, model, nodes["1"])
+
+
+class TestUpdateMountedStates(unittest.TestCase):
+    """update_mounted_states refreshes the mounted column in place."""
+
+    def test_updates_mounted_flags_and_colors(self):
+        store = MagicMock()
+
+        def _make_iter(name, ds_type, parent):
+            it = MagicMock()
+            it._row = {"name": name, "type": ds_type, "parent": parent}
+            return it
+
+        root = _make_iter("tank", "pool", None)
+        ds_a = _make_iter("a", "filesystem", root)
+        snap = _make_iter("@snap1", "snapshot", ds_a)
+        ds_b = _make_iter("b", "filesystem", root)
+
+        children = {root: [ds_a, ds_b], ds_a: [snap], ds_b: [], snap: []}
+        siblings = {ds_a: ds_b, ds_b: None, snap: None}
+
+        def _get_value(it, col):
+            if col == 0:
+                return it._row["name"]
+            if col == 2:
+                return it._row["type"]
+            return None
+
+        def _iter_children(it):
+            return children[it][0] if children[it] else None
+
+        def _iter_next(it):
+            return siblings.get(it)
+
+        def _iter_parent(it):
+            return it._row["parent"]
+
+        store.get_value = _get_value
+        store.iter_children = _iter_children
+        store.iter_next = _iter_next
+        store.iter_parent = _iter_parent
+        store.get_iter_first.return_value = root
+
+        set_calls = {}
+
+        def _set(it, *args):
+            cols = dict(zip(args[::2], args[1::2]))
+            set_calls[it] = cols
+
+        store.set = _set
+
+        repo = MagicMock()
+        repo.get_property = lambda ds, prop: "yes" if ds in ("tank", "tank/a") else "no"
+
+        app = MagicMock()
+        app.datasets_store = store
+        app.ctx.zfs_repository = repo
+
+        with (
+            patch.object(dp, "update_ds_button_sensitivity"),
+            patch.object(dp, "get_mounted_snapshots", return_value={"tank/a@snap1"}),
+        ):
+            dp.update_mounted_states(app)
+
+        self.assertTrue(set_calls[root][8])
+        self.assertIsNone(set_calls[root][9])
+        self.assertTrue(set_calls[ds_a][8])
+        self.assertIsNone(set_calls[ds_a][9])
+        self.assertTrue(set_calls[snap][8])
+        self.assertIsNone(set_calls[snap][9])
+        self.assertFalse(set_calls[ds_b][8])
+        self.assertEqual(set_calls[ds_b][9], "#00797A")
 
 
 if __name__ == "__main__":

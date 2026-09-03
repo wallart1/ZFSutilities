@@ -49,7 +49,10 @@ from datasets_page import (
 )
 from disk_actions import on_disks_smart_details
 from disks_page import (
-    refresh_disks_page,
+    on_disks_apply_profile,
+    on_disks_manage_profiles,
+    on_disks_refresh,
+    on_disks_rewrite_data,
     update_disks_button_sensitivity,
 )
 from logs_page import (
@@ -177,6 +180,10 @@ PAGE_SPECS = {
     },
     "disks": {
         "buttons": [
+            ("Apply Profile…", "dialog-apply", "_disks_apply_profile_btn"),
+            ("Rewrite Data", "document-edit", "_disks_rewrite_data_btn"),
+            ("Advanced: Manage Profiles…", "preferences-system", "_disks_manage_profiles_btn"),
+            (None, None, None),  # spacer
             ("SMART Details", "dialog-information", "_disks_smart_details_btn"),
             ("Refresh", "view-refresh", "_disks_refresh_btn"),
         ],
@@ -412,8 +419,11 @@ ACTION_HANDLERS = {
         ),
     },
     "disks": {
+        "Apply Profile…": on_disks_apply_profile,
+        "Rewrite Data": on_disks_rewrite_data,
+        "Advanced: Manage Profiles…": on_disks_manage_profiles,
         "SMART Details": on_disks_smart_details,
-        "Refresh": lambda app: (refresh_disks_page(app), log_msg("VERB: Disks refreshed")),
+        "Refresh": on_disks_refresh,
     },
     "pools": {
         "Watch": on_pools_watch,

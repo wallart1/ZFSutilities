@@ -39,7 +39,7 @@ from dashboard_page import (
     refresh_dashboard_page,
 )
 from datasets_page import create_datasets_page, refresh_datasets_page
-from disks_page import create_disks_page, on_disks_refresh
+from disks_page import create_disks_page, on_disks_refresh, refresh_disks_page
 from docs_viewer import DocsViewerWindow
 from feature_config import get_checkagainst, get_pools
 from gui_helpers import (
@@ -574,6 +574,8 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             self._start_stop_schedule_timer(page_name)
             if page_name == "dashboard":
                 refresh_dashboard_page(self)
+            elif page_name == "disks":
+                refresh_disks_page(self)
             log_msg(f"VERB: Switched to: {page_name.title()}")
 
     def _start_stop_dashboard_timer(self, page_name):

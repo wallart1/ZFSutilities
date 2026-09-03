@@ -76,6 +76,8 @@ the GUI tabs and the bash scripts.
 | `merge_checkagainst_entries()` | Merge derived and user entries for `zfsconfig_get_checkagainst` |
 | `add_checkagainst_entry()` | Append a row to `user_entries` if not already present |
 | `get_retention()` / `save_retention()` | Per-pool retention policies |
+| `get_workload_profiles()` / `save_workload_profiles()` | Workload profile config |
+| `delete_workload_profile()` / `reset_workload_profiles()` | Remove/reset workload profiles |
 | `get_archive_path()` / `save_archive_path()` | Offsite archive path |
 | `get_prune_label()` / `save_prune_label()` | Global retention prune label |
 | `get_prune_pools_order()` / `save_prune_pools_order()` | Retention Prune pool order |
@@ -96,8 +98,47 @@ the GUI tabs and the bash scripts.
 
 | Structure | Reference |
 | --------- | --------- |
-| JSON config feature sections | [backup/offsite/restore/pools/retention/checkagainst/scrub][ds-json] |
+| JSON config feature sections | [backup/offsite/restore/pools/retention/checkagainst/scrub/workload_profiles][ds-json] |
 | Snapshot name persistence and one-minute reservation | [Snapshot name persistence][ds-snapfile] |
+
+---
+
+### `workload_profiles.py`
+
+Pure-logic workload profile helpers used by the Disks tab Apply Profile workflow.
+Contains no GTK code and no direct subprocess calls; all ZFS I/O is delegated to
+``ZfsRepository`` callers.
+
+**Key constants:**
+
+| Constant | Purpose |
+| -------- | ------- |
+| `LIVE_PROPERTIES` | Properties that can be changed with `zfs set` |
+| `CREATION_ONLY_PROPERTIES` | Properties fixed at dataset creation (`volblocksize`, `ashift`) |
+| `ALL_KNOWN_PROPERTIES` | Union of the two groups |
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `properties_for_profile(profile, ds_type)` | Return the profile properties that apply to the dataset type |
+| `match_profile(profiles, ds_type, live_props)` | Find the first profile whose live properties match the dataset |
+| `build_apply_plan(profile, dataset, ds_type, live_props)` | Build a preview plan of property changes |
+| `build_zfs_set_commands(plan)` | Emit the `zfs set` commands for plan entries that will apply |
+| `profile_has_warning(name, profile, pool_has_special)` | Whether the profile selection should show a warning |
+| `warning_text(name, profile, pool_has_special)` | Warning text, or `None` if no warning applies |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `feature_config` | Seed profile definitions |
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| Workload profile objects | [workload_profiles][ds-workload] |
 
 ---
 
@@ -233,7 +274,7 @@ and tests easy to mock.
 | Class | Purpose |
 | ----- | ------- |
 | `PoolRow` | One row from `zpool list -H -o name,health,size,alloc,free,cap,ckpoint` |
-| `DatasetRow` | One row from `zfs list -H -o name,creation,type,used,avail,refer,origin,clones` |
+| `DatasetRow` | One row from `zfs list -H -o name,creation,type,used,avail,refer,origin,clones,mounted` |
 | `SnapshotRow` | One row from `zfs list -t snapshot -H -o ...` |
 | `HoldRow` | One row from `zfs holds -H <snapshot>` |
 | `ZfsRepository` | Wraps all `zfs`/`zpool` subprocess commands |
@@ -244,6 +285,10 @@ and tests easy to mock.
 | -------- | ------- |
 | `get_default_repository()` | Returns a module-level default `ZfsRepository` instance |
 | `is_dataset_encrypted(path)` | Return `True` if *path* resides on an encrypted ZFS dataset |
+| `get_property(dataset, prop)` | Value of a single ZFS property |
+| `get_properties(dataset, props)` | Values for a list of ZFS properties; missing properties return `"-"` |
+| `get_all_properties(dataset)` | All ZFS properties for *dataset* |
+| `set_property(dataset, prop, value)` | Set a ZFS property; returns success/failure |
 
 **Called modules / imported helpers:** none (uses `subprocess` directly).
 
@@ -711,9 +756,9 @@ page layout and action logic can be tested independently.
 
 ### `disks_page.py`
 
-The **Disks** tab UI: disk inventory TreeView, pool selector, and vdev topology
-TreeView. Slow block-device and ZFS calls are cached in a background loader
-following the `ImportablePoolCache` pattern.
+The **Disks** tab UI: disk inventory TreeView, pool selector, vdev topology
+TreeView, and dataset-tuning pane. Slow block-device and ZFS calls are cached in
+a background loader following the `ImportablePoolCache` pattern.
 
 **Key classes:**
 
@@ -727,9 +772,14 @@ following the `ImportablePoolCache` pattern.
 | Function | Purpose |
 | -------- | ------- |
 | `create_disks_page(app)` | Build and return the Disks tab widget |
-| `refresh_disks_page(app)` | Repopulate disk inventory and topology stores |
+| `refresh_disks_page(app)` | Repopulate disk inventory, topology, and dataset stores |
 | `on_disks_refresh(app)` | Invalidate cache and refresh the page |
-| `update_disks_button_sensitivity(app)` | Enable/disable SMART Details button |
+| `update_disks_button_sensitivity(app)` | Enable/disable action buttons based on selection |
+| `show_apply_profile_dialog(app, datasets)` | Preview and confirm applying a workload profile |
+| `on_disks_apply_profile(app)` | Apply the selected profile to selected datasets |
+| `on_disks_rewrite_data(app)` | Run `zfs rewrite` on a single selected dataset |
+| `show_manage_profiles_dialog(app)` | Open the workload profile manager |
+| `show_profile_editor_dialog(app, name=None)` | Add or edit a workload profile |
 
 **Called modules / imported helpers:**
 
@@ -737,7 +787,10 @@ following the `ImportablePoolCache` pattern.
 | ------ | ------------------------ |
 | `disk_repository` | `DiskRepository`, `DiskInfo` |
 | `zfs_repository` | `ZfsRepository`, `TopologyNode` |
-| `gui_helpers` | `bold_label`, `configure_treeview_column`, `setup_row_scroll` |
+| `gui_helpers` | `bold_label`, `configure_treeview_column`, `create_dialog`, `setup_row_scroll` |
+| `feature_config` | Workload profile getters/setters |
+| `workload_profiles` | Profile matching, apply plan, and command builders |
+| `zfs_lock_manager` | Advisory locks for dataset actions |
 | `logging_config` | `log_msg` |
 
 ---
@@ -942,7 +995,8 @@ share a common snapshot before a source snapshot can be deleted safely.
 
 ### `datasets_page.py`
 
-Datasets tab: a lazy-loading tree of pools, datasets, snapshots, and holds.
+Datasets tab: a lazy-loading tree of datasets, snapshots, and holds. Each pool
+is represented by its root dataset at the top level.
 
 **Key functions:**
 
@@ -950,6 +1004,7 @@ Datasets tab: a lazy-loading tree of pools, datasets, snapshots, and holds.
 | -------- | ------- |
 | `create_datasets_page()` | Build the Datasets tab widget |
 | `refresh_datasets_page()` | Refresh the tree, preserving expansion state |
+| `update_mounted_states()` | Refresh only the mounted flag/color of visible rows after a mount or unmount |
 | `expand_selected_datasets()` | Expand selected rows recursively |
 | `update_ds_button_sensitivity()` | Enable/disable action buttons |
 
@@ -1402,6 +1457,7 @@ Reusable GTK helpers and utility functions used by nearly every page.
 | `build_full_dataset_name()` | Walk tree parents to build the full ZFS name |
 | Tree loading helpers | Load pools, datasets, and snapshots on demand |
 | `get_busy_processes()` / `diagnose_dataset_busy()` | Find and explain why a dataset is busy |
+| `get_mounted_snapshots()` | Parse `mount -t zfs` output to detect explicitly mounted snapshots (the `.zfs/snapshot` directory alone is an automount stub) |
 | `show_error_dialog()` / `show_warning_dialog()` | Modal error/warning message dialogs |
 | `create_info_panel()` | Build the shared log/info panel |
 | `create_menu_bar()` | Build the application menu bar |
@@ -1684,6 +1740,7 @@ One-time parser for legacy `zfsretainpol-<pool>` bash files.
 [ds-backup]: ../developer-guide/data-structures.md#backup-object
 [ds-config-migrations]: ../developer-guide/data-structures.md#config-migrations
 [ds-retention]: ../developer-guide/data-structures.md#retention-policy-arrays-bktname-bktretain-minage
+[ds-workload]: ../developer-guide/data-structures.md#workload_profiles-object
 
 ---
 

@@ -550,6 +550,26 @@ class ZfsRepository:
                 props[parts[0]] = parts[1]
         return props
 
+    def get_properties(self, dataset: str, props: list[str]) -> dict[str, str]:
+        """Return a property->value dict for the requested properties on *dataset*.
+
+        Missing properties are included with value ``"-"`` so callers always
+        receive a complete mapping. Raises ``subprocess.CalledProcessError`` on
+        command failure.
+        """
+        result = self._run(self._zfs("get", "-H", "-o", "property,value", ",".join(props), dataset))
+        values: dict[str, str] = {}
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t", 1)
+            if len(parts) == 2:
+                values[parts[0]] = parts[1]
+        for prop in props:
+            if prop not in values:
+                values[prop] = "-"
+        return values
+
     def get_recursive_snapshot_clones(self, dataset: str) -> list[str]:
         """Return non-empty clones values for all snapshots under *dataset*."""
         result = self._run(self._zfs("list", "-H", "-t", "snapshot", "-o", "clones", "-r", dataset))
@@ -604,6 +624,14 @@ class ZfsRepository:
         """Rollback a dataset to a snapshot (-r)."""
         result = self._run(self._zfs("rollback", "-r", snapshot), check=False)
         return result.returncode == 0
+
+    def set_property(self, dataset: str, prop: str, value: str) -> bool:
+        """Set a ZFS property. Returns True on success, False on failure."""
+        result = self._run(self._zfs("set", f"{prop}={value}", dataset), check=False)
+        if result.returncode != 0:
+            log_msg(f"WARN: Failed to set {prop}={value} on {dataset}: {result.stderr.strip()}")
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Version / topology reads

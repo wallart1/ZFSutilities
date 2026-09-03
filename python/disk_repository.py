@@ -16,7 +16,7 @@ from backup_config import log_msg
 
 @dataclass
 class DiskInfo:
-    """One physical disk from `lsblk`."""
+    """One physical disk or partition from `lsblk`."""
 
     name: str
     path: str
@@ -31,6 +31,7 @@ class DiskInfo:
     transport: str = ""
     pools: list[str] = field(default_factory=list)
     smart_health: str = "n/a"
+    parent_path: str | None = None
 
 
 @dataclass
@@ -89,7 +90,12 @@ class DiskRepository:
         return (["sudo"] + cmd) if self.sudo else cmd
 
     def list_disks(self) -> list[DiskInfo]:
-        """Return physical disks from `lsblk --json`, excluding partitions and zvols."""
+        """Return physical disks and their partitions from `lsblk --json`.
+
+        Whole disks are classified as HDD/SSD/NVMe; partitions are typed
+        ``part`` and carry ``parent_path`` so callers can relate them to
+        their underlying device.
+        """
         cmd = self._prefix(
             [
                 self.lsblk_bin,
@@ -110,25 +116,35 @@ class DiskRepository:
             log_msg(f"WARN: Failed to parse lsblk JSON: {exc}")
             return []
 
-        disks: list[DiskInfo] = []
-        for dev in data.get("blockdevices", []):
-            if dev.get("type") != "disk":
-                continue
-            name = dev.get("name", "")
-            path = dev.get("path", "")
-            if name.startswith(("zd", "loop")) or path.startswith("/dev/zd"):
-                continue
+        def _int(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
 
+        def _disk_type(dev):
             rota = dev.get("rota")
             tran = (dev.get("tran") or "").lower()
             if rota == 1:
-                disk_type = "HDD"
-            elif tran == "nvme":
-                disk_type = "NVMe"
-            elif rota == 0:
-                disk_type = "SSD"
+                return "HDD"
+            if tran == "nvme":
+                return "NVMe"
+            if rota == 0:
+                return "SSD"
+            return "unknown"
+
+        def _process_device(dev, parent=None):
+            dev_type = dev.get("type")
+            if dev_type == "disk":
+                name = dev.get("name", "")
+                path = dev.get("path", "")
+                if name.startswith(("zd", "loop")) or path.startswith("/dev/zd"):
+                    return None
+            elif dev_type == "part" and parent is not None:
+                name = dev.get("name", "")
+                path = dev.get("path", "")
             else:
-                disk_type = "unknown"
+                return None
 
             size_bytes = dev.get("size") or 0
             try:
@@ -136,26 +152,46 @@ class DiskRepository:
             except (TypeError, ValueError):
                 size_bytes = 0
 
-            def _int(value):
-                try:
-                    return int(value)
-                except (TypeError, ValueError):
-                    return None
+            if parent is None:
+                disk_type = _disk_type(dev)
+                model = (dev.get("model") or "").strip()
+                serial = (dev.get("serial") or "").strip()
+                transport = (dev.get("tran") or "").lower()
+                parent_path = None
+            else:
+                disk_type = "part"
+                model = ""
+                serial = ""
+                transport = parent.transport
+                parent_path = parent.path
 
-            disks.append(
-                DiskInfo(
-                    name=name,
-                    path=path,
-                    model=(dev.get("model") or "").strip(),
-                    serial=(dev.get("serial") or "").strip(),
-                    size_bytes=size_bytes,
-                    size_human=_format_bytes(size_bytes),
-                    disk_type=disk_type,
-                    logical_sector=_int(dev.get("log-sec")),
-                    physical_sector=_int(dev.get("phy-sec")),
-                    transport=tran,
-                )
+            disk = DiskInfo(
+                name=name,
+                path=path,
+                model=model,
+                serial=serial,
+                size_bytes=size_bytes,
+                size_human=_format_bytes(size_bytes),
+                disk_type=disk_type,
+                logical_sector=_int(dev.get("log-sec")),
+                physical_sector=_int(dev.get("phy-sec")),
+                transport=transport,
+                parent_path=parent_path,
             )
+            return disk
+
+        disks: list[DiskInfo] = []
+        for dev in data.get("blockdevices", []):
+            disk = _process_device(dev)
+            if disk is None:
+                continue
+            disks.append(disk)
+            for child in dev.get("children", []):
+                if child.get("type") != "part":
+                    continue
+                part = _process_device(child, parent=disk)
+                if part is not None:
+                    disks.append(part)
         return disks
 
     def resolve_by_id(self) -> dict[str, str]:
@@ -180,9 +216,6 @@ class DiskRepository:
             if not link:
                 continue
             basename = os.path.basename(link)
-            # Skip partition symlinks; whole-disk mappings are sufficient here.
-            if "-part" in basename:
-                continue
             try:
                 target = os.path.realpath(link)
             except OSError:
@@ -231,9 +264,17 @@ class DiskRepository:
         """Combine lsblk, by-id resolution, and SMART health into an inventory."""
         disks = self.list_disks()
         by_id_map = self.resolve_by_id()
-        by_path: dict[str, DiskInfo] = {}
+
+        parent_health: dict[str, str] = {}
         for disk in disks:
             disk.by_id = by_id_map.get(disk.path, "")
-            disk.smart_health = self.smart_health(disk.path)
+            if disk.parent_path is None:
+                disk.smart_health = self.smart_health(disk.path)
+                parent_health[disk.path] = disk.smart_health
+            else:
+                disk.smart_health = parent_health.get(disk.parent_path, "n/a")
+
+        by_path: dict[str, DiskInfo] = {}
+        for disk in disks:
             by_path[disk.path] = disk
         return DiskInventory(disks=disks, by_path=by_path)

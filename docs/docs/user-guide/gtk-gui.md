@@ -142,16 +142,17 @@ The **Disks** tab shows the physical storage layer underneath your ZFS pools.
 
 ### Disk inventory
 
-The upper pane lists every physical block device detected on the system:
+The upper pane lists every physical block device detected on the system, plus
+any partitions that belong to those devices:
 
 | Column | Meaning |
 | --- | --- |
-| Name | Kernel device node (e.g. `/dev/sda`) |
-| by-id | Best `/dev/disk/by-id` symlink name for the device |
-| Model | Device model string from `lsblk` |
-| Serial | Device serial number |
+| Name | Kernel device node (e.g. `/dev/sda` or `/dev/sda1`) |
+| by-id | Best `/dev/disk/by-id` symlink name for the device or partition |
+| Model | Device model string from `lsblk` (blank for partitions) |
+| Serial | Device serial number (blank for partitions) |
 | Size | Capacity in human-readable units |
-| Type | `HDD`, `SSD`, `NVMe`, or `unknown` (derived from `ROTA` and `TRAN`) |
+| Type | `HDD`, `SSD`, `NVMe`, `part`, or `unknown` |
 | Log-sec | Logical sector size |
 | Phy-sec | Physical sector size |
 | Transport | Transport type (e.g. `sata`, `nvme`, `sas`) |
@@ -159,12 +160,18 @@ The upper pane lists every physical block device detected on the system:
 | SMART | Overall SMART health (`PASSED`, `FAILED`, or `n/a`) |
 
 Device scans and SMART probes can be slow, so the inventory is loaded in a
-background thread and cached for a few seconds. Select a disk to jump to its
-first pool in the topology view.
+background thread and cached for a few seconds. Selecting a disk or partition
+selects the matching device in the Pool Topology pane, and selecting a device
+in the topology pane selects the matching disk or partition in the inventory.
+When the selected device belongs to a pool, every other member of that pool is
+also highlighted in the inventory.
 
 ### Pool topology
 
-The lower pane shows the vdev topology of the pool selected in the drop-down:
+The middle pane shows the vdev topology of the pool selected in the drop-down.
+Select a pool to highlight all of its member disks and partitions in the
+inventory view (their text is drawn in teal).  Selecting a device node in the
+tree also selects the corresponding row in the inventory:
 
 | Column | Meaning |
 | --- | --- |
@@ -174,8 +181,52 @@ The lower pane shows the vdev topology of the pool selected in the drop-down:
 | Read / Write / Cksum | Error counters from `zpool status` |
 | Ashift | Effective ashift for the vdev |
 
+### Dataset Tuning
+
+The lower pane shows a read-only grid of live ZFS properties for every dataset
+and zvol in the selected pool:
+
+| Column | Meaning |
+| --- | --- |
+| Name | Dataset path |
+| Type | `filesystem` or `volume` |
+| Recordsize / Volblocksize | Logical block size (live or creation-only) |
+| Compression | Compression algorithm |
+| Atime | Access-time behavior |
+| Logbias | Throughput/latency bias |
+| Sync | Synchronous-write policy |
+| Primarycache | Cache inclusion policy |
+| Special small blocks | Small-block special-vdev threshold |
+| Profile match | First seeded profile whose live properties match the dataset |
+
+Select one or more datasets and click **Apply Profile…** to change live
+properties with `zfs set` so they match a workload profile. A preview lists the
+exact commands that will run. Profiles that may be unsafe (for example,
+`sync=disabled`) show a warning and require explicit confirmation.
+
+Live properties such as recordsize and compression only affect newly written
+data; existing blocks keep the old layout until rewritten. `volblocksize` on a
+zvol is fixed at creation and can never be changed afterward — a profile's
+volblocksize only takes effect on zvols created later. The pool's root dataset
+appears in the list: applying a profile there changes the values that children
+inherit by default, so it is the place to set pool-wide defaults.
+
+After applying a profile, existing data still has the old block layout. Select a
+single dataset and click **Rewrite Data** to run `zfs rewrite`, which rewrites
+existing blocks in place so they match the current properties. This requires
+OpenZFS 2.3+; on older versions a guidance label explains that you can create a
+new dataset with the desired profile and migrate with send/receive instead.
+
+Use **Advanced: Manage Profiles…** to add, edit, delete, or reset the workload
+profiles stored in the JSON config.
+
 ### Actions
 
+- **Apply Profile…** — apply the selected workload profile to the selected
+  dataset(s).
+- **Rewrite Data** — run `zfs rewrite` on a single selected dataset. Requires
+  OpenZFS 2.3+.
+- **Advanced: Manage Profiles…** — open the workload profile manager.
 - **SMART Details** — dumps `smartctl -a` output for the selected disk to the
   GUI log panel. Requires a single disk to be selected and `smartctl` to be
   installed; otherwise a warning is logged.
@@ -186,9 +237,8 @@ The lower pane shows the vdev topology of the pool selected in the drop-down:
 | Feature | Minimum OpenZFS |
 | --- | --- |
 | Read-only Disks views | 2.1+ |
-
-Later phases will extend this table as pool creation, workload profiles, and
-growth operations are added.
+| Apply Profile (live property changes) | 2.1+ |
+| Rewrite Data | 2.3+ |
 
 ## Startup Version Check (Two-Node)
 
@@ -392,8 +442,9 @@ The sidebar exposes these pages:
 | [Offsite](#offsite-tab)           | Configure and run [`zfssendoffsite`](../commands-and-modules/commands.md#zfssendoffsite) |
 | [Restore](#restore-tab)           | Configure and run [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore)         |
 | [Schedule](#schedule-tab)         | Manage scheduled jobs                                                                    |
+| [Disks](#disks-tab)               | Physical disk inventory, pool topology, and dataset tuning                               |
 | [Pools](#pools-tab)               | Pool registry + live `zpool list` status + scrub manager                                 |
-| [Datasets](#datasets-tab)         | Collapsible dataset tree with inline snapshot/hold management                            |
+| [Datasets](#datasets-tab)         | Collapsible dataset tree with inline snapshot/hold management (pool root datasets at top level) |
 | [Retention](#retention-tab)       | Per-pool retention policies + prune runner                                               |
 | [Checkagainst](#checkagainst-tab) | Edit the [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst) table   |
 | [Logs](#logs-tab)                 | Browse, search, and prune session log files                                              |
@@ -1497,8 +1548,8 @@ removed manually via the **Prune Old** action button.
 
 ## Datasets Tab
 
-This tab displays a hierarchical, collapsible tree of all pools, datasets,
-snapshots, and hold tags.
+This tab displays a hierarchical, collapsible tree of all datasets, snapshots,
+and hold tags. Each pool is represented by its root dataset at the top level.
 
 ### Tree conventions
 
@@ -1506,7 +1557,7 @@ The dataset tree uses typography to indicate row kind:
 
 | Style            | Meaning                                                     |
 | ---------------- | ----------------------------------------------------------- |
-| **Bold**         | Pool name (top-level row)                                   |
+| **Bold**         | Pool root dataset (top-level row)                           |
 | Normal           | Regular dataset                                             |
 | Normal `[clone]` | Dataset that is a ZFS clone (origin shown in last column)   |
 | *Italic*         | Snapshot or hold tag |
@@ -1537,13 +1588,13 @@ based on what is selected.
 | **Delete**           | Only snapshots and/or holds selected             | Releases the selected hold tags, then destroys the selected snapshots (`zfs destroy`). If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well. |
 | **Add Hold**         | At least one snapshot selected                   | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                      |
 | **Rollback**         | Exactly one snapshot selected                    | Rolls the dataset back to that snapshot (destroys newer snapshots)                                                                                                                                               |
-| **Browse**           | Exactly one mounted filesystem or snapshot selected | Opens the selected item in the default file manager. Filesystems open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`.                                                                      |
-| **Mount**            | Exactly one unmounted filesystem or snapshot selected | Mounts the selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for a snapshot. Disabled for pools, volumes, and holds.                                                                          |
-| **Unmount**          | Exactly one mounted filesystem or snapshot selected | Unmounts the selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). If processes are still using it, a warning dialog lists them and asks you to close them before retrying. |
-| **Refresh**          | Always                                           | Re-reads all pools, datasets, snapshots, and holds while preserving the tree's vertical scroll position and current selection whenever possible                                                                  |
+| **Browse**           | Exactly one mounted filesystem or snapshot selected | Opens the selected item in the default file manager. Filesystems (including pool root datasets) open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`.                                      |
+| **Mount**            | One or more unmounted filesystems or snapshots selected | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. Disabled for volumes and holds. |
+| **Unmount**          | One or more mounted filesystems or snapshots selected | Unmounts each selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). Pool root datasets can be unmounted. Unmounting a filesystem also unmounts its mounted children (see the note below). If processes are still using it, a warning dialog lists them and asks you to close them before retrying.                |
+| **Refresh**          | Always                                           | Re-reads all datasets, snapshots, and holds while preserving the tree's vertical scroll position and current selection whenever possible                                                                         |
 | **Expand Selected**  | One or more pool/dataset/snapshot rows selected  | Recursively expands each selected row and its lazy-loaded descendants. Placeholder rows and hold tags are skipped.                                                                                               |
 | **Collapse All**     | Always                                           | Collapses the entire tree                                                                                                                                                                                        |
-| **Show Big Stuff**   | Exactly one pool selected                        | Runs [`zfsshowbigstuff`](../commands-and-modules/commands.md#zfsshowbigstuff) on the selected pool and streams the output to the log panel. Useful for quickly finding the largest datasets in a pool.          |
+| **Show Big Stuff**   | Exactly one pool root dataset selected           | Runs [`zfsshowbigstuff`](../commands-and-modules/commands.md#zfsshowbigstuff) on the selected pool and streams the output to the log panel. Useful for quickly finding the largest datasets in a pool.          |
 
 Right-click any cell for a context menu:
 
@@ -1552,10 +1603,20 @@ Right-click any cell for a context menu:
 - **Copy full name** — copies the fully-qualified dataset or snapshot name
   (e.g. `pool/data/dataset-a@offsite-…`). For hold tags,
   this copies the parent snapshot name.
-- **Send details to log** — logs all ZFS properties of the selected pool,
-  dataset, or snapshot to the bottom panel (holds log their tag, snapshot,
-  and dataset instead of fetching properties). This is useful for diagnostics
-  and for checking property values that are not shown in the tree columns.
+- **Send details to log** — logs all ZFS properties of the selected dataset
+  or snapshot to the bottom panel (holds log their tag, snapshot, and dataset
+  instead of fetching properties). This is useful for diagnostics and for
+  checking property values that are not shown in the tree columns.
+
+!!! note "Unmounting a parent dataset cascades to its children"
+    Unmounting a filesystem also unmounts any of its mounted children. For
+    example, unmounting `zfstest3/zfstest2` also unmounts
+    `zfstest3/zfstest2/zfstest1`. This is inherent ZFS/Linux behavior, not a
+    GUI limitation: a child's mount always lives underneath its parent's
+    mountpoint, so a parent cannot be unmounted while a child is still mounted
+    beneath it. The plain `zfs unmount` command behaves the same way. If you
+    want only one dataset unmounted, unmount the child (leaf) dataset and
+    leave its parents mounted.
 
 ---
 

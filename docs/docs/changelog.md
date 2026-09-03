@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+## 0.95.0
+
+*Released 2026-09-03*
+
+### Added
+
+- **Disks tab workload profiles (Phase 2)** — The Disks tab now has a dataset
+  tuning pane showing live ZFS properties (recordsize, compression, atime,
+  logbias, sync, primarycache, special_small_blocks, volblocksize) for every
+  dataset and zvol in the selected pool, along with the first seeded workload
+  profile whose properties match each dataset. Select one or more datasets and
+  click **Apply Profile…** to preview and apply a profile with `zfs set`.
+  Profiles that may be unsafe (for example `sync=disabled` or
+  `special_small_blocks` on a pool without a special vdev) show a warning and
+  require explicit confirmation.
+- **`python/workload_profiles.py`** — Pure-logic helpers (no GTK, no
+  subprocess) for profile property filtering, profile matching, apply-plan
+  building, and `zfs set` command generation.
+- **Seeded workload profiles** — `feature_config.py` defines ten built-in
+  profiles (general, media, database-postgresql, database-innodb,
+  vm-os-btrfs, vm-chaindata-ext4, vm-bigfile-ext4, backup-archive,
+  small-files, scratch). **Advanced: Manage Profiles…** adds, edits, deletes,
+  and resets profiles, persisted in the JSON config under `workload_profiles`
+  and seeded by config migration v25.
+- **Rewrite Data action** — Runs `zfs rewrite` on a single selected dataset so
+  existing blocks match the current properties. Gated on OpenZFS 2.3+ via
+  `zfs_capabilities`; on older versions a guidance label explains the
+  send/receive alternative.
+- **`ZfsRepository.get_properties()` / `set_property()`** — Batch property
+  reads (missing properties return `"-"`) and a checked property setter.
+- **Disks tab two-way selection sync and pool highlighting** — Selecting a
+  disk or partition selects its pool and device node in the topology pane, and
+  selecting a topology device selects the matching inventory row. All members
+  of the selected pool are highlighted in the inventory.
+- **Partition-aware disk inventory** — `disk_repository.py` now lists
+  partitions (`disk_type="part"`, with `parent_path` linking each partition to
+  its whole-disk device) and resolves `-part` by-id symlinks.
+
+### Changed
+
+- **Datasets tab pool rows are now root datasets** — Each pool is represented
+  by its real root dataset row (with live properties) instead of a placeholder
+  pool row, so root datasets can be browsed, mounted, and unmounted directly.
+- **Multi-select Mount/Unmount** — The Mount and Unmount actions now process
+  every selected filesystem/snapshot. Mounting mounts unmounted ancestors
+  first so the target's mountpoint is not hidden; unmounting unmounts mounted
+  descendants (deepest first) before the parent.
+- **Reliable snapshot mount-state detection** — `gui_helpers.py` now parses
+  `mount -t zfs` output (`get_mounted_snapshots()`) instead of relying on the
+  `.zfs/snapshot` directory, which exists even for unmounted snapshots. Mount
+  verifies the snapshot actually automounted; mount state is refreshed
+  in place via `update_mounted_states()` without rebuilding the tree.
+- **Disks tab refreshes on every page entry**, including the first entry after
+  a GUI restart.
+- **Config schema bumped to v25** — Seeds default workload profiles on upgrade
+  while preserving any user-defined profiles.
+
 ## 0.93.1
 
 *Released 2026-08-30*

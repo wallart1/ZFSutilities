@@ -32,6 +32,32 @@ class TestDiskRepositoryListDisks(unittest.TestCase):
                     "serial": "WD-WCC3F1SP",
                     "log-sec": 512,
                     "phy-sec": 4096,
+                    "children": [
+                        {
+                            "name": "sda1",
+                            "path": "/dev/sda1",
+                            "size": 536870912000,
+                            "type": "part",
+                            "rota": True,
+                            "tran": "sata",
+                            "model": None,
+                            "serial": None,
+                            "log-sec": 512,
+                            "phy-sec": 4096,
+                        },
+                        {
+                            "name": "sda2",
+                            "path": "/dev/sda2",
+                            "size": 536870912000,
+                            "type": "part",
+                            "rota": True,
+                            "tran": "sata",
+                            "model": None,
+                            "serial": None,
+                            "log-sec": 512,
+                            "phy-sec": 4096,
+                        },
+                    ],
                 },
                 {
                     "name": "sdb",
@@ -60,6 +86,18 @@ class TestDiskRepositoryListDisks(unittest.TestCase):
                 {
                     "name": "sda1",
                     "path": "/dev/sda1",
+                    "size": 536870912000,
+                    "type": "part",
+                    "rota": True,
+                    "tran": "sata",
+                    "model": None,
+                    "serial": None,
+                    "log-sec": 512,
+                    "phy-sec": 4096,
+                },
+                {
+                    "name": "sda2",
+                    "path": "/dev/sda2",
                     "size": 536870912000,
                     "type": "part",
                     "rota": True,
@@ -105,7 +143,7 @@ class TestDiskRepositoryListDisks(unittest.TestCase):
             repo = DiskRepository(sudo=False)
             disks = repo.list_disks()
 
-        self.assertEqual(len(disks), 3)
+        self.assertEqual(len(disks), 5)
         by_path = {d.path: d for d in disks}
         self.assertEqual(by_path["/dev/sda"].disk_type, "HDD")
         self.assertEqual(by_path["/dev/sdb"].disk_type, "SSD")
@@ -113,6 +151,11 @@ class TestDiskRepositoryListDisks(unittest.TestCase):
         self.assertEqual(by_path["/dev/sda"].size_human, "931.51 GiB")
         self.assertEqual(by_path["/dev/sda"].logical_sector, 512)
         self.assertEqual(by_path["/dev/sda"].physical_sector, 4096)
+        self.assertEqual(by_path["/dev/sda1"].disk_type, "part")
+        self.assertEqual(by_path["/dev/sda1"].parent_path, "/dev/sda")
+        self.assertEqual(by_path["/dev/sda1"].transport, "sata")
+        self.assertEqual(by_path["/dev/sda2"].disk_type, "part")
+        self.assertEqual(by_path["/dev/sda2"].parent_path, "/dev/sda")
 
     def test_list_disks_returns_empty_on_failure(self):
         with mock_subprocess() as m:
@@ -155,7 +198,7 @@ class TestDiskRepositoryResolveById(unittest.TestCase):
                 mapping = repo.resolve_by_id()
 
         self.assertEqual(mapping["/dev/sda"], "wwn-0x5000cca768")
-        self.assertNotIn("/dev/sda1", mapping)
+        self.assertEqual(mapping["/dev/sda1"], "wwn-0x5000cca768-part1")
 
 
 class TestDiskRepositorySmart(unittest.TestCase):
@@ -240,6 +283,39 @@ class TestDiskRepositoryInventory(unittest.TestCase):
             ]
         }
 
+        lsblk_data = {
+            "blockdevices": [
+                {
+                    "name": "sda",
+                    "path": "/dev/sda",
+                    "size": 1000204886016,
+                    "type": "disk",
+                    "rota": True,
+                    "tran": "sata",
+                    "model": "WD10EZEX",
+                    "serial": "WD-WCC",
+                    "log-sec": 512,
+                    "phy-sec": 4096,
+                    "children": [
+                        {
+                            "name": "sda1",
+                            "path": "/dev/sda1",
+                            "size": 536870912000,
+                            "type": "part",
+                            "rota": True,
+                            "tran": "sata",
+                            "model": None,
+                            "serial": None,
+                            "log-sec": 512,
+                            "phy-sec": 4096,
+                        }
+                    ],
+                }
+            ]
+        }
+
+        smartctl_calls = []
+
         def _handler(cmd, **_kw):
             cmd_str = " ".join(str(c) for c in cmd)
             if cmd_str.startswith("lsblk"):
@@ -248,9 +324,12 @@ class TestDiskRepositoryInventory(unittest.TestCase):
                 )
             if cmd_str.startswith("find"):
                 return subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout="/dev/disk/by-id/wwn-abc\n"
+                    args=[],
+                    returncode=0,
+                    stdout=("/dev/disk/by-id/wwn-abc\n/dev/disk/by-id/wwn-abc-part1\n"),
                 )
             if "smartctl" in cmd_str and "-H" in cmd_str:
+                smartctl_calls.append(cmd_str)
                 return subprocess.CompletedProcess(
                     args=[],
                     returncode=0,
@@ -258,17 +337,26 @@ class TestDiskRepositoryInventory(unittest.TestCase):
                 )
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="")
 
+        def _realpath(link):
+            if "-part1" in link:
+                return "/dev/sda1"
+            return "/dev/sda"
+
         with mock_subprocess() as m:
             m.set_command_handler(r".*", _handler)
-            with patch("disk_repository.os.path.realpath", return_value="/dev/sda"):
+            with patch("disk_repository.os.path.realpath", side_effect=_realpath):
                 repo = DiskRepository(sudo=False)
                 inventory = repo.disk_inventory()
 
-        self.assertEqual(len(inventory.disks), 1)
-        disk = inventory.disks[0]
+        self.assertEqual(len(inventory.disks), 2)
+        disk = inventory.by_path["/dev/sda"]
+        part = inventory.by_path["/dev/sda1"]
         self.assertEqual(disk.by_id, "wwn-abc")
         self.assertEqual(disk.smart_health, "PASSED")
-        self.assertEqual(inventory.by_path["/dev/sda"], disk)
+        self.assertEqual(part.by_id, "wwn-abc-part1")
+        self.assertEqual(part.smart_health, "PASSED")
+        self.assertEqual(part.parent_path, "/dev/sda")
+        self.assertNotIn("/dev/sda1", smartctl_calls)
 
 
 if __name__ == "__main__":

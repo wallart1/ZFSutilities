@@ -527,14 +527,16 @@ tests/run-tests test-zfsretain test_backup_config
 
 | Suite                     | Tests | Description                                                                                                    |
 | ------------------------- | ----- | -------------------------------------------------------------------------------------------------------------- |
-| `test_action_dispatch`    | 39     | Page button specs, action dispatch table, and Logs tab button wiring                                           |
+| `test_action_dispatch`    | 44     | Page button specs, action dispatch table, and Logs tab button wiring                                           |
 | `test_backup_config`      | 32    | Config load/save, defaults, pools, retention, UI state, snapshot name generation, log pruning, message level   |
 | `test_backup_history`     | 36    | History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting       |
 | `test_backup_page`        | 23     | Backup tab UI labels (including pre/post command labels), config load/collect helpers, and frame header widget support |
 | `test_backup_runner`      | 59    | Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and log size cap |
 | `test_command_builders`   | 51    | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
-| `test_config_migrations`  | 51    | Schema migrations 1→12, idempotency, missing migration errors                                                  |
+| `test_config_migrations`  | 54    | Schema migrations 1→24, idempotency, missing migration errors                                                  |
 | `test_cron_manager`       | 41    | Cron line generation, condition support, human-readable interpretation, next-run computation                     |
+| `test_disks_page_phase2`  | 36    | Disks tab dataset-tuning pane, Apply Profile dialog/execution, Rewrite Data gating, workload profile manager   |
+| `test_workload_profiles`  | 27    | Workload profile property filtering, profile matching, apply plan, `zfs set` command building, warnings        |
 | `test_dashboard_page`     | 185   | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, async refresh loading state |
 | `test_docs_integrity`     | 14    | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability  |
 | `test_gui_infrastructure` | 144    | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling            |

@@ -75,13 +75,111 @@ class FakeListStore:
     def get_path(self, it):
         return it.index
 
+    def set_value(self, it, col, value):
+        self.rows[it.index][col] = value
 
-def _disk_row(path, pools=""):
-    """Return a disk ListStore row with *path* and *pools* filled in."""
-    row = [""] * 11
+
+def _disk_row(path, pools="", highlight=False):
+    """Return a disk ListStore row with *path*, *pools*, and *highlight* filled in."""
+    row = [""] * 12
     row[0] = path
     row[9] = pools
+    row[11] = highlight
     return row
+
+
+class _TreeIter:
+    """Path-based iterator stand-in for FakeTreeStore."""
+
+    def __init__(self, path):
+        self.path = path
+
+
+class FakeTreeStore:
+    """Minimal TreeStore stand-in that supports nested iteration."""
+
+    def __init__(self):
+        self.root = []
+
+    def clear(self):
+        self.root = []
+
+    def _node(self, parent_path):
+        node = self.root
+        for idx in parent_path:
+            node = node[idx]["children"]
+        return node
+
+    def _row_node(self, path):
+        node = self.root
+        for idx in path[:-1]:
+            node = node[idx]["children"]
+        return node[path[-1]]
+
+    def append(self, parent_iter, row):
+        parent_path = parent_iter.path if parent_iter else ()
+        children = self._node(parent_path)
+        children.append({"row": list(row), "children": []})
+        new_path = parent_path + (len(children) - 1,)
+        return _TreeIter(new_path)
+
+    def get_iter_first(self):
+        return _TreeIter((0,)) if self.root else None
+
+    def iter_children(self, parent_iter):
+        parent_path = parent_iter.path if parent_iter else ()
+        children = self._node(parent_path)
+        if children:
+            return _TreeIter(parent_path + (0,))
+        return None
+
+    def iter_next(self, it):
+        path = it.path
+        parent_path = path[:-1]
+        idx = path[-1]
+        children = self._node(parent_path)
+        if idx + 1 < len(children):
+            return _TreeIter(parent_path + (idx + 1,))
+        return None
+
+    def get_value(self, it, col):
+        return self._row_node(it.path)["row"][col]
+
+    def get_path(self, it):
+        return it.path
+
+    def get_iter(self, path):
+        return _TreeIter(path)
+
+
+class FakeTreeSelection:
+    """TreeSelection stand-in with configurable selected paths."""
+
+    def __init__(self, store, paths=None):
+        self.store = store
+        self.paths = paths or []
+        self.selected_paths = []
+
+    def get_selected_rows(self):
+        return (self.store, self.paths)
+
+    def select_path(self, path):
+        self.selected_paths.append(path)
+
+
+class FakeTreeView:
+    """TreeView stand-in backed by a FakeTreeStore and FakeTreeSelection."""
+
+    def __init__(self, store, paths=None):
+        self.store = store
+        self._selection = FakeTreeSelection(store, paths)
+        self.scrolled_to = []
+
+    def get_selection(self):
+        return self._selection
+
+    def scroll_to_cell(self, path, *args, **_kwargs):
+        self.scrolled_to.append(path)
 
 
 def _make_app(disks=None, topologies=None):
@@ -94,16 +192,26 @@ def _make_app(disks=None, topologies=None):
     cache = MagicMock()
     cache.get.return_value = MagicMock(disks=disks or [], topologies=topologies or {})
     app._disks_inventory_cache = cache
+    app._disks_syncing_selection = False
 
     # Default to an empty fake store so selection-restore loops terminate.
     app.disks_store = FakeListStore()
 
     # Topology store helpers.
-    app.disks_topology_store.append.return_value = MagicMock()
+    app.disks_topology_store = FakeTreeStore()
+    app.disks_topology_view = FakeTreeView(app.disks_topology_store)
+
+    # Dataset tuning store helpers.
+    app.disks_dataset_store = FakeListStore()
 
     # Selection helpers.
     app.disks_view.get_selection.return_value.get_selected_rows.return_value = (
         app.disks_store,
+        [],
+    )
+    app.disks_dataset_view = MagicMock()
+    app.disks_dataset_view.get_selection.return_value.get_selected_rows.return_value = (
+        app.disks_dataset_store,
         [],
     )
 
@@ -207,6 +315,44 @@ class TestDiskInventoryCache(unittest.TestCase):
         self.assertEqual(len(data.disks), 1)
         self.assertEqual(data.disks[0].pools, ["pool1"])
         self.assertEqual(data.topologies["pool1"].ashift, 12)
+
+    def test_load_maps_partition_path_to_pool(self):
+        dp = _import_disks_page()
+        partition = _disk(
+            path="/dev/sda1",
+            disk_type="part",
+            parent_path="/dev/sda",
+            pools=[],
+        )
+        disk_repo = MagicMock()
+        disk_repo.disk_inventory.return_value = MagicMock(
+            disks=[partition],
+            by_path={"/dev/sda1": partition},
+        )
+        zfs_repo = MagicMock()
+        zfs_repo.list_pools_full.return_value = [{"name": "pool1"}]
+        zfs_repo.pool_topology.return_value = _topology(
+            "pool1",
+            children=[
+                TopologyNode(
+                    name="/dev/sda1",
+                    vdev_type="disk",
+                    state="ONLINE",
+                    read=0,
+                    write=0,
+                    cksum=0,
+                    ashift=None,
+                    children=[],
+                )
+            ],
+        )
+        zfs_repo.get_ashift.return_value = MagicMock(effective=12)
+
+        cache = dp.DiskInventoryCache(disk_repo, zfs_repo)
+        data = cache._load()
+
+        self.assertEqual(len(data.disks), 1)
+        self.assertEqual(data.disks[0].pools, ["pool1"])
 
 
 class TestRefreshDisksPage(unittest.TestCase):
@@ -319,11 +465,15 @@ class TestSelectionAndTopology(unittest.TestCase):
         )
         app.disks_store = FakeListStore([_disk_row("/dev/sda", "pool1")])
         app._disks_pool_selector.get_active_text.return_value = None
+        app._disks_pool_selector.get_model.return_value = [["pool1"]]
 
-        def _set_active_text(text):
-            app._disks_pool_selector.get_active_text.return_value = text
+        def _set_active(index):
+            model = app._disks_pool_selector.get_model.return_value
+            app._disks_pool_selector.get_active_text.return_value = (
+                model[index][0] if 0 <= index < len(model) else None
+            )
 
-        app._disks_pool_selector.set_active_text.side_effect = _set_active_text
+        app._disks_pool_selector.set_active.side_effect = _set_active
 
         selection = app.disks_view.get_selection.return_value
         selection.get_selected_rows.return_value = (
@@ -333,8 +483,119 @@ class TestSelectionAndTopology(unittest.TestCase):
 
         dp._on_disk_selection_changed(selection, app)
 
-        app._disks_pool_selector.set_active_text.assert_called_with("pool1")
-        app.disks_topology_store.append.assert_called()
+        app._disks_pool_selector.set_active.assert_called_with(0)
+        self.assertTrue(len(app.disks_topology_store.root) > 0)
+        self.assertEqual(app.disks_topology_view.get_selection().selected_paths, [(0, 0)])
+
+    def test_topology_selection_change_selects_disk_row(self):
+        dp = _import_disks_page()
+        topology = _topology(
+            "pool1",
+            children=[
+                TopologyNode(
+                    name="/dev/sda",
+                    vdev_type="disk",
+                    state="ONLINE",
+                    read=0,
+                    write=0,
+                    cksum=0,
+                    ashift=None,
+                    children=[],
+                )
+            ],
+        )
+        app = _make_app(
+            disks=[_disk(path="/dev/sda", pools=["pool1"])],
+            topologies={"pool1": topology},
+        )
+        app.disks_store = FakeListStore([_disk_row("/dev/sda", "pool1")])
+        disk_selection = FakeTreeSelection(app.disks_store)
+        app.disks_view.get_selection.return_value = disk_selection
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+
+        dp._repopulate_topology_for_selected_pool(app)
+
+        selection = app.disks_topology_view.get_selection()
+        selection.paths = [(0, 0)]
+        dp._on_topology_selection_changed(selection, app)
+
+        self.assertEqual(disk_selection.selected_paths, [0])
+        self.assertEqual(app.disks_view.scroll_to_cell.call_args_list[-1][0][0], 0)
+
+    def test_pool_selector_change_highlights_member_disks(self):
+        dp = _import_disks_page()
+        disks = [
+            _disk(path="/dev/sda", pools=["pool1"]),
+            _disk(path="/dev/sdb", pools=["pool2"]),
+            _disk(path="/dev/sdc", pools=["pool1", "pool2"]),
+        ]
+        app = _make_app(
+            disks=disks,
+            topologies={
+                "pool1": _topology("pool1"),
+                "pool2": _topology("pool2"),
+            },
+        )
+        app.disks_store = FakeListStore(
+            [
+                _disk_row("/dev/sda"),
+                _disk_row("/dev/sdb"),
+                _disk_row("/dev/sdc"),
+            ]
+        )
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+
+        dp._repopulate_topology_for_selected_pool(app)
+
+        self.assertTrue(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(app.disks_store.rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertTrue(app.disks_store.rows[2][dp.COL_D_HIGHLIGHT])
+
+    def test_highlight_cleared_for_missing_pool(self):
+        dp = _import_disks_page()
+        app = _make_app(
+            disks=[_disk(path="/dev/sda", pools=["pool1"])],
+            topologies={},
+        )
+        app.disks_store = FakeListStore([_disk_row("/dev/sda", highlight=True)])
+        app._disks_pool_selector.get_active_text.return_value = None
+
+        dp._highlight_pool_disks(app, None)
+
+        self.assertFalse(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
+
+    def test_refresh_restores_highlight_for_active_pool(self):
+        dp = _import_disks_page()
+        disks = [
+            _disk(path="/dev/sda", pools=["pool1"]),
+            _disk(path="/dev/sdb", pools=["pool2"]),
+        ]
+        app = _make_app(
+            disks=disks,
+            topologies={"pool1": _topology("pool1")},
+        )
+        app.disks_store = FakeListStore()
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+
+        dp.refresh_disks_page(app)
+
+        self.assertTrue(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(app.disks_store.rows[1][dp.COL_D_HIGHLIGHT])
+
+    def test_disk_cell_highlight_func_sets_foreground(self):
+        dp = _import_disks_page()
+        renderer = MagicMock()
+        model = MagicMock()
+        tree_iter = MagicMock()
+
+        model.get_value.return_value = True
+        dp._disk_cell_highlight_func(MagicMock(), renderer, model, tree_iter)
+        renderer.set_property.assert_called_with("foreground", dp.POOL_MEMBER_HIGHLIGHT_FG)
+
+        renderer.reset_mock()
+        model.get_value.return_value = False
+        dp._disk_cell_highlight_func(MagicMock(), renderer, model, tree_iter)
+        renderer.set_property.assert_called_with("foreground", None)
 
 
 class TestUpdateButtonSensitivity(unittest.TestCase):

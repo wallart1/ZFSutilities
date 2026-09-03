@@ -485,6 +485,18 @@ class TestOnPageChanged(unittest.TestCase):
         window._start_stop_dashboard_timer.assert_called_once_with("dashboard")
         mock_refresh.assert_called_once_with(window)
 
+    @patch("zfsutilities_gui.refresh_disks_page")
+    def test_disks_page_refreshes(self, mock_refresh):
+        """Switching to the Disks tab refreshes the disk inventory and topology."""
+        window = self._make_window({"pools": []})
+        stack = MagicMock()
+        stack.get_visible_child_name.return_value = "disks"
+
+        window.on_page_changed(stack, None)
+
+        window.update_action_buttons.assert_called_once_with("disks")
+        mock_refresh.assert_called_once_with(window)
+
 
 class TestUpdateActionButtonsGuard(unittest.TestCase):
     """update_action_buttons() only rebuilds the panel for the visible page."""

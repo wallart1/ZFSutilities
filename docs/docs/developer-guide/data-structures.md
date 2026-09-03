@@ -236,6 +236,7 @@ Top-level keys:
 | `pools`                                                               | array of strings or objects          | Registered pool names. String entries are supported for backward compatibility; v14 migrates them to `{"name", "offsite_candidate"}` objects |
 | [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) | object                               | Nested fss table: `backup_derived_active`, `offsite_derived_active`, `backup_derived`, `offsite_derived`, `user_entries`. Each row contains `source_root`, `dest_root`, `label`, optional `comment`. |
 | `retention`                                                           | object keyed by pool name | Per-pool retention policy. Each value is an array of `{name, retain, minage}` entries. Key `default` is the fallback |
+| `workload_profiles`                                                   | object keyed by profile name | Pre-defined and user-defined workload profiles used by the Disks tab Apply Profile action. Each value follows the profile schema below |
 | `prune_label`                                                         | string                    | Default snapshot label used by the Retention tab prune runner (default `dailybackup`)                                |
 | `prune_pools_order`                                                   | array of strings          | Persisted order of pools in the Retention tab Prune list                                                             |
 | `retention_mass_delete`                                               | object                    | Settings for the Retention tab Advanced Prune Options card (`includes`, `excludes`, `startwith`, `endwith`, `snapshot_has`, `releaseholds`, `ignore_retention_policies`) |
@@ -282,8 +283,28 @@ The Python config API is split across two modules:
 - `feature_config.get_pools()` / `save_pools()` — registered pool list
 - `feature_config.get_checkagainst()` / `save_checkagainst()` — fss table
 - `feature_config.generate_snapshot_name()` / `generate_offsite_snapshot_name()` — snapshot naming
+- `feature_config.get_workload_profiles()` / `save_workload_profiles()` / `delete_workload_profile()` / `reset_workload_profiles()` — workload profile config
 
 `backup_config.py` still re-exports all of these for backward compatibility.
+
+### `workload_profiles` object
+
+Persisted by the Disks tab Apply Profile workflow and seeded by migration v25.
+Each profile has this schema:
+
+| Key           | Type                      | Purpose                                                                           |
+| ------------- | ------------------------- | --------------------------------------------------------------------------------- |
+| `description` | string                    | Short human-readable description of the workload                                  |
+| `applies_to`  | array of strings          | One or both of `filesystem` and `volume`                                          |
+| `properties`  | object                    | ZFS property values to apply, keyed by property name                              |
+| `notes`       | string                    | Context or warning text shown when the profile is selected                        |
+
+Properties are divided into two groups:
+
+- **Live properties** can be changed with `zfs set`: `recordsize`, `compression`, `atime`, `logbias`, `sync`, `primarycache`, `special_small_blocks`.
+- **Creation-only properties** are display-only and cannot be changed after dataset creation: `volblocksize`, `ashift`.
+
+The pure-logic helpers in `python/workload_profiles.py` (`properties_for_profile`, `match_profile`, `build_apply_plan`, `build_zfs_set_commands`, `profile_has_warning`, `warning_text`) decide which properties apply to a given dataset type and build the preview plan. The Disks tab **Advanced: Manage Profiles…** dialog edits this object directly; changes are persisted immediately through `feature_config.save_workload_profiles()`.
 
 ### `backup` object
 
@@ -309,7 +330,7 @@ the software release version. When the config structure changes, bump
 **Migration chain** (`config_migrations.py`):
 
 ```python
-CONFIG_VERSION = 15
+CONFIG_VERSION = 25
 
 MIGRATIONS = [
     _migrate_1_to_2,
@@ -326,6 +347,16 @@ MIGRATIONS = [
     _migrate_12_to_13,
     _migrate_13_to_14,
     _migrate_14_to_15,
+    _migrate_15_to_16,
+    _migrate_16_to_17,
+    _migrate_17_to_18,
+    _migrate_18_to_19,
+    _migrate_19_to_20,
+    _migrate_20_to_21,
+    _migrate_21_to_22,
+    _migrate_22_to_23,
+    _migrate_23_to_24,
+    _migrate_24_to_25,
 ]
 ```
 
@@ -391,7 +422,7 @@ Cross-cutting, non-GTK state passed to GUI pages and action handlers.
 
 | Class | Fields | Purpose |
 | ----- | ------ | ------- |
-| `DiskInfo` | `name`, `path`, `by_id`, `model`, `serial`, `size_bytes`, `size_human`, `disk_type`, `logical_sector`, `physical_sector`, `transport`, `pools`, `smart_health` | One physical block device from `lsblk` |
+| `DiskInfo` | `name`, `path`, `by_id`, `model`, `serial`, `size_bytes`, `size_human`, `disk_type`, `logical_sector`, `physical_sector`, `transport`, `pools`, `smart_health`, `parent_path` | One physical block device or partition from `lsblk`; partitions have `disk_type="part"` and `parent_path` set to the whole-disk device |
 | `DiskInventory` | `disks`, `by_path` | Full disk inventory plus a path -> `DiskInfo` index |
 
 ### `ZfsRepository` dataclasses (`zfs_repository.py`)
@@ -401,7 +432,7 @@ Read methods return typed rows instead of raw tab-separated strings.
 | Class | Fields | Source command |
 | ----- | ------ | -------------- |
 | `PoolRow` | `name`, `health`, `size`, `alloc`, `free`, `cap`, `ckpoint` | `zpool list -H -o name,health,size,alloc,free,cap,ckpoint` |
-| `DatasetRow` | `name`, `creation`, `ds_type`, `used`, `avail`, `refer`, `origin`, `clones` | `zfs list -H -o name,creation,type,used,avail,refer,origin,clones` |
+| `DatasetRow` | `name`, `creation`, `ds_type`, `used`, `avail`, `refer`, `origin`, `clones`, `mounted` | `zfs list -H -o name,creation,type,used,avail,refer,origin,clones,mounted` |
 | `SnapshotRow` | `name`, `creation`, `ds_type`, `used`, `avail`, `refer`, `origin`, `clones` | `zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones` |
 | `HoldRow` | `snapshot`, `tag`, `date` | `zfs holds -H <snapshot>` |
 | `AshiftInfo` | `configured`, `effective` | Configured and effective pool ashift values |
@@ -411,6 +442,10 @@ Additional `ZfsRepository` methods:
 
 | Method | Return | Purpose |
 | ------ | ------ | ------- |
+| `get_property(dataset, prop)` | `str` | Value of a single ZFS property |
+| `get_properties(dataset, props)` | `dict[str, str]` | Values for a list of ZFS properties; missing properties are returned as `"-"` |
+| `get_all_properties(dataset)` | `dict[str, str]` | All ZFS properties for *dataset* |
+| `set_property(dataset, prop, value)` | `bool` | Run `zfs set <prop>=<value> <dataset>`; returns success/failure |
 | `pool_status_errors(pool)` | `dict` | Parses `zpool status <pool>` and returns `has_errors` (`bool`), `errors_summary` (`str`), `data_errors` (`list` of paths), and `vdev_errors` (`list` of `{name, read, write, cksum}` dicts). Used by the Dashboard and Pools tab to color the **Errors** column. |
 | `version_output()` | `str` | Raw `zfs version` text (empty on failure) |
 | `zdb_pool_config(pool)` | `str` | Raw `zdb -C <pool>` text (empty on failure) |
