@@ -418,14 +418,16 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
             mount_path = src_path.rstrip("/")
             if not os.path.ismount(mount_path):
                 log_msg(
-                    f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not mounted"
+                    f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: "
+                    f"{mount_path} is not mounted"
                 )
             else:
                 try:
                     os.listdir(mount_path)
                 except OSError:
                     log_msg(
-                        f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: {mount_path} is not accessible"
+                        f"WARN: Skipping ZFS keys {zfs_keys_path} -> {zfs_keys_dest}: "
+                        f"{mount_path} is not accessible"
                     )
                 else:
                     if not is_dataset_encrypted(zfs_keys_dest):

@@ -1,8 +1,8 @@
 r"""Diagnostic script for ZfsRepository / Datasets tab behavior.
 
-Run on a machine with live ZFS pools:
+Run on a machine with live ZFS pools (from the repository root):
 
-    sudo python3 07\ GTK\ +\ Python/diagnose_zfs_repository.py
+    sudo python3 python/diagnose_zfs_repository.py
 
 It exercises the same repository calls the Datasets tab uses and prints
 exact commands, return codes, and result counts.
@@ -42,6 +42,7 @@ def main():
     print("=" * 70)
     print(f"2. list_datasets(pool={pool!r}, depth=1)")
     print("=" * 70)
+    rows = []
     try:
         rows = repo.list_datasets(pool=pool, depth=1)
         print(f"Rows returned: {len(rows)}")

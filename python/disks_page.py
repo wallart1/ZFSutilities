@@ -42,6 +42,7 @@ from workload_profiles import (
     match_profile,
     profile_has_warning,
     warning_text,
+    zfs_set_commands_with_entries,
 )
 from zfs_repository import TopologyNode, ZfsRepository
 
@@ -304,7 +305,8 @@ def create_disks_page(app):
     top_box.pack_start(title, False, False, 0)
 
     desc = Gtk.Label(
-        label="Physical block devices and partitions detected on this system and their pool membership."
+        label="Physical block devices and partitions detected on this system "
+        "and their pool membership."
     )
     desc.set_halign(Gtk.Align.START)
     desc.set_line_wrap(True)
@@ -411,7 +413,8 @@ def create_disks_page(app):
     bottom_box.pack_start(ds_title, False, False, 0)
 
     ds_desc = Gtk.Label(
-        label="Read-only view of dataset properties. Select one or more datasets and use Apply Profile to tune live properties."
+        label="Read-only view of dataset properties. Select one or more datasets "
+        "and use Apply Profile to tune live properties."
     )
     ds_desc.set_halign(Gtk.Align.START)
     ds_desc.set_line_wrap(True)
@@ -1382,7 +1385,7 @@ def on_disks_apply_profile(app):
 
     repo = app.ctx.zfs_repository
     all_commands = []
-    ds_commands: list[tuple[str, str, list[str]]] = []
+    ds_commands: list[tuple[str, str, list[tuple[str, dict]]]] = []
     for ds in datasets:
         ds_name = ds["name"]
         ds_type = ds["type"]
@@ -1395,10 +1398,10 @@ def on_disks_apply_profile(app):
             )
             continue
         plan = build_apply_plan(profile, ds_name, ds_type, live_props)
-        commands = build_zfs_set_commands(plan)
-        if commands:
-            all_commands.extend(commands)
-            ds_commands.append((ds_name, ds_type, commands))
+        cmd_pairs = zfs_set_commands_with_entries(plan)
+        if cmd_pairs:
+            all_commands.extend(cmd for cmd, _entry in cmd_pairs)
+            ds_commands.append((ds_name, ds_type, cmd_pairs))
 
     if not all_commands:
         dialog = Gtk.MessageDialog(
@@ -1417,10 +1420,9 @@ def on_disks_apply_profile(app):
     lock_ids = zlm.acquire_multiple("w", dataset_names)
 
     steps = []
-    for ds_name, _ds_type, commands in ds_commands:
-        for cmd in commands:
-            # cmd is of the form "zfs set <prop>=<value> <dataset>"
-            desc = f"Set {cmd.split(' ', 3)[2]} on {ds_name}"
+    for ds_name, _ds_type, cmd_pairs in ds_commands:
+        for cmd, entry in cmd_pairs:
+            desc = f"Set {entry['property']}={entry['value']} on {ds_name}"
             steps.append(
                 BashStep(
                     ["bash", "-c", cmd],

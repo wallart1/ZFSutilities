@@ -177,6 +177,11 @@ Empty arrays: `includes=()`, `excludes=()`.
 - Use `[[ ]]` for conditionals (not `[ ]`)
 - Use `${var%%/*}` for parameter expansion instead of `awk -F'/' '{print $1}'`
   where readable
+- Likewise prefer parameter expansion or a `case` glob over `grep -oP '…\K…'`
+  for extracting fields from command output (e.g. `${line#*lun}` +
+  `${rest%%[!0-9]*}` for a `lunN` token, or word-splitting a line and matching
+  `iqn.*` for an IQN). This avoids the PCRE dependency and keeps remote
+  heredocs portable. Plain `grep -F`/`grep -oE` remain fine.
 - Prefer `local var1 var2` over separate `local` declarations when grouping
   related variables
 - Match `if`/`fi`, `for`/`done`, `while`/`done` — never leave dangling blocks

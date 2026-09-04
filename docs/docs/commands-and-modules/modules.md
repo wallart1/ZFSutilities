@@ -600,7 +600,7 @@ checkrunningvms <dataset>
 
 | Variable                    | Role                                                   | Reference                                                                       |
 | --------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `NODE_MODE`, `COMPUTE_HOST` | Determines whether `qm config` runs locally or via SSH | [Node Configuration](../developer-guide/global-variables.md#node-configuration) |
+| — | None: `qm`/`pct` are invoked locally; Proxmox tools absence returns `2` (see Return codes) | — |
 
 **Return codes:**
 
@@ -721,7 +721,7 @@ Returns non-zero if no common snapshot exists.
 Releases selected holds on a single ZFS snapshot. When no tag patterns are
 supplied, all holds are released. When one or more patterns are supplied,
 only holds matching at least one pattern are released. Unmatched holds are
-reported in `$ZFS_DELALLHOLDS_REMAINING_TAGS`.
+reported in `$zfs_delallholds_remaining_tags`.
 
 ```bash
 source_helper zfsdelallholds
@@ -739,7 +739,7 @@ delallholds <snapshot> [hold-tag-pattern...]
 
 | Variable                        | Description                                              |
 | ------------------------------- | -------------------------------------------------------- |
-| `$ZFS_DELALLHOLDS_REMAINING_TAGS` | Space-separated list of hold tags that were not released |
+| `$zfs_delallholds_remaining_tags` | Space-separated list of hold tags that were not released |
 
 **Called modules:** none.
 
@@ -1292,7 +1292,7 @@ arguments. Callers set the variables below, then invoke `send-receive`.
 | Structure                                                                                  | Direction                        | Purpose                                                                                         |
 | ------------------------------------------------------------------------------------------ | -------------------------------- | ----------------------------------------------------------------------------------------------- |
 | [`$fsarray`](../developer-guide/data-structures.md#fsarray-fsarraylen)                     | produced (via `zfsbuildfsarray`) | Filtered source dataset list                                                                    |
-| [`ISCSI_TEARDOWN`](../developer-guide/data-structures.md#iscsi_teardown-associative-array) | read                             | Per-dataset teardown records that drive `iscsi_rebuild_torn_down` after each successful receive |
+| [`iscsi_teardown`](../developer-guide/data-structures.md#iscsi_teardown-associative-array) | read                             | Per-dataset teardown records that drive `iscsi_rebuild_torn_down` after each successful receive |
 
 **Return codes:**
 
@@ -1356,7 +1356,7 @@ steps.
       GUIDs.
    j. If this is a live (non-dry-run) full copy into an existing destination,
       call `iscsi_rebuild_torn_down` to restore any iSCSI LUNs recorded in
-      `ISCSI_TEARDOWN`.
+      `iscsi_teardown`.
    k. Release source and destination locks.
 6. Restore original `$sourcefs`, `$destfs`, `$doincrementals`, and `$nextsnap`
    before returning.

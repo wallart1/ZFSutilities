@@ -350,7 +350,7 @@ def on_row_expanded(view, tree_iter, path, _data=None):
         child = next_child
 
 
-def get_mounted_snapshots(repo=None):
+def get_mounted_snapshots():
     """Return the set of currently mounted ZFS snapshots.
 
     Parses ``mount -t zfs`` output because the ``.zfs/snapshot/<snap>``
@@ -387,7 +387,7 @@ def load_dataset_children(store, ds_iter, ds_name, repo=None):
 
     # Build a set of explicitly mounted ZFS snapshots so each snapshot row can
     # show its own mount state independent of the parent dataset.
-    mounted_snaps = get_mounted_snapshots(repo=repo)
+    mounted_snaps = get_mounted_snapshots()
 
     # Load snapshots of this exact dataset (not descendants).
     # depth=1 is required because ZFS does not list a dataset's own snapshots
@@ -820,7 +820,10 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
                 if lun_info:
                     log_msg(f"WARN:   → Zvol is exposed as an iSCSI LUN on {lun_info}.")
                 else:
-                    log_msg(f"WARN:   → Zvol has an iSCSI backstore ({bsname}) but no LUN mapping.")
+                    log_msg(
+                        f"WARN:   → Zvol has an iSCSI backstore ({bsname}) "
+                        f"but no LUN mapping."
+                    )
                 log_msg("WARN:     Use 'remove-vm-disk' or targetcli to tear down iSCSI first.")
                 found_cause = True
         except (subprocess.CalledProcessError, FileNotFoundError):

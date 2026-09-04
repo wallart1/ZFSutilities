@@ -54,7 +54,7 @@ function retain {
     zfslock_wait_or_resolve "$retainfs" "w" "retain $label"
     local lock_rc=$?
     if [[ $lock_rc -eq 0 ]]; then
-        retain_lock="$ZFSLOCK_ID"
+        retain_lock="$zfslock_id"
     elif [[ $lock_rc -eq 2 ]]; then
         log_msg "INFO: Skipping $retainfs (lock conflict)."
         return 1

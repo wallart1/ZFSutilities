@@ -17,6 +17,7 @@ from backup_history import load_history
 from config_core import get_dashboard_config, save_dashboard_config
 from gi.repository import GLib, Gtk
 from gui_helpers import configure_treeview_column, set_monospace_font
+from log_index import LogIndex
 from logging_config import log_msg
 from logs_page import select_log_by_path
 from path_utils import get_version, resolve_local_bin, resolve_remote_version
@@ -204,6 +205,24 @@ def _run_cmd(cmd, timeout=5):
         return None
 
 
+def _profile_name_from_runner_args(args):
+    """Extract the profile name from a profile_runner.py command line.
+
+    Matches both a direct invocation (``python3 .../profile_runner.py run
+    <name>``) and a cron ``/bin/sh -c`` wrapper, whose compound command
+    (``mkdir -p ... && python3 ... run <name> >> log 2>&1``) keeps the shell
+    alive as a parent process. Returns None when no profile name is found.
+    """
+    parts = args.split()
+    for idx, token in enumerate(parts):
+        if token.endswith("profile_runner.py"):
+            for j in range(idx + 1, len(parts) - 1):
+                if parts[j] == "run" and not parts[j + 1].startswith((">", "-")):
+                    return parts[j + 1]
+            return None
+    return None
+
+
 def _log_file_from_pid_environ(pid):
     """Return ZFSUTILITIES_LOG_FILE from a process's environment, or None."""
     try:
@@ -310,6 +329,37 @@ def _get_recent_entries(limit=10):
     """
     entries = load_history()
     return entries[:limit]
+
+
+def _attach_highest_levels(recent):
+    """Attach a transient ``highest_level`` key to each recent history entry.
+
+    The level comes from the persistent session-log index (see
+    :class:`log_index.LogIndex`), which tracks the highest message level
+    parsed from each operation's log file.  Entries whose log file is
+    missing or unparsed get ``None`` and fall back to result-based display.
+    Entries are fresh parses from ``load_history()`` and are never written
+    back, so in-place mutation here is safe.
+    """
+    try:
+        index = LogIndex.load()
+    except Exception as exc:
+        log_msg(f"WARN: Could not load log index: {exc}")
+        index = None
+    for entry in recent:
+        log_file = entry.get("log_file")
+        highest = None
+        if index is not None and log_file:
+            try:
+                highest = index.update(log_file).get("highest_level")
+            except Exception as exc:
+                log_msg(f"WARN: Could not scan log file {log_file}: {exc}")
+        entry["highest_level"] = highest
+    if index is not None:
+        try:
+            index.save()
+        except Exception as exc:
+            log_msg(f"WARN: Could not save log index: {exc}")
 
 
 def _local_hostname():
@@ -829,11 +879,26 @@ def _health_icon(health):
     return "<span foreground='#FF8C00'>●</span>"
 
 
-def _result_icon(result):
-    """Return a checkmark or X mark for a history result string."""
+def _outcome_markup(entry):
+    """Return the Pango markup for a Recent Operations message-level cell.
+
+    Shows the highest message level issued during the operation (from the
+    session-log index) rather than treating WARN messages as failures:
+    FATAL renders red, WARN amber, and INFO/VERB/DEBUG green.  When no
+    level information is available (no log file, missing log, or no
+    level-prefixed lines), fall back to the exit-code-based result.
+    """
+    highest = entry.get("highest_level")
+    if highest == "FATAL":
+        return "<span foreground='#CC0000'>✗</span> FATAL"
+    if highest == "WARN":
+        return "<span foreground='#FF8C00'>⚠</span> WARN"
+    if highest in ("INFO", "VERB", "DEBUG"):
+        return f"<span foreground='#00AA00'>✓</span> {highest}"
+    result = entry.get("result", "unknown")
     if result == "success":
-        return "<span foreground='#00AA00'>✓</span>"
-    return "<span foreground='#CC0000'>✗</span>"
+        return "<span foreground='#00AA00'>✓</span> success"
+    return f"<span foreground='#CC0000'>✗</span> {result}"
 
 
 # ---------------------------------------------------------------------------
@@ -1020,13 +1085,13 @@ def create_dashboard_page(app):
         (0, "Date / Time", 150),
         (1, "Type", 70),
         (2, "Name", 140),
-        (3, "Outcome", 90),
+        (3, "Message Level", 90),
     ]:
         r = Gtk.CellRendererText()
         r.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         if col_idx == 0:
             set_monospace_font(r)
-        # Outcome column contains Pango markup (colored icons)
+        # Message Level column contains Pango markup (colored icons)
         attr = "markup" if col_idx == 3 else "text"
         col = Gtk.TreeViewColumn(title_text, r, **{attr: col_idx})
         configure_treeview_column(col, width=width)
@@ -1121,6 +1186,7 @@ def _gather_dashboard_data(app):
 
     pools, pools_stale = _get_cached_or_fresh(app, "_dashboard_pools", _get_pool_health())
     recent = _get_recent_entries(10)
+    _attach_highest_levels(recent)
     missing_luns, iscsi_stale = _get_cached_or_fresh(
         app, "_dashboard_iscsi", _get_iscsi_missing_luns()
     )
@@ -1358,6 +1424,15 @@ def _refresh_config_section_from_data(app, data):
         app.dashboard_config_grid.attach(val, 1, row, 1, 1)
         row += 1
 
+    # Versions
+    ver_lbl = _make_config_label("Version(s)")
+    app.dashboard_config_grid.attach(ver_lbl, 0, row, 1, 1)
+
+    ver_val = Gtk.Label(label=data["versions"])
+    ver_val.set_halign(Gtk.Align.START)
+    app.dashboard_config_grid.attach(ver_val, 1, row, 1, 1)
+    row += 1
+
     # Operating system(s)
     os_lbl = _make_config_label("Operating system(s)")
     app.dashboard_config_grid.attach(os_lbl, 0, row, 1, 1)
@@ -1377,15 +1452,6 @@ def _refresh_config_section_from_data(app, data):
     os_name_val = Gtk.Label(label=os_name_text)
     os_name_val.set_halign(Gtk.Align.START)
     app.dashboard_config_grid.attach(os_name_val, 1, row, 1, 1)
-    row += 1
-
-    # Versions
-    ver_lbl = _make_config_label("Version(s)")
-    app.dashboard_config_grid.attach(ver_lbl, 0, row, 1, 1)
-
-    ver_val = Gtk.Label(label=data["versions"])
-    ver_val.set_halign(Gtk.Align.START)
-    app.dashboard_config_grid.attach(ver_val, 1, row, 1, 1)
     row += 1
 
     # ZFS versions
@@ -1513,8 +1579,7 @@ def _refresh_ops_section(app, recent):
         ts = _format_history_timestamp(entry.get("timestamp", "?"))
         etype = entry.get("type", "?")
         name = entry.get("name", "?")
-        result = entry.get("result", "unknown")
-        outcome = f"{_result_icon(result)} {result}"
+        outcome = _outcome_markup(entry)
         log_file = entry.get("log_file", "")
         tree_iter = app.dashboard_ops_store.append([ts, etype, name, outcome, log_file])
         if selected_log_file and log_file == selected_log_file:
@@ -1719,7 +1784,7 @@ def _collect_running_tasks(app):
                 if not pid:
                     continue
                 # Try to get profile name from command line
-                profile_name = "unknown"
+                profile_name = None
                 try:
                     ps_result = subprocess.run(
                         ["ps", "-p", pid, "-o", "args="],
@@ -1729,13 +1794,11 @@ def _collect_running_tasks(app):
                         check=False,
                     )
                     if ps_result.returncode == 0:
-                        args = ps_result.stdout.strip()
-                        # profile_runner.py run <profile_name>
-                        parts = args.split()
-                        if len(parts) >= 2 and parts[-2] == "run":
-                            profile_name = parts[-1]
+                        profile_name = _profile_name_from_runner_args(ps_result.stdout.strip())
                 except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                     pass
+                if not profile_name:
+                    profile_name = f"profile_runner.py (PID {pid})"
                 # Skip if already shown as a profile task.
                 if any(t["type"] == "Profile" and t["name"] == profile_name for t in tasks):
                     continue

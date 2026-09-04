@@ -23,7 +23,7 @@ if ! zfslock_wait_or_resolve "$sourcefs" "w" "zfsdelallholdssubtree"; then
     log_msg "WARN: Could not acquire write lock on ${sourcefs}; aborting."
     exit 1
 fi
-_delallholdssubtree_lock="$ZFSLOCK_ID"
+_delallholdssubtree_lock="$zfslock_id"
 if [[ $2 != '' ]]; then tag=$2; else unset tag; fi
 
 if [[ $autoproceed = '' ]]; then autoproceed='N'; fi

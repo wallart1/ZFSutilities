@@ -8,6 +8,6 @@
 # same helpers (pool_to_target, pool_list, is_known_pool) plus
 # single-node / two-node mode awareness.
 
-NODE_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+node_lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=node-lib.sh
-source "${NODE_LIB_DIR}/node-lib.sh"
+source "${node_lib_dir}/node-lib.sh"

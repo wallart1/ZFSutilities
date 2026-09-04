@@ -76,7 +76,7 @@ extract_heredoc_by_marker() {
 test_storage_move_heredoc_bootstrap() {
     test_start "storage_move heredoc avoids BASH_SOURCE[0] bootstrap"
     local bootstrap
-    bootstrap=$(extract_heredoc_by_marker 'PHASE=teardown_done')
+    bootstrap=$(extract_heredoc_by_marker 'phase=teardown_done')
     if grep -q 'BASH_SOURCE\[0\]' <<< "$bootstrap"; then
         test_fail "storage_move heredoc still uses BASH_SOURCE[0] bootstrap"
         return
@@ -124,9 +124,9 @@ test_disk_num_from_key_ide() {
 
 test_auto_select_dst_key() {
     test_start "auto_select_dst_key picks next free scsi slot"
-    SRCKEY="scsi0"
-    DST_CONF="$_mock_zfs_state_dir/dst.conf"
-    cat > "$DST_CONF" << 'EOF'
+    srckey="scsi0"
+    dst_conf="$_mock_zfs_state_dir/dst.conf"
+    cat > "$dst_conf" << 'EOF'
 scsi0: some-disk
 EOF
     local key
@@ -136,9 +136,9 @@ EOF
 
 test_auto_select_dst_key_efidisk() {
     test_start "auto_select_dst_key handles efidisk0"
-    SRCKEY="efidisk0"
-    DST_CONF="$_mock_zfs_state_dir/dst-efi.conf"
-    touch "$DST_CONF"
+    srckey="efidisk0"
+    dst_conf="$_mock_zfs_state_dir/dst-efi.conf"
+    touch "$dst_conf"
     local key
     key=$(auto_select_dst_key)
     assert_equals "efidisk0" "$key"
@@ -218,28 +218,28 @@ test_is_valid_disk_key() {
 }
 
 test_state_round_trip_no_rename() {
-    test_start "write_state/read_state round-trip NO_RENAME"
+    test_start "write_state/read_state round-trip no_rename"
     local state_file="$_mock_zfs_state_dir/no-rename.state"
-    SRCVMID=100
-    SRCKEY="scsi0"
-    DSTVMID=200
-    DSTKEY="scsi1"
-    SRCZVOL="pool/vm-100-disk-0"
-    DSTZVOL="$SRCZVOL"
-    SRCBACKSTORE="vm-100-disk-0"
-    DSTBACKSTORE="$SRCBACKSTORE"
-    TARGET="iqn.2024-01.com.example:threeamigos"
-    TARGETSHORT="threeamigos"
-    POOL="threeamigos"
-    SRCLUN=5
-    DSTLUN=""
-    PHASE="started"
-    ENCRYPTED="N"
-    NO_RENAME="Y"
+    srcvmid=100
+    srckey="scsi0"
+    dstvmid=200
+    dstkey="scsi1"
+    srczvol="pool/vm-100-disk-0"
+    dstzvol="$srczvol"
+    srcbackstore="vm-100-disk-0"
+    dstbackstore="$srcbackstore"
+    target="iqn.2024-01.com.example:threeamigos"
+    targetshort="threeamigos"
+    pool="threeamigos"
+    srclun=5
+    dstlun=""
+    phase="started"
+    encrypted="N"
+    no_rename="Y"
     write_state "$state_file"
-    NO_RENAME="X"
+    no_rename="X"
     read_state "$state_file"
-    assert_equals "Y" "$NO_RENAME"
+    assert_equals "Y" "$no_rename"
 }
 
 test_usage_includes_no_rename() {

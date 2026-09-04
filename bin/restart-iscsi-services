@@ -43,9 +43,9 @@ if ! systemctl cat rtslib-fb-targetctl >/dev/null 2>&1; then
     exit 1
 fi
 
-CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
-if [[ ! -e "$CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
-    CONF="/etc/iscsi-encrypted-luns.conf"
+conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$conf" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    conf="/etc/iscsi-encrypted-luns.conf"
 fi
 
 # ------------------------------------------------------------------
@@ -60,45 +60,71 @@ check_running_vms() {
 
     local vmids=""
 
-    while IFS= read -r TARGET; do
-        [[ -z "$TARGET" ]] && continue
+    while IFS= read -r target; do
+        [[ -z "$target" ]] && continue
         while IFS= read -r line; do
-            local BSNAME
-            BSNAME=$(echo "$line" | grep -oP 'block/\K[^\s/]+')
-            [[ -z "$BSNAME" ]] && continue
+            # Extract the backstore name after "block/", stopping at the
+            # first whitespace or '/' (fixed-string expansion, no regex).
+            local bsname=""
+            local _rest="${line#*block/}"
+            if [[ "$_rest" != "$line" ]]; then
+                bsname="${_rest%%[[:space:]/]*}"
+            fi
+            [[ -z "$bsname" ]] && continue
 
-            local ZVOL
-            ZVOL=$(echo "$backstores" | grep " ${BSNAME} " | grep -oP '/dev/zvol/\K[^ )]+')
-            [[ -z "$ZVOL" ]] && continue
+            # Extract the backing zvol path (/dev/zvol/...), stopping at the
+            # first space or ')'.
+            local zvol=""
+            local _bs_line
+            _bs_line=$(echo "$backstores" | grep " ${bsname} " | head -1)
+            if [[ -n "$_bs_line" ]]; then
+                _rest="${_bs_line#*/dev/zvol/}"
+                if [[ "$_rest" != "$_bs_line" ]]; then
+                    zvol="/dev/zvol/${_rest%%[ )]*}"
+                fi
+            fi
+            [[ -z "$zvol" ]] && continue
 
-            local VMID
-            VMID=$(echo "$ZVOL" | grep -oP '/vm-\K[0-9]+(?=-disk-)')
-            [[ -z "$VMID" ]] && continue
+            # Extract the numeric vmid from .../vm-<id>-disk-<n>.
+            local vmid=""
+            _rest="${zvol#*/vm-}"
+            if [[ "$_rest" != "$zvol" && "$_rest" == *-disk-* ]]; then
+                local _vmid="${_rest%%-disk-*}"
+                [[ -n "$_vmid" && "$_vmid" != *[!0-9]* ]] && vmid="$_vmid"
+            fi
+            [[ -z "$vmid" ]] && continue
 
             if [[ -z "$vmids" ]]; then
-                vmids="$VMID"
-            elif [[ " $vmids " != *" $VMID "* ]]; then
-                vmids="$vmids $VMID"
+                vmids="$vmid"
+            elif [[ " $vmids " != *" $vmid "* ]]; then
+                vmids="$vmids $vmid"
             fi
-        done < <(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null)
-    done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+')
+        done < <(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null)
+    done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
+        # targetcli separates each target name from its dotted leader with a
+        # space, so the IQN is a whole whitespace-delimited token.
+        read -ra _t_words <<< "$_t_line"
+        for _t in "${_t_words[@]}"; do
+            case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
+        done
+    done)
 
     [[ -z "$vmids" ]] && return 0
 
     local running_vms=()
-    for VMID in $vmids; do
+    for vmid in $vmids; do
         local status
         status=$(ssh -o ConnectTimeout=5 -o BatchMode=yes \
-            root@"$COMPUTE_HOST" "qm status '$VMID' 2>/dev/null | awk '{print \$2}'" \
+            root@"$compute_host" "qm status '$vmid' 2>/dev/null | awk '{print \$2}'" \
             2>/dev/null || true)
         if [[ "$status" == "running" ]]; then
-            running_vms+=("$VMID")
+            running_vms+=("$vmid")
         fi
     done
 
     if [[ ${#running_vms[@]} -gt 0 ]]; then
         echo ""
-        log_msg "FATAL: The following VMs are currently running on $COMPUTE_HOST:"
+        log_msg "FATAL: The following VMs are currently running on $compute_host:"
         for vm in "${running_vms[@]}"; do
             log_msg "INFO:     VM $vm"
         done
@@ -140,7 +166,7 @@ main() {
     # Show encrypted LUN status
     echo ""
     log_msg "INFO: Encrypted LUN status:"
-    if [[ -f "$CONF" ]]; then
+    if [[ -f "$conf" ]]; then
         while IFS=: read -r name device _target; do
             [[ -z "$name" || "$name" == \#* ]] && continue
             if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
@@ -150,9 +176,9 @@ main() {
             else
                 log_msg "WARN:   $name — missing from iSCSI target"
             fi
-        done < "$CONF"
+        done < "$conf"
     else
-        log_msg "INFO:   (no encrypted LUNs config at $CONF)"
+        log_msg "INFO:   (no encrypted LUNs config at $conf)"
     fi
 
     # Save only if all expected LUNs are active

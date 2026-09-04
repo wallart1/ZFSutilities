@@ -95,16 +95,17 @@ rootcheck
 The library:
 
 1. Sources `/etc/zfsutilities/node.conf` (falling back to `/etc/zfsutilities/two-node.conf`, then legacy `/etc/zfsutilities-node.conf` / `/etc/two-node.conf`)
-2. In single-node mode: sets `STORAGE_HOST=COMPUTE_HOST=$THIS_HOST`,
+2. In single-node mode: sets `storage_host=compute_host=$this_host` (lowercase
+   working copies of the config's `STORAGE_HOST`/`COMPUTE_HOST`/`THIS_HOST`),
    leaves iSCSI variables empty
 3. Provides helper functions:
 
 ```bash
-is_single_node()        # returns 0 if NODE_MODE == "single-node"
-is_two_node()           # returns 0 if NODE_MODE == "two-node"
+is_single_node()        # returns 0 if node_mode == "single-node"
+is_two_node()           # returns 0 if node_mode == "two-node"
 pool_to_target()        # echoes full IQN for a pool (two-node only)
-pool_list()             # echoes pool names from POOL_TARGET (two-node only)
-is_known_pool()         # returns 0 if pool is in POOL_TARGET (two-node only)
+pool_list()             # echoes pool names from pool_target (two-node only)
+is_known_pool()         # returns 0 if pool is in pool_target (two-node only)
 find_zfsutility_script()# locates a sibling script across repo/deployed layouts
 remote_zfsutilities_bin()   # resolves active bin/ directory on a remote host
 remote_zfsutility_script()  # full path to a script on a remote host
@@ -150,25 +151,25 @@ via `/dev/zvol/...` — no iSCSI layer:
 
 ```bash
 if is_two_node; then
-    TARGET=$(pool_to_target "$POOL") || exit 1
-    targetcli /backstores/block create "$BSNAME" "$ZVOL_DEV"
-    targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${BSNAME}"
+    target=$(pool_to_target "$pool") || exit 1
+    targetcli /backstores/block create "$backstore_name" "$zvol_dev"
+    targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${backstore_name}"
     safe-iscsi-save
-    ssh root@"$COMPUTE_HOST" rescan-storage
+    ssh root@"$compute_host" rescan-storage
 fi
 ```
 
 ### Pool validation
 
 ```bash
-# Two-node: validates against POOL_TARGET
+# Two-node: validates against pool_target
 if is_two_node; then
-    is_known_pool "$POOL" || die "Unknown pool: $POOL ..."
+    is_known_pool "$pool" || die "Unknown pool: $pool ..."
 fi
 
 # Single-node: validates against live zpool list
 if is_single_node; then
-    zpool list -H -o name | grep -qx "$POOL" || die "Pool $POOL not found"
+    zpool list -H -o name | grep -qx "$pool" || die "Pool $pool not found"
 fi
 ```
 
@@ -189,7 +190,10 @@ This applies to: [rescan-storage](../commands-and-modules/two-node.md#rescan-sto
 
 If [zfsdelfs](../commands-and-modules/commands.md#zfsdelfs), [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup), and `rsync-dailybackup` run from the
 ZFSutilities project tree (not from the versioned installation PATH), they source
-the config directly instead of using the library. Running from the repo-root is supported only in a development environment.
+the config directly instead of using the library. Running from the repo-root is
+supported only in a development environment. They keep the config file's
+uppercase names at source time, then work with lowercase copies (`node_mode`,
+`storage_host`, `compute_host`):
 
 ```bash
 NODE_CONF="/etc/zfsutilities/node.conf"
@@ -198,9 +202,10 @@ if [[ ! -r "$NODE_CONF" ]]; then
     exit 1
 fi
 source "$NODE_CONF"
-if [[ "$NODE_MODE" == "single-node" ]]; then
-    STORAGE_HOST="${THIS_HOST:-$(hostname -s)}"
-    COMPUTE_HOST="$STORAGE_HOST"
+node_mode="${NODE_MODE:-two-node}"
+if [[ "$node_mode" == "single-node" ]]; then
+    storage_host="${THIS_HOST:-$(hostname -s)}"
+    compute_host="$storage_host"
 fi
 ```
 
@@ -304,14 +309,19 @@ is unlocked; see [ZFS Key Handling](../installation/zfs-keys.md).
 
 ## Variable Reference
 
+The names below are the ones used in the config file. After `node-lib.sh` (or
+the repo-root pattern above) processes the config, scripts read the lowercase
+working copies (`node_mode`, `this_host`, `storage_host`, `compute_host`,
+`storage_ip`, `iqn_prefix`, `pool_target`).
+
 ### Single-node variables
 
 | Variable       | Source  | Description                        |
 | -------------- | ------- | ---------------------------------- |
 | `NODE_MODE`    | Config  | Always `"single-node"`             |
 | `THIS_HOST`    | Config  | Short hostname (`hostname -s`)     |
-| `STORAGE_HOST` | Derived | Set to `$THIS_HOST` by lib/scripts |
-| `COMPUTE_HOST` | Derived | Set to `$THIS_HOST` by lib/scripts |
+| `STORAGE_HOST` | Derived | Set to `$THIS_HOST` by lib/scripts (lowercase `storage_host`) |
+| `COMPUTE_HOST` | Derived | Set to `$THIS_HOST` by lib/scripts (lowercase `compute_host`) |
 
 ### Two-node variables
 

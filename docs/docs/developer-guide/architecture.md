@@ -553,15 +553,15 @@ sequenceDiagram
     SR->>ZFSD: delfs(dest) or delallsnaps(dest)
     ZFSD->>Node: iscsi_teardown_zvol(dataset)
     Node->>TC: Remove LUN & backstore
-    Node->>ZFSD: Record in ISCSI_TEARDOWN[dataset]
+    Node->>ZFSD: Record in iscsi_teardown[dataset]
     ZFSD->>SR: Continue with zfs destroy/receive
     SR->>SR: zfs receive new dataset
     SR->>Node: iscsi_rebuild_torn_down()
     Node->>TC: Recreate backstore + LUN<br/>at original LUN number
-    Node->>SR: Unset ISCSI_TEARDOWN entry
+    Node->>SR: Unset iscsi_teardown entry
 ```
 
-The `ISCSI_TEARDOWN` associative array (see [Data Structures](data-structures.md#iscsi_teardown-associative-array)) bridges the teardown and rebuild across the destroy/receive cycle. In single-node mode this array is always empty and the helpers are no-ops.
+The `iscsi_teardown` associative array (see [Data Structures](data-structures.md#iscsi_teardown-associative-array)) bridges the teardown and rebuild across the destroy/receive cycle. In single-node mode this array is always empty and the helpers are no-ops.
 
 ---
 

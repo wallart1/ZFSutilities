@@ -212,7 +212,10 @@ def create_schedule_page(app):
         (
             "condition",
             "Condition (optional)",
-            "Optional shell command prepended with &&. The profile runs only if this command exits 0. Example: [ $(date +%d) -ge 28 ]",
+            (
+                "Optional shell command prepended with &&. The profile runs only "
+                "if this command exits 0. Example: [ $(date +%d) -ge 28 ]"
+            ),
             5,
         ),
     ]

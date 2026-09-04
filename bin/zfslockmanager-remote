@@ -53,8 +53,10 @@ _remote_agent_lock_json() {
     script=$(_zfslock_read_field "$lockfile" "script") || script=""
     acquired=$(_zfslock_read_field "$lockfile" "acquired") || acquired=""
     description=$(_zfslock_read_field "$lockfile" "description") || description=""
-    printf '  {"dataset":"%s","type":"%s","pid":"%s","script":"%s","acquired":"%s","description":"%s"}' \
-        "$dataset" "$type" "$pid" "$script" "$acquired" "$description"
+    printf '  {"dataset":"%s","type":"%s","pid":"%s","script":"%s",' \
+        "$dataset" "$type" "$pid" "$script"
+    printf '"acquired":"%s","description":"%s"}' \
+        "$acquired" "$description"
 }
 
 cmd_hold() {
@@ -71,7 +73,7 @@ cmd_hold() {
 
     if ! zfslock_acquire "$dataset" "$type" "$description"; then
         local conflict=""
-        conflict=${ZFSLOCK_CONFLICT_INFO:-}
+        conflict=${zfslock_conflict_info:-}
         if [[ -n "$conflict" ]]; then
             local c_dataset c_type c_pid c_script
             c_dataset=$(_zfslock_read_field "$conflict" "dataset") || c_dataset=""
@@ -85,7 +87,7 @@ cmd_hold() {
         exit 1
     fi
 
-    echo "LOCKED $ZFSLOCK_ID"
+    echo "LOCKED $zfslock_id"
 
     # Hold the lock until stdin closes or we receive a signal.
     trap _remote_agent_cleanup EXIT INT TERM HUP
@@ -107,7 +109,7 @@ cmd_check() {
     fi
 
     local conflict=""
-    conflict=${ZFSLOCK_CONFLICT_INFO:-}
+    conflict=${zfslock_conflict_info:-}
     if [[ -n "$conflict" && -f "$conflict" ]]; then
         echo -n '{"available": false, "conflict": '
         _remote_agent_lock_json "$conflict"
@@ -122,7 +124,7 @@ cmd_list() {
 
     local lockfile first=1
     echo "["
-    for lockfile in "$ZFSLOCK_LOCKS_DIR"/*.lock; do
+    for lockfile in "$zfslock_locks_dir"/*.lock; do
         [[ -f "$lockfile" ]] || continue
         if [[ $first -eq 1 ]]; then
             first=0

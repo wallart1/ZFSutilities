@@ -12,18 +12,19 @@ Scripts marked **both** run on either node and delegate automatically via SSH as
 Every script that touches VM disks or iSCSI configuration begins by sourcing
 `/usr/local/lib/node-lib.sh` (repo: `lib/node-lib.sh`). That library
 reads `/etc/zfsutilities/node.conf` (falling back to `/etc/zfsutilities/two-node.conf`, legacy `/etc/zfsutilities-node.conf` and `/etc/two-node.conf` also work) and
-populates the node-configuration global variables below. These variables apply to
+populates the node-configuration global variables below (lowercase working
+copies of the uppercase names used in the config file). These variables apply to
 every entry below — they are documented once here rather than repeated in every
 entry:
 
 | Variable                       | Purpose                                                                | Reference                                                                          |
 | ------------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `NODE_MODE`                    | `single-node` or `two-node` — gates all iSCSI and SSH-delegation logic | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
-| `THIS_HOST`                    | Short hostname of the current node                                     | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
-| `STORAGE_HOST`, `COMPUTE_HOST` | Short hostnames of the two nodes (two-node); both equal `THIS_HOST` in single-node | [Node Configuration](../developer-guide/global-variables.md#node-configuration) |
-| `STORAGE_IP`                   | Storage-network IP of the storage node                                 | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
-| `IQN_PREFIX`                   | iSCSI IQN prefix for all targets                                       | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
-| `POOL_TARGET`                  | Pool → target short-name map                                           | [POOL_TARGET](../developer-guide/data-structures.md#pool_target-associative-array) |
+| `node_mode`                    | `single-node` or `two-node` — gates all iSCSI and SSH-delegation logic | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
+| `this_host`                    | Short hostname of the current node                                     | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
+| `storage_host`, `compute_host` | Short hostnames of the two nodes (two-node); both equal `this_host` in single-node | [Node Configuration](../developer-guide/global-variables.md#node-configuration) |
+| `storage_ip`                   | Storage-network IP of the storage node                                 | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
+| `iqn_prefix`                   | iSCSI IQN prefix for all targets                                       | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
+| `pool_target`                  | Pool → target short-name map                                           | [pool_target](../developer-guide/data-structures.md#pool_target-associative-array) |
 
 The library also defines helper functions used throughout these scripts:
 
@@ -32,8 +33,8 @@ The library also defines helper functions used throughout these scripts:
 | `is_single_node`            | Returns 0 in `single-node` mode                                          |
 | `is_two_node`               | Returns 0 in `two-node` mode                                             |
 | `pool_to_target <pool>`     | Echoes the full IQN for a pool; returns 1 if unknown or single-node      |
-| `pool_list`                 | Echoes valid pool names from `POOL_TARGET` (empty in single-node)        |
-| `is_known_pool <pool>`      | Returns 0 if the pool is in `POOL_TARGET` (always 1 in single-node)      |
+| `pool_list`                 | Echoes valid pool names from `pool_target` (empty in single-node)        |
+| `is_known_pool <pool>`      | Returns 0 if the pool is in `pool_target` (always 1 in single-node)      |
 | `find_zfsutility_script <name>` | Locates a sibling script across repo or deployed layouts; respects `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR` overrides |
 | `remote_zfsutility_script <host> <name>` | Returns the remote path to `<name>` on `<host>`, or just `<name>` on failure |
 
@@ -101,6 +102,7 @@ detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
 - [`iscsi-restore-luns` (storage node)](#iscsi-restore-luns-storage-node)
 - [`list-vm-disks` (both)](#list-vm-disks-both)
 - [`repair-iscsi-luns` (storage node)](#repair-iscsi-luns-storage-node)
+- [`repair-vm-disk-sizes` (compute node)](#repair-vm-disk-sizes-compute-node)
 - [`move-vm-disk` (both)](#move-vm-disk-both)
 - [`new-vm-disk` (both)](#new-vm-disk-both)
 - [`switch-version` (any host)](#switch-version-any-host)
@@ -520,7 +522,7 @@ sudo list-vm-disks [--with-devices]
    LUN/zvol to the actual VMID, VM name, and Proxmox disk key.  This reflects
    disks that have been moved between VMs.
 2. On the compute host, build a LUN-to-host-device map from
-   `/dev/disk/by-path/ip-${STORAGE_IP}*`.
+   `/dev/disk/by-path/ip-${storage_ip}*`.
 3. For running VMs, use `qm guest exec` to list the guest's
    `/dev/disk/by-path` entries and resolve the symlink to the guest's
    `/dev/sdX`.  SCSI disks are matched by disk key (`scsiN` →
@@ -731,6 +733,64 @@ sudo enroll-efi-keys-vm <vmid>
 Side effects: grows the EFI zvol; rewrites EFI vars; updates the VM config.
 The VM is left stopped. After starting it, watch the console — the UEFI boot
 order is reset and may need to be re-selected in the firmware setup.
+
+---
+
+### `repair-vm-disk-sizes` (compute node)
+
+Repairs the `size=` parameter on Proxmox VM disk lines. Proxmox stores the
+disk size in each config disk line (for example
+`scsi0: /dev/disk/by-path/.../threeamigos-lun-8,...,size=100G`). For raw
+by-path/iSCSI disks this value is only metadata — QEMU uses the actual block
+device size, so a wrong value does not affect the guest — but it makes the GUI
+display the wrong size and breaks `qm resize` and disk reporting. An earlier
+`enroll-efi-keys-vm` bug rewrote every disk line's `size=` to `size=4M`
+(instead of only the `efidisk0` line); this script restores the correct value.
+
+```bash
+sudo repair-vm-disk-sizes [--dry-run] [--vmid <vmid>]
+```
+
+**Arguments:**
+
+| Argument   | Description                                        |
+| ---------- | -------------------------------------------------- |
+| `--dry-run` | Report what would change without editing configs  |
+| `--vmid`    | Repair only the given VM ID (default: all VMs)    |
+
+**Globals:** node-config globals only.
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| `/etc/pve/qemu-server/<vmid>.conf` | Disk-line `size=` values corrected | — |
+
+**Internal flow / algorithm:**
+
+1. Delegate to the compute host in two-node mode.
+2. For each VM config (or only `--vmid`), scan disk lines (`efidisk0`,
+   `scsi`/`sata`/`ide`/`virtio` slots) that record a `size=` value.
+3. Resolve the correct size: for `/dev/disk/by-path/...` volumes, from the live
+   block device on the compute node; for `pool:vm-N-disk-M` storage references,
+   from the backing zvol `volsize` (local ZFS in single-node mode, SSH to the
+   storage host in two-node mode).
+4. Rewrite only the disk lines whose recorded size differs; lines whose volume
+   cannot be resolved (for example a LUN that is not logged in) are skipped
+   with a warning.
+5. Print a checked/fixed/skipped summary.
+
+**Return codes / side effects:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Scan completed (skipped lines do not fail the run) |
+| `1`  | Bad arguments or missing VM config |
+
+Side effects: edits VM config `size=` values in place. For VMs that are
+running, Proxmox only re-reads the config on the next config change or VM
+restart, so applying the repair while a VM is running is safe but the GUI
+updates only afterwards.
 
 ---
 
@@ -1132,7 +1192,7 @@ sudo rescan-storage
 2. Delegate to the compute host if run elsewhere.
 3. List active iSCSI sessions; abort if none are found.
 4. Run `iscsiadm -m session --rescan`.
-5. Count `/dev/disk/by-path/ip-${STORAGE_IP}*` devices and warn if the count is
+5. Count `/dev/disk/by-path/ip-${storage_ip}*` devices and warn if the count is
    unexpectedly low.
 
 **Return codes / side effects:**
@@ -1349,11 +1409,11 @@ sudo setup-iscsi-targets
 1. Exit silently in single-node mode.
 2. Verify the script is running on the storage host.
 3. Ensure `targetcli` is installed.
-4. For each entry in `POOL_TARGET`:
+4. For each entry in `pool_target`:
     - Create the target IQN if it does not already exist.
     - Ensure TPG1 exists.
     - Disable authentication and demo-mode write protect.
-    - Create the portal `${STORAGE_IP}:3260` if it does not already exist.
+    - Create the portal `${storage_ip}:3260` if it does not already exist.
 5. Save the targetcli configuration if anything changed.
 
 **Return codes / side effects:**
@@ -1386,15 +1446,15 @@ sudo show-lun-map
 
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
-| `/dev/disk/by-path/ip-${STORAGE_IP}*` | iSCSI device symlinks | — |
-| `POOL_TARGET` | Valid target short names for filtering | [POOL_TARGET](../developer-guide/data-structures.md#pool_target-associative-array) |
+| `/dev/disk/by-path/ip-${storage_ip}*` | iSCSI device symlinks | — |
+| `pool_target` | Valid target short names for filtering | [pool_target](../developer-guide/data-structures.md#pool_target-associative-array) |
 
 **Internal flow / algorithm:**
 
 1. Exit silently in single-node mode.
 2. Delegate to the compute host if run elsewhere.
-3. Build a target regex from `POOL_TARGET` values.
-4. Iterate over `/dev/disk/by-path/ip-${STORAGE_IP}*` symlinks, extracting target
+3. Build a target regex from `pool_target` values.
+4. Iterate over `/dev/disk/by-path/ip-${storage_ip}*` symlinks, extracting target
    and LUN from each basename.
 5. Resolve each symlink to its `/dev/sdX` device and read its size.
 6. Print a sorted target/LUN/device/size table.

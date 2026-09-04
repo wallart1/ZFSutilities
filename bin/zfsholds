@@ -26,6 +26,6 @@ function holds {
 
     zfs list -Hrt snapshot -o name "$1" | xargs -r -n1 zfs holds -H
 
-    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release "$zfslock_id"
 }
 if calledbybash; then holds "$*"; fi

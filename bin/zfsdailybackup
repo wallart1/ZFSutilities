@@ -36,10 +36,10 @@ if [[ ! -r "$NODE_CONF" ]]; then
     fi
 fi
 source "$NODE_CONF"
-: "${NODE_MODE:=two-node}"
-if [[ "$NODE_MODE" == "single-node" ]]; then
-    STORAGE_HOST="${THIS_HOST:-$(hostname -s)}"
-    COMPUTE_HOST="$STORAGE_HOST"
+node_mode="${NODE_MODE:-two-node}"
+if [[ "$node_mode" == "single-node" ]]; then
+    storage_host="${THIS_HOST:-$(hostname -s)}"
+    compute_host="$storage_host"
 fi
 
 source_helper zfssnapbuild
@@ -156,17 +156,17 @@ if [[ $pull_rocky = 'Y' ]]; then
     fi
 fi
 
-if [[ $pull_tweety = 'Y' && "$NODE_MODE" == "two-node" ]]; then
-    log_msg "INFO: ***  Pulling rsync backup from ${COMPUTE_HOST}  ***"
+if [[ $pull_tweety = 'Y' && "$node_mode" == "two-node" ]]; then
+    log_msg "INFO: ***  Pulling rsync backup from ${compute_host}  ***"
     if [[ $dryrun != 'N' ]]; then
-        log_msg "INFO: Dry-run: Would push rsync scripts to ${COMPUTE_HOST} and run remote backup"
+        log_msg "INFO: Dry-run: Would push rsync scripts to ${compute_host} and run remote backup"
     else
-        _run_remote_pull "$COMPUTE_HOST" "$COMPUTE_HOST"
+        _run_remote_pull "$compute_host" "$compute_host"
     fi
 fi
 
 if [[ $pull_stewie = 'Y' ]]; then
-    log_msg "INFO: ***  Pulling rsync backup from ${STORAGE_HOST} (local)  ***"
+    log_msg "INFO: ***  Pulling rsync backup from ${storage_host} (local)  ***"
     if [[ $dryrun != 'N' ]]; then
         log_msg "INFO: Dry-run: Would run local rsync and package backup"
     else

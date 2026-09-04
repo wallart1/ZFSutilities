@@ -37,7 +37,7 @@ zfslock_acquire() {
     if [[ "${_mock_lock_error:-}" == "$1" ]]; then
         return 2
     fi
-    ZFSLOCK_ID="/tmp/mock_lock_${1//\//_}"
+    zfslock_id="/tmp/mock_lock_${1//\//_}"
     return 0
 }
 zfslock_wait_or_resolve() {
@@ -51,7 +51,7 @@ zfslock_wait_or_resolve() {
     if [[ "${_mock_lock_conflict:-}" == "$1" ]]; then
         return 2
     fi
-    ZFSLOCK_ID="/tmp/mock_lock_${1//\//_}"
+    zfslock_id="/tmp/mock_lock_${1//\//_}"
     return 0
 }
 zfslock_release() { true; }

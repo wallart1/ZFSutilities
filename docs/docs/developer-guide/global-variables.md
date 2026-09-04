@@ -83,7 +83,11 @@ reading a policy via `zfsconfig_get_retention`:
 
 Sourced from `/etc/zfsutilities/node.conf` (falling back to
 `/etc/zfsutilities/two-node.conf`, then legacy `/etc/zfsutilities-node.conf` /
-`/etc/two-node.conf`) by `node-lib.sh` and the repo-root scripts.
+`/etc/two-node.conf`) by `node-lib.sh` and the repo-root scripts. The uppercase
+names below are the ones that appear in the config file. After sourcing,
+`node-lib.sh` exposes lowercase working copies — `node_mode`, `this_host`,
+`storage_host`, `compute_host`, `storage_ip`, `iqn_prefix`, and the
+`pool_target` associative array — and scripts use the lowercase names.
 
 | Variable       | Purpose                                                                                                                                           |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |

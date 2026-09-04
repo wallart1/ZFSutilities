@@ -28,8 +28,8 @@ if ! command -v qm >/dev/null 2>&1; then
     exit 1
 fi
 
-MY_HOST=$(hostname -s)
-PVE_CONF_DIR="/etc/pve/qemu-server"
+my_host=$(hostname -s)
+pve_conf_dir="/etc/pve/qemu-server"
 
 usage() {
     log_msg "INFO: Usage: attach-vm-disk <zvol> <vmid> [dst-disk-key]"
@@ -49,65 +49,73 @@ usage() {
 # --- Argument validation ---
 [[ $# -ge 2 && $# -le 3 ]] || usage
 
-ZVOL="$1"
-DSTVMID="$2"
-DSTKEY="${3:-}"
+zvol="$1"
+dstvmid="$2"
+dstkey="${3:-}"
 
-[[ "$DSTVMID" =~ ^[0-9]+$ ]] || {
-    log_msg "FATAL: vmid must be a number, got: $DSTVMID"
+[[ "$dstvmid" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: vmid must be a number, got: $dstvmid"
     exit 1
 }
-[[ -z "$DSTKEY" || "$DSTKEY" =~ ^[a-z]+[0-9]+$ ]] || {
-    log_msg "FATAL: dst-disk-key must be like scsi0 or ide1, got: $DSTKEY"
-    exit 1
-}
+# Dst-disk-key must be lowercase letters followed by digits (e.g. scsi0, ide1).
+if [[ -n "$dstkey" ]]; then
+    _dstkey_num="${dstkey##*[a-z]}"
+    _dstkey_letters="${dstkey%"${_dstkey_num}"}"
+    [[ -n "${_dstkey_letters}" && "${_dstkey_letters}" != *[^a-z]* \
+        && -n "${_dstkey_num}" && "${_dstkey_num}" =~ ^[0-9]+$ ]] || {
+        log_msg "FATAL: dst-disk-key must be like scsi0 or ide1, got: $dstkey"
+        exit 1
+    }
+fi
 
 # --- Parse zvol path ---
-# Regex: ^([^/]+)/proxmox/vm-([0-9]+)-disk-([0-9]+)$
-# Purpose: Parse a zvol path into pool, VMID, and disk number for iSCSI LUN attachment.
-# Group 1: pool name   e.g. "threeamigos"
-# Group 2: VM ID       e.g. "105"
-# Group 3: disk number e.g. "0"
-# Example: "threeamigos/proxmox/vm-105-disk-0" -> match
-if [[ "$ZVOL" =~ ^([^/]+)/proxmox/vm-([0-9]+)-disk-([0-9]+)$ ]]; then
-    POOL="${BASH_REMATCH[1]}"
-    SRCVMID="${BASH_REMATCH[2]}"
-    DISKNUM="${BASH_REMATCH[3]}"
-else
-    log_msg "FATAL: Zvol path must be <pool>/proxmox/vm-<vmid>-disk-<num>, got: $ZVOL"
+# Expected shape: <pool>/proxmox/vm-<vmid>-disk-<num>
+# Parsed with parameter expansion (no regex).
+# Example: "threeamigos/proxmox/vm-105-disk-0" -> pool=threeamigos vmid=105 disk=0
+pool="${zvol%%/*}"
+_zvol_tail="${zvol#"${pool}/"}"   # everything after the first /
+_zvol_dir="${_zvol_tail%%/*}"      # component after the pool
+_zvol_base="${_zvol_tail#*/}"      # remainder (unchanged if no more /)
+srcvmid="${_zvol_base#vm-}"
+disknum="${_zvol_base##*-disk-}"
+srcvmid="${srcvmid%-disk-*}"
+if [[ -z "$pool" || "$zvol" != */* || "$_zvol_dir" != proxmox \
+    || "${_zvol_base}" != vm-*-disk-* || "${_zvol_base}" == */* \
+    || ! "$srcvmid" =~ ^[0-9]+$ || ! "$disknum" =~ ^[0-9]+$ ]]; then
+    log_msg "FATAL: Zvol path must be <pool>/proxmox/vm-<vmid>-disk-<num>, got: $zvol"
     exit 1
 fi
 
-BACKSTORE_NAME="vm-${SRCVMID}-disk-${DISKNUM}"
-ZVOL_DEV="/dev/zvol/${ZVOL}"
+backstore_name="vm-${srcvmid}-disk-${disknum}"
+zvol_dev="/dev/zvol/${zvol}"
 
 # --- Validate zvol exists ---
-if ! zfs list -H -o name "$ZVOL" 2>/dev/null | grep -q .; then
-    log_msg "FATAL: Zvol does not exist: $ZVOL"
+if ! zfs list -H -o name "$zvol" 2>/dev/null | grep -q .; then
+    log_msg "FATAL: Zvol does not exist: $zvol"
     exit 1
 fi
 
-ZVOL_SIZE=$(zfs get -H -o value volsize "$ZVOL" 2>/dev/null || echo "unknown")
+zvol_size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
 
 # --- Delegate to compute host if run on storage node (two-node only) ---
-if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "attach-vm-disk")
-    exec ssh -t root@"$COMPUTE_HOST" \
-        "$REMOTE_SCRIPT '$ZVOL' '$DSTVMID' '$DSTKEY'"
+if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
+    remote_script=$(remote_zfsutility_script "$compute_host" "attach-vm-disk")
+    exec ssh -t root@"$compute_host" \
+        "$remote_script '$zvol' '$dstvmid' '$dstkey'"
 fi
 
 # === Running on the compute host ===
 
-dst_conf="$PVE_CONF_DIR/${DSTVMID}.conf"
+dst_conf="$pve_conf_dir/${dstvmid}.conf"
 [[ -f "$dst_conf" ]] || {
     log_msg "FATAL: VM config not found: $dst_conf"
     exit 1
 }
 
 # --- VM state check ---
-status=$(qm status "$DSTVMID" 2>/dev/null | awk '{print $2}')
+status=$(qm status "$dstvmid" 2>/dev/null | awk '{print $2}')
 if [[ "${status:-unknown}" != "stopped" ]]; then
-    log_msg "WARN: VM $DSTVMID is currently $status"
+    log_msg "WARN: VM $dstvmid is currently $status"
     log_msg "INFO:   Attaching a disk to a running VM is allowed but the guest OS may"
     log_msg "INFO:   need to rescan SCSI buses to see the new device."
     echo ""
@@ -117,9 +125,9 @@ if [[ "${status:-unknown}" != "stopped" ]]; then
 fi
 
 # --- Determine destination disk key ---
-if [[ -n "$DSTKEY" ]]; then
-    if grep -q "^${DSTKEY}:" "$dst_conf"; then
-        log_msg "FATAL: Destination key $DSTKEY already exists in VM $DSTVMID config"
+if [[ -n "$dstkey" ]]; then
+    if grep -q "^${dstkey}:" "$dst_conf"; then
+        log_msg "FATAL: Destination key $dstkey already exists in VM $dstvmid config"
         exit 1
     fi
 else
@@ -128,64 +136,70 @@ else
     while grep -q "^${bus}${n}:" "$dst_conf"; do
         n=$((n + 1))
     done
-    DSTKEY="${bus}${n}"
+    dstkey="${bus}${n}"
 fi
 
 log_msg "INFO: === attach-vm-disk ==="
-log_msg "INFO:   Zvol:      $ZVOL"
-log_msg "INFO:   Size:      $ZVOL_SIZE"
-log_msg "INFO:   Dest VM:   $DSTVMID"
-log_msg "INFO:   Dest key:  $DSTKEY"
+log_msg "INFO:   Zvol:      $zvol"
+log_msg "INFO:   Size:      $zvol_size"
+log_msg "INFO:   Dest VM:   $dstvmid"
+log_msg "INFO:   Dest key:  $dstkey"
 
 # --- Two-node: ensure iSCSI backstore and LUN exist ---
-LUN_NUM=""
+lun_num=""
 if is_two_node; then
-    TARGET=$(pool_to_target "$POOL") || {
-        log_msg "FATAL: Failed to map pool to target: $POOL"
+    target=$(pool_to_target "$pool") || {
+        log_msg "FATAL: Failed to map pool to target: $pool"
         exit 1
     }
 
     echo ""
-    log_msg "INFO: Ensuring iSCSI infrastructure on $STORAGE_HOST..."
+    log_msg "INFO: Ensuring iSCSI infrastructure on $storage_host..."
 
     # Check/create backstore and LUN on storage host
-    lun_result=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
-        "$ZVOL" "$ZVOL_DEV" "$BACKSTORE_NAME" "$TARGET" 2>&1 << 'SSHEOF'
+    lun_result=$(ssh -o ConnectTimeout=10 root@"$storage_host" bash -s \
+        "$zvol" "$zvol_dev" "$backstore_name" "$target" 2>&1 << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
 set -e
-ZVOL="$1"
-ZVOL_DEV="$2"
-BACKSTORE_NAME="$3"
-TARGET="$4"
+zvol="$1"
+zvol_dev="$2"
+backstore_name="$3"
+target="$4"
 
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 
 # Check if backstore exists
-if targetcli /backstores/block ls 2>/dev/null | grep -q " ${BACKSTORE_NAME} "; then
+if targetcli /backstores/block ls 2>/dev/null | grep -q " ${backstore_name} "; then
     log_msg "INFO: BACKSTORE_EXISTS"
 else
-    targetcli /backstores/block create "$BACKSTORE_NAME" "$ZVOL_DEV"
-    targetcli "/backstores/block/${BACKSTORE_NAME}" set attribute emulate_tpu=1
+    targetcli /backstores/block create "$backstore_name" "$zvol_dev"
+    targetcli "/backstores/block/${backstore_name}" set attribute emulate_tpu=1
     log_msg "INFO: BACKSTORE_CREATED"
 fi
 
 # Check if LUN is mapped
-existing_lun=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
-    | grep " ${BACKSTORE_NAME} " \
-    | grep -oP 'lun\K[0-9]+' \
-    | head -1)
+lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
+    | grep " ${backstore_name} " | head -1)
+existing_lun=""
+if [[ -n "$lun_line" ]]; then
+    existing_lun="${lun_line#*lun}"
+    existing_lun="${existing_lun%%[!0-9]*}"
+fi
 
 if [[ -n "$existing_lun" ]]; then
     echo "LUN_EXISTS:$existing_lun"
 else
-    targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${BACKSTORE_NAME}"
-    new_lun=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
-        | grep " ${BACKSTORE_NAME} " \
-        | grep -oP 'lun\K[0-9]+' \
-        | head -1)
+    targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${backstore_name}"
+    lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
+        | grep " ${backstore_name} " | head -1)
+    new_lun=""
+    if [[ -n "$lun_line" ]]; then
+        new_lun="${lun_line#*lun}"
+        new_lun="${new_lun%%[!0-9]*}"
+    fi
     echo "LUN_CREATED:$new_lun"
 fi
 
@@ -193,17 +207,17 @@ fi
 "$mydir/safe-iscsi-save"
 SSHEOF
     ) || {
-        log_msg "FATAL: Storage operations failed on $STORAGE_HOST"
+        log_msg "FATAL: Storage operations failed on $storage_host"
         exit 1
     }
 
     # Parse result
     if echo "$lun_result" | grep -q "LUN_EXISTS:"; then
-        LUN_NUM=$(echo "$lun_result" | grep "LUN_EXISTS:" | cut -d: -f2)
-        log_msg "INFO: ✓ LUN $LUN_NUM already mapped"
+        lun_num=$(echo "$lun_result" | grep "LUN_EXISTS:" | cut -d: -f2)
+        log_msg "INFO: ✓ LUN $lun_num already mapped"
     elif echo "$lun_result" | grep -q "LUN_CREATED:"; then
-        LUN_NUM=$(echo "$lun_result" | grep "LUN_CREATED:" | cut -d: -f2)
-        log_msg "INFO: ✓ LUN $LUN_NUM created and mapped"
+        lun_num=$(echo "$lun_result" | grep "LUN_CREATED:" | cut -d: -f2)
+        log_msg "INFO: ✓ LUN $lun_num created and mapped"
     else
         log_msg "FATAL: Could not determine LUN number from storage host"
         exit 1
@@ -217,17 +231,17 @@ fi
 
 # --- Build disk line ---
 if is_two_node; then
-    by_path="/dev/disk/by-path/ip-${STORAGE_IP}:3260-iscsi-${TARGET}-lun-${LUN_NUM}"
-    disk_line="${DSTKEY}: ${by_path},format=raw,discard=on,iothread=1,size=${ZVOL_SIZE}"
+    by_path="/dev/disk/by-path/ip-${storage_ip}:3260-iscsi-${target}-lun-${lun_num}"
+    disk_line="${dstkey}: ${by_path},format=raw,discard=on,iothread=1,size=${zvol_size}"
 else
     # Single-node: use Proxmox storage reference
-    disk_line="${DSTKEY}: ${POOL}:vm-${SRCVMID}-disk-${DISKNUM},"\
-        "format=raw,discard=on,iothread=1,size=${ZVOL_SIZE}"
+    disk_line="${dstkey}: ${pool}:vm-${srcvmid}-disk-${disknum},"\
+        "format=raw,discard=on,iothread=1,size=${zvol_size}"
 fi
 
 # --- Confirmation ---
 echo ""
-log_msg "INFO: Will add the following line to VM $DSTVMID config:"
+log_msg "INFO: Will add the following line to VM $dstvmid config:"
 log_msg "INFO:   $disk_line"
 echo ""
 read -rp "Proceed? (y/N): " confirm
@@ -236,8 +250,8 @@ echo ""
 
 # --- Add to VM config ---
 echo "$disk_line" >> "$dst_conf"
-log_msg "INFO: ✓ Added $DSTKEY to VM $DSTVMID config"
+log_msg "INFO: ✓ Added $dstkey to VM $dstvmid config"
 
 echo ""
 log_msg "INFO: === Done ==="
-log_msg "INFO:   Attached: $ZVOL → VM $DSTVMID as $DSTKEY"
+log_msg "INFO:   Attached: $zvol → VM $dstvmid as $dstkey"

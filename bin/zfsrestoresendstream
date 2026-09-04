@@ -72,7 +72,7 @@ function restoresendstream {
             log_msg "FATAL: Could not acquire write lock on ${fulldestfs}"
             source "$(find_zfsutility_script bashreturn)" 8
         fi
-        local receive_lock="$ZFSLOCK_ID"
+        local receive_lock="$zfslock_id"
         if ! pv "$file" | zfs receive -v "$fulldestfs"; then
             zfslock_release "$receive_lock" || true
             log_msg 'FATAL: Unable to restore file.'

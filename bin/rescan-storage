@@ -19,7 +19,7 @@ source "$NODE_LIB"
 source_helper rootcheck
 rootcheck
 
-MY_HOST=$(hostname -s)
+my_host=$(hostname -s)
 
 if is_single_node; then
     log_msg "INFO: rescan-storage: not applicable in single-node mode (no iSCSI)"
@@ -27,9 +27,9 @@ if is_single_node; then
 fi
 
 # --- If not on the compute host, delegate via SSH ---
-if [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
-    exec ssh root@"$COMPUTE_HOST" "$REMOTE_SCRIPT"
+if [[ "$my_host" != "$compute_host" ]]; then
+    remote_script=$(remote_zfsutility_script "$compute_host" "rescan-storage")
+    exec ssh root@"$compute_host" "$remote_script"
 fi
 
 # === Running on the compute host ===
@@ -37,14 +37,14 @@ fi
 log_msg "INFO: === rescan-storage ==="
 
 # --- Check iSCSI sessions ---
-SESSION_COUNT=$(iscsiadm -m session 2>/dev/null | wc -l)
-if [[ "$SESSION_COUNT" -eq 0 ]]; then
+session_count=$(iscsiadm -m session 2>/dev/null | wc -l)
+if [[ "$session_count" -eq 0 ]]; then
     log_msg "FATAL: No active iSCSI sessions — storage network may be down"
     log_msg "FATAL:   Run: sudo diagnose-storage"
     exit 1
 fi
 
-log_msg "INFO: Active iSCSI sessions: $SESSION_COUNT"
+log_msg "INFO: Active iSCSI sessions: $session_count"
 iscsiadm -m session 2>/dev/null | sed 's/^/  /'
 
 # --- Rescan all sessions ---
@@ -53,11 +53,11 @@ iscsiadm -m session --rescan 2>&1 | sed 's/^/  /'
 log_msg "INFO: ✓ Rescan complete"
 
 # --- Show device count ---
-DEVICE_COUNT=$(find /dev/disk/by-path/ -maxdepth 1 -name "ip-${STORAGE_IP}*" \
+device_count=$(find /dev/disk/by-path/ -maxdepth 1 -name "ip-${storage_ip}*" \
     -print 2>/dev/null | wc -l)
-log_msg "INFO: Total iSCSI devices visible: $DEVICE_COUNT"
+log_msg "INFO: Total iSCSI devices visible: $device_count"
 
-if [[ "$DEVICE_COUNT" -lt 31 ]]; then
+if [[ "$device_count" -lt 31 ]]; then
     log_msg "WARN: Expected at least 31 devices (29 threeamigos + 2 nvme1)"
-    log_msg "WARN:   Current count ($DEVICE_COUNT) is low — some LUNs may be missing"
+    log_msg "WARN:   Current count ($device_count) is low — some LUNs may be missing"
 fi

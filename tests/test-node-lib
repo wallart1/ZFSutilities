@@ -267,26 +267,26 @@ test_two_node_config_loading() {
     local output
     output=$(
         NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh"
-        echo "STORAGE_HOST=$STORAGE_HOST"
-        echo "COMPUTE_HOST=$COMPUTE_HOST"
-        echo "NODE_MODE=$NODE_MODE"
+        echo "storage_host=$storage_host"
+        echo "compute_host=$compute_host"
+        echo "node_mode=$node_mode"
     )
-    assert_contains "$output" "STORAGE_HOST=stewie"
-    assert_contains "$output" "COMPUTE_HOST=brian"
-    assert_contains "$output" "NODE_MODE=two-node"
+    assert_contains "$output" "storage_host=stewie"
+    assert_contains "$output" "compute_host=brian"
+    assert_contains "$output" "node_mode=two-node"
 }
 
 test_single_node_config_loading() {
-    test_start "node-lib.sh single-node config sets STORAGE_HOST=COMPUTE_HOST=THIS_HOST"
+    test_start "node-lib.sh single-node config sets storage_host=compute_host=this_host"
     local output this_host
     this_host=$(hostname -s)
     output=$(
         NODE_CONF="$node_conf" source "$mydir/lib/node-lib.sh"
-        echo "STORAGE_HOST=$STORAGE_HOST"
-        echo "COMPUTE_HOST=$COMPUTE_HOST"
+        echo "storage_host=$storage_host"
+        echo "compute_host=$compute_host"
     )
-    assert_contains "$output" "STORAGE_HOST=$this_host"
-    assert_contains "$output" "COMPUTE_HOST=$this_host"
+    assert_contains "$output" "storage_host=$this_host"
+    assert_contains "$output" "compute_host=$this_host"
 }
 
 # ------------------------------------------------------------------------------

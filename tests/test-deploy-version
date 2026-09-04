@@ -540,5 +540,40 @@ test_deploy_version_does_not_wire() {
 
 test_deploy_version_does_not_wire
 
+# Regression: the variable-casing cleanup renamed VERSION -> version but must
+# not rename the repository file, which is VERSION (uppercase).
+test_version_file_references_use_uppercase_filename() {
+    test_start "deploy/install scripts read the repo VERSION file (uppercase)"
+    local repo_root
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+    local fail_reason="" script
+    for script in bin/deploy-version bin/install-single-node bin/install-two-node; do
+        # A lower-case version filename reference is a casing mistake.
+        if grep -qE '\$(mydir|repo_dir)/version"' "$repo_root/$script"; then
+            fail_reason="$script references a lower-case version file"
+            break
+        fi
+    done
+
+    # deploy-version reads ./VERSION for the default version and copies it
+    # into the deployed version directory.
+    if [[ -z "$fail_reason" ]]; then
+        if ! grep -q '"\$mydir/VERSION"' "$repo_root/bin/deploy-version"; then
+            fail_reason="deploy-version does not read ./VERSION"
+        elif ! grep -q 'install -m 0644 "\$mydir/VERSION"' "$repo_root/bin/deploy-version"; then
+            fail_reason="deploy-version does not copy ./VERSION into the deployment"
+        fi
+    fi
+
+    if [[ -n "$fail_reason" ]]; then
+        test_fail "$fail_reason"
+    else
+        test_pass
+    fi
+}
+
+test_version_file_references_use_uppercase_filename
+
 test_summary
 teardown_test_env

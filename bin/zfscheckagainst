@@ -125,7 +125,10 @@ function checkagainst {
         local _conf="$mydir/../share/config/zfscheckagainst.conf"
         if [[ -f "$_conf" ]]; then
             while IFS= read -r _line; do
-                [[ "$_line" =~ ^[[:space:]]*# ]] && continue
+                # Comment line = first non-space char is '#'; stripping all
+                # whitespace then comparing replaces the old "^[[:space:]]*#"
+                # regex without any regex literal.
+                [[ "${_line//[[:space:]]/}" == '#'* ]] && continue
                 [[ -z "${_line//[[:space:]]/}" ]] && continue
                 # Convert legacy 4-field strip/prepend rows to 3-field
                 # source_root/dest_root rows.
@@ -196,7 +199,8 @@ function checkagainst {
                 # Compute the counterpart dataset by replacing the source-root
                 # prefix with the destination-root prefix.
                 local _src_dataset="${snaptocheck%%@*}"
-                _candidate_dstocheck="$(_compute_checkagainst_counterpart "$dest_root" "$_src_dataset" "$source_root")"
+                _candidate_dstocheck=$(_compute_checkagainst_counterpart \
+                    "$dest_root" "$_src_dataset" "$source_root")
 
                 # Expand <offsite> placeholder in the destination root.
                 local _ca_dest_roots=("$dest_root")
@@ -231,7 +235,8 @@ function checkagainst {
                 for dest_root in "${_ca_dest_roots[@]}"; do
                     # Recompute counterpart with the expanded dest_root.
                     _src_dataset="${snaptocheck%%@*}"
-                    _candidate_dstocheck="$(_compute_checkagainst_counterpart "$dest_root" "$_src_dataset" "$source_root")"
+                    _candidate_dstocheck=$(_compute_checkagainst_counterpart \
+                    "$dest_root" "$_src_dataset" "$source_root")
 
                     _candidate_pool=$(echo "$dest_root" | awk -F'/' '{print $1}')
 

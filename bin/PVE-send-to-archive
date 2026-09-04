@@ -62,7 +62,7 @@ for sourcefs in "${subtrees[@]}"; do
         # Intentionally set for sourced zfscommsnap helper.
         commsnap_mostrecent="Y"
         if ! snap=$(getcommonsnap "$fs"); then
-            zfslock_release "$ZFSLOCK_ID"
+            zfslock_release "$zfslock_id"
             log_msg "FATAL: Could not get name of most recent snapshot for $fs."
             source "$(find_zfsutility_script bashreturn)" 8
         fi
@@ -73,7 +73,7 @@ for sourcefs in "${subtrees[@]}"; do
         # Create the destination directory if needed.
         if ! [ -x "$destinationdir/$archivename/$(dirname "$fs")" ]; then
             if ! mkdir -p "$destinationdir/$archivename/$(dirname "$fs")"; then
-                zfslock_release "$ZFSLOCK_ID"
+                zfslock_release "$zfslock_id"
                 log_msg "FATAL: Directory creation for $destinationdir/$archivename failed."
                 source "$(find_zfsutility_script bashreturn)" 8
             fi
@@ -83,13 +83,13 @@ for sourcefs in "${subtrees[@]}"; do
             "$destinationdir/$archivename/$fs.zfssendstream"
         if ! (zfs send -cw "$fs$snap" | pv \
             | cat - > "$destinationdir/$archivename/$fs.zfssendstream"); then
-            zfslock_release "$ZFSLOCK_ID"
+            zfslock_release "$zfslock_id"
             log_msg "FATAL: Failed to send $fs$snap to" \
                 "$destinationdir/$archivename/$fs.zfssendstream."
             source "$(find_zfsutility_script bashreturn)" 8
         fi
 
-        zfslock_release "$ZFSLOCK_ID"
+        zfslock_release "$zfslock_id"
     done
 done
 

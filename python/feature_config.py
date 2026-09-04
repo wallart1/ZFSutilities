@@ -603,7 +603,11 @@ DEFAULT_WORKLOAD_PROFILES = {
             "primarycache": "all",
             "special_small_blocks": "0",
         },
-        "notes": "Most media is already compressed; lz4's early-abort detects incompressible blocks cheaply. Use backup-archive (zstd) instead if the content is compressible.",
+        "notes": (
+            "Most media is already compressed; lz4's early-abort detects "
+            "incompressible blocks cheaply. Use backup-archive (zstd) "
+            "instead if the content is compressible."
+        ),
     },
     "database-postgresql": {
         "description": "PostgreSQL data directory. Matches recordsize to the 8K page size.",
@@ -617,7 +621,12 @@ DEFAULT_WORKLOAD_PROFILES = {
             "primarycache": "all",
             "special_small_blocks": "0",
         },
-        "notes": "Put pg_wal on a sibling dataset (logbias=throughput, compression=lz4). Never sync=disabled — PostgreSQL durability depends on fsync. Consider primarycache=metadata only if ARC pressure is observed (PostgreSQL caches in shared_buffers).",
+        "notes": (
+            "Put pg_wal on a sibling dataset (logbias=throughput, "
+            "compression=lz4). Never sync=disabled — PostgreSQL durability "
+            "depends on fsync. Consider primarycache=metadata only if ARC "
+            "pressure is observed (PostgreSQL caches in shared_buffers)."
+        ),
     },
     "database-innodb": {
         "description": "MySQL/MariaDB InnoDB data files. Matches recordsize to the 16K page size.",
@@ -631,10 +640,17 @@ DEFAULT_WORKLOAD_PROFILES = {
             "primarycache": "all",
             "special_small_blocks": "0",
         },
-        "notes": "If innodb_page_size is customized (32K/64K), set recordsize to match. Redo logs on a sibling dataset. sync=disabled is unsafe despite old blog advice.",
+        "notes": (
+            "If innodb_page_size is customized (32K/64K), set recordsize to "
+            "match. Redo logs on a sibling dataset. sync=disabled is unsafe "
+            "despite old blog advice."
+        ),
     },
     "vm-os-btrfs": {
-        "description": "Linux OS system disks (BTRFS root + /home) on zvols. Mixed, latency-sensitive IO.",
+        "description": (
+            "Linux OS system disks (BTRFS root + /home) on zvols. Mixed, "
+            "latency-sensitive IO."
+        ),
         "applies_to": ["volume"],
         "properties": {
             "volblocksize": "16K",
@@ -644,10 +660,21 @@ DEFAULT_WORKLOAD_PROFILES = {
             "primarycache": "all",
             "special_small_blocks": "0",
         },
-        "notes": "volblocksize is fixed at creation. 16K balances BTRFS's metadata-heavy commit bursts; use 8K for lowest write latency on mirrored SSD/NVMe, 32K if these zvols live on wide raidz. BTRFS is CoW-on-CoW: zvol lz4 stays useful via early-abort even if the guest compresses. On OpenZFS 2.4+, special_small_blocks with a special vdev is worth considering for the small metadata writes.",
+        "notes": (
+            "volblocksize is fixed at creation. 16K balances BTRFS's "
+            "metadata-heavy commit bursts; use 8K for lowest write latency "
+            "on mirrored SSD/NVMe, 32K if these zvols live on wide raidz. "
+            "BTRFS is CoW-on-CoW: zvol lz4 stays useful via early-abort "
+            "even if the guest compresses. On OpenZFS 2.4+, "
+            "special_small_blocks with a special vdev is worth considering "
+            "for the small metadata writes."
+        ),
     },
     "vm-chaindata-ext4": {
-        "description": "Crypto blockchain data disks (EXT4): chainstate-style small random IO plus large sequential block files.",
+        "description": (
+            "Crypto blockchain data disks (EXT4): chainstate-style small "
+            "random IO plus large sequential block files."
+        ),
         "applies_to": ["volume"],
         "properties": {
             "volblocksize": "16K",
@@ -657,10 +684,21 @@ DEFAULT_WORKLOAD_PROFILES = {
             "primarycache": "all",
             "special_small_blocks": "0",
         },
-        "notes": "volblocksize is fixed at creation. Chainstate-type workloads do 4K random IO: do not go above 16K (read-modify-write hurts); drop to 8K if sync/validation speed is the priority. Block data barely compresses — lz4's early-abort keeps it cheap. ARC matters: hot chainstate benefits from a large ARC. Never sync=disabled where wallet/consensus state lives; keep these zvols off wide raidz if performance matters.",
+        "notes": (
+            "volblocksize is fixed at creation. Chainstate-type workloads "
+            "do 4K random IO: do not go above 16K (read-modify-write "
+            "hurts); drop to 8K if sync/validation speed is the priority. "
+            "Block data barely compresses — lz4's early-abort keeps it "
+            "cheap. ARC matters: hot chainstate benefits from a large ARC. "
+            "Never sync=disabled where wallet/consensus state lives; keep "
+            "these zvols off wide raidz if performance matters."
+        ),
     },
     "vm-bigfile-ext4": {
-        "description": "Large-file data disks (EXT4): e.g. ~130 GB torrent files. Piece-sized writes, sequential-ish reads.",
+        "description": (
+            "Large-file data disks (EXT4): e.g. ~130 GB torrent files. "
+            "Piece-sized writes, sequential-ish reads."
+        ),
         "applies_to": ["volume"],
         "properties": {
             "volblocksize": "64K",
@@ -670,10 +708,19 @@ DEFAULT_WORKLOAD_PROFILES = {
             "primarycache": "all",
             "special_small_blocks": "0",
         },
-        "notes": "volblocksize is fixed at creation. Torrent clients write multi-MB pieces that EXT4 writeback coalesces into large runs, so 64K cuts metadata, improves compression, and reduces raidz padding waste; 128K (the maximum) suits true large-file-only volumes. Never use 64K+ for small-random-IO guests.",
+        "notes": (
+            "volblocksize is fixed at creation. Torrent clients write "
+            "multi-MB pieces that EXT4 writeback coalesces into large runs, "
+            "so 64K cuts metadata, improves compression, and reduces raidz "
+            "padding waste; 128K (the maximum) suits true large-file-only "
+            "volumes. Never use 64K+ for small-random-IO guests."
+        ),
     },
     "backup-archive": {
-        "description": "Backup targets and long-term archives: rsync trees, restic/borg repos, tarballs.",
+        "description": (
+            "Backup targets and long-term archives: rsync trees, "
+            "restic/borg repos, tarballs."
+        ),
         "applies_to": ["filesystem"],
         "properties": {
             "recordsize": "1M",
@@ -684,10 +731,20 @@ DEFAULT_WORKLOAD_PROFILES = {
             "primarycache": "all",
             "special_small_blocks": "0",
         },
-        "notes": "zstd (= level 3) trades a little CPU for meaningfully better ratio on stored data; zstd-6 for deep-cold archives. Datasets received via zfs receive keep the sender's block layout — this profile governs file-level backup trees and new writes. Keep dedup off and copies=1; rely on pool redundancy plus snapshots.",
+        "notes": (
+            "zstd (= level 3) trades a little CPU for meaningfully better "
+            "ratio on stored data; zstd-6 for deep-cold archives. Datasets "
+            "received via zfs receive keep the sender's block layout — "
+            "this profile governs file-level backup trees and new writes. "
+            "Keep dedup off and copies=1; rely on pool redundancy plus "
+            "snapshots."
+        ),
     },
     "small-files": {
-        "description": "Many small files: maildirs, source trees, document stores. Best with a special (metadata) vdev.",
+        "description": (
+            "Many small files: maildirs, source trees, document stores. "
+            "Best with a special (metadata) vdev."
+        ),
         "applies_to": ["filesystem"],
         "properties": {
             "recordsize": "128K",
@@ -698,10 +755,18 @@ DEFAULT_WORKLOAD_PROFILES = {
             "primarycache": "all",
             "special_small_blocks": "32K",
         },
-        "notes": "special_small_blocks only takes effect when the pool has a special allocation vdev; without one it is inert. The UI should warn when applying this profile to a pool with no special vdev.",
+        "notes": (
+            "special_small_blocks only takes effect when the pool has a "
+            "special allocation vdev; without one it is inert. The UI "
+            "should warn when applying this profile to a pool with no "
+            "special vdev."
+        ),
     },
     "scratch": {
-        "description": "Throwaway data only: build caches, render scratch, downloads-in-progress — anything regenerable.",
+        "description": (
+            "Throwaway data only: build caches, render scratch, "
+            "downloads-in-progress — anything regenerable."
+        ),
         "applies_to": ["filesystem"],
         "properties": {
             "recordsize": "128K",
@@ -712,7 +777,15 @@ DEFAULT_WORKLOAD_PROFILES = {
             "primarycache": "all",
             "special_small_blocks": "0",
         },
-        "notes": "sync=disabled ignores application fsync requests: on crash or power loss you can lose the last few seconds of writes, and apps that relied on fsync ordering can be left inconsistent. ZFS itself stays intact — the risk is purely to recent application data. NEVER apply to backups, databases, or VM disks with state you care about. The UI must show a warning whenever this profile is applied.",
+        "notes": (
+            "sync=disabled ignores application fsync requests: on crash or "
+            "power loss you can lose the last few seconds of writes, and "
+            "apps that relied on fsync ordering can be left inconsistent. "
+            "ZFS itself stays intact — the risk is purely to recent "
+            "application data. NEVER apply to backups, databases, or VM "
+            "disks with state you care about. The UI must show a warning "
+            "whenever this profile is applied."
+        ),
     },
 }
 

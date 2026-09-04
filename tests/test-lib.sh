@@ -16,6 +16,13 @@ export mydir
 : "${ZFSUTILITIES_CURRENT_BIN_DIR:=$mydir/bin}"
 export ZFSUTILITIES_BIN_DIR ZFSUTILITIES_CURRENT_BIN_DIR
 
+# Point bashinit's optional paths.sh bootstrap at the repo copy. Tests that
+# re-source bashinit from mock helper dirs would otherwise trigger a spurious
+# "Could not find sibling script: paths.sh" WARN because the mock dirs do not
+# contain lib/paths.sh.
+: "${PATHS_LIB:=$mydir/lib/paths.sh}"
+export PATHS_LIB
+
 # Disable the automatic Step-5 migration so tests do not touch production paths.
 export ZFSUTILITIES_DISABLE_MIGRATION=1
 
@@ -583,8 +590,8 @@ mock_retention_policy() {
 # =============================================================================
 
 zfslock_init() { true; }
-zfslock_acquire() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
-zfslock_wait_or_resolve() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_acquire() { zfslock_id="/tmp/mock_lock_$$"; return 0; }
+zfslock_wait_or_resolve() { zfslock_id="/tmp/mock_lock_$$"; return 0; }
 zfslock_release() { true; }
 zfslock_release_all() { true; }
 

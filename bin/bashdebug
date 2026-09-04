@@ -17,11 +17,12 @@ function _trap_DEBUG {
 
     local expanded_cmd="$cmd" # Default to unexpanded
 
-    # Regex: ^[[:space:]]*\(\(
-    # Purpose: Detect arithmetic expressions (( ... )) so we skip eval expansion
-    #          on them (eval would misinterpret the parentheses).
-    # Example: "(( 1 + 1 ))" -> match; "echo hello" -> no match
-    if [[ ! "$cmd" =~ ^[[:space:]]*\(\( ]]; then
+    # Glob-based check: detect arithmetic expressions (( ... )) so we skip
+    # eval expansion on them (eval would misinterpret the parentheses).
+    # Trim leading whitespace, then test for the "((" prefix.
+    # Example: "(( 1 + 1 ))" -> skip eval; "echo hello" -> eval allowed
+    local _trimmed_cmd="${cmd#"${cmd%%[![:space:]]*}"}"
+    if [[ "$_trimmed_cmd" != '(('* ]]; then
         expanded_cmd=$(eval echo "$cmd" 2>/dev/null) || expanded_cmd="$cmd"
     fi
 

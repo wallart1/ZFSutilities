@@ -30,17 +30,27 @@ if ! command -v qm >/dev/null 2>&1; then
     exit 1
 fi
 
-MY_HOST=$(hostname -s)
-PVE_CONF_DIR="/etc/pve/qemu-server"
+my_host=$(hostname -s)
+pve_conf_dir="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 
 # Arrays populated during discovery. Each element is "vmid:diskkey".
-declare -a VM_REFS=()
+declare -a vm_refs=()
 
 # iSCSI state discovered on the storage host (two-node only).
-ISCSI_TARGET=""
-ISCSI_LUN=""
-ISCSI_BACKSTORE=""
-ISCSI_ENCRYPTED="N"
+iscsi_target=""
+iscsi_lun=""
+iscsi_backstore=""
+iscsi_encrypted="N"
+
+# Returns 0 when a basename looks like vm-<vmid>-disk-<num>.
+is_vm_disk_name() {
+    local base="$1" rest mid tail
+    [[ "$base" == vm-*-disk-* ]] || return 1
+    rest="${base#vm-}"
+    mid="${rest%%-disk-*}"
+    tail="${rest##*-disk-}"
+    [[ "$mid" =~ ^[0-9]+$ && "$tail" =~ ^[0-9]+$ ]]
+}
 
 usage() {
     log_msg "INFO: Usage: rename-vm-disk <old-zvol-path> <new-zvol-path>"
@@ -63,92 +73,105 @@ usage() {
 validate_args() {
     [[ $# -eq 2 ]] || usage
 
-    OLD_ZVOL="$1"
-    NEW_ZVOL="$2"
+    old_zvol="$1"
+    new_zvol="$2"
 
-    [[ -n "$OLD_ZVOL" && "$OLD_ZVOL" == */* ]] || {
-        log_msg "FATAL: old-zvol-path must include a pool and dataset, got: $OLD_ZVOL"
+    [[ -n "$old_zvol" && "$old_zvol" == */* ]] || {
+        log_msg "FATAL: old-zvol-path must include a pool and dataset, got: $old_zvol"
         exit 1
     }
-    [[ -n "$NEW_ZVOL" && "$NEW_ZVOL" == */* ]] || {
-        log_msg "FATAL: new-zvol-path must include a pool and dataset, got: $NEW_ZVOL"
+    [[ -n "$new_zvol" && "$new_zvol" == */* ]] || {
+        log_msg "FATAL: new-zvol-path must include a pool and dataset, got: $new_zvol"
         exit 1
     }
 
-    OLD_POOL="${OLD_ZVOL%%/*}"
-    NEW_POOL="${NEW_ZVOL%%/*}"
-    [[ "$OLD_POOL" == "$NEW_POOL" ]] || {
+    old_pool="${old_zvol%%/*}"
+    new_pool="${new_zvol%%/*}"
+    [[ "$old_pool" == "$new_pool" ]] || {
         log_msg "FATAL: old and new zvol paths must be under the same pool."
-        log_msg "FATAL:   Old pool: $OLD_POOL"
-        log_msg "FATAL:   New pool: $NEW_POOL"
+        log_msg "FATAL:   Old pool: $old_pool"
+        log_msg "FATAL:   New pool: $new_pool"
         exit 1
     }
-    POOL="$OLD_POOL"
+    pool="$old_pool"
 
-    OLD_BASENAME="${OLD_ZVOL##*/}"
-    NEW_BASENAME="${NEW_ZVOL##*/}"
+    old_basename="${old_zvol##*/}"
+    new_basename="${new_zvol##*/}"
 
-    if ! zfs list -H -t volume -o name "$OLD_ZVOL" >/dev/null 2>&1; then
-        log_msg "FATAL: Source zvol does not exist: $OLD_ZVOL"
+    if ! zfs list -H -t volume -o name "$old_zvol" >/dev/null 2>&1; then
+        log_msg "FATAL: Source zvol does not exist: $old_zvol"
         exit 1
     fi
 
-    if zfs list -H -t volume -o name "$NEW_ZVOL" >/dev/null 2>&1; then
-        log_msg "FATAL: Destination zvol already exists: $NEW_ZVOL"
+    if zfs list -H -t volume -o name "$new_zvol" >/dev/null 2>&1; then
+        log_msg "FATAL: Destination zvol already exists: $new_zvol"
         exit 1
     fi
 
-    NEW_PARENT="${NEW_ZVOL%/*}"
-    if ! zfs list -H -o name "$NEW_PARENT" >/dev/null 2>&1; then
-        log_msg "FATAL: Destination parent dataset does not exist: $NEW_PARENT"
+    new_parent="${new_zvol%/*}"
+    if ! zfs list -H -o name "$new_parent" >/dev/null 2>&1; then
+        log_msg "FATAL: Destination parent dataset does not exist: $new_parent"
         exit 1
     fi
 
-    if [[ "$OLD_BASENAME" =~ ^vm-[0-9]+-disk-[0-9]+$ ]] && \
-       ! [[ "$NEW_BASENAME" =~ ^vm-[0-9]+-disk-[0-9]+$ ]]; then
-        warn "New basename '$NEW_BASENAME' does not match the VM disk naming convention."
+    if is_vm_disk_name "$old_basename" && ! is_vm_disk_name "$new_basename"; then
+        warn "New basename '$new_basename' does not match the VM disk naming convention."
         warn "Some ZFS Utilities tools may not recognize it as a VM disk."
     fi
 }
 
 # --- iSCSI discovery on the storage host (two-node only) ----------------------
 discover_iscsi_state() {
-    ISCSI_TARGET=""
-    ISCSI_LUN=""
-    ISCSI_BACKSTORE=""
-    ISCSI_ENCRYPTED="N"
+    iscsi_target=""
+    iscsi_lun=""
+    iscsi_backstore=""
+    iscsi_encrypted="N"
 
     local result
-    result=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s "$OLD_ZVOL" 2>&1 <<'SSHEOF'
+    result=$(ssh -o ConnectTimeout=10 root@"$storage_host" bash -s "$old_zvol" 2>&1 <<'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
 set -e
-OLD_ZVOL="$1"
+old_zvol="$1"
 
-# Enumerate every iSCSI LUN and find the one whose backstore points at this zvol.
+# Enumerate every iSCSI lun and find the one whose backstore points at this zvol.
 while IFS= read -r target; do
     [[ -n "$target" ]] || continue
     while IFS= read -r line; do
-        lun=$(echo "$line" | grep -oP 'lun\K[0-9]+' | head -1 || true)
-        bsname=$(echo "$line" | grep -oP 'block/\K\S+' | head -1 || true)
+        # Strip everything through the first "lun" token and keep the
+        # leading digits ("... lun3 [block/..." -> "3").
+        _lun_rest="${line#*lun}"
+        lun="${_lun_rest%%[!0-9]*}"
+        bsname=""
+        rest="${line#*block/}"
+        [[ "$rest" != "$line" ]] && bsname="${rest%%[[:space:]]*}"
         if [[ -n "$bsname" && -n "$lun" ]]; then
-            dev=$(targetcli "/backstores/block/${bsname}" info 2>/dev/null \
-                | grep -oP '/dev/zvol/\S+' | head -1 || true)
-            if [[ "$dev" == "/dev/zvol/${OLD_ZVOL}" ]]; then
-                encrypted=$(zfs get -H -o value encryption "$OLD_ZVOL" 2>/dev/null || echo "off")
+            devinfo=$(targetcli "/backstores/block/${bsname}" info 2>/dev/null || true)
+            rest="${devinfo#*/dev/zvol/}"
+            dev=""
+            [[ "$rest" != "$devinfo" ]] && dev="/dev/zvol/${rest%%[[:space:]]*}"
+            if [[ "$dev" == "/dev/zvol/${old_zvol}" ]]; then
+                encrypted=$(zfs get -H -o value encryption "$old_zvol" 2>/dev/null || echo "off")
                 echo "EXPORTED|${target}|${lun}|${bsname}|${encrypted}"
                 exit 0
             fi
         fi
     done < <(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null || true)
-done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+' || true)
+done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
+    # targetcli separates each target name from its dotted leader with a
+    # space, so the IQN is a whole whitespace-delimited token.
+    read -ra _t_words <<< "$_t_line"
+    for _t in "${_t_words[@]}"; do
+        case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
+    done
+done)
 
 echo "NOT_EXPORTED"
 SSHEOF
     ) || {
-        log_msg "FATAL: iSCSI discovery failed on $STORAGE_HOST"
+        log_msg "FATAL: iSCSI discovery failed on $storage_host"
         log_msg "FATAL:   $result"
         exit 1
     }
@@ -157,19 +180,19 @@ SSHEOF
         local exported_target exported_lun exported_bs exported_enc
         IFS='|' read -r _ exported_target exported_lun exported_bs exported_enc \
             <<< "$result"
-        ISCSI_TARGET="$exported_target"
-        ISCSI_LUN="$exported_lun"
-        ISCSI_BACKSTORE="$exported_bs"
-        [[ "$exported_enc" != "off" && "$exported_enc" != "-" ]] && ISCSI_ENCRYPTED="Y"
+        iscsi_target="$exported_target"
+        iscsi_lun="$exported_lun"
+        iscsi_backstore="$exported_bs"
+        [[ "$exported_enc" != "off" && "$exported_enc" != "-" ]] && iscsi_encrypted="Y"
     fi
 }
 
 # --- Scan Proxmox VM configs for references to the old zvol -------------------
 find_vm_refs() {
-    VM_REFS=()
+    vm_refs=()
 
     local conf vmid line key
-    for conf in "$PVE_CONF_DIR"/*.conf; do
+    for conf in "$pve_conf_dir"/*.conf; do
         [[ -f "$conf" ]] || continue
         vmid=$(basename "$conf" .conf)
         [[ "$vmid" =~ ^[0-9]+$ ]] || continue
@@ -178,29 +201,43 @@ find_vm_refs() {
             [[ -n "$line" ]] || continue
             key="${line%%:*}"
             [[ "$key" == "$line" ]] && continue
+            # Only Proxmox disk keys (bus name followed by digits).
+            case "$key" in
+                scsi[0-9]*|ide[0-9]*|sata[0-9]*|virtio[0-9]*|efidisk[0-9]*) ;;
+                *) continue ;;
+            esac
             if is_single_node; then
-                local single_re="^${key}:[[:space:]]*${POOL}:${OLD_BASENAME}(,|[[:space:]]|$)"
-                if [[ "$line" =~ $single_re ]]; then
-                    VM_REFS+=("${vmid}:${key}")
+                # Match "key:<ws>pool:old_basename" followed by a comma,
+                # whitespace, or end of line.
+                local rest="${line#"${key}":}"
+                rest="${rest#"${rest%%[![:space:]]*}"}"
+                local target="${pool}:${old_basename}"
+                if [[ "$rest" == "$target" || "$rest" == "$target,"* \
+                    || "$rest" == "$target"[[:space:]]* ]]; then
+                    vm_refs+=("${vmid}:${key}")
                 fi
             else
-                if [[ -n "$ISCSI_TARGET" && -n "$ISCSI_LUN" ]]; then
-                    local targetshort="${ISCSI_TARGET##*:}"
-                    local iscsi_re="^${key}:.*ip-${STORAGE_IP}:3260-iscsi-"
-                    iscsi_re+="${IQN_PREFIX}:${targetshort}-lun-${ISCSI_LUN}(,|[[:space:]]|$)"
-                    if [[ "$line" =~ $iscsi_re ]]; then
-                        VM_REFS+=("${vmid}:${key}")
+                if [[ -n "$iscsi_target" && -n "$iscsi_lun" ]]; then
+                    local targetshort="${iscsi_target##*:}"
+                    local marker="ip-${storage_ip}:3260-iscsi-"
+                    marker+="${iqn_prefix}:${targetshort}-lun-${iscsi_lun}"
+                    if [[ "$line" == "${key}:"*"$marker"* ]]; then
+                        local after="${line##*"$marker"}"
+                        if [[ -z "$after" || "$after" == ,* \
+                            || "$after" == [[:space:]]* ]]; then
+                            vm_refs+=("${vmid}:${key}")
+                        fi
                     fi
                 fi
             fi
-        done < <(grep -E '^(scsi|ide|sata|virtio|efidisk)[0-9]+:' "$conf" 2>/dev/null || true)
+        done < <(grep -E '^[a-z]' "$conf" 2>/dev/null || true)
     done
 }
 
 # --- Ensure every VM that references this zvol is stopped ---------------------
 check_vms_stopped() {
     local ref vmid status
-    for ref in "${VM_REFS[@]}"; do
+    for ref in "${vm_refs[@]}"; do
         vmid="${ref%%:*}"
         status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}' || true)
         [[ "${status:-unknown}" == "stopped" ]] || {
@@ -221,94 +258,117 @@ bashinit
 source_helper zfslockmanager
 
 set -e
-OLD_ZVOL="$1"
-NEW_ZVOL="$2"
-TARGET="$3"
-OLD_BS="$4"
-LUN="$5"
-ENCRYPTED="$6"
+old_zvol="$1"
+new_zvol="$2"
+target="$3"
+old_bs="$4"
+lun="$5"
+encrypted="$6"
 ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
-ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+ISCSI_ENCRYPTED_CONF=\
+"${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
 if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
     ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
 fi
 
-NEW_BS="${NEW_ZVOL##*/}"
-TARGETSHORT="${TARGET##*:}"
+new_bs="${new_zvol##*/}"
+targetshort="${target##*:}"
 
 manifest_remove() {
-    [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${1}$" "$ISCSI_MANIFEST" \
-        && sed -i "/^${1}$/d" "$ISCSI_MANIFEST"
+    [[ -f "$ISCSI_MANIFEST" ]] || return 0
+    grep -qxF -- "$1" "$ISCSI_MANIFEST" || return 0
+    grep -vxF -- "$1" "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.new" || true
+    mv "${ISCSI_MANIFEST}.new" "$ISCSI_MANIFEST"
 }
 manifest_add() {
-    [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${1}$" "$ISCSI_MANIFEST" \
-        && echo "$1" >> "$ISCSI_MANIFEST"
+    [[ -f "$ISCSI_MANIFEST" ]] || return 0
+    grep -qxF -- "$1" "$ISCSI_MANIFEST" || echo "$1" >> "$ISCSI_MANIFEST"
+}
+# Returns 0 when a line of $2 starts with the literal prefix $1.
+prefix_in_file() {
+    local prefix="$1" file="$2" _line
+    [[ -f "$file" ]] || return 1
+    while IFS= read -r _line; do
+        [[ "$_line" == "$prefix"* ]] && return 0
+    done < "$file"
+    return 1
 }
 encrypted_remove() {
-    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
-        && sed -i "/^${1}:/d" "$ISCSI_ENCRYPTED_CONF"
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] || return 0
+    prefix_in_file "$1:" "$ISCSI_ENCRYPTED_CONF" || return 0
+    awk -v prefix="$1:" 'index($0, prefix) != 1' "$ISCSI_ENCRYPTED_CONF" \
+        > "${ISCSI_ENCRYPTED_CONF}.new"
+    mv "${ISCSI_ENCRYPTED_CONF}.new" "$ISCSI_ENCRYPTED_CONF"
 }
 encrypted_add() {
-    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${1}:" "$ISCSI_ENCRYPTED_CONF" \
-        && echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] || return 0
+    prefix_in_file "$1:" "$ISCSI_ENCRYPTED_CONF" \
+        || echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
 }
 
 zfslock_init
-if ! zfslock_wait_or_resolve "$OLD_ZVOL" "x" "rename-vm-disk source"; then
-    log_msg "FATAL: Could not acquire destroy lock on source zvol ${OLD_ZVOL}"
+if ! zfslock_wait_or_resolve "$old_zvol" "x" "rename-vm-disk source"; then
+    log_msg "FATAL: Could not acquire destroy lock on source zvol ${old_zvol}"
     exit 1
 fi
-lock_old="$ZFSLOCK_ID"
-if ! zfslock_wait_or_resolve "$NEW_ZVOL" "x" "rename-vm-disk destination"; then
+lock_old="$zfslock_id"
+if ! zfslock_wait_or_resolve "$new_zvol" "x" "rename-vm-disk destination"; then
     zfslock_release "$lock_old"
-    log_msg "FATAL: Could not acquire destroy lock on destination zvol ${NEW_ZVOL}"
+    log_msg "FATAL: Could not acquire destroy lock on destination zvol ${new_zvol}"
     exit 1
 fi
-lock_new="$ZFSLOCK_ID"
+lock_new="$zfslock_id"
 
-# Tear down old LUN and backstore if present.
-if [[ -n "$OLD_BS" ]]; then
-    if targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null | grep -q " ${OLD_BS} "; then
-        targetcli "/iscsi/${TARGET}/tpg1/luns" delete "lun${LUN}"
+# Tear down old lun and backstore if present.
+if [[ -n "$old_bs" ]]; then
+    if targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null | grep -qF " ${old_bs} "; then
+        targetcli "/iscsi/${target}/tpg1/luns" delete "lun${lun}"
     fi
-    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${OLD_BS} "; then
-        targetcli /backstores/block delete "${OLD_BS}"
+    if targetcli /backstores/block ls 2>/dev/null | grep -qF " ${old_bs} "; then
+        targetcli /backstores/block delete "${old_bs}"
     fi
-    manifest_remove "${OLD_BS}"
-    encrypted_remove "${OLD_BS}"
+    manifest_remove "${old_bs}"
+    encrypted_remove "${old_bs}"
 fi
 
 # Rename the zvol.
-zfs rename "${OLD_ZVOL}" "${NEW_ZVOL}"
+zfs rename "${old_zvol}" "${new_zvol}"
 
-# Recreate backstore and LUN if the old zvol was exported.
-if [[ -n "$OLD_BS" ]]; then
-    ZVOL_DEV="/dev/zvol/${NEW_ZVOL}"
+# Recreate backstore and lun if the old zvol was exported.
+if [[ -n "$old_bs" ]]; then
+    zvol_dev="/dev/zvol/${new_zvol}"
     for _i in $(seq 1 20); do
-        [[ -b "$ZVOL_DEV" ]] && break
+        [[ -b "$zvol_dev" ]] && break
         sleep 0.5
     done
-    [[ -b "$ZVOL_DEV" ]] || { log_msg "FATAL: device node not found: $ZVOL_DEV"; exit 1; }
+    [[ -b "$zvol_dev" ]] || { log_msg "FATAL: device node not found: $zvol_dev"; exit 1; }
 
-    targetcli /backstores/block create "${NEW_BS}" "${ZVOL_DEV}"
-    targetcli "/backstores/block/${NEW_BS}" set attribute emulate_tpu=1
+    targetcli /backstores/block create "${new_bs}" "${zvol_dev}"
+    targetcli "/backstores/block/${new_bs}" set attribute emulate_tpu=1
 
-    NEW_LUN="$LUN"
-    if ! targetcli "/iscsi/${TARGET}/tpg1/luns" create \
-            "/backstores/block/${NEW_BS}" "${NEW_LUN}" 2>/dev/null; then
-        targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${NEW_BS}"
-        NEW_LUN=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
-            | grep " ${NEW_BS} " | grep -oP 'lun\K[0-9]+' | head -1)
+    new_lun="$lun"
+    if ! targetcli "/iscsi/${target}/tpg1/luns" create \
+            "/backstores/block/${new_bs}" "${new_lun}" 2>/dev/null; then
+        targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${new_bs}"
+        # Strip everything through the first "lun" token and keep the
+        # leading digits ("... lun3 [block/..." -> "3").
+        new_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
+            | grep -F " ${new_bs} " \
+            | while IFS= read -r _lun_line; do
+                _lun_rest="${_lun_line#*lun}"
+                printf '%s\n' "${_lun_rest%%[!0-9]*}"
+            done \
+            | head -1)
     fi
-    [[ -n "$NEW_LUN" ]] || { log_msg "FATAL: could not determine new LUN"; exit 1; }
+    [[ -n "$new_lun" ]] || { log_msg "FATAL: could not determine new lun"; exit 1; }
 
-    manifest_add "${NEW_BS}"
-    if [[ "$ENCRYPTED" == "Y" ]]; then
-        encrypted_add "${NEW_BS}" "${ZVOL_DEV}" "${TARGETSHORT}"
+    manifest_add "${new_bs}"
+    if [[ "$encrypted" == "Y" ]]; then
+        encrypted_add "${new_bs}" "${zvol_dev}" "${targetshort}"
     fi
 
     "$mydir/safe-iscsi-save"
-    echo "LUN=${NEW_LUN}"
+    echo "lun=${new_lun}"
 fi
 
 zfslock_release "$lock_new"
@@ -318,61 +378,116 @@ SSHEOF
 
 # --- Run the storage-side rename (two-node only) ------------------------------
 run_storage_rename() {
-    log_msg "INFO: Performing storage operations on ${STORAGE_HOST}..."
+    log_msg "INFO: Performing storage operations on ${storage_host}..."
     local result
-    result=$(ssh -o ConnectTimeout=10 root@"$STORAGE_HOST" bash -s \
-        "$OLD_ZVOL" "$NEW_ZVOL" "$ISCSI_TARGET" "$ISCSI_BACKSTORE" \
-        "$ISCSI_LUN" "$ISCSI_ENCRYPTED" \
+    result=$(ssh -o ConnectTimeout=10 root@"$storage_host" bash -s \
+        "$old_zvol" "$new_zvol" "$iscsi_target" "$iscsi_backstore" \
+        "$iscsi_lun" "$iscsi_encrypted" \
         <<< "$(storage_rename_script)" 2>&1) || {
-            log_msg "FATAL: Storage-side rename failed on $STORAGE_HOST"
+            log_msg "FATAL: Storage-side rename failed on $storage_host"
             echo "$result"
             exit 1
         }
 
-    # If the storage host had to fall back to a new LUN number, capture it.
-    if [[ "$result" == *LUN=* ]]; then
+    # If the storage host had to fall back to a new lun number, capture it.
+    if [[ "$result" == *lun=* ]]; then
         local new_lun
-        new_lun=$(echo "$result" | grep -oP '^LUN=\K[0-9]+' | tail -1 || true)
-        [[ -n "$new_lun" ]] && ISCSI_LUN="$new_lun"
+        # Last "lun=N" line wins (the remote script echoes at most one).
+        new_lun=""
+        local _rl_line
+        while IFS= read -r _rl_line; do
+            case "$_rl_line" in
+                lun=*)
+                    new_lun="${_rl_line#lun=}"
+                    new_lun="${new_lun%%[!0-9]*}" ;;
+            esac
+        done <<< "$result"
+        [[ -n "$new_lun" ]] && iscsi_lun="$new_lun"
     fi
-    echo "$result" | grep -v '^LUN=' || true
+    echo "$result" | grep -v '^lun=' || true
 }
 
 # --- Update Proxmox VM configs ------------------------------------------------
 update_vm_configs() {
-    [[ ${#VM_REFS[@]} -gt 0 ]] || return 0
+    [[ ${#vm_refs[@]} -gt 0 ]] || return 0
 
+    # Rewrite lines of conf $1 whose key is $2. The line must contain $3 (for
+    # the two-node branch: an iSCSI by-path marker immediately followed by lun
+    # digits; for single-node: "pool:basename" followed by a comma, whitespace,
+    # or end of line); the matched text is replaced with $4. Returns 0 when a
+    # line changed.
+    _update_conf_line() {
+        local conf="$1" key="$2" old_target="$3" new_target="$4"
+        local line rest after prefix tail digits tmp changed=1
+        [[ -f "$conf" ]] || return 1
+        tmp="${conf}.tmp.$$"
+        : > "$tmp"
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ $changed -eq 1 && "$line" == "${key}:"*"$old_target"* ]]; then
+                if [[ "$old_target" == *-lun- ]]; then
+                    # Two-node: consume the lun digits after the marker.
+                    after="${line##*"$old_target"}"
+                    digits="${after%%[!0-9]*}"
+                    tail="${after#"$digits"}"
+                    prefix="${line%"$old_target$after"}"
+                    line="${prefix}${new_target}${tail}"
+                    changed=0
+                else
+                    # Single-node: old_target must end at a comma, whitespace,
+                    # or end of line.
+                    rest="${line#"${key}":}"
+                    rest="${rest#"${rest%%[![:space:]]*}"}"
+                    if [[ "$rest" == "$old_target" ]]; then
+                        after=""
+                    elif [[ "$rest" == "$old_target,"* \
+                        || "$rest" == "$old_target"[[:space:]]* ]]; then
+                        after="${rest#"$old_target"}"
+                    else
+                        rest=""
+                    fi
+                    if [[ -n "$rest" ]]; then
+                        prefix="${line%"$old_target$after"}"
+                        line="${prefix}${new_target}${after}"
+                        changed=0
+                    fi
+                fi
+            fi
+            printf '%s\n' "$line" >> "$tmp"
+        done < "$conf"
+        if [[ $changed -eq 0 ]]; then
+            mv "$tmp" "$conf"
+            return 0
+        fi
+        rm -f "$tmp"
+        return 1
+    }
+
+    local ref vmid key conf
     if is_two_node; then
-        # Two-node configs reference disks by LUN/by-path. No change is needed
-        # unless the storage host had to assign a different LUN.
-        [[ -n "$ISCSI_TARGET" ]] || return 0
-        local targetshort="${ISCSI_TARGET##*:}"
-        local old_by_path="ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:${targetshort}-lun-"
-        local new_by_path="${old_by_path}${ISCSI_LUN}"
-        old_by_path="${old_by_path}[0-9]+"
+        # Two-node configs reference disks by lun/by-path. No change is needed
+        # unless the storage host had to assign a different lun.
+        [[ -n "$iscsi_target" ]] || return 0
+        local targetshort="${iscsi_target##*:}"
+        local marker="ip-${storage_ip}:3260-iscsi-${iqn_prefix}:${targetshort}-lun-"
+        local new_by_path="${marker}${iscsi_lun}"
 
-        local ref vmid key conf
-        for ref in "${VM_REFS[@]}"; do
+        for ref in "${vm_refs[@]}"; do
             vmid="${ref%%:*}"
             key="${ref#*:}"
-            conf="$PVE_CONF_DIR/${vmid}.conf"
-            if grep -qE "^${key}:.*${old_by_path}" "$conf" 2>/dev/null; then
-                sed -i -E "s|^(${key}:.*)${old_by_path}|\\1${new_by_path}|" "$conf"
+            conf="$pve_conf_dir/${vmid}.conf"
+            if _update_conf_line "$conf" "$key" "$marker" "$new_by_path"; then
                 log_msg "INFO: ✓ Updated ${key} in VM ${vmid} config"
             fi
         done
     else
         # Single-node configs reference disks as pool:basename.
-        local ref vmid key conf
-        for ref in "${VM_REFS[@]}"; do
+        local old_target="${pool}:${old_basename}"
+        local new_target="${pool}:${new_basename}"
+        for ref in "${vm_refs[@]}"; do
             vmid="${ref%%:*}"
             key="${ref#*:}"
-            conf="$PVE_CONF_DIR/${vmid}.conf"
-            local single_re="^${key}:[[:space:]]*${POOL}:${OLD_BASENAME}(,|[[:space:]]|$)"
-            local single_sub="s|^(${key}:[[:space:]]*)${POOL}:${OLD_BASENAME}|"
-            single_sub+="\\1${POOL}:${NEW_BASENAME}|"
-            if grep -qE "$single_re" "$conf" 2>/dev/null; then
-                sed -i -E "$single_sub" "$conf"
+            conf="$pve_conf_dir/${vmid}.conf"
+            if _update_conf_line "$conf" "$key" "$old_target" "$new_target"; then
                 log_msg "INFO: ✓ Updated ${key} in VM ${vmid} config"
             fi
         done
@@ -382,7 +497,7 @@ update_vm_configs() {
 # --- Rescan iSCSI on the compute host (two-node only) -------------------------
 run_rescan() {
     is_two_node || return 0
-    [[ -n "$ISCSI_BACKSTORE" ]] || return 0
+    [[ -n "$iscsi_backstore" ]] || return 0
     log_msg "INFO: Rescanning iSCSI..."
     "$mydir/rescan-storage"
 }
@@ -392,23 +507,23 @@ main() {
     validate_args "$@"
 
     # Delegate to compute host if invoked on the storage node (two-node only).
-    if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-        REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "rename-vm-disk")
-        exec ssh -t root@"$COMPUTE_HOST" \
-            "$REMOTE_SCRIPT '$OLD_ZVOL' '$NEW_ZVOL'"
+    if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
+        remote_script=$(remote_zfsutility_script "$compute_host" "rename-vm-disk")
+        exec ssh -t root@"$compute_host" \
+            "$remote_script '$old_zvol' '$new_zvol'"
     fi
 
     # === Running on the compute host ===
 
     log_msg "INFO: === rename-vm-disk ==="
-    log_msg "INFO:   Old: $OLD_ZVOL"
-    log_msg "INFO:   New: $NEW_ZVOL"
+    log_msg "INFO:   Old: $old_zvol"
+    log_msg "INFO:   New: $new_zvol"
     echo ""
 
     if is_two_node; then
         discover_iscsi_state
-        if [[ -n "$ISCSI_TARGET" ]]; then
-            log_msg "INFO:   iSCSI: ${ISCSI_TARGET} LUN ${ISCSI_LUN} backstore ${ISCSI_BACKSTORE}"
+        if [[ -n "$iscsi_target" ]]; then
+            log_msg "INFO:   iSCSI: ${iscsi_target} lun ${iscsi_lun} backstore ${iscsi_backstore}"
         else
             log_msg "INFO:   iSCSI: not exported"
         fi
@@ -417,10 +532,10 @@ main() {
 
     find_vm_refs
 
-    if [[ ${#VM_REFS[@]} -gt 0 ]]; then
+    if [[ ${#vm_refs[@]} -gt 0 ]]; then
         log_msg "INFO:   Referenced by VM(s):"
         local ref
-        for ref in "${VM_REFS[@]}"; do
+        for ref in "${vm_refs[@]}"; do
             log_msg "INFO:     ${ref%%:*} disk ${ref#*:}"
         done
         echo ""
@@ -438,20 +553,20 @@ main() {
         run_storage_rename
     else
         zfslock_init
-        if ! zfslock_wait_or_resolve "$OLD_ZVOL" "x" "rename-vm-disk source"; then
-            log_msg "FATAL: Could not acquire destroy lock on source zvol ${OLD_ZVOL}"
+        if ! zfslock_wait_or_resolve "$old_zvol" "x" "rename-vm-disk source"; then
+            log_msg "FATAL: Could not acquire destroy lock on source zvol ${old_zvol}"
             exit 1
         fi
-        lock_old="$ZFSLOCK_ID"
-        if ! zfslock_wait_or_resolve "$NEW_ZVOL" "x" "rename-vm-disk destination"; then
+        lock_old="$zfslock_id"
+        if ! zfslock_wait_or_resolve "$new_zvol" "x" "rename-vm-disk destination"; then
             zfslock_release "$lock_old"
-            log_msg "FATAL: Could not acquire destroy lock on destination zvol ${NEW_ZVOL}"
+            log_msg "FATAL: Could not acquire destroy lock on destination zvol ${new_zvol}"
             exit 1
         fi
-        lock_new="$ZFSLOCK_ID"
+        lock_new="$zfslock_id"
 
         log_msg "INFO: Renaming zvol..."
-        zfs rename "$OLD_ZVOL" "$NEW_ZVOL" || {
+        zfs rename "$old_zvol" "$new_zvol" || {
             zfslock_release "$lock_new"
             zfslock_release "$lock_old"
             log_msg "FATAL: zfs rename failed"
@@ -467,7 +582,7 @@ main() {
 
     echo ""
     log_msg "INFO: === Done ==="
-    log_msg "INFO:   $OLD_ZVOL  →  $NEW_ZVOL"
+    log_msg "INFO:   $old_zvol  →  $new_zvol"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

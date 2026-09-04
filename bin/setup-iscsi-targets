@@ -27,9 +27,9 @@ rootcheck
 is_single_node && exit 0
 
 # Verify we're on the storage host
-MY_HOST=$(hostname -s)
-if [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
-    log_msg "FATAL: Must run on the storage host ($STORAGE_HOST), not $MY_HOST"
+my_host=$(hostname -s)
+if [[ "$my_host" != "$storage_host" ]]; then
+    log_msg "FATAL: Must run on the storage host ($storage_host), not $my_host"
     exit 1
 fi
 
@@ -42,25 +42,25 @@ fi
 log_msg "INFO: === Setting up iSCSI targets ==="
 echo ""
 
-CREATED=0
-EXISTING=0
-PORTALS_ADDED=0
+created=0
+existing=0
+portals_added=0
 
-# Iterate over POOL_TARGET values (target short names)
-for pool in "${!POOL_TARGET[@]}"; do
-    target_short="${POOL_TARGET[$pool]}"
-    target_iqn="${IQN_PREFIX}:${target_short}"
+# Iterate over pool_target values (target short names)
+for pool in "${!pool_target[@]}"; do
+    target_short="${pool_target[$pool]}"
+    target_iqn="${iqn_prefix}:${target_short}"
 
     log_msg "INFO:   Pool: $pool → Target: $target_iqn"
 
     # Check if target already exists
     if targetcli /iscsi ls 2>/dev/null | grep -q "${target_iqn}"; then
-        EXISTING=$((EXISTING + 1))
+        existing=$((existing + 1))
         log_msg "INFO:     ✓ Target already exists"
     else
         # Create the target
         if targetcli /iscsi create "$target_iqn" >/dev/null 2>&1; then
-            CREATED=$((CREATED + 1))
+            created=$((created + 1))
             log_msg "INFO:     ✓ Target created"
         else
             log_msg "FATAL:   Failed to create target"
@@ -77,19 +77,19 @@ for pool in "${!POOL_TARGET[@]}"; do
 
     # Check if portal already exists
     portal_exists=false
-    if targetcli "${tpg_path}/portals" ls 2>/dev/null | grep -q "${STORAGE_IP}:3260"; then
+    if targetcli "${tpg_path}/portals" ls 2>/dev/null | grep -q "${storage_ip}:3260"; then
         portal_exists=true
     fi
 
     if [[ "$portal_exists" == true ]]; then
-        log_msg "INFO:     ✓ Portal ${STORAGE_IP}:3260 already exists"
+        log_msg "INFO:     ✓ Portal ${storage_ip}:3260 already exists"
     else
         # Create the portal
-        if targetcli "${tpg_path}/portals" create "${STORAGE_IP}:3260" >/dev/null 2>&1; then
-            PORTALS_ADDED=$((PORTALS_ADDED + 1))
-            log_msg "INFO:     ✓ Portal ${STORAGE_IP}:3260 added"
+        if targetcli "${tpg_path}/portals" create "${storage_ip}:3260" >/dev/null 2>&1; then
+            portals_added=$((portals_added + 1))
+            log_msg "INFO:     ✓ Portal ${storage_ip}:3260 added"
         else
-            log_msg "WARN:   Could not add portal ${STORAGE_IP}:3260"
+            log_msg "WARN:   Could not add portal ${storage_ip}:3260"
         fi
     fi
 done
@@ -97,7 +97,7 @@ done
 echo ""
 
 # Save config if anything changed
-if [[ $CREATED -gt 0 || $PORTALS_ADDED -gt 0 ]]; then
+if [[ $created -gt 0 || $portals_added -gt 0 ]]; then
     targetcli saveconfig >/dev/null 2>&1
     log_msg "INFO: ✓ iSCSI configuration saved"
 else
@@ -105,8 +105,8 @@ else
 fi
 
 echo ""
-log_msg "INFO:   Targets created:   $CREATED"
-log_msg "INFO:   Targets existing:  $EXISTING"
-log_msg "INFO:   Portals added:     $PORTALS_ADDED"
+log_msg "INFO:   Targets created:   $created"
+log_msg "INFO:   Targets existing:  $existing"
+log_msg "INFO:   Portals added:     $portals_added"
 echo ""
 log_msg "INFO: === Done ==="

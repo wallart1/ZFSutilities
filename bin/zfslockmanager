@@ -15,14 +15,14 @@
 #   zfslock_init                           # Set up EXIT trap for auto-cleanup
 #   zfslock_acquire "pool/dataset" "w" "description"
 #   # ... do work ...
-#   zfslock_release "$ZFSLOCK_ID"          # Or let EXIT trap handle it
+#   zfslock_release "$zfslock_id"          # Or let EXIT trap handle it
 #
 # Multiple Locks:
-#   $ZFSLOCK_ID only holds the most recent lock ID. For multiple locks, save each ID:
+#   $zfslock_id only holds the most recent lock ID. For multiple locks, save each ID:
 #     zfslock_acquire "source/data" "w" "reading source"
-#     lock_source="$ZFSLOCK_ID"
+#     lock_source="$zfslock_id"
 #     zfslock_acquire "dest/data" "w" "writing dest"
-#     lock_dest="$ZFSLOCK_ID"
+#     lock_dest="$zfslock_id"
 #     # ... do work ...
 #     zfslock_release "$lock_source"
 #     zfslock_release "$lock_dest"
@@ -32,11 +32,11 @@
 #   zfslock_init                           # Initialize lock manager, set up EXIT trap
 #   zfslock_acquire <dataset> <type> [description]
 #                                          # Returns: 0=success, 1=conflict, 2=error
-#                                          # Sets: $ZFSLOCK_ID on success
+#                                          # Sets: $zfslock_id on success
 #   zfslock_release <lock_id>              # Release a specific lock
 #   zfslock_release_all                    # Release all locks held by current PID
 #   zfslock_check <dataset> <type>         # Check for conflicts (0=none, 1=conflict)
-#                                          # Sets: $ZFSLOCK_CONFLICT_INFO
+#                                          # Sets: $zfslock_conflict_info
 #   zfslock_wait_or_resolve <dataset> <type> [description]
 #                                          # Returns: 0=acquired, 1=aborted, 2=skipped
 #   zfslock_is_stale <lock_file>           # Check if lock is stale (0=stale, 1=active)
@@ -47,13 +47,13 @@
 # ==============================================================================
 
 ZFSLOCK_DIR="${ZFSLOCK_DIR:-/run/lock/zfsutilities}"
-ZFSLOCK_LOCKS_DIR="$ZFSLOCK_DIR/.locks"
-ZFSLOCK_PIDS_DIR="$ZFSLOCK_DIR/.pids"
+zfslock_locks_dir="$ZFSLOCK_DIR/.locks"
+zfslock_pids_dir="$ZFSLOCK_DIR/.pids"
 ZFSLOCK_WAIT_INTERVAL=30    # Seconds between retry attempts when waiting
 
 # Global variables set by functions
-ZFSLOCK_ID=""               # Set by zfslock_acquire on success
-ZFSLOCK_CONFLICT_INFO=""    # Set by zfslock_check when conflict found
+zfslock_id=""               # Set by zfslock_acquire on success
+zfslock_conflict_info=""    # Set by zfslock_check when conflict found
 
 # ==============================================================================
 # Two-Node Awareness
@@ -62,29 +62,47 @@ ZFSLOCK_CONFLICT_INFO=""    # Set by zfslock_check when conflict found
 # These are populated by _zfslock_load_node_config() the first time they are
 # needed.  Tests can override the configuration by setting ZFSLOCK_REMOTE_HOST,
 # ZFSLOCK_REMOTE_POOLS, ZFSLOCK_THIS_HOST, or ZFSLOCK_REMOTE_DISABLED=1.
-_ZFSLOCK_NODE_MODE="single-node"
-_ZFSLOCK_STORAGE_HOST=""
-_ZFSLOCK_COMPUTE_HOST=""
-_ZFSLOCK_THIS_HOST=""
-declare -A _ZFSLOCK_POOL_TARGET=()
-declare -A _ZFSLOCK_REMOTE_PIDS=()
-declare -A _ZFSLOCK_REMOTE_HOSTS=()
-_ZFSLOCK_REMOTE_CONFLICT_SEQ=0
+_zfslock_node_mode="single-node"
+_zfslock_storage_host=""
+_zfslock_compute_host=""
+_zfslock_this_host=""
+declare -A _zfslock_pool_target=()
+declare -A _zfslock_remote_pids=()
+declare -A _zfslock_remote_hosts=()
+_zfslock_remote_conflict_seq=0
+
+# Extract a scalar value from the right-hand side of a KEY=value line in a
+# node config file.  Strips at most one quote character from each end and
+# rejects empty values or values that still contain a quote.  Prints the
+# value on stdout; returns 1 when the value is invalid, in which case the
+# caller keeps the current/default setting.
+_zfslock_conf_scalar() {
+    local value="$1"
+    value="${value#\"}"
+    value="${value%\"}"
+    value="${value#\'}"
+    value="${value%\'}"
+    # Reject empty values or values that still contain a quote character.
+    [[ -n "$value" ]] || return 1
+    [[ "$value" != *'"'* ]] || return 1
+    [[ "$value" != *"'"* ]] || return 1
+    printf '%s\n' "$value"
+}
 
 # Load node configuration from /etc/zfsutilities/node.conf (with legacy
 # fallbacks).  If no configuration is found, default to single-node/local mode.
 _zfslock_load_node_config() {
     # Test override: disable all remote locking.
     if [[ "${ZFSLOCK_REMOTE_DISABLED:-}" == "1" ]]; then
-        _ZFSLOCK_NODE_MODE="single-node"
-        _ZFSLOCK_STORAGE_HOST=""
-        _ZFSLOCK_COMPUTE_HOST=""
-        _ZFSLOCK_THIS_HOST="${ZFSLOCK_THIS_HOST:-$(hostname -s)}"
-        _ZFSLOCK_POOL_TARGET=()
+        _zfslock_node_mode="single-node"
+        _zfslock_storage_host=""
+        _zfslock_compute_host=""
+        _zfslock_this_host="${ZFSLOCK_THIS_HOST:-$(hostname -s)}"
+        _zfslock_pool_target=()
         return 0
     fi
 
-    _ZFSLOCK_THIS_HOST="${ZFSLOCK_THIS_HOST:-$(hostname -s)}"
+    _zfslock_this_host="${ZFSLOCK_THIS_HOST:-$(hostname -s)}"
 
     local conf_path=""
     local env_conf="${ZFSUTILITIES_NODE_CONF:-}"
@@ -99,45 +117,71 @@ _zfslock_load_node_config() {
     fi
 
     if [[ -z "$conf_path" ]]; then
-        _ZFSLOCK_NODE_MODE="single-node"
-        _ZFSLOCK_STORAGE_HOST="$_ZFSLOCK_THIS_HOST"
-        _ZFSLOCK_COMPUTE_HOST="$_ZFSLOCK_THIS_HOST"
-        _ZFSLOCK_POOL_TARGET=()
+        _zfslock_node_mode="single-node"
+        _zfslock_storage_host="$_zfslock_this_host"
+        _zfslock_compute_host="$_zfslock_this_host"
+        _zfslock_pool_target=()
         return 0
     fi
 
     local node_mode="two-node"
     local storage_host="" compute_host=""
-    local line
+    local line value
     while IFS= read -r line || [[ -n "$line" ]]; do
         # Strip comments and trailing whitespace.
         line="${line%%#*}"
         line="${line//[[:space:]]/}"
         [[ -z "$line" ]] && continue
 
-        if [[ "$line" =~ ^NODE_MODE=[\"\']?([^\"\'[:space:]]+)[\"\']?$ ]]; then
-            node_mode="${BASH_REMATCH[1]}"
-        elif [[ "$line" =~ ^STORAGE_HOST=[\"\']?([^\"\'[:space:]]+)[\"\']?$ ]]; then
-            storage_host="${BASH_REMATCH[1]}"
-        elif [[ "$line" =~ ^COMPUTE_HOST=[\"\']?([^\"\'[:space:]]+)[\"\']?$ ]]; then
-            compute_host="${BASH_REMATCH[1]}"
-        elif [[ "$line" =~ POOL_TARGET\[([^]]+)\]=[\"\']?([^\"\'[:space:]]+)[\"\']? ]]; then
-            _ZFSLOCK_POOL_TARGET["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
-        fi
+        case "$line" in
+            NODE_MODE=*)
+                value=$(_zfslock_conf_scalar "${line#NODE_MODE=}") \
+                    && node_mode="$value"
+                ;;
+            STORAGE_HOST=*)
+                value=$(_zfslock_conf_scalar "${line#STORAGE_HOST=}") \
+                    && storage_host="$value"
+                ;;
+            COMPUTE_HOST=*)
+                value=$(_zfslock_conf_scalar "${line#COMPUTE_HOST=}") \
+                    && compute_host="$value"
+                ;;
+            *POOL_TARGET\[*)
+                # Legacy regex was unanchored: match anywhere in the line.
+                value="${line#*POOL_TARGET\[}"
+                if [[ "$value" == *\]* ]]; then
+                    local pt_key="${value%%\]*}"
+                    value="${value#*\]}"
+                    if [[ -n "$pt_key" && "$value" == =* ]]; then
+                        # Value: optional one leading quote, then everything
+                        # up to the next quote/space (legacy: unanchored).
+                        value="${value#=}"
+                        value="${value#\"}"
+                        value="${value#\'}"
+                        value="${value%%[[:space:]]*}"
+                        value="${value%%\"*}"
+                        value="${value%%\'*}"
+                        if [[ -n "$value" ]]; then
+                            _zfslock_pool_target["$pt_key"]="$value"
+                        fi
+                    fi
+                fi
+                ;;
+        esac
     done < "$conf_path"
 
-    _ZFSLOCK_NODE_MODE="$node_mode"
-    _ZFSLOCK_STORAGE_HOST="${storage_host:-$_ZFSLOCK_THIS_HOST}"
-    _ZFSLOCK_COMPUTE_HOST="${compute_host:-$_ZFSLOCK_THIS_HOST}"
+    _zfslock_node_mode="$node_mode"
+    _zfslock_storage_host="${storage_host:-$_zfslock_this_host}"
+    _zfslock_compute_host="${compute_host:-$_zfslock_this_host}"
 
     # Test override: force a specific remote authority and pool list.
     if [[ -n "${ZFSLOCK_REMOTE_HOST:-}" ]]; then
-        _ZFSLOCK_STORAGE_HOST="$ZFSLOCK_REMOTE_HOST"
-        _ZFSLOCK_NODE_MODE="two-node"
-        _ZFSLOCK_POOL_TARGET=()
+        _zfslock_storage_host="$ZFSLOCK_REMOTE_HOST"
+        _zfslock_node_mode="two-node"
+        _zfslock_pool_target=()
         local pool
         for pool in ${ZFSLOCK_REMOTE_POOLS:-}; do
-            _ZFSLOCK_POOL_TARGET["$pool"]="$pool"
+            _zfslock_pool_target["$pool"]="$pool"
         done
     fi
 }
@@ -147,16 +191,16 @@ _zfslock_load_node_config() {
 _zfslock_remote_host_for_dataset() {
     local dataset="$1"
     local pool
-    if [[ -z "${_ZFSLOCK_THIS_HOST:-}" ]]; then
+    if [[ -z "${_zfslock_this_host:-}" ]]; then
         _zfslock_load_node_config
     fi
-    [[ "$_ZFSLOCK_NODE_MODE" == "two-node" ]] || return 0
-    [[ "$_ZFSLOCK_THIS_HOST" != "$_ZFSLOCK_STORAGE_HOST" ]] || return 0
+    [[ "$_zfslock_node_mode" == "two-node" ]] || return 0
+    [[ "$_zfslock_this_host" != "$_zfslock_storage_host" ]] || return 0
 
     pool="${dataset%%/*}"
-    [[ -n "${_ZFSLOCK_POOL_TARGET[$pool]:-}" ]] || return 0
+    [[ -n "${_zfslock_pool_target[$pool]:-}" ]] || return 0
 
-    echo "$_ZFSLOCK_STORAGE_HOST"
+    echo "$_zfslock_storage_host"
 }
 
 # Return the remote bin directory on the given host.
@@ -194,21 +238,23 @@ _zfslock_remote_exec() {
 }
 
 # Spawn a remote command in the background, redirecting stdout to outfile.
-# The SSH process PID is left in $_ZFSLOCK_REMOTE_SSH_PID.
+# The SSH process PID is left in $_zfslock_remote_ssh_pid.
 _zfslock_remote_spawn() {
     local host="$1"
     local remote_cmd="$2"
     local outfile="$3"
     _zfslock_remote_exec "$host" "$remote_cmd" > "$outfile" 2>/dev/null &
-    _ZFSLOCK_REMOTE_SSH_PID=$!
+    _zfslock_remote_ssh_pid=$!
 }
 
 # Create a temporary local lock file from remote conflict details so that the
 # existing interactive prompt can display it.
 _zfslock_remote_conflict_file() {
-    local dataset="$1" type="$2" pid="$3" script="$4" acquired="$5" description="$6" remote_host="$7" remote_lockfile="$8"
-    _ZFSLOCK_REMOTE_CONFLICT_SEQ=$((_ZFSLOCK_REMOTE_CONFLICT_SEQ + 1))
-    local conflict_file="$ZFSLOCK_LOCKS_DIR/.remote-conflict.$$.${_ZFSLOCK_REMOTE_CONFLICT_SEQ}.lock"
+    local dataset="$1" type="$2" pid="$3" script="$4"
+    local acquired="$5" description="$6" remote_host="$7" remote_lockfile="$8"
+    _zfslock_remote_conflict_seq=$((_zfslock_remote_conflict_seq + 1))
+    local conflict_file=\
+"$zfslock_locks_dir/.remote-conflict.$$.${_zfslock_remote_conflict_seq}.lock"
     {
         printf '{"dataset":"%s","type":"%s","pid":"%s","script":"%s",' \
             "$dataset" "$type" "$pid" "$script"
@@ -219,13 +265,47 @@ _zfslock_remote_conflict_file() {
 }
 
 # Extract a JSON string value from a one-line JSON blob.
+# Finds the literal "field": prefix, skips whitespace, and captures the
+# quoted string value (empty allowed).  The legacy regex was unanchored,
+# so if the first "field": occurrence is not followed by a quoted value,
+# later occurrences are tried.
 _zfslock_json_str_field() {
     local json="$1" field="$2"
-    if [[ "$json" =~ \"$field\":[[:space:]]*\"([^\"]*)\" ]]; then
-        echo "${BASH_REMATCH[1]}"
-        return 0
-    fi
-    return 1
+    local rest value
+    rest="${json#*\"$field\":}"
+    [[ "$rest" != "$json" ]] || return 1
+    while :; do
+        # Skip whitespace after the colon.
+        rest="${rest#"${rest%%[![:space:]]*}"}"
+        if [[ "$rest" == \"*\"* ]]; then
+            rest="${rest#\"}"
+            echo "${rest%%\"*}"
+            return 0
+        fi
+        value="${rest#*\"$field\":}"
+        [[ "$value" != "$rest" ]] || return 1
+        rest="$value"
+    done
+}
+
+# Extract a token from a remote CONFLICT response line: the run of
+# non-whitespace characters after "key=".  The legacy regex was unanchored
+# and required at least one non-whitespace character, so a "key=" that is
+# immediately followed by whitespace is skipped in favor of any later
+# occurrence.  Prints the token; returns 1 when no occurrence matches.
+_zfslock_conflict_field() {
+    local line="$1" key="$2"
+    local rest="$line" value
+    while :; do
+        value="${rest#*"$key"=}"
+        [[ "$value" != "$rest" ]] || return 1
+        rest="${value%%[[:space:]]*}"
+        if [[ -n "$rest" ]]; then
+            printf '%s\n' "$rest"
+            return 0
+        fi
+        rest="$value"
+    done
 }
 
 # ==============================================================================
@@ -248,13 +328,13 @@ _zfslock_file() {
     local dataset="$1"
     local encoded
     encoded=$(_zfslock_encode "$dataset")
-    echo "$ZFSLOCK_LOCKS_DIR/${encoded}.lock"
+    echo "$zfslock_locks_dir/${encoded}.lock"
 }
 
 # Get the PID tracking file path
 # Usage: pidfile=$(_zfslock_pidfile)
 _zfslock_pidfile() {
-    echo "$ZFSLOCK_PIDS_DIR/$$"
+    echo "$zfslock_pids_dir/$$"
 }
 
 # Get the script name of the caller
@@ -319,26 +399,46 @@ _zfslock_hierarchy_conflict() {
 
 # Read lock file and extract a field using simple parsing (no jq dependency)
 # Usage: value=$(_zfslock_read_field "lockfile" "fieldname")
+# String values are quoted and non-empty ("field": "value"); numeric values
+# are a run of digits after "field": and optional whitespace.  The legacy
+# regexes were unanchored, so if the first "field": occurrence does not
+# match, later occurrences are tried.  The string form is tried across the
+# whole blob before the numeric form.
 _zfslock_read_field() {
     local lockfile="$1" field="$2"
     [[ -f "$lockfile" ]] || return 1
     local content
     content=$(<"$lockfile")
-    # Regex: "field":[[:space:]]*"([^"]+)"
-    # Purpose: Extract a string value for a given JSON field.
-    # Group 1: The string value.
-    # Examples: "dataset": "pool/data" -> "pool/data"
-    if [[ "$content" =~ \"$field\":[[:space:]]*\"([^\"]+)\" ]]; then
-        echo "${BASH_REMATCH[1]}"
-    # Regex: "field":[[:space:]]*([0-9]+)
-    # Purpose: Extract a numeric value for a given JSON field.
-    # Group 1: The integer value.
-    # Examples: "pid": 1234 -> 1234
-    elif [[ "$content" =~ \"$field\":[[:space:]]*([0-9]+) ]]; then
-        echo "${BASH_REMATCH[1]}"
-    else
-        return 1
-    fi
+    local rest value
+    # Pass 1: string values.
+    rest="${content#*\"$field\":}"
+    [[ "$rest" != "$content" ]] || return 1
+    while :; do
+        rest="${rest#"${rest%%[![:space:]]*}"}"
+        if [[ "$rest" == \"*\"* ]]; then
+            value="${rest#\"}"
+            value="${value%%\"*}"
+            if [[ -n "$value" ]]; then
+                echo "$value"
+                return 0
+            fi
+        fi
+        value="${rest#*\"$field\":}"
+        [[ "$value" != "$rest" ]] || break
+        rest="$value"
+    done
+    # Pass 2: numeric values.
+    rest="${content#*\"$field\":}"
+    while :; do
+        rest="${rest#"${rest%%[![:space:]]*}"}"
+        if [[ "$rest" =~ ^[0-9]+ ]]; then
+            echo "${BASH_REMATCH[0]}"
+            return 0
+        fi
+        value="${rest#*\"$field\":}"
+        [[ "$value" != "$rest" ]] || return 1
+        rest="$value"
+    done
 }
 
 # EXIT trap handler
@@ -354,13 +454,13 @@ _zfslock_cleanup_trap() {
 # Creates lock directories and sets up EXIT trap for automatic cleanup
 zfslock_init() {
     local dir
-    for dir in "$ZFSLOCK_LOCKS_DIR" "$ZFSLOCK_PIDS_DIR"; do
+    for dir in "$zfslock_locks_dir" "$zfslock_pids_dir"; do
         if [[ ! -d "$dir" ]]; then
             mkdir -p "$dir" || { log_msg "WARN: Unable to create directory $dir"; return 2; }
         fi
     done
     # Load two-node configuration on first use.
-    if [[ -z "${_ZFSLOCK_THIS_HOST:-}" ]]; then
+    if [[ -z "${_zfslock_this_host:-}" ]]; then
         _zfslock_load_node_config
     fi
     trap _zfslock_cleanup_trap EXIT
@@ -388,8 +488,8 @@ zfslock_is_stale() {
 # Remove all stale locks
 zfslock_cleanup_stale() {
     local lockfile removed=0
-    [[ -d "$ZFSLOCK_LOCKS_DIR" ]] || return 0
-    for lockfile in "$ZFSLOCK_LOCKS_DIR"/*.lock; do
+    [[ -d "$zfslock_locks_dir" ]] || return 0
+    for lockfile in "$zfslock_locks_dir"/*.lock; do
         [[ -f "$lockfile" ]] || continue
         if zfslock_is_stale "$lockfile"; then
             rm -f "$lockfile"
@@ -397,7 +497,7 @@ zfslock_cleanup_stale() {
         fi
     done
     local pidfile
-    for pidfile in "$ZFSLOCK_PIDS_DIR"/*; do
+    for pidfile in "$zfslock_pids_dir"/*; do
         [[ -f "$pidfile" ]] || continue
         kill -0 "$(basename "$pidfile")" 2>/dev/null || rm -f "$pidfile"
     done
@@ -421,13 +521,13 @@ _zfslock_check_file() {
 
     existing_pid=$(_zfslock_read_field "$lockfile" "pid")
     if [[ "$existing_pid" == "$$" ]]; then
-        ZFSLOCK_REENTRY="$lockfile"
+        zfslock_reentry="$lockfile"
         return 2
     fi
 
     existing_type=$(_zfslock_read_field "$lockfile" "type")
     if _zfslock_hierarchy_conflict "$requested_type" "$existing_type" "$relationship"; then
-        ZFSLOCK_CONFLICT_INFO="$lockfile"
+        zfslock_conflict_info="$lockfile"
         return 1
     fi
     return 0
@@ -435,7 +535,7 @@ _zfslock_check_file() {
 
 # Check for lock conflicts on a dataset
 # Returns: 0 if no conflict, 1 if conflict exists
-# Sets: $ZFSLOCK_CONFLICT_INFO with details about the conflicting lock
+# Sets: $zfslock_conflict_info with details about the conflicting lock
 _zfslock_check_one() {
     local lockfile="$1" type="$2" relationship="$3"
     _zfslock_check_file "$lockfile" "$type" "$relationship"
@@ -448,8 +548,8 @@ zfslock_check() {
     local dataset="$1" type="$2" lockfile
     local remote_host
 
-    ZFSLOCK_CONFLICT_INFO=""
-    ZFSLOCK_REENTRY=""
+    zfslock_conflict_info=""
+    zfslock_reentry=""
 
     if [[ -z "$dataset" || -z "$type" ]]; then
         log_msg "WARN: zfslock_check requires dataset and type"
@@ -483,7 +583,7 @@ zfslock_check() {
 
     local dataset_encoded
     dataset_encoded=$(_zfslock_encode "$dataset")
-    for lockfile in "$ZFSLOCK_LOCKS_DIR"/"${dataset_encoded}%2F"*.lock; do
+    for lockfile in "$zfslock_locks_dir"/"${dataset_encoded}%2F"*.lock; do
         [[ -f "$lockfile" ]] || continue
         _zfslock_check_one "$lockfile" "$type" "descendant" || return $?
     done
@@ -491,7 +591,7 @@ zfslock_check() {
 
 # Acquire a lock on a dataset
 # Returns: 0=success, 1=conflict, 2=error
-# Sets: $ZFSLOCK_ID on success (the lock file path)
+# Sets: $zfslock_id on success (the lock file path)
 # Acquire a lock on a remote storage node. This is the compute-side half of
 # two-node locking: it asks the storage-side zfslockmanager-remote agent to
 # hold the lock and keeps the SSH session alive until release.
@@ -507,24 +607,25 @@ _zfslock_remote_acquire() {
         return 2
     fi
 
-    remote_lockfile="$ZFSLOCK_LOCKS_DIR/$(_zfslock_encode "$dataset").lock"
+    remote_lockfile="$zfslock_locks_dir/$(_zfslock_encode "$dataset").lock"
 
     # Re-entrant remote lock (same process already holds it).
-    if [[ -n "${_ZFSLOCK_REMOTE_PIDS[$remote_lockfile]:-}" ]]; then
-        ZFSLOCK_ID="REENTRY:REMOTE:$remote_lockfile"
+    if [[ -n "${_zfslock_remote_pids[$remote_lockfile]:-}" ]]; then
+        zfslock_id="REENTRY:REMOTE:$remote_lockfile"
         return 0
     fi
 
     remote_agent=$(_zfslock_remote_agent "$host") || return 2
 
-    tmpfile=$(mktemp "${ZFSLOCK_LOCKS_DIR}/.remote-acquire.XXXXXX") || return 2
+    tmpfile=$(mktemp "${zfslock_locks_dir}/.remote-acquire.XXXXXX") || return 2
 
     local remote_cmd
-    remote_cmd="$remote_agent hold $(printf '%q' "$dataset") $(printf '%q' "$type") $(printf '%q' "$description")"
+    remote_cmd=\
+"$remote_agent hold $(printf '%q' "$dataset") $(printf '%q' "$type") $(printf '%q' "$description")"
 
-    _ZFSLOCK_REMOTE_SSH_PID=""
+    _zfslock_remote_ssh_pid=""
     _zfslock_remote_spawn "$host" "$remote_cmd" "$tmpfile"
-    ssh_pid=$_ZFSLOCK_REMOTE_SSH_PID
+    ssh_pid=$_zfslock_remote_ssh_pid
 
     # Wait for the agent to respond (up to 30 seconds).
     local elapsed=0 timeout=300
@@ -552,19 +653,20 @@ _zfslock_remote_acquire() {
 
     if [[ "$line" == LOCKED\ * ]]; then
         remote_lockfile="${line#LOCKED }"
-        _ZFSLOCK_REMOTE_PIDS[$remote_lockfile]=$ssh_pid
-        _ZFSLOCK_REMOTE_HOSTS[$remote_lockfile]=$host
-        ZFSLOCK_ID="REMOTE:$remote_lockfile"
+        _zfslock_remote_pids[$remote_lockfile]=$ssh_pid
+        _zfslock_remote_hosts[$remote_lockfile]=$host
+        zfslock_id="REMOTE:$remote_lockfile"
         return 0
     fi
 
     if [[ "$line" == CONFLICT* ]]; then
         local c_dataset="" c_type="" c_pid="" c_script=""
-        [[ "$line" =~ dataset=([^[:space:]]+) ]] && c_dataset="${BASH_REMATCH[1]}"
-        [[ "$line" =~ type=([^[:space:]]+) ]] && c_type="${BASH_REMATCH[1]}"
-        [[ "$line" =~ pid=([^[:space:]]+) ]] && c_pid="${BASH_REMATCH[1]}"
-        [[ "$line" =~ script=([^[:space:]]+) ]] && c_script="${BASH_REMATCH[1]}"
-        ZFSLOCK_CONFLICT_INFO=$(_zfslock_remote_conflict_file "$c_dataset" "$c_type" "$c_pid" "$c_script" "" "" "$host" "")
+        c_dataset=$(_zfslock_conflict_field "$line" "dataset") || c_dataset=""
+        c_type=$(_zfslock_conflict_field "$line" "type") || c_type=""
+        c_pid=$(_zfslock_conflict_field "$line" "pid") || c_pid=""
+        c_script=$(_zfslock_conflict_field "$line" "script") || c_script=""
+        zfslock_conflict_info=$(_zfslock_remote_conflict_file \
+            "$c_dataset" "$c_type" "$c_pid" "$c_script" "" "" "$host" "")
         return 1
     fi
 
@@ -586,7 +688,9 @@ _zfslock_remote_check() {
     fi
 
     remote_agent=$(_zfslock_remote_agent "$host") || return 2
-    output=$(_zfslock_remote_exec "$host" "$remote_agent check $(printf '%q' "$dataset") $(printf '%q' "$type")" 2>/dev/null)
+    output=$(_zfslock_remote_exec "$host" \
+        "$remote_agent check $(printf '%q' "$dataset") $(printf '%q' "$type")" \
+        2>/dev/null)
 
     if [[ "$output" == *'"available": true'* ]]; then
         return 0
@@ -601,7 +705,9 @@ _zfslock_remote_check() {
     c_acquired=$(_zfslock_json_str_field "$json" "acquired") || c_acquired=""
     c_description=$(_zfslock_json_str_field "$json" "description") || c_description=""
 
-    ZFSLOCK_CONFLICT_INFO=$(_zfslock_remote_conflict_file "$c_dataset" "$c_type" "$c_pid" "$c_script" "$c_acquired" "$c_description" "$host" "")
+    zfslock_conflict_info=$(_zfslock_remote_conflict_file \
+        "$c_dataset" "$c_type" "$c_pid" "$c_script" \
+        "$c_acquired" "$c_description" "$host" "")
     return 1
 }
 
@@ -624,8 +730,8 @@ zfslock_acquire() {
     local script
     local remote_host
 
-    ZFSLOCK_ID=""
-    ZFSLOCK_REENTRY=""
+    zfslock_id=""
+    zfslock_reentry=""
 
     if [[ -z "$dataset" || -z "$type" ]]; then
         log_msg "WARN: zfslock_acquire requires dataset and type"
@@ -641,7 +747,7 @@ zfslock_acquire() {
     fi
 
     # Ensure directories exist
-    if [[ ! -d "$ZFSLOCK_LOCKS_DIR" ]]; then
+    if [[ ! -d "$zfslock_locks_dir" ]]; then
         zfslock_init || return 2
     fi
 
@@ -658,9 +764,9 @@ zfslock_acquire() {
     fi
 
     # Handle re-entrant locking (same PID already holds the lock)
-    if [[ -n "$ZFSLOCK_REENTRY" ]]; then
+    if [[ -n "$zfslock_reentry" ]]; then
         # Mark as reentry so release knows not to actually release
-        ZFSLOCK_ID="REENTRY:$ZFSLOCK_REENTRY"
+        zfslock_id="REENTRY:$zfslock_reentry"
         return 0  # Reuse existing lock
     fi
 
@@ -687,13 +793,13 @@ zfslock_acquire() {
     pidfile=$(_zfslock_pidfile)
     echo "$lockfile" >> "$pidfile"
 
-    ZFSLOCK_ID="$lockfile"
+    zfslock_id="$lockfile"
     return 0
 }
 
 # Acquire locks on multiple datasets in a deadlock-free order.
 # Returns: 0=success, 1=conflict, 2=error
-# Sets: ZFSLOCK_IDS array with the lock-file paths of all acquired locks.
+# Sets: zfslock_ids array with the lock-file paths of all acquired locks.
 zfslock_acquire_multiple() {
     local type="$1"
     shift
@@ -704,7 +810,7 @@ zfslock_acquire_multiple() {
     local ds i j held
     local depth slashes
 
-    ZFSLOCK_IDS=()
+    zfslock_ids=()
 
     if [[ -z "$type" || ${#datasets[@]} -eq 0 ]]; then
         log_msg "WARN: zfslock_acquire_multiple requires a type and at least one dataset"
@@ -747,7 +853,7 @@ zfslock_acquire_multiple() {
     # Acquire all locks in order, rolling back on any failure.
     for ds in "${kept[@]}"; do
         if zfslock_acquire "$ds" "$type"; then
-            acquired+=("$ZFSLOCK_ID")
+            acquired+=("$zfslock_id")
         else
             local fail_rc=$?
             for held in "${acquired[@]}"; do
@@ -758,7 +864,7 @@ zfslock_acquire_multiple() {
     done
 
     # shellcheck disable=SC2034
-    ZFSLOCK_IDS=("${acquired[@]}")
+    zfslock_ids=("${acquired[@]}")
     return 0
 }
 
@@ -775,19 +881,19 @@ zfslock_release() {
     # Remote locks are held by an SSH session on the storage node.
     if [[ "$lock_id" == REMOTE:* ]]; then
         remote_lockfile="${lock_id#REMOTE:}"
-        ssh_pid="${_ZFSLOCK_REMOTE_PIDS[$remote_lockfile]:-}"
-        remote_host="${_ZFSLOCK_REMOTE_HOSTS[$remote_lockfile]:-}"
+        ssh_pid="${_zfslock_remote_pids[$remote_lockfile]:-}"
+        remote_host="${_zfslock_remote_hosts[$remote_lockfile]:-}"
         if [[ -n "$ssh_pid" ]]; then
             kill "$ssh_pid" 2>/dev/null
             wait "$ssh_pid" 2>/dev/null
-            unset "_ZFSLOCK_REMOTE_PIDS[$remote_lockfile]"
+            unset "_zfslock_remote_pids[$remote_lockfile]"
         fi
         # Ensure the lock file is removed even if the holder process could not
         # be signalled cleanly.
         if [[ -n "$remote_host" ]]; then
             _zfslock_remote_force_release "$remote_host" "$remote_lockfile" 2>/dev/null || true
         fi
-        unset "_ZFSLOCK_REMOTE_HOSTS[$remote_lockfile]"
+        unset "_zfslock_remote_hosts[$remote_lockfile]"
         rm -f "$lock_id"
         return 0
     fi
@@ -829,9 +935,9 @@ zfslock_release_all() {
     rm -f "$pidfile"
 
     # Terminate any remote lock-holder SSH sessions.
-    for remote_lockfile in "${!_ZFSLOCK_REMOTE_PIDS[@]}"; do
-        ssh_pid="${_ZFSLOCK_REMOTE_PIDS[$remote_lockfile]}"
-        remote_host="${_ZFSLOCK_REMOTE_HOSTS[$remote_lockfile]:-}"
+    for remote_lockfile in "${!_zfslock_remote_pids[@]}"; do
+        ssh_pid="${_zfslock_remote_pids[$remote_lockfile]}"
+        remote_host="${_zfslock_remote_hosts[$remote_lockfile]:-}"
         if [[ -n "$ssh_pid" ]]; then
             kill "$ssh_pid" 2>/dev/null
             wait "$ssh_pid" 2>/dev/null
@@ -840,8 +946,8 @@ zfslock_release_all() {
             _zfslock_remote_force_release "$remote_host" "$remote_lockfile" 2>/dev/null || true
         fi
     done
-    _ZFSLOCK_REMOTE_PIDS=()
-    _ZFSLOCK_REMOTE_HOSTS=()
+    _zfslock_remote_pids=()
+    _zfslock_remote_hosts=()
 }
 
 # Determine whether interactive conflict resolution is safe.
@@ -883,7 +989,7 @@ zfslock_wait_or_resolve() {
         _first_pass=0
 
         # Conflict exists
-        local lockfile="$ZFSLOCK_CONFLICT_INFO"
+        local lockfile="$zfslock_conflict_info"
 
         # In non-interactive/headless mode, either wait for the lock or abort.
         if ! _zfslock_is_interactive; then
@@ -1004,7 +1110,8 @@ zfslock_wait_or_resolve() {
                 if [[ "$confirm" == "yes" ]]; then
                     local remote_host="" remote_lockfile=""
                     remote_host=$(_zfslock_read_field "$lockfile" "remote_host") || remote_host=""
-                    remote_lockfile=$(_zfslock_read_field "$lockfile" "remote_lockfile") || remote_lockfile=""
+                    remote_lockfile=$(_zfslock_read_field "$lockfile" "remote_lockfile") \
+                        || remote_lockfile=""
                     if [[ -n "$remote_host" && -n "$remote_lockfile" ]]; then
                         if _zfslock_remote_force_release "$remote_host" "$remote_lockfile"; then
                             log_msg "WARN: Force-released remote lock on $lock_dataset " \
@@ -1014,8 +1121,8 @@ zfslock_wait_or_resolve() {
                         fi
                     else
                         rm -f "$lockfile"
-                        log_msg "WARN: Force-released lock on $lock_dataset (was held by $lock_script" \
-                            "PID $lock_pid)"
+                        log_msg "WARN: Force-released lock on $lock_dataset" \
+                            "(was held by $lock_script PID $lock_pid)"
                     fi
                     # Loop will retry to acquire
                 else

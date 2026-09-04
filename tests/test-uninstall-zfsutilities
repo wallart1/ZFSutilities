@@ -457,8 +457,8 @@ COMPUTE_HOST="compute"
 EOF
     export ZFSUTILITIES_NODE_CONF="$tmpdir/etc/zfsutilities-node.conf"
 
-    DO_PURGE="false"
-    DO_ALL_NODES="false"
+    do_purge="false"
+    do_all_nodes="false"
     DO_YES="false"
 
     load_uninstall_config
@@ -493,13 +493,13 @@ EOF
         failed=1
         echo "    dialog returned non-zero"
     fi
-    if [[ "$DO_PURGE" != "true" ]]; then
+    if [[ "$do_purge" != "true" ]]; then
         failed=1
-        echo "    DO_PURGE not set to true"
+        echo "    do_purge not set to true"
     fi
-    if [[ "$DO_ALL_NODES" != "true" ]]; then
+    if [[ "$do_all_nodes" != "true" ]]; then
         failed=1
-        echo "    DO_ALL_NODES not set to true"
+        echo "    do_all_nodes not set to true"
     fi
 
     unset ZFSUTILITIES_NODE_CONF

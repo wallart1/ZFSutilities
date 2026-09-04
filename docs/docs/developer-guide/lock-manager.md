@@ -69,7 +69,7 @@ When acquiring a lock on `/pool/parent/child`:
 `zfslock_acquire <dataset> <type> [description]`
 
 - Returns: 0=success, 1=conflict, 2=error
-- Sets: $ZFSLOCK_ID on success
+- Sets: $zfslock_id on success
 
 ##### Lock release
 
@@ -84,7 +84,7 @@ When acquiring a lock on `/pool/parent/child`:
 `zfslock_check <dataset> <type>`
 
 - Returns: 0=no conflict, 1=conflict exists
-- Sets: $ZFSLOCK_CONFLICT_INFO
+- Sets: $zfslock_conflict_info
 
 ##### Interactive conflict resolution
 
@@ -240,7 +240,7 @@ zfslock_acquire_multiple <type> <dataset> [<dataset> ...]
 
 - `<type>` is one of `r`, `w`, or `x`.
 - Returns `0` on success, `1` on conflict, and `2` on error.
-- On success, the global array `ZFSLOCK_IDS` contains the acquired lock file
+- On success, the global array `zfslock_ids` contains the acquired lock file
   paths.
 - If any individual lock cannot be acquired, all locks acquired during the
   call are released before returning, so the caller never holds a partial set.

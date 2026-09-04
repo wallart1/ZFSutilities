@@ -2,7 +2,7 @@
 # remove-vm <vmid>
 # Removes a VM's zvols and Proxmox config without archiving.
 #
-# Discovers all vm-<VMID>-disk-* zvols across pools, lists them along with any
+# Discovers all vm-<vmid>-disk-* zvols across pools, lists them along with any
 # iSCSI target/LUN information, asks for confirmation, then destroys them using
 # zfsdelfs (which handles snapshots, holds, clone-dependency checks, and iSCSI
 # teardown). Finally removes the VM definition.
@@ -34,8 +34,8 @@ if ! command -v qm >/dev/null 2>&1; then
     exit 1
 fi
 
-MY_HOST=$(hostname -s)
-PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
+my_host=$(hostname -s)
+pve_conf_dir="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 
 usage() {
     log_msg "INFO: Usage: remove-vm <vmid>"
@@ -56,21 +56,21 @@ usage() {
 
 [[ $# -eq 1 ]] || usage
 
-VMID="$1"
-[[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
+vmid="$1"
+[[ "$vmid" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $vmid"; exit 1; }
 [[ $EUID -eq 0 || ${REMOVE_VM_TEST_NO_ROOT:-0} == "1" ]] || {
     log_msg "FATAL: Must run as root (use sudo)"
     exit 1
 }
 
 # --- If not on the compute host, delegate (two-node only) ---
-if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "remove-vm")
-    exec ssh -t root@"$COMPUTE_HOST" \
-        "$REMOTE_SCRIPT '$VMID'"
+if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
+    remote_script=$(remote_zfsutility_script "$compute_host" "remove-vm")
+    exec ssh -t root@"$compute_host" \
+        "$remote_script '$vmid'"
 fi
 
-proxmoxconfig="${PVE_CONF_DIR}/${VMID}.conf"
+proxmoxconfig="${pve_conf_dir}/${vmid}.conf"
 
 # =====================================================================
 # Discover zvols (and iSCSI info in two-node mode)
@@ -89,44 +89,66 @@ if is_single_node; then
         sizes+=("$size")
         targets+=("")
         luns+=("")
+    # Select zvols named <pool>/proxmox/vm-<vmid>-disk-<n> (grep -F for the
+    # literal prefix, then anchor the end with a digit check).
     done < <(zfs list -H -t volume -o name 2>/dev/null \
-        | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$" \
-        | sort)
+        | grep -F "/proxmox/vm-${vmid}-disk-" \
+        | while IFS= read -r zvol; do
+            disk_suffix="${zvol##*disk-}"
+            [[ "$disk_suffix" =~ ^[0-9]+$ ]] || continue
+            [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_suffix}" ]] || continue
+            echo "$zvol"
+        done | sort)
 else
     # Two-node: discover on the storage host and collect target/LUN info.
-    discover_out=$(ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF'
+    discover_out=$(ssh root@"$storage_host" bash -s "$vmid" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-VMID="$1"
+vmid="$1"
 
-zfs list -H -t volume -o name 2>/dev/null \
-    | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$" \
-    | sort \
-    | while IFS= read -r zvol; do
+# Feed the loop sorted zvol names; keep only names ending in
+# vm-<vmid>-disk-<digits> (grep -F matches the literal prefix; the suffix
+# digit check anchors the end).
+while IFS= read -r zvol; do
+        disk_suffix="${zvol##*disk-}"
+        [[ "$disk_suffix" =~ ^[0-9]+$ ]] || continue
+        [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_suffix}" ]] || continue
         size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
-        disknum=$(echo "$zvol" | grep -oP 'disk-\K[0-9]+$')
-        backstore="vm-${VMID}-disk-${disknum}"
+        disknum="$disk_suffix"
+        backstore="vm-${vmid}-disk-${disknum}"
 
         target=""
         lun=""
         while IFS= read -r t; do
-            found_lun=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
-                | grep " ${backstore} " \
-                | grep -oP 'lun\K[0-9]+' \
-                | head -1)
+            # The selected LUN line starts with "lun<n>"; take the digits.
+            lun_line=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
+                | grep " ${backstore} " | head -1)
+            found_lun=""
+            if [[ -n "$lun_line" ]]; then
+                found_lun="${lun_line#*lun}"
+                found_lun="${found_lun%%[!0-9]*}"
+            fi
             if [[ -n "$found_lun" ]]; then
                 target="$t"
                 lun="$found_lun"
                 break
             fi
-        done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+')
+        done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
+            # targetcli separates each target name from its dotted leader
+            # with a space, so the IQN is a whole token.
+            read -ra _t_words <<< "$_t_line"
+            for _t in "${_t_words[@]}"; do
+                case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
+            done
+        done)
 
         printf '%s\t%s\t%s\t%s\n' "$zvol" "$size" "$target" "$lun"
-    done
+    done < <(zfs list -H -t volume -o name 2>/dev/null \
+        | grep -F "/proxmox/vm-${vmid}-disk-" | sort)
 SSHEOF
-    ) || { log_msg "FATAL: SSH to $STORAGE_HOST failed"; exit 1; }
+    ) || { log_msg "FATAL: SSH to $storage_host failed"; exit 1; }
 
     while IFS=$'\t' read -r zvol size target lun; do
         [[ -n "$zvol" ]] || continue
@@ -138,7 +160,7 @@ SSHEOF
 fi
 
 if [[ ${#zvols[@]} -eq 0 && ! -f "$proxmoxconfig" ]]; then
-    log_msg "INFO: No zvols or Proxmox config found for VM ${VMID}."
+    log_msg "INFO: No zvols or Proxmox config found for VM ${vmid}."
     exit 0
 fi
 
@@ -147,7 +169,7 @@ fi
 # =====================================================================
 
 log_msg "INFO: === remove-vm ==="
-log_msg "INFO:   VM: ${VMID}"
+log_msg "INFO:   VM: ${vmid}"
 if [[ -f "$proxmoxconfig" ]]; then
     log_msg "INFO:   Config: ${proxmoxconfig}"
 else
@@ -177,9 +199,9 @@ fi
 
 # Warn if the VM is running.
 if [[ -f "$proxmoxconfig" ]]; then
-    vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+    vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
     if [[ "$vm_status" == "running" ]]; then
-        log_msg "INFO:   VM ${VMID} is currently running and will be stopped before removal."
+        log_msg "INFO:   VM ${vmid} is currently running and will be stopped before removal."
         echo ""
     fi
 fi
@@ -194,10 +216,10 @@ fi
 # =====================================================================
 
 if [[ -f "$proxmoxconfig" ]]; then
-    vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+    vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
     if [[ "$vm_status" == "running" ]]; then
-        log_msg "INFO:   Stopping VM ${VMID}..."
-        qm stop "$VMID" 2>/dev/null || true
+        log_msg "INFO:   Stopping VM ${vmid}..."
+        qm stop "$vmid" 2>/dev/null || true
         sleep 2
     fi
 fi
@@ -218,20 +240,20 @@ if [[ ${#zvols[@]} -gt 0 ]]; then
             fi
         done
     else
-        remote_zfsdelfs=$(remote_zfsutility_script "$STORAGE_HOST" "zfsdelfs")
+        remote_zfsdelfs=$(remote_zfsutility_script "$storage_host" "zfsdelfs")
         for zvol in "${zvols[@]}"; do
             log_msg "INFO:     Destroying ${zvol}..."
-            if ! ssh root@"$STORAGE_HOST" \
+            if ! ssh root@"$storage_host" \
                     "$remote_zfsdelfs '$zvol' '' '' '' \"autoproceed='Y'\""; then
-                log_msg "FATAL: Failed to remove ${zvol} on $STORAGE_HOST"
+                log_msg "FATAL: Failed to remove ${zvol} on $storage_host"
                 exit 1
             fi
         done
 
         log_msg "INFO:   Saving iSCSI configuration..."
-        remote_safe_save=$(remote_zfsutility_script "$STORAGE_HOST" "safe-iscsi-save")
-        ssh root@"$STORAGE_HOST" "$remote_safe_save" \
-            || log_msg "WARN: Could not save iSCSI config on $STORAGE_HOST"
+        remote_safe_save=$(remote_zfsutility_script "$storage_host" "safe-iscsi-save")
+        ssh root@"$storage_host" "$remote_safe_save" \
+            || log_msg "WARN: Could not save iSCSI config on $storage_host"
 
         log_msg "INFO:   Rescanning iSCSI..."
         rescan_path=$(find_zfsutility_script rescan-storage) || exit 1
@@ -252,4 +274,4 @@ fi
 
 echo ""
 log_msg "INFO: === Done ==="
-log_msg "INFO:   VM ${VMID} has been removed."
+log_msg "INFO:   VM ${vmid} has been removed."

@@ -43,7 +43,7 @@ function delallsnaps {
         log_msg "WARN: Could not acquire write lock on ${zfsdelallsnaps_fs}; aborting."
         return 1
     fi
-    local _delallsnaps_lock="$ZFSLOCK_ID"
+    local _delallsnaps_lock="$zfslock_id"
 
     unset zfsdelsnapsfind
     if [[ $2 != '' ]]; then zfsdelsnapsfind="$2"; fi
@@ -99,7 +99,7 @@ function delallsnaps {
             log_msg "INFO: About to delete the following ${#snaparray[@]} snapshots from" \
                 "$zfsdelallsnaps_fs." \
                 "\nThis will disregard system offsite-* holds and snapshot age;" \
-                "user holds may block individual snapshots."
+                "user holds will block individual snapshots from being deleted."
             local now
             now=$(date +%s)
             for snap in "${snaparray[@]}"; do

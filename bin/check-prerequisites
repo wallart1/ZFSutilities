@@ -29,19 +29,19 @@ set -euo pipefail
 # Argument parsing
 # ------------------------------------------------------------------
 
-CHECK_MODE=""
-LIST_FAILURES=""
+check_mode=""
+list_failures=""
 
 for arg in "$@"; do
     case "$arg" in
         --single-node)
-            CHECK_MODE="single-node"
+            check_mode="single-node"
             ;;
         --two-node)
-            CHECK_MODE="two-node"
+            check_mode="two-node"
             ;;
         --list-failures)
-            LIST_FAILURES="Y"
+            list_failures="Y"
             ;;
         --help|-h)
             echo "Usage: $0 [--single-node|--two-node] [--list-failures]"
@@ -59,21 +59,21 @@ done
 # Helpers
 # ------------------------------------------------------------------
 
-PASS=0
-FAIL=0
-WARN=0
+pass_count=0
+fail_count=0
+warn_count=0
 
 # Arrays for structured failure reporting
-FAIL_CATS=()
-FAIL_NAMES=()
-FAIL_PKGS=()
-FAIL_MSGS=()
+fail_cats=()
+fail_names=()
+fail_pkgs=()
+fail_msgs=()
 
 pass() {
-    if [[ -z "$LIST_FAILURES" ]]; then
+    if [[ -z "$list_failures" ]]; then
         echo "  ✓ $1"
     fi
-    ((++PASS))
+    ((++pass_count))
 }
 
 fail() {
@@ -82,26 +82,26 @@ fail() {
     local package="${3:-}"
     local message="${4:-}"
 
-    FAIL_CATS+=("$category")
-    FAIL_NAMES+=("$name")
-    FAIL_PKGS+=("$package")
-    FAIL_MSGS+=("$message")
+    fail_cats+=("$category")
+    fail_names+=("$name")
+    fail_pkgs+=("$package")
+    fail_msgs+=("$message")
 
-    if [[ -z "$LIST_FAILURES" ]]; then
+    if [[ -z "$list_failures" ]]; then
         if [[ -n "$package" ]]; then
             echo "  ✗ $name — $message (install: $package)"
         else
             echo "  ✗ $name — $message"
         fi
     fi
-    ((++FAIL))
+    ((++fail_count))
 }
 
 warn() {
-    if [[ -z "$LIST_FAILURES" ]]; then
+    if [[ -z "$list_failures" ]]; then
         echo "  ⚠ $1"
     fi
-    ((++WARN))
+    ((++warn_count))
 }
 
 check_cmd() {
@@ -161,7 +161,7 @@ check_mkdocs_version() {
 # Core ZFS utilities
 # ------------------------------------------------------------------
 
-if [[ -z "$LIST_FAILURES" ]]; then
+if [[ -z "$list_failures" ]]; then
     echo "=== Core ZFS Utilities ==="
 fi
 check_cmd "core" "bash" "bash"
@@ -169,7 +169,7 @@ check_cmd "core" "zfs" "zfsutils-linux"
 check_cmd "core" "zpool" "zfsutils-linux"
 check_cmd "core" "pv" "pv"
 check_cmd "core" "rsync" "rsync"
-if [[ -z "$LIST_FAILURES" ]]; then
+if [[ -z "$list_failures" ]]; then
     echo ""
 fi
 
@@ -177,7 +177,7 @@ fi
 # Proxmox
 # ------------------------------------------------------------------
 
-if [[ -z "$LIST_FAILURES" ]]; then
+if [[ -z "$list_failures" ]]; then
     echo "=== Proxmox VE / VM tools ==="
 fi
 if command -v pveversion >/dev/null 2>&1; then
@@ -186,7 +186,7 @@ else
     warn "pveversion not found — Proxmox VE is required only on a two-node compute host;" \
          "optional on single-node and two-node storage hosts"
 fi
-if [[ -z "$LIST_FAILURES" ]]; then
+if [[ -z "$list_failures" ]]; then
     echo ""
 fi
 
@@ -194,7 +194,7 @@ fi
 # GTK GUI
 # ------------------------------------------------------------------
 
-if [[ -z "$LIST_FAILURES" ]]; then
+if [[ -z "$list_failures" ]]; then
     echo "=== GTK GUI ==="
 fi
 check_cmd "gui" "python3" "python3"
@@ -208,7 +208,7 @@ if [[ -n "${DISPLAY:-}" ]]; then
 else
     warn "DISPLAY not set — GUI requires an X11 or Wayland session"
 fi
-if [[ -z "$LIST_FAILURES" ]]; then
+if [[ -z "$list_failures" ]]; then
     echo ""
 fi
 
@@ -216,8 +216,8 @@ fi
 # Two-node prerequisites
 # ------------------------------------------------------------------
 
-if [[ "$CHECK_MODE" == "two-node" ]]; then
-    if [[ -z "$LIST_FAILURES" ]]; then
+if [[ "$check_mode" == "two-node" ]]; then
+    if [[ -z "$list_failures" ]]; then
         echo "=== Two-Node ==="
     fi
     check_cmd "two-node" "ssh" "openssh-client"
@@ -225,7 +225,7 @@ if [[ "$CHECK_MODE" == "two-node" ]]; then
     check_cmd "two-node" "targetcli" "targetcli-fb"
     check_systemd_service "two-node" "rtslib-fb-targetctl" "python3-rtslib-fb"
     check_cmd "two-node" "iscsiadm" "open-iscsi"
-    if [[ -z "$LIST_FAILURES" ]]; then
+    if [[ -z "$list_failures" ]]; then
         echo ""
     fi
 fi
@@ -234,7 +234,7 @@ fi
 # Documentation
 # ------------------------------------------------------------------
 
-if [[ -z "$LIST_FAILURES" ]]; then
+if [[ -z "$list_failures" ]]; then
     echo "=== Documentation ==="
 fi
 check_cmd "docs" "pip3" "python3-pip"
@@ -253,7 +253,7 @@ if python3 -c "import material" >/dev/null 2>&1; then
 else
     fail "docs" "mkdocs-material" "mkdocs-material" "not installed"
 fi
-if [[ -z "$LIST_FAILURES" ]]; then
+if [[ -z "$list_failures" ]]; then
     echo ""
 fi
 
@@ -261,15 +261,15 @@ fi
 # Machine-readable failure list
 # ------------------------------------------------------------------
 
-if [[ -n "$LIST_FAILURES" ]]; then
-    for i in "${!FAIL_NAMES[@]}"; do
+if [[ -n "$list_failures" ]]; then
+    for i in "${!fail_names[@]}"; do
         printf '%s|%s|%s|%s\n' \
-            "${FAIL_CATS[$i]}" \
-            "${FAIL_NAMES[$i]}" \
-            "${FAIL_PKGS[$i]}" \
-            "${FAIL_MSGS[$i]}"
+            "${fail_cats[$i]}" \
+            "${fail_names[$i]}" \
+            "${fail_pkgs[$i]}" \
+            "${fail_msgs[$i]}"
     done
-    if [[ $FAIL -gt 0 ]]; then
+    if [[ $fail_count -gt 0 ]]; then
         exit 1
     fi
     exit 0
@@ -280,20 +280,20 @@ fi
 # ------------------------------------------------------------------
 
 echo "=========================================="
-echo "  Pass:  $PASS"
-echo "  Warn:  $WARN"
-echo "  Fail:  $FAIL"
+echo "  Pass:  $pass_count"
+echo "  Warn:  $warn_count"
+echo "  Fail:  $fail_count"
 echo "=========================================="
 
-if [[ $FAIL -gt 0 ]]; then
+if [[ $fail_count -gt 0 ]]; then
     echo ""
-    echo "✗ $FAIL required prerequisite(s) missing. Install them before proceeding."
+    echo "✗ $fail_count required prerequisite(s) missing. Install them before proceeding."
     exit 1
 fi
 
-if [[ $WARN -gt 0 ]]; then
+if [[ $warn_count -gt 0 ]]; then
     echo ""
-    echo "⚠ $WARN optional item(s) missing — installation can continue" \
+    echo "⚠ $warn_count optional item(s) missing — installation can continue" \
         "but some features may be unavailable."
 fi
 

@@ -51,44 +51,51 @@ usage() {
 
 [[ $# -eq 1 ]] || usage
 
-VMID="$1"
-[[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
+vmid="$1"
+[[ "$vmid" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $vmid"; exit 1; }
 
 # --- If not on the compute host, delegate (two-node only) ---
-if is_two_node && [[ "$THIS_HOST" != "$COMPUTE_HOST" ]]; then
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "promote-vm-clone")
-    exec ssh -t root@"$COMPUTE_HOST" "$REMOTE_SCRIPT '$VMID'"
+if is_two_node && [[ "$this_host" != "$compute_host" ]]; then
+    remote_script=$(remote_zfsutility_script "$compute_host" "promote-vm-clone")
+    exec ssh -t root@"$compute_host" "$remote_script '$vmid'"
 fi
 
 # --- Discover clone zvols ---
 if is_single_node; then
     clone_info=$(zfs list -H -o name,origin \
-        | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
+        | awk -v p="/proxmox/vm-${vmid}-disk-" \
+            'index($1, p) && $2 != "-" {print $1 "\t" $2}')
 else
-    clone_info=$(ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF'
+    clone_info=$(ssh root@"$storage_host" bash -s "$vmid" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-VMID="$1"
+vmid="$1"
 zfs list -H -o name,origin \
-    | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}'
+    | awk -v p="/proxmox/vm-${vmid}-disk-" \
+        'index($1, p) && $2 != "-" {print $1 "\t" $2}'
 SSHEOF
-    ) || { log_msg "FATAL: SSH to $STORAGE_HOST failed"; exit 1; }
+    ) || { log_msg "FATAL: SSH to $storage_host failed"; exit 1; }
 fi
 
 [[ -n "$clone_info" ]] \
     || {
-        log_msg "FATAL: No clone zvols found for VM ${VMID} — already promoted or not a ZFS clone"
+        log_msg "FATAL: No clone zvols found for VM ${vmid} — already promoted or not a ZFS clone"
         exit 1
     }
 
 log_msg "INFO: === promote-vm-clone ==="
-log_msg "INFO:   VM: ${VMID}"
+log_msg "INFO:   VM: ${vmid}"
 echo ""
 log_msg "INFO:   Zvols to promote:"
 while IFS=$'\t' read -r zvol origin; do
-    src_vmid=$(echo "$origin" | grep -oP '/proxmox/vm-\K[0-9]+(?=-disk-)')
+    src_vmid=""
+    if [[ "$origin" == *"/proxmox/vm-"*"-disk-"* ]]; then
+        src_vmid="${origin#*"/proxmox/vm-"}"
+        src_vmid="${src_vmid%%-disk-*}"
+        [[ "$src_vmid" =~ ^[0-9]+$ ]] || src_vmid=""
+    fi
     log_msg "INFO:     ${zvol}"
     log_msg "INFO:       origin: ${origin}"
     [[ -n "$src_vmid" ]] && log_msg "INFO:       cuts dependency on VM ${src_vmid}"
@@ -108,14 +115,15 @@ if is_single_node; then
             exit 1
         fi
         zfs promote "$zvol" || { log_msg "FATAL: Promotion failed: $zvol"; exit 1; }
-        zfslock_release "$ZFSLOCK_ID"
+        zfslock_release "$zfslock_id"
         log_msg "INFO: ✓ Promoted: ${zvol}"
         log_msg "INFO:   snapshot moved from ${origin%%@*} to ${zvol}"
     done < <(zfs list -H -o name,origin \
-        | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
+        | awk -v p="/proxmox/vm-${vmid}-disk-" \
+            'index($1, p) && $2 != "-" {print $1 "\t" $2}')
 else
     run_remote_promote() {
-        ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF'
+        ssh root@"$storage_host" bash -s "$vmid" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
@@ -123,7 +131,7 @@ bashinit
 source_helper zfslockmanager
 
 set -e
-VMID="$1"
+vmid="$1"
 zfslock_init
 while IFS=$'\t' read -r zvol origin; do
     if ! zfslock_wait_or_resolve "$zvol" "w" "promote-vm-clone"; then
@@ -131,24 +139,25 @@ while IFS=$'\t' read -r zvol origin; do
         exit 1
     fi
     zfs promote "$zvol"
-    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release "$zfslock_id"
     log_msg "INFO: ✓ Promoted: ${zvol}"
     log_msg "INFO:   snapshot moved from ${origin%%@*} to ${zvol}"
 done < <(zfs list -H -o name,origin \
-    | awk -v v="$VMID" '$1 ~ "/proxmox/vm-" v "-disk-" && $2 != "-" {print $1 "\t" $2}')
+    | awk -v p="/proxmox/vm-${vmid}-disk-" \
+        'index($1, p) && $2 != "-" {print $1 "\t" $2}')
 SSHEOF
     }
 
     if ! run_remote_promote; then
-        log_msg "FATAL: Promotion failed on $STORAGE_HOST"
+        log_msg "FATAL: Promotion failed on $storage_host"
         exit 1
     fi
 fi
 
 echo ""
 log_msg "INFO: === Done ==="
-log_msg "INFO:   VM ${VMID} zvols are now independent."
-log_msg "INFO:   Other clones of the same snapshots have been re-parented to VM ${VMID}."
+log_msg "INFO:   VM ${vmid} zvols are now independent."
+log_msg "INFO:   Other clones of the same snapshots have been re-parented to VM ${vmid}."
 log_msg "INFO:   The former source VM can be destroyed when ready:"
 log_msg "INFO:     1. Stop the source VM"
 log_msg "INFO:     2. Remove its disks from the Proxmox config"

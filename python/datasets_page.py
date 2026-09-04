@@ -425,7 +425,7 @@ def update_mounted_states(app):
     """
     repo = app.ctx.zfs_repository
     store = app.datasets_store
-    mounted_snaps = get_mounted_snapshots(repo=repo)
+    mounted_snaps = get_mounted_snapshots()
 
     def _walk(tree_iter):
         while tree_iter:

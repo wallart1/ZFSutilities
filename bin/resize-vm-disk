@@ -30,7 +30,7 @@ if ! command -v qm >/dev/null 2>&1; then
     exit 1
 fi
 
-MY_HOST=$(hostname -s)
+my_host=$(hostname -s)
 
 usage() {
     local pool_choices
@@ -58,118 +58,130 @@ usage() {
 }
 
 # Filter --skip-rescan from args
-SKIP_RESCAN=false
-CLEAN_ARGS=()
+skip_rescan=false
+clean_args=()
 for arg in "$@"; do
-    [[ "$arg" == "--skip-rescan" ]] && SKIP_RESCAN=true || CLEAN_ARGS+=("$arg")
+    [[ "$arg" == "--skip-rescan" ]] && skip_rescan=true || clean_args+=("$arg")
 done
-set -- "${CLEAN_ARGS[@]}"
+set -- "${clean_args[@]}"
 
 # --- Argument validation ---
 [[ $# -eq 4 ]] || usage
 
-POOL="$1"
-VMID="$2"
-DISKNUM="$3"
-NEWSIZE="$4"
+pool="$1"
+vmid="$2"
+disknum="$3"
+newsize="$4"
 
 if is_two_node; then
-    is_known_pool "$POOL" || {
-        log_msg "FATAL: Pool must be one of: $(pool_list | paste -sd ' ' -). Got: $POOL"
+    is_known_pool "$pool" || {
+        log_msg "FATAL: Pool must be one of: $(pool_list | paste -sd ' ' -). Got: $pool"
         exit 1
     }
 else
-    zpool list -H -o name "$POOL" >/dev/null 2>&1 || {
-        log_msg "FATAL: Pool '$POOL' not found. Available pools:" \
+    zpool list -H -o name "$pool" >/dev/null 2>&1 || {
+        log_msg "FATAL: Pool '$pool' not found. Available pools:" \
             "$(zpool list -H -o name 2>/dev/null | paste -sd ' ' -)"
         exit 1
     }
 fi
-[[ "$VMID" =~ ^[0-9]+$ ]] || {
-    log_msg "FATAL: VMID must be a number, got: $VMID"
+[[ "$vmid" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: vmid must be a number, got: $vmid"
     exit 1
 }
-[[ "$DISKNUM" =~ ^[0-9]+$ ]] || {
-    log_msg "FATAL: disk-num must be a number, got: $DISKNUM"
+[[ "$disknum" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: disk-num must be a number, got: $disknum"
     exit 1
 }
-[[ "$NEWSIZE" =~ ^[0-9]+(\.[0-9]+)?[KMGTP]$ ]] || {
-    log_msg "FATAL: new-size must be a total size like 200G or 1T (not an increment), got: $NEWSIZE"
+# Size must be an integer or decimal number followed by a KMGTP unit
+# (e.g. 200G, 1T, 10.5G). Validated with parameter expansion, not regex.
+size_unit="${newsize: -1}"
+size_number="${newsize%"${size_unit}"}"
+size_int="${size_number%%.*}"
+size_frac="${size_number#"${size_int}"}"
+valid_size=false
+if [[ "${size_unit}" == [KMGTP] && "${size_int}" =~ ^[0-9]+$ ]]; then
+    if [[ -z "${size_frac}" || "${size_frac}" =~ ^\.[0-9]+$ ]]; then
+        valid_size=true
+    fi
+fi
+[[ "${valid_size}" == true ]] || {
+    log_msg "FATAL: new-size must be a total size like 200G or 1T (not an increment), got: $newsize"
     exit 1
 }
 
 # --- If not on the storage host, delegate storage work via SSH (two-node only) ---
-if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
-    log_msg "INFO: Connecting to $STORAGE_HOST for storage operations..."
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$STORAGE_HOST" "resize-vm-disk")
-    ssh root@"$STORAGE_HOST" "$REMOTE_SCRIPT '$POOL' '$VMID' '$DISKNUM' '$NEWSIZE' --skip-rescan" \
+if is_two_node && [[ "$my_host" != "$storage_host" ]]; then
+    log_msg "INFO: Connecting to $storage_host for storage operations..."
+    remote_script=$(remote_zfsutility_script "$storage_host" "resize-vm-disk")
+    ssh root@"$storage_host" "$remote_script '$pool' '$vmid' '$disknum' '$newsize' --skip-rescan" \
         || {
-            log_msg "FATAL: Storage operations failed on $STORAGE_HOST"
+            log_msg "FATAL: Storage operations failed on $storage_host"
             exit 1
         }
     echo ""
     log_msg "INFO: Rescanning iSCSI on $(hostname)..."
-    if [[ "$MY_HOST" == "$COMPUTE_HOST" ]]; then
+    if [[ "$my_host" == "$compute_host" ]]; then
         "$mydir/rescan-storage"
     else
-        REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
-        ssh root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1 \
-            || log_msg "WARN: Could not rescan $COMPUTE_HOST — run 'sudo rescan-storage'" \
-                "on $COMPUTE_HOST manually"
+        remote_rescan=$(remote_zfsutility_script "$compute_host" "rescan-storage")
+        ssh root@"$compute_host" "$remote_rescan" 2>&1 \
+            || log_msg "WARN: Could not rescan $compute_host — run 'sudo rescan-storage'" \
+                "on $compute_host manually"
     fi
     exit 0
 fi
 
 # === Running on the storage host ===
 
-ZVOL_NAME="$POOL/proxmox/vm-${VMID}-disk-${DISKNUM}"
+zvol_name="$pool/proxmox/vm-${vmid}-disk-${disknum}"
 
 log_msg "INFO: === resize-vm-disk ==="
-log_msg "INFO:   Zvol:       $ZVOL_NAME"
-log_msg "INFO:   Total size: $NEWSIZE  (this is the final size, not an increment)"
+log_msg "INFO:   Zvol:       $zvol_name"
+log_msg "INFO:   Total size: $newsize  (this is the final size, not an increment)"
 echo ""
 
 # --- Check zvol exists ---
-if ! zfs list -H -o name "$ZVOL_NAME" 2>/dev/null | grep -q .; then
-    log_msg "FATAL: Zvol does not exist: $ZVOL_NAME"
+if ! zfs list -H -o name "$zvol_name" 2>/dev/null | grep -q .; then
+    log_msg "FATAL: Zvol does not exist: $zvol_name"
     exit 1
 fi
 
-CURRENT_SIZE=$(zfs get -H -o value volsize "$ZVOL_NAME")
-log_msg "INFO:   Current size: $CURRENT_SIZE"
+current_size=$(zfs get -H -o value volsize "$zvol_name")
+log_msg "INFO:   Current size: $current_size"
 echo ""
 
 # --- Grow zvol ---
 zfslock_init
-if ! zfslock_wait_or_resolve "$ZVOL_NAME" "w" "resize-vm-disk"; then
-    log_msg "FATAL: Could not acquire write lock on ${ZVOL_NAME}"
+if ! zfslock_wait_or_resolve "$zvol_name" "w" "resize-vm-disk"; then
+    log_msg "FATAL: Could not acquire write lock on ${zvol_name}"
     exit 1
 fi
 
-log_msg "INFO: Resizing zvol to $NEWSIZE..."
-zfs set volsize="$NEWSIZE" "$ZVOL_NAME"
-zfslock_release "$ZFSLOCK_ID"
+log_msg "INFO: Resizing zvol to $newsize..."
+zfs set volsize="$newsize" "$zvol_name"
+zfslock_release "$zfslock_id"
 log_msg "INFO: ✓ Zvol resized"
 
-NEW_ACTUAL=$(zfs get -H -o value volsize "$ZVOL_NAME")
-log_msg "INFO:   New size: $NEW_ACTUAL"
+new_actual=$(zfs get -H -o value volsize "$zvol_name")
+log_msg "INFO:   New size: $new_actual"
 
 # --- Trigger rescan on the compute host (two-node only, unless called remotely) ---
-if is_two_node && [[ "$SKIP_RESCAN" == false ]]; then
-    log_msg "INFO: Triggering iSCSI rescan on $COMPUTE_HOST..."
-    REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
-    if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1; then
+if is_two_node && [[ "$skip_rescan" == false ]]; then
+    log_msg "INFO: Triggering iSCSI rescan on $compute_host..."
+    remote_rescan=$(remote_zfsutility_script "$compute_host" "rescan-storage")
+    if ssh -o ConnectTimeout=10 root@"$compute_host" "$remote_rescan" 2>&1; then
         log_msg "INFO: ✓ Rescan triggered"
     else
-        log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage'" \
-            "on $COMPUTE_HOST manually"
+        log_msg "WARN: Could not reach $compute_host — run 'sudo rescan-storage'" \
+            "on $compute_host manually"
     fi
 fi
 
 echo ""
 log_msg "INFO: === Done ==="
-log_msg "INFO:   $ZVOL_NAME"
-log_msg "INFO:   Before: $CURRENT_SIZE  →  After: $NEW_ACTUAL"
+log_msg "INFO:   $zvol_name"
+log_msg "INFO:   Before: $current_size  →  After: $new_actual"
 echo ""
 log_msg "INFO: Next steps inside the VM:"
 log_msg "INFO:   Resize the partition and filesystem (growpart, resize2fs, etc.)"

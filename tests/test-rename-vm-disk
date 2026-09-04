@@ -25,18 +25,18 @@ is_two_node() { [[ "$_TEST_NODE_MODE" == "two-node" ]]; }
 
 setup_globals() {
     _TEST_NODE_MODE="single-node"
-    PVE_CONF_DIR="$_mock_zfs_state_dir/pve"
-    rm -rf "$PVE_CONF_DIR"
-    mkdir -p "$PVE_CONF_DIR"
-    POOL="threeamigos"
-    OLD_BASENAME="vm-100-disk-0"
-    NEW_BASENAME="vm-100-disk-1"
-    OLD_ZVOL="${POOL}/proxmox/${OLD_BASENAME}"
-    NEW_ZVOL="${POOL}/proxmox/${NEW_BASENAME}"
-    ISCSI_TARGET=""
-    ISCSI_LUN=""
-    ISCSI_BACKSTORE=""
-    VM_REFS=()
+    pve_conf_dir="$_mock_zfs_state_dir/pve"
+    rm -rf "$pve_conf_dir"
+    mkdir -p "$pve_conf_dir"
+    pool="threeamigos"
+    old_basename="vm-100-disk-0"
+    new_basename="vm-100-disk-1"
+    old_zvol="${pool}/proxmox/${old_basename}"
+    new_zvol="${pool}/proxmox/${new_basename}"
+    iscsi_target=""
+    iscsi_lun=""
+    iscsi_backstore=""
+    vm_refs=()
     # Reset any per-test qm mock inherited from a prior test.
     unset -f qm 2>/dev/null || true
 }
@@ -47,7 +47,7 @@ setup_globals() {
 write_vm_conf() {
     local vmid="$1"
     shift
-    local conf="$PVE_CONF_DIR/${vmid}.conf"
+    local conf="$pve_conf_dir/${vmid}.conf"
     : > "$conf"
     local line
     for line in "$@"; do
@@ -62,106 +62,106 @@ write_vm_conf() {
 test_find_single_node_refs() {
     setup_globals
     _TEST_NODE_MODE="single-node"
-    local disk_line="scsi0: ${POOL}:${OLD_BASENAME},format=raw"
+    local disk_line="scsi0: ${pool}:${old_basename},format=raw"
     disk_line+=",discard=on,iothread=1,size=32G"
     write_vm_conf 100 "$disk_line"
 
     test_start "find_vm_refs finds single-node zvol reference"
     find_vm_refs
-    if ! assert_array_len 1 "${VM_REFS[@]}"; then
+    if ! assert_array_len 1 "${vm_refs[@]}"; then
         return
     fi
-    assert_equals "100:scsi0" "${VM_REFS[0]}"
+    assert_equals "100:scsi0" "${vm_refs[0]}"
 }
 
 test_find_single_node_refs_vmid_mismatch() {
     setup_globals
     _TEST_NODE_MODE="single-node"
     # Zvol basename says vm-100, but it is attached to VM 200.
-    write_vm_conf 200 "scsi2: ${POOL}:${OLD_BASENAME},format=raw,size=32G"
+    write_vm_conf 200 "scsi2: ${pool}:${old_basename},format=raw,size=32G"
 
     test_start "find_vm_refs finds reference even when zvol VMID differs from config VMID"
     find_vm_refs
-    if ! assert_array_len 1 "${VM_REFS[@]}"; then
+    if ! assert_array_len 1 "${vm_refs[@]}"; then
         return
     fi
-    assert_equals "200:scsi2" "${VM_REFS[0]}"
+    assert_equals "200:scsi2" "${vm_refs[0]}"
 }
 
 test_find_single_node_refs_detached() {
     setup_globals
     _TEST_NODE_MODE="single-node"
-    write_vm_conf 100 "scsi0: ${POOL}:vm-100-disk-9,format=raw,size=32G"
+    write_vm_conf 100 "scsi0: ${pool}:vm-100-disk-9,format=raw,size=32G"
 
     test_start "find_vm_refs returns empty for detached zvol"
     find_vm_refs
-    assert_array_len 0 "${VM_REFS[@]}"
+    assert_array_len 0 "${vm_refs[@]}"
 }
 
 test_find_two_node_refs() {
     setup_globals
     _TEST_NODE_MODE="two-node"
-    STORAGE_IP="10.0.0.5"
-    IQN_PREFIX="iqn.2025-01.com.example"
-    ISCSI_TARGET="${IQN_PREFIX}:${POOL}"
-    ISCSI_LUN="3"
-    ISCSI_BACKSTORE="${OLD_BASENAME}"
+    storage_ip="10.0.0.5"
+    iqn_prefix="iqn.2025-01.com.example"
+    iscsi_target="${iqn_prefix}:${pool}"
+    iscsi_lun="3"
+    iscsi_backstore="${old_basename}"
 
-    local disk_line="scsi1: /dev/disk/by-path/ip-${STORAGE_IP}"
-    disk_line+=":3260-iscsi-${ISCSI_TARGET}-lun-${ISCSI_LUN},format=raw,size=32G"
+    local disk_line="scsi1: /dev/disk/by-path/ip-${storage_ip}"
+    disk_line+=":3260-iscsi-${iscsi_target}-lun-${iscsi_lun},format=raw,size=32G"
     write_vm_conf 105 "$disk_line"
 
     test_start "find_vm_refs finds two-node by-path reference"
     find_vm_refs
-    if ! assert_array_len 1 "${VM_REFS[@]}"; then
+    if ! assert_array_len 1 "${vm_refs[@]}"; then
         return
     fi
-    assert_equals "105:scsi1" "${VM_REFS[0]}"
+    assert_equals "105:scsi1" "${vm_refs[0]}"
 }
 
 test_find_two_node_refs_vmid_mismatch() {
     setup_globals
     _TEST_NODE_MODE="two-node"
-    STORAGE_IP="10.0.0.5"
-    IQN_PREFIX="iqn.2025-01.com.example"
-    ISCSI_TARGET="${IQN_PREFIX}:${POOL}"
-    ISCSI_LUN="7"
-    ISCSI_BACKSTORE="${OLD_BASENAME}"
+    storage_ip="10.0.0.5"
+    iqn_prefix="iqn.2025-01.com.example"
+    iscsi_target="${iqn_prefix}:${pool}"
+    iscsi_lun="7"
+    iscsi_backstore="${old_basename}"
 
     # Zvol basename says vm-100, but the by-path disk is attached to VM 999.
-    local disk_line="scsi0: /dev/disk/by-path/ip-${STORAGE_IP}"
-    disk_line+=":3260-iscsi-${ISCSI_TARGET}-lun-${ISCSI_LUN},format=raw,size=32G"
+    local disk_line="scsi0: /dev/disk/by-path/ip-${storage_ip}"
+    disk_line+=":3260-iscsi-${iscsi_target}-lun-${iscsi_lun},format=raw,size=32G"
     write_vm_conf 999 "$disk_line"
 
     test_start "find_vm_refs finds two-node reference despite VMID mismatch"
     find_vm_refs
-    if ! assert_array_len 1 "${VM_REFS[@]}"; then
+    if ! assert_array_len 1 "${vm_refs[@]}"; then
         return
     fi
-    assert_equals "999:scsi0" "${VM_REFS[0]}"
+    assert_equals "999:scsi0" "${vm_refs[0]}"
 }
 
 test_find_two_node_refs_detached() {
     setup_globals
     _TEST_NODE_MODE="two-node"
-    STORAGE_IP="10.0.0.5"
-    IQN_PREFIX="iqn.2025-01.com.example"
-    ISCSI_TARGET="${IQN_PREFIX}:${POOL}"
-    ISCSI_LUN="3"
-    ISCSI_BACKSTORE="${OLD_BASENAME}"
+    storage_ip="10.0.0.5"
+    iqn_prefix="iqn.2025-01.com.example"
+    iscsi_target="${iqn_prefix}:${pool}"
+    iscsi_lun="3"
+    iscsi_backstore="${old_basename}"
 
-    local disk_line="scsi1: /dev/disk/by-path/ip-${STORAGE_IP}"
-    disk_line+=":3260-iscsi-${IQN_PREFIX}:${POOL}-lun-99,format=raw,size=32G"
+    local disk_line="scsi1: /dev/disk/by-path/ip-${storage_ip}"
+    disk_line+=":3260-iscsi-${iqn_prefix}:${pool}-lun-99,format=raw,size=32G"
     write_vm_conf 105 "$disk_line"
 
     test_start "find_vm_refs returns empty when no two-node reference matches"
     find_vm_refs
-    assert_array_len 0 "${VM_REFS[@]}"
+    assert_array_len 0 "${vm_refs[@]}"
 }
 
 test_check_vms_stopped_all_stopped() {
     setup_globals
-    VM_REFS=("100:scsi0")
+    vm_refs=("100:scsi0")
 
     qm() {
         if [[ "$1" == "status" && "$2" == "100" ]]; then
@@ -179,7 +179,7 @@ test_check_vms_stopped_all_stopped() {
 
 test_check_vms_stopped_running() {
     setup_globals
-    VM_REFS=("100:scsi0")
+    vm_refs=("100:scsi0")
 
     qm() {
         if [[ "$1" == "status" && "$2" == "100" ]]; then
@@ -198,38 +198,38 @@ test_check_vms_stopped_running() {
 test_update_single_node_config() {
     setup_globals
     _TEST_NODE_MODE="single-node"
-    VM_REFS=("100:scsi0")
-    local disk_line="scsi0: ${POOL}:${OLD_BASENAME},format=raw"
+    vm_refs=("100:scsi0")
+    local disk_line="scsi0: ${pool}:${old_basename},format=raw"
     disk_line+=",discard=on,iothread=1,size=32G"
-    local expected="scsi0: ${POOL}:${NEW_BASENAME},format=raw"
+    local expected="scsi0: ${pool}:${new_basename},format=raw"
     expected+=",discard=on,iothread=1,size=32G"
     write_vm_conf 100 "$disk_line"
 
     test_start "update_vm_configs rewrites single-node pool:basename reference"
     update_vm_configs
     local updated
-    updated=$(grep "^scsi0:" "$PVE_CONF_DIR/100.conf")
+    updated=$(grep "^scsi0:" "$pve_conf_dir/100.conf")
     assert_equals "$expected" "$updated"
 }
 
 test_update_two_node_config_lun_change() {
     setup_globals
     _TEST_NODE_MODE="two-node"
-    STORAGE_IP="10.0.0.5"
-    IQN_PREFIX="iqn.2025-01.com.example"
-    ISCSI_TARGET="${IQN_PREFIX}:${POOL}"
-    ISCSI_LUN="5"
-    VM_REFS=("200:scsi2")
-    local old_line="scsi2: /dev/disk/by-path/ip-${STORAGE_IP}"
-    old_line+=":3260-iscsi-${ISCSI_TARGET}-lun-3,format=raw,size=32G"
-    local expected="scsi2: /dev/disk/by-path/ip-${STORAGE_IP}"
-    expected+=":3260-iscsi-${ISCSI_TARGET}-lun-5,format=raw,size=32G"
+    storage_ip="10.0.0.5"
+    iqn_prefix="iqn.2025-01.com.example"
+    iscsi_target="${iqn_prefix}:${pool}"
+    iscsi_lun="5"
+    vm_refs=("200:scsi2")
+    local old_line="scsi2: /dev/disk/by-path/ip-${storage_ip}"
+    old_line+=":3260-iscsi-${iscsi_target}-lun-3,format=raw,size=32G"
+    local expected="scsi2: /dev/disk/by-path/ip-${storage_ip}"
+    expected+=":3260-iscsi-${iscsi_target}-lun-5,format=raw,size=32G"
     write_vm_conf 200 "$old_line"
 
     test_start "update_vm_configs updates two-node by-path when LUN changes"
     update_vm_configs
     local updated
-    updated=$(grep "^scsi2:" "$PVE_CONF_DIR/200.conf")
+    updated=$(grep "^scsi2:" "$pve_conf_dir/200.conf")
     assert_equals "$expected" "$updated"
 }
 

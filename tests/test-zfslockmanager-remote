@@ -16,8 +16,8 @@ mkdir -p "$REMOTE_LOCK_DIR/.locks" "$REMOTE_LOCK_DIR/.pids"
 _run_agent() {
     ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs" \
     ZFSLOCK_DIR="$REMOTE_LOCK_DIR" \
-    ZFSLOCK_LOCKS_DIR="$REMOTE_LOCK_DIR/.locks" \
-    ZFSLOCK_PIDS_DIR="$REMOTE_LOCK_DIR/.pids" \
+    zfslock_locks_dir="$REMOTE_LOCK_DIR/.locks" \
+    zfslock_pids_dir="$REMOTE_LOCK_DIR/.pids" \
     ZFSLOCK_REMOTE_DISABLED=1 \
     ZFSLOCK_REMOTE_TEST_NO_ROOT=1 \
     bash "$AGENT_SCRIPT" "$@" 2>&1
@@ -45,8 +45,8 @@ _start_holder() {
 
     ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs" \
     ZFSLOCK_DIR="$REMOTE_LOCK_DIR" \
-    ZFSLOCK_LOCKS_DIR="$REMOTE_LOCK_DIR/.locks" \
-    ZFSLOCK_PIDS_DIR="$REMOTE_LOCK_DIR/.pids" \
+    zfslock_locks_dir="$REMOTE_LOCK_DIR/.locks" \
+    zfslock_pids_dir="$REMOTE_LOCK_DIR/.pids" \
     ZFSLOCK_REMOTE_DISABLED=1 \
     ZFSLOCK_REMOTE_TEST_NO_ROOT=1 \
     bash "$AGENT_SCRIPT" hold "$dataset" "$type" "$description" < "$_HOLDER_FIFO" >/dev/null 2>&1 &

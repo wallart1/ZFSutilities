@@ -34,7 +34,7 @@ function delholds {
         log_msg "WARN: Could not acquire write lock on ${zfsdelholds_subtree}; aborting."
         return 1
     fi
-    local _delholds_lock="$ZFSLOCK_ID"
+    local _delholds_lock="$zfslock_id"
     zfsdelholds_match=$2
     local -a zfsdelholds_depth_args=()
     if [[ $3 != '' ]]; then

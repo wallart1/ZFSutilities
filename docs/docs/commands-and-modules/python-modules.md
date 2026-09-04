@@ -125,6 +125,7 @@ Contains no GTK code and no direct subprocess calls; all ZFS I/O is delegated to
 | `match_profile(profiles, ds_type, live_props)` | Find the first profile whose live properties match the dataset |
 | `build_apply_plan(profile, dataset, ds_type, live_props)` | Build a preview plan of property changes |
 | `build_zfs_set_commands(plan)` | Emit the `zfs set` commands for plan entries that will apply |
+| `zfs_set_commands_with_entries(plan)` | Like `build_zfs_set_commands`, but pairs each command with its plan entry so callers can describe steps without re-parsing the command string |
 | `profile_has_warning(name, profile, pool_has_special)` | Whether the profile selection should show a warning |
 | `warning_text(name, profile, pool_has_special)` | Warning text, or `None` if no warning applies |
 

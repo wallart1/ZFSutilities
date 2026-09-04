@@ -11,9 +11,9 @@ setup_test_env
 
 # Mock node-lib.sh behavior
 NODE_MODE="two-node"
-STORAGE_HOST="stewie"
-COMPUTE_HOST="tweety"
-STORAGE_IP="192.168.100.1"
+storage_host="stewie"
+compute_host="tweety"
+storage_ip="192.168.100.1"
 IQN_PREFIX="iqn.2026-02.local.stewie"
 declare -A POOL_TARGET=(
     ["threeamigos"]="threeamigos"
@@ -155,7 +155,7 @@ REPAIR_ISCSI_LUNS_SKIP_ROOT="Y"
 REPAIR_ISCSI_LUNS_TEST_MODE="Y"
 script_text=$(cat "$old_mydir/bin/repair-iscsi-luns")
 # Ensure MY_HOST is set to the storage host so main() can be tested.
-script_text="${script_text/MY_HOST=\$(hostname -s)/MY_HOST=stewie}"
+script_text="${script_text/my_host=\$(hostname -s)/my_host=stewie}"
 eval "$script_text"
 
 # ------------------------------------------------------------------
@@ -171,11 +171,11 @@ reset_mocks() {
     _mock_visible_count="0"
     safe_iscsi_save_called=false
     RESCAN_STORAGE_CALLED=false
-    DRY_RUN=false
-    MISSING_BACKSTORES=()
-    MISSING_LUNS=()
-    UNMAPPED_ZVOLS=()
-    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+    dry_run=false
+    missing_backstores=()
+    missing_luns=()
+    unmapped_zvols=()
+    manifest="/etc/rtslib-fb-target/expected-backstores.txt"
     export REPAIR_ISCSI_LUNS_NODE_LIB="/dev/null"
 }
 
@@ -364,9 +364,9 @@ test_dry_run_makes_no_changes() {
     _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0\nthreeamigos/prox'
     _mock_zfs_list+='mox/vm-209-disk-2'
 
-    DRY_RUN=true
+    dry_run=true
     main >/dev/null 2>&1 || true
-    DRY_RUN=false
+    dry_run=false
 
     local mutate_called=false
     for call in "${_mock_targetcli_calls[@]}"; do
@@ -425,7 +425,7 @@ test_manifest_entry_creates_missing_backstore() {
 
     local manifest
     manifest=$(make_temp_manifest "vm-209-disk-2")
-    MANIFEST="$manifest"
+    manifest="$manifest"
 
     _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
     _mock_backstores+='(1.0MiB) write-thru activated]'
@@ -437,7 +437,7 @@ test_manifest_entry_creates_missing_backstore() {
     main >/dev/null 2>&1 || true
 
     rm -f "$manifest"
-    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+    manifest="/etc/rtslib-fb-target/expected-backstores.txt"
 
     local create_backstore_called=false
     local create_lun_called=false
@@ -465,7 +465,7 @@ test_manifest_limits_exported_zvols() {
 
     local manifest
     manifest=$(make_temp_manifest "vm-101-disk-0")
-    MANIFEST="$manifest"
+    manifest="$manifest"
 
     _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
     _mock_backstores+='(1.0MiB) write-thru activated]'
@@ -477,7 +477,7 @@ test_manifest_limits_exported_zvols() {
     main >/dev/null 2>&1 || true
 
     rm -f "$manifest"
-    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+    manifest="/etc/rtslib-fb-target/expected-backstores.txt"
 
     local create_called=false
     for call in "${_mock_targetcli_calls[@]}"; do
@@ -487,7 +487,7 @@ test_manifest_limits_exported_zvols() {
     done
 
     if [[ "$create_called" == false ]] &&\
-       [[ " ${UNMAPPED_ZVOLS[*]} " == *" threeamigos/proxmox/vm-209-disk-2 "* ]]; then
+       [[ " ${unmapped_zvols[*]} " == *" threeamigos/proxmox/vm-209-disk-2 "* ]]; then
         test_pass
     else
         test_fail "Expected vm-209-disk-2 to be reported as unexported, not created"
@@ -500,7 +500,7 @@ test_empty_manifest_exports_nothing() {
 
     local manifest
     manifest=$(make_temp_manifest "")
-    MANIFEST="$manifest"
+    manifest="$manifest"
 
     _mock_backstores=''
     _mock_luns_threeamigos=''
@@ -509,7 +509,7 @@ test_empty_manifest_exports_nothing() {
     main >/dev/null 2>&1 || true
 
     rm -f "$manifest"
-    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+    manifest="/etc/rtslib-fb-target/expected-backstores.txt"
 
     local create_called=false
     for call in "${_mock_targetcli_calls[@]}"; do

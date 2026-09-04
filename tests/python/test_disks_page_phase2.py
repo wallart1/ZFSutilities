@@ -740,6 +740,12 @@ class TestApplyProfileHandler(unittest.TestCase):
                 app.dataset_runner.steps[0].command,
                 ["bash", "-c", "zfs set compression=zstd pool1/data"],
             )
+            # The step description comes from the plan entry, not from
+            # re-parsing the command string.
+            self.assertEqual(
+                app.dataset_runner.steps[0].description,
+                "Set compression=zstd on pool1/data",
+            )
 
             app.dataset_runner.finish(cancelled=False)
             mock_zlm.release.assert_called_once_with("lock1")

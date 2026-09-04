@@ -25,13 +25,13 @@ unset _local_bashinit
 source_helper rootcheck
 rootcheck
 
-MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)
+mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)
 
 # ------------------------------------------------------------------
 # Argument parsing
 # ------------------------------------------------------------------
-VERSION=""
-DEPLOY_GROUPS=()
+version=""
+deploy_groups=()
 
 usage() {
     log_msg "INFO: Usage: deploy-version [version] [group ...]"
@@ -42,7 +42,7 @@ usage() {
     log_msg "INFO:            groups are deployed."
     log_msg "INFO:"
     log_msg "INFO: Examples:"
-    log_msg "INFO:   sudo ./bin/deploy-version                  # deploy current VERSION to all" \
+    log_msg "INFO:   sudo ./bin/deploy-version                  # deploy current version to all" \
         "groups"
     log_msg "INFO:   sudo ./bin/deploy-version 1.2.0            # deploy specific version to all" \
         "groups"
@@ -70,7 +70,7 @@ usage() {
 [[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
 
 # Guard: must be run from the repo root, not a deployed path
-if [[ ! -d "$MYDIR/bin" || ! -d "$MYDIR/lib" ]]; then
+if [[ ! -d "$mydir/bin" || ! -d "$mydir/lib" ]]; then
     die "deploy-version must be run from the repository root.\n" \
         "  Wrong:  sudo deploy-version  (runs from deployed PATH)\n" \
         "  Right:  cd /path/to/zfsutilities-dev && sudo ./bin/deploy-version"
@@ -86,32 +86,31 @@ for arg in "$@"; do
 done
 
 if [[ $# -eq 0 ]]; then
-    VERSION=$(cat "$MYDIR/VERSION")
+    version=$(cat "$mydir/VERSION")
 elif [[ $# -ge 1 ]]; then
-    VERSION="$1"
+    version="$1"
     shift
-    DEPLOY_GROUPS=("$@")
+    deploy_groups=("$@")
 fi
 
-VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
-VERSION_DIR="$VERSION_BASE/versions/$VERSION"
+version_base="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
+version_dir="$version_base/versions/$version"
 
 # ------------------------------------------------------------------
 # Load deployment-group configuration
 # ------------------------------------------------------------------
-DEPLOY_CONF="/etc/zfsutilities-deploy.conf"
-DEPLOY_GROUP_NAMES=()
-DEPLOY_GROUP_HOSTS=()
+deploy_conf="/etc/zfsutilities-deploy.conf"
+deploy_group_names=()
+deploy_group_hosts=()
 
-if [[ -f "$DEPLOY_CONF" ]]; then
+if [[ -f "$deploy_conf" ]]; then
     # shellcheck source=/dev/null
-    source "$DEPLOY_CONF"
-    # Collect all defined DEPLOY_GROUP_* variables
+    source "$deploy_conf"
+    # Collect all defined DEPLOY_GROUP_* variables (internal tracking arrays
+    # are lowercase and never match the uppercase prefix).
     for var in ${!DEPLOY_GROUP_*}; do
-        # Skip our own internal arrays — they match the same prefix
-        [[ "$var" == "DEPLOY_GROUP_HOSTS" || "$var" == "DEPLOY_GROUP_NAMES" ]] && continue
-        DEPLOY_GROUP_NAMES+=("${var#DEPLOY_GROUP_}")
-        DEPLOY_GROUP_HOSTS+=("${!var}")
+        deploy_group_names+=("${var#DEPLOY_GROUP_}")
+        deploy_group_hosts+=("${!var}")
     done
 fi
 
@@ -129,7 +128,7 @@ elif [[ -f /etc/two-node.conf ]]; then
     NODE_MODE="two-node"
 fi
 
-MY_HOST=$(hostname -s)
+my_host=$(hostname -s)
 
 # ------------------------------------------------------------------
 # Helper: verify critical scripts were deployed
@@ -137,8 +136,8 @@ MY_HOST=$(hostname -s)
 validate_critical_scripts() {
     local missing=0
     for script in zfs-diagnose-busy zfsdelsnap zfscleanup zfsretain zfs-send-receive rootcheck; do
-        if [[ ! -f "$VERSION_DIR/bin/$script" ]]; then
-            log_msg "WARN:   Missing: $VERSION_DIR/bin/$script"
+        if [[ ! -f "$version_dir/bin/$script" ]]; then
+            log_msg "WARN:   Missing: $version_dir/bin/$script"
             ((++missing))
         fi
     done
@@ -157,73 +156,73 @@ deploy_to_host() {
     log_msg "INFO: === Deploying to $host_label ==="
 
     # Create version directory structure
-    mkdir -p "$VERSION_DIR/bin" "$VERSION_DIR/lib" \
-        "$VERSION_DIR/python" "$VERSION_DIR/docs" "$VERSION_DIR/share"
+    mkdir -p "$version_dir/bin" "$version_dir/lib" \
+        "$version_dir/python" "$version_dir/docs" "$version_dir/share"
 
     # Copy executables and helper scripts into bin/
     rsync -a --delete \
         --exclude='__pycache__/' \
         --exclude='*.pyc' \
         --exclude='.nfs*' \
-        "$MYDIR/bin/" "$VERSION_DIR/bin/"
+        "$mydir/bin/" "$version_dir/bin/"
 
     # Symlink GUI launcher to Python script
-    rm -f "$VERSION_DIR/bin/zfsutilities-gui"
-    ln -sfn "../python/zfsutilities_gui.py" "$VERSION_DIR/bin/zfsutilities-gui"
+    rm -f "$version_dir/bin/zfsutilities-gui"
+    ln -sfn "../python/zfsutilities_gui.py" "$version_dir/bin/zfsutilities-gui"
 
     # Symlink documentation-viewer launcher to Python script
-    rm -f "$VERSION_DIR/bin/zfsutilities-docs"
-    ln -sfn "../python/docs_viewer.py" "$VERSION_DIR/bin/zfsutilities-docs"
+    rm -f "$version_dir/bin/zfsutilities-docs"
+    ln -sfn "../python/docs_viewer.py" "$version_dir/bin/zfsutilities-docs"
 
     # Copy sourced libraries into lib/
     rsync -a --delete \
         --exclude='__pycache__/' \
         --exclude='*.pyc' \
         --exclude='.nfs*' \
-        "$MYDIR/lib/" "$VERSION_DIR/lib/"
+        "$mydir/lib/" "$version_dir/lib/"
 
     # Copy Python source into python/
     rsync -a --delete \
         --exclude='__pycache__/' \
         --exclude='*.pyc' \
         --exclude='.nfs*' \
-        "$MYDIR/python/" "$VERSION_DIR/python/"
+        "$mydir/python/" "$version_dir/python/"
 
     # Copy documentation source and built site into docs/
     rsync -a --delete \
         --exclude='__pycache__/' \
         --exclude='*.pyc' \
         --exclude='.nfs*' \
-        "$MYDIR/docs/" "$VERSION_DIR/docs/"
+        "$mydir/docs/" "$version_dir/docs/"
 
     # Copy shared resources into share/
     rsync -a --delete \
         --exclude='__pycache__/' \
         --exclude='*.pyc' \
         --exclude='.nfs*' \
-        "$MYDIR/share/" "$VERSION_DIR/share/"
+        "$mydir/share/" "$version_dir/share/"
 
-    # Copy VERSION file for reference
-    if [[ -f "$MYDIR/VERSION" ]]; then
-        install -m 0644 "$MYDIR/VERSION" "$VERSION_DIR/"
+    # Copy version file for reference
+    if [[ -f "$mydir/VERSION" ]]; then
+        install -m 0644 "$mydir/VERSION" "$version_dir/"
     fi
 
     # Rebuild static documentation site so it is version-correct
     if ! command -v mkdocs &>/dev/null; then
         log_msg "FATAL: mkdocs is not installed. Cannot build documentation."
-        source "$MYDIR/bashfatal" 1
+        source "$mydir/bashfatal" 1
     fi
-    if [[ -f "$VERSION_DIR/docs/mkdocs.yml" ]]; then
-        if ! (cd "$VERSION_DIR/docs" && mkdocs build >/dev/null 2>&1); then
+    if [[ -f "$version_dir/docs/mkdocs.yml" ]]; then
+        if ! (cd "$version_dir/docs" && mkdocs build >/dev/null 2>&1); then
             log_msg "FATAL: Documentation build failed."
-            source "$MYDIR/bashfatal" 1
+            source "$mydir/bashfatal" 1
         fi
     fi
 
     # Ensure the built documentation site is readable by non-root users
-    if [[ -d "$VERSION_DIR/docs/site" ]]; then
-        find "$VERSION_DIR/docs/site" -type d -exec chmod 0755 {} \;
-        find "$VERSION_DIR/docs/site" -type f -exec chmod 0644 {} \;
+    if [[ -d "$version_dir/docs/site" ]]; then
+        find "$version_dir/docs/site" -type d -exec chmod 0755 {} \;
+        find "$version_dir/docs/site" -type f -exec chmod 0644 {} \;
     fi
 
     # Verify critical scripts were copied
@@ -239,14 +238,14 @@ deploy_to_host() {
 _sync_to_host() {
     local host="$1"
 
-    [[ "$MY_HOST" == "$host" ]] && return
+    [[ "$my_host" == "$host" ]] && return
 
     log_msg "INFO: Syncing to $host..."
     local ssh_ctrl="/tmp/.deploy-version-ssh-${host}-$$"
     local ssh_opts=(-o ControlMaster=auto -o ControlPath="${ssh_ctrl}" -o ControlPersist=60)
 
-    ssh "${ssh_opts[@]}" root@"$host" "mkdir -p '$VERSION_DIR'"
-    rsync -az --delete -e "ssh ${ssh_opts[*]}" "$VERSION_DIR/" "root@$host:$VERSION_DIR/"
+    ssh "${ssh_opts[@]}" root@"$host" "mkdir -p '$version_dir'"
+    rsync -az --delete -e "ssh ${ssh_opts[*]}" "$version_dir/" "root@$host:$version_dir/"
     ssh -O exit -o ControlPath="$ssh_ctrl" root@"$host" 2>/dev/null || true
     rm -f "$ssh_ctrl"
     log_msg "INFO:   ✓ $host files synced (run switch-version on $host to activate)"
@@ -256,26 +255,26 @@ _sync_to_host() {
 # Main: local deployment
 # ------------------------------------------------------------------
 log_msg "INFO: === deploy-version ==="
-log_msg "INFO:   Version: $VERSION"
-log_msg "INFO:   Source:  $MYDIR"
+log_msg "INFO:   Version: $version"
+log_msg "INFO:   Source:  $mydir"
 
-deploy_to_host "local host ($MY_HOST)"
+deploy_to_host "local host ($my_host)"
 
 # ------------------------------------------------------------------
 # Remote deployments
 # ------------------------------------------------------------------
-REMOTE_HOSTS=()
+remote_hosts=()
 
-if [[ ${#DEPLOY_GROUP_NAMES[@]} -gt 0 ]]; then
+if [[ ${#deploy_group_names[@]} -gt 0 ]]; then
     # --- Modern: deploy.conf groups ---
     selected_indices=()
 
-    if [[ ${#DEPLOY_GROUPS[@]} -gt 0 ]]; then
+    if [[ ${#deploy_groups[@]} -gt 0 ]]; then
         # User specified one or more groups on the command line
-        for group in "${DEPLOY_GROUPS[@]}"; do
+        for group in "${deploy_groups[@]}"; do
             found=0
-            for i in "${!DEPLOY_GROUP_NAMES[@]}"; do
-                if [[ "${DEPLOY_GROUP_NAMES[$i]}" == "$group" ]]; then
+            for i in "${!deploy_group_names[@]}"; do
+                if [[ "${deploy_group_names[$i]}" == "$group" ]]; then
                     selected_indices+=("$i")
                     found=1
                     break
@@ -287,40 +286,40 @@ if [[ ${#DEPLOY_GROUP_NAMES[@]} -gt 0 ]]; then
         done
     else
         # No groups specified — deploy to all groups
-        for i in "${!DEPLOY_GROUP_NAMES[@]}"; do
+        for i in "${!deploy_group_names[@]}"; do
             selected_indices+=("$i")
         done
     fi
 
     # Collect unique hosts from selected groups
     for i in "${selected_indices[@]}"; do
-        for host in ${DEPLOY_GROUP_HOSTS[$i]}; do
+        for host in ${deploy_group_hosts[$i]}; do
             dup=0
-            for h in "${REMOTE_HOSTS[@]}"; do
+            for h in "${remote_hosts[@]}"; do
                 if [[ "$h" == "$host" ]]; then
                     dup=1
                     break
                 fi
             done
-            [[ $dup -eq 0 ]] && REMOTE_HOSTS+=("$host")
+            [[ $dup -eq 0 ]] && remote_hosts+=("$host")
         done
     done
 else
     # --- Legacy: node-config fallback ---
     if [[ "$NODE_MODE" == "two-node" ]]; then
-        [[ -n "$STORAGE_HOST" && "$MY_HOST" != "$STORAGE_HOST" ]] && REMOTE_HOSTS+=("$STORAGE_HOST")
-        [[ -n "$COMPUTE_HOST" && "$MY_HOST" != "$COMPUTE_HOST" ]] && REMOTE_HOSTS+=("$COMPUTE_HOST")
+        [[ -n "$STORAGE_HOST" && "$my_host" != "$STORAGE_HOST" ]] && remote_hosts+=("$STORAGE_HOST")
+        [[ -n "$COMPUTE_HOST" && "$my_host" != "$COMPUTE_HOST" ]] && remote_hosts+=("$COMPUTE_HOST")
     fi
 fi
 
-for host in "${REMOTE_HOSTS[@]}"; do
+for host in "${remote_hosts[@]}"; do
     _sync_to_host "$host"
 done
 
 log_msg "INFO: === Done ==="
-log_msg "INFO:   Deployed: $VERSION"
-log_msg "INFO:   Location: $VERSION_DIR"
+log_msg "INFO:   Deployed: $version"
+log_msg "INFO:   Location: $version_dir"
 log_msg "INFO:"
-log_msg "INFO:   Scripts are available via PATH: $VERSION_BASE/bin"
-log_msg "INFO:   To activate:   sudo switch-version $VERSION"
+log_msg "INFO:   Scripts are available via PATH: $version_base/bin"
+log_msg "INFO:   To activate:   sudo switch-version $version"
 log_msg "INFO:   To list all:   sudo switch-version --list"

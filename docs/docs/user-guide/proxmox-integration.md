@@ -182,6 +182,21 @@ stores UEFI firmware variables (boot order, Secure Boot state, etc.).
        For Windows VMs with BitLocker, disable BitLocker protectors inside
        the VM before enrolling.
 
+       An earlier version of `enroll-efi-keys-vm` rewrote the `size=` value
+       on every config disk line to `size=4M` instead of only the `efidisk0`
+       line. If a VM's data disks show the wrong size in the Proxmox GUI, or
+       `qm resize` and disk reporting misbehave, restore the recorded sizes
+       with the helper script on the compute node:
+
+       ```bash
+       sudo repair-vm-disk-sizes [--dry-run] [--vmid <vmid>]
+       ```
+
+       It reads the correct size from the live block device (by-path volumes)
+       or the backing zvol (`pool:vm-N-disk-M` references) and rewrites only
+       the disk lines whose recorded size differs. See
+       [repair-vm-disk-sizes](../commands-and-modules/two-node.md#repair-vm-disk-sizes-compute-node).
+
 !!! tip "Avoiding kernel log spam"
     By default, Proxmox's `pvestatd` runs `iscsiadm --rescan` roughly every
     10 seconds to discover new LUNs. This causes the Linux iSCSI target on

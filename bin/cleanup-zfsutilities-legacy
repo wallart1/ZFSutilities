@@ -22,13 +22,13 @@
 #   - /root/.config/zfsutilities/ is removed only if it is empty after its
 #     contents have been migrated.
 
-MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
 
 # Point bashinit at the centralized paths helper before it tries to discover it
 # (discovery can fail when mydir has not been set yet). This variable is read
 # by bashinit when it is sourced below.
 # shellcheck disable=SC2034
-PATHS_LIB="$MYDIR/../lib/paths.sh"
+PATHS_LIB="$mydir/../lib/paths.sh"
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -50,40 +50,40 @@ rootcheck
 # Configuration — override via environment variables in tests.
 # ------------------------------------------------------------------
 load_cleanup_config() {
-    VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
+    version_base="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
 
     # Legacy paths are read from lib/paths.sh; these are the local names used
     # by this script.
-    LEGACY_CONFIG_PATH="${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
+    legacy_config_path="${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
     local _def_history="/root/.config/zfsutilities-history.json"
-    LEGACY_HISTORY_PATH="${ZFSUTILITIES_LEGACY_HISTORY_PATH:-$_def_history}"
-    LEGACY_PROFILES_DIR="${ZFSUTILITIES_LEGACY_PROFILES_DIR:-/root/.config/profiles}"
-    LEGACY_NEXTSNAP_FILE="${ZFSUTILITIES_LEGACY_NEXTSNAP_FILE:-/root/.config/zfsutilities_nextsnap}"
+    legacy_history_path="${ZFSUTILITIES_LEGACY_HISTORY_PATH:-$_def_history}"
+    legacy_profiles_dir="${ZFSUTILITIES_LEGACY_PROFILES_DIR:-/root/.config/profiles}"
+    legacy_nextsnap_file="${ZFSUTILITIES_LEGACY_NEXTSNAP_FILE:-/root/.config/zfsutilities_nextsnap}"
     local _d_offsnap="/root/.config/zfsutilities_offsite_nextsnap"
-    LEGACY_OFFSITE_NEXTSNAP_FILE="${ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE:-$_d_offsnap}"
-    LEGACY_NODE_CONF="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
-    LEGACY_DEPLOY_CONF="${ZFSUTILITIES_LEGACY_DEPLOY_CONF:-/etc/zfsutilities-deploy.conf}"
+    legacy_offsite_nextsnap_file="${ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE:-$_d_offsnap}"
+    legacy_node_conf="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
+    legacy_deploy_conf="${ZFSUTILITIES_LEGACY_DEPLOY_CONF:-/etc/zfsutilities-deploy.conf}"
     local _def_iscsi_enc="/etc/iscsi-encrypted-luns.conf"
-    LEGACY_ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF:-$_def_iscsi_enc}"
-    LEGACY_TWO_NODE_CONF="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
-    LEGACY_CONFIG_DIR="${ZFSUTILITIES_LEGACY_CONFIG_DIR:-/root/.config/zfsutilities}"
+    legacy_iscsi_encrypted_conf="${ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF:-$_def_iscsi_enc}"
+    legacy_two_node_conf="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
+    legacy_config_dir="${ZFSUTILITIES_LEGACY_CONFIG_DIR:-/root/.config/zfsutilities}"
 }
 
 # ------------------------------------------------------------------
 # State variables
 # ------------------------------------------------------------------
-DO_SYMLINKS="true"
-DO_REMOVE_VERSIONS="false"
-REMOVE_VERSIONS_LIST=()
-DO_REMOVE_OLDER_THAN="false"
-REMOVE_OLDER_THAN=""
-DO_ALL_ORPHANED="false"
-DO_YES="false"
-DO_DRY_RUN="false"
-HELP_REQUESTED="false"
+do_symlinks="true"
+do_remove_versions="false"
+remove_versions_list=()
+do_remove_older_than="false"
+remove_older_than=""
+do_all_orphaned="false"
+do_yes="false"
+do_dry_run="false"
+help_requested="false"
 
-SYMLINKS_REMOVED=0
-VERSIONS_REMOVED=0
+symlinks_removed=0
+versions_removed=0
 
 # ------------------------------------------------------------------
 # Helpers
@@ -116,7 +116,7 @@ usage() {
 
 # Print a message, respecting dry-run prefix.
 dry_run_prefix() {
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         printf '[DRY-RUN] '
     fi
 }
@@ -131,13 +131,13 @@ remove_symlink_only() {
         log_msg "WARN: $path is not a symlink; leaving it in place"
         return 0
     fi
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO: [DRY-RUN] rm -f $path"
     else
         rm -f "$path"
         log_msg "INFO: Removed legacy symlink $path"
     fi
-    SYMLINKS_REMOVED=$((SYMLINKS_REMOVED + 1))
+    symlinks_removed=$((symlinks_removed + 1))
 }
 
 # Remove a directory only if it is empty.
@@ -150,7 +150,7 @@ remove_dir_if_empty() {
         log_msg "WARN: $path is not empty; leaving it in place"
         return 0
     fi
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO: [DRY-RUN] rmdir $path"
     else
         rmdir "$path"
@@ -160,7 +160,7 @@ remove_dir_if_empty() {
 
 # Return the currently active version directory, or empty string.
 active_version_dir() {
-    readlink -f "$VERSION_BASE/current" 2>/dev/null || true
+    readlink -f "$version_base/current" 2>/dev/null || true
 }
 
 # Return the currently active version name, or empty string.
@@ -183,18 +183,19 @@ _version_supports_new_layout() {
     [[ -f "$bashinit_file" ]] || return 1
     # Detect whether this deployed version already understands the FHS-aligned
     # layout by looking for the new path variables or the migration helper.
-    # shellcheck disable=SC2091
-    grep -qE 'ZFSUTILITIES_STATE_DIR|ZFSUTILITIES_CONFIG_DIR|migrate_zfsutilities_state' \
-        "$bashinit_file" 2>/dev/null
+    # Fixed-string probes (no regex); any one match indicates the new layout.
+    grep -qF 'ZFSUTILITIES_STATE_DIR' "$bashinit_file" 2>/dev/null \
+        || grep -qF 'ZFSUTILITIES_CONFIG_DIR' "$bashinit_file" 2>/dev/null \
+        || grep -qF 'migrate_zfsutilities_state' "$bashinit_file" 2>/dev/null
 }
 
 # List installed version names, sorted with sort -V.
 installed_versions() {
-    if [[ ! -d "$VERSION_BASE/versions" ]]; then
+    if [[ ! -d "$version_base/versions" ]]; then
         return 0
     fi
     local v
-    for v in "$VERSION_BASE/versions/"*; do
+    for v in "$version_base/versions/"*; do
         [[ -d "$v" ]] || continue
         basename "$v"
     done | sort -V
@@ -212,7 +213,7 @@ _version_is_older_than() {
 
 # Resolve the uninstall-version helper to use.
 uninstall_version_helper() {
-    local helper="$VERSION_BASE/current/bin/uninstall-version"
+    local helper="$version_base/current/bin/uninstall-version"
     if [[ -x "$helper" ]]; then
         echo "$helper"
         return 0
@@ -234,15 +235,15 @@ uninstall_version() {
         return 1
     fi
 
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO: [DRY-RUN] $helper -y $version"
-        VERSIONS_REMOVED=$((VERSIONS_REMOVED + 1))
+        versions_removed=$((versions_removed + 1))
         return 0
     fi
 
     if "$helper" -y "$version"; then
         log_msg "INFO: Removed deployed version $version"
-        VERSIONS_REMOVED=$((VERSIONS_REMOVED + 1))
+        versions_removed=$((versions_removed + 1))
     else
         log_msg "WARN: uninstall-version failed for $version"
         return 1
@@ -256,56 +257,56 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --symlinks-only)
-                DO_SYMLINKS="true"
-                DO_REMOVE_VERSIONS="false"
-                DO_REMOVE_OLDER_THAN="false"
-                DO_ALL_ORPHANED="false"
-                REMOVE_VERSIONS_LIST=()
+                do_symlinks="true"
+                do_remove_versions="false"
+                do_remove_older_than="false"
+                do_all_orphaned="false"
+                remove_versions_list=()
                 shift
                 ;;
             --remove-versions)
-                DO_REMOVE_VERSIONS="true"
-                DO_SYMLINKS="false"
+                do_remove_versions="true"
+                do_symlinks="false"
                 shift
                 while [[ $# -gt 0 && "$1" != --* ]]; do
-                    REMOVE_VERSIONS_LIST+=("$1")
+                    remove_versions_list+=("$1")
                     shift
                 done
-                if [[ ${#REMOVE_VERSIONS_LIST[@]} -eq 0 ]]; then
+                if [[ ${#remove_versions_list[@]} -eq 0 ]]; then
                     die "--remove-versions requires at least one version"
                 fi
                 ;;
             --remove-older-than)
-                DO_REMOVE_OLDER_THAN="true"
-                DO_SYMLINKS="false"
-                DO_REMOVE_VERSIONS="false"
-                DO_ALL_ORPHANED="false"
-                REMOVE_VERSIONS_LIST=()
+                do_remove_older_than="true"
+                do_symlinks="false"
+                do_remove_versions="false"
+                do_all_orphaned="false"
+                remove_versions_list=()
                 if [[ $# -lt 2 ]]; then
                     die "--remove-older-than requires a version argument"
                 fi
-                REMOVE_OLDER_THAN="$2"
+                remove_older_than="$2"
                 shift 2
                 ;;
             --all-orphaned)
-                DO_ALL_ORPHANED="true"
-                DO_SYMLINKS="false"
-                DO_REMOVE_VERSIONS="false"
-                DO_REMOVE_OLDER_THAN="false"
-                REMOVE_VERSIONS_LIST=()
+                do_all_orphaned="true"
+                do_symlinks="false"
+                do_remove_versions="false"
+                do_remove_older_than="false"
+                remove_versions_list=()
                 shift
                 ;;
             --yes|-y)
-                DO_YES="true"
+                do_yes="true"
                 shift
                 ;;
             --dry-run)
-                DO_DRY_RUN="true"
+                do_dry_run="true"
                 shift
                 ;;
             --help|-h)
                 usage
-                HELP_REQUESTED=true
+                help_requested=true
                 return 0
                 ;;
             -*)
@@ -324,17 +325,17 @@ parse_args() {
 cleanup_symlinks() {
     log_msg "INFO: === Cleaning up legacy symlinks ==="
 
-    remove_symlink_only "$LEGACY_CONFIG_PATH"
-    remove_symlink_only "$LEGACY_HISTORY_PATH"
-    remove_symlink_only "$LEGACY_PROFILES_DIR"
-    remove_symlink_only "$LEGACY_NEXTSNAP_FILE"
-    remove_symlink_only "$LEGACY_OFFSITE_NEXTSNAP_FILE"
-    remove_symlink_only "$LEGACY_NODE_CONF"
-    remove_symlink_only "$LEGACY_DEPLOY_CONF"
-    remove_symlink_only "$LEGACY_ISCSI_ENCRYPTED_CONF"
-    remove_symlink_only "$LEGACY_TWO_NODE_CONF"
+    remove_symlink_only "$legacy_config_path"
+    remove_symlink_only "$legacy_history_path"
+    remove_symlink_only "$legacy_profiles_dir"
+    remove_symlink_only "$legacy_nextsnap_file"
+    remove_symlink_only "$legacy_offsite_nextsnap_file"
+    remove_symlink_only "$legacy_node_conf"
+    remove_symlink_only "$legacy_deploy_conf"
+    remove_symlink_only "$legacy_iscsi_encrypted_conf"
+    remove_symlink_only "$legacy_two_node_conf"
 
-    remove_dir_if_empty "$LEGACY_CONFIG_DIR"
+    remove_dir_if_empty "$legacy_config_dir"
 }
 
 cleanup_versions_explicit() {
@@ -343,12 +344,12 @@ cleanup_versions_explicit() {
     active=$(active_version_name)
 
     local version
-    for version in "${REMOVE_VERSIONS_LIST[@]}"; do
+    for version in "${remove_versions_list[@]}"; do
         if [[ "$version" == "$active" ]]; then
             log_msg "WARN: Refusing to remove the currently active version: $version"
             continue
         fi
-        if [[ ! -d "$VERSION_BASE/versions/$version" ]]; then
+        if [[ ! -d "$version_base/versions/$version" ]]; then
             log_msg "WARN: Version not found: $version"
             continue
         fi
@@ -357,7 +358,7 @@ cleanup_versions_explicit() {
 }
 
 cleanup_versions_older_than() {
-    log_msg "INFO: === Removing versions older than $REMOVE_OLDER_THAN ==="
+    log_msg "INFO: === Removing versions older than $remove_older_than ==="
     local active
     active=$(active_version_name)
 
@@ -367,7 +368,7 @@ cleanup_versions_older_than() {
         if [[ "$version" == "$active" ]]; then
             continue
         fi
-        if _version_is_older_than "$version" "$REMOVE_OLDER_THAN"; then
+        if _version_is_older_than "$version" "$remove_older_than"; then
             uninstall_version "$version"
         fi
     done < <(installed_versions)
@@ -392,21 +393,21 @@ cleanup_all_orphaned() {
 # Confirmation prompts
 # ------------------------------------------------------------------
 confirm_symlinks() {
-    if [[ "$DO_YES" == "true" ]]; then
+    if [[ "$do_yes" == "true" ]]; then
         return 0
     fi
 
     log_msg "INFO:"
     log_msg "INFO: The following legacy symlinks will be removed if they exist:"
-    log_msg "INFO:   $LEGACY_CONFIG_PATH"
-    log_msg "INFO:   $LEGACY_HISTORY_PATH"
-    log_msg "INFO:   $LEGACY_PROFILES_DIR"
-    log_msg "INFO:   $LEGACY_NEXTSNAP_FILE"
-    log_msg "INFO:   $LEGACY_OFFSITE_NEXTSNAP_FILE"
-    log_msg "INFO:   $LEGACY_NODE_CONF"
-    log_msg "INFO:   $LEGACY_DEPLOY_CONF"
-    log_msg "INFO:   $LEGACY_ISCSI_ENCRYPTED_CONF"
-    log_msg "INFO:   $LEGACY_TWO_NODE_CONF"
+    log_msg "INFO:   $legacy_config_path"
+    log_msg "INFO:   $legacy_history_path"
+    log_msg "INFO:   $legacy_profiles_dir"
+    log_msg "INFO:   $legacy_nextsnap_file"
+    log_msg "INFO:   $legacy_offsite_nextsnap_file"
+    log_msg "INFO:   $legacy_node_conf"
+    log_msg "INFO:   $legacy_deploy_conf"
+    log_msg "INFO:   $legacy_iscsi_encrypted_conf"
+    log_msg "INFO:   $legacy_two_node_conf"
     log_msg "INFO:"
     if ! ask_yn "Remove these legacy symlinks?" "N"; then
         log_msg "INFO: Cancelled."
@@ -416,7 +417,7 @@ confirm_symlinks() {
 
 confirm_version_list() {
     local -n versions_ref=$1
-    if [[ "$DO_YES" == "true" ]]; then
+    if [[ "$do_yes" == "true" ]]; then
         return 0
     fi
 
@@ -435,7 +436,7 @@ confirm_version_list() {
 
 confirm_older_than() {
     local reference="$1"
-    if [[ "$DO_YES" == "true" ]]; then
+    if [[ "$do_yes" == "true" ]]; then
         return 0
     fi
 
@@ -450,7 +451,7 @@ confirm_older_than() {
 }
 
 confirm_all_orphaned() {
-    if [[ "$DO_YES" == "true" ]]; then
+    if [[ "$do_yes" == "true" ]]; then
         return 0
     fi
 
@@ -474,36 +475,36 @@ main() {
     set -euo pipefail
 
     parse_args "$@"
-    if [[ "$HELP_REQUESTED" == "true" ]]; then
+    if [[ "$help_requested" == "true" ]]; then
         source "$(find_zfsutility_script bashreturn)" 0
     fi
     load_cleanup_config
 
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO: === DRY RUN — no changes will be made ==="
     fi
 
-    if [[ "$DO_SYMLINKS" == "true" ]]; then
+    if [[ "$do_symlinks" == "true" ]]; then
         confirm_symlinks || source "$(find_zfsutility_script bashreturn)" 0
         cleanup_symlinks
-    elif [[ "$DO_REMOVE_VERSIONS" == "true" ]]; then
-        confirm_version_list REMOVE_VERSIONS_LIST || source "$(find_zfsutility_script bashreturn)" 0
+    elif [[ "$do_remove_versions" == "true" ]]; then
+        confirm_version_list remove_versions_list || source "$(find_zfsutility_script bashreturn)" 0
         cleanup_versions_explicit
-    elif [[ "$DO_REMOVE_OLDER_THAN" == "true" ]]; then
-        confirm_older_than "$REMOVE_OLDER_THAN" || source "$(find_zfsutility_script bashreturn)" 0
+    elif [[ "$do_remove_older_than" == "true" ]]; then
+        confirm_older_than "$remove_older_than" || source "$(find_zfsutility_script bashreturn)" 0
         cleanup_versions_older_than
-    elif [[ "$DO_ALL_ORPHANED" == "true" ]]; then
+    elif [[ "$do_all_orphaned" == "true" ]]; then
         confirm_all_orphaned || source "$(find_zfsutility_script bashreturn)" 0
         cleanup_all_orphaned
     fi
 
     log_msg "INFO:"
     log_msg "INFO: === cleanup-zfsutilities-legacy complete ==="
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO: This was a dry run; no changes were made."
     else
-        log_msg "INFO:   Legacy symlinks removed: $SYMLINKS_REMOVED"
-        log_msg "INFO:   Deployed versions removed: $VERSIONS_REMOVED"
+        log_msg "INFO:   Legacy symlinks removed: $symlinks_removed"
+        log_msg "INFO:   Deployed versions removed: $versions_removed"
         local active
         active=$(active_version_name)
         [[ -n "$active" ]] && log_msg "INFO:   Active version preserved: $active"

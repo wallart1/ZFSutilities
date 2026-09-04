@@ -28,9 +28,15 @@ log_msg "INFO: ZFS version: $(modinfo zfs | awk '/^version:/{print $2}')"
 # 1. Check configuration file
 if [[ -f "$zfs_conf" ]]; then
     log_msg "INFO: [OK] Found $zfs_conf:"
-    # grep -E '^options zfs'  —  Find kernel module option lines in /etc/modprobe.d/zfs.conf.
-    #   Only lines beginning with "options zfs" are matched (comments and blank lines ignored).
-    grep -E '^options zfs' "$zfs_conf" || log_msg "INFO:   (no 'options zfs' lines found)"
+    # awk index() with the fixed string "options zfs"  —  find kernel module
+    #   option lines in /etc/modprobe.d/zfs.conf. index()==1 restricts the
+    #   match to lines beginning with that string (comments/blanks ignored).
+    _options_lines=$(awk 'index($0, "options zfs") == 1' "$zfs_conf")
+    if [[ -n "$_options_lines" ]]; then
+        printf '%s\n' "$_options_lines"
+    else
+        log_msg "INFO:   (no 'options zfs' lines found)"
+    fi
 else
     warn "$zfs_conf not found."
     exit 1
@@ -63,10 +69,12 @@ fi
 # 4. Optional: dmesg verification
 if dmesg | grep -qi "zfs"; then
     log_msg "INFO: [INFO] ZFS module load messages in dmesg:"
-    # grep -i "zfs" | grep -E "module|loaded|vdev_scrub"
-    # Purpose: Filter dmesg for ZFS-related lines that mention module loading,
-    #          "loaded", or scrub events. The -E pattern is an OR of three keywords.
-    dmesg | grep -i "zfs" | grep -E "module|loaded|vdev_scrub" | tail -n 5
+    # grep -i "zfs" | awk fixed-string index() tests for "module", "loaded",
+    #   or "vdev_scrub"  —  filter dmesg for ZFS-related lines that mention
+    #   module loading or scrub events (OR of the three fixed keywords).
+    dmesg | grep -i "zfs" \
+        | awk 'index($0, "module") || index($0, "loaded") || index($0, "vdev_scrub")' \
+        | tail -n 5
 else
     warn "No ZFS load messages found in dmesg."
 fi

@@ -14,8 +14,8 @@ old_mydir="$mydir"
 _zfsdelallholds_lock_dir=$(mktemp -d)
 cat > "$_zfsdelallholds_lock_dir/zfslockmanager" <<'EOF'
 zfslock_init() { true; }
-zfslock_acquire() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
-zfslock_wait_or_resolve() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_acquire() { zfslock_id="/tmp/mock_lock_$$"; return 0; }
+zfslock_wait_or_resolve() { zfslock_id="/tmp/mock_lock_$$"; return 0; }
 zfslock_release() { true; }
 zfslock_release_all() { true; }
 EOF
@@ -64,11 +64,11 @@ test_reports_remaining_holds() {
     echo "=== Reports remaining holds ==="
     mock_zfs_holds "pool/fs@snap" "offsite-pool" "userhold"
     delallholds "pool/fs@snap" 'offsite-*'
-    test_start "Sets ZFS_DELALLHOLDS_REMAINING_TAGS for unreleased holds"
-    if [[ "$ZFS_DELALLHOLDS_REMAINING_TAGS" == "userhold" ]]; then
+    test_start "Sets zfs_delallholds_remaining_tags for unreleased holds"
+    if [[ "$zfs_delallholds_remaining_tags" == "userhold" ]]; then
         test_pass
     else
-        test_fail "Expected remaining tags 'userhold', got: '$ZFS_DELALLHOLDS_REMAINING_TAGS'"
+        test_fail "Expected remaining tags 'userhold', got: '$zfs_delallholds_remaining_tags'"
     fi
 }
 
@@ -77,10 +77,10 @@ test_no_holds_returns_zero() {
     _mock_zfs_holds=()
     delallholds "pool/fs@snap" 'offsite-*'
     test_start "No holds returns zero and clears remaining tags"
-    if [[ -z "$ZFS_DELALLHOLDS_REMAINING_TAGS" ]]; then
+    if [[ -z "$zfs_delallholds_remaining_tags" ]]; then
         test_pass
     else
-        test_fail "Expected empty remaining tags, got: '$ZFS_DELALLHOLDS_REMAINING_TAGS'"
+        test_fail "Expected empty remaining tags, got: '$zfs_delallholds_remaining_tags'"
     fi
 }
 

@@ -9,10 +9,14 @@
 # allowed.
 
 # Paths for the global snapshot-name reservation mechanism. These can be
-# overridden by callers/tests via environment variables.
+# overridden by callers/tests via environment variables; the uppercase names
+# are the external interface, the lowercase names are the working copies.
 SNAPNAME_LOCK="${SNAPNAME_LOCK:-/run/lock/zfsutilities/.snapname.lock}"
+snapname_lock="$SNAPNAME_LOCK"
 SNAPNAME_RESERVED="${SNAPNAME_RESERVED:-/run/lock/zfsutilities/.snapname.reserved}"
+snapname_reserved="$SNAPNAME_RESERVED"
 SNAPNAME_RESERVE_SECONDS="${SNAPNAME_RESERVE_SECONDS:-60}"
+snapname_reserve_seconds="$SNAPNAME_RESERVE_SECONDS"
 
 function buildsnapfilename {
     local caller="${BASH_SOURCE[1]}"        # Who called?
@@ -28,21 +32,21 @@ function _snapname_update_reservation {
     local name="$1"
     local epoch
     epoch=$(date +%s)
-    local cutoff=$(( epoch - SNAPNAME_RESERVE_SECONDS ))
+    local cutoff=$(( epoch - snapname_reserve_seconds ))
     local reserved_dir
-    reserved_dir=$(dirname "$SNAPNAME_RESERVED")
+    reserved_dir=$(dirname "$snapname_reserved")
     mkdir -p "$reserved_dir"
-    local tmpfile="${SNAPNAME_RESERVED}.tmp.$$"
-    if [[ -f "$SNAPNAME_RESERVED" ]]; then
+    local tmpfile="${snapname_reserved}.tmp.$$"
+    if [[ -f "$snapname_reserved" ]]; then
         awk -v name="$name" -v epoch="$epoch" -v cutoff="$cutoff" '
             $1 == name { next }
             $2 >= cutoff { print }
             END { print name " " epoch }
-        ' "$SNAPNAME_RESERVED" > "$tmpfile"
+        ' "$snapname_reserved" > "$tmpfile"
     else
         echo "$name $epoch" > "$tmpfile"
     fi
-    mv "$tmpfile" "$SNAPNAME_RESERVED"
+    mv "$tmpfile" "$snapname_reserved"
 }
 
 zfssnapbuild() {
@@ -70,10 +74,10 @@ zfssnapbuild() {
     fi
     # Generate a new snapshot name under the global snapshot-name lock.
     local lock_dir
-    lock_dir=$(dirname "$SNAPNAME_LOCK")
+    lock_dir=$(dirname "$snapname_lock")
     mkdir -p "$lock_dir"
     local lock_fd
-    exec {lock_fd}>"$SNAPNAME_LOCK"
+    exec {lock_fd}>"$snapname_lock"
     if ! flock -x "$lock_fd"; then
         exec {lock_fd}>&-
         return 1

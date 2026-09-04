@@ -64,7 +64,7 @@ if [[ ${#mountarray[@]} -gt 0 ]]; then
                 log_msg "FATAL: Could not acquire write lock on ${fs}; aborting."
                 exit 8
             fi
-            fs_lock="$ZFSLOCK_ID"
+            fs_lock="$zfslock_id"
             zfs "$command" "$fs"
             zfslock_release "$fs_lock" || true
         fi

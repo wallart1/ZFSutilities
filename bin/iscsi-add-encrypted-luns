@@ -32,13 +32,13 @@ is_single_node && exit 0
 
 sleep 2  # Brief wait for device nodes to appear after zfs load-key
 
-CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
-if [[ ! -e "$CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
-    CONF="/etc/iscsi-encrypted-luns.conf"
+conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$conf" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    conf="/etc/iscsi-encrypted-luns.conf"
 fi
-SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
+savefile="/etc/rtslib-fb-target/saveconfig.json"
 
-if [[ ! -f "$CONF" ]]; then
+if [[ ! -f "$conf" ]]; then
     exit 0
 fi
 
@@ -46,10 +46,10 @@ fi
 # Returns the index on stdout, or empty string if not found.
 lookup_lun_number() {
     local bsname="$1"
-    [[ -f "$SAVEFILE" ]] || return
-    BSNAME="$bsname" python3 - "$SAVEFILE" << 'PYEOF' 2>/dev/null
+    [[ -f "$savefile" ]] || return
+    bsname="$bsname" python3 - "$savefile" << 'PYEOF' 2>/dev/null
 import json, os, sys
-name = os.environ["BSNAME"]
+name = os.environ["bsname"]
 with open(sys.argv[1]) as f:
     config = json.load(f)
 for target in config.get("targets", []):
@@ -61,7 +61,7 @@ for target in config.get("targets", []):
 PYEOF
 }
 
-ADDED=0
+added=0
 while IFS=: read -r name device target; do
     [[ -z "$name" || "$name" == \#* ]] && continue
 
@@ -78,16 +78,16 @@ while IFS=: read -r name device target; do
 
     targetcli /backstores/block create "$name" "$device" >/dev/null 2>&1
     if [[ -n "$lun_num" ]]; then
-        targetcli /iscsi/"${IQN_PREFIX}":"${target}"/tpg1/luns \
+        targetcli /iscsi/"${iqn_prefix}":"${target}"/tpg1/luns \
             create /backstores/block/"$name" "$lun_num" >/dev/null 2>&1
         log_msg "INFO:   ✓ Added $name (LUN $lun_num)"
     else
-        targetcli /iscsi/"${IQN_PREFIX}":"${target}"/tpg1/luns \
+        targetcli /iscsi/"${iqn_prefix}":"${target}"/tpg1/luns \
             create /backstores/block/"$name" >/dev/null 2>&1
         log_msg "INFO:   ✓ Added $name (auto LUN)"
     fi
-    ADDED=$((ADDED + 1))
-done < "$CONF"
+    added=$((added + 1))
+done < "$conf"
 
 # Save only if all expected LUNs are active
 "$mydir/safe-iscsi-save"

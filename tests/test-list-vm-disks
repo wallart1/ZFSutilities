@@ -152,14 +152,14 @@ reset_mocks() {
     _qm_guest_output=""
     _qm_exec_returns_status=false
     _qm_exec_status_exited="true"
-    VM_MAP_VMID=()
-    VM_MAP_NAME=()
-    VM_MAP_KEY=()
-    HOST_DEV=()
-    HOST_BYPATH=()
-    GUEST_DEV=()
-    GUEST_BYPATH=()
-    RUNNING_VM=()
+    vm_map_vmid=()
+    vm_map_name=()
+    vm_map_key=()
+    host_dev=()
+    host_bypath=()
+    guest_dev=()
+    guest_bypath=()
+    running_vm=()
 }
 
 setup_two_node_zfs() {
@@ -194,16 +194,16 @@ test_build_vm_disk_map_two_node() {
     build_vm_disk_map
 
     local ok=1
-    [[ "${VM_MAP_VMID[threeamigos:0]}" == "100" ]] || ok=0
-    [[ "${VM_MAP_NAME[threeamigos:0]}" == "webserver" ]] || ok=0
-    [[ "${VM_MAP_KEY[threeamigos:0]}" == "scsi0" ]] || ok=0
-    [[ "${VM_MAP_VMID[threeamigos:1]}" == "200" ]] || ok=0
-    [[ "${VM_MAP_NAME[threeamigos:1]}" == "dbserver" ]] || ok=0
+    [[ "${vm_map_vmid[threeamigos:0]}" == "100" ]] || ok=0
+    [[ "${vm_map_name[threeamigos:0]}" == "webserver" ]] || ok=0
+    [[ "${vm_map_key[threeamigos:0]}" == "scsi0" ]] || ok=0
+    [[ "${vm_map_vmid[threeamigos:1]}" == "200" ]] || ok=0
+    [[ "${vm_map_name[threeamigos:1]}" == "dbserver" ]] || ok=0
 
     if [[ $ok -eq 1 ]]; then
         test_pass
     else
-        test_fail "VM map contents: $(declare -p VM_MAP_VMID VM_MAP_NAME VM_MAP_KEY)"
+        test_fail "VM map contents: $(declare -p vm_map_vmid vm_map_name vm_map_key)"
     fi
 }
 
@@ -219,12 +219,12 @@ EOF
     build_vm_disk_map
 
     # The zvol is vm-100-disk-0 but the disk is attached to VM 300.
-    if [[ "${VM_MAP_VMID[threeamigos:0]}" == "300" ]] &&\
-       [[ "${VM_MAP_NAME[threeamigos:0]}" == "moved-here" ]]; then
+    if [[ "${vm_map_vmid[threeamigos:0]}" == "300" ]] &&\
+       [[ "${vm_map_name[threeamigos:0]}" == "moved-here" ]]; then
         test_pass
     else
-        local _wrap_msg="Expected VMID 300, got ${VM_MAP_VMID[threeamigos:0]} / "
-        _wrap_msg+="${VM_MAP_NAME[threeamigos:0]}"
+        local _wrap_msg="Expected VMID 300, got ${vm_map_vmid[threeamigos:0]} / "
+        _wrap_msg+="${vm_map_name[threeamigos:0]}"
         test_fail "$_wrap_msg"
     fi
 }
@@ -236,16 +236,16 @@ test_build_host_device_map() {
     build_host_device_map
 
     local ok=1
-    [[ "${HOST_DEV[threeamigos:0]}" == "/dev/loop0" ]] || ok=0
+    [[ "${host_dev[threeamigos:0]}" == "/dev/loop0" ]] || ok=0
     local _wrap_rhs="$by_path_dir/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos"
     _wrap_rhs+="-lun-0"
-    [[ "${HOST_BYPATH[threeamigos:0]}" == "$_wrap_rhs" ]] || ok=0
-    [[ "${HOST_DEV[threeamigos:1]}" == "/dev/loop1" ]] || ok=0
+    [[ "${host_bypath[threeamigos:0]}" == "$_wrap_rhs" ]] || ok=0
+    [[ "${host_dev[threeamigos:1]}" == "/dev/loop1" ]] || ok=0
 
     if [[ $ok -eq 1 ]]; then
         test_pass
     else
-        test_fail "Host map contents: $(declare -p HOST_DEV HOST_BYPATH)"
+        test_fail "Host map contents: $(declare -p host_dev host_bypath)"
     fi
 }
 
@@ -255,10 +255,10 @@ test_build_running_vm_set() {
 
     build_running_vm_set
 
-    if [[ -n "${RUNNING_VM[100]:-}" && -z "${RUNNING_VM[200]:-}" ]]; then
+    if [[ -n "${running_vm[100]:-}" && -z "${running_vm[200]:-}" ]]; then
         test_pass
     else
-        test_fail "RUNNING map contents: $(declare -p RUNNING_VM)"
+        test_fail "RUNNING map contents: $(declare -p running_vm)"
     fi
 }
 
@@ -272,12 +272,12 @@ test_build_guest_device_map_running() {
     build_running_vm_set
     build_guest_device_map
 
-    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" ]] &&\
+    if [[ "${guest_dev[threeamigos:0]}" == "/dev/sda" ]] &&\
        local _wrap_rhs="/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
-       [[ "${GUEST_BYPATH[threeamigos:0]}" == "$_wrap_rhs" ]]; then
+       [[ "${guest_bypath[threeamigos:0]}" == "$_wrap_rhs" ]]; then
         test_pass
     else
-        test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
+        test_fail "Guest map contents: $(declare -p guest_dev guest_bypath)"
     fi
 }
 
@@ -291,10 +291,10 @@ test_build_guest_device_map_stopped() {
     build_running_vm_set
     build_guest_device_map
 
-    if [[ -z "${GUEST_DEV[threeamigos:1]:-}" && -z "${GUEST_BYPATH[threeamigos:1]:-}" ]]; then
+    if [[ -z "${guest_dev[threeamigos:1]:-}" && -z "${guest_bypath[threeamigos:1]:-}" ]]; then
         test_pass
     else
-        test_fail "Stopped VM should have no guest device: $(declare -p GUEST_DEV GUEST_BYPATH)"
+        test_fail "Stopped VM should have no guest device: $(declare -p guest_dev guest_bypath)"
     fi
 }
 
@@ -309,12 +309,12 @@ test_build_guest_device_map_base64() {
     build_running_vm_set
     build_guest_device_map
 
-    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" ]] &&\
+    if [[ "${guest_dev[threeamigos:0]}" == "/dev/sda" ]] &&\
        local _wrap_rhs="/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
-       [[ "${GUEST_BYPATH[threeamigos:0]}" == "$_wrap_rhs" ]]; then
+       [[ "${guest_bypath[threeamigos:0]}" == "$_wrap_rhs" ]]; then
         test_pass
     else
-        test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
+        test_fail "Guest map contents: $(declare -p guest_dev guest_bypath)"
     fi
 }
 
@@ -329,12 +329,12 @@ test_build_guest_device_map_exited_one() {
     build_running_vm_set
     build_guest_device_map
 
-    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" ]] &&\
+    if [[ "${guest_dev[threeamigos:0]}" == "/dev/sda" ]] &&\
        local _wrap_rhs="/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
-       [[ "${GUEST_BYPATH[threeamigos:0]}" == "$_wrap_rhs" ]]; then
+       [[ "${guest_bypath[threeamigos:0]}" == "$_wrap_rhs" ]]; then
         test_pass
     else
-        test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
+        test_fail "Guest map contents: $(declare -p guest_dev guest_bypath)"
     fi
 }
 
@@ -350,12 +350,12 @@ test_build_guest_device_map_immediate_status() {
     build_running_vm_set
     build_guest_device_map
 
-    if [[ "${GUEST_DEV[threeamigos:0]}" == "/dev/sda" ]] &&\
+    if [[ "${guest_dev[threeamigos:0]}" == "/dev/sda" ]] &&\
        local _wrap_rhs="/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
-       [[ "${GUEST_BYPATH[threeamigos:0]}" == "$_wrap_rhs" ]]; then
+       [[ "${guest_bypath[threeamigos:0]}" == "$_wrap_rhs" ]]; then
         test_pass
     else
-        test_fail "Guest map contents: $(declare -p GUEST_DEV GUEST_BYPATH)"
+        test_fail "Guest map contents: $(declare -p guest_dev guest_bypath)"
     fi
 }
 

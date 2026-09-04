@@ -10,7 +10,7 @@
 #
 # Run as root on each host where you want to switch versions.
 
-MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
 
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
@@ -26,32 +26,32 @@ unset _local_bashinit
 # filesystem.  They are re-evaluated at function entry so tests can set the
 # environment variables after sourcing this file.
 load_switch_config() {
-    VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
-    BASHINIT_LINK="${ZFSUTILITIES_BASHINIT_LINK:-/root/bashinit}"
-    PROFILE_FILE="${ZFSUTILITIES_PROFILE_FILE:-/etc/profile.d/zfsutilities.sh}"
-    SUDOERS_FILE="${ZFSUTILITIES_SUDOERS_FILE:-/etc/sudoers.d/zfsutilities}"
-    NODE_LIB_LINK="${ZFSUTILITIES_NODE_LIB_LINK:-/usr/local/lib/node-lib.sh}"
-    TWO_NODE_LIB_LINK="${ZFSUTILITIES_TWO_NODE_LIB_LINK:-/usr/local/lib/two-node-lib.sh}"
-    ISCSI_LIB_LINK="${ZFSUTILITIES_ISCSI_LIB_LINK:-/usr/local/lib/iscsi-lib.sh}"
-    ROOTCHECK_LINK="${ZFSUTILITIES_ROOTCHECK_LINK:-/usr/local/lib/rootcheck}"
-    LOCAL_BIN_DIR="${ZFSUTILITIES_LOCAL_BIN_DIR:-/usr/local/bin}"
+    version_base="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
+    bashinit_link="${ZFSUTILITIES_BASHINIT_LINK:-/root/bashinit}"
+    profile_file="${ZFSUTILITIES_PROFILE_FILE:-/etc/profile.d/zfsutilities.sh}"
+    sudoers_file="${ZFSUTILITIES_SUDOERS_FILE:-/etc/sudoers.d/zfsutilities}"
+    node_lib_link="${ZFSUTILITIES_NODE_LIB_LINK:-/usr/local/lib/node-lib.sh}"
+    two_node_lib_link="${ZFSUTILITIES_TWO_NODE_LIB_LINK:-/usr/local/lib/two-node-lib.sh}"
+    iscsi_lib_link="${ZFSUTILITIES_ISCSI_LIB_LINK:-/usr/local/lib/iscsi-lib.sh}"
+    rootcheck_link="${ZFSUTILITIES_ROOTCHECK_LINK:-/usr/local/lib/rootcheck}"
+    local_bin_dir="${ZFSUTILITIES_LOCAL_BIN_DIR:-/usr/local/bin}"
 }
 
 # Use the project's rootcheck helper if it is not already loaded (tests mock
 # this function to run as non-root).
 if ! declare -f rootcheck &>/dev/null; then
     # shellcheck source=rootcheck
-    source "$MYDIR/rootcheck"
+    source "$mydir/rootcheck"
 fi
 rootcheck
 
 # Source desktop launcher helpers.  In the flat layout the library lives at
 # "../lib/desktop-launcher-lib.sh" relative to bin/.
 _DESKTOP_LAUNCHER_LIB=""
-if [[ -f "$MYDIR/../lib/desktop-launcher-lib.sh" ]]; then
-    _DESKTOP_LAUNCHER_LIB="$MYDIR/../lib/desktop-launcher-lib.sh"
-elif [[ -f "$MYDIR/lib/desktop-launcher-lib.sh" ]]; then
-    _DESKTOP_LAUNCHER_LIB="$MYDIR/lib/desktop-launcher-lib.sh"
+if [[ -f "$mydir/../lib/desktop-launcher-lib.sh" ]]; then
+    _DESKTOP_LAUNCHER_LIB="$mydir/../lib/desktop-launcher-lib.sh"
+elif [[ -f "$mydir/lib/desktop-launcher-lib.sh" ]]; then
+    _DESKTOP_LAUNCHER_LIB="$mydir/lib/desktop-launcher-lib.sh"
 fi
 
 if [[ -n "$_DESKTOP_LAUNCHER_LIB" ]]; then
@@ -88,7 +88,7 @@ usage() {
 # ------------------------------------------------------------------
 
 setup_bin_symlink() {
-    local bin_link="$VERSION_BASE/bin"
+    local bin_link="$version_base/bin"
     if [[ ! -L "$bin_link" ]]; then
         ln -sfn "current/bin" "$bin_link"
         log_msg "INFO:   Created $bin_link -> current/bin"
@@ -96,9 +96,9 @@ setup_bin_symlink() {
 }
 
 setup_path_config() {
-    local profile_file="$PROFILE_FILE"
-    local sudoers_file="$SUDOERS_FILE"
-    local bin_path="$VERSION_BASE/bin"
+    local profile_file="$profile_file"
+    local sudoers_file="$sudoers_file"
+    local bin_path="$version_base/bin"
 
     # /etc/profile.d — idempotent
     if [[ ! -f "$profile_file" ]] || ! grep -qF "$bin_path" "$profile_file" 2>/dev/null; then
@@ -126,8 +126,8 @@ EOF
 }
 
 setup_bashinit_symlink() {
-    local target="$VERSION_BASE/current/bin/bashinit"
-    local link="$BASHINIT_LINK"
+    local target="$version_base/current/bin/bashinit"
+    local link="$bashinit_link"
 
     if [[ -f "$link" && ! -L "$link" ]]; then
         mv "$link" "${link}.bak"
@@ -141,48 +141,48 @@ setup_bashinit_symlink() {
 }
 
 setup_library_symlinks() {
-    local node_target="$VERSION_BASE/current/lib/node-lib.sh"
-    local two_node_target="$VERSION_BASE/current/lib/two-node-lib.sh"
-    local iscsi_lib_target="$VERSION_BASE/current/lib/iscsi-lib.sh"
-    local rootcheck_target="$VERSION_BASE/current/bin/rootcheck"
+    local node_target="$version_base/current/lib/node-lib.sh"
+    local two_node_target="$version_base/current/lib/two-node-lib.sh"
+    local iscsi_lib_target="$version_base/current/lib/iscsi-lib.sh"
+    local rootcheck_target="$version_base/current/bin/rootcheck"
 
-    if [[ -f "$VERSION_BASE/current/lib/node-lib.sh" ]]; then
-        ln -sfn "$node_target" "$NODE_LIB_LINK"
-        log_msg "INFO:   Created $NODE_LIB_LINK -> $node_target"
+    if [[ -f "$version_base/current/lib/node-lib.sh" ]]; then
+        ln -sfn "$node_target" "$node_lib_link"
+        log_msg "INFO:   Created $node_lib_link -> $node_target"
     fi
 
-    if [[ -f "$VERSION_BASE/current/lib/two-node-lib.sh" ]]; then
-        ln -sfn "$two_node_target" "$TWO_NODE_LIB_LINK"
-        log_msg "INFO:   Created $TWO_NODE_LIB_LINK -> $two_node_target"
-    elif [[ -f "$VERSION_BASE/current/lib/node-lib.sh" ]]; then
+    if [[ -f "$version_base/current/lib/two-node-lib.sh" ]]; then
+        ln -sfn "$two_node_target" "$two_node_lib_link"
+        log_msg "INFO:   Created $two_node_lib_link -> $two_node_target"
+    elif [[ -f "$version_base/current/lib/node-lib.sh" ]]; then
         # Backward-compat: old scripts source /usr/local/lib/two-node-lib.sh
-        ln -sfn "node-lib.sh" "$TWO_NODE_LIB_LINK"
-        log_msg "INFO:   Created $TWO_NODE_LIB_LINK -> node-lib.sh (compat)"
+        ln -sfn "node-lib.sh" "$two_node_lib_link"
+        log_msg "INFO:   Created $two_node_lib_link -> node-lib.sh (compat)"
     fi
 
-    if [[ -f "$VERSION_BASE/current/lib/iscsi-lib.sh" ]]; then
-        ln -sfn "$iscsi_lib_target" "$ISCSI_LIB_LINK"
-        log_msg "INFO:   Created $ISCSI_LIB_LINK -> $iscsi_lib_target"
+    if [[ -f "$version_base/current/lib/iscsi-lib.sh" ]]; then
+        ln -sfn "$iscsi_lib_target" "$iscsi_lib_link"
+        log_msg "INFO:   Created $iscsi_lib_link -> $iscsi_lib_target"
     fi
 
-    if [[ -f "$VERSION_BASE/current/bin/rootcheck" ]]; then
-        ln -sfn "$rootcheck_target" "$ROOTCHECK_LINK"
-        log_msg "INFO:   Created $ROOTCHECK_LINK -> $rootcheck_target"
+    if [[ -f "$version_base/current/bin/rootcheck" ]]; then
+        ln -sfn "$rootcheck_target" "$rootcheck_link"
+        log_msg "INFO:   Created $rootcheck_link -> $rootcheck_target"
     fi
 }
 
 cleanup_old_symlinks() {
     local removed=0
-    for link in "$LOCAL_BIN_DIR"/*; do
+    for link in "$local_bin_dir"/*; do
         [[ -L "$link" ]] || continue
         local target
         target=$(readlink "$link" 2>/dev/null || true)
-        [[ "$target" == "$VERSION_BASE/current/bin/"* ]] || continue
+        [[ "$target" == "$version_base/current/bin/"* ]] || continue
         rm -f "$link"
         ((++removed))
     done
     if [[ $removed -gt 0 ]]; then
-        log_msg "INFO:   Removed $removed old symlinks from $LOCAL_BIN_DIR"
+        log_msg "INFO:   Removed $removed old symlinks from $local_bin_dir"
     fi
 }
 
@@ -232,29 +232,29 @@ uninstall_wiring() {
     load_switch_config
     log_msg "INFO: === Unwiring version from active production ==="
 
-    if [[ -L "$BASHINIT_LINK" ]]; then
-        rm -f "$BASHINIT_LINK"
-        log_msg "INFO:   Removed $BASHINIT_LINK"
+    if [[ -L "$bashinit_link" ]]; then
+        rm -f "$bashinit_link"
+        log_msg "INFO:   Removed $bashinit_link"
     fi
 
-    if [[ -L "$NODE_LIB_LINK" ]]; then
-        rm -f "$NODE_LIB_LINK"
-        log_msg "INFO:   Removed $NODE_LIB_LINK"
+    if [[ -L "$node_lib_link" ]]; then
+        rm -f "$node_lib_link"
+        log_msg "INFO:   Removed $node_lib_link"
     fi
 
-    if [[ -L "$TWO_NODE_LIB_LINK" ]]; then
-        rm -f "$TWO_NODE_LIB_LINK"
-        log_msg "INFO:   Removed $TWO_NODE_LIB_LINK"
+    if [[ -L "$two_node_lib_link" ]]; then
+        rm -f "$two_node_lib_link"
+        log_msg "INFO:   Removed $two_node_lib_link"
     fi
 
-    if [[ -L "$ISCSI_LIB_LINK" ]]; then
-        rm -f "$ISCSI_LIB_LINK"
-        log_msg "INFO:   Removed $ISCSI_LIB_LINK"
+    if [[ -L "$iscsi_lib_link" ]]; then
+        rm -f "$iscsi_lib_link"
+        log_msg "INFO:   Removed $iscsi_lib_link"
     fi
 
-    if [[ -L "$ROOTCHECK_LINK" ]]; then
-        rm -f "$ROOTCHECK_LINK"
-        log_msg "INFO:   Removed $ROOTCHECK_LINK"
+    if [[ -L "$rootcheck_link" ]]; then
+        rm -f "$rootcheck_link"
+        log_msg "INFO:   Removed $rootcheck_link"
     fi
 
     local desktop_user
@@ -268,17 +268,17 @@ uninstall_wiring() {
 
 list_versions() {
     log_msg "INFO: === Installed versions ==="
-    if [[ ! -d "$VERSION_BASE/versions" ]]; then
+    if [[ ! -d "$version_base/versions" ]]; then
         log_msg "INFO:   (no versions installed)"
         return 0
     fi
 
     local current previous
-    current=$(readlink -f "$VERSION_BASE/current" 2>/dev/null || true)
-    previous=$(readlink -f "$VERSION_BASE/previous" 2>/dev/null || true)
+    current=$(readlink -f "$version_base/current" 2>/dev/null || true)
+    previous=$(readlink -f "$version_base/previous" 2>/dev/null || true)
 
     {
-    for v in "$VERSION_BASE/versions/"*; do
+    for v in "$version_base/versions/"*; do
         [[ -d "$v" ]] || continue
         local name
         name=$(basename "$v")
@@ -326,23 +326,23 @@ switch_version_main() {
     # Resolve "previous"
     if [[ "$version" == "previous" ]]; then
         local previous_link
-        previous_link=$(readlink "$VERSION_BASE/previous" 2>/dev/null || true)
+        previous_link=$(readlink "$version_base/previous" 2>/dev/null || true)
         [[ -n "$previous_link" ]] || die "No previous version recorded"
         version=$(basename "$previous_link")
     fi
 
     local target="versions/$version"
-    [[ -d "$VERSION_BASE/$target" ]] || die "Version not found: $version"
+    [[ -d "$version_base/$target" ]] || die "Version not found: $version"
 
     local current
-    current=$(readlink "$VERSION_BASE/current" 2>/dev/null || true)
+    current=$(readlink "$version_base/current" 2>/dev/null || true)
 
     if [[ "$current" != "$target" ]]; then
         # Uninstall prior version's wiring using its own switch-version.
         if [[ -n "$current" ]]; then
             local prior_version
             prior_version=$(basename "$current")
-            local prior_switch="$VERSION_BASE/versions/$prior_version/bin/switch-version"
+            local prior_switch="$version_base/versions/$prior_version/bin/switch-version"
             if [[ -x "$prior_switch" ]]; then
                 log_msg "INFO:   Unwiring previous version $prior_version..."
                 "$prior_switch" --uninstall || \
@@ -354,21 +354,21 @@ switch_version_main() {
 
         # Record current as previous before switching
         if [[ -n "$current" ]]; then
-            ln -sfn "$current" "$VERSION_BASE/previous"
+            ln -sfn "$current" "$version_base/previous"
         fi
 
         # Switch current symlink
-        ln -sfn "$target" "$VERSION_BASE/current"
+        ln -sfn "$target" "$version_base/current"
 
         # Re-execute target version's switch-version so its own code performs
         # the wiring.  The re-executed instance sees current == target and
         # proceeds straight to install_wiring().
         local this_switch new_switch
         this_switch=$(realpath "$0" 2>/dev/null || echo "$0")
-        new_switch=$(realpath "$VERSION_BASE/current/bin/switch-version" 2>/dev/null || \
-            echo "$VERSION_BASE/current/bin/switch-version")
+        new_switch=$(realpath "$version_base/current/bin/switch-version" 2>/dev/null || \
+            echo "$version_base/current/bin/switch-version")
         if [[ "$this_switch" != "$new_switch" ]]; then
-            exec "$VERSION_BASE/current/bin/switch-version" "$version"
+            exec "$version_base/current/bin/switch-version" "$version"
         fi
     fi
 

@@ -33,18 +33,16 @@ if ! command -v qm >/dev/null 2>&1; then
     exit 1
 fi
 
-MY_HOST=$(hostname -s)
-PVE_CONF_DIR="/etc/pve/qemu-server"
+my_host=$(hostname -s)
+pve_conf_dir="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 
-# Build reverse target-short → pool lookup from POOL_TARGET (two-node only)
-declare -A TARGET_POOL=()
-TARGET_RE=""
+# Build reverse target-short → pool lookup from pool_target (two-node only)
+declare -A target_pool=()
 if is_two_node; then
-    for _pool in "${!POOL_TARGET[@]}"; do
-        TARGET_POOL["${POOL_TARGET[$_pool]}"]="$_pool"
+    for _pool in "${!pool_target[@]}"; do
+        target_pool["${pool_target[$_pool]}"]="$_pool"
     done
     unset _pool
-    TARGET_RE="$(IFS='|'; echo "${POOL_TARGET[*]}")"
 fi
 
 usage() {
@@ -63,29 +61,29 @@ usage() {
 # --- Argument validation ---
 [[ $# -eq 3 ]] || usage
 
-SRCVMID="$1"
-DSTVMID="$2"
-NEW_NAME="$3"
+srcvmid="$1"
+dstvmid="$2"
+new_name="$3"
 
-[[ "$SRCVMID" =~ ^[0-9]+$ ]] || {
-    log_msg "FATAL: src_vmid must be a number, got: $SRCVMID"
+[[ "$srcvmid" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: src_vmid must be a number, got: $srcvmid"
     exit 1
 }
-[[ "$DSTVMID" =~ ^[0-9]+$ ]] || {
-    log_msg "FATAL: dst_vmid must be a number, got: $DSTVMID"
+[[ "$dstvmid" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: dst_vmid must be a number, got: $dstvmid"
     exit 1
 }
 
 # --- If not on the compute host, delegate (two-node only) ---
-if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "clone-vm")
-    exec ssh -t root@"$COMPUTE_HOST" "$REMOTE_SCRIPT '$SRCVMID' '$DSTVMID' '$NEW_NAME'"
+if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
+    remote_script=$(remote_zfsutility_script "$compute_host" "clone-vm")
+    exec ssh -t root@"$compute_host" "$remote_script '$srcvmid' '$dstvmid' '$new_name'"
 fi
 
 # === Running on the compute host ===
 
-src_conf="$PVE_CONF_DIR/${SRCVMID}.conf"
-dst_conf="$PVE_CONF_DIR/${DSTVMID}.conf"
+src_conf="$pve_conf_dir/${srcvmid}.conf"
+dst_conf="$pve_conf_dir/${dstvmid}.conf"
 
 [[ -f "$src_conf" ]]  || {
     log_msg "FATAL: Source VM config not found: $src_conf"
@@ -97,12 +95,105 @@ dst_conf="$PVE_CONF_DIR/${DSTVMID}.conf"
 }
 
 # --- Check source VM is stopped ---
-vm_status=$(qm status "$SRCVMID" 2>/dev/null | awk '{print $2}')
+vm_status=$(qm status "$srcvmid" 2>/dev/null | awk '{print $2}')
 [[ "$vm_status" == "stopped" ]] \
     || {
-        log_msg "FATAL: VM $SRCVMID must be stopped before cloning (status: ${vm_status:-unknown})"
+        log_msg "FATAL: VM $srcvmid must be stopped before cloning (status: ${vm_status:-unknown})"
         exit 1
     }
+
+# --- Config-line parsing helpers (no regex literals over 10 chars) ---
+
+# Parse a Proxmox disk line: <key>: <storage>:vm-<srcvmid>-disk-<N>[,params]
+# On success sets _pd_key / _pd_storage / _pd_disknum / _pd_rest and returns 0.
+# True when the line begins with a net<N>: key (N all digits).
+is_net_line() {
+    local key="${1%%:*}"
+    [[ "$1" == *:* && "$key" == net* ]] || return 1
+    [[ "${key#net}" =~ ^[0-9]+$ ]]
+}
+
+parse_disk_line() {
+    local line="$1" rest storage rem key_head key_tail
+    _pd_key="${line%%:*}"
+    # Key must be lowercase letters followed by digits only ([a-z]+[0-9]+).
+    key_tail="${_pd_key##*[!0-9]}"
+    key_head="${_pd_key%"${key_tail}"}"
+    [[ -n "$key_tail" && -n "$key_head" && "$key_head" != *[!a-z]* ]] || return 1
+    rest="${line#*:}"
+    [[ "$rest" == *:* ]] || return 1
+    storage="${rest%%:*}"
+    [[ -n "$storage" ]] || return 1
+    # Consume leading spaces like the old "\ *" quantifier; an all-space
+    # storage keeps one space (regex backtracking behavior).
+    storage="${storage#"${storage%%[! ]*}"}"
+    [[ -n "$storage" ]] || storage=" "
+    rem="${rest#*:}"
+    [[ "$rem" == "vm-${srcvmid}-disk-"* ]] || return 1
+    rem="${rem#"vm-${srcvmid}-disk-"}"
+    _pd_disknum="${rem%%[!0-9]*}"
+    [[ -n "$_pd_disknum" ]] || return 1
+    _pd_rest="${rem#"${_pd_disknum}"}"
+    _pd_storage="$storage"
+    return 0
+}
+
+# Parse a two-node iSCSI disk line, extracting the target short name and LUN
+# number. Format:
+#   <key>: ...ip-<storage_ip>:3260-iscsi-<iqn_prefix>:<target>-lun-<N>[,params]
+# The target short name must be a known pool_target value (a target_pool key).
+# On success sets _pi_key / _pi_target / _pi_lun and returns 0.
+parse_iscsi_line() {
+    local line="$1" marker tail field lpart key_head key_tail
+    _pi_key="${line%%:*}"
+    # Key must be lowercase letters followed by digits only ([a-z]+[0-9]+).
+    key_tail="${_pi_key##*[!0-9]}"
+    key_head="${_pi_key%"${key_tail}"}"
+    [[ -n "$key_tail" && -n "$key_head" && "$key_head" != *[!a-z]* ]] || return 1
+    marker="ip-${storage_ip}:3260-iscsi-${iqn_prefix}:"
+    [[ "$line" == *"${marker}"* ]] || return 1
+    tail="${line#*"${marker}"}"
+    field="${tail%%,*}"
+    [[ "$field" == *-lun-[0-9]* ]] || return 1
+    _pi_target="${field%%-lun-*}"
+    [[ -v target_pool["${_pi_target}"] ]] || return 1
+    lpart="${field##*-lun-}"
+    _pi_lun="${lpart%%[!0-9]*}"
+    [[ -n "$_pi_lun" ]] || return 1
+    return 0
+}
+
+# Replace the MAC in a netN: line, mirroring the old greedy regex: the LAST
+# "=<MAC>," occurrence is rewritten. Mode "pairs" requires strict
+# XX:XX:XX:XX:XX:XX; mode "loose" accepts any 17 hex/colon characters
+# (the legacy [0-9A-Fa-f:]{17} behavior).
+rewrite_mac() {
+    local line="$1" new_mac="$2" mode="$3"
+    local rest="$line" result="$line"
+    local prefix="" seg after cand tail colon_pos
+    while [[ "$rest" == *=* ]]; do
+        seg="${rest%%=*}"
+        after="${rest#*=}"
+        cand="${after:0:17}"
+        tail="${after:17}"
+        if (( ${#after} >= 18 )) && [[ "$tail" == ,* ]]; then
+            if [[ "$mode" == pairs ]]; then
+                # Strict XX:XX:XX:XX:XX:XX — colons exactly at positions
+                # 3,6,9,12,15 and hex nibbles everywhere else.
+                colon_pos="${cand:2:1}${cand:5:1}${cand:8:1}${cand:11:1}${cand:14:1}"
+                if [[ ${#cand} -eq 17 && "$colon_pos" == ::::: \
+                        && -z "${cand//[0-9A-Fa-f:]/}" ]]; then
+                    result="${prefix}${seg}=${new_mac}${tail}"
+                fi
+            elif [[ -z "${cand//[0-9A-Fa-f:]/}" ]]; then
+                result="${prefix}${seg}=${new_mac}${tail}"
+            fi
+        fi
+        prefix="${prefix}${seg}="
+        rest="$after"
+    done
+    printf '%s\n' "$result"
+}
 
 # === Single-node clone path ===
 if is_single_node; then
@@ -112,34 +203,25 @@ if is_single_node; then
 
     while IFS= read -r line; do
         [[ "$line" =~ ^\[.+\] ]] && break
-        # Regex: ^([a-z]+[0-9]+):\ *([^:]+):vm-${SRCVMID}-disk-([0-9]+)
-        # Purpose: Parse Proxmox VM config disk lines to map source VM disks to their zvols.
-        # Group 1: disk key       e.g. "scsi0", "virtio0"
-        # Group 2: storage pool   e.g. "threeamigos", "fivebays"
-        # Group 3: disk number    e.g. "0", "1"
-        # Example: "scsi0: threeamigos:vm-105-disk-0,size=32G" -> match
-        if [[ "$line" =~ ^([a-z]+[0-9]+):\ *([^:]+):vm-${SRCVMID}-disk-([0-9]+) ]]; then
-            key="${BASH_REMATCH[1]}"
-            storage="${BASH_REMATCH[2]}"
-            disknum="${BASH_REMATCH[3]}"
+        if parse_disk_line "$line"; then
             # Find the actual zvol by searching all pools
             zvol=$(zfs list -H -t volume -o name 2>/dev/null \
-                | grep "/proxmox/vm-${SRCVMID}-disk-${disknum}$" | head -1)
+                | grep -F "/proxmox/vm-${srcvmid}-disk-${_pd_disknum}" | head -1)
             if [[ -n "$zvol" ]]; then
-                sn_disk_keys+=("$key")
-                sn_disk_zvols["$key"]="$zvol"
+                sn_disk_keys+=("${_pd_key}")
+                sn_disk_zvols["${_pd_key}"]="$zvol"
             fi
         fi
     done < "$src_conf"
 
     [[ ${#sn_disk_keys[@]} -gt 0 ]] || {
-        log_msg "FATAL: No ZFS disk zvols found for VM $SRCVMID"
+        log_msg "FATAL: No ZFS disk zvols found for VM $srcvmid"
         exit 1
     }
 
     log_msg "INFO: === clone-vm (single-node, full copy) ==="
-    log_msg "INFO:   Source:  VM ${SRCVMID}"
-    log_msg "INFO:   Dest:    VM ${DSTVMID} (${NEW_NAME})"
+    log_msg "INFO:   Source:  VM ${srcvmid}"
+    log_msg "INFO:   Dest:    VM ${dstvmid} (${new_name})"
     log_msg "INFO:   Disks:"
     for key in "${sn_disk_keys[@]}"; do
         log_msg "INFO:     ${key}: ${sn_disk_zvols[$key]}"
@@ -155,9 +237,9 @@ if is_single_node; then
     for key in "${sn_disk_keys[@]}"; do
         src_zvol="${sn_disk_zvols[$key]}"
         pool="${src_zvol%%/*}"
-        disknum=$(echo "$src_zvol" | grep -oP 'disk-\K[0-9]+$')
-        dst_zvol="${pool}/proxmox/vm-${DSTVMID}-disk-${disknum}"
-        snap="${src_zvol}@clone-to-${DSTVMID}"
+        disknum="${src_zvol##*-disk-}"
+        dst_zvol="${pool}/proxmox/vm-${dstvmid}-disk-${disknum}"
+        snap="${src_zvol}@clone-to-${dstvmid}"
 
         log_msg "INFO: Cloning ${key}: ${src_zvol} → ${dst_zvol}..."
 
@@ -171,19 +253,19 @@ if is_single_node; then
             log_msg "FATAL: Could not acquire write lock on source zvol ${src_zvol}"
             exit 1
         fi
-        lock_src="$ZFSLOCK_ID"
+        lock_src="$zfslock_id"
         if ! zfslock_wait_or_resolve "$dst_zvol" "w" "clone-vm destination"; then
             zfslock_release "$lock_src"
             log_msg "FATAL: Could not acquire write lock on destination zvol ${dst_zvol}"
             exit 1
         fi
-        lock_dst="$ZFSLOCK_ID"
+        lock_dst="$zfslock_id"
 
         zfs snapshot "$snap"
         zfs send "$snap" | zfs receive -o compression=lz4 -o refreservation=none "$dst_zvol"
-        if ! zfs destroy "${dst_zvol}@clone-to-${DSTVMID}" 2>/dev/null; then
+        if ! zfs destroy "${dst_zvol}@clone-to-${dstvmid}" 2>/dev/null; then
             source_helper zfs-diagnose-busy
-            diagnose_dataset_busy "${dst_zvol}@clone-to-${DSTVMID}"
+            diagnose_dataset_busy "${dst_zvol}@clone-to-${dstvmid}"
         fi
         if ! zfs destroy "$snap" 2>/dev/null; then
             source_helper zfs-diagnose-busy
@@ -196,7 +278,7 @@ if is_single_node; then
     done
 
     # Write new VM config
-    log_msg "INFO: Writing VM ${DSTVMID} config..."
+    log_msg "INFO: Writing VM ${dstvmid} config..."
     new_vmgenid=$(cat /proc/sys/kernel/random/uuid)
     name_written=false
     vmgenid_written=false
@@ -204,48 +286,29 @@ if is_single_node; then
     while IFS= read -r line; do
         [[ "$line" =~ ^\[.+\] ]] && break
 
-        # Regex: ^([a-z]+[0-9]+):\ *([^:]+):vm-${SRCVMID}-disk-([0-9]+)(.*)
-        # Purpose: Rewrite disk lines for the destination VM config, preserving trailing params.
-        # Group 1: disk key       e.g. "scsi0"
-        # Group 2: storage pool   e.g. "threeamigos"
-        # Group 3: disk number    e.g. "0"
-        # Group 4: rest of line   e.g. ",size=32G"
-        if [[ "$line" =~ ^([a-z]+[0-9]+):\ *([^:]+):vm-${SRCVMID}-disk-([0-9]+)(.*) ]]; then
-            key="${BASH_REMATCH[1]}"
-            storage="${BASH_REMATCH[2]}"
-            disknum="${BASH_REMATCH[3]}"
-            rest="${BASH_REMATCH[4]}"
-            echo "${key}: ${storage}:vm-${DSTVMID}-disk-${disknum}${rest}"
+        if parse_disk_line "$line"; then
+            echo "${_pd_key}: ${_pd_storage}:vm-${dstvmid}-disk-${_pd_disknum}${_pd_rest}"
         elif [[ "$line" =~ ^vmgenid: ]]; then
             echo "vmgenid: $new_vmgenid"
             vmgenid_written=true
         elif [[ "$line" =~ ^name: ]]; then
-            echo "name: $NEW_NAME"
+            echo "name: $new_name"
             name_written=true
-        elif [[ "$line" =~ ^net[0-9]+: ]]; then
+        elif is_net_line "$line"; then
             new_mac=$(gen_mac)
-            # Regex: ^(net[0-9]+:.*=)([0-9A-Fa-f:]{17})(,.*)$
-            # Purpose: Match and replace MAC addresses in network config lines.
-            # Group 1: prefix up to =        e.g. "net0: virtio="
-            # Group 2: MAC address           e.g. "BC:24:11:AA:BB:CC"
-            # Group 3: trailing params       e.g. ",bridge=vmbr0"
-            if [[ "$line" =~ ^(net[0-9]+:.*=)([0-9A-Fa-f:]{17})(,.*)$ ]]; then
-                echo "${BASH_REMATCH[1]}${new_mac}${BASH_REMATCH[3]}"
-            else
-                echo "$line"
-            fi
+            rewrite_mac "$line" "$new_mac" loose
         else
             echo "$line"
         fi
     done < "$src_conf" > "$dst_conf"
 
-    [[ "$name_written"    == "true" ]] || echo "name: $NEW_NAME"      >> "$dst_conf"
+    [[ "$name_written"    == "true" ]] || echo "name: $new_name"      >> "$dst_conf"
     [[ "$vmgenid_written" == "true" ]] || echo "vmgenid: $new_vmgenid" >> "$dst_conf"
 
     log_msg "INFO: ✓ Config written: $dst_conf"
     echo ""
     log_msg "INFO: === Done ==="
-    log_msg "INFO:   VM ${DSTVMID} (${NEW_NAME}) is ready in Proxmox."
+    log_msg "INFO:   VM ${dstvmid} (${new_name}) is ready in Proxmox."
     log_msg "INFO:   Review hardware in the GUI before starting."
     exit 0
 fi
@@ -258,25 +321,13 @@ declare -A disk_pools=()
 declare -A disk_targets=()
 declare -A disk_luns=()
 
-# Pre-build the regex so the loop line stays within the 100-character limit.
-iscsi_disk_re="^([a-z]+[0-9]+):.*ip-${STORAGE_IP}:3260-iscsi-"
-iscsi_disk_re+="${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+)"
-
 while IFS= read -r line; do
     [[ "$line" =~ ^\[.+\] ]] && break
-    # Regex: ^([a-z]+[0-9]+):.*ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:(${TARGET_RE})-lun-([0-9]+)
-    # Purpose: Parse iSCSI disk lines from the source VM config to build a LUN-to-pool mapping.
-    # Group 1: disk key       e.g. "scsi0"
-    # Group 2: target short   e.g. "threeamigos"
-    # Group 3: LUN number     e.g. "0"
-    if [[ "$line" =~ $iscsi_disk_re ]]; then
-        key="${BASH_REMATCH[1]}"
-        target_short="${BASH_REMATCH[2]}"
-        lun="${BASH_REMATCH[3]}"
-        disk_keys+=("$key")
-        disk_luns["$key"]="$lun"
-        disk_pools["$key"]="${TARGET_POOL[$target_short]}"
-        disk_targets["$key"]="${IQN_PREFIX}:${target_short}"
+    if parse_iscsi_line "$line"; then
+        disk_keys+=("${_pi_key}")
+        disk_luns["${_pi_key}"]="${_pi_lun}"
+        disk_pools["${_pi_key}"]="${target_pool[${_pi_target}]}"
+        disk_targets["${_pi_key}"]="${iqn_prefix}:${_pi_target}"
     fi
 done < "$src_conf"
 
@@ -286,8 +337,8 @@ done < "$src_conf"
 }
 
 log_msg "INFO: === clone-vm ==="
-log_msg "INFO:   Source:  VM ${SRCVMID}"
-log_msg "INFO:   Dest:    VM ${DSTVMID} (${NEW_NAME})"
+log_msg "INFO:   Source:  VM ${srcvmid}"
+log_msg "INFO:   Dest:    VM ${dstvmid} (${new_name})"
 log_msg "INFO:   Disks:"
 for key in "${disk_keys[@]}"; do
     log_msg "INFO:     ${key}: pool=${disk_pools[$key]}, LUN ${disk_luns[$key]}"
@@ -311,19 +362,32 @@ for key in "${disk_keys[@]}"; do
 
     # Resolve the source disk number so we can acquire advisory locks on the
     # source and destination zvols locally (where the Dashboard reads them).
-    disknum=$(ssh root@"$STORAGE_HOST" bash -s "$target" "$old_lun" <<'DISKEOF'
+    disknum=$(ssh root@"$storage_host" bash -s "$target" "$old_lun" <<'DISKEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-TARGET="$1"
-OLD_LUN="$2"
+target="$1"
+old_lun="$2"
 
-backstore=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
-    | grep -E "lun${OLD_LUN}[^0-9]" \
-    | grep -oP 'block/\K\S+')
+# Select the LUN line (LUN id followed by a non-digit) and extract the
+# backstore name (first whitespace-separated token after "block/").
+backstore=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
+    | awk -v pat="lun${old_lun}" '
+        index($0, pat) && index($0, "block/") {
+            after = index($0, pat) + length(pat)
+            if (substr($0, after, 1) !~ /^[0-9]$/) {
+                tail = substr($0, index($0, "block/") + 6)
+                split(tail, f)
+                print f[1]
+            }
+        }')
 [[ -n "$backstore" ]] || exit 1
-echo "$backstore" | grep -oP 'disk-\K[0-9]+$'
+if [[ "$backstore" == *-disk-[0-9]* ]] && [[ "${backstore##*-disk-}" =~ ^[0-9]+$ ]]; then
+    echo "${backstore##*-disk-}"
+else
+    exit 1
+fi
 DISKEOF
     ) || {
         log_msg "FATAL: Could not determine disk number for ${key} (LUN ${old_lun})"
@@ -335,40 +399,40 @@ DISKEOF
         exit 1
     }
 
-    src_zvol="${pool}/proxmox/vm-${SRCVMID}-disk-${disknum}"
-    dst_zvol="${pool}/proxmox/vm-${DSTVMID}-disk-${disknum}"
+    src_zvol="${pool}/proxmox/vm-${srcvmid}-disk-${disknum}"
+    dst_zvol="${pool}/proxmox/vm-${dstvmid}-disk-${disknum}"
 
     if ! zfslock_wait_or_resolve "$src_zvol" "w" "clone-vm source"; then
         log_msg "FATAL: Could not acquire write lock on source zvol ${src_zvol}"
         exit 1
     fi
-    lock_src="$ZFSLOCK_ID"
+    lock_src="$zfslock_id"
     if ! zfslock_wait_or_resolve "$dst_zvol" "w" "clone-vm destination"; then
         zfslock_release "$lock_src"
         log_msg "FATAL: Could not acquire write lock on destination zvol ${dst_zvol}"
         exit 1
     fi
-    lock_dst="$ZFSLOCK_ID"
+    lock_dst="$zfslock_id"
 
-    new_lun=$(ssh root@"$STORAGE_HOST" bash -s \
-        "$target" "$SRCVMID" "$DSTVMID" "$old_lun" "$pool" "$disknum" << 'SSHEOF'
+    new_lun=$(ssh root@"$storage_host" bash -s \
+        "$target" "$srcvmid" "$dstvmid" "$old_lun" "$pool" "$disknum" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
 set -e
-TARGET="$1"
-SRC_VMID="$2"
-DST_VMID="$3"
-OLD_LUN="$4"
-POOL="$5"
-DISKNUM="$6"
+target="$1"
+src_vmid="$2"
+dst_vmid="$3"
+old_lun="$4"
+pool="$5"
+disknum="$6"
 
-src_zvol="${POOL}/proxmox/vm-${SRC_VMID}-disk-${DISKNUM}"
-dst_zvol="${POOL}/proxmox/vm-${DST_VMID}-disk-${DISKNUM}"
+src_zvol="${pool}/proxmox/vm-${src_vmid}-disk-${disknum}"
+dst_zvol="${pool}/proxmox/vm-${dst_vmid}-disk-${disknum}"
 dst_zvol_dev="/dev/zvol/${dst_zvol}"
-dst_backstore="vm-${DST_VMID}-disk-${DISKNUM}"
-snap="${src_zvol}@clone-to-${DST_VMID}"
+dst_backstore="vm-${dst_vmid}-disk-${disknum}"
+snap="${src_zvol}@clone-to-${dst_vmid}"
 
 log_msg "INFO:   ${src_zvol} → ${dst_zvol}"
 
@@ -376,15 +440,15 @@ zfs list -H "$src_zvol" >/dev/null 2>&1 \
     || { log_msg "FATAL: Source zvol not found: ${src_zvol}"; exit 1; }
 ! zfs list -H "$dst_zvol" >/dev/null 2>&1 \
     || { log_msg "FATAL: Destination zvol already exists: ${dst_zvol}"; exit 1; }
-! targetcli /backstores/block ls 2>/dev/null | grep -q " ${dst_backstore} " \
+! targetcli /backstores/block ls 2>/dev/null | grep -qF " ${dst_backstore} " \
     || { log_msg "FATAL: Backstore already exists: ${dst_backstore}"; exit 1; }
 
 # Snapshot, send, receive
 zfs snapshot "$snap"
 zfs send "$snap" | zfs receive -o compression=lz4 -o refreservation=none "$dst_zvol"
-if ! zfs destroy "${dst_zvol}@clone-to-${DST_VMID}" 2>/dev/null; then
+if ! zfs destroy "${dst_zvol}@clone-to-${dst_vmid}" 2>/dev/null; then
     source_helper zfs-diagnose-busy
-    diagnose_dataset_busy "${dst_zvol}@clone-to-${DST_VMID}"
+    diagnose_dataset_busy "${dst_zvol}@clone-to-${dst_vmid}"
 fi
 if ! zfs destroy "$snap" 2>/dev/null; then
     source_helper zfs-diagnose-busy
@@ -399,22 +463,27 @@ for i in $(seq 1 20); do [[ -b "$dst_zvol_dev" ]] && break; sleep 0.5; done
 
 # Create iSCSI backstore and LUN
 targetcli /backstores/block create "$dst_backstore" "$dst_zvol_dev" >&2 2>&1
-targetcli "/iscsi/${TARGET}/tpg1/luns" create "/backstores/block/${dst_backstore}" >&2 2>&1
+targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${dst_backstore}" >&2 2>&1
 log_msg "INFO: ✓ iSCSI LUN added"
 
 # Add to expected-backstores manifest
-MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
-if [[ -f "$MANIFEST" ]]; then
-    if ! grep -q "^${dst_backstore}$" "$MANIFEST"; then
-        echo "$dst_backstore" >> "$MANIFEST"
+manifest="/etc/rtslib-fb-target/expected-backstores.txt"
+if [[ -f "$manifest" ]]; then
+    if ! grep -qxF "$dst_backstore" "$manifest"; then
+        echo "$dst_backstore" >> "$manifest"
         log_msg "INFO: ✓ Added to expected-backstores manifest"
     fi
 fi
 
-# Print only the new LUN number to stdout (captured by caller)
-targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
-    | grep "$dst_backstore" \
-    | grep -oP 'lun\K[0-9]+' \
+# Print only the new LUN number to stdout (captured by caller).
+# Select the line for this backstore, strip everything through the first
+# "lun" token, and keep the leading digits ("... lun3 [block/..." -> "3").
+targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
+    | grep -F "$dst_backstore" \
+    | while IFS= read -r _lun_line; do
+        _lun_rest="${_lun_line#*lun}"
+        printf '%s\n' "${_lun_rest%%[!0-9]*}"
+    done \
     | head -1
 SSHEOF
     ) || {
@@ -436,13 +505,13 @@ done
 
 # --- Save iSCSI config on the storage host ---
 log_msg "INFO: Saving iSCSI configuration..."
-REMOTE_SAFE_ISCSI_SAVE=$(remote_zfsutility_script "$STORAGE_HOST" "safe-iscsi-save")
-ssh root@"$STORAGE_HOST" bash -c 'exec "$@"' bash "$REMOTE_SAFE_ISCSI_SAVE" >/dev/null
+remote_safe_iscsi_save=$(remote_zfsutility_script "$storage_host" "safe-iscsi-save")
+ssh root@"$storage_host" bash -c 'exec "$@"' bash "$remote_safe_iscsi_save" >/dev/null
 log_msg "INFO: ✓ Configuration saved"
 echo ""
 
 # --- Write new VM config ---
-log_msg "INFO: Writing VM ${DSTVMID} config..."
+log_msg "INFO: Writing VM ${dstvmid} config..."
 
 # Build pool:old_lun → new_lun lookup (pool-qualified to handle multi-pool VMs)
 declare -A lun_map=()
@@ -457,16 +526,11 @@ vmgenid_written=false
 while IFS= read -r line; do
     [[ "$line" =~ ^\[.+\] ]] && break
 
-    # Regex: ^[a-z]+[0-9]+:.*:(${TARGET_RE})-lun-([0-9]+)
-    # Purpose: Rewrite iSCSI disk lines in the destination config, substituting old LUN numbers
-    #          with newly allocated ones. The disk key prefix is not captured — only target+LUN.
-    # Group 1: target short   e.g. "threeamigos"
-    # Group 2: old LUN number e.g. "0"
-    if [[ "$line" =~ ^[a-z]+[0-9]+:.*:(${TARGET_RE})-lun-([0-9]+) ]]; then
+    if parse_iscsi_line "$line"; then
         # Disk line — replace old LUN with new LUN
-        target_short="${BASH_REMATCH[1]}"
-        old_lun="${BASH_REMATCH[2]}"
-        pool_key="${TARGET_POOL[$target_short]}"
+        target_short="${_pi_target}"
+        old_lun="${_pi_lun}"
+        pool_key="${target_pool[$target_short]}"
         new_lun="${lun_map[${pool_key}:${old_lun}]}"
         [[ -n "$new_lun" ]] && line="${line/-lun-${old_lun},/-lun-${new_lun},}"
         echo "$line"
@@ -476,26 +540,13 @@ while IFS= read -r line; do
         vmgenid_written=true
 
     elif [[ "$line" =~ ^name: ]]; then
-        echo "name: $NEW_NAME"
+        echo "name: $new_name"
         name_written=true
 
-    elif [[ "$line" =~ ^net[0-9]+: ]]; then
+    elif is_net_line "$line"; then
         # Replace MAC address (XX:XX:XX:XX:XX:XX after the model= field)
         new_mac=$(gen_mac)
-        # Regex: ^(net[0-9]+:.*=)(<MAC>)(,.*)$
-        # Purpose: MAC address replacement using explicit per-nibble hex classes.
-        #          Functionally equivalent to [0-9A-Fa-f:]{17} but explicit.
-        # Group 1: prefix up to =    e.g. "net0: virtio="
-        # Group 2: MAC address       e.g. "BC:24:11:AA:BB:CC"
-        # Group 3: trailing params   e.g. ",bridge=vmbr0"
-        _mac_nibble='[0-9A-Fa-f][0-9A-Fa-f]'
-        _mac_re="^(net[0-9]+:.*=)(${_mac_nibble}:${_mac_nibble}:${_mac_nibble}:"
-        _mac_re+="${_mac_nibble}:${_mac_nibble}:${_mac_nibble})(,.*)$"
-        if [[ "$line" =~ $_mac_re ]]; then
-            echo "${BASH_REMATCH[1]}${new_mac}${BASH_REMATCH[3]}"
-        else
-            echo "$line"
-        fi
+        rewrite_mac "$line" "$new_mac" pairs
 
     else
         echo "$line"
@@ -504,7 +555,7 @@ while IFS= read -r line; do
 done < "$src_conf" > "$dst_conf"
 
 # Add name and vmgenid if the source config didn't have them
-[[ "$name_written"    == "true" ]] || echo "name: $NEW_NAME"      >> "$dst_conf"
+[[ "$name_written"    == "true" ]] || echo "name: $new_name"      >> "$dst_conf"
 [[ "$vmgenid_written" == "true" ]] || echo "vmgenid: $new_vmgenid" >> "$dst_conf"
 
 log_msg "INFO: ✓ Config written: $dst_conf"
@@ -516,5 +567,5 @@ log_msg "INFO: Rescanning iSCSI..."
 echo ""
 
 log_msg "INFO: === Done ==="
-log_msg "INFO:   VM ${DSTVMID} (${NEW_NAME}) is ready in Proxmox."
+log_msg "INFO:   VM ${dstvmid} (${new_name}) is ready in Proxmox."
 log_msg "INFO:   Review hardware in the GUI before starting."

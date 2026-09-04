@@ -27,7 +27,7 @@ source_helper zfslockmanager
 # ==============================================================================
 
 _zfslockctl_ensure_config() {
-    if [[ -z "${_ZFSLOCK_THIS_HOST:-}" ]]; then
+    if [[ -z "${_zfslock_this_host:-}" ]]; then
         _zfslock_load_node_config
     fi
 }
@@ -39,12 +39,12 @@ _zfslockctl_remote_host_for_dataset() {
 
 _zfslockctl_storage_host() {
     _zfslockctl_ensure_config
-    echo "$_ZFSLOCK_STORAGE_HOST"
+    echo "$_zfslock_storage_host"
 }
 
 _zfslockctl_is_compute_node() {
     _zfslockctl_ensure_config
-    [[ "$_ZFSLOCK_NODE_MODE" == "two-node" && "$_ZFSLOCK_THIS_HOST" != "$_ZFSLOCK_STORAGE_HOST" ]]
+    [[ "$_zfslock_node_mode" == "two-node" && "$_zfslock_this_host" != "$_zfslock_storage_host" ]]
 }
 
 # Print one line from a remote list JSON object.
@@ -78,7 +78,8 @@ _zfslockctl_print_remote_lock_line() {
     local display_time
     display_time=$(date -d "$acquired" "+%Y-%m-%d %H:%M" 2>/dev/null) || display_time="$acquired"
 
-    printf "%-40s %-6s %-8s %-20s %-20s %s\n" "$dataset" "$type_name" "$pid" "$script" "$host" "$display_time"
+    printf "%-40s %-6s %-8s %-20s %-20s %s\n" \
+        "$dataset" "$type_name" "$pid" "$script" "$host" "$display_time"
 }
 
 # ==============================================================================
@@ -92,7 +93,7 @@ cmd_list() {
     local found=0
 
     # Clean up stale locks first
-    if [[ -d "$ZFSLOCK_LOCKS_DIR" ]]; then
+    if [[ -d "$zfslock_locks_dir" ]]; then
         zfslock_cleanup_stale 2>/dev/null
     fi
 
@@ -114,8 +115,8 @@ cmd_list() {
     fi
 
     # Always include local locks (single-node, or storage node).
-    if [[ -d "$ZFSLOCK_LOCKS_DIR" ]]; then
-        for lockfile in "$ZFSLOCK_LOCKS_DIR"/*.lock ; do
+    if [[ -d "$zfslock_locks_dir" ]]; then
+        for lockfile in "$zfslock_locks_dir"/*.lock ; do
             [[ -f "$lockfile" ]] || continue
 
             local dataset type pid script acquired
@@ -148,7 +149,7 @@ cmd_list() {
                 display_time="$acquired"
 
             printf "%-40s %-6s %-8s %-20s %-20s %s\n" \
-                "$dataset" "$type_name" "$pid" "$script" "$_ZFSLOCK_THIS_HOST" "$display_time"
+                "$dataset" "$type_name" "$pid" "$script" "$_zfslock_this_host" "$display_time"
             ((found++))
         done
     fi
@@ -177,7 +178,9 @@ cmd_status() {
     if [[ -n "$remote_host" ]]; then
         local remote_agent output
         remote_agent=$(_zfslock_remote_agent "$remote_host")
-        output=$(_zfslock_remote_exec "$remote_host" "$remote_agent check $(printf '%q' "$dataset") w" 2>/dev/null) || output=""
+        output=$(_zfslock_remote_exec "$remote_host" \
+            "$remote_agent check $(printf '%q' "$dataset") w" 2>/dev/null) \
+            || output=""
         if [[ "$output" == *'"available": true'* ]]; then
             log_msg "INFO: Dataset '$dataset' is not locked on $remote_host"
             return 0
@@ -259,7 +262,7 @@ cmd_status() {
         local dataset_encoded
         dataset_encoded=$(_zfslock_encode "$dataset")
         local descendant_locks=0
-        for desc_lock in "$ZFSLOCK_LOCKS_DIR"/"${dataset_encoded}%2F"*.lock ; do
+        for desc_lock in "$zfslock_locks_dir"/"${dataset_encoded}%2F"*.lock ; do
             [[ -f "$desc_lock" ]] || continue
             local d_dataset
             d_dataset=$(_zfslock_read_field "$desc_lock" "dataset")
@@ -287,9 +290,9 @@ cmd_status() {
                 log_msg "INFO:   Type '$check_type': available"
             else
                 local conflict_dataset
-                conflict_dataset=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "dataset")
+                conflict_dataset=$(_zfslock_read_field "$zfslock_conflict_info" "dataset")
                 local conflict_type
-                conflict_type=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "type")
+                conflict_type=$(_zfslock_read_field "$zfslock_conflict_info" "type")
                 log_msg "INFO:   Type '$check_type': BLOCKED by $conflict_dataset ($conflict_type)"
             fi
         done
@@ -315,8 +318,11 @@ cmd_release() {
         if [[ -n "$remote_host" ]]; then
             local remote_agent
             remote_agent=$(_zfslock_remote_agent "$remote_host")
+            local encoded_lock
+            encoded_lock="$zfslock_locks_dir/$(_zfslock_encode "$target").lock"
             _zfslock_remote_exec "$remote_host" \
-                "$remote_agent release $(printf '%q' "$ZFSLOCK_LOCKS_DIR/$(_zfslock_encode "$target").lock")" >/dev/null 2>&1
+                "$remote_agent release $(printf '%q' "$encoded_lock")" \
+                >/dev/null 2>&1
             log_msg "INFO: Requested remote release of lock for '$target' on $remote_host"
             return 0
         fi
@@ -364,7 +370,7 @@ cmd_release() {
         rm -f "$lockfile"
 
         # Also remove from PID tracking if exists
-        local pidfile="$ZFSLOCK_PIDS_DIR/$pid"
+        local pidfile="$zfslock_pids_dir/$pid"
         if [[ -f "$pidfile" ]]; then
             local temp
             temp=$(grep -v "^${lockfile}$" "$pidfile" 2>/dev/null)
@@ -401,12 +407,12 @@ cmd_cleanup() {
         log_msg "INFO: Requested stale-lock cleanup on $storage_host"
     fi
 
-    if [[ ! -d "$ZFSLOCK_LOCKS_DIR" ]]; then
+    if [[ ! -d "$zfslock_locks_dir" ]]; then
         log_msg "INFO: No locks directory found."
         return 0
     fi
 
-    for lockfile in "$ZFSLOCK_LOCKS_DIR"/*.lock ; do
+    for lockfile in "$zfslock_locks_dir"/*.lock ; do
         [[ -f "$lockfile" ]] || continue
 
         local dataset pid script
@@ -426,7 +432,7 @@ cmd_cleanup() {
     # Clean up stale PID files
     local pidfile
     local pid_removed=0
-    for pidfile in "$ZFSLOCK_PIDS_DIR"/* ; do
+    for pidfile in "$zfslock_pids_dir"/* ; do
         [[ -f "$pidfile" ]] || continue
 
         local pid
@@ -483,13 +489,13 @@ cmd_wait() {
         fi
 
         local conflict_dataset
-        conflict_dataset=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "dataset")
+        conflict_dataset=$(_zfslock_read_field "$zfslock_conflict_info" "dataset")
         local conflict_type
-        conflict_type=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "type")
+        conflict_type=$(_zfslock_read_field "$zfslock_conflict_info" "type")
         local conflict_script
-        conflict_script=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "script")
+        conflict_script=$(_zfslock_read_field "$zfslock_conflict_info" "script")
         local conflict_pid
-        conflict_pid=$(_zfslock_read_field "$ZFSLOCK_CONFLICT_INFO" "pid")
+        conflict_pid=$(_zfslock_read_field "$zfslock_conflict_info" "pid")
 
         log_msg "INFO: [$attempts] Blocked by: $conflict_dataset ($conflict_type) -" \
             "$conflict_script (PID $conflict_pid)"

@@ -1257,7 +1257,7 @@ that same pool.
 
 Main daily backup orchestrator. Runs the full backup sequence:
 
-1. Pull rsync backups from remote hosts (`rocky`, `COMPUTE_HOST`, `STORAGE_HOST`)
+1. Pull rsync backups from remote hosts (`rocky`, `$compute_host`, `$storage_host`)
 2. Snapshot `threeamigos/proxmox` and copy to `fivebays`
 3. Snapshot `NVME1` and copy to `fivebays`
 4. Apply retention policies to all affected pools
@@ -1277,8 +1277,8 @@ sudo zfsdailybackup [overrides]
 | Variable                     | Default | Purpose                                                          |
 | ---------------------------- | ------- | ---------------------------------------------------------------- |
 | `pull_rocky`                 | `'Y'`   | Pull rsync backup from host `rocky`                              |
-| `pull_tweety`                | `'Y'`   | Pull rsync backup from `$COMPUTE_HOST` (two-node only)           |
-| `pull_stewie`                | `'Y'`   | Pull rsync backup from `$STORAGE_HOST`                           |
+| `pull_tweety`                | `'Y'`   | Pull rsync backup from `$compute_host` (two-node only)            |
+| `pull_stewie`                | `'Y'`   | Pull rsync backup from `$storage_host`                            |
 | `backup_threeamigos_proxmox` | `'Y'`   | Snapshot and copy `threeamigos/proxmox` → `fivebays`             |
 | `backup_NVME1`               | `'Y'`   | Snapshot and copy `NVME1` → `fivebays`                           |
 | `prune`                      | `'Y'`   | Run retention via `zfscleanup` on affected pools after the sends |
@@ -1297,7 +1297,7 @@ sudo zfsdailybackup [overrides]
 | `$releaseholds`                             | Passed to `zfscleanup` during prune                                                | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 | `$releaseholds_tags`                        | Hold tag patterns passed to `zfscleanup` during prune (default `offsite-*`)        | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 | `$includes`, `$excludes`, `$startwith`      | Dataset filters forwarded to `zfs-send-receive`                                    | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
-| `NODE_MODE`, `STORAGE_HOST`, `COMPUTE_HOST` | Node-config vars that gate the two-node rsync-pull steps                           | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
+| `node_mode`, `compute_host`, `storage_host` | Lowercase node-lib copies that gate the two-node rsync-pull steps    | [Node Configuration](../developer-guide/global-variables.md#node-configuration) |
 
 Example overrides:
 
@@ -1330,7 +1330,7 @@ sudo zfsdailybackup "dryrun='Y'"
 
 1. Generate `$nextsnap` via `zfssnapbuild`.
 2. Apply overrides from `$1`.
-3. Optionally pull rsync backups from `rocky`, `$COMPUTE_HOST` (two-node only), and `$STORAGE_HOST`.
+3. Optionally pull rsync backups from `rocky`, `$compute_host` (two-node only), and `$storage_host`.
 4. Snapshot and copy `threeamigos/proxmox` → `fivebays`.
 5. Snapshot and copy `NVME1` → `fivebays`.
 6. Remove the snapfile unless in dry-run mode.
@@ -1440,13 +1440,13 @@ follow the `vm-<N>-disk-<N>` naming convention in a two-node configuration.
 | ------------------------------------------------ | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `$includes`, `$excludes`, `$startwith` | Forwarded to `zfsbuildfsarray`; `$depth` is reset internally and not forwarded | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$autoproceed`, `$dryrun`, `$releaseholds`, `$releaseholds_tags` | Execution control passed through to `zfsdelallsnaps`                                   | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
-| `NODE_MODE`, `COMPUTE_HOST`                      | Determines whether iSCSI teardown/rebuild is attempted, and how `qm status` is queried | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
+| `node_mode`, `compute_host`                    | Determines whether iSCSI teardown/rebuild is attempted, and how `qm status` is queried | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
 
 **Data structures produced:**
 
 | Structure                                                                                  | Reference                                                                                                          |
 | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| [`ISCSI_TEARDOWN`](../developer-guide/data-structures.md#iscsi_teardown-associative-array) | Populated before `zfs destroy`; consumed by `zfs-send-receive` to rebuild LUNs after the replacement `zfs receive` |
+| [`iscsi_teardown`](../developer-guide/data-structures.md#iscsi_teardown-associative-array) | Populated before `zfs destroy`; consumed by `zfs-send-receive` to rebuild LUNs after the replacement `zfs receive` |
 
 Calls `zfsdelallsnaps` first to clear snapshots, then destroys the dataset.
 For VM-disk zvols in two-node mode it automatically tears down the matching
@@ -1484,7 +1484,7 @@ report the specific cause — holds, open files, iSCSI LUNs, running VMs, etc.
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | `$fsarray` / `$fsarraylen` | Datasets selected for deletion | [$fsarray](../developer-guide/data-structures.md#fsarray-fsarraylen) |
-| `ISCSI_TEARDOWN` | Records iSCSI LUNs torn down so `zfs-send-receive` can rebuild them | [ISCSI_TEARDOWN](../developer-guide/data-structures.md#iscsi_teardown-associative-array) |
+| `iscsi_teardown` | Records iSCSI LUNs torn down so `zfs-send-receive` can rebuild them | [iscsi_teardown](../developer-guide/data-structures.md#iscsi_teardown-associative-array) |
 | Node config | Determines single-node vs two-node iSCSI behavior | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 
 **Internal flow:**
@@ -1494,7 +1494,7 @@ report the specific cause — holds, open files, iSCSI LUNs, running VMs, etc.
 3. Build `fsarray` bottom-up so descendants are destroyed before parents.
 4. For each dataset:
     - Abort if any snapshot has clone dependents.
-    - In two-node mode, tear down matching iSCSI LUN/backstore for `vm-<N>-disk-<N>` zvols and record the teardown in `ISCSI_TEARDOWN`.
+    - In two-node mode, tear down matching iSCSI LUN/backstore for `vm-<N>-disk-<N>` zvols and record the teardown in `iscsi_teardown`.
     - Call `delallsnaps` with `releaseholds`.
     - Run `zfs destroy`; on failure call `diagnose_dataset_busy` and abort.
 5. Restore the caller's filter state.

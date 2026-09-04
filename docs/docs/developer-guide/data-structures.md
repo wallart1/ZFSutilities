@@ -170,14 +170,14 @@ snapbucket_s[0..n]     snapbucketlen_s
 These are populated with `declare` using computed variable names
 (`snapbucket_${bktname[$i]}[$l]`) because bash has no true nested arrays.
 
-## `ISCSI_TEARDOWN` (associative array)
+## `iscsi_teardown` (associative array)
 
 Used by [`zfsdelfs`](../commands-and-modules/commands.md#zfsdelfs) to bridge
 teardown → rebuild across a zfs destroy/receive cycle. In single-node mode
 this stays empty.
 
 ```
-ISCSI_TEARDOWN[<dataset>]="<target>:<lun_num>:<backstore_name>:<encrypted_flag>"
+iscsi_teardown[<dataset>]="<target>:<lun_num>:<backstore_name>:<encrypted_flag>"
 ```
 
 | Key                                                      | Value                                                                                                     |

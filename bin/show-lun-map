@@ -19,7 +19,7 @@ source "$NODE_LIB"
 source_helper rootcheck
 rootcheck
 
-MY_HOST=$(hostname -s)
+my_host=$(hostname -s)
 
 if is_single_node; then
     log_msg "INFO: show-lun-map: not applicable in single-node mode (no iSCSI)"
@@ -27,9 +27,9 @@ if is_single_node; then
 fi
 
 # --- If not on the compute host, delegate via SSH ---
-if [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "show-lun-map")
-    exec ssh root@"$COMPUTE_HOST" "$REMOTE_SCRIPT"
+if [[ "$my_host" != "$compute_host" ]]; then
+    remote_script=$(remote_zfsutility_script "$compute_host" "show-lun-map")
+    exec ssh root@"$compute_host" "$remote_script"
 fi
 
 # === Running on the compute host ===
@@ -38,38 +38,41 @@ log_msg "INFO: === LUN → Device Map ==="
 echo ""
 
 # /dev/disk/by-path entries for iSCSI look like:
-#   ip-${STORAGE_IP}:3260-iscsi-${IQN_PREFIX}:<target_short>-lun-<n>
+#   ip-${storage_ip}:3260-iscsi-${iqn_prefix}:<target_short>-lun-<n>
 # and are symlinks to ../../sdX. The list of valid <target_short> values
-# comes from /etc/two-node.conf via POOL_TARGET.
+# comes from /etc/two-node.conf via pool_target.
 
-# Build a regex alternation from the target short names: e.g. "threeamigos|nvme1"
-TARGET_RE="$(IFS='|'; echo "${POOL_TARGET[*]}")"
-
-declare -A LUN_TO_DEV
+declare -A lun_to_dev
 
 while IFS= read -r link; do
     name=$(basename "$link")
 
-    # Regex: :(${TARGET_RE})-lun-([0-9]+)$
-    # Purpose: Extract the iSCSI target short name and LUN number from a
-    #          /dev/disk/by-path symlink basename.
-    # Group 1: target short name  e.g. "threeamigos"
-    # Group 2: LUN number         e.g. "0"
-    if [[ "$name" =~ :(${TARGET_RE})-lun-([0-9]+)$ ]]; then
-        TARGET="${BASH_REMATCH[1]}"
-        LUN="${BASH_REMATCH[2]}"
-    else
-        continue
-    fi
+    # Extract the iSCSI target short name and LUN number from the symlink
+    # basename using fixed-string suffix/prefix splitting (no regex):
+    #   1. LUN = digits after the final "-lun-" (must be all digits).
+    #   2. target = text between the final ":" and the "-lun-<n>" suffix.
+    #   3. target must be one of the configured pool_target short names.
+    lun="${name##*-lun-}"
+    [[ -n "$lun" && "$lun" != *[!0-9]* && "$name" == *-lun-*"$lun" ]] || continue
+    target="${name%-lun-$lun}"
+    target="${target##*:}"
+    _matched=false
+    for _short in "${pool_target[@]}"; do
+        if [[ "$target" == "$_short" ]]; then
+            _matched=true
+            break
+        fi
+    done
+    [[ "$_matched" == true ]] || continue
 
-    DEVPATH=$(readlink -f "$link" 2>/dev/null)
-    [[ -b "$DEVPATH" ]] || continue
-    DEV=$(basename "$DEVPATH")
+    devpath=$(readlink -f "$link" 2>/dev/null)
+    [[ -b "$devpath" ]] || continue
+    dev=$(basename "$devpath")
 
-    LUN_TO_DEV["${TARGET}:${LUN}"]="$DEV"
-done < <(find /dev/disk/by-path/ -maxdepth 1 -name "ip-${STORAGE_IP}*" -print 2>/dev/null)
+    lun_to_dev["${target}:${lun}"]="$dev"
+done < <(find /dev/disk/by-path/ -maxdepth 1 -name "ip-${storage_ip}*" -print 2>/dev/null)
 
-if [[ ${#LUN_TO_DEV[@]} -eq 0 ]]; then
+if [[ ${#lun_to_dev[@]} -eq 0 ]]; then
     log_msg "FATAL: No iSCSI devices found. Is the storage network up?"
     exit 1
 fi
@@ -77,14 +80,14 @@ fi
 printf "%-14s  %-6s  %-8s  %s\n" "Target" "LUN" "Device" "Size"
 printf "%-14s  %-6s  %-8s  %s\n" "------" "---" "------" "----"
 
-for KEY in $(printf '%s\n' "${!LUN_TO_DEV[@]}" | sort -t: -k1,1 -k2,2n); do
-    TARGET="${KEY%%:*}"
-    LUN="${KEY##*:}"
-    DEV="${LUN_TO_DEV[$KEY]}"
-    SIZE=$(lsblk -bdn -o SIZE "/dev/${DEV}" 2>/dev/null \
+for key in $(printf '%s\n' "${!lun_to_dev[@]}" | sort -t: -k1,1 -k2,2n); do
+    target="${key%%:*}"
+    lun="${key##*:}"
+    dev="${lun_to_dev[$key]}"
+    size=$(lsblk -bdn -o size "/dev/${dev}" 2>/dev/null \
           | awk '{printf "%.0fG", $1/1073741824}')
-    printf "%-14s  lun%-3s  %-8s  %s\n" "$TARGET" "$LUN" "/dev/$DEV" "$SIZE"
+    printf "%-14s  lun%-3s  %-8s  %s\n" "$target" "$lun" "/dev/$dev" "$size"
 done
 
 echo ""
-log_msg "INFO: Total iSCSI LUNs visible: ${#LUN_TO_DEV[@]}"
+log_msg "INFO: Total iSCSI LUNs visible: ${#lun_to_dev[@]}"

@@ -1,0 +1,268 @@
+#!/usr/bin/bash
+#
+# Script: repair-vm-disk-sizes
+# Description: Repairs the size= parameter on Proxmox VM disk lines.
+#   Proxmox stores the disk size in each VM config disk line (e.g.
+#   "scsi0: /dev/disk/by-path/...,size=100G"). For raw by-path/iSCSI disks this
+#   value is only metadata — QEMU uses the actual block device size — but a wrong
+#   value makes the GUI display the wrong size and breaks qm resize/reporting.
+#   An earlier bug in enroll-efi-keys-vm rewrote every disk line's size= to 4M;
+#   this script restores the correct size from the live block device (by-path
+#   volumes) or the backing zvol volsize (pool:vm-N-disk-M storage references).
+# Usage: repair-vm-disk-sizes [--dry-run] [--vmid <vmid>]
+#     --dry-run   Report what would change without editing any config
+#     --vmid      Repair only the given VM ID (default: all VM configs)
+# Globals:
+#     dry_run     true when --dry-run was given
+#     vmid        Optional VM ID filter (empty = all VMs)
+#     checked     Count of disk lines with a size= parameter examined
+#     fixed       Count of disk lines changed (or that would change in dry-run)
+#     skipped     Count of disk lines whose size could not be resolved
+# Returns: 0 on success, 1 on a fatal error (bad args, missing config, not root)
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source_helper rootcheck
+
+rootcheck
+
+if ! command -v qm >/dev/null 2>&1; then
+    log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
+    log_msg "FATAL:   On a single node without Proxmox there are no VMs to manage."
+    log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
+    exit 1
+fi
+
+my_host=$(hostname -s)
+pve_conf_dir="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
+
+dry_run=false
+vmid=""
+
+checked=0
+fixed=0
+skipped=0
+
+usage() {
+    log_msg "INFO: Usage: repair-vm-disk-sizes [--dry-run] [--vmid <vmid>]"
+    echo ""
+    log_msg "INFO:   --dry-run   Report what would change without editing any config"
+    log_msg "INFO:   --vmid      Repair only the given VM ID (default: all VMs)"
+    echo ""
+    log_msg "INFO: Correct sizes are read from the live block device for"
+    log_msg "INFO: /dev/disk/by-path volumes and from the backing zvol volsize for"
+    log_msg "INFO: pool:vm-N-disk-M storage references."
+    echo ""
+    log_msg "INFO: Example:"
+    log_msg "INFO:   repair-vm-disk-sizes --dry-run"
+    exit 1
+}
+
+# --- Argument parsing ---------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run)
+            dry_run=true
+            shift
+            ;;
+        --vmid)
+            [[ $# -ge 2 ]] || {
+                log_msg "FATAL: --vmid requires an argument"
+                exit 1
+            }
+            vmid="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            log_msg "FATAL: Unknown option: $1"
+            usage
+            ;;
+    esac
+done
+
+[[ -z "$vmid" || "$vmid" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: --vmid must be a number, got: $vmid"
+    exit 1
+}
+
+# Delegate to the compute host if invoked on the storage node (two-node only).
+if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
+    remote_script=$(remote_zfsutility_script "$compute_host" "repair-vm-disk-sizes")
+    remote_args=""
+    [[ "$dry_run" == true ]] && remote_args+="--dry-run "
+    [[ -n "$vmid" ]] && remote_args+="--vmid $vmid"
+    exec ssh -t root@"$compute_host" "$remote_script $remote_args"
+fi
+
+# --- Size helpers -------------------------------------------------------------
+
+# Convert a byte count to a human-readable size using the largest binary unit
+# that divides evenly (e.g. 107374182400 -> "100G", 4194304 -> "4M"). Sizes
+# that are not whole multiples of 1024 fall back to raw bytes. Proxmox accepts
+# both forms.
+human_size() {
+    local bytes="$1"
+    local unit=""
+    local divisor=1
+    local last_divisor=1
+    local u
+    for u in K M G T P; do
+        divisor=$((divisor * 1024))
+        if (( bytes % divisor == 0 )); then
+            unit="$u"
+            last_divisor="$divisor"
+        else
+            break
+        fi
+    done
+    if [[ -z "$unit" ]]; then
+        echo "$bytes"
+        return 0
+    fi
+    echo "$((bytes / last_divisor))${unit}"
+}
+
+# Echo the correct human-readable size for a VM disk volume identifier, or
+# return 1 if the size cannot be determined.
+#   /dev/disk/by-path/...   -> size of the live block device on this host
+#   pool:vm-N-disk-M        -> volsize of the backing zvol (local zfs in
+#                              single-node mode, SSH to the storage host in
+#                              two-node mode)
+size_for_volume() {
+    local vol="$1"
+    local dev bytes size zvol
+    local pool rest mid tail
+
+    if [[ "$vol" == /dev/disk/by-path/* ]]; then
+        dev=$(readlink -f "$vol" 2>/dev/null || true)
+        [[ -n "$dev" ]] || return 1
+        # blockdev fails with empty output for missing or non-block devices.
+        bytes=$(blockdev --getsize64 "$dev" 2>/dev/null || true)
+        [[ "$bytes" =~ ^[0-9]+$ && "$bytes" -gt 0 ]] || return 1
+        human_size "$bytes"
+        return 0
+    fi
+
+    # Storage reference: pool:vm-<vmid>-disk-<num> (basename documented).
+    pool="${vol%%:*}"
+    rest="${vol#*:}"
+    if [[ -n "$pool" && "$pool" != "$vol" && "$rest" == vm-*-disk-* ]]; then
+        mid="${rest#vm-}"
+        mid="${mid%%-disk-*}"
+        tail="${rest##*-disk-}"
+        [[ "$mid" =~ ^[0-9]+$ && "$tail" =~ ^[0-9]+$ ]] || return 1
+        zvol="${pool}/proxmox/${rest}"
+        if is_two_node; then
+            size=$(ssh -o ConnectTimeout=10 root@"$storage_host" \
+                "zfs get -H -o value volsize '$zvol'" 2>/dev/null || true)
+        else
+            size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || true)
+        fi
+        [[ -n "$size" && "$size" != "-" ]] || return 1
+        echo "$size"
+        return 0
+    fi
+
+    return 1
+}
+
+# --- Config repair ------------------------------------------------------------
+
+# Repair the size= parameter on every disk line of one VM config. Updates the
+# checked, fixed, and skipped counters. Only lines that already record a size=
+# value are considered; lines whose volume cannot be resolved are left
+# untouched with a WARN (e.g. a LUN that is not currently logged in).
+repair_conf() {
+    local conf="$1" vmid="$2"
+    local line key vol cur_size new_size
+    local rest mid lineno
+
+    while IFS= read -r line; do
+        key="${line%%:*}"
+        # Only Proxmox disk keys: efidisk0 or a bus name followed by digits
+        # (scsiN, sataN, ideN, virtioN). Excludes net0, hostpci0, unusedN,
+        # boot, bootdisk, and similar lookalikes.
+        case "$key" in
+            efidisk0) ;;
+            scsi[0-9]*|sata[0-9]*|ide[0-9]*|virtio[0-9]*)
+                mid="${key##*[a-z]}"
+                [[ "$mid" =~ ^[0-9]+$ ]] || continue ;;
+            *) continue ;;
+        esac
+        # Volume identifier: first comma-separated field after the key. The
+        # first cut keeps everything after the first colon, which is required
+        # for by-path volumes that contain colons (portal address, IQN).
+        vol=$(echo "$line" | cut -d: -f2- | cut -d, -f1 | tr -d ' ')
+        cur_size="${line#*size=}"
+        if [[ "$cur_size" == "$line" ]]; then
+            cur_size=""
+        else
+            cur_size="${cur_size%%,*}"
+        fi
+        [[ -n "$cur_size" ]] || continue
+
+        checked=$((checked + 1))
+        if ! new_size=$(size_for_volume "$vol"); then
+            skipped=$((skipped + 1))
+            log_msg "WARN: VM $vmid $key: cannot resolve size for $vol;" \
+                "leaving size=$cur_size"
+            continue
+        fi
+        [[ "$new_size" != "$cur_size" ]] || continue
+
+        if [[ "$dry_run" == true ]]; then
+            log_msg "INFO: VM $vmid $key: would change size=$cur_size to" \
+                "size=$new_size ($vol)"
+        else
+            # Replace the size value on this key's line only (line-addressed
+            # sed; disk lines record size= at most once).
+            lineno=$(grep -n -m1 "^${key}:" "$conf" | cut -d: -f1 || true)
+            if [[ -n "$lineno" ]]; then
+                sed -i -E "${lineno}s|size=[^,]+|size=${new_size}|" "$conf"
+            fi
+            log_msg "INFO: ✓ VM $vmid $key: size=$cur_size -> size=$new_size"
+        fi
+        fixed=$((fixed + 1))
+    done < <(grep -E '^[a-z]' "$conf" 2>/dev/null)
+}
+
+# --- Main ---------------------------------------------------------------------
+
+log_msg "INFO: === repair-vm-disk-sizes ==="
+[[ "$dry_run" == true ]] && log_msg "INFO:   Mode: dry-run (no changes)"
+
+if [[ -n "$vmid" ]]; then
+    conf="$pve_conf_dir/${vmid}.conf"
+    [[ -f "$conf" ]] || {
+        log_msg "FATAL: VM config not found: $conf"
+        exit 1
+    }
+    repair_conf "$conf" "$vmid"
+else
+    shopt -s nullglob
+    for conf in "$pve_conf_dir"/*.conf; do
+        vmid=$(basename "$conf" .conf)
+        # Skip non-VM files such as "205 (copy).conf".
+        [[ "$vmid" =~ ^[0-9]+$ ]] || continue
+        repair_conf "$conf" "$vmid"
+    done
+    shopt -u nullglob
+fi
+
+log_msg "INFO: === Done ==="
+log_msg "INFO:   Checked: $checked   Fixed: $fixed   Skipped: $skipped"
+[[ "$dry_run" == true ]] && log_msg "INFO:   Dry-run: no configs were modified"
+
+exit 0

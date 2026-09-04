@@ -129,11 +129,20 @@ function delfs {
                     _annotation+="  [ZFS clone dependents — cannot delete]"
                     _has_dependent_clones=true
                 fi
-                if [[ "$NODE_MODE" != "single-node" && "$_bsname" =~ ^vm-[0-9]+-disk-[0-9]+$ ]] && \
+                # Shape test for vm-<n>-disk-<n> without regex: glob shape
+                # plus fixed-string digit validation of the numeric parts.
+                local _vmid="${_bsname#vm-}"; _vmid="${_vmid%%-disk-*}"
+                local _diskno="${_bsname##*-disk-}"
+                if [[ "$node_mode" != "single-node" && "$_bsname" == vm-*-disk-* \
+                        && -n "$_vmid" && "$_vmid" != *[!0-9]* \
+                        && -n "$_diskno" && "$_diskno" != *[!0-9]* \
+                        && "${_bsname#*-disk-}" != *-disk-* ]] && \
                         targetcli /backstores/block ls 2>/dev/null | grep -q " ${_bsname} "; then
                     local _bs_dev
                     _bs_dev=$(targetcli "/backstores/block/${_bsname}" info 2>/dev/null \
-                        | grep -oP '/dev/zvol/\S+' | head -1)
+                        | awk '{ for (i = 1; i <= NF; i++) { \
+                            p = index($i, "/dev/zvol/"); \
+                            if (p > 0) { print substr($i, p); exit } } }')
                     if [[ -z "$_bs_dev" || "$_bs_dev" == "/dev/zvol/${fs}" ]]; then
                         _annotation+="  [iSCSI LUN — will be removed from targetcli]"
                     fi

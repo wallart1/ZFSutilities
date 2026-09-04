@@ -30,7 +30,7 @@ if ! command -v qm >/dev/null 2>&1; then
     exit 1
 fi
 
-MY_HOST=$(hostname -s)
+my_host=$(hostname -s)
 
 usage() {
     local pool_choices
@@ -52,144 +52,148 @@ usage() {
 }
 
 # Filter --skip-rescan from args
-SKIP_RESCAN=false
-CLEAN_ARGS=()
+skip_rescan=false
+clean_args=()
 for arg in "$@"; do
-    [[ "$arg" == "--skip-rescan" ]] && SKIP_RESCAN=true || CLEAN_ARGS+=("$arg")
+    [[ "$arg" == "--skip-rescan" ]] && skip_rescan=true || clean_args+=("$arg")
 done
-set -- "${CLEAN_ARGS[@]}"
+set -- "${clean_args[@]}"
 
 # --- Argument validation ---
 [[ $# -eq 3 ]] || usage
 
-POOL="$1"
-VMID="$2"
-DISKNUM="$3"
+pool="$1"
+vmid="$2"
+disknum="$3"
 
 if is_two_node; then
-    is_known_pool "$POOL" || {
-        log_msg "FATAL: Pool must be one of: $(pool_list | paste -sd ' ' -). Got: $POOL"
+    is_known_pool "$pool" || {
+        log_msg "FATAL: Pool must be one of: $(pool_list | paste -sd ' ' -). Got: $pool"
         exit 1
     }
 else
-    zpool list -H -o name "$POOL" >/dev/null 2>&1 || {
-        log_msg "FATAL: Pool '$POOL' not found. Available pools:" \
+    zpool list -H -o name "$pool" >/dev/null 2>&1 || {
+        log_msg "FATAL: Pool '$pool' not found. Available pools:" \
             "$(zpool list -H -o name 2>/dev/null | paste -sd ' ' -)"
         exit 1
     }
 fi
-[[ "$VMID" =~ ^[0-9]+$ ]] || {
-    log_msg "FATAL: VMID must be a number, got: $VMID"
+[[ "$vmid" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: vmid must be a number, got: $vmid"
     exit 1
 }
-[[ "$DISKNUM" =~ ^[0-9]+$ ]] || {
-    log_msg "FATAL: disk-num must be a number, got: $DISKNUM"
+[[ "$disknum" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: disk-num must be a number, got: $disknum"
     exit 1
 }
 
 # --- If not on the storage host, delegate storage work via SSH (two-node only) ---
-if is_two_node && [[ "$MY_HOST" != "$STORAGE_HOST" ]]; then
-    log_msg "INFO: Connecting to $STORAGE_HOST for storage operations..."
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$STORAGE_HOST" "remove-vm-disk")
-    ssh -t root@"$STORAGE_HOST" "$REMOTE_SCRIPT '$POOL' '$VMID' '$DISKNUM' --skip-rescan" \
+if is_two_node && [[ "$my_host" != "$storage_host" ]]; then
+    log_msg "INFO: Connecting to $storage_host for storage operations..."
+    remote_script=$(remote_zfsutility_script "$storage_host" "remove-vm-disk")
+    ssh -t root@"$storage_host" "$remote_script '$pool' '$vmid' '$disknum' --skip-rescan" \
         || {
-            log_msg "FATAL: Storage operations failed on $STORAGE_HOST"
+            log_msg "FATAL: Storage operations failed on $storage_host"
             exit 1
         }
     echo ""
     log_msg "INFO: Rescanning iSCSI on $(hostname)..."
-    if [[ "$MY_HOST" == "$COMPUTE_HOST" ]]; then
+    if [[ "$my_host" == "$compute_host" ]]; then
         "$mydir/rescan-storage"
     else
-        REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
-        ssh root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1 \
-            || log_msg "WARN: Could not rescan $COMPUTE_HOST — run 'sudo rescan-storage'" \
-                "on $COMPUTE_HOST manually"
+        remote_rescan=$(remote_zfsutility_script "$compute_host" "rescan-storage")
+        ssh root@"$compute_host" "$remote_rescan" 2>&1 \
+            || log_msg "WARN: Could not rescan $compute_host — run 'sudo rescan-storage'" \
+                "on $compute_host manually"
     fi
     exit 0
 fi
 
 # === Running on the storage host ===
 
-ZVOL_NAME="$POOL/proxmox/vm-${VMID}-disk-${DISKNUM}"
-BACKSTORE_NAME="vm-${VMID}-disk-${DISKNUM}"
+zvol_name="$pool/proxmox/vm-${vmid}-disk-${disknum}"
+backstore_name="vm-${vmid}-disk-${disknum}"
 
-TARGET=""
+target=""
 if is_two_node; then
-    TARGET=$(pool_to_target "$POOL") || {
-        log_msg "FATAL: Failed to map pool to target: $POOL"
+    target=$(pool_to_target "$pool") || {
+        log_msg "FATAL: Failed to map pool to target: $pool"
         exit 1
     }
 fi
 
 log_msg "INFO: === remove-vm-disk ==="
-log_msg "INFO:   Zvol:      $ZVOL_NAME"
-log_msg "INFO:   Backstore: $BACKSTORE_NAME"
+log_msg "INFO:   Zvol:      $zvol_name"
+log_msg "INFO:   Backstore: $backstore_name"
 if is_two_node; then
-    log_msg "INFO:   Target:    $TARGET"
+    log_msg "INFO:   Target:    $target"
 fi
 echo ""
 
 # --- Check zvol exists ---
-if ! zfs list -H -o name "$ZVOL_NAME" 2>/dev/null | grep -q .; then
-    log_msg "FATAL: Zvol does not exist: $ZVOL_NAME"
+if ! zfs list -H -o name "$zvol_name" 2>/dev/null | grep -q .; then
+    log_msg "FATAL: Zvol does not exist: $zvol_name"
     exit 1
 fi
 
-ZVOL_SIZE=$(zfs get -H -o value volsize "$ZVOL_NAME" 2>/dev/null || echo "unknown")
-log_msg "INFO:   Zvol size: $ZVOL_SIZE"
+zvol_size=$(zfs get -H -o value volsize "$zvol_name" 2>/dev/null || echo "unknown")
+log_msg "INFO:   Zvol size: $zvol_size"
 echo ""
 
 # --- Confirm before destruction ---
 log_msg "WARN: This will PERMANENTLY DESTROY the following:"
-log_msg "INFO:   - iSCSI LUN for $BACKSTORE_NAME"
-log_msg "INFO:   - Zvol $ZVOL_NAME (all data lost)"
+log_msg "INFO:   - iSCSI LUN for $backstore_name"
+log_msg "INFO:   - Zvol $zvol_name (all data lost)"
 echo ""
 read -rp "  Have you stopped the VM and removed the disk from Proxmox? (y/N): " response
 [[ "$response" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
 
-read -rp "  Are you sure you want to destroy $ZVOL_NAME? (y/N): " response2
+read -rp "  Are you sure you want to destroy $zvol_name? (y/N): " response2
 [[ "$response2" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
 
 # --- iSCSI teardown (two-node only) ---
 if is_two_node; then
     # --- Find and remove LUN from target ---
-    LUN_NUM=$(targetcli "/iscsi/${TARGET}/tpg1/luns" ls 2>/dev/null \
-        | grep "$BACKSTORE_NAME" \
-        | grep -oP 'lun\K[0-9]+' \
-        | head -1)
+    # The selected LUN line starts with "lun<n>"; take the digits that follow.
+    lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
+        | grep "$backstore_name" | head -1)
+    lun_num=""
+    if [[ -n "$lun_line" ]]; then
+        lun_num="${lun_line#*lun}"
+        lun_num="${lun_num%%[!0-9]*}"
+    fi
 
-    if [[ -n "$LUN_NUM" ]]; then
-        log_msg "INFO: Removing LUN $LUN_NUM from target..."
-        targetcli "/iscsi/${TARGET}/tpg1/luns" delete "lun${LUN_NUM}"
+    if [[ -n "$lun_num" ]]; then
+        log_msg "INFO: Removing LUN $lun_num from target..."
+        targetcli "/iscsi/${target}/tpg1/luns" delete "lun${lun_num}"
         log_msg "INFO: ✓ LUN removed from target"
     else
         log_msg "WARN: LUN not found in target — skipping LUN removal"
     fi
 
     # --- Remove backstore ---
-    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${BACKSTORE_NAME} "; then
-        log_msg "INFO: Removing backstore $BACKSTORE_NAME..."
-        targetcli /backstores/block delete "$BACKSTORE_NAME"
+    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${backstore_name} "; then
+        log_msg "INFO: Removing backstore $backstore_name..."
+        targetcli /backstores/block delete "$backstore_name"
         log_msg "INFO: ✓ Backstore removed"
     else
-        log_msg "WARN: Backstore $BACKSTORE_NAME not found — skipping"
+        log_msg "WARN: Backstore $backstore_name not found — skipping"
     fi
 
     # --- Remove from expected-backstores manifest ---
-    MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
-    if [[ -f "$MANIFEST" ]] && grep -q "^${BACKSTORE_NAME}$" "$MANIFEST"; then
-        sed -i "/^${BACKSTORE_NAME}$/d" "$MANIFEST"
+    manifest="/etc/rtslib-fb-target/expected-backstores.txt"
+    if [[ -f "$manifest" ]] && grep -q "^${backstore_name}$" "$manifest"; then
+        sed -i "/^${backstore_name}$/d" "$manifest"
         log_msg "INFO: ✓ Removed from expected-backstores manifest"
     fi
 
     # --- Remove from encrypted LUNs conf if present ---
-    ENCRYPTED_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
-    if [[ ! -e "$ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
-        ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+    encrypted_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+    if [[ ! -e "$encrypted_conf" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+        encrypted_conf="/etc/iscsi-encrypted-luns.conf"
     fi
-    if [[ -f "$ENCRYPTED_CONF" ]] && grep -q "^${BACKSTORE_NAME}:" "$ENCRYPTED_CONF"; then
-        sed -i "/^${BACKSTORE_NAME}:/d" "$ENCRYPTED_CONF"
+    if [[ -f "$encrypted_conf" ]] && grep -q "^${backstore_name}:" "$encrypted_conf"; then
+        sed -i "/^${backstore_name}:/d" "$encrypted_conf"
         log_msg "INFO: ✓ Removed from encrypted LUNs config"
     fi
 
@@ -199,37 +203,37 @@ if is_two_node; then
     log_msg "INFO: ✓ Configuration saved"
 
     # --- Trigger rescan on the compute host (unless called remotely) ---
-    if [[ "$SKIP_RESCAN" == false ]]; then
-        log_msg "INFO: Triggering iSCSI rescan on $COMPUTE_HOST..."
-        REMOTE_RESCAN=$(remote_zfsutility_script "$COMPUTE_HOST" "rescan-storage")
-        if ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" "$REMOTE_RESCAN" 2>&1; then
+    if [[ "$skip_rescan" == false ]]; then
+        log_msg "INFO: Triggering iSCSI rescan on $compute_host..."
+        remote_rescan=$(remote_zfsutility_script "$compute_host" "rescan-storage")
+        if ssh -o ConnectTimeout=10 root@"$compute_host" "$remote_rescan" 2>&1; then
             log_msg "INFO: ✓ Rescan triggered"
         else
-            log_msg "WARN: Could not reach $COMPUTE_HOST — run 'sudo rescan-storage' on" \
-                "$COMPUTE_HOST manually"
+            log_msg "WARN: Could not reach $compute_host — run 'sudo rescan-storage' on" \
+                "$compute_host manually"
         fi
     fi
 fi
 
 # --- Destroy zvol ---
-log_msg "INFO: Destroying zvol $ZVOL_NAME..."
+log_msg "INFO: Destroying zvol $zvol_name..."
 
 zfslock_init
-if ! zfslock_wait_or_resolve "$ZVOL_NAME" "x" "remove-vm-disk destroy"; then
-    log_msg "FATAL: Could not acquire destroy lock on ${ZVOL_NAME}"
+if ! zfslock_wait_or_resolve "$zvol_name" "x" "remove-vm-disk destroy"; then
+    log_msg "FATAL: Could not acquire destroy lock on ${zvol_name}"
     exit 1
 fi
 
-if ! zfs destroy "$ZVOL_NAME"; then
+if ! zfs destroy "$zvol_name"; then
     source_helper zfs-diagnose-busy
-    diagnose_dataset_busy "$ZVOL_NAME"
-    zfslock_release "$ZFSLOCK_ID"
-    log_msg "FATAL: Could not destroy zvol $ZVOL_NAME"
+    diagnose_dataset_busy "$zvol_name"
+    zfslock_release "$zfslock_id"
+    log_msg "FATAL: Could not destroy zvol $zvol_name"
     exit 1
 fi
-zfslock_release "$ZFSLOCK_ID"
+zfslock_release "$zfslock_id"
 log_msg "INFO: ✓ Zvol destroyed"
 
 echo ""
 log_msg "INFO: === Done ==="
-log_msg "INFO:   Removed: $ZVOL_NAME"
+log_msg "INFO:   Removed: $zvol_name"

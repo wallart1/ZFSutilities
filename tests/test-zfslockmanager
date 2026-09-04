@@ -17,9 +17,9 @@ source "$mydir/bin/zfslockmanager"
 # Redirect lock directory to a temp location so we do not interfere with
 # production locks.
 ZFSLOCK_DIR="$_mock_zfs_state_dir/locks"
-ZFSLOCK_LOCKS_DIR="$ZFSLOCK_DIR/.locks"
-ZFSLOCK_PIDS_DIR="$ZFSLOCK_DIR/.pids"
-mkdir -p "$ZFSLOCK_LOCKS_DIR" "$ZFSLOCK_PIDS_DIR"
+zfslock_locks_dir="$ZFSLOCK_DIR/.locks"
+zfslock_pids_dir="$ZFSLOCK_DIR/.pids"
+mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir"
 
 # ---------------------------------------------------------------------------
 # Background-process helpers
@@ -46,9 +46,9 @@ export ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs"
 bashinit
 source "$mydir/bin/zfslockmanager"
 export ZFSLOCK_DIR="$ZFSLOCK_DIR"
-export ZFSLOCK_LOCKS_DIR="$ZFSLOCK_LOCKS_DIR"
-export ZFSLOCK_PIDS_DIR="$ZFSLOCK_PIDS_DIR"
-mkdir -p "$ZFSLOCK_LOCKS_DIR" "$ZFSLOCK_PIDS_DIR"
+export zfslock_locks_dir="$zfslock_locks_dir"
+export zfslock_pids_dir="$zfslock_pids_dir"
+mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir"
 zfslock_init
 zfslock_acquire "$dataset" "$type" "$description"
 rc=\$?
@@ -89,7 +89,7 @@ _bg_lock_kill() {
 
 cleanup_test_locks() {
     rm -rf "$ZFSLOCK_DIR" 2>/dev/null
-    mkdir -p "$ZFSLOCK_LOCKS_DIR" "$ZFSLOCK_PIDS_DIR" 2>/dev/null
+    mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ test_multi_lock_acquisition() {
     if zfslock_acquire_multiple w "test/z/b" "test/a" "test/a/child"; then
         local datasets=()
         local id
-        for id in "${ZFSLOCK_IDS[@]}"; do
+        for id in "${zfslock_ids[@]}"; do
             datasets+=("$(_zfslock_read_field "$id" "dataset")")
         done
         assert_equals "test/a/child test/z/b" "${datasets[*]}"
@@ -119,7 +119,7 @@ test_multi_lock_acquisition() {
     if zfslock_acquire_multiple w "pool/parent" "pool/parent/child" "pool/other"; then
         local datasets=()
         local id
-        for id in "${ZFSLOCK_IDS[@]}"; do
+        for id in "${zfslock_ids[@]}"; do
             datasets+=("$(_zfslock_read_field "$id" "dataset")")
         done
         assert_equals "pool/other pool/parent/child" "${datasets[*]}"
@@ -185,12 +185,12 @@ test_basic_acquire_release() {
 
     test_start "Acquire lock on test/dataset"
     if zfslock_acquire "test/dataset" "w" "test description" && \
-       [[ -n "$ZFSLOCK_ID" && -f "$ZFSLOCK_ID" ]]; then
+       [[ -n "$zfslock_id" && -f "$zfslock_id" ]]; then
         test_pass
     else
-        test_fail "ZFSLOCK_ID not set or file not created"
+        test_fail "zfslock_id not set or file not created"
     fi
-    local lock1="$ZFSLOCK_ID"
+    local lock1="$zfslock_id"
 
     test_start "Lock file contains correct data"
     local lock_dataset lock_type lock_pid
@@ -212,9 +212,9 @@ test_basic_acquire_release() {
 
     test_start "Acquire multiple locks"
     zfslock_acquire "test/dataset1" "r" "first lock"
-    local multi_lock1="$ZFSLOCK_ID"
+    local multi_lock1="$zfslock_id"
     zfslock_acquire "test/dataset2" "r" "second lock"
-    local multi_lock2="$ZFSLOCK_ID"
+    local multi_lock2="$zfslock_id"
     [[ -f "$multi_lock1" ]] &&\
     [[ -f "$multi_lock2" ]] && test_pass || test_fail "Not all lock files created"
 
@@ -226,10 +226,10 @@ test_basic_acquire_release() {
     test_start "Acquire writes lock file atomically"
     cleanup_test_locks
     if zfslock_acquire "test/atomic" "w" "atomic write test"; then
-        local atomic_lock="$ZFSLOCK_ID"
+        local atomic_lock="$zfslock_id"
         local leftover tmp
         leftover=""
-        for tmp in "$ZFSLOCK_LOCKS_DIR"/.*.tmp*; do
+        for tmp in "$zfslock_locks_dir"/.*.tmp*; do
             [[ -f "$tmp" ]] && leftover="$tmp"
         done
         if [[ -n "$leftover" ]]; then
@@ -256,7 +256,7 @@ test_same_dataset_conflicts() {
 
     # Hold a write lock in the main shell
     zfslock_acquire "test/data" "w" "holding write lock"
-    local write_lock="$ZFSLOCK_ID"
+    local write_lock="$zfslock_id"
 
     test_start "Read conflicts with existing Write"
     _bg_lock_start "test/data" "r" "trying read"
@@ -281,11 +281,11 @@ test_same_dataset_conflicts() {
 
     # Hold a read lock in the main shell
     zfslock_acquire "test/data" "r" "holding read lock"
-    local read_lock="$ZFSLOCK_ID"
+    local read_lock="$zfslock_id"
 
     test_start "Read does NOT conflict with existing Read"
     zfslock_acquire "test/data2" "r" "first read on data2"
-    local read_lock2="$ZFSLOCK_ID"
+    local read_lock2="$zfslock_id"
     _bg_lock_start "test/data2" "r" "second read on data2"
     bg_rc=$(_bg_lock_wait_rc)
     _bg_lock_kill
@@ -311,7 +311,7 @@ test_hierarchy_conflicts() {
     cleanup_test_locks
 
     zfslock_acquire "pool/parent" "x" "destroy parent"
-    local parent_lock="$ZFSLOCK_ID"
+    local parent_lock="$zfslock_id"
     test_start "Destroy on parent blocks write on child"
     _bg_lock_start "pool/parent/child" "w" "write child"
     local bg_rc
@@ -321,7 +321,7 @@ test_hierarchy_conflicts() {
     zfslock_release "$parent_lock"
 
     zfslock_acquire "pool/parent" "w" "write parent"
-    parent_lock="$ZFSLOCK_ID"
+    parent_lock="$zfslock_id"
     test_start "Write on parent blocks write on child"
     _bg_lock_start "pool/parent/child" "w" "write child"
     bg_rc=$(_bg_lock_wait_rc)
@@ -330,15 +330,15 @@ test_hierarchy_conflicts() {
     zfslock_release "$parent_lock"
 
     zfslock_acquire "pool/parent" "r" "read parent"
-    parent_lock="$ZFSLOCK_ID"
+    parent_lock="$zfslock_id"
     test_start "Read on parent does NOT block read on child"
     zfslock_acquire "pool/parent/child" "r" "read child" && test_pass || \
         test_fail "Parent read should not block child read"
-    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release "$zfslock_id"
     zfslock_release "$parent_lock"
 
     zfslock_acquire "pool/parent/child" "r" "read child"
-    local child_lock="$ZFSLOCK_ID"
+    local child_lock="$zfslock_id"
     test_start "Any lock on child blocks destroy on parent"
     _bg_lock_start "pool/parent" "x" "destroy parent"
     bg_rc=$(_bg_lock_wait_rc)
@@ -347,7 +347,7 @@ test_hierarchy_conflicts() {
     zfslock_release "$child_lock"
 
     zfslock_acquire "pool/parent/child" "w" "write child"
-    child_lock="$ZFSLOCK_ID"
+    child_lock="$zfslock_id"
     test_start "Write on child blocks write on parent"
     _bg_lock_start "pool/parent" "w" "write parent"
     bg_rc=$(_bg_lock_wait_rc)
@@ -356,11 +356,11 @@ test_hierarchy_conflicts() {
     zfslock_release "$child_lock"
 
     zfslock_acquire "pool/parent/child" "r" "read child"
-    child_lock="$ZFSLOCK_ID"
+    child_lock="$zfslock_id"
     test_start "Read on child does NOT block read on parent"
     zfslock_acquire "pool/parent" "r" "read parent" && test_pass || \
         test_fail "Child read should not block parent read"
-    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release "$zfslock_id"
     zfslock_release_all
 }
 
@@ -374,7 +374,7 @@ test_stale_detection() {
     cleanup_test_locks
 
     test_start "Live process with empty cmdline is not stale"
-    local fake_lockfile="$ZFSLOCK_LOCKS_DIR/empty%2Fcmdline.lock"
+    local fake_lockfile="$zfslock_locks_dir/empty%2Fcmdline.lock"
     printf '{"dataset":"empty/cmdline","type":"w","pid":%s,"script":"%s",'\
 '"acquired":"2026-01-01T00:00:00-05:00","description":"test"}\n' \
         "$$" "$0" > "$fake_lockfile"
@@ -390,7 +390,7 @@ test_stale_detection() {
     rm -f "$fake_lockfile"
 
     test_start "Detect stale lock (dead PID)"
-    local fake_lockfile="$ZFSLOCK_LOCKS_DIR/test%2Fstale.lock"
+    local fake_lockfile="$zfslock_locks_dir/test%2Fstale.lock"
     printf '\
 {"dataset":"test/stale","type":"w","pid":99999999,\
 "script":"fake_script","acquired":"2026-01-01T00:00:00-05:00",\
@@ -403,7 +403,7 @@ test_stale_detection() {
 
     test_start "Active lock is not stale"
     zfslock_acquire "test/active" "w" "active lock"
-    local active_lock="$ZFSLOCK_ID"
+    local active_lock="$zfslock_id"
     ! zfslock_is_stale "$active_lock" && test_pass || test_fail "Active lock should not be stale"
 
     test_start "Cleanup removes stale locks"
@@ -437,7 +437,7 @@ test_concurrent_access() {
         test_pass
     else
         test_fail "Background lock should block foreground"
-        zfslock_release "$ZFSLOCK_ID"
+        zfslock_release "$zfslock_id"
     fi
 
     _bg_lock_kill
@@ -447,7 +447,7 @@ test_concurrent_access() {
     zfslock_cleanup_stale > /dev/null
     if zfslock_acquire "test/concurrent" "w" "after bg exit"; then
         test_pass
-        zfslock_release "$ZFSLOCK_ID"
+        zfslock_release "$zfslock_id"
     else
         test_fail "Should acquire lock after bg exits"
     fi
@@ -466,7 +466,7 @@ test_path_encoding() {
 
     test_start "Lock dataset with multiple path segments"
     if zfslock_acquire "pool/parent/child/grandchild" "w" "deep path"; then
-        local lockfile="$ZFSLOCK_ID"
+        local lockfile="$zfslock_id"
         [[ "$lockfile" == *"%2F"* ]] && test_pass || test_fail "Path not encoded with %2F"
         zfslock_release "$lockfile"
     else
@@ -475,7 +475,7 @@ test_path_encoding() {
 
     test_start "Lock snapshot path"
     if zfslock_acquire "pool/dataset@snapshot" "r" "snapshot lock"; then
-        local lockfile="$ZFSLOCK_ID"
+        local lockfile="$zfslock_id"
         [[ "$lockfile" == *"%40"* ]] && test_pass || test_fail "Snapshot @ not encoded as %40"
         zfslock_release "$lockfile"
     else
@@ -549,7 +549,7 @@ test_stale_conflict_retry() {
     _enable_interactive
 
     test_start "Stale conflicting lock is removed before prompting"
-    local fake_lockfile="$ZFSLOCK_LOCKS_DIR/stale%2Fconflict.lock"
+    local fake_lockfile="$zfslock_locks_dir/stale%2Fconflict.lock"
     printf '{"dataset":"stale/conflict","type":"w","pid":99999999,"script":"fake","acquire'\
 'd":"2026-01-01T00:00:00-05:00","description":"stale"}\n' > "$fake_lockfile"
     if zfslock_wait_or_resolve "stale/conflict" "w" "test" >/dev/null 2>&1; then
@@ -796,8 +796,8 @@ setup_remote_agent() {
 # two-node override variables, or the agent will try to forward recursively.
 unset ZFSLOCK_REMOTE_HOST ZFSLOCK_REMOTE_POOLS ZFSLOCK_REMOTE_BIN ZFSLOCK_THIS_HOST ZFSLOCK_REMOTE_DISABLED
 export ZFSLOCK_DIR="$_remote_lock_dir"
-export ZFSLOCK_LOCKS_DIR="$_remote_lock_dir/.locks"
-export ZFSLOCK_PIDS_DIR="$_remote_lock_dir/.pids"
+export zfslock_locks_dir="$_remote_lock_dir/.locks"
+export zfslock_pids_dir="$_remote_lock_dir/.pids"
 source "$mydir/bin/bashinit"
 bashinit
 source "$mydir/bin/zfslockmanager"
@@ -807,14 +807,14 @@ cmd_hold() {
     zfslock_init
     if ! zfslock_acquire "\$dataset" "\$type" "\$description"; then
         local c_dataset c_type c_pid c_script
-        c_dataset=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "dataset") || c_dataset=""
-        c_type=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "type") || c_type=""
-        c_pid=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "pid") || c_pid=""
-        c_script=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "script") || c_script=""
+        c_dataset=\$(_zfslock_read_field "\$zfslock_conflict_info" "dataset") || c_dataset=""
+        c_type=\$(_zfslock_read_field "\$zfslock_conflict_info" "type") || c_type=""
+        c_pid=\$(_zfslock_read_field "\$zfslock_conflict_info" "pid") || c_pid=""
+        c_script=\$(_zfslock_read_field "\$zfslock_conflict_info" "script") || c_script=""
         echo "CONFLICT dataset=\$c_dataset type=\$c_type pid=\$c_pid script=\$c_script"
         exit 1
     fi
-    echo "LOCKED \$ZFSLOCK_ID"
+    echo "LOCKED \$zfslock_id"
     sleep 3600
 }
 
@@ -824,10 +824,10 @@ cmd_check() {
         echo '{"available": true}'
     else
         local c_dataset c_type c_pid c_script
-        c_dataset=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "dataset") || c_dataset=""
-        c_type=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "type") || c_type=""
-        c_pid=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "pid") || c_pid=""
-        c_script=\$(_zfslock_read_field "\$ZFSLOCK_CONFLICT_INFO" "script") || c_script=""
+        c_dataset=\$(_zfslock_read_field "\$zfslock_conflict_info" "dataset") || c_dataset=""
+        c_type=\$(_zfslock_read_field "\$zfslock_conflict_info" "type") || c_type=""
+        c_pid=\$(_zfslock_read_field "\$zfslock_conflict_info" "pid") || c_pid=""
+        c_script=\$(_zfslock_read_field "\$zfslock_conflict_info" "script") || c_script=""
         printf '{"available": false, "conflict": {"dataset":"%s","type":"%s","pid":"%s","script":"%s","acquired":"","description":""}}\n' \
             "\$c_dataset" "\$c_type" "\$c_pid" "\$c_script"
     fi
@@ -868,12 +868,12 @@ test_remote_acquire_and_release() {
     export ZFSLOCK_THIS_HOST="compute"
 
     # Force re-load of node config with the test overrides.
-    _ZFSLOCK_THIS_HOST=""
+    _zfslock_this_host=""
     _zfslock_load_node_config
 
     test_start "Remote acquire creates lock on storage node"
     if zfslock_acquire "remotepool/dataset" "w" "remote test"; then
-        local remote_lockfile="${ZFSLOCK_ID#REMOTE:}"
+        local remote_lockfile="${zfslock_id#REMOTE:}"
         if [[ -f "$remote_lockfile" ]]; then
             test_pass
         else
@@ -884,8 +884,8 @@ test_remote_acquire_and_release() {
     fi
 
     test_start "Remote release removes lock on storage node"
-    local remote_lockfile="${ZFSLOCK_ID#REMOTE:}"
-    zfslock_release "$ZFSLOCK_ID"
+    local remote_lockfile="${zfslock_id#REMOTE:}"
+    zfslock_release "$zfslock_id"
     if [[ ! -f "$remote_lockfile" ]]; then
         test_pass
     else
@@ -920,7 +920,7 @@ test_remote_conflict() {
     export ZFSLOCK_REMOTE_POOLS="remotepool"
     export ZFSLOCK_REMOTE_BIN="$_remote_bin_dir"
     export ZFSLOCK_THIS_HOST="compute"
-    _ZFSLOCK_THIS_HOST=""
+    _zfslock_this_host=""
     _zfslock_load_node_config
 
     # Pre-create a remote lock by running the agent directly.
@@ -929,8 +929,8 @@ test_remote_conflict() {
 #!/usr/bin/bash
 unset ZFSLOCK_REMOTE_HOST ZFSLOCK_REMOTE_POOLS ZFSLOCK_REMOTE_BIN ZFSLOCK_THIS_HOST ZFSLOCK_REMOTE_DISABLED
 export ZFSLOCK_DIR="$_remote_lock_dir"
-export ZFSLOCK_LOCKS_DIR="$_remote_lock_dir/.locks"
-export ZFSLOCK_PIDS_DIR="$_remote_lock_dir/.pids"
+export zfslock_locks_dir="$_remote_lock_dir/.locks"
+export zfslock_pids_dir="$_remote_lock_dir/.pids"
 source "$mydir/bin/bashinit"
 bashinit
 source "$mydir/bin/zfslockmanager"

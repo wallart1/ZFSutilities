@@ -20,8 +20,8 @@ overrides() { true; }
 EOF
     cat > "$tmpdir/zfslockmanager" << 'EOF'
 zfslock_init() { true; }
-zfslock_acquire() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
-zfslock_wait_or_resolve() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+zfslock_acquire() { zfslock_id="/tmp/mock_lock_$$"; return 0; }
+zfslock_wait_or_resolve() { zfslock_id="/tmp/mock_lock_$$"; return 0; }
 zfslock_release() { true; }
 zfslock_release_all() { true; }
 EOF

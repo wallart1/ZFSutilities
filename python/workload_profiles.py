@@ -168,9 +168,14 @@ def build_apply_plan(
     return plan
 
 
-def build_zfs_set_commands(plan: list[dict]) -> list[str]:
-    """Return the ``zfs set`` command strings for plan entries that will apply."""
-    commands: list[str] = []
+def zfs_set_commands_with_entries(plan: list[dict]) -> list[tuple[str, dict]]:
+    """Return ``(command, plan_entry)`` pairs for entries that will apply.
+
+    Callers that need to describe or annotate each command should use this
+    instead of re-parsing the command string, which couples them to the exact
+    command format.
+    """
+    pairs: list[tuple[str, dict]] = []
     for entry in plan:
         if not entry.get("will_apply"):
             continue
@@ -180,8 +185,13 @@ def build_zfs_set_commands(plan: list[dict]) -> list[str]:
         # unchanged.
         value = shlex.quote(str(entry["value"]))
         dataset = shlex.quote(entry.get("dataset", ""))
-        commands.append(f"zfs set {prop}={value} {dataset}")
-    return commands
+        pairs.append((f"zfs set {prop}={value} {dataset}", entry))
+    return pairs
+
+
+def build_zfs_set_commands(plan: list[dict]) -> list[str]:
+    """Return the ``zfs set`` command strings for plan entries that will apply."""
+    return [cmd for cmd, _entry in zfs_set_commands_with_entries(plan)]
 
 
 def profile_has_warning(name: str, profile: dict, pool_has_special: bool) -> bool:

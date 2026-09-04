@@ -18,7 +18,7 @@ set -euo pipefail
 source_helper rootcheck
 rootcheck
 
-VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
+version_base="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
 
 # die is provided by bashinit (sourced above).
 
@@ -37,11 +37,11 @@ usage() {
 [[ $EUID -eq 0 || ${UNINSTALL_VERSION_TEST_NO_ROOT:-0} == "1" ]] || \
     die "Must run as root (use sudo)"
 
-FORCE_YES=0
+force_yes=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -y|--yes)
-            FORCE_YES=1
+            force_yes=1
             shift
             ;;
         -h|--help)
@@ -59,25 +59,25 @@ done
 
 [[ $# -eq 1 ]] || usage
 
-VERSION="$1"
-TARGET="$VERSION_BASE/versions/$VERSION"
+version="$1"
+target="$version_base/versions/$version"
 
-[[ -d "$TARGET" ]] || die "Version not found: $VERSION"
+[[ -d "$target" ]] || die "Version not found: $version"
 
-CURRENT=$(readlink -f "$VERSION_BASE/current" 2>/dev/null || true)
-if [[ "$CURRENT" == "$TARGET" ]]; then
-    die "Cannot uninstall the currently active version ($VERSION)"
+current=$(readlink -f "$version_base/current" 2>/dev/null || true)
+if [[ "$current" == "$target" ]]; then
+    die "Cannot uninstall the currently active version ($version)"
 fi
 
-if [[ "$FORCE_YES" -eq 0 ]]; then
-    read -rp "Remove $VERSION? (y/N): " confirm
+if [[ "$force_yes" -eq 0 ]]; then
+    read -rp "Remove $version? (y/N): " confirm
     # Regex: ^[Yy]$
     # Purpose: Accept any single-character response starting with Y or y as confirmation.
     # Example: "Y" -> match; "y" -> match; "yes" -> no match (triggers abort)
     [[ "$confirm" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
 fi
 
-rm -rf "$TARGET"
+rm -rf "$target"
 
 log_msg "INFO: === uninstall-version ==="
-log_msg "INFO:   Removed: $VERSION"
+log_msg "INFO:   Removed: $version"

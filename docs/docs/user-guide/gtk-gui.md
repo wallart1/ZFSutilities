@@ -614,6 +614,16 @@ only when the selection contains at least one real task; selecting the
 | **Profile**   | `profile_runner.py` jobs launched by **Run Now** in the Schedule tab       | SIGTERM the profile-runner process              |
 | **Scheduled** | `profile_runner.py` jobs launched by cron                                | SIGTERM the profile-runner process              |
 
+Cron launches each scheduled profile through a compound shell command
+(`mkdir -p ... && python3 .../profile_runner.py run <name> ...`), so the
+cron shell stays alive as a parent process while the runner executes. The
+Dashboard resolves the profile name from that wrapper's command line and
+folds it into the **Profile** row reported by the profile lock file, so a
+scheduled run appears only once. A runner process that cannot be matched to
+a profile name (for example, an invocation without a profile argument) is
+listed as **Scheduled: profile_runner.py (PID N)** so the row still
+identifies the process.
+
 The scrub list is reconciled against live `zpool status` on every refresh, so
 scrubs that finish or are paused externally — for example, by a headless
 profile that uses the **Pause scrubs during each step** option — do not keep
@@ -643,14 +653,18 @@ The list refreshes automatically with the rest of the Dashboard. Stale locks
 
 A scrollable table showing the last **10** history entries:
 
-| Column        | Meaning                                                                  |
-| ------------- | ------------------------------------------------------------------------ |
-| **Date/Time** | When the operation finished (`YYYY-MM-DDTHH:MM±TZ`)                      |
-| **Type**      | `backup`, `offsite`, `restore`, or `prune`                               |
-| **Name**      | GUI label or scheduled profile name                                      |
-| **Outcome**   | Coloured icon + text (`✓ success`, `✗ failed`, `⏹ cancelled`, *running*) |
+| Column          | Meaning                                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Date/Time**   | When the operation finished (`YYYY-MM-DDTHH:MM±TZ`)                                                                                |
+| **Type**        | `backup`, `offsite`, `restore`, or `prune`                                                                                         |
+| **Name**        | GUI label or scheduled profile name                                                                                                |
+| **Message Level** | Highest message level issued during the operation, from its session log: green `✓` INFO/VERB/DEBUG, amber `⚠` WARN, red `✗` FATAL |
 
 The list refreshes automatically with the rest of the Dashboard.
+
+A WARN message does **not** mean the operation failed — many scripts warn and
+continue. When a session log is unavailable or contains no levelled messages,
+the cell falls back to the exit-code result (`✓ success`, `✗ failed`).
 
 Each row also stores the operation's session-log path in a hidden column. The
 [**View Log**](#actions) action uses this path to jump to the log in the
@@ -669,7 +683,8 @@ This section is hidden entirely on single-node systems.
 ### Configuration
 
 Shows the current node mode (`single-node` or `two-node`), hostnames, the
-ZFSutilities version, and the **ZFS version(s)** in use. In two-node mode the
+ZFSutilities version(s), the operating system(s) in use, and the **ZFS
+version(s)**. In two-node mode the
 versions of the storage host and compute host are fetched remotely; if both
 roles resolve to the same host it is shown once with both role labels. If a
 remote host cannot be reached, its version is shown as *unknown*.

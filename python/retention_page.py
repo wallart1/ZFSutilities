@@ -78,7 +78,7 @@ def load_retention_profile_config(app, config):
                 selection.select_path(Gtk.TreePath.new_from_indices([i]))
 
 
-# ── Online pool helpers ───────────────────────────────────────────────────────
+# ── Online pool helpers ───────────────────────
 
 
 def _get_online_pool_names():
@@ -162,7 +162,7 @@ def _clear_non_default_policies_on_new_install(app, ctx):
     ctx.is_new_install = False
 
 
-# ── Page factory ───────────────────────────────────────────────────────────────
+# ── Page factory ──────────────────────────
 
 
 def create_retention_page(app, ctx):
@@ -197,7 +197,7 @@ def create_retention_page(app, ctx):
     outer.set_margin_bottom(10)
     scrolled.add(outer)
 
-    # ── Header ────────────────────────────────────────────────────────────────
+    # ── Header ──────────────────────────
     hdr = Gtk.Label()
     hdr.set_markup("<big><b>Retention Policies</b></big>")
     hdr.set_halign(Gtk.Align.START)
@@ -211,7 +211,7 @@ def create_retention_page(app, ctx):
     desc.set_line_wrap(True)
     outer.pack_start(desc, False, False, 0)
 
-    # ── Pool selector ─────────────────────────────────────────────────────────
+    # ── Pool selector ────────────────────────
     pool_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_box.pack_start(Gtk.Label(label="Pool:"), False, False, 0)
 
@@ -227,7 +227,7 @@ def create_retention_page(app, ctx):
 
     outer.pack_start(pool_box, False, False, 0)
 
-    # ── Table (TreeView) ──────────────────────────────────────────────────────
+    # ── Table (TreeView) ───────────────────────
     app._ret_store = Gtk.ListStore(str, str, int, int)
 
     tv = Gtk.TreeView(model=app._ret_store)
@@ -285,13 +285,13 @@ def create_retention_page(app, ctx):
     app._ret_store.connect("row-inserted", lambda *_a: _update_ret_status(app))
     app._ret_store.connect("row-deleted", lambda *_a: _update_ret_status(app))
 
-    # ── Dirty / warning label ─────────────────────────────────────────────────
+    # ── Dirty / warning label ─────────────────────
     app._ret_status_label = Gtk.Label()
     app._ret_status_label.set_halign(Gtk.Align.START)
     app._ret_status_label.set_line_wrap(True)
     outer.pack_start(app._ret_status_label, False, False, 0)
 
-    # ── Prune section ─────────────────────────────────────────────────────────
+    # ── Prune section ────────────────────────
     outer.pack_start(Gtk.Separator(), False, False, 8)
 
     prune_hdr = Gtk.Label()
@@ -356,7 +356,7 @@ def create_retention_page(app, ctx):
     outer.pack_start(verb_check, False, False, 0)
     app._ret_original_verb = verb_check.get_active()
 
-    # ── Advanced Prune Options ────────────────────────────────────────────────
+    # ── Advanced Prune Options ─────────────────────
     advanced_exp = Gtk.Expander()
     advanced_exp.set_label_widget(bold_label("Advanced Prune Options"))
     advanced_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
@@ -450,7 +450,7 @@ def create_retention_page(app, ctx):
     reminder.set_line_wrap(True)
     advanced_box.pack_start(reminder, False, False, 0)
 
-    # ── Wire up pool selector ─────────────────────────────────────────────────
+    # ── Wire up pool selector ─────────────────────
     combo.connect("changed", _on_pool_changed, app)
     app._ret_combo = combo
 
@@ -562,7 +562,7 @@ def _on_prune_drag_end(treeview, drag_context, app):
         log_msg(f"WARN: Could not save prune pool order: {e}")
 
 
-# ── Internal helpers ───────────────────────────────────────────────────────────
+# ── Internal helpers ────────────────────────
 
 
 def _load_pool_into_store(app, ctx, pool, buckets=None):

@@ -22,11 +22,12 @@ source "$NODE_LIB"
 # Key: dataset name. Value: "target:lun_num:backstore_name:encrypted_flag"
 # Populated by iscsi_teardown_zvol; consumed by iscsi_rebuild_torn_down.
 # encrypted_flag is "Y" if the backstore was listed in /etc/iscsi-encrypted-luns.conf.
-declare -A ISCSI_TEARDOWN
+declare -A iscsi_teardown
 
 # iSCSI manifest paths used by teardown/rebuild helpers.
 : "${ISCSI_MANIFEST:=/etc/rtslib-fb-target/expected-backstores.txt}"
-: "${ISCSI_ENCRYPTED_CONF:=${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf}"
+: "${ISCSI_ENCRYPTED_CONF:=${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}"\
+"/iscsi-encrypted-luns.conf}"
 
 # Legacy fallback: if the new path does not exist and the legacy path does, use
 # the legacy path so existing installs keep working before the Step 5 migration.
@@ -39,24 +40,28 @@ fi
 function iscsi_check_vm_running {
     local vmid="$1"
     local status
-    if [[ "$NODE_MODE" == "single-node" ]]; then
+    if [[ "$node_mode" == "single-node" ]]; then
         status=$(qm status "$vmid" 2>/dev/null)
     else
-        status=$(ssh -o ConnectTimeout=5 -o BatchMode=yes root@"$COMPUTE_HOST" \
+        status=$(ssh -o ConnectTimeout=5 -o BatchMode=yes root@"$compute_host" \
             "qm status $vmid 2>/dev/null" 2>/dev/null)
     fi
     if [[ -z "$status" ]]; then
         return 2
     fi
-    echo "$status" | grep -q "status: running" && return 1
+    [[ "$status" == *"status: running"* ]] && return 1
     return 0
 }
 
 # Remove a backstore name from the expected-backstores manifest if present.
 function manifest_remove_backstore {
     local bsname="$1"
-    if [[ -f "$ISCSI_MANIFEST" ]] && grep -q "^${bsname}$" "$ISCSI_MANIFEST"; then
-        sed -i "/^${bsname}$/d" "$ISCSI_MANIFEST"
+    if [[ -f "$ISCSI_MANIFEST" ]] && grep -qxF -- "$bsname" "$ISCSI_MANIFEST"; then
+        # Drop the exact-line match with awk (fixed string, no regex);
+        # cat back into the original path keeps the file inode and mode.
+        awk -v b="$bsname" '$0 != b' "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.tmp"
+        cat -- "${ISCSI_MANIFEST}.tmp" > "$ISCSI_MANIFEST"
+        rm -f -- "${ISCSI_MANIFEST}.tmp"
         log_msg "INFO: Removed ${bsname} from expected-backstores manifest"
     fi
 }
@@ -64,17 +69,29 @@ function manifest_remove_backstore {
 # Add a backstore name to the expected-backstores manifest if not present.
 function manifest_add_backstore {
     local bsname="$1"
-    if [[ -f "$ISCSI_MANIFEST" ]] && ! grep -q "^${bsname}$" "$ISCSI_MANIFEST"; then
+    if [[ -f "$ISCSI_MANIFEST" ]] && ! grep -qxF -- "$bsname" "$ISCSI_MANIFEST"; then
         echo "$bsname" >> "$ISCSI_MANIFEST"
         log_msg "INFO: Added ${bsname} to expected-backstores manifest"
     fi
 }
 
+# Return 0 if the encrypted-luns config has a line starting with "$1:".
+# awk index() replaces the old "^name:" regex anchor without any regex.
+_encrypted_conf_has_prefix() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] || return 1
+    awk -v b="$1:" 'index($0, b) == 1 { f=1; exit } END { exit !f }' \
+        "$ISCSI_ENCRYPTED_CONF"
+}
+
 # Remove a backstore entry from the encrypted-luns config if present.
 function encrypted_conf_remove_backstore {
     local bsname="$1"
-    if [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${bsname}:" "$ISCSI_ENCRYPTED_CONF"; then
-        sed -i "/^${bsname}:/d" "$ISCSI_ENCRYPTED_CONF"
+    if _encrypted_conf_has_prefix "$bsname"; then
+        # Drop the anchored line (prefix match via index, no regex).
+        awk -v b="${bsname}:" 'index($0, b) != 1' "$ISCSI_ENCRYPTED_CONF" \
+            > "${ISCSI_ENCRYPTED_CONF}.tmp"
+        cat -- "${ISCSI_ENCRYPTED_CONF}.tmp" > "$ISCSI_ENCRYPTED_CONF"
+        rm -f -- "${ISCSI_ENCRYPTED_CONF}.tmp"
         log_msg "INFO: Removed ${bsname} from encrypted LUNs config"
     fi
 }
@@ -85,7 +102,7 @@ function encrypted_conf_add_backstore {
     local bsname="$1"
     local zvol_dev="$2"
     local target_short="$3"
-    if [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && ! grep -q "^${bsname}:" "$ISCSI_ENCRYPTED_CONF"; then
+    if ! _encrypted_conf_has_prefix "$bsname"; then
         echo "${bsname}:${zvol_dev}:${target_short}" >> "$ISCSI_ENCRYPTED_CONF"
         log_msg "INFO: Added ${bsname} to encrypted LUNs config"
     fi
@@ -93,7 +110,7 @@ function encrypted_conf_add_backstore {
 
 # Remove iSCSI LUN+backstore for a zvol before it is destroyed.
 # Only acts on datasets matching vm-<N>-disk-<N> that have a targetcli backstore.
-# Records the removal in ISCSI_TEARDOWN[] so callers can rebuild after zfs receive.
+# Records the removal in iscsi_teardown[] so callers can rebuild after zfs receive.
 # Returns: 0=done (or not needed), 1=VM is running (caller should abort)
 function iscsi_teardown_zvol {
     local dataset="$1"
@@ -101,21 +118,32 @@ function iscsi_teardown_zvol {
 
     # Identify VM disk zvols by their naming convention.
     # Example: "vm-105-disk-0" matches; "threeamigos/data" does not.
-    [[ "$bsname" =~ ^vm-([0-9]+)-disk-[0-9]+$ ]] || return 0
-    local vmid="${BASH_REMATCH[1]}"
+    # Bash glob + prefix/suffix stripping replaces the old vm-<N>-disk-<N>
+    # regex; the reconstructed name must equal the original so that only the
+    # exact vm-<N>-disk-<N> shape matches, and both parts must be non-empty
+    # all-digit strings (the '' case in the glob patterns rejects empties).
+    [[ "$bsname" == vm-*-disk-* ]] || return 0
+    local _vmid="${bsname#vm-}" _tail
+    _vmid="${_vmid%%-disk-*}"
+    _tail="${bsname##*-disk-}"
+    [[ "vm-${_vmid}-disk-${_tail}" == "$bsname" ]] || return 0
+    case $_vmid in ''|*[!0-9]*) return 0 ;; esac
+    case $_tail in ''|*[!0-9]*) return 0 ;; esac
+    local vmid="$_vmid"
 
     # In single-node mode, no iSCSI teardown is needed.
-    [[ "$NODE_MODE" == "single-node" ]] && return 0
+    [[ "$node_mode" == "single-node" ]] && return 0
 
     # Skip if no backstore exists for this name.
-    targetcli /backstores/block ls 2>/dev/null | grep -q " ${bsname} " || return 0
+    targetcli /backstores/block ls 2>/dev/null \
+        | grep -qF -- " ${bsname} " || return 0
 
     # Skip if the backstore points to a different zvol than the one being deleted.
     # This prevents backup pool datasets from triggering teardown of the live
     # iSCSI backstore on the primary pools.
     local bs_dev
     bs_dev=$(targetcli "/backstores/block/${bsname}" info 2>/dev/null \
-        | grep -oP '/dev/zvol/\S+' | head -1)
+        | awk '{for(i=1;i<=NF;i++) if(index($i,"/dev/zvol/")==1){print $i; exit}}')
     if [[ -n "$bs_dev" && "$bs_dev" != "/dev/zvol/${dataset}" ]]; then
         return 0
     fi
@@ -124,13 +152,27 @@ function iscsi_teardown_zvol {
     local target="" lun_num=""
     local t
     while IFS= read -r t; do
+        # Strip everything through the first "lun" token and keep the
+        # leading digits ("... lun3 [block/..." -> "3").
         lun_num=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
-            | grep "$bsname" | grep -oP 'lun\K[0-9]+' | head -1)
+            | grep -F -- "$bsname" \
+            | while IFS= read -r _lun_line; do
+                _lun_rest="${_lun_line#*lun}"
+                printf '%s\n' "${_lun_rest%%[!0-9]*}"
+            done \
+            | head -1)
         if [[ -n "$lun_num" ]]; then
             target="$t"
             break
         fi
-    done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+')
+    done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
+        # targetcli separates each target name from its dotted leader with a
+        # space, so the IQN is a whole whitespace-delimited token.
+        read -ra _t_words <<< "$_t_line"
+        for _t in "${_t_words[@]}"; do
+            case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
+        done
+    done)
 
     if [[ -z "$target" ]]; then
         log_msg "WARN: Backstore $bsname has no matching LUN — removing backstore only."
@@ -146,7 +188,7 @@ function iscsi_teardown_zvol {
         log_msg "WARN: VM ${vmid} is running. Stop the VM before deleting $bsname."
         return 1
     elif [[ $vm_rc -eq 2 ]]; then
-        log_msg "WARN: Could not verify VM ${vmid} status (${COMPUTE_HOST} unreachable?)." \
+        log_msg "WARN: Could not verify VM ${vmid} status (${compute_host} unreachable?)." \
             "Proceeding."
     fi
 
@@ -157,25 +199,25 @@ function iscsi_teardown_zvol {
     # Clean up iSCSI manifests so the backstore is not considered expected after
     # the dataset is destroyed.
     local encrypted_flag="N"
-    if [[ -f "$ISCSI_ENCRYPTED_CONF" ]] && grep -q "^${bsname}:" "$ISCSI_ENCRYPTED_CONF"; then
+    if _encrypted_conf_has_prefix "$bsname"; then
         encrypted_flag="Y"
     fi
     manifest_remove_backstore "$bsname"
     encrypted_conf_remove_backstore "$bsname"
 
-    ISCSI_TEARDOWN["$dataset"]="${target}:${lun_num}:${bsname}:${encrypted_flag}"
+    iscsi_teardown["$dataset"]="${target}:${lun_num}:${bsname}:${encrypted_flag}"
     log_msg "INFO: iSCSI teardown complete: $bsname (LUN ${lun_num})"
     return 0
 }
 
-# Rebuild iSCSI LUNs recorded in ISCSI_TEARDOWN after a successful zfs receive.
+# Rebuild iSCSI LUNs recorded in iscsi_teardown after a successful zfs receive.
 # Preserves original LUN numbers so by-path symlinks on the compute host remain stable.
 function iscsi_rebuild_torn_down {
-    [[ ${#ISCSI_TEARDOWN[@]} -gt 0 ]] || return 0
+    [[ ${#iscsi_teardown[@]} -gt 0 ]] || return 0
 
     local dataset target lun_num bsname zvol_dev encrypted_flag rebuilt=false
-    for dataset in "${!ISCSI_TEARDOWN[@]}"; do
-        IFS=: read -r target lun_num bsname encrypted_flag <<< "${ISCSI_TEARDOWN[$dataset]}"
+    for dataset in "${!iscsi_teardown[@]}"; do
+        IFS=: read -r target lun_num bsname encrypted_flag <<< "${iscsi_teardown[$dataset]}"
         zvol_dev="/dev/zvol/$dataset"
 
         # Wait up to 10s for zvol device to appear after zfs receive.
@@ -192,7 +234,8 @@ function iscsi_rebuild_torn_down {
 
         log_msg "INFO: Rebuilding iSCSI: $bsname → LUN ${lun_num} on ${target}"
         targetcli /backstores/block create "$bsname" "$zvol_dev" 2>/dev/null
-        targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${bsname}" "$lun_num" 2>/dev/null
+        targetcli "/iscsi/${target}/tpg1/luns" create \
+            "/backstores/block/${bsname}" "$lun_num" 2>/dev/null
 
         # Restore manifest entries that teardown removed.
         manifest_add_backstore "$bsname"
@@ -200,22 +243,22 @@ function iscsi_rebuild_torn_down {
             encrypted_conf_add_backstore "$bsname" "$zvol_dev" "${target##*:}"
         fi
 
-        unset "ISCSI_TEARDOWN[$dataset]"
+        unset "iscsi_teardown[$dataset]"
         rebuilt=true
         log_msg "INFO: iSCSI rebuild complete: $bsname (LUN ${lun_num})"
     done
 
-    if [[ "$rebuilt" == true && "$NODE_MODE" != "single-node" ]]; then
+    if [[ "$rebuilt" == true && "$node_mode" != "single-node" ]]; then
         log_msg "INFO: Saving iSCSI configuration..."
         local safe_iscsi_save
         safe_iscsi_save=$(find_zfsutility_script safe-iscsi-save)
         "$safe_iscsi_save"
-        log_msg "INFO: Triggering iSCSI rescan on ${COMPUTE_HOST}..."
+        log_msg "INFO: Triggering iSCSI rescan on ${compute_host}..."
         local rescan_path
-        rescan_path=$(remote_zfsutility_script "$COMPUTE_HOST" rescan-storage)
-        ssh -o ConnectTimeout=10 root@"$COMPUTE_HOST" \
+        rescan_path=$(remote_zfsutility_script "$compute_host" rescan-storage)
+        ssh -o ConnectTimeout=10 root@"$compute_host" \
             "bash -lc $(printf '%q' "$rescan_path")" 2>/dev/null \
-            || log_msg "WARN: Could not rescan $COMPUTE_HOST —" \
-                "run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+            || log_msg "WARN: Could not rescan $compute_host —" \
+                "run 'sudo rescan-storage' on $compute_host manually"
     fi
 }

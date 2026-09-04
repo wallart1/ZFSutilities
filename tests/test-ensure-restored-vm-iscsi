@@ -1,5 +1,7 @@
 #!/usr/bin/bash
 # test-ensure-restored-vm-iscsi — Unit tests for the restore iSCSI helper.
+# shellcheck disable=SC2016
+# (single-quoted $1/$2 below are deliberate: they assert literal script text)
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
@@ -7,8 +9,12 @@ setup_test_env
 # Load the real helper functions from the script (excluding the main body and
 # argument validation), then exercise run_on_storage / ensure_lun_on_storage
 # with mocked bash/ssh and zfs so no root or real storage node is needed.
+# Source the helper section: everything from the host helpers up to (but not
+# including) the "# Main" banner, so edits that shift line counts inside the
+# helpers cannot truncate a heredoc or cut off the last function.
 # shellcheck source=/dev/null
-source <(sed -n '76,396p' "$mydir/bin/ensure-restored-vm-iscsi")
+source <(awk 'NR >= 76 { if ($0 == "# Main") exit; print }' \
+    "$mydir/bin/ensure-restored-vm-iscsi")
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -113,10 +119,10 @@ test_expected_lun_for_zvol_sata() {
 sata2: /dev/disk/by-path/ip-192.168.1.1:3260-iscsi-iqn.2026-02.local:threeamigos-lun-7,format=raw
 EOF
 
-    PVE_CONF_DIR="$pve_dir"
-    STORAGE_IP="192.168.1.1"
-    IQN_PREFIX="iqn.2026-02.local"
-    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    pve_conf_dir="$pve_dir"
+    storage_ip="192.168.1.1"
+    iqn_prefix="iqn.2026-02.local"
+    declare -A pool_target=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
     local lun
@@ -138,10 +144,10 @@ scsi0: /dev/disk/by-path/ip-192.168.1.1:3260-iscsi-iqn.2026-02.local:threeamigos
 scsi1: /dev/disk/by-path/ip-192.168.1.1:3260-iscsi-iqn.2026-02.local:threeamigos-lun-31,format=raw
 EOF
 
-    PVE_CONF_DIR="$pve_dir"
-    STORAGE_IP="192.168.1.1"
-    IQN_PREFIX="iqn.2026-02.local"
-    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    pve_conf_dir="$pve_dir"
+    storage_ip="192.168.1.1"
+    iqn_prefix="iqn.2026-02.local"
+    declare -A pool_target=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
     local lun
@@ -159,10 +165,10 @@ test_expected_lun_missing_config() {
 
     local tmp_dir
     tmp_dir=$(mktemp -d)
-    PVE_CONF_DIR="$tmp_dir"
-    STORAGE_IP="192.168.1.1"
-    IQN_PREFIX="iqn.2026-02.local"
-    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    pve_conf_dir="$tmp_dir"
+    storage_ip="192.168.1.1"
+    iqn_prefix="iqn.2026-02.local"
+    declare -A pool_target=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
     local lun
@@ -188,10 +194,10 @@ scsi0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-31,form
 efidisk0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-30,efitype=4m,size=4M
 EOF
 
-    PVE_CONF_DIR="$pve_dir"
-    STORAGE_IP="1.2.3.4"
-    IQN_PREFIX="iqn.local"
-    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    pve_conf_dir="$pve_dir"
+    storage_ip="1.2.3.4"
+    iqn_prefix="iqn.local"
+    declare -A pool_target=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
     local lun
@@ -216,10 +222,10 @@ scsi0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-31,form
 efidisk0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-30,efitype=4m,size=4M
 EOF
 
-    PVE_CONF_DIR="$pve_dir"
-    STORAGE_IP="1.2.3.4"
-    IQN_PREFIX="iqn.local"
-    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    pve_conf_dir="$pve_dir"
+    storage_ip="1.2.3.4"
+    iqn_prefix="iqn.local"
+    declare -A pool_target=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
     local lun
@@ -241,10 +247,10 @@ scsi0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-31,form
 efidisk0: /dev/disk/by-path/ip-1.2.3.4:3260-iscsi-iqn.local:threeamigos-lun-30,efitype=4m,size=4M
 EOF
 
-    PVE_CONF_DIR="$pve_dir"
-    STORAGE_IP="1.2.3.4"
-    IQN_PREFIX="iqn.local"
-    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    pve_conf_dir="$pve_dir"
+    storage_ip="1.2.3.4"
+    iqn_prefix="iqn.local"
+    declare -A pool_target=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
     local lun
@@ -266,14 +272,14 @@ efidisk0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-30,e
 scsi0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-31,size=50G
 EOF
 
-    PVE_CONF_DIR="$pve_dir"
+    pve_conf_dir="$pve_dir"
     # shellcheck disable=SC2034
     # Intentionally set for sourced expected_lun_for_zvol helper.
-    STORAGE_IP="1.1.1.1"
+    storage_ip="1.1.1.1"
     # shellcheck disable=SC2034
-    IQN_PREFIX="iqn.local"
+    iqn_prefix="iqn.local"
     # shellcheck disable=SC2034
-    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    declare -A pool_target=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
     local lun
@@ -299,14 +305,14 @@ scsi0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-31,size
 scsi1: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-32,size=100G
 EOF
 
-    PVE_CONF_DIR="$pve_dir"
+    pve_conf_dir="$pve_dir"
     # shellcheck disable=SC2034
     # Intentionally set for sourced expected_lun_for_zvol helper.
-    STORAGE_IP="1.1.1.1"
+    storage_ip="1.1.1.1"
     # shellcheck disable=SC2034
-    IQN_PREFIX="iqn.local"
+    iqn_prefix="iqn.local"
     # shellcheck disable=SC2034
-    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    declare -A pool_target=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
     local lun
@@ -336,14 +342,14 @@ scsi0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-31,size
 sata0: /dev/disk/by-path/ip-1.1.1.1:3260-iscsi-iqn.local:threeamigos-lun-32,size=100G
 EOF
 
-    PVE_CONF_DIR="$pve_dir"
+    pve_conf_dir="$pve_dir"
     # shellcheck disable=SC2034
     # Intentionally set for sourced expected_lun_for_zvol helper.
-    STORAGE_IP="1.1.1.1"
+    storage_ip="1.1.1.1"
     # shellcheck disable=SC2034
-    IQN_PREFIX="iqn.local"
+    iqn_prefix="iqn.local"
     # shellcheck disable=SC2034
-    declare -A POOL_TARGET=([threeamigos]="threeamigos")
+    declare -A pool_target=([threeamigos]="threeamigos")
     unset '_assigned_config_luns'
 
     local lun
@@ -401,8 +407,8 @@ ssh() {
 test_run_on_storage_remote_forwards_heredoc() {
     test_start "run_on_storage forwards heredoc and args to remote storage host"
 
-    MY_HOST="tweety"
-    STORAGE_HOST="stewie"
+    my_host="tweety"
+    storage_host="stewie"
     _ssh_calls=()
 
     run_on_storage "alpha" "beta gamma" <<'EOF'
@@ -419,9 +425,9 @@ test_run_on_storage_local_forwards_heredoc() {
 
     # shellcheck disable=SC2034
     # Intentionally set for sourced run_on_storage / ensure_lun_on_storage helpers.
-    MY_HOST="stewie"
+    my_host="stewie"
     # shellcheck disable=SC2034
-    STORAGE_HOST="stewie"
+    storage_host="stewie"
     _bash_calls=()
 
     run_on_storage "one" "two three" <<'EOF'
@@ -437,7 +443,7 @@ test_is_local_host() {
     test_start "is_local_host matches the local hostname exactly"
 
     local rc
-    MY_HOST="stewie"
+    my_host="stewie"
     is_local_host "stewie"; rc=$?
     assert_rc 0 "$rc" || return
     is_local_host "tweety"; rc=$?
@@ -452,12 +458,12 @@ test_read_compute_file_local() {
     expected="scsi0: /dev/disk/by-path/ip-1.1.1.1:3260-lun-0"
     printf '%s\n' "$expected" > "$tmp_dir/100.conf"
 
-    MY_HOST="stewie"
+    my_host="stewie"
     # shellcheck disable=SC2034
     # Intentionally set for sourced read_compute_file helper.
-    COMPUTE_HOST="stewie"
+    compute_host="stewie"
     # shellcheck disable=SC2034
-    PVE_CONF_DIR="$tmp_dir"
+    pve_conf_dir="$tmp_dir"
     actual=$(read_compute_file "$tmp_dir/100.conf")
     assert_equals "$expected" "$actual"
 
@@ -467,8 +473,8 @@ test_read_compute_file_local() {
 test_exec_on_storage_remote_forwards_command() {
     test_start "exec_on_storage forwards command to remote storage host"
 
-    MY_HOST="tweety"
-    STORAGE_HOST="stewie"
+    my_host="tweety"
+    storage_host="stewie"
     _ssh_calls=()
 
     local _saved_ssh
@@ -489,9 +495,9 @@ test_ensure_lun_on_storage_sends_correct_storage_script() {
 
     # shellcheck disable=SC2034
     # Intentionally set for sourced run_on_storage / ensure_lun_on_storage helpers.
-    MY_HOST="stewie"
+    my_host="stewie"
     # shellcheck disable=SC2034
-    STORAGE_HOST="stewie"
+    storage_host="stewie"
     _bash_calls=()
     _mock_zfs_props=()
     _mock_zfs_props["threeamigos/proxmox/vm-215-disk-0:encryption"]="off"
@@ -509,13 +515,13 @@ test_ensure_lun_on_storage_sends_correct_storage_script() {
     expected_args+="/dev/zvol/threeamigos/proxmox/vm-215-disk-0 "
     expected_args+="vm-215-disk-0 iqn.2026-02.local.stewie:threeamigos 31 N"
     assert_contains "${_bash_calls[0]}" "$expected_args" || return
-    assert_contains "${_bash_calls[0]}" 'ZVOL="$1"' || return
+    assert_contains "${_bash_calls[0]}" 'zvol="$1"' || return
     assert_contains "${_bash_calls[0]}" "targetcli /backstores/block create" || return
 
     expected_args="args=-s vm-215-disk-0 "
     expected_args+="/dev/zvol/threeamigos/proxmox/vm-215-disk-0 threeamigos N"
     assert_contains "${_bash_calls[1]}" "$expected_args" || return
-    assert_contains "${_bash_calls[1]}" 'BSNAME="$1"'
+    assert_contains "${_bash_calls[1]}" 'bsname="$1"'
 }
 
 # ---------------------------------------------------------------------------

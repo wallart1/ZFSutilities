@@ -26,18 +26,18 @@ rootcheck
 # iSCSI-only script — exit silently in single-node mode
 is_single_node && exit 0
 
-SAVEFILE="/etc/rtslib-fb-target/saveconfig.json"
+savefile="/etc/rtslib-fb-target/saveconfig.json"
 
-if [[ ! -f "$SAVEFILE" ]]; then
-    log_msg "FATAL: saveconfig.json not found: $SAVEFILE"
+if [[ ! -f "$savefile" ]]; then
+    log_msg "FATAL: saveconfig.json not found: $savefile"
     exit 1
 fi
 
 log_msg "INFO: === Restoring missing iSCSI LUNs ==="
 echo ""
 
-ADDED_BS=0
-ADDED_LUNS=0
+added_bs=0
+added_luns=0
 
 # ------------------------------------------------------------------
 # Restore missing backstores
@@ -50,9 +50,9 @@ while IFS=: read -r name dev; do
     fi
     if targetcli /backstores/block create "$name" "$dev" >/dev/null 2>&1; then
         log_msg "INFO:   ✓ Added backstore $name"
-        ((ADDED_BS++))
+        ((added_bs++))
     fi
-done < <(python3 - "$SAVEFILE" << 'PYEOF'
+done < <(python3 - "$savefile" << 'PYEOF'
 import json, sys
 with open(sys.argv[1]) as f:
     config = json.load(f)
@@ -72,9 +72,9 @@ while IFS=: read -r iqn tag idx bs_name; do
     if targetcli "/iscsi/${iqn}/tpg${tag}/luns" \
             create "/backstores/block/${bs_name}" "$idx" >/dev/null 2>&1; then
         log_msg "INFO:   ✓ Added LUN $idx ($bs_name) to ${iqn}"
-        ((ADDED_LUNS++))
+        ((added_luns++))
     fi
-done < <(python3 - "$SAVEFILE" << 'PYEOF'
+done < <(python3 - "$savefile" << 'PYEOF'
 import json, sys
 with open(sys.argv[1]) as f:
     config = json.load(f)
@@ -93,11 +93,11 @@ for target in config.get("targets", []):
 PYEOF
 )
 
-if [[ $ADDED_BS -eq 0 && $ADDED_LUNS -eq 0 ]]; then
+if [[ $added_bs -eq 0 && $added_luns -eq 0 ]]; then
     log_msg "INFO:   ✓ All LUNs present — nothing to restore"
 else
     echo ""
-    log_msg "INFO:   ✓ Restored $ADDED_BS backstore(s), $ADDED_LUNS LUN mapping(s)"
+    log_msg "INFO:   ✓ Restored $added_bs backstore(s), $added_luns LUN mapping(s)"
 fi
 
 echo ""
@@ -106,7 +106,7 @@ echo ""
 "$mydir/safe-iscsi-save"
 
 # Rescan compute host so it discovers any newly restored LUNs
-if [[ $ADDED_BS -gt 0 || $ADDED_LUNS -gt 0 ]]; then
+if [[ $added_bs -gt 0 || $added_luns -gt 0 ]]; then
     log_msg "INFO: === Rescanning compute host ==="
     "$mydir/rescan-storage"
 fi

@@ -1307,7 +1307,7 @@ test_lock_before_snapshot_creation() {
     # Override the lock mock so we can record acquisition order.
     zfslock_wait_or_resolve() {
         log_msg "INFO: LOCK_TEST acquired $1"
-        ZFSLOCK_ID="/tmp/mock_lock_$$"
+        zfslock_id="/tmp/mock_lock_$$"
         return 0
     }
 
@@ -1317,7 +1317,7 @@ test_lock_before_snapshot_creation() {
     restore_stderr
 
     # Restore the test harness lock mock for subsequent tests.
-    zfslock_wait_or_resolve() { ZFSLOCK_ID="/tmp/mock_lock_$$"; return 0; }
+    zfslock_wait_or_resolve() { zfslock_id="/tmp/mock_lock_$$"; return 0; }
 
     local log
     log=$(get_stderr_log)
@@ -1404,7 +1404,7 @@ _install_lock_mocks() {
 
     zfslock_wait_or_resolve() {
         echo "wait:$1" >> "$op_trace"
-        ZFSLOCK_ID="/tmp/mock_lock_$$"
+        zfslock_id="/tmp/mock_lock_$$"
         return 0
     }
     zfslock_release() {

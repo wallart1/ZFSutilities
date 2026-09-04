@@ -83,7 +83,7 @@ function _mass_delete_ignore_retention {
                 fi
                 all_snaps+=("$snap")
             done < <(zfs list -Ho name -t snapshot "$fs" 2>/dev/null)
-            zfslock_release "$ZFSLOCK_ID"
+            zfslock_release "$zfslock_id"
         done
     done
 

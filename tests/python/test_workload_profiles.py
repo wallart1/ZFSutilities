@@ -20,6 +20,7 @@ from workload_profiles import (
     profile_has_warning,
     properties_for_profile,
     warning_text,
+    zfs_set_commands_with_entries,
 )
 
 
@@ -228,6 +229,56 @@ class TestBuildZfsSetCommands(unittest.TestCase):
         ]
         commands = build_zfs_set_commands(plan)
         self.assertEqual(commands, ["zfs set compression=zstd tank/data"])
+
+
+class TestZfsSetCommandsWithEntries(unittest.TestCase):
+    """zfs_set_commands_with_entries pairs each command with its plan entry."""
+
+    def _plan(self):
+        return [
+            {
+                "property": "compression",
+                "value": "zstd",
+                "dataset": "tank/data",
+                "will_apply": True,
+            },
+            {
+                "property": "recordsize",
+                "value": "128K",
+                "dataset": "tank/data",
+                "will_apply": False,
+            },
+            {
+                "property": "atime",
+                "value": "off",
+                "dataset": "tank/data",
+                "will_apply": True,
+            },
+        ]
+
+    def test_pairs_commands_with_entries_in_plan_order(self):
+        pairs = zfs_set_commands_with_entries(self._plan())
+        self.assertEqual(
+            [(cmd, entry["property"]) for cmd, entry in pairs],
+            [
+                ("zfs set compression=zstd tank/data", "compression"),
+                ("zfs set atime=off tank/data", "atime"),
+            ],
+        )
+
+    def test_pairs_reference_original_entries(self):
+        plan = self._plan()
+        pairs = zfs_set_commands_with_entries(plan)
+        self.assertIs(pairs[0][1], plan[0])
+        self.assertIs(pairs[1][1], plan[2])
+
+    def test_matches_build_zfs_set_commands(self):
+        plan = self._plan()
+        pairs = zfs_set_commands_with_entries(plan)
+        self.assertEqual(
+            [cmd for cmd, _entry in pairs],
+            build_zfs_set_commands(plan),
+        )
 
 
 class TestWarnings(unittest.TestCase):

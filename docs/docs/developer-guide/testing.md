@@ -38,41 +38,73 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| `test-deploy-version` | 21 | Root-level script selection logic: executable files, shebang files, exclusions; validation of critical scripts; Two-node script symlinks including `repair-iscsi-luns`, `iscsi-restore-luns`, `attach-vm-disk`, and `detach-vm-disk`; GUI and docs launcher symlinks; no production wiring |
-| `test-attach-vm-disk` | 9 | `attach-vm-disk` argument validation: zvol path parsing, VM ID format, and disk-key format |
-| `test-detach-vm-disk` | 2 | `detach-vm-disk` manifest handling: exact backstore removal and no-match pass-through |
-| `test-ensure-restored-vm-iscsi` | 23 | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding |
-| `test-check-prerequisites` | 5 | `check-prerequisites` helper `check_mkdocs_version`: absent mkdocs, mkdocs 1.x, mkdocs 2.x, mkdocs 10.x, and malformed version output |
-| `test-datesubtract` | 4 | `datesubtract` argument validation, day/month/year output, and `log_msg` routing |
-| `test-installer-checks` | 17 | Installer safety checks: ZFS root filesystem detection with `findmnt`; desktop-user detection; home-directory symlink creation and removal; partial-uninstall detection; `install_doc_server` pins `mkdocs<2` |
+| `test-archive-vm` | 10 | `archive-vm` retire-snapshot selection and invocation (single-node and two-node) |
+| `test-attach-vm-disk` | 9 | `attach-vm-disk` zvol-path parsing and validation |
+| `test-check-prerequisites` | 7 | `check-prerequisites` tool version checks (mkdocs major-version gating) |
+| `test-cleanup-zfsutilities-legacy` | 13 | `cleanup-zfsutilities-legacy` prompt, `--yes`, `--dry-run`, and non-symlink guards |
+| `test-clone-vm` | 7 | `clone-vm` storage heredoc bootstrap and lock sourcing |
+| `test-datesubtract` | 4 | `datesubtract` usage errors and day/month/year output via `log_msg` |
+| `test-deploy-version` | 23 | Root-level script selection, exclusions, retention-policy file filtering, critical-script validation, no production wiring, and VERSION-file casing |
+| `test-detach-vm-disk` | 2 | `detach-vm-disk` iSCSI manifest removal |
+| `test-enroll-efi-keys-vm` | 8 | `enroll-efi-keys-vm` EFI-disk and iSCSI by-path parsing for Secure Boot enrollment |
+| `test-ensure-restored-vm-iscsi` | 24 | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding |
+| `test-findoffsitepool` | 5 | `findoffsitepool` online-candidate selection |
+| `test-installer-checks` | 29 | Installer prerequisite checks and desktop-launcher helper functions |
+| `test-installer-retention` | 3 | Installer default retention profile initialization and preservation of existing user profiles |
+| `test-iscsi-add-encrypted-luns` | 3 | Encrypted-LUN config path resolution (modern + legacy fallback) and targetcli invocation |
+| `test-list-vm-disks` | 16 | `list-vm-disks` VM disk maps: configs, LUN/host-device maps, running VMs |
+| `test-lock-coverage` | 1 | Static checks that locked scripts source zfslockmanager, initialize it, and acquire locks |
+| `test-logging` | 19 | `log_msg` writes all messages to the session log file and ignores `msg_level`; unset `ZFSUTILITIES_LOG_FILE` handling; `ask_yn`, `warn`, and `die` helpers |
+| `test-migration` | 6 | One-time migration of config/history/profiles/system files with legacy symlinks |
+| `test-module-dependencies` | 2 | Static analysis: root-level bash modules source the modules whose functions they call |
 | `test-move-vm-disk` | 14 | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove, validation helpers, state round-trip, heredoc bootstrap |
-| `test-switch-version` | 8 | Version switching, production wiring, prior-version uninstall invocation, rollback, `--uninstall`, `--list`, and obsolete LUKS-key systemd artifact cleanup |
-| `test-repair-iscsi-luns` | 9 | Backstore/LUN parsing, zvol discovery, gap-free LUN index allocation, missing backstore/LUN creation, dry-run mode, and compute-host rescan |
-| `test-restart-iscsi-services` | 8 | VM running-state detection before iSCSI target restart |
-| `test-safe-iscsi-save` | 5 | Degraded-config guard: refuses save when active backstores are missing, saves when counts match, and regenerates the manifest after a successful save |
-| `test-startdocserver` | 15 | Server health checks (`curl`), PID discovery (`lsof` / `fuser` / `pgrep` / `http.server`), CWD mismatch detection, `--restart` logic |
-| `test-zfsbuildfsarray` | 14 | Dataset array building with includes, excludes, exact-match (`=` prefix), depth limits, `startwith` / `endwith`, clone skipping |
-| `test-zfscommsnap` | 6 | Common snapshot detection by GUID, most-recent / oldest modes, return codes (0, 4, 8, 16) |
-| `test-zfscleanup` | 5 | Pool selection: configured pools, explicit argument, fallback to online pools, offline-pool skipping |
-| `test-zfscheckagainst` | 29 | `<offsite>` placeholder expansion in Source root and Destination root columns, offline hold-tag verification, literal counterparts, child-dataset counterpart path mapping, missing-snapshot fatal error, legacy `.conf` fallback |
-| `test-zfsconfig` | 13 | Pool entry parsing: strings, dicts, mixed entries, missing/empty/null names; offsite-candidate selection; checkagainst field emission and default/incomplete-entry handling |
-| `test-zfs-diagnose-busy` | 8 | Diagnostic output from `zfs-diagnose-busy` — detects busy dataset causes (clones, holds, open files, sends, receives, shares, iSCSI LUNs) |
-| `test-zfsdelfs` | 7 | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs` |
-| `test-zfsdelsnap` | 6 | Fatal error when required helper `zfs-diagnose-busy` is missing; normal operation when helper is present; `checkagainst` rc handling; user-hold blocking |
-| `test-zfsdelallsnaps` | 5 | Return-code behavior of `zfsdelallsnaps`: all-success returns `0`, any `delsnap` failure returns `1`, empty list returns `0`; lock acquisition |
-| `test-lock-coverage` | 1 | Static checks that locked dataset-mutating scripts source `zfslockmanager`, initialize it, and acquire locks. |
-| `test-zfslockmanager` | 43 | Lock acquire / release, same-dataset conflicts, hierarchy conflicts, stale detection, concurrent access, path encoding, multi-lock acquisition, headless wait modes, headless timed wait. |
-| `test-zfsmount` | 2 | Lock acquisition before mount/unmount per dataset. |
-| `test-zfsrestoresendstream` | 1 | Lock acquisition before each `zfs receive` destination. |
-| `test-zfsresume` | 1 | Lock acquisition before reading the resume token. |
-| `test-zfsunmount` | 1 | Lock acquisition before unmount per dataset. |
-| `test-zfsretain` | 10 | Retention policy phases: offsite monthly dedup, same-day dedup, bucket pruning with empty-snapshot preference, empty logging, retain=0 |
-| `test-zfs-send-receive-dryrun` | 35 | Dry-run logging, space-check logic (including `space_check_min_buffer` override), resume-token decisions (including non-existent destination), `handle_commsnap_rc` paths, new-destination vs existing-destination messages, VERB-level resumable and clone logging, autoproceed prompt-once behavior, rc=16 autoproceed and non-interactive handling |
+| `test-new-vm-disk` | 3 | `new-vm-disk` EFI disk-line building with `ms-cert` gating |
+| `test-node-lib` | 37 | `find_zfsutility_script` resolution across `bin/`, `lib/`, and `python/` layouts |
+| `test-paths` | 6 | `paths.sh` defaults, composed paths, legacy paths, and environment overrides |
+| `test-proxmox-required-guards` | 16 | Proxmox scripts fail fast when `qm`/`pct` are absent |
+| `test-remove-vm` | 6 | `remove-vm` VMID validation, zvol listing, and user confirmation |
+| `test-rename-vm-disk` | 10 | `rename-vm-disk` VM-config reference discovery (single- and two-node) |
+| `test-repair-iscsi-luns` | 13 | `repair-iscsi-luns` backstore/target parsing and zvol discovery |
+| `test-repair-vm-disk-sizes` | 13 | `repair-vm-disk-sizes` size byte-to-human conversion, by-path/storage-ref size resolution, config line repair, dry-run |
+| `test-restart-iscsi-services` | 13 | VM running-state detection before iSCSI target restart and main() helper invocation |
+| `test-safe-iscsi-save` | 6 | Degraded-config guard for iSCSI saveconfig and encrypted-backstore boot-config stripping |
+| `test-startdocserver` | 13 | Server health checks, PID discovery, CWD mismatch, restart logic |
+| `test-switch-version` | 8 | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, `--list`, and obsolete systemd artifact cleanup |
+| `test-test-lib` | 4 | Harness assertion helpers: pass/fail/skip counter semantics |
+| `test-unarchive-vm` | 6 | `--new-vmid` rewriting, UUID regeneration, conflict handling |
+| `test-uninstall-some-versions` | 7 | Bulk version uninstall from an explicit list file |
+| `test-uninstall-version` | 10 | Single-version uninstall prompting with `-y`/`--yes` |
+| `test-uninstall-zfsutilities` | 10 | Full uninstall: preserve-by-default, `--purge`, `--dry-run` |
+| `test-zfs-diagnose-busy` | 8 | Diagnostic output from `zfs-diagnose-busy` — busy dataset causes |
+| `test-zfs-send-receive-dryrun` | 39 | Dry-run logging, space checks, resume-token helpers (including non-existent destination), clone messages, pv quiet in headless mode, full-copy lock hand-off, two-step full transfers, pool-root full-copy fallback |
 | `integration/test-zfs-send-receive-pools` | 7 | Real-pool integration tests for `zfs-send-receive`: full copy, incremental with/without intermediates, rollback, resume token, space-check skip, clone copy. Requires root and the local test pools described below. |
-| `test-zfssnapbuild` | 9 | Snapshot name generation, bucket logic (daily / weekly / monthly / offsite), snapfile reuse |
-| `test-zfsshowbigstuff` | 6 | `zfsshowbigstuff` argument validation, largest/smallest sort flags, count handling, and `log_msg` routing |
-| `test-logging` | 12 | `log_msg` writes all messages to the session log file and ignores `msg_level`; unset `ZFSUTILITIES_LOG_FILE` handling; `ask_yn`, `warn`, and `die` helpers |
-| `test-module-dependencies` | 1 | Static analysis: every root-level bash module call to a known module function is satisfied by a local definition, a sourced module, or `bashinit` |
+| `test-zfsbuildfsarray` | 10 | Dataset array building with includes/excludes/depth/sorting |
+| `test-zfscheckagainst` | 29 | `zfscheckagainst` snapshot verification against backup/offsite counterparts (online and hold-tag paths) |
+| `test-zfscheckrunningvms` | 3 | `zfscheckrunningvms` exit codes when `qm`/`pct` are missing |
+| `test-zfscleanup` | 9 | Pool selection: config pools, explicit argument, fallback to online pools, offline skip |
+| `test-zfscommsnap` | 6 | Common snapshot detection by GUID, most-recent/oldest modes |
+| `test-zfsconfig` | 19 | `zfsconfig` pool-entry emission (string, dict, and mixed forms) |
+| `test-zfsdailybackup` | 4 | `zfsdailybackup` pull/push failure WARN-and-continue and dry-run logging |
+| `test-zfsdelallholds` | 6 | Selective hold release by tag patterns |
+| `test-zfsdelallsnaps` | 5 | Return-code behavior and lock acquisition around snapshot deletion |
+| `test-zfsdelfs` | 10 | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs` |
+| `test-zfsdelsnap` | 6 | Snapshot deletion safety checks, hold release, `zfscheckagainst` dependency sourcing, user-hold blocking |
+| `test-zfsfullcopy` | 9 | `zfsfullcopy` full-copy wrapper: overrides, required parameters, single `send-receive` invocation, parameter forwarding |
+| `test-zfslockmanager` | 42 | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition, headless timed wait |
+| `test-zfslockmanager-remote` | 7 | Remote lock hold/check/conflict protocol |
+| `test-zfsmassdelsnaps` | 16 | Mass snapshot deletion: ignore/respect retention, dry-run, approval, releaseholds forwarding |
+| `test-zfsmount` | 2 | Lock acquisition before mount/unmount per dataset |
+| `test-zfsreapplyholds` | 11 | Capture/apply snapshot holds, CLI argument parsing, dry-run apply |
+| `test-zfsrestore` | 15 | `zfsrestore` full-copy wrapper: overrides, legacy second overrides, required parameters, single `send-receive` invocation, parameter forwarding |
+| `test-zfsrestoresendstream` | 1 | Lock acquisition before each zfs receive destination |
+| `test-zfsresume` | 1 | Lock acquisition before reading resume token |
+| `test-zfsretain` | 17 | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
+| `test-zfsretain-debug` | 1 | `zfsretain` sources cleanly and defines the retain function |
+| `test-zfsscruball` | 5 | `zfsscruball` state file, `zpool scrub -w` invocation, completed-pool skip |
+| `test-zfssend` | 1 | `zfssend` defines a send function after sourcing |
+| `test-zfsshowbigstuff` | 10 | `zfsshowbigstuff` usage errors and sort-option handling |
+| `test-zfssnapbuild` | 13 | Snapshot name generation, bucket logic, snapfile handling |
+| `test-zfsunmount` | 1 | Lock acquisition before unmount per dataset |
 
 Bash tests run without a real ZFS pool — commands are intercepted with bash
 function overrides so every suite can execute as a normal user.
@@ -150,43 +182,71 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| `test_action_dispatch` | 18 | Page button specs, action dispatch table, and Logs/Datasets/Offsite button wiring |
-| `test_app_context` | 5 | `AppContext` dataclass fields, `is_new_install`, and default repository |
+| `test_action_dispatch` | 44 | Page button specs, action dispatch table, and Logs tab button wiring |
+| `test_app_context` | 9 | Shared operational state (app context) helpers for GUI pages |
 | `test_backup_config` | 32 | Config load/save, defaults, pools, retention, UI state, snapshot name generation, log pruning, message level |
-| `test_config_core` | 23 | Core config load/save, UI state, log/history retention, session-log size cap, dashboard config, pruning |
-| `test_checkagainst_page` | 35 | Checkagainst tab page construction, Comment column, dirty tracking, cell editing, Save/Revert/Add/Remove handlers |
-| `test_feature_config` | 23 | Backup/offsite/restore config, retention, snapshot names, scrub manager, pools/checkagainst, prune label |
 | `test_backup_history` | 36 | History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting |
-| `test_backup_page` | 8 | Backup tab UI labels (including pre/post command labels), config load/collect helpers, and frame header widget support |
-| `test_backup_runner` | 24 | Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and session-log reuse |
-| `test_command_builders` | 30 | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
-| `test_config_migrations` | 28 | JSON config migration chain (v1 → v15), idempotency, missing-migration handling |
-| `test_cron_manager` | 34 | Cron expression formatting, next-run calculation, profile scheduling, cron file generation, weekday ordinal support |
-| `test_dashboard_page` | 167 | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, ZFS version display, async refresh loading state |
-| `test_docs_integrity` | 12 | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability |
-| `test_docs_viewer` | 1 | Standalone documentation viewer launcher (`docs_viewer.main()`) |
-| `test_gui_infrastructure` | 88 | GTK mock setup, `gi.repository` patching, module imports without a display server, docs viewer HTTP server, zoom/navigation/state persistence, anchor scrolling, tree expansion helpers, TreeSearch freeze/thaw, clear-button status-bar reset, paned position persistence |
-| `test_legacy_retention` | 7 | Legacy `zfsretainpol-*` file parsing, malformed-line handling, JSON config import |
-| `test_log_index` | 29 | Persistent session-log index: scan/update, trailer and level extraction, large-file tail scanning, and last-trailer-wins behavior |
-| `test_logging_config` | 26 | `log_msg` sink/file behavior, session log environment helpers, viewer level helpers, and configurable session-log size cap |
-| `test_main` | 40 | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, X11 window visibility for stuck-instance detection, initial dashboard refresh |
-| `test_page_runners` | 6 | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation |
-| `test_profile_manager` | 15 | Profile CRUD, name validation, duplicate detection, override string generation |
-| `test_profile_runner` | 56 | Step building, pool selection, rsync/ZFS command generation, error handling, dataset encryption detection, dry-run profile execution, weekday ordinal runtime guard |
-| `test_restore_runner` | 16 | Restore destination computation and zfs-send-receive parameter mapping |
-| `test_retention_page` | 22 | Retention tab: prune-label persistence, dirty detection, multi-pool Save/Revert, profile round-trip, fresh-install cleanup, prune-list filtering |
-| `test_runner_factory` | 4 | `RunnerFactory` creates `BackupRunner` instances with shared callbacks |
-| `test_schedule_page` | 52 | Schedule page path resolution for deployed vs repo layouts; dirty tracking and multi-row Save/Revert for active toggles and cron edits; dry-run flag display in profile summary; async refresh and next-run caching |
-| `test_scrub_manager` | 35 | Scrub state parsing, queue/target management, tick logic, systemd timers, remaining-time ETA |
-| `test_scrub_page` | 5 | Scrub page store schema and flicker-free refresh logic |
+| `test_backup_page` | 23 | Backup tab UI labels (including pre/post command labels), config load/collect helpers, and frame header widget support |
+| `test_backup_runner` | 59 | Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and log size cap |
+| `test_checkagainst_derivation` | 24 | Checkagainst derived-row generation, merge, and source/dest-root helpers |
+| `test_checkagainst_page` | 59 | Checkagainst tab table editing and config persistence |
+| `test_command_builders` | 51 | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
+| `test_config_core` | 26 | JSON config load/save and generic state helpers |
+| `test_config_migrations` | 55 | Schema migrations 1→24, idempotency, missing migration errors |
+| `test_cron_manager` | 41 | Cron line generation, condition support, human-readable interpretation, next-run computation |
+| `test_dashboard_page` | 195 | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators, async refresh loading state |
+| `test_dataset_actions` | 43 | Datasets tab actions (mount/unmount/destroy/holds) driven through BackupRunner |
+| `test_datasets_page` | 52 | Datasets tab UI, dataset tree, and mounted-state refresh |
+| `test_datasets_tree` | 13 | Lazy dataset-tree loading in `gui_helpers` |
+| `test_diagnose_zfs_repository` | 6 | `diagnose_zfs_repository.py` — diagnostic main() output for pools, datasets, snapshots, and error paths |
+| `test_disk_actions` | 6 | `disk_actions.py` — Disks tab SMART-details action and selected-disk path resolution (name/by-id fallback) |
+| `test_disk_repository` | 9 | `disk_repository.py` — lsblk, by-id, and smartctl subprocess isolation |
+| `test_disks_page` | 14 | Disks tab UI |
+| `test_disks_page_phase2` | 36 | Disks tab dataset-tuning pane, Apply Profile dialog/execution, Rewrite Data gating, workload profile manager |
+| `test_docs_integrity` | 14 | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability |
+| `test_docs_viewer` | 9 | Standalone documentation viewer launcher |
+| `test_feature_config` | 64 | Per-feature config getters/setters and snapshot name generation |
+| `test_file_locking` | 9 | Advisory flock helpers |
+| `test_gui_helpers` | 7 | `gui_helpers` utilities, including mounted-snapshot detection via `mount -t zfs` |
+| `test_gui_infrastructure` | 144 | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling |
+| `test_installer_retention` | 6 | Installer retention profile initialization: default-only on new install and preservation of existing profiles |
+| `test_legacy_retention` | 7 | Legacy `zfsretainpol-*` file parsing and pool scanning |
+| `test_log_index` | 30 | Persistent session-log metadata index |
+| `test_logging_config` | 42 | Message levels, GUI sink, session log env helpers, and session log truncation |
+| `test_logs_page` | 54 | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, column-header label tooltips, and pop-out reparenting |
+| `test_main` | 40 | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, initial dashboard refresh |
+| `test_migration` | 8 | One-time state-file migration helper |
+| `test_node_config` | 9 | Two-node configuration loading and resolution |
+| `test_offsite_page` | 19 | Offsite tab UI, offsite pool detection, and config helpers |
+| `test_offsite_runner` | 17 | Offsite run command builders and pool detection |
+| `test_page_runners` | 10 | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation |
+| `test_path_utils` | 28 | Shared path helpers mirroring bash `$mydir` / `find_zfsutility_script` behavior |
+| `test_paths` | 35 | Centralized path-resolution module (local and remote deployed layouts) |
+| `test_pool_actions` | 15 | Pool registry add/remove/save/revert action handlers |
+| `test_pool_watch` | 6 | Per-pool dataset watch window |
+| `test_pools_page` | 50 | Pools tab registry UI |
+| `test_profile_dialogs` | 14 | Add/Recall profile dialogs, duplicate-name overwrite handling |
+| `test_profile_integration` | 3 | Concurrent profile execution: disjoint datasets, same-dataset conflict, backup+prune serialization |
+| `test_profile_manager` | 20 | Profile CRUD, update, name validation, listing, existence checks, lifecycle logging, condition defaults |
+| `test_profile_runner` | 71 | Backup/offsite/restore/retention profile step building, rsync failure diagnosis in headless runs |
+| `test_profile_runner_concurrency` | 10 | Per-profile advisory locks, duplicate-invocation suppression, and metadata |
+| `test_profile_validation` | 23 | Backup/offsite profile scope-alignment checks |
+| `test_restore_page` | 15 | Restore tab UI widgets, config load/collect, auto-destination, advanced variables |
+| `test_restore_runner` | 22 | Restore destination computation and zfs-send-receive parameter mapping |
+| `test_retention_actions` | 23 | Retention tab action handlers |
+| `test_retention_page` | 47 | Retention Policies tab UI |
+| `test_runner_factory` | 4 | Runner factory wiring for page runners |
+| `test_schedule_page` | 66 | Schedule page path resolution, dirty tracking, condition field, run-now child-watch handling, fatal-fallback logging, async refresh, and next-run caching |
+| `test_scrub_manager` | 91 | Scrub state parsing, queue/target management, priority ordering, tick logic, systemd timers |
+| `test_scrub_page` | 8 | Scrub page store schema, flicker-free refresh logic, and drag-and-drop priority ordering |
+| `test_session_log` | 16 | Per-run session log helpers (create, append, trailer, size cap) |
+| `test_workload_profiles` | 30 | Workload profile property filtering, profile matching, apply plan, `zfs set` command building, warnings |
+| `test_zfs_capabilities` | 12 | OpenZFS release-variation gating |
 | `test_zfs_diagnostics` | 8 | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run` |
-| `test_datasets_page` | 17 | Datasets tab UI: page construction, pool refresh, button sensitivity, and the Expand Selected action |
-| `test_datasets_tree` | 6 | Datasets tree lazy loading: row expansion, full-name building, exact-dataset snapshot filtering |
-| `test_zfsinfo` | 10 | Pool/dataset/snapshot parsing, summary counting, CLI output formatting |
-| `test_dataset_actions` | 6 | Dataset destruction routed through `BackupRunner`: `BashStep` building, runner start/callback, missing/busy runner, cancel handling |
-| `test_logs_page` | 35 | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, Load Full Log confirmation, column-header label tooltips, and live-viewer buffer cap |
-| `test_zfs_repository` | 30 | `ZfsRepository` pool/dataset/snapshot/hold parsing, pool error parsing, and write-method success/failure |
-| `test_zfsutilities_gui` | 17 | Window behavior: peer-version check, dry-run toggle, dataset-runner creation, stdin forwarding, info-panel level filtering, Restore tab destination refresh |
+| `test_zfs_lock_manager` | 6 | `zfs_lock_manager` two-node lock behavior |
+| `test_zfs_repository` | 71 | `zfs_repository.py` — ZFS/zpool subprocess isolation |
+| `test_zfsinfo` | 10 | Pool/dataset/snapshot info gathering with mocked `subprocess` |
+| `test_zfsutilities_gui` | 44 | Main GUI window behavior |
 
 Python tests run with the standard library `unittest` module (no pytest required).
 A custom coloured runner (`tests/python/runner.py`) produces output that matches
@@ -400,6 +460,13 @@ correctly.
 
 ### Python
 
+- **Clear stale bytecode as a wrap-up practice.** `__pycache__` directories
+are gitignored artifacts that Python regenerates on demand, but stale `.pyc`
+files (for example a cache left behind by a renamed or deleted suite) can
+cause phantom import or test behavior. Periodically removing all
+`__pycache__` directories — a good development-cycle wrap-up step before the
+final full test run — keeps the caches honest; the suite run regenerates only
+what it needs.
 * **Config isolation** — Always wrap config-mutating tests in
 `temp_config_dir()` so they do not touch the real `/var/lib/zfsutilities/config.json`.
 * **GTK mocking** — Use `mock_gtk()` as a context manager when importing any

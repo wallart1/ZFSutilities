@@ -83,7 +83,7 @@ ssh() {
 reset_mocks() {
     NODE_MODE="two-node"
     STORAGE_HOST="stewie"
-    COMPUTE_HOST="tweety"
+    compute_host="tweety"
     _mock_backstores=""
     _mock_luns=""
     _mock_targets=""
@@ -203,7 +203,7 @@ test_script_loads_without_qm() {
     (
         NODE_MODE="two-node"
         STORAGE_HOST="stewie"
-        COMPUTE_HOST="tweety"
+        compute_host="tweety"
         NODE_LIB="/dev/null"
         find_zfsutility_script() { echo "/dev/null"; }
         targetcli() { return 0; }
@@ -225,7 +225,7 @@ test_script_fails_without_targetcli() {
     output=$(
         NODE_MODE="two-node"
         STORAGE_HOST="stewie"
-        COMPUTE_HOST="tweety"
+        compute_host="tweety"
         NODE_LIB="/dev/null"
         find_zfsutility_script() { echo "/dev/null"; }
         unset -f targetcli 2>/dev/null || true
@@ -248,7 +248,7 @@ test_script_fails_without_target_service() {
     output=$(
         NODE_MODE="two-node"
         STORAGE_HOST="stewie"
-        COMPUTE_HOST="tweety"
+        compute_host="tweety"
         NODE_LIB="/dev/null"
         find_zfsutility_script() { echo "/dev/null"; }
         targetcli() { return 0; }

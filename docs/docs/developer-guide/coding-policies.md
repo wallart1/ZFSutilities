@@ -16,6 +16,12 @@ and extend — both for yourself and others.
 
 Key foundational practices:
 
+- **Orchestrator exemption**: User-invoked top-level orchestrator scripts
+  (for example `zfsdailybackup`) may contain installation-specific hostnames,
+  pool names, and paths — they are configured by editing the script's own
+  variables (or via the `zfsoverrides` mechanism) for a specific deployment.
+  Reusable helpers, sourced libraries, and any code invoked by the GUI must
+  not hard-code installation-specific data.
 - **Use `set -euo pipefail`** at the start of scripts to enable strict error
   handling:
     - `set -e`: Exit immediately on any command failure.
@@ -272,7 +278,7 @@ Avoid single-letter names like `l`, `O`, `I` due to visual ambiguity.
 
 ### Comments and Documentation
 
-- **Regular expressions**: Avoid retular expressions when possible. All regular expressions longer than 10 characters must be profusely documented in the code comments.
+- **Regular expressions**: Avoid regular expressions when possible. All regular expressions longer than 10 characters must be profusely documented in the code comments.
 - **Block comments**: Start with `# ` and explain intent, not code.
 - **Inline comments**: Use sparingly, with at least two spaces before `#`.
   Briefly explain intent and non-obvious code.

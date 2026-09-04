@@ -105,7 +105,9 @@ class DatasetRow:
 
 @dataclass
 class SnapshotRow:
-    """One line from `zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones`."""
+    """One line from
+    `zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones`.
+    """
 
     name: str
     creation: str

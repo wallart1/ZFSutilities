@@ -30,7 +30,7 @@ for fs in "${fsarray[@]}"; do
         log_msg "FATAL: Could not acquire write lock on ${fs}; aborting."
         exit 8
     fi
-    fs_lock="$ZFSLOCK_ID"
+    fs_lock="$zfslock_id"
     if ! zfs unmount "$fs"; then
         log_msg "WARN: Unable to unmount ${fs}"
     fi

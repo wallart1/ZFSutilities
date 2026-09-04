@@ -32,5 +32,5 @@ function zfshold {
     # -r: don't run if empty, suppress "tag already exists" errors (hold already present)
     zfs list -Hrt snapshot -o name "$2" | grep "$3" | xargs -r -n1 zfs hold "$1" 2>/dev/null
 
-    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release "$zfslock_id"
 }

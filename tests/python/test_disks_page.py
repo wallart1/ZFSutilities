@@ -1,4 +1,4 @@
-"""Tests for disks_page.py and disk_actions.py — Disks tab UI and actions."""
+"""Tests for disks_page.py — Disks tab UI."""
 
 import os
 import sys
@@ -22,16 +22,6 @@ def _import_disks_page():
         import disks_page
 
         return disks_page
-
-
-def _import_disk_actions():
-    """Import disk_actions under a fresh mocked GTK context."""
-    sys.modules.pop("disk_actions", None)
-    sys.modules.pop("disks_page", None)
-    with mock_gtk():
-        import disk_actions
-
-        return disk_actions
 
 
 def _assert_log_contains(logs, needle):
@@ -614,53 +604,6 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
             dp.update_disks_button_sensitivity(app)
             btn.set_sensitive.assert_called_with(expected)
             btn.reset_mock()
-
-
-class TestDiskActions(unittest.TestCase):
-    """Disk tab action handlers."""
-
-    def _select_first_disk(self, app, path="/dev/sda"):
-        """Prime app.disks_store and selection for a single selected disk."""
-        app.disks_store = FakeListStore([_disk_row(path)])
-        selection = app.disks_view.get_selection.return_value
-        selection.get_selected_rows.return_value = (app.disks_store, [0])
-
-    def test_smart_details_logs_output(self):
-        da = _import_disk_actions()
-        app = _make_app()
-        app.ctx.disk_repository.smart_details.return_value = "line one\nline two\n"
-        self._select_first_disk(app)
-
-        with capture_logs() as logs:
-            da.on_disks_smart_details(app)
-
-        _assert_log_contains(logs, "INFO: SMART details for /dev/sda:")
-        _assert_log_contains(logs, "INFO: line one")
-        _assert_log_contains(logs, "INFO: line two")
-
-    def test_smart_details_warns_when_nothing_selected(self):
-        da = _import_disk_actions()
-        app = _make_app()
-        app.disks_view.get_selection.return_value.get_selected_rows.return_value = (
-            app.disks_store,
-            [],
-        )
-
-        with capture_logs() as logs:
-            da.on_disks_smart_details(app)
-
-        _assert_log_contains(logs, "WARN: Select a disk to view SMART details")
-
-    def test_smart_details_warns_when_unavailable(self):
-        da = _import_disk_actions()
-        app = _make_app()
-        app.ctx.disk_repository.smart_details.return_value = "n/a"
-        self._select_first_disk(app)
-
-        with capture_logs() as logs:
-            da.on_disks_smart_details(app)
-
-        _assert_log_contains(logs, "WARN: SMART details unavailable for /dev/sda")
 
 
 if __name__ == "__main__":

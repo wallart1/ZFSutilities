@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+## 0.96.0
+
+*Released 2026-09-04*
+
+### Added
+
+- **`repair-vm-disk-sizes` command** — Repairs the `size=` parameter on
+  Proxmox VM config disk lines by reading the correct size from the live
+  block device (iSCSI by-path volumes) or the backing zvol volsize
+  (`pool:vm-N-disk-M` storage references). Supports `--dry-run` and
+  `--vmid <vmid>`, and delegates to the compute host in two-node mode.
+  Recovers VMs whose disk lines were clobbered to `size=4M` by the earlier
+  `enroll-efi-keys-vm` bug.
+- **Dashboard scheduled-run identity** — The Dashboard resolves the profile
+  name from a cron runner's compound command line so a scheduled profile
+  appears once in the running-tasks list instead of as a separate cron shell
+  row; unmatched runners are labeled `Scheduled: profile_runner.py (PID N)`.
+- **Dashboard history severity indicators** — Recent history entries now
+  display the highest message level parsed from each operation's session log
+  via the persistent log index, falling back to result-based display.
+
+### Changed
+
+- **Bash code standardized to the lowercase naming convention** — Scripts and
+  libraries now use lowercase variables throughout (`iscsi_teardown`,
+  `node_mode`, `compute_host`, `storage_host`, `mydir`, …) with matching
+  documentation updates. Developer conventions now recommend parameter
+  expansion or `case` globs over `grep -oP` for field extraction.
+- **Coding policies: orchestrator exemption** — User-invoked top-level
+  orchestrator scripts (e.g. `zfsdailybackup`) may contain
+  installation-specific hostnames and paths; reusable helpers and
+  GUI-invoked code may not.
+- **Test coverage** — New dedicated suites for `disk_actions.py` and
+  `diagnose_zfs_repository.py`; `repair-vm-disk-sizes` added to the Proxmox
+  guard suite; VERSION-file casing regression test in `test-deploy-version`.
+- Documentation refreshed: two-node command reference (`repair-vm-disk-sizes`),
+  Proxmox integration guide, testing guide (including a stale-bytecode
+  hygiene note).
+
+### Fixed
+
+- **`deploy-version` and installers referenced a non-existent lowercase
+  `version` file** — the default version read, the VERSION copy into deployed
+  version directories, and the installer version display/`switch-version`
+  hand-off all failed or silently skipped after the variable-casing cleanup;
+  all now reference the uppercase `VERSION` file again.
+- **`diagnose_zfs_repository` crash on error path** — a failing
+  `list_datasets()` left `rows` unbound, raising `NameError` after printing
+  the error; its docstring run instructions are corrected too.
+
 ## 0.95.0
 
 *Released 2026-09-03*

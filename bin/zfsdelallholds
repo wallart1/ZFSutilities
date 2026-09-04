@@ -5,7 +5,7 @@
 # $2+   Optional hold tag patterns. Only holds matching at least one pattern
 #       are released. If no patterns are supplied, all holds are released.
 #
-# Sets global variable ZFS_DELALLHOLDS_REMAINING_TAGS to a space-separated
+# Sets global variable zfs_delallholds_remaining_tags to a space-separated
 # list of hold tags that were NOT released (empty if none remain).
 
 function delallholds {
@@ -27,7 +27,7 @@ function delallholds {
     local hold holdtag pattern
     declare -a holdarray released_tags held_tags
 
-    ZFS_DELALLHOLDS_REMAINING_TAGS=""
+    zfs_delallholds_remaining_tags=""
 
     local _delallholds_parent="${zfsdelallholds_snap%%@*}"
     zfslock_init
@@ -35,7 +35,7 @@ function delallholds {
         log_msg "WARN: Could not acquire write lock on ${_delallholds_parent}; aborting."
         return 1
     fi
-    local _delallholds_lock="$ZFSLOCK_ID"
+    local _delallholds_lock="$zfslock_id"
 
     # Read each line from zfs holds -H into holdarray
     IFS=$'\n' readarray -t holdarray < <(zfs holds -H "$zfsdelallholds_snap")
@@ -70,7 +70,7 @@ function delallholds {
     if [[ ${#held_tags[@]} -gt 0 ]]; then
         # shellcheck disable=SC2034
         # Intentionally set for callers that source this helper.
-        ZFS_DELALLHOLDS_REMAINING_TAGS="${held_tags[*]}"
+        zfs_delallholds_remaining_tags="${held_tags[*]}"
     fi
 
     if [[ ${#released_tags[@]} -eq 0 ]]; then

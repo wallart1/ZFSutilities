@@ -421,7 +421,8 @@ class BackupRunner:
                 if data:
                     text = data.decode("utf-8", errors="replace")
                     # Regex: [\r\n]+
-                    # Purpose: Split raw byte stream into logical lines, handling mixed \r\n, \n, \r.
+                    # Purpose: Split raw byte stream into logical lines, handling mixed
+                    # \r\n, \n, \r.
                     # Example: "line1\r\nline2\nline3" -> ["line1", "line2", "line3"]
                     for segment in re.split(r"[\r\n]+", text):
                         segment = segment.strip()

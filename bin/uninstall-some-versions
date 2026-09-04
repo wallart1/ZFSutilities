@@ -56,5 +56,8 @@ uninstall=$(find_zfsutility_script uninstall-version)
 
 # Trim leading whitespace, drop blank lines, and run uninstall-version -y
 # once per listed version via xargs (one at a time, destructively).
-sed -e 's/^[[:space:]]*//' -e '/^$/d' "$listfile" | \
-    xargs -I {} "$uninstall" -y {}
+while IFS= read -r version_entry || [[ -n "$version_entry" ]]; do
+    version_entry="${version_entry#"${version_entry%%[![:space:]]*}"}"
+    [[ -z "$version_entry" ]] && continue
+    printf '%s\n' "$version_entry"
+done < "$listfile" | xargs -I {} "$uninstall" -y {}

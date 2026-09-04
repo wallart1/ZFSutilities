@@ -14,16 +14,16 @@
 #   --dry-run     Print actions without executing them.
 #   --help, -h    Show this help and exit.
 
-MYDIR=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
 
 # Source bashinit, tolerating a missing /root/bashinit symlink so the script
 # can finish a partial uninstall.
 if [[ -f ~/bashinit ]]; then
     # shellcheck source=/root/bashinit
     source ~/bashinit
-elif [[ -f "$MYDIR/bashinit" ]]; then
+elif [[ -f "$mydir/bashinit" ]]; then
     # shellcheck source=bashinit
-    source "$MYDIR/bashinit"
+    source "$mydir/bashinit"
 else
     echo "FATAL: bashinit not found" >&2
     exit 1
@@ -34,17 +34,17 @@ bashinit
 # this function to run as non-root).
 if ! declare -f rootcheck &>/dev/null; then
     # shellcheck source=rootcheck
-    source "$MYDIR/rootcheck"
+    source "$mydir/rootcheck"
 fi
 rootcheck
 
 # Source desktop launcher helpers.  In the flat layout the library lives at
 # "../lib/desktop-launcher-lib.sh" relative to bin/.
 _DESKTOP_LAUNCHER_LIB=""
-if [[ -f "$MYDIR/../lib/desktop-launcher-lib.sh" ]]; then
-    _DESKTOP_LAUNCHER_LIB="$MYDIR/../lib/desktop-launcher-lib.sh"
-elif [[ -f "$MYDIR/lib/desktop-launcher-lib.sh" ]]; then
-    _DESKTOP_LAUNCHER_LIB="$MYDIR/lib/desktop-launcher-lib.sh"
+if [[ -f "$mydir/../lib/desktop-launcher-lib.sh" ]]; then
+    _DESKTOP_LAUNCHER_LIB="$mydir/../lib/desktop-launcher-lib.sh"
+elif [[ -f "$mydir/lib/desktop-launcher-lib.sh" ]]; then
+    _DESKTOP_LAUNCHER_LIB="$mydir/lib/desktop-launcher-lib.sh"
 fi
 
 if [[ -n "$_DESKTOP_LAUNCHER_LIB" ]]; then
@@ -66,52 +66,52 @@ fi
 # Configuration — override these environment variables in tests.
 # ------------------------------------------------------------------
 load_uninstall_config() {
-    VERSION_BASE="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
-    BASHINIT_LINK="${ZFSUTILITIES_BASHINIT_LINK:-/root/bashinit}"
-    PROFILE_FILE="${ZFSUTILITIES_PROFILE_FILE:-/etc/profile.d/zfsutilities.sh}"
-    SUDOERS_FILE="${ZFSUTILITIES_SUDOERS_FILE:-/etc/sudoers.d/zfsutilities}"
-    NODE_LIB_LINK="${ZFSUTILITIES_NODE_LIB_LINK:-/usr/local/lib/node-lib.sh}"
-    TWO_NODE_LIB_LINK="${ZFSUTILITIES_TWO_NODE_LIB_LINK:-/usr/local/lib/two-node-lib.sh}"
-    ISCSI_LIB_LINK="${ZFSUTILITIES_ISCSI_LIB_LINK:-/usr/local/lib/iscsi-lib.sh}"
-    ROOTCHECK_LINK="${ZFSUTILITIES_ROOTCHECK_LINK:-/usr/local/lib/rootcheck}"
-    LOCAL_BIN_DIR="${ZFSUTILITIES_LOCAL_BIN_DIR:-/usr/local/bin}"
-    SYSTEM_CONFIG_DIR="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}"
-    STATE_DIR="${ZFSUTILITIES_STATE_DIR:-/var/lib/zfsutilities}"
-    NODE_CONF="${ZFSUTILITIES_NODE_CONF:-${SYSTEM_CONFIG_DIR}/node.conf}"
-    LEGACY_NODE_CONF="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
-    LEGACY_TWO_NODE_CONF="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
-    DEPLOY_CONF="${ZFSUTILITIES_DEPLOY_CONF:-${SYSTEM_CONFIG_DIR}/deploy.conf}"
-    LEGACY_DEPLOY_CONF="${ZFSUTILITIES_LEGACY_DEPLOY_CONF:-/etc/zfsutilities-deploy.conf}"
-    CONFIG_PATH="${ZFSUTILITIES_CONFIG_PATH:-${STATE_DIR}/config.json}"
-    CONFIG_DIR="${ZFSUTILITIES_CONFIG_DIR:-${STATE_DIR}}"
-    LEGACY_CONFIG_PATH="${ZFSUTILITIES_LEGACY_CONFIG_PATH}"
-    LEGACY_CONFIG_DIR="${ZFSUTILITIES_LEGACY_CONFIG_DIR}"
-    HISTORY_PATH="${ZFSUTILITIES_HISTORY_PATH:-${STATE_DIR}/history.json}"
-    LEGACY_HISTORY_PATH="${ZFSUTILITIES_LEGACY_HISTORY_PATH}"
-    LEGACY_PROFILES_DIR="${ZFSUTILITIES_LEGACY_PROFILES_DIR}"
-    LEGACY_NEXTSNAP_FILE="${ZFSUTILITIES_LEGACY_NEXTSNAP_FILE}"
-    LEGACY_OFFSITE_NEXTSNAP_FILE="${ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE}"
-    CACHE_DIR="${ZFSUTILITIES_CACHE_DIR:-/root/.cache/zfsutilities}"
-    LOG_DIR="${ZFSUTILITIES_LOG_DIR:-/var/log/zfsutilities}"
-    CRON_FILE="${ZFSUTILITIES_CRON_FILE:-/etc/cron.d/zfsutilities}"
-    PROFILE_LOCK_DIR="${ZFSUTILITIES_PROFILE_LOCK_DIR:-/run/lock/zfsutilities/profiles}"
-    ZFSLOCK_DIR="${ZFSUTILITIES_ZFSLOCK_DIR:-/run/lock/zfsutilities}"
-    SYSTEMD_DIR="${ZFSUTILITIES_SYSTEMD_DIR:-/etc/systemd/system}"
-    local _def_iscsi_enc="${SYSTEM_CONFIG_DIR}/iscsi-encrypted-luns.conf"
+    version_base="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
+    bashinit_link="${ZFSUTILITIES_BASHINIT_LINK:-/root/bashinit}"
+    profile_file="${ZFSUTILITIES_PROFILE_FILE:-/etc/profile.d/zfsutilities.sh}"
+    sudoers_file="${ZFSUTILITIES_SUDOERS_FILE:-/etc/sudoers.d/zfsutilities}"
+    node_lib_link="${ZFSUTILITIES_NODE_LIB_LINK:-/usr/local/lib/node-lib.sh}"
+    two_node_lib_link="${ZFSUTILITIES_TWO_NODE_LIB_LINK:-/usr/local/lib/two-node-lib.sh}"
+    iscsi_lib_link="${ZFSUTILITIES_ISCSI_LIB_LINK:-/usr/local/lib/iscsi-lib.sh}"
+    rootcheck_link="${ZFSUTILITIES_ROOTCHECK_LINK:-/usr/local/lib/rootcheck}"
+    local_bin_dir="${ZFSUTILITIES_LOCAL_BIN_DIR:-/usr/local/bin}"
+    system_config_dir="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}"
+    state_dir="${ZFSUTILITIES_STATE_DIR:-/var/lib/zfsutilities}"
+    NODE_CONF="${ZFSUTILITIES_NODE_CONF:-${system_config_dir}/node.conf}"
+    legacy_node_conf="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
+    legacy_two_node_conf="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
+    deploy_conf="${ZFSUTILITIES_DEPLOY_CONF:-${system_config_dir}/deploy.conf}"
+    legacy_deploy_conf="${ZFSUTILITIES_LEGACY_DEPLOY_CONF:-/etc/zfsutilities-deploy.conf}"
+    config_path="${ZFSUTILITIES_CONFIG_PATH:-${state_dir}/config.json}"
+    config_dir="${ZFSUTILITIES_CONFIG_DIR:-${state_dir}}"
+    legacy_config_path="${ZFSUTILITIES_LEGACY_CONFIG_PATH}"
+    legacy_config_dir="${ZFSUTILITIES_LEGACY_CONFIG_DIR}"
+    history_path="${ZFSUTILITIES_HISTORY_PATH:-${state_dir}/history.json}"
+    legacy_history_path="${ZFSUTILITIES_LEGACY_HISTORY_PATH}"
+    legacy_profiles_dir="${ZFSUTILITIES_LEGACY_PROFILES_DIR}"
+    legacy_nextsnap_file="${ZFSUTILITIES_LEGACY_NEXTSNAP_FILE}"
+    legacy_offsite_nextsnap_file="${ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE}"
+    cache_dir="${ZFSUTILITIES_CACHE_DIR:-/root/.cache/zfsutilities}"
+    log_dir="${ZFSUTILITIES_LOG_DIR:-/var/log/zfsutilities}"
+    cron_file="${ZFSUTILITIES_CRON_FILE:-/etc/cron.d/zfsutilities}"
+    profile_lock_dir="${ZFSUTILITIES_PROFILE_LOCK_DIR:-/run/lock/zfsutilities/profiles}"
+    zfslock_dir="${ZFSUTILITIES_ZFSLOCK_DIR:-/run/lock/zfsutilities}"
+    systemd_dir="${ZFSUTILITIES_SYSTEMD_DIR:-/etc/systemd/system}"
+    local _def_iscsi_enc="${system_config_dir}/iscsi-encrypted-luns.conf"
     ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_ISCSI_ENCRYPTED_CONF:-$_def_iscsi_enc}"
     local _d_legacy_iscsi="/etc/iscsi-encrypted-luns.conf"
-    LEGACY_ISCSI_ENCRYPTED_CONF="${ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF:-$_d_legacy_iscsi}"
-    PVE_ISCSI_PLUGIN="${ZFSUTILITIES_PVE_ISCSI_PLUGIN:-/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm}"
-    CACHE_WARM_LOG_GLOB="${ZFSUTILITIES_CACHE_WARM_LOG_GLOB:-/var/log/zfs-cache-warm*.log}"
+    legacy_iscsi_encrypted_conf="${ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF:-$_d_legacy_iscsi}"
+    pve_iscsi_plugin="${ZFSUTILITIES_PVE_ISCSI_PLUGIN:-/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm}"
+    cache_warm_log_glob="${ZFSUTILITIES_CACHE_WARM_LOG_GLOB:-/var/log/zfs-cache-warm*.log}"
 }
 
 # ------------------------------------------------------------------
 # State variables set by argument parsing and interactive prompts.
 # ------------------------------------------------------------------
-DO_PURGE="false"
-DO_ALL_NODES="false"
-DO_YES="false"
-DO_DRY_RUN="false"
+do_purge="false"
+do_all_nodes="false"
+do_yes="false"
+do_dry_run="false"
 
 # ------------------------------------------------------------------
 # Helpers
@@ -144,7 +144,7 @@ remove_file() {
     if [[ ! -e "$path" && ! -L "$path" ]]; then
         return 0
     fi
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO:   [DRY-RUN] rm -f $path"
         return 0
     fi
@@ -158,7 +158,7 @@ remove_symlink() {
     if [[ ! -L "$path" ]]; then
         return 0
     fi
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO:   [DRY-RUN] rm -f $path"
         return 0
     fi
@@ -172,7 +172,7 @@ remove_dir() {
     if [[ ! -d "$path" ]]; then
         return 0
     fi
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO:   [DRY-RUN] rm -rf $path"
         return 0
     fi
@@ -184,7 +184,7 @@ remove_dir() {
 systemctl_cmd() {
     local action="$1"
     local unit="$2"
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO:   [DRY-RUN] systemctl $action $unit"
         return 0
     fi
@@ -193,7 +193,7 @@ systemctl_cmd() {
 
 # Reload systemd daemon, idempotently.
 reload_systemd() {
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO:   [DRY-RUN] systemctl daemon-reload"
         return 0
     fi
@@ -205,7 +205,7 @@ run_on_peer() {
     local peer="$1"
     shift
     local cmd="$*"
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO:   [DRY-RUN] ssh root@$peer $cmd"
         return 0
     fi
@@ -218,26 +218,26 @@ run_on_peer() {
 # Argument parsing
 # ------------------------------------------------------------------
 parse_args() {
-    DO_PURGE="false"
-    DO_ALL_NODES="false"
-    DO_YES="false"
-    DO_DRY_RUN="false"
+    do_purge="false"
+    do_all_nodes="false"
+    do_yes="false"
+    do_dry_run="false"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --purge)
-                DO_PURGE="true"
+                do_purge="true"
                 shift
                 ;;
             --all-nodes)
-                DO_ALL_NODES="true"
+                do_all_nodes="true"
                 shift
                 ;;
             --yes|-y)
-                DO_YES="true"
+                do_yes="true"
                 shift
                 ;;
             --dry-run)
-                DO_DRY_RUN="true"
+                do_dry_run="true"
                 shift
                 ;;
             --help|-h)
@@ -258,18 +258,18 @@ detect_node_mode() {
     NODE_MODE=""
     STORAGE_HOST=""
     COMPUTE_HOST=""
-    THIS_HOST=$(hostname -s)
+    this_host=$(hostname -s)
 
     if [[ -f "$NODE_CONF" ]]; then
         # shellcheck source=/dev/null
         source "$NODE_CONF"
-    elif [[ -f "$LEGACY_NODE_CONF" ]]; then
+    elif [[ -f "$legacy_node_conf" ]]; then
         # shellcheck source=/dev/null
-        source "$LEGACY_NODE_CONF"
+        source "$legacy_node_conf"
         NODE_MODE="two-node"
-    elif [[ -f "$LEGACY_TWO_NODE_CONF" ]]; then
+    elif [[ -f "$legacy_two_node_conf" ]]; then
         # shellcheck source=/dev/null
-        source "$LEGACY_TWO_NODE_CONF"
+        source "$legacy_two_node_conf"
         NODE_MODE="two-node"
     fi
 
@@ -281,9 +281,9 @@ peer_host() {
     if [[ "$NODE_MODE" != "two-node" ]]; then
         return 0
     fi
-    if [[ "$THIS_HOST" == "$STORAGE_HOST" && -n "$COMPUTE_HOST" ]]; then
+    if [[ "$this_host" == "$STORAGE_HOST" && -n "$COMPUTE_HOST" ]]; then
         echo "$COMPUTE_HOST"
-    elif [[ "$THIS_HOST" == "$COMPUTE_HOST" && -n "$STORAGE_HOST" ]]; then
+    elif [[ "$this_host" == "$COMPUTE_HOST" && -n "$STORAGE_HOST" ]]; then
         echo "$STORAGE_HOST"
     fi
 }
@@ -292,41 +292,41 @@ peer_host() {
 # Status detection for the interactive summary.
 # ------------------------------------------------------------------
 detect_installed_state() {
-    HAS_VERSION_BASE="false"
-    HAS_CURRENT="false"
-    HAS_CONFIG="false"
-    HAS_LOGS="false"
-    HAS_CRON="false"
-    HAS_SYSTEMD="false"
-    HAS_CACHEWARM="false"
+    has_version_base="false"
+    has_current="false"
+    has_config="false"
+    has_logs="false"
+    has_cron="false"
+    has_systemd="false"
+    has_cachewarm="false"
 
-    if [[ -d "$VERSION_BASE" ]]; then
-        HAS_VERSION_BASE="true"
-        if [[ -L "$VERSION_BASE/current" || -e "$VERSION_BASE/current" ]]; then
-            HAS_CURRENT="true"
+    if [[ -d "$version_base" ]]; then
+        has_version_base="true"
+        if [[ -L "$version_base/current" || -e "$version_base/current" ]]; then
+            has_current="true"
         fi
     fi
 
-    if [[ -f "$CONFIG_PATH" || -d "$CONFIG_DIR" || -f "$HISTORY_PATH" ]]; then
-        HAS_CONFIG="true"
+    if [[ -f "$config_path" || -d "$config_dir" || -f "$history_path" ]]; then
+        has_config="true"
     fi
 
-    if [[ -d "$LOG_DIR" ]]; then
-        HAS_LOGS="true"
+    if [[ -d "$log_dir" ]]; then
+        has_logs="true"
     fi
 
-    if [[ -f "$CRON_FILE" ]]; then
-        HAS_CRON="true"
+    if [[ -f "$cron_file" ]]; then
+        has_cron="true"
     fi
 
-    if [[ -d "$SYSTEMD_DIR/rtslib-fb-targetctl.service.d" || \
-          -f "$SYSTEMD_DIR/zfs-cache-warm.service" ]]; then
-        HAS_SYSTEMD="true"
+    if [[ -d "$systemd_dir/rtslib-fb-targetctl.service.d" || \
+          -f "$systemd_dir/zfs-cache-warm.service" ]]; then
+        has_systemd="true"
     fi
 
-    if [[ -f "$LOCAL_BIN_DIR/warm-cache.sh" || \
-          -f "$SYSTEMD_DIR/zfs-cache-warm.service" ]]; then
-        HAS_CACHEWARM="true"
+    if [[ -f "$local_bin_dir/warm-cache.sh" || \
+          -f "$systemd_dir/zfs-cache-warm.service" ]]; then
+        has_cachewarm="true"
     fi
 }
 
@@ -341,13 +341,13 @@ present_interactive_dialog() {
     log_msg "INFO: This script will remove the ZFSutilities software from this host."
     log_msg "INFO:"
     log_msg "INFO: Detected state:"
-    log_msg "INFO:   Deployed software:     $HAS_VERSION_BASE"
-    log_msg "INFO:   Active version link:   $HAS_CURRENT"
-    log_msg "INFO:   Configuration files:   $HAS_CONFIG"
-    log_msg "INFO:   Log files:             $HAS_LOGS"
-    log_msg "INFO:   Cron schedules:        $HAS_CRON"
-    log_msg "INFO:   Systemd integration:   $HAS_SYSTEMD"
-    log_msg "INFO:   Cache-warm utility:    $HAS_CACHEWARM"
+    log_msg "INFO:   Deployed software:     $has_version_base"
+    log_msg "INFO:   Active version link:   $has_current"
+    log_msg "INFO:   Configuration files:   $has_config"
+    log_msg "INFO:   Log files:             $has_logs"
+    log_msg "INFO:   Cron schedules:        $has_cron"
+    log_msg "INFO:   Systemd integration:   $has_systemd"
+    log_msg "INFO:   Cache-warm utility:    $has_cachewarm"
     log_msg "INFO:   Node mode:             $NODE_MODE"
     log_msg "INFO:"
     log_msg "INFO: You have two choices:"
@@ -374,11 +374,11 @@ present_interactive_dialog() {
             " or c to cancel [1/2/c]: " choice
         case "${choice,,}" in
             1|software)
-                DO_PURGE="false"
+                do_purge="false"
                 break
                 ;;
             2|purge|everything)
-                DO_PURGE="true"
+                do_purge="true"
                 break
                 ;;
             c|cancel)
@@ -391,10 +391,10 @@ present_interactive_dialog() {
         esac
     done
 
-    if [[ "$NODE_MODE" == "two-node" && "$DO_ALL_NODES" != "true" ]]; then
+    if [[ "$NODE_MODE" == "two-node" && "$do_all_nodes" != "true" ]]; then
         log_msg "INFO:"
         if ask_yn "Also run the uninstall on the peer node ($(peer_host))?" "N"; then
-            DO_ALL_NODES="true"
+            do_all_nodes="true"
         fi
     fi
 }
@@ -406,7 +406,7 @@ confirm_uninstall() {
     log_msg "INFO:"
     log_msg "INFO: === Summary of actions ==="
     local _mode_text
-    if [[ "$DO_PURGE" == "true" ]]; then
+    if [[ "$do_purge" == "true" ]]; then
         _mode_text="Remove software and clean up everything"
     else
         _mode_text="Remove software only"
@@ -415,53 +415,53 @@ confirm_uninstall() {
     local peer
     peer=$(peer_host)
     local _peer_text
-    if [[ "$DO_ALL_NODES" == "true" ]]; then
+    if [[ "$do_all_nodes" == "true" ]]; then
         _peer_text="$peer"
     else
         _peer_text="(local only)"
     fi
     log_msg "INFO:   Peer node:       $_peer_text"
-    log_msg "INFO:   Dry run:         $DO_DRY_RUN"
+    log_msg "INFO:   Dry run:         $do_dry_run"
     log_msg "INFO:"
 
-    if [[ "$DO_PURGE" == "true" ]]; then
+    if [[ "$do_purge" == "true" ]]; then
         log_msg "INFO: The following will be removed:"
-        log_msg "INFO:   - $VERSION_BASE"
-        log_msg "INFO:   - $BASHINIT_LINK"
-        log_msg "INFO:   - $NODE_LIB_LINK"
-        log_msg "INFO:   - $TWO_NODE_LIB_LINK"
-        log_msg "INFO:   - $ROOTCHECK_LINK"
-        log_msg "INFO:   - $PROFILE_FILE"
-        log_msg "INFO:   - $SUDOERS_FILE"
-        log_msg "INFO:   - $CRON_FILE"
-        log_msg "INFO:   - $SYSTEMD_DIR/rtslib-fb-targetctl.service.d/"
-        log_msg "INFO:   - $SYSTEMD_DIR/zfs-cache-warm.service"
-        log_msg "INFO:   - $SYSTEM_CONFIG_DIR/"
-        log_msg "INFO:   - $STATE_DIR/"
+        log_msg "INFO:   - $version_base"
+        log_msg "INFO:   - $bashinit_link"
+        log_msg "INFO:   - $node_lib_link"
+        log_msg "INFO:   - $two_node_lib_link"
+        log_msg "INFO:   - $rootcheck_link"
+        log_msg "INFO:   - $profile_file"
+        log_msg "INFO:   - $sudoers_file"
+        log_msg "INFO:   - $cron_file"
+        log_msg "INFO:   - $systemd_dir/rtslib-fb-targetctl.service.d/"
+        log_msg "INFO:   - $systemd_dir/zfs-cache-warm.service"
+        log_msg "INFO:   - $system_config_dir/"
+        log_msg "INFO:   - $state_dir/"
         log_msg "INFO:   - $NODE_CONF"
-        log_msg "INFO:   - $LEGACY_NODE_CONF"
-        log_msg "INFO:   - $LEGACY_TWO_NODE_CONF"
-        log_msg "INFO:   - $DEPLOY_CONF"
-        log_msg "INFO:   - $CONFIG_PATH"
-        log_msg "INFO:   - $CONFIG_DIR"
-        log_msg "INFO:   - $HISTORY_PATH"
-        log_msg "INFO:   - $CACHE_DIR"
-        log_msg "INFO:   - $LOG_DIR"
+        log_msg "INFO:   - $legacy_node_conf"
+        log_msg "INFO:   - $legacy_two_node_conf"
+        log_msg "INFO:   - $deploy_conf"
+        log_msg "INFO:   - $config_path"
+        log_msg "INFO:   - $config_dir"
+        log_msg "INFO:   - $history_path"
+        log_msg "INFO:   - $cache_dir"
+        log_msg "INFO:   - $log_dir"
         log_msg "INFO:   - $ISCSI_ENCRYPTED_CONF"
-        log_msg "INFO:   - Cache-warm scripts in $LOCAL_BIN_DIR and related logs"
+        log_msg "INFO:   - Cache-warm scripts in $local_bin_dir and related logs"
         log_msg "INFO:   - Desktop shortcuts for the GUI and documentation viewer"
     else
         log_msg "INFO: The following will be removed:"
-        log_msg "INFO:   - $VERSION_BASE"
-        log_msg "INFO:   - $BASHINIT_LINK"
-        log_msg "INFO:   - $NODE_LIB_LINK"
-        log_msg "INFO:   - $TWO_NODE_LIB_LINK"
-        log_msg "INFO:   - $ROOTCHECK_LINK"
-        log_msg "INFO:   - $PROFILE_FILE"
-        log_msg "INFO:   - $SUDOERS_FILE"
-        log_msg "INFO:   - $CRON_FILE"
-        log_msg "INFO:   - $SYSTEMD_DIR/rtslib-fb-targetctl.service.d/"
-        log_msg "INFO:   - $SYSTEMD_DIR/zfs-cache-warm.service"
+        log_msg "INFO:   - $version_base"
+        log_msg "INFO:   - $bashinit_link"
+        log_msg "INFO:   - $node_lib_link"
+        log_msg "INFO:   - $two_node_lib_link"
+        log_msg "INFO:   - $rootcheck_link"
+        log_msg "INFO:   - $profile_file"
+        log_msg "INFO:   - $sudoers_file"
+        log_msg "INFO:   - $cron_file"
+        log_msg "INFO:   - $systemd_dir/rtslib-fb-targetctl.service.d/"
+        log_msg "INFO:   - $systemd_dir/zfs-cache-warm.service"
         log_msg "INFO:   - Desktop shortcuts for the GUI and documentation viewer"
         log_msg "INFO:"
         log_msg "INFO: The following will be preserved:"
@@ -474,11 +474,11 @@ confirm_uninstall() {
     log_msg "INFO:"
     log_msg "INFO: ZFS pools, datasets, snapshots, and iSCSI targets will NOT be touched."
 
-    if [[ -f "$PVE_ISCSI_PLUGIN" ]] && grep -q 'tdiff > 86400' "$PVE_ISCSI_PLUGIN" 2>/dev/null; then
+    if [[ -f "$pve_iscsi_plugin" ]] && grep -q 'tdiff > 86400' "$pve_iscsi_plugin" 2>/dev/null; then
         log_msg "INFO:"
-        log_msg "INFO: Note: The Proxmox iSCSI rescan-rate patch on $PVE_ISCSI_PLUGIN"
+        log_msg "INFO: Note: The Proxmox iSCSI rescan-rate patch on $pve_iscsi_plugin"
         log_msg "INFO:       will NOT be reversed automatically. To reverse it manually, run:"
-        log_msg "INFO:         sed -i 's/tdiff > 86400)/tdiff > 10)/' $PVE_ISCSI_PLUGIN"
+        log_msg "INFO:         sed -i 's/86400)/10)/' $pve_iscsi_plugin"
         log_msg "INFO:         systemctl restart pvestatd"
     fi
 
@@ -501,9 +501,9 @@ uninstall_software() {
     systemctl_cmd disable zfs-cache-warm.service
 
     # Remove active-version wiring via switch-version if it is still present.
-    local switch_version="$VERSION_BASE/current/bin/switch-version"
+    local switch_version="$version_base/current/bin/switch-version"
     if [[ -x "$switch_version" ]]; then
-        if [[ "$DO_DRY_RUN" == "true" ]]; then
+        if [[ "$do_dry_run" == "true" ]]; then
             log_msg "INFO:   [DRY-RUN] $switch_version --uninstall"
         else
             log_msg "INFO:   Unwiring active version..."
@@ -513,85 +513,85 @@ uninstall_software() {
     fi
 
     # Remove the entire versioned deployment tree.
-    remove_dir "$VERSION_BASE"
+    remove_dir "$version_base"
 
     # Remove any leftover production wiring.
-    remove_symlink "$BASHINIT_LINK"
-    remove_symlink "$NODE_LIB_LINK"
-    remove_symlink "$TWO_NODE_LIB_LINK"
-    remove_symlink "$ISCSI_LIB_LINK"
-    remove_symlink "$ROOTCHECK_LINK"
-    remove_file "$PROFILE_FILE"
-    remove_file "$SUDOERS_FILE"
+    remove_symlink "$bashinit_link"
+    remove_symlink "$node_lib_link"
+    remove_symlink "$two_node_lib_link"
+    remove_symlink "$iscsi_lib_link"
+    remove_symlink "$rootcheck_link"
+    remove_file "$profile_file"
+    remove_file "$sudoers_file"
 
     # Remove desktop shortcuts.
     local desktop_user
     desktop_user=$(get_desktop_user)
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO:   [DRY-RUN] remove desktop shortcuts for '$desktop_user'"
     else
         remove_desktop_symlinks "$desktop_user" || true
     fi
 
     # Remove cron drop-in.
-    remove_file "$CRON_FILE"
+    remove_file "$cron_file"
 
     # Remove systemd integration.
-    remove_dir "$SYSTEMD_DIR/rtslib-fb-targetctl.service.d"
-    remove_file "$SYSTEMD_DIR/zfs-cache-warm.service"
+    remove_dir "$systemd_dir/rtslib-fb-targetctl.service.d"
+    remove_file "$systemd_dir/zfs-cache-warm.service"
 
     reload_systemd
 
     # Remove transient profile lock directory.
-    remove_dir "$PROFILE_LOCK_DIR"
+    remove_dir "$profile_lock_dir"
 }
 
 uninstall_purge() {
     log_msg "INFO:"
     log_msg "INFO: === Removing configuration, logs, and other remnants ==="
 
-    remove_dir "$SYSTEM_CONFIG_DIR"
-    remove_dir "$STATE_DIR"
+    remove_dir "$system_config_dir"
+    remove_dir "$state_dir"
     remove_file "$NODE_CONF"
-    remove_file "$LEGACY_NODE_CONF"
-    remove_file "$LEGACY_TWO_NODE_CONF"
-    remove_file "$DEPLOY_CONF"
-    remove_file "$LEGACY_DEPLOY_CONF"
-    remove_file "$CONFIG_PATH"
-    remove_dir "$CONFIG_DIR"
-    remove_file "$LEGACY_CONFIG_PATH"
-    remove_symlink "$LEGACY_CONFIG_PATH"
-    remove_dir "$LEGACY_CONFIG_DIR"
-    remove_file "$HISTORY_PATH"
-    remove_file "$LEGACY_HISTORY_PATH"
-    remove_symlink "$LEGACY_HISTORY_PATH"
-    remove_dir "$LEGACY_PROFILES_DIR"
-    remove_symlink "$LEGACY_PROFILES_DIR"
-    remove_file "$LEGACY_NEXTSNAP_FILE"
-    remove_file "$LEGACY_OFFSITE_NEXTSNAP_FILE"
-    remove_dir "$CACHE_DIR"
-    remove_dir "$LOG_DIR"
+    remove_file "$legacy_node_conf"
+    remove_file "$legacy_two_node_conf"
+    remove_file "$deploy_conf"
+    remove_file "$legacy_deploy_conf"
+    remove_file "$config_path"
+    remove_dir "$config_dir"
+    remove_file "$legacy_config_path"
+    remove_symlink "$legacy_config_path"
+    remove_dir "$legacy_config_dir"
+    remove_file "$history_path"
+    remove_file "$legacy_history_path"
+    remove_symlink "$legacy_history_path"
+    remove_dir "$legacy_profiles_dir"
+    remove_symlink "$legacy_profiles_dir"
+    remove_file "$legacy_nextsnap_file"
+    remove_file "$legacy_offsite_nextsnap_file"
+    remove_dir "$cache_dir"
+    remove_dir "$log_dir"
     remove_file "$ISCSI_ENCRYPTED_CONF"
-    remove_file "$LEGACY_ISCSI_ENCRYPTED_CONF"
-    remove_symlink "$LEGACY_NODE_CONF"
-    remove_symlink "$LEGACY_DEPLOY_CONF"
-    remove_symlink "$LEGACY_ISCSI_ENCRYPTED_CONF"
-    remove_symlink "$LEGACY_TWO_NODE_CONF"
+    remove_file "$legacy_iscsi_encrypted_conf"
+    remove_symlink "$legacy_node_conf"
+    remove_symlink "$legacy_deploy_conf"
+    remove_symlink "$legacy_iscsi_encrypted_conf"
+    remove_symlink "$legacy_two_node_conf"
 
     # Cache-warm utility.
-    remove_file "$LOCAL_BIN_DIR/warm-cache.sh"
-    remove_file "$LOCAL_BIN_DIR/identify-hot-vms.sh"
-    remove_file "$LOCAL_BIN_DIR/monitor-cache.sh"
-    remove_file "$SYSTEMD_DIR/zfs-cache-warm.service"
-    for log in $CACHE_WARM_LOG_GLOB; do
+    remove_file "$local_bin_dir/warm-cache.sh"
+    remove_file "$local_bin_dir/identify-hot-vms.sh"
+    remove_file "$local_bin_dir/monitor-cache.sh"
+    remove_file "$systemd_dir/zfs-cache-warm.service"
+    for log in $cache_warm_log_glob; do
         remove_file "$log"
     done
 
     # Remove the base lock directory only if it is empty. Do not remove it
     # if other ZFSutilities processes are still running or if it contains
     # unrelated files.
-    if [[ -d "$ZFSLOCK_DIR" && -z "$(ls -A "$ZFSLOCK_DIR" 2>/dev/null)" ]]; then
-        remove_dir "$ZFSLOCK_DIR"
+    if [[ -d "$zfslock_dir" && -z "$(ls -A "$zfslock_dir" 2>/dev/null)" ]]; then
+        remove_dir "$zfslock_dir"
     fi
 }
 
@@ -606,9 +606,9 @@ uninstall_peer() {
     log_msg "INFO: === Running uninstall on peer node: $peer ==="
 
     local remote_flags=""
-    [[ "$DO_PURGE" == "true" ]] && remote_flags+=" --purge"
-    [[ "$DO_YES" == "true" ]] && remote_flags+=" --yes"
-    [[ "$DO_DRY_RUN" == "true" ]] && remote_flags+=" --dry-run"
+    [[ "$do_purge" == "true" ]] && remote_flags+=" --purge"
+    [[ "$do_yes" == "true" ]] && remote_flags+=" --yes"
+    [[ "$do_dry_run" == "true" ]] && remote_flags+=" --dry-run"
 
     local remote_script
     remote_script="/usr/local/lib/zfsutilities/current/bin/uninstall-zfsutilities"
@@ -618,7 +618,7 @@ uninstall_peer() {
     if run_on_peer "$peer" "[[ -x '$remote_script' ]]" >/dev/null 2>&1; then
         run_on_peer "$peer" "$remote_script$remote_flags"
     else
-        if [[ "$DO_DRY_RUN" == "true" ]]; then
+        if [[ "$do_dry_run" == "true" ]]; then
             log_msg "INFO:   [DRY-RUN] would run local uninstall-zfsutilities on $peer via ssh"
         else
             log_msg "INFO:   Peer has no deployed uninstall script; running local copy via ssh..."
@@ -644,32 +644,32 @@ main() {
     detect_node_mode
     detect_installed_state
 
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO: === DRY RUN — no changes will be made ==="
     fi
 
-    if [[ "$DO_YES" != "true" ]]; then
+    if [[ "$do_yes" != "true" ]]; then
         present_interactive_dialog
         confirm_uninstall
     fi
 
     uninstall_software
 
-    if [[ "$DO_PURGE" == "true" ]]; then
+    if [[ "$do_purge" == "true" ]]; then
         uninstall_purge
     fi
 
-    if [[ "$DO_ALL_NODES" == "true" ]]; then
+    if [[ "$do_all_nodes" == "true" ]]; then
         uninstall_peer
     fi
 
     log_msg "INFO:"
     log_msg "INFO: === ZFSutilities uninstall complete ==="
-    if [[ "$DO_DRY_RUN" == "true" ]]; then
+    if [[ "$do_dry_run" == "true" ]]; then
         log_msg "INFO: This was a dry run; no changes were made."
     else
         log_msg "INFO: ZFSutilities has been removed from this host."
-        if [[ "$DO_PURGE" != "true" ]]; then
+        if [[ "$do_purge" != "true" ]]; then
             log_msg "INFO: Configuration, logs, and history were preserved."
             log_msg "INFO: Run with --purge to remove them as well."
         fi

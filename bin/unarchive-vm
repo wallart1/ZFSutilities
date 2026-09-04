@@ -31,8 +31,8 @@ if ! command -v qm >/dev/null 2>&1; then
     exit 1
 fi
 
-MY_HOST=$(hostname -s)
-PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
+my_host=$(hostname -s)
+pve_conf_dir="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 JSON_CONFIG="${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
 
 usage() {
@@ -63,46 +63,67 @@ usage() {
 prompt_new_vmid() {
     local response
     echo ""
-    log_msg "INFO: VMID ${VMID} is already in use (config or zvols exist)."
-    read -rp "Enter a new VMID to restore as, or leave blank to abort: " response
+    log_msg "INFO: vmid ${vmid} is already in use (config or zvols exist)."
+    read -rp "Enter a new vmid to restore as, or leave blank to abort: " response
     if [[ -z "$response" ]]; then
         log_msg "INFO: Aborted."
         exit 0
     fi
     if [[ ! "$response" =~ ^[0-9]+$ ]]; then
-        log_msg "FATAL: new VMID must be a number, got: $response"
+        log_msg "FATAL: new vmid must be a number, got: $response"
         exit 1
     fi
-    if [[ "$response" == "$VMID" ]]; then
-        log_msg "FATAL: new VMID must differ from the original VMID"
+    if [[ "$response" == "$vmid" ]]; then
+        log_msg "FATAL: new vmid must differ from the original vmid"
         exit 1
     fi
-    NEWVMID="$response"
+    newvmid="$response"
+}
+
+# Return 0 if $1 is a Proxmox disk key: one or more lowercase letters
+# followed by one or more digits (e.g. scsi0, virtio12). Implemented with
+# parameter expansion so no regex exceeds the 10-character policy limit.
+is_disk_key() {
+    local key="$1" digits letters
+    digits="${key##*[a-z]}"
+    letters="${key%"$digits"}"
+    [[ -n "$letters" && "$letters" =~ ^[a-z]+$ && "$digits" =~ ^[0-9]+$ ]]
 }
 
 vmid_in_use() {
     local check_vmid="$1"
-    local dest_conf="${PVE_CONF_DIR}/${check_vmid}.conf"
+    local dest_conf="${pve_conf_dir}/${check_vmid}.conf"
     [[ -f "$dest_conf" ]] && return 0
 
-    local found
+    local found vol vol_tail
     if is_single_node; then
-        found=$(zfs list -H -t volume -o name 2>/dev/null \
-            | grep -E "/proxmox/vm-${check_vmid}-disk-[0-9]+$" \
-            | grep -v "^${ARCHIVE_BASE}/" \
-            | head -1)
+        # Find a non-archive zvol for this VM: ends in "/proxmox/vm-N-disk-"
+        # followed only by digits, and not under the archive base.
+        found=""
+        while IFS= read -r vol; do
+            [[ "$vol" == "${archive_base}/"* ]] && continue
+            vol_tail="${vol##*"/proxmox/vm-${check_vmid}-disk-"}"
+            [[ "$vol_tail" =~ ^[0-9]+$ ]] || continue
+            found="$vol"
+            break
+        done < <(zfs list -H -t volume -o name 2>/dev/null)
     else
-        found=$(ssh root@"$STORAGE_HOST" bash -s "$check_vmid" "$ARCHIVE_BASE" << 'SSHEOF'
+        found=$(ssh root@"$storage_host" bash -s "$check_vmid" "$archive_base" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-VMID="$1"
-ARCHIVE_BASE="$2"
-zfs list -H -t volume -o name 2>/dev/null \
-    | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$" \
-    | grep -v "^${ARCHIVE_BASE}/" \
-    | head -1
+vmid="$1"
+archive_base="$2"
+found=""
+while IFS= read -r vol; do
+    [[ "$vol" == "${archive_base}/"* ]] && continue
+    vol_tail="${vol##*"/proxmox/vm-${vmid}-disk-"}"
+    [[ "$vol_tail" =~ ^[0-9]+$ ]] || continue
+    found="$vol"
+    break
+done < <(zfs list -H -t volume -o name 2>/dev/null)
+echo "$found"
 SSHEOF
         )
     fi
@@ -111,34 +132,34 @@ SSHEOF
 
 # get_json_archive_path is provided by node-lib.sh (sourced above).
 
-NEWVMID=""
-POS_ARGS=()
+newvmid=""
+pos_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --new-vmid)
             shift
-            NEWVMID="${1:-}"
-            [[ -n "$NEWVMID" ]] || usage
+            newvmid="${1:-}"
+            [[ -n "$newvmid" ]] || usage
             shift
             ;;
         *)
-            POS_ARGS+=("$1")
+            pos_args+=("$1")
             shift
             ;;
     esac
 done
 
-[[ ${#POS_ARGS[@]} -ge 1 && ${#POS_ARGS[@]} -le 2 ]] || usage
+[[ ${#pos_args[@]} -ge 1 && ${#pos_args[@]} -le 2 ]] || usage
 
-VMID="${POS_ARGS[0]}"
-ARCHIVE_BASE="${POS_ARGS[1]:-}"
+vmid="${pos_args[0]}"
+archive_base="${pos_args[1]:-}"
 
-[[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
-if [[ -n "$NEWVMID" && ! "$NEWVMID" =~ ^[0-9]+$ ]]; then
-    log_msg "FATAL: new-vmid must be a number, got: $NEWVMID"
+[[ "$vmid" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $vmid"; exit 1; }
+if [[ -n "$newvmid" && ! "$newvmid" =~ ^[0-9]+$ ]]; then
+    log_msg "FATAL: new-vmid must be a number, got: $newvmid"
     exit 1
 fi
-if [[ -n "$NEWVMID" && "$NEWVMID" == "$VMID" ]]; then
+if [[ -n "$newvmid" && "$newvmid" == "$vmid" ]]; then
     log_msg "FATAL: new-vmid must differ from vmid"
     exit 1
 fi
@@ -148,28 +169,28 @@ if [[ $EUID -ne 0 && ${UNARCHIVE_VM_TEST_NO_ROOT:-0} != "1" ]]; then
 fi
 
 # --- If not on the compute host, delegate (two-node only) ---
-if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
+if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
     new_vmid_arg=""
-    [[ -n "$NEWVMID" ]] && new_vmid_arg=" --new-vmid '$NEWVMID'"
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "unarchive-vm")
-    exec ssh -t root@"$COMPUTE_HOST" \
-        "$REMOTE_SCRIPT '$VMID' '$ARCHIVE_BASE'${new_vmid_arg}"
+    [[ -n "$newvmid" ]] && new_vmid_arg=" --new-vmid '$newvmid'"
+    remote_script=$(remote_zfsutility_script "$compute_host" "unarchive-vm")
+    exec ssh -t root@"$compute_host" \
+        "$remote_script '$vmid' '$archive_base'${new_vmid_arg}"
 fi
 
 log_msg "INFO: === unarchive-vm ===="
-log_msg "INFO:   VM: ${VMID}"
-[[ -n "$NEWVMID" && "$NEWVMID" != "$VMID" ]] && log_msg "INFO:   New VM: ${NEWVMID}"
+log_msg "INFO:   VM: ${vmid}"
+[[ -n "$newvmid" && "$newvmid" != "$vmid" ]] && log_msg "INFO:   New VM: ${newvmid}"
 echo ""
 
 # =======================================================================
 # Resolve archive base
 # =======================================================================
 
-if [[ -z "$ARCHIVE_BASE" ]]; then
-    ARCHIVE_BASE=$(get_json_archive_path)
+if [[ -z "$archive_base" ]]; then
+    archive_base=$(get_json_archive_path)
 fi
 
-[[ -n "$ARCHIVE_BASE" ]] \
+[[ -n "$archive_base" ]] \
     || {
         log_msg "FATAL: Archive base path is required (provide as argument or save in JSON config)"
         exit 1
@@ -177,18 +198,18 @@ fi
 
 # Validate the base exists as a ZFS dataset
 if is_single_node; then
-    if ! zfs list -H -o name "$ARCHIVE_BASE" 2>/dev/null \
-            | grep -q "^${ARCHIVE_BASE}$"; then
+    if ! zfs list -H -o name "$archive_base" 2>/dev/null \
+            | grep -qxF -- "$archive_base"; then
         {
-            log_msg "FATAL: Not a ZFS dataset: $ARCHIVE_BASE"
+            log_msg "FATAL: Not a ZFS dataset: $archive_base"
             exit 1
         }
     fi
 else
-    if ! ssh root@"$STORAGE_HOST" "zfs list -H -o name '$ARCHIVE_BASE' 2>/dev/null \
-            | grep -q '^${ARCHIVE_BASE}$'"; then
+    if ! ssh root@"$storage_host" "zfs list -H -o name '$archive_base' 2>/dev/null \
+            | grep -qxF -- '$archive_base'"; then
         {
-            log_msg "FATAL: Not a ZFS dataset on $STORAGE_HOST: $ARCHIVE_BASE"
+            log_msg "FATAL: Not a ZFS dataset on $storage_host: $archive_base"
             exit 1
         }
     fi
@@ -196,10 +217,10 @@ fi
 
 # Get mountpoint of the base dataset
 if is_single_node; then
-    ARCHIVE_MOUNT=$(zfs get -H -o value mountpoint "$ARCHIVE_BASE")
+    archive_mount=$(zfs get -H -o value mountpoint "$archive_base")
 else
-    ARCHIVE_MOUNT=$(ssh root@"$STORAGE_HOST" \
-        "zfs get -H -o value mountpoint '$ARCHIVE_BASE'")
+    archive_mount=$(ssh root@"$storage_host" \
+        "zfs get -H -o value mountpoint '$archive_base'")
 fi
 
 # =======================================================================
@@ -210,26 +231,35 @@ log_msg "INFO: --- Discovering archive ---"
 
 # Find archived zvol datasets under the archive base
 if is_single_node; then
-    archived_zvols=$(zfs list -H -t volume -o name -r "$ARCHIVE_BASE" 2>/dev/null \
-        | grep -E "^${ARCHIVE_BASE}/.+/proxmox/vm-${VMID}-disk-[0-9]+$" \
+    # -r lists only descendants of the base, so filtering by the fixed
+    # strings "${archive_base}/" and "/proxmox/vm-${vmid}-disk-" plus a
+    # digits-at-end check preserves the original anchored-regex semantics.
+    archived_zvols=$(zfs list -H -t volume -o name -r "$archive_base" 2>/dev/null \
+        | grep -F "${archive_base}/" \
+        | grep -F "/proxmox/vm-${vmid}-disk-" \
+        | grep -E '[0-9]+$' \
         | sort)
 else
-    archived_zvols=$(ssh root@"$STORAGE_HOST" bash -s "$ARCHIVE_BASE" "$VMID" << 'SSHEOF'
+    archived_zvols=$(ssh root@"$storage_host" bash -s "$archive_base" "$vmid" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-ARCHIVE_BASE="$1"
-VMID="$2"
-zfs list -H -t volume -o name -r "$ARCHIVE_BASE" 2>/dev/null \
-    | grep -E "^${ARCHIVE_BASE}/.+/proxmox/vm-${VMID}-disk-[0-9]+$" \
+archive_base="$1"
+vmid="$2"
+# -r lists only descendants of the base, so fixed-string filters preserve
+# the original anchored-regex semantics.
+zfs list -H -t volume -o name -r "$archive_base" 2>/dev/null \
+    | grep -F "${archive_base}/" \
+    | grep -F "/proxmox/vm-${vmid}-disk-" \
+    | grep -E '[0-9]+$' \
     | sort
 SSHEOF
-    ) || { log_msg "FATAL: SSH to $STORAGE_HOST failed"; exit 1; }
+    ) || { log_msg "FATAL: SSH to $storage_host failed"; exit 1; }
 fi
 
 if [[ -z "$archived_zvols" ]]; then
-    log_msg "FATAL: No archived zvols found for VM ${VMID} under ${ARCHIVE_BASE}"
+    log_msg "FATAL: No archived zvols found for VM ${vmid} under ${archive_base}"
     exit 1
 fi
 
@@ -241,9 +271,13 @@ declare -a disk_nums=()
 
 dataset_count=0
 while IFS= read -r arc_zvol; do
-    # Original zvol path is the suffix after ARCHIVE_BASE/
-    orig_zvol="${arc_zvol#"${ARCHIVE_BASE}"/}"
-    disknum=$(echo "$orig_zvol" | grep -oP 'disk-\K[0-9]+$')
+    # Original zvol path is the suffix after archive_base/
+    orig_zvol="${arc_zvol#"${archive_base}"/}"
+    disknum=""
+    if [[ "$orig_zvol" == *-disk-* ]]; then
+        disknum="${orig_zvol##*-disk-}"
+        [[ "$disknum" =~ ^[0-9]+$ ]] || disknum=""
+    fi
 
     archive_datasets+=("$arc_zvol")
     original_zvols+=("$orig_zvol")
@@ -254,16 +288,16 @@ done <<< "$archived_zvols"
 # Verify sidecar files exist
 missing_sidecars=()
 for i in "${!archive_datasets[@]}"; do
-    vbs_file="${ARCHIVE_MOUNT}/${original_zvols[$i]}.original_volblocksize"
-    info_file="${ARCHIVE_MOUNT}/${original_zvols[$i]}.disk_info"
+    vbs_file="${archive_mount}/${original_zvols[$i]}.original_volblocksize"
+    info_file="${archive_mount}/${original_zvols[$i]}.disk_info"
     if is_single_node; then
         [[ -f "$vbs_file" ]] || missing_sidecars+=("$vbs_file")
         [[ -f "$info_file" ]] || missing_sidecars+=("$info_file")
     else
-        if ! ssh root@"$STORAGE_HOST" "[[ -f '$vbs_file' ]]"; then
+        if ! ssh root@"$storage_host" "[[ -f '$vbs_file' ]]"; then
             missing_sidecars+=("$vbs_file")
         fi
-        if ! ssh root@"$STORAGE_HOST" "[[ -f '$info_file' ]]"; then
+        if ! ssh root@"$storage_host" "[[ -f '$info_file' ]]"; then
             missing_sidecars+=("$info_file")
         fi
     fi
@@ -276,30 +310,30 @@ done
         exit 1
     }
 
-# Resolve new VMID if the original is in use and none was supplied
-if [[ -n "$NEWVMID" ]]; then
-    if vmid_in_use "$NEWVMID"; then
+# Resolve new vmid if the original is in use and none was supplied
+if [[ -n "$newvmid" ]]; then
+    if vmid_in_use "$newvmid"; then
         {
-            log_msg "FATAL: Requested new VMID ${NEWVMID} is already in use"
+            log_msg "FATAL: Requested new vmid ${newvmid} is already in use"
             exit 1
         }
     fi
-elif vmid_in_use "$VMID"; then
+elif vmid_in_use "$vmid"; then
     while true; do
         prompt_new_vmid
-        if ! vmid_in_use "$NEWVMID"; then
+        if ! vmid_in_use "$newvmid"; then
             break
         fi
-        log_msg "INFO: VMID ${NEWVMID} is also in use."
-        NEWVMID=""
+        log_msg "INFO: vmid ${newvmid} is also in use."
+        newvmid=""
     done
 fi
-NEWVMID="${NEWVMID:-$VMID}"
+newvmid="${newvmid:-$vmid}"
 
-# Build new zvol paths using the (possibly changed) VMID
+# Build new zvol paths using the (possibly changed) vmid
 for i in "${!original_zvols[@]}"; do
-    new_zvols+=("${original_zvols[$i]/%vm-${VMID}-disk-${disk_nums[$i]}/\
-vm-${NEWVMID}-disk-${disk_nums[$i]}}")
+    new_zvols+=("${original_zvols[$i]/%vm-${vmid}-disk-${disk_nums[$i]}/\
+vm-${newvmid}-disk-${disk_nums[$i]}}")
 done
 
 # Verify destination zvols do not already exist
@@ -307,12 +341,12 @@ existing_dest=()
 for i in "${!new_zvols[@]}"; do
     if is_single_node; then
         if zfs list -H -o name "${new_zvols[$i]}" 2>/dev/null \
-                | grep -q "^${new_zvols[$i]}$"; then
+                | grep -qxF -- "${new_zvols[$i]}"; then
             existing_dest+=("${new_zvols[$i]}")
         fi
     else
-        if ssh root@"$STORAGE_HOST" "zfs list -H -o name '${new_zvols[$i]}' 2>/dev/null \
-                | grep -q '^${new_zvols[$i]}$'"; then
+        if ssh root@"$storage_host" "zfs list -H -o name '${new_zvols[$i]}' 2>/dev/null \
+                | grep -qxF -- '${new_zvols[$i]}'"; then
             existing_dest+=("${new_zvols[$i]}")
         fi
     fi
@@ -326,23 +360,23 @@ done
     }
 
 # Verify archived config exists
-archived_config="${ARCHIVE_MOUNT}/${PVE_CONF_DIR}/${VMID}.conf"
+archived_config="${archive_mount}/${pve_conf_dir}/${vmid}.conf"
 if is_single_node; then
     if [[ ! -f "$archived_config" ]]; then
         log_msg "FATAL: Archived config not found: $archived_config"
         exit 1
     fi
 else
-    if ! ssh root@"$STORAGE_HOST" "[[ -f '$archived_config' ]]"; then
+    if ! ssh root@"$storage_host" "[[ -f '$archived_config' ]]"; then
         {
-            log_msg "FATAL: Archived config not found on $STORAGE_HOST: $archived_config"
+            log_msg "FATAL: Archived config not found on $storage_host: $archived_config"
             exit 1
         }
     fi
 fi
 
 # Verify destination config does not already exist
-dest_config="${PVE_CONF_DIR}/${NEWVMID}.conf"
+dest_config="${pve_conf_dir}/${newvmid}.conf"
 if [[ -f "$dest_config" ]]; then
     log_msg "FATAL: Destination Proxmox config already exists: $dest_config"
     exit 1
@@ -352,16 +386,16 @@ fi
 # Show summary and confirm
 # =======================================================================
 
-log_msg "INFO:   Archive base: ${ARCHIVE_BASE}"
-log_msg "INFO:   Archive mount: ${ARCHIVE_MOUNT}"
+log_msg "INFO:   Archive base: ${archive_base}"
+log_msg "INFO:   Archive mount: ${archive_mount}"
 log_msg "INFO:   Archived config: ${archived_config}"
 log_msg "INFO:   Zvols to restore:"
 for i in "${!archive_datasets[@]}"; do
-    vbs_file="${ARCHIVE_MOUNT}/${original_zvols[$i]}.original_volblocksize"
+    vbs_file="${archive_mount}/${original_zvols[$i]}.original_volblocksize"
     if is_single_node; then
         orig_vbs=$(cat "$vbs_file")
     else
-        orig_vbs=$(ssh root@"$STORAGE_HOST" "cat '$vbs_file'")
+        orig_vbs=$(ssh root@"$storage_host" "cat '$vbs_file'")
     fi
     if [[ "${original_zvols[$i]}" != "${new_zvols[$i]}" ]]; then
         log_msg "INFO:     ${original_zvols[$i]} → ${new_zvols[$i]} (volblocksize: ${orig_vbs})"
@@ -388,7 +422,7 @@ if is_single_node; then
         arc_dataset="${archive_datasets[$i]}"
         orig_zvol="${original_zvols[$i]}"
         new_zvol="${new_zvols[$i]}"
-        vbs_file="${ARCHIVE_MOUNT}/${orig_zvol}.original_volblocksize"
+        vbs_file="${archive_mount}/${orig_zvol}.original_volblocksize"
 
         snap=$(zfs list -H -t snapshot -o name -S creation "$arc_dataset" 2>/dev/null | head -1)
         if [[ -z "$snap" ]]; then
@@ -412,15 +446,15 @@ if is_single_node; then
 
         if ! zfs send -cw "${arc_dataset}${snap_name}" \
                 | zfs receive -o volblocksize="$orig_vbs" "$new_zvol"; then
-            zfslock_release "$ZFSLOCK_ID"
+            zfslock_release "$zfslock_id"
             { log_msg "FATAL: Failed to restore ${new_zvol}"; exit 1; }
         fi
-        zfslock_release "$ZFSLOCK_ID"
+        zfslock_release "$zfslock_id"
         log_msg "INFO:   ✓ Restored: ${new_zvol}"
     done
 else
     # Two-node: run restoration on storage host via SSH
-    if ! ssh root@"$STORAGE_HOST" bash -s "$ARCHIVE_MOUNT" "$dataset_count" \
+    if ! ssh root@"$storage_host" bash -s "$archive_mount" "$dataset_count" \
             "${archive_datasets[@]}" "${original_zvols[@]}" "${new_zvols[@]}" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
@@ -429,7 +463,7 @@ bashinit
 source_helper zfslockmanager
 
 set -e
-ARCHIVE_MOUNT="$1"
+archive_mount="$1"
 dataset_count="$2"
 shift 2
 
@@ -441,7 +475,7 @@ for i in "${!archive_datasets[@]}"; do
     arc_dataset="${archive_datasets[$i]}"
     orig_zvol="${original_zvols[$i]}"
     new_zvol="${new_zvols[$i]}"
-    vbs_file="${ARCHIVE_MOUNT}/${orig_zvol}.original_volblocksize"
+    vbs_file="${archive_mount}/${orig_zvol}.original_volblocksize"
 
     snap=$(zfs list -H -t snapshot -o name -S creation "$arc_dataset" 2>/dev/null | head -1)
     [[ -n "$snap" ]] || { log_msg "FATAL: No snapshots found on ${arc_dataset}"; exit 1; }
@@ -463,12 +497,12 @@ for i in "${!archive_datasets[@]}"; do
     zfs send -cw "${arc_dataset}${snap_name}" \
         | zfs receive -o volblocksize="$orig_vbs" "$new_zvol"
 
-    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release "$zfslock_id"
     log_msg "INFO:   ✓ Restored: ${new_zvol}"
 done
 SSHEOF
     then
-        log_msg "FATAL: Zvol restoration failed on $STORAGE_HOST"
+        log_msg "FATAL: Zvol restoration failed on $storage_host"
         exit 1
     fi
 fi
@@ -485,14 +519,14 @@ declare -A disk_to_target=()
 if is_two_node; then
     log_msg "INFO: --- Step 2: Rebuilding iSCSI infrastructure ---"
 
-    lun_result=$(ssh root@"$STORAGE_HOST" bash -s "$NEWVMID" "$dataset_count" \
+    lun_result=$(ssh root@"$storage_host" bash -s "$newvmid" "$dataset_count" \
         "${new_zvols[@]}" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
 set -e
-VMID="$1"
+vmid="$1"
 dataset_count="$2"
 shift 2
 new_zvols=("${@:1:$dataset_count}")
@@ -500,8 +534,12 @@ new_zvols=("${@:1:$dataset_count}")
 for i in "${!new_zvols[@]}"; do
     new_zvol="${new_zvols[$i]}"
     pool="${new_zvol%%/*}"
-    disknum=$(echo "$new_zvol" | grep -oP 'disk-\K[0-9]+$')
-    backstore="vm-${VMID}-disk-${disknum}"
+    disknum=""
+    if [[ "$new_zvol" == *-disk-* ]]; then
+        disknum="${new_zvol##*-disk-}"
+        [[ "$disknum" =~ ^[0-9]+$ ]] || disknum=""
+    fi
+    backstore="vm-${vmid}-disk-${disknum}"
     zvol_dev="/dev/zvol/${new_zvol}"
 
     # Map pool to target using node-lib's pool_to_target logic
@@ -520,7 +558,7 @@ except Exception as e:
     echo "DISK:${disknum}"
 
     # Create backstore if missing
-    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${backstore} "; then
+    if targetcli /backstores/block ls 2>/dev/null | grep -qF " ${backstore} "; then
         echo "BACKSTORE_EXISTS:${backstore}"
     else
         targetcli /backstores/block create "$backstore" "$zvol_dev"
@@ -530,25 +568,27 @@ except Exception as e:
 
     # Create LUN if missing
     existing_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep " ${backstore} " \
-        | grep -oP 'lun\K[0-9]+' \
+        | grep -F " ${backstore} " \
+        | grep -oE 'lun[0-9]+' \
         | head -1)
+    existing_lun="${existing_lun#lun}"
 
     if [[ -n "$existing_lun" ]]; then
         echo "LUN_EXISTS:${disknum}:${existing_lun}"
     else
         targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${backstore}"
         new_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-            | grep " ${backstore} " \
-            | grep -oP 'lun\K[0-9]+' \
+            | grep -F " ${backstore} " \
+            | grep -oE 'lun[0-9]+' \
             | head -1)
+        new_lun="${new_lun#lun}"
         echo "LUN_CREATED:${disknum}:${new_lun}"
     fi
 
     # Add to expected-backstores manifest
     manifest="/etc/rtslib-fb-target/expected-backstores.txt"
     if [[ -f "$manifest" ]]; then
-        if ! grep -q "^${backstore}$" "$manifest"; then
+        if ! grep -qxF -- "${backstore}" "$manifest"; then
             echo "$backstore" >> "$manifest"
             echo "MANIFEST_ADDED:${backstore}"
         fi
@@ -562,7 +602,8 @@ except Exception as e:
             enc_conf="/etc/iscsi-encrypted-luns.conf"
         fi
         target_short="${target##*:}"
-        if [[ -f "$enc_conf" ]] && grep -q "^${backstore}:" "$enc_conf"; then
+        if [[ -f "$enc_conf" ]] \
+            && cut -d: -f1 "$enc_conf" | grep -qxF -- "${backstore}"; then
             echo "ENCRYPTED_ALREADY:${backstore}"
         else
             echo "${backstore}:${zvol_dev}:${target_short}" >> "$enc_conf"
@@ -577,7 +618,7 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 echo "CONFIG_SAVED"
 SSHEOF
     ) || {
-        log_msg "FATAL: iSCSI reconstruction failed on $STORAGE_HOST"
+        log_msg "FATAL: iSCSI reconstruction failed on $storage_host"
         exit 1
     }
 
@@ -623,11 +664,11 @@ mkdir -p "$(dirname "$dest_config")"
 # Build disk_key -> disk_num mapping from .disk_info sidecars.
 declare -A key_to_disknum=()
 for i in "${!original_zvols[@]}"; do
-    info_file="${ARCHIVE_MOUNT}/${original_zvols[$i]}.disk_info"
+    info_file="${archive_mount}/${original_zvols[$i]}.disk_info"
     if is_single_node; then
         disk_key=$(grep '^DISK_KEY=' "$info_file" 2>/dev/null | cut -d= -f2)
     else
-        disk_key=$(ssh root@"$STORAGE_HOST" \
+        disk_key=$(ssh root@"$storage_host" \
             "grep '^DISK_KEY=' '$info_file' 2>/dev/null | cut -d= -f2")
     fi
     disknum="${disk_nums[$i]}"
@@ -637,7 +678,7 @@ done
 if is_single_node; then
     archived_content=$(cat "$archived_config")
 else
-    archived_content=$(ssh root@"$STORAGE_HOST" "cat '$archived_config'")
+    archived_content=$(ssh root@"$storage_host" "cat '$archived_config'")
 fi
 if [[ -z "$archived_content" ]]; then
     log_msg "FATAL: Failed to read archived config"
@@ -645,14 +686,14 @@ if [[ -z "$archived_content" ]]; then
 fi
 
 rewrite_needed=false
-[[ "$NEWVMID" != "$VMID" ]] && rewrite_needed=true
+[[ "$newvmid" != "$vmid" ]] && rewrite_needed=true
 
 if [[ "$rewrite_needed" == "false" ]] && is_single_node; then
-    # No VMID change in single-node mode: simple copy is sufficient.
+    # No vmid change in single-node mode: simple copy is sufficient.
     cp "$archived_config" "$dest_config"
     log_msg "INFO:   ✓ Config restored: $dest_config"
 else
-    # Rewrite disk lines (and UUIDs when the VMID changed).
+    # Rewrite disk lines (and UUIDs when the vmid changed).
     new_vmgenid=""
     new_smbios_uuid=""
     vmgenid_written=false
@@ -665,26 +706,38 @@ else
     while IFS= read -r line; do
         [[ "$line" =~ ^\[.+\] ]] && break
 
-        if [[ "$line" =~ \
-            ^([a-z]+[0-9]+):\ *([^:]+):vm-${VMID}-disk-([0-9]+)(.*) ]]; then
-            # Single-node disk line: rewrite VMID if it changed, otherwise keep.
-            key="${BASH_REMATCH[1]}"
-            storage="${BASH_REMATCH[2]}"
-            disknum="${BASH_REMATCH[3]}"
-            rest="${BASH_REMATCH[4]}"
-            echo "${key}: ${storage}:vm-${NEWVMID}-disk-${disknum}${rest}"
-            [[ "$NEWVMID" != "$VMID" ]] && log_msg "INFO:   ✓ Rewrote ${key} for VMID ${NEWVMID}"
-        elif [[ "$line" =~ \
-            ^([a-z]+[0-9]+):.*ip-([0-9\.]+):3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+)(.*) ]]; then
+        # Split the line into key and value parts with parameter expansion
+        # (avoids regexes longer than the 10-character policy limit).
+        key="${line%%:*}"
+        rest_of_line="${line#*:}"
+        storage="${rest_of_line%%:*}"
+        storage="${storage#"${storage%%[! ]*}"}"  # drop leading spaces
+        disk_part="${rest_of_line#*:}"
+        disk_tail="${disk_part#vm-${vmid}-disk-}"
+        disknum="${disk_tail%%[!0-9]*}"
+        if is_disk_key "$key" \
+            && [[ "$line" == "$key:"* && "$rest_of_line" == *:* ]] \
+            && [[ -n "$storage" && "$disk_part" == "vm-${vmid}-disk-"* ]] \
+            && [[ -n "$disknum" ]]; then
+            # Single-node disk line: rewrite vmid if it changed, otherwise keep.
+            rest="${disk_tail#"$disknum"}"
+            echo "${key}: ${storage}:vm-${newvmid}-disk-${disknum}${rest}"
+            [[ "$newvmid" != "$vmid" ]] && log_msg "INFO:   ✓ Rewrote ${key} for vmid ${newvmid}"
+        elif [[ "$line" == *"ip-"[0-9.]":3260-iscsi-iqn."*"-lun-"[0-9]* ]] \
+            && is_disk_key "$key" && [[ "$line" == "$key:"* ]]; then
             # Two-node iSCSI disk line: rewrite LUN (and target if needed).
-            key="${BASH_REMATCH[1]}"
-            rest="${BASH_REMATCH[5]}"
+            after="${line##*-iscsi-}"
+            target="${after%-lun-*}"
+            lun_and_rest="${after##*-lun-}"
+            lun_digits="${lun_and_rest%%[!0-9]*}"
+            rest="${lun_and_rest#"$lun_digits"}"
             disknum="${key_to_disknum[$key]}"
 
-            if [[ -n "$disknum" && -n "${disk_to_lun[$disknum]}" ]]; then
+            if [[ -n "$disknum" && -n "${disk_to_lun[$disknum]}" \
+                && -n "$lun_digits" && "$target" != *,* ]]; then
                 new_lun="${disk_to_lun[$disknum]}"
                 new_target="${disk_to_target[$disknum]}"
-                new_path="ip-${STORAGE_IP}:3260-iscsi-${new_target}-lun-${new_lun}"
+                new_path="ip-${storage_ip}:3260-iscsi-${new_target}-lun-${new_lun}"
                 # Reconstruct line preserving everything except the path
                 prefix="${line%%ip-*}"
                 echo "${prefix}${new_path}${rest}"
@@ -725,7 +778,7 @@ if is_two_node; then
     rescan_path=$(find_zfsutility_script rescan-storage) \
         || { log_msg "FATAL: Could not locate rescan-storage"; exit 1; }
     if ! "$rescan_path"; then
-        log_msg "WARN: iSCSI rescan failed; run 'sudo rescan-storage' on $COMPUTE_HOST manually"
+        log_msg "WARN: iSCSI rescan failed; run 'sudo rescan-storage' on $compute_host manually"
     fi
     echo ""
 fi
@@ -735,10 +788,10 @@ fi
 # =======================================================================
 
 log_msg "INFO: === Done ==="
-if [[ "$NEWVMID" != "$VMID" ]]; then
-    log_msg "INFO:   VM ${VMID} has been unarchived as VM ${NEWVMID}."
+if [[ "$newvmid" != "$vmid" ]]; then
+    log_msg "INFO:   VM ${vmid} has been unarchived as VM ${newvmid}."
 else
-    log_msg "INFO:   VM ${VMID} has been unarchived."
+    log_msg "INFO:   VM ${vmid} has been unarchived."
 fi
 if is_two_node; then
     log_msg "INFO:   iSCSI LUNs:"

@@ -172,7 +172,8 @@ def _rsync_log_setup_script(log_path):
     return (
         f"mkdir -p {log_dir}; "
         f"if [ ! -f {log_path_quoted} ] || "
-        f'[ "$(date -r {log_path_quoted} +%Y%m%d 2>/dev/null || echo 0)" != "$(date +%Y%m%d)" ]; then '
+        f'[ "$(date -r {log_path_quoted} +%Y%m%d 2>/dev/null || echo 0)" '
+        f'!= "$(date +%Y%m%d)" ]; then '
         f": > {log_path_quoted}; fi"
     )
 

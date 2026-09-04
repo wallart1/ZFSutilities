@@ -706,6 +706,35 @@ test_ensure_open_iscsi_remote_already_installed
 test_ensure_open_iscsi_remote_declines_install
 test_ensure_open_iscsi_remote_installs_and_enables
 
+# ------------------------------------------------------------------
+# Installer template placeholder drift guards
+# ------------------------------------------------------------------
+
+# Every @@TOKEN@@ left in an installer template must be substituted by the
+# install script that consumes it; otherwise the generated config keeps a
+# literal placeholder (this caught @@this_host@@ vs @@THIS_HOST@@ drift).
+test_installer_placeholders_match_templates() {
+    test_start "installer scripts substitute every template placeholder"
+    local pairs=(
+        "bin/install-single-node share/installer/node.conf.template"
+        "bin/install-two-node share/installer/deploy.conf.template"
+    )
+    local pair script template token
+    for pair in "${pairs[@]}"; do
+        script="$mydir/${pair%% *}"
+        template="$mydir/${pair##* }"
+        for token in $(grep -oE '@@[A-Za-z_]+@@' "$template" | sort -u); do
+            if ! grep -qF -- "$token" "$script"; then
+                test_fail "$script does not substitute $token from $(basename "$template")"
+                return
+            fi
+        done
+    done
+    test_pass
+}
+
+test_installer_placeholders_match_templates
+
 
 test_summary
 teardown_test_env

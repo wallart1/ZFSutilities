@@ -52,7 +52,8 @@ _cleanup_target_holds() {
         if [[ "$_rc" -eq 0 ]]; then
             rm -f -- "$_target_holds_file"
         else
-            log_msg "WARN: zfsrestore failed (exit $_rc); leaving captured-holds temp file for diagnosis: $_target_holds_file"
+            log_msg "WARN: zfsrestore failed (exit $_rc); leaving captured-holds" \
+                "temp file for diagnosis: $_target_holds_file"
         fi
     fi
 }

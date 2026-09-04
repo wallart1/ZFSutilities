@@ -23,21 +23,21 @@ unset _local_bashinit
 source_helper zfslockmanager
 
 # Test counters
-TESTS_RUN=0
-TESTS_PASSED=0
-TESTS_FAILED=0
+tests_run=0
+tests_passed=0
+tests_failed=0
 
 # Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m' # No Color
+red='\033[0;31m'
+green='\033[0;32m'
+nc='\033[0m' # No Color
 
 # Test helper functions
-test_start() { ((TESTS_RUN++)); echo -n "  Test $TESTS_RUN: $1... "; }
-test_pass() { ((TESTS_PASSED++)); echo -e "${GREEN}PASS${NC}"; }
+test_start() { ((tests_run++)); echo -n "  Test $tests_run: $1... "; }
+test_pass() { ((tests_passed++)); echo -e "${green}PASS${nc}"; }
 test_fail() {
-    ((TESTS_FAILED++))
-    echo -e "${RED}FAIL${NC}"
+    ((tests_failed++))
+    echo -e "${red}FAIL${nc}"
     [[ -n "$1" ]] && echo "    Reason: $1"
 }
 
@@ -57,7 +57,7 @@ _assert_conflict() {
         test_pass
     else
         test_fail "$reason"
-        zfslock_release "$ZFSLOCK_ID"
+        zfslock_release "$zfslock_id"
     fi
 }
 
@@ -75,7 +75,7 @@ _assert_no_conflict() {
 cleanup_test_locks() {
     # shellcheck disable=SC2153
     rm -rf "$ZFSLOCK_DIR" 2>/dev/null
-    mkdir -p "$ZFSLOCK_LOCKS_DIR" "$ZFSLOCK_PIDS_DIR" 2>/dev/null
+    mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir" 2>/dev/null
 }
 
 # ==============================================================================
@@ -90,12 +90,12 @@ test_basic_acquire_release() {
 
     test_start "Acquire lock on test/dataset"
     if zfslock_acquire "test/dataset" "w" "test description" &&
-            [[ -n "$ZFSLOCK_ID" && -f "$ZFSLOCK_ID" ]]; then
+            [[ -n "$zfslock_id" && -f "$zfslock_id" ]]; then
         test_pass
     else
-        test_fail "ZFSLOCK_ID not set or file not created"
+        test_fail "zfslock_id not set or file not created"
     fi
-    local lock1="$ZFSLOCK_ID"
+    local lock1="$zfslock_id"
 
     # Test 2: Verify lock file contents
     test_start "Lock file contains correct data"
@@ -122,8 +122,8 @@ test_basic_acquire_release() {
 
     test_start "Acquire multiple locks"
     local multi_lock1 multi_lock2
-    zfslock_acquire "test/dataset1" "r" "first lock"; multi_lock1="$ZFSLOCK_ID"
-    zfslock_acquire "test/dataset2" "r" "second lock"; multi_lock2="$ZFSLOCK_ID"
+    zfslock_acquire "test/dataset1" "r" "first lock"; multi_lock1="$zfslock_id"
+    zfslock_acquire "test/dataset2" "r" "second lock"; multi_lock2="$zfslock_id"
     if [[ -f "$multi_lock1" && -f "$multi_lock2" ]]; then
         test_pass
     else
@@ -147,7 +147,7 @@ test_same_dataset_conflicts() {
 
     # Acquire a write lock
     zfslock_acquire "test/data" "w" "holding write lock"
-    local write_lock="$ZFSLOCK_ID"
+    local write_lock="$zfslock_id"
 
     test_start "Read conflicts with existing Write"
     _assert_conflict "test/data" "r" "trying read" \
@@ -168,7 +168,7 @@ test_same_dataset_conflicts() {
 
     test_start "Read does NOT conflict with existing Read"
     if zfslock_acquire "test/data2" "r" "first read on data2"; then
-        local read_lock2="$ZFSLOCK_ID"
+        local read_lock2="$zfslock_id"
         if zfslock_acquire "test/data2" "r" "second read on data2"; then
             test_pass
         else
@@ -193,42 +193,42 @@ test_hierarchy_conflicts() {
     cleanup_test_locks
 
     local parent_lock child_lock
-    zfslock_acquire "pool/parent" "x" "destroy parent"; parent_lock="$ZFSLOCK_ID"
+    zfslock_acquire "pool/parent" "x" "destroy parent"; parent_lock="$zfslock_id"
     test_start "Destroy on parent blocks write on child"
     _assert_conflict "pool/parent/child" "w" "write child" \
         "Parent destroy should block child write"
     zfslock_release "$parent_lock"
 
-    zfslock_acquire "pool/parent" "w" "write parent"; parent_lock="$ZFSLOCK_ID"
+    zfslock_acquire "pool/parent" "w" "write parent"; parent_lock="$zfslock_id"
     test_start "Write on parent blocks write on child"
     _assert_conflict "pool/parent/child" "w" "write child" \
         "Parent write should block child write"
     zfslock_release "$parent_lock"
 
-    zfslock_acquire "pool/parent" "r" "read parent"; parent_lock="$ZFSLOCK_ID"
+    zfslock_acquire "pool/parent" "r" "read parent"; parent_lock="$zfslock_id"
     test_start "Read on parent does NOT block read on child"
     _assert_no_conflict "pool/parent/child" "r" "read child" \
         "Parent read should not block child read"
-    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release "$zfslock_id"
     zfslock_release "$parent_lock"
 
-    zfslock_acquire "pool/parent/child" "r" "read child"; child_lock="$ZFSLOCK_ID"
+    zfslock_acquire "pool/parent/child" "r" "read child"; child_lock="$zfslock_id"
     test_start "Any lock on child blocks destroy on parent"
     _assert_conflict "pool/parent" "x" "destroy parent" \
         "Child lock should block parent destroy"
     zfslock_release "$child_lock"
 
-    zfslock_acquire "pool/parent/child" "w" "write child"; child_lock="$ZFSLOCK_ID"
+    zfslock_acquire "pool/parent/child" "w" "write child"; child_lock="$zfslock_id"
     test_start "Write on child blocks write on parent"
     _assert_conflict "pool/parent" "w" "write parent" \
         "Child write should block parent write"
     zfslock_release "$child_lock"
 
-    zfslock_acquire "pool/parent/child" "r" "read child"; child_lock="$ZFSLOCK_ID"
+    zfslock_acquire "pool/parent/child" "r" "read child"; child_lock="$zfslock_id"
     test_start "Read on child does NOT block read on parent"
     _assert_no_conflict "pool/parent" "r" "read parent" \
         "Child read should not block parent read"
-    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release "$zfslock_id"
     zfslock_release_all
 }
 
@@ -240,7 +240,7 @@ test_stale_detection() {
 
     # Create a lock file with a non-existent PID
     test_start "Detect stale lock (dead PID)"
-    local fake_lockfile="$ZFSLOCK_LOCKS_DIR/test%2Fstale.lock"
+    local fake_lockfile="$zfslock_locks_dir/test%2Fstale.lock"
     local fake_lock_json
     fake_lock_json=$(_create_fake_lock "test/stale" "w" 99999999 \
         "stale lock" "fake_script")
@@ -253,7 +253,7 @@ test_stale_detection() {
 
     test_start "Active lock is not stale"
     zfslock_acquire "test/active" "w" "active lock"
-    local active_lock="$ZFSLOCK_ID"
+    local active_lock="$zfslock_id"
     if ! zfslock_is_stale "$active_lock"; then
         test_pass
     else
@@ -313,7 +313,7 @@ test_concurrent_access() {
         test_pass
     else
         test_fail "Background lock should block foreground acquire"
-        zfslock_release "$ZFSLOCK_ID"
+        zfslock_release "$zfslock_id"
     fi
 
     # Clean up background process
@@ -326,7 +326,7 @@ test_concurrent_access() {
     zfslock_cleanup_stale > /dev/null
     if zfslock_acquire "test/concurrent" "w" "after bg exit"; then
         test_pass
-        zfslock_release "$ZFSLOCK_ID"
+        zfslock_release "$zfslock_id"
     else
         test_fail "Should be able to acquire lock after background process exits"
     fi
@@ -342,7 +342,7 @@ test_path_encoding() {
 
     test_start "Lock dataset with multiple path segments"
     if zfslock_acquire "pool/parent/child/grandchild" "w" "deep path"; then
-        local lockfile="$ZFSLOCK_ID"
+        local lockfile="$zfslock_id"
         if [[ "$lockfile" == *"%2F"* ]]; then
             test_pass
         else
@@ -355,7 +355,7 @@ test_path_encoding() {
 
     test_start "Lock snapshot path"
     if zfslock_acquire "pool/dataset@snapshot" "r" "snapshot lock"; then
-        lockfile="$ZFSLOCK_ID"
+        lockfile="$zfslock_id"
         if [[ "$lockfile" == *"%40"* ]]; then
             test_pass
         else
@@ -618,19 +618,19 @@ main() {
     echo "========================================"
     echo "Test Summary"
     echo "========================================"
-    echo "  Total:  $TESTS_RUN"
-    echo -e "  Passed: ${GREEN}$TESTS_PASSED${NC}"
-    if [[ $TESTS_FAILED -gt 0 ]]; then
-        echo -e "  Failed: ${RED}$TESTS_FAILED${NC}"
+    echo "  Total:  $tests_run"
+    echo -e "  Passed: ${green}$tests_passed${nc}"
+    if [[ $tests_failed -gt 0 ]]; then
+        echo -e "  Failed: ${red}$tests_failed${nc}"
     else
         echo "  Failed: 0"
     fi
     echo ""
 
-    if [[ $TESTS_FAILED -eq 0 ]]; then
-        echo -e "${GREEN}All tests passed!${NC}"; return 0
+    if [[ $tests_failed -eq 0 ]]; then
+        echo -e "${green}All tests passed!${nc}"; return 0
     fi
-    echo -e "${RED}Some tests failed.${NC}"
+    echo -e "${red}Some tests failed.${nc}"
     return 1
 }
 

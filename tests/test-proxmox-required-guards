@@ -83,6 +83,7 @@ GUARDED_SCRIPTS=(
     archive-vm
     unarchive-vm
     resize-vm-disk
+    repair-vm-disk-sizes
     enroll-efi-keys-vm
     promote-vm-clone
     list-vm-disks

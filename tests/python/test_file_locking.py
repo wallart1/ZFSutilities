@@ -3,8 +3,14 @@
 import fcntl
 import multiprocessing
 import os
+import sys
 import tempfile
 import unittest
+
+REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
+PYTHON_SRC = os.path.join(REPO_ROOT, "python")
+if PYTHON_SRC not in sys.path:
+    sys.path.insert(0, PYTHON_SRC)
 
 import file_locking as fl
 

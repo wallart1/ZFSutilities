@@ -58,7 +58,7 @@ EOF
 
 cat > "$mock_mydir/zfslockmanager" <<'EOF'
 zfslock_init() { true; }
-zfslock_acquire() { ZFSLOCK_ID="/tmp/mock_lock"; return 0; }
+zfslock_acquire() { zfslock_id="/tmp/mock_lock"; return 0; }
 zfslock_release() { true; }
 zfslock_release_all() { true; }
 EOF

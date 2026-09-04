@@ -578,7 +578,7 @@ def _mount_one_snapshot(item, repo, app):
                 log_msg(f"WARN: Cannot mount {full_snap}: snapshot path {path} is not accessible.")
                 return False
 
-            if full_snap in get_mounted_snapshots(repo=repo):
+            if full_snap in get_mounted_snapshots():
                 log_msg(f"INFO: Mounted snapshot {full_snap}")
                 return True
 

@@ -84,7 +84,7 @@ test_update_efidisk_config() {
     cat > "$conf_file" << 'EOF'
 bios: ovmf
 efidisk0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13,format=raw,efitype=4m,pre-enrolled-keys=1,size=1M
-scsi0: /dev/disk/by-path/...
+scsi0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-8,format=raw,discard=on,iothread=1,size=100G
 
 [PENDING]
 efidisk0: /dev/disk/by-path/...,efitype=4m,format=raw,ms-cert=2023k,pre-enrolled-keys=1,size=1M
@@ -99,6 +99,23 @@ EOF
     else
         test_pass
     fi
+}
+
+test_update_efidisk_config_preserves_data_disk_sizes() {
+    test_start "update_efidisk_config leaves scsi data disk size= untouched"
+    local conf_file="$_mock_zfs_state_dir/209-data.conf"
+    cat > "$conf_file" << 'EOF'
+bios: ovmf
+efidisk0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13,format=raw,efitype=4m,pre-enrolled-keys=1,size=1M
+scsi0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-8,format=raw,discard=on,iothread=1,size=100G
+scsi1: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-9,format=raw,discard=on,iothread=1,size=2T
+EOF
+    update_efidisk_config "$conf_file"
+    local line0 line1
+    line0=$(grep '^scsi0:' "$conf_file")
+    line1=$(grep '^scsi1:' "$conf_file")
+    assert_contains "$line0" "size=100G"
+    assert_contains "$line1" "size=2T"
 }
 
 test_update_efidisk_config_idempotent() {
@@ -123,5 +140,6 @@ test_parse_iscsi_by_path_vm208
 test_parse_iscsi_by_path_rejects_invalid
 test_update_efidisk_config
 test_update_efidisk_config_idempotent
+test_update_efidisk_config_preserves_data_disk_sizes
 
 test_summary

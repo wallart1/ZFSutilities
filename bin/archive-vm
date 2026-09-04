@@ -30,8 +30,8 @@ if ! command -v qm >/dev/null 2>&1; then
     exit 1
 fi
 
-MY_HOST=$(hostname -s)
-PVE_CONF_DIR="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
+my_host=$(hostname -s)
+pve_conf_dir="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 JSON_CONFIG="${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
 
 source_helper zfslockmanager
@@ -57,9 +57,29 @@ usage() {
 build_archive_prompt() {
     local default_prompt="$1"
     if is_two_node; then
-        echo "Archive base ZFS dataset (must be on ${STORAGE_HOST})${default_prompt}: "
+        echo "Archive base ZFS dataset (must be on ${storage_host})${default_prompt}: "
     else
         echo "Archive base ZFS dataset${default_prompt}: "
+    fi
+}
+
+# Return 0 if $1 is a Proxmox disk key: one or more lowercase letters
+# followed by one or more digits (e.g. scsi0, virtio12). Implemented with
+# parameter expansion so no regex exceeds the 10-character policy limit.
+is_disk_key() {
+    local key="$1" digits letters
+    digits="${key##*[a-z]}"
+    letters="${key%"$digits"}"
+    [[ -n "$letters" && "$letters" =~ ^[a-z]+$ && "$digits" =~ ^[0-9]+$ ]]
+}
+
+# Extract the trailing disk number from a zvol path such as
+# threeamigos/proxmox/vm-105-disk-0 (prints nothing when absent).
+disk_number_from_zvol() {
+    local zvol="$1" disknum
+    if [[ "$zvol" == *-disk-* ]]; then
+        disknum="${zvol##*-disk-}"
+        [[ "$disknum" =~ ^[0-9]+$ ]] && echo "$disknum"
     fi
 }
 
@@ -82,15 +102,15 @@ ensure_retire_snapshot() {
             fi
             snap_name="@retire-$(date -Iminutes)-d"
             if ! zfs snapshot "${zvol}${snap_name}"; then
-                zfslock_release "$ZFSLOCK_ID"
+                zfslock_release "$zfslock_id"
                 { log_msg "FATAL: Failed to create snapshot ${zvol}${snap_name}"; exit 1; }
             fi
-            zfslock_release "$ZFSLOCK_ID"
+            zfslock_release "$zfslock_id"
             snap="${zvol}${snap_name}"
             log_msg "INFO:   Created retire snapshot: ${snap}"
         fi
     else
-        snap=$(ssh root@"$STORAGE_HOST" bash -s "$zvol" << 'SSHEOF'
+        snap=$(ssh root@"$storage_host" bash -s "$zvol" << 'SSHEOF'
 zvol="$1"
 
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
@@ -109,12 +129,12 @@ if [[ -z "$snap" ]]; then
     fi
     snap_name="@retire-$(date -Iminutes)-d"
     if ! zfs snapshot "${zvol}${snap_name}"; then
-        zfslock_release "$ZFSLOCK_ID"
+        zfslock_release "$zfslock_id"
         log_msg "FATAL: Failed to create snapshot ${zvol}${snap_name}"
         echo "__ARCHIVE_VM_ERROR__"
         exit 1
     fi
-    zfslock_release "$ZFSLOCK_ID"
+    zfslock_release "$zfslock_id"
     snap="${zvol}${snap_name}"
     log_msg "INFO:   Created retire snapshot: ${snap}"
 fi
@@ -123,7 +143,7 @@ SSHEOF
         )
         if [[ -z "$snap" || "$snap" == __ARCHIVE_VM_ERROR__ ]]; then
             {
-                log_msg "FATAL: Failed to determine snapshot for ${zvol} on ${STORAGE_HOST}"
+                log_msg "FATAL: Failed to determine snapshot for ${zvol} on ${storage_host}"
                 exit 1
             }
         fi
@@ -159,23 +179,37 @@ with open(conf_file, 'w') as f:
 # references or orphaned zvols are emitted via log_msg on stderr.
 collect_referenced_zvols() {
     local config_line disk_num target lun zvol_path
-    local all_zvols orphan_zvol
+    local key rest_of_line storage disk_part after lun_and_rest
+    local vol vol_tail
     local -A referenced_zvols=()
 
     if is_single_node; then
         while IFS= read -r config_line; do
             [[ "$config_line" =~ ^\[.+\] ]] && break
-            # Regex: ^[a-z]+[0-9]+: *([^:]+):vm-${VMID}-disk-([0-9]+)
-            # Matches Proxmox ZFS disk lines such as:
+            # Parse Proxmox ZFS disk lines such as:
             #   scsi0: threeamigos:vm-105-disk-0,size=10G
-            # Group 1 is the storage name; group 2 is the disk number.
-            if [[ "$config_line" =~ ^[a-z]+[0-9]+:\ *([^:]+):vm-${VMID}-disk-([0-9]+) ]]; then
-                disk_num="${BASH_REMATCH[2]}"
-                zvol_path=$(zfs list -H -t volume -o name 2>/dev/null \
-                    | grep -E "/proxmox/vm-${VMID}-disk-${disk_num}$" \
-                    | head -1)
+            # and extract the disk number via parameter expansion.
+            key="${config_line%%:*}"
+            rest_of_line="${config_line#*:}"
+            storage="${rest_of_line%%:*}"
+            storage="${storage#"${storage%%[! ]*}"}"  # drop leading spaces
+            disk_part="${rest_of_line#*:}"
+            disk_num="${disk_part#vm-"${vmid}"-disk-}"
+            disk_num="${disk_num%%[!0-9]*}"
+            if is_disk_key "$key" \
+                && [[ "$config_line" == "$key:"* && "$rest_of_line" == *:* ]] \
+                && [[ -n "$storage" && "$disk_part" == "vm-${vmid}-disk-"* ]] \
+                && [[ -n "$disk_num" ]]; then
+                # Find the zvol whose path ends with this disk reference.
+                zvol_path=""
+                while IFS= read -r vol; do
+                    if [[ "$vol" == *"/proxmox/vm-${vmid}-disk-${disk_num}" ]]; then
+                        zvol_path="$vol"
+                        break
+                    fi
+                done < <(zfs list -H -t volume -o name 2>/dev/null)
                 if [[ -z "$zvol_path" ]]; then
-                    log_msg "WARN: Config references vm-${VMID}-disk-${disk_num}" \
+                    log_msg "WARN: Config references vm-${vmid}-disk-${disk_num}" \
                         "but no zvol was found"
                     continue
                 fi
@@ -186,15 +220,14 @@ collect_referenced_zvols() {
             fi
         done < "$proxmoxconfig"
 
-        all_zvols=$(zfs list -H -t volume -o name 2>/dev/null \
-            | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$" \
-            || true)
-        for orphan_zvol in $all_zvols; do
-            if [[ -z "${referenced_zvols[$orphan_zvol]:-}" ]]; then
-                log_msg "WARN: Orphaned zvol not referenced in config:" \
-                    "${orphan_zvol}"
+        # Warn about VM zvols that are not referenced in the config.
+        while IFS= read -r vol; do
+            vol_tail="${vol##*"/proxmox/vm-${vmid}-disk-"}"
+            [[ "$vol_tail" =~ ^[0-9]+$ ]] || continue
+            if [[ -z "${referenced_zvols[$vol]:-}" ]]; then
+                log_msg "WARN: Orphaned zvol not referenced in config:" "$vol"
             fi
-        done
+        done < <(zfs list -H -t volume -o name 2>/dev/null)
         return 0
     fi
 
@@ -203,26 +236,31 @@ collect_referenced_zvols() {
     local -a target_lun_refs=()
     while IFS= read -r config_line; do
         [[ "$config_line" =~ ^\[.+\] ]] && break
-        # Regex: ^[a-z]+[0-9]+:.*ip-[0-9.]+:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+)
-        # Matches Proxmox iSCSI disk lines such as:
+        # Parse Proxmox iSCSI disk lines such as:
         #   scsi0: ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-0,size=10G
-        # Group 1 is the full target IQN; group 2 is the LUN number.
-        local _disk_re='^[a-z]+[0-9]+:.*ip-[0-9.]+:3260-iscsi-(iqn\.[^,]+)-lun-([0-9]+)'
-        if [[ "$config_line" =~ $_disk_re ]]; then
-            target="${BASH_REMATCH[1]}"
-            lun="${BASH_REMATCH[2]}"
-            target_lun_refs+=("${target}:${lun}")
+        # extracting the target IQN and LUN number via parameter expansion.
+        key="${config_line%%:*}"
+        rest_of_line="${config_line#*:}"
+        if is_disk_key "$key" && [[ "$config_line" == "$key:"* ]] \
+            && [[ "$rest_of_line" == *"ip-"[0-9.]*":3260-iscsi-iqn."*"-lun-"[0-9]* ]]; then
+            after="${rest_of_line##*-iscsi-}"
+            target="${after%-lun-*}"
+            lun_and_rest="${after##*-lun-}"
+            lun="${lun_and_rest%%[!0-9]*}"
+            if [[ -n "$lun" && "$target" == iqn.* && "$target" != *,* ]]; then
+                target_lun_refs+=("${target}:${lun}")
+            fi
         fi
     done < "$proxmoxconfig"
 
     if [[ ${#target_lun_refs[@]} -gt 0 ]]; then
-        ssh root@"$STORAGE_HOST" bash -s "$VMID" \
+        ssh root@"$storage_host" bash -s "$vmid" \
             "${target_lun_refs[@]}" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-VMID="$1"
+vmid="$1"
 shift
 
 declare -A referenced_zvols=()
@@ -230,24 +268,33 @@ for ref in "$@"; do
     IFS=: read -r target lun <<< "$ref"
     [[ -n "$target" && -n "$lun" ]] || continue
 
-    # Find the backstore name mapped to this target/LUN.
-    # Pattern "lun${lun}[^0-9]" matches lun0 without matching lun01.
-    backstore=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep -E "lun${lun}[^0-9]" \
-        | grep -oP 'block/\K\S+' \
-        | head -1)
+    # Find the backstore name mapped to this target/LUN. Match lun0 without
+    # matching lun01: the character after "lun${lun}" must not be a digit.
+    backstore=""
+    while IFS= read -r lun_line; do
+        [[ "$lun_line" == *"lun${lun}"* ]] || continue
+        after_lun="${lun_line#*"lun${lun}"}"
+        [[ -z "$after_lun" || "$after_lun" =~ ^[0-9] ]] && continue
+        [[ "$lun_line" == *"block/"* ]] || continue
+        backstore="${lun_line#*"block/"}"
+        backstore="${backstore%%[[:space:]]*}"
+        break
+    done < <(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null)
     if [[ -z "$backstore" ]]; then
         log_msg "WARN: Config references target ${target} LUN ${lun}" \
             "but no backstore was found"
         continue
     fi
 
-    # Map the backstore to its /dev/zvol path.
-    # Pattern '/dev/zvol/\K[^ )]+' extracts pool/dataset from the device path.
-    zvol=$(targetcli /backstores/block ls 2>/dev/null \
-        | grep " ${backstore} " \
-        | grep -oP '/dev/zvol/\K[^ )]+' \
+    # Map the backstore to its /dev/zvol path (pool/dataset).
+    zvol_line=$(targetcli /backstores/block ls 2>/dev/null \
+        | grep -F " ${backstore} " \
         | head -1)
+    zvol=""
+    if [[ "$zvol_line" == *"/dev/zvol/"* ]]; then
+        zvol="${zvol_line#*"/dev/zvol/"}"
+        zvol="${zvol%%[ )]*}"
+    fi
     if [[ -z "$zvol" ]]; then
         log_msg "WARN: Backstore ${backstore} has no zvol"
         continue
@@ -264,30 +311,32 @@ while IFS= read -r orphan_zvol; do
         log_msg "WARN: Orphaned zvol not referenced in config:" \
             "${orphan_zvol}"
     fi
-done < <(zfs list -H -t volume -o name 2>/dev/null \
-    | grep -E "/proxmox/vm-${VMID}-disk-[0-9]+$")
+done < <(zfs list -H -t volume -o name 2>/dev/null | while IFS= read -r vol; do
+    vol_tail="${vol##*"/proxmox/vm-${vmid}-disk-"}"
+    [[ "$vol_tail" =~ ^[0-9]+$ ]] && echo "$vol"
+done)
 SSHEOF
     fi
 }
 
 [[ $# -eq 1 ]] || usage
 
-VMID="$1"
-[[ "$VMID" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $VMID"; exit 1; }
+vmid="$1"
+[[ "$vmid" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $vmid"; exit 1; }
 [[ $EUID -eq 0 || ${ARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || {
     log_msg "FATAL: Must run as root (use sudo)"
     exit 1
 }
 
 # --- If not on the compute host, delegate (two-node only) ---
-if is_two_node && [[ "$MY_HOST" != "$COMPUTE_HOST" ]]; then
-    REMOTE_SCRIPT=$(remote_zfsutility_script "$COMPUTE_HOST" "archive-vm")
-    exec ssh -t root@"$COMPUTE_HOST" \
-        "$REMOTE_SCRIPT '$VMID'"
+if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
+    remote_script=$(remote_zfsutility_script "$compute_host" "archive-vm")
+    exec ssh -t root@"$compute_host" \
+        "$remote_script '$vmid'"
 fi
 
 log_msg "INFO: === archive-vm ==="
-log_msg "INFO:   VM: ${VMID}"
+log_msg "INFO:   VM: ${vmid}"
 echo ""
 
 # =======================================================================
@@ -297,31 +346,36 @@ echo ""
 log_msg "INFO: --- Step 1: Discovering dependent clones ---"
 
 if is_single_node; then
+    # index() does a fixed-string substring test (no regex literals).
     clone_info=$(zfs list -H -o name,origin \
-        | awk -v v="$VMID" '$2 ~ "/proxmox/vm-" v "-disk-" {print $1 "\t" $2}')
+        | awk -v v="$vmid" 'index($2, "/proxmox/vm-" v "-disk-") {print $1 "\t" $2}')
 else
-    clone_info=$(ssh root@"$STORAGE_HOST" bash -s "$VMID" << 'SSHEOF'
+    clone_info=$(ssh root@"$storage_host" bash -s "$vmid" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-VMID="$1"
+vmid="$1"
+# index() does a fixed-string substring test (no regex literals).
 zfs list -H -o name,origin \
-    | awk -v v="$VMID" '$2 ~ "/proxmox/vm-" v "-disk-" {print $1 "\t" $2}'
+    | awk -v v="$vmid" 'index($2, "/proxmox/vm-" v "-disk-") {print $1 "\t" $2}'
 SSHEOF
-    ) || { log_msg "FATAL: SSH to $STORAGE_HOST failed"; exit 1; }
+    ) || { log_msg "FATAL: SSH to $storage_host failed"; exit 1; }
 fi
 
 declare -A clone_vmids
 if [[ -n "$clone_info" ]]; then
     log_msg "INFO:   Found dependent clones:"
     while IFS=$'\t' read -r zvol origin; do
-        # grep -oP '/proxmox/vm-\K[0-9]+(?=-disk-)'
-        # Purpose: Extract the VM ID from a zvol path using PCRE lookaround assertions.
-        #          \K resets the match start; (?=-disk-) is a positive lookahead.
-        # Example: "threeamigos/proxmox/vm-105-disk-0" -> match ("105")
-        clone_vmid=$(echo "$zvol" | grep -oP '/proxmox/vm-\K[0-9]+(?=-disk-)')
-        if [[ -n "$clone_vmid" && "$clone_vmid" != "$VMID" ]]; then
+        # Extract the VM ID from a zvol path via parameter expansion.
+        # Example: "threeamigos/proxmox/vm-105-disk-0" -> "105"
+        clone_vmid=""
+        if [[ "$zvol" == *"/proxmox/vm-"*"-disk-"* ]]; then
+            vm_part="${zvol#*"/proxmox/vm-"}"
+            clone_vmid="${vm_part%%-disk-*}"
+            [[ "$clone_vmid" =~ ^[0-9]+$ ]] || clone_vmid=""
+        fi
+        if [[ -n "$clone_vmid" && "$clone_vmid" != "$vmid" ]]; then
             clone_vmids["$clone_vmid"]=1
             log_msg "INFO:     VM ${clone_vmid}: ${zvol}"
             log_msg "INFO:       origin: ${origin}"
@@ -329,7 +383,7 @@ if [[ -n "$clone_info" ]]; then
     done <<< "$clone_info"
     echo ""
 
-    if ask_yn "Promote all clones to sever dependency on VM ${VMID}?"; then
+    if ask_yn "Promote all clones to sever dependency on VM ${vmid}?"; then
         for clone_vmid in "${!clone_vmids[@]}"; do
             echo ""
             log_msg "INFO: Promoting VM ${clone_vmid}..."
@@ -350,7 +404,7 @@ echo ""
 # Step 2: Archive
 # =======================================================================
 
-log_msg "INFO: --- Step 2: Archiving VM ${VMID} ---"
+log_msg "INFO: --- Step 2: Archiving VM ${vmid} ---"
 
 # Always prompt for archive base path
 configured_path=$(get_json_archive_path)
@@ -361,45 +415,45 @@ else
 fi
 
 read -rp "$(build_archive_prompt "$default_prompt")" user_path
-ARCHIVE_BASE="${user_path:-$configured_path}"
+archive_base="${user_path:-$configured_path}"
 
-[[ -n "$ARCHIVE_BASE" ]] || { log_msg "FATAL: Archive base path is required"; exit 1; }
+[[ -n "$archive_base" ]] || { log_msg "FATAL: Archive base path is required"; exit 1; }
 
 # Validate the base exists as a ZFS dataset
 if is_single_node; then
-    if ! zfs list -H -o name "$ARCHIVE_BASE" >/dev/null 2>&1; then
-        { log_msg "FATAL: Not a ZFS dataset: $ARCHIVE_BASE"; exit 1; }
+    if ! zfs list -H -o name "$archive_base" >/dev/null 2>&1; then
+        { log_msg "FATAL: Not a ZFS dataset: $archive_base"; exit 1; }
     fi
 else
-    if ! ssh root@"$STORAGE_HOST" "zfs list -H -o name '$ARCHIVE_BASE'" \
+    if ! ssh root@"$storage_host" "zfs list -H -o name '$archive_base'" \
             >/dev/null 2>&1; then
-        { log_msg "FATAL: Not a ZFS dataset on $STORAGE_HOST: $ARCHIVE_BASE"; exit 1; }
+        { log_msg "FATAL: Not a ZFS dataset on $storage_host: $archive_base"; exit 1; }
     fi
 fi
 
 # Save the path back to JSON (in case it changed or was empty)
-if [[ "$ARCHIVE_BASE" != "$configured_path" ]]; then
-    save_json_archive_path "$ARCHIVE_BASE"
+if [[ "$archive_base" != "$configured_path" ]]; then
+    save_json_archive_path "$archive_base"
     log_msg "INFO:   ✓ Saved archive path to JSON config"
 fi
 
 # Get mountpoint of the base dataset
 if is_single_node; then
-    ARCHIVE_MOUNT=$(zfs get -H -o value mountpoint "$ARCHIVE_BASE")
+    archive_mount=$(zfs get -H -o value mountpoint "$archive_base")
 else
-    ARCHIVE_MOUNT=$(ssh root@"$STORAGE_HOST" \
-        "zfs get -H -o value mountpoint '$ARCHIVE_BASE'")
+    archive_mount=$(ssh root@"$storage_host" \
+        "zfs get -H -o value mountpoint '$archive_base'")
 fi
 
-proxmoxconfig="${PVE_CONF_DIR}/${VMID}.conf"
+proxmoxconfig="${pve_conf_dir}/${vmid}.conf"
 [[ -f "$proxmoxconfig" ]] || { log_msg "FATAL: Proxmox config not found: $proxmoxconfig"; exit 1; }
 
 # Find only the zvols actually referenced by the VM config.
 zvols=$(collect_referenced_zvols | sort -u) \
     || { log_msg "FATAL: Failed to discover referenced zvols"; exit 1; }
-[[ -n "$zvols" ]] || { log_msg "FATAL: No referenced zvols found for VM ${VMID}"; exit 1; }
+[[ -n "$zvols" ]] || { log_msg "FATAL: No referenced zvols found for VM ${vmid}"; exit 1; }
 
-log_msg "INFO:   Archive base: ${ARCHIVE_BASE} (mount: ${ARCHIVE_MOUNT})"
+log_msg "INFO:   Archive base: ${archive_base} (mount: ${archive_mount})"
 log_msg "INFO:   Zvols to archive:"
 while IFS= read -r _zvol; do
     log_msg "INFO:     ${_zvol}"
@@ -420,7 +474,7 @@ for zvol in $zvols; do
         exit 1
     fi
     snap_name="@${snap##*@}"
-    archive_dataset="${ARCHIVE_BASE}/${zvol}"
+    archive_dataset="${archive_base}/${zvol}"
 
     log_msg "INFO:   Snapshot to archive: ${snap}"
 
@@ -438,26 +492,31 @@ for zvol in $zvols; do
         fi
 
         # Save original volblocksize
-        echo "$orig_vbs" > "${ARCHIVE_MOUNT}/${zvol}.original_volblocksize"
+        echo "$orig_vbs" > "${archive_mount}/${zvol}.original_volblocksize"
 
         # Save disk info sidecar for unarchive
-        # grep -oP 'disk-\K[0-9]+$'
-        # Purpose: Extract the disk number from a zvol path using \K to drop the "disk-" prefix.
-        # Example: "threeamigos/proxmox/vm-105-disk-0" -> match ("0")
-        disknum=$(echo "$zvol" | grep -oP 'disk-\K[0-9]+$')
-        # grep -E "^[a-z]+[0-9]+:.*:vm-${VMID}-disk-${disknum},""  —  Find the Proxmox config
-        #   disk key (e.g. "scsi0") for a given VM disk number.
-        disk_key=$(grep -E "^[a-z]+[0-9]+:.*:vm-${VMID}-disk-${disknum}," \
-            "$proxmoxconfig" | head -1 | cut -d: -f1)
+        # Extract the disk number from the zvol path (e.g. "...disk-0" -> "0").
+        disknum=$(disk_number_from_zvol "$zvol")
+        # Find the Proxmox config disk key (e.g. "scsi0") for this disk
+        # number; first matching line wins (as with the old head -1).
+        disk_key=""
+        while IFS= read -r config_line; do
+            key="${config_line%%:*}"
+            is_disk_key "$key" || continue
+            [[ "$config_line" == "$key:"*":vm-${vmid}-disk-${disknum},"* ]] \
+                || continue
+            disk_key="$key"
+            break
+        done < "$proxmoxconfig"
         if [[ -n "$disk_key" ]]; then
-            info_file="${ARCHIVE_MOUNT}/${zvol}.disk_info"
+            info_file="${archive_mount}/${zvol}.disk_info"
             echo "DISK_KEY=${disk_key}" > "$info_file"
         fi
     else
         # Two-node: delegate to storage host
         log_msg "INFO:   Archiving ${zvol}${snap_name} → ${archive_dataset}"
-        if ! ssh root@"$STORAGE_HOST" bash -s "$zvol" "$snap_name" \
-                "$archive_dataset" "$ARCHIVE_MOUNT" "$VMID" \
+        if ! ssh root@"$storage_host" bash -s "$zvol" "$snap_name" \
+                "$archive_dataset" "$archive_mount" "$vmid" \
                 "$proxmoxconfig" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
@@ -467,7 +526,7 @@ zvol="$1"
 snap_name="$2"
 archive_dataset="$3"
 archive_mount="$4"
-VMID="$5"
+vmid="$5"
 proxmoxconfig="$6"
 
 # Get original volblocksize on the storage host
@@ -485,22 +544,32 @@ fi
 echo "$orig_vbs" > "${archive_mount}/${zvol}.original_volblocksize"
 
 # Save disk info sidecar for unarchive
-# grep -oP 'disk-\K[0-9]+$'  —  Extract disk number from zvol path (see comment above).
-disknum=$(echo "$zvol" | grep -oP 'disk-\K[0-9]+$')
-backstore="vm-${VMID}-disk-${disknum}"
+# Extract disk number from zvol path (e.g. "...disk-0" -> "0").
+disknum=""
+if [[ "$zvol" == *-disk-* ]]; then
+    disknum="${zvol##*-disk-}"
+    [[ "$disknum" =~ ^[0-9]+$ ]] || disknum=""
+fi
+backstore="vm-${vmid}-disk-${disknum}"
 
 # Find target and LUN for this backstore
 target=""
 lun=""
-# grep -oP 'iqn\.[^/]+'  —  Extract IQN strings from targetcli output.
-#   Matches "iqn." followed by non-slash characters.
-for t in $(targetcli "/iscsi" ls 2>/dev/null | grep -oP 'iqn\.[^/]+' | sort -u); do
-    # grep -oP 'lun\K[0-9]+'  —  Extract the LUN number for this backstore.
-    #   \K drops "lun" so only the digits are returned.
+# Extract IQN strings from targetcli output: each target name is a whole
+# whitespace-delimited token starting with "iqn." (targetcli separates the
+# name from its dotted leader with a space).
+for t in $(targetcli "/iscsi" ls 2>/dev/null | while IFS= read -r _t_line; do
+    read -ra _t_words <<< "$_t_line"
+    for _t in "${_t_words[@]}"; do
+        case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
+    done
+done | sort -u); do
+    # Extract the LUN number for this backstore ("lun0" -> "0").
     found_lun=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
-        | grep " ${backstore} " \
-        | grep -oP 'lun\K[0-9]+' \
+        | grep -F " ${backstore} " \
+        | grep -oE 'lun[0-9]+' \
         | head -1)
+    found_lun="${found_lun#lun}"
     if [[ -n "$found_lun" ]]; then
         target="$t"
         lun="$found_lun"
@@ -510,9 +579,19 @@ done
 
 # Find disk key in config
 if [[ -n "$target" && -n "$lun" ]]; then
-    disk_key=$(grep -E \
-        "^[a-z]+[0-9]+:.*ip-[0-9.]+:3260-iscsi-${target}-lun-${lun}" \
-        "$proxmoxconfig" | head -1 | cut -d: -f1)
+    disk_key=""
+    while IFS= read -r config_line; do
+        key="${config_line%%:*}"
+        trailing="${key##*[a-z]}"
+        leading="${key%"$trailing"}"
+        [[ -n "$leading" && "$leading" =~ ^[a-z]+$ && "$trailing" =~ ^[0-9]+$ ]] \
+            || continue
+        [[ "$config_line" == "$key:"* ]] || continue
+        [[ "$config_line" == *"ip-"[0-9.]":3260-iscsi-${target}-lun-${lun}"* ]] \
+            || continue
+        disk_key="$key"
+        break
+    done < "$proxmoxconfig"
     if [[ -n "$disk_key" ]]; then
         info_file="${archive_mount}/${zvol}.disk_info"
         echo "DISK_KEY=${disk_key}" > "$info_file"
@@ -531,14 +610,14 @@ SSHEOF
 done
 
 # Archive Proxmox config — mirror the full path under the base mountpoint
-config_dest_mount="${ARCHIVE_MOUNT}/${proxmoxconfig}"
+config_dest_mount="${archive_mount}/${proxmoxconfig}"
 if is_single_node; then
     mkdir -p "$(dirname "$config_dest_mount")"
     cp "$proxmoxconfig" "$config_dest_mount"
 else
     # Two-node: copy config to storage host's archive mount
-    ssh root@"$STORAGE_HOST" "mkdir -p '$(dirname "$config_dest_mount")'"
-    scp -q "$proxmoxconfig" "root@${STORAGE_HOST}:${config_dest_mount}"
+    ssh root@"$storage_host" "mkdir -p '$(dirname "$config_dest_mount")'"
+    scp -q "$proxmoxconfig" "root@${storage_host}:${config_dest_mount}"
 fi
 log_msg "INFO:   ✓ Config archived: ${proxmoxconfig}"
 echo ""
@@ -551,7 +630,7 @@ log_msg "INFO: --- Step 3: Verifying archive ---"
 
 errors=0
 for zvol in $zvols; do
-    archive_dataset="${ARCHIVE_BASE}/${zvol}"
+    archive_dataset="${archive_base}/${zvol}"
     if is_single_node; then
         if ! zfs list -H "$archive_dataset" >/dev/null 2>&1; then
             log_msg "FATAL: MISSING dataset: ${archive_dataset}"
@@ -561,19 +640,19 @@ for zvol in $zvols; do
             log_msg "INFO:   ✓ ${archive_dataset} (${size})"
         fi
     else
-        if ! ssh root@"$STORAGE_HOST" "zfs list -H '$archive_dataset'" \
+        if ! ssh root@"$storage_host" "zfs list -H '$archive_dataset'" \
                 >/dev/null 2>&1; then
             log_msg "FATAL: MISSING dataset: ${archive_dataset}"
             ((++errors))
         else
-            size=$(ssh root@"$STORAGE_HOST" \
+            size=$(ssh root@"$storage_host" \
                 "zfs get -H -o value volsize '$archive_dataset'")
             log_msg "INFO:   ✓ ${archive_dataset} (${size})"
         fi
     fi
 done
 
-config_dest_mount="${ARCHIVE_MOUNT}/${proxmoxconfig}"
+config_dest_mount="${archive_mount}/${proxmoxconfig}"
 
 if is_single_node; then
     if [[ ! -f "$config_dest_mount" ]] || [[ ! -s "$config_dest_mount" ]]; then
@@ -583,7 +662,7 @@ if is_single_node; then
         log_msg "INFO:   ✓ Config archive OK"
     fi
 else
-    if ! ssh root@"$STORAGE_HOST" "[[ -f '$config_dest_mount' && -s '$config_dest_mount' ]]"; then
+    if ! ssh root@"$storage_host" "[[ -f '$config_dest_mount' && -s '$config_dest_mount' ]]"; then
         log_msg "FATAL: Config archive missing or empty"
         ((++errors))
     else
@@ -605,16 +684,16 @@ echo ""
 
 log_msg "INFO: --- Step 4: VM removal ---"
 
-if ! ask_yn "Remove VM ${VMID}?"; then
-    log_msg "INFO: VM ${VMID} preserved. Archive is under: ${ARCHIVE_BASE}"
+if ! ask_yn "Remove VM ${vmid}?"; then
+    log_msg "INFO: VM ${vmid} preserved. Archive is under: ${archive_base}"
     exit 0
 fi
 
 # Stop the VM if running
-vm_status=$(qm status "$VMID" 2>/dev/null | awk '{print $2}')
+vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
 if [[ "$vm_status" == "running" ]]; then
-    log_msg "INFO:   Stopping VM ${VMID}..."
-    qm stop "$VMID" 2>/dev/null || true
+    log_msg "INFO:   Stopping VM ${vmid}..."
+    qm stop "$vmid" 2>/dev/null || true
     sleep 2
 fi
 
@@ -632,13 +711,13 @@ if is_single_node; then
 else
     log_msg "INFO:   Removing disks and iSCSI resources..."
     for zvol in $zvols; do
-        # grep -oP 'disk-\K[0-9]+$'  —  Extract disk number from zvol path (see comment above).
-        disknum=$(echo "$zvol" | grep -oP 'disk-\K[0-9]+$')
+        # Extract disk number from zvol path (e.g. "...disk-0" -> "0").
+        disknum=$(disk_number_from_zvol "$zvol")
         pool="${zvol%%/*}"
         log_msg "INFO:     Removing disk ${disknum} from pool ${pool}..."
-        remote_remove_vm_disk=$(remote_zfsutility_script "$STORAGE_HOST" "remove-vm-disk")
-        ssh root@"$STORAGE_HOST" \
-            "$remote_remove_vm_disk '$pool' '$VMID' '$disknum'" \
+        remote_remove_vm_disk=$(remote_zfsutility_script "$storage_host" "remove-vm-disk")
+        ssh root@"$storage_host" \
+            "$remote_remove_vm_disk '$pool' '$vmid' '$disknum'" \
             || log_msg "WARN: Could not remove disk ${disknum}"
     done
 fi
@@ -649,5 +728,5 @@ rm -f "$proxmoxconfig"
 
 echo ""
 log_msg "INFO: === Done ==="
-log_msg "INFO:   VM ${VMID} has been archived."
-log_msg "INFO:   Archive: ${ARCHIVE_BASE}"
+log_msg "INFO:   VM ${vmid} has been archived."
+log_msg "INFO:   Archive: ${archive_base}"

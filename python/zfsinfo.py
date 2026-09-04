@@ -82,7 +82,8 @@ def print_pools(pools):
             health = f"** {health} **"
 
         log_msg(
-            f"INFO: {pool['name']:<20} {pool['size']:>8} {pool['alloc']:>8} {pool['free']:>8} {health:<10}"
+            f"INFO: {pool['name']:<20} {pool['size']:>8} {pool['alloc']:>8} "
+            f"{pool['free']:>8} {health:<10}"
         )
 
     log_msg("INFO: ")
@@ -129,7 +130,8 @@ def print_summary(pools, datasets, snapshot_counts):
     degraded_pools = sum(1 for p in pools if p["health"] != "ONLINE")
 
     log_msg(
-        f"INFO:   Pools:     {len(pools)} total ({online_pools} online, {degraded_pools} degraded/offline)"
+        f"INFO:   Pools:     {len(pools)} total "
+        f"({online_pools} online, {degraded_pools} degraded/offline)"
     )
     log_msg(f"INFO:   Datasets:  {len(datasets)}")
     log_msg(f"INFO:   Snapshots: {total_snapshots}")

@@ -28,7 +28,7 @@ EOF
 zfslock_init() { true; }
 zfslock_wait_or_resolve() {
     echo "\$1 \$2" >> "$lock_log"
-    ZFSLOCK_ID="$tmpdir/lock_\$1"
+    zfslock_id="$tmpdir/lock_\$1"
     return 0
 }
 zfslock_release() { true; }
@@ -111,7 +111,7 @@ EOF
 zfslock_init() { true; }
 zfslock_wait_or_resolve() {
     echo "\$1 \$2" >> "$lock_log"
-    ZFSLOCK_ID="$tmpdir/lock_\$1"
+    zfslock_id="$tmpdir/lock_\$1"
     return 0
 }
 zfslock_release() { true; }

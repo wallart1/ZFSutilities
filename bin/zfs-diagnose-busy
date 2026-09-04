@@ -15,6 +15,18 @@
 #   - Running VM using the zvol
 #   - NFS / SMB shares
 
+# Return 0 if $1 is exactly vm-<vmid>-disk-<n> with numeric vmid and disk
+# number. Implemented with a glob shape test plus fixed-string digit checks
+# on the numeric parts (no regex literals).
+is_vm_disk_basename() {
+    local _s="$1"
+    [[ "$_s" == vm-*-disk-* ]] || return 1
+    local _mid="${_s#vm-}"; _mid="${_mid%%-disk-*}"
+    local _end="${_s##*-disk-}"
+    [[ -n "$_mid" && "$_mid" != *[!0-9]* && -n "$_end" && "$_end" != *[!0-9]* \
+        && "${_s#*-disk-}" != *-disk-* ]]
+}
+
 function diagnose_dataset_busy {
     local target="$1"
     local destroy_stderr="${2:-}"
@@ -148,7 +160,7 @@ function diagnose_dataset_busy {
     # 6. iSCSI LUN exposure (zvols only)
     # ------------------------------------------------------------------
     local bsname="${target##*/}"
-    if [[ "$bsname" =~ ^vm-[0-9]+-disk-[0-9]+$ ]]; then
+    if is_vm_disk_basename "$bsname"; then
         if command -v targetcli >/dev/null 2>&1; then
             if targetcli /backstores/block ls 2>/dev/null | grep -q " ${bsname} "; then
                 local lun_info=""
@@ -156,12 +168,20 @@ function diagnose_dataset_busy {
                 while IFS= read -r t; do
                     local lun_num
                     lun_num=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
-                        | grep "$bsname" | grep -oP 'lun\K[0-9]+' | head -1)
+                        | grep "$bsname" | grep -oE 'lun[0-9]+' | head -1 \
+                        | sed 's/^lun//')
                     if [[ -n "$lun_num" ]]; then
                         lun_info="${t} (LUN ${lun_num})"
                         break
                     fi
-                done < <(targetcli /iscsi ls 2>/dev/null | grep -oP 'iqn\.\S+')
+                done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
+                    # targetcli separates each target name from its dotted
+                    # leader with a space, so the IQN is a whole token.
+                    read -ra _t_words <<< "$_t_line"
+                    for _t in "${_t_words[@]}"; do
+                        case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
+                    done
+                done)
 
                 if [[ -n "$lun_info" ]]; then
                     log_msg "WARN:   → Zvol is exposed as an iSCSI LUN on ${lun_info}."
@@ -178,8 +198,9 @@ function diagnose_dataset_busy {
     # ------------------------------------------------------------------
     # 7. Running VM using the zvol
     # ------------------------------------------------------------------
-    if [[ "$bsname" =~ ^vm-([0-9]+)-disk-[0-9]+$ ]]; then
-        local vmid="${BASH_REMATCH[1]}"
+    if is_vm_disk_basename "$bsname"; then
+        local vmid="${bsname#vm-}"
+        vmid="${vmid%%-disk-*}"
         if command -v qm >/dev/null 2>&1; then
             local vm_status
             vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')

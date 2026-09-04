@@ -18,21 +18,27 @@
 #
 # After this file has been sourced, the following are available to the caller:
 #
-#   NODE_MODE         "single-node" or "two-node"
-#   STORAGE_HOST      short hostname of the storage host (= THIS_HOST in single-node)
-#   COMPUTE_HOST      short hostname of the compute host (= THIS_HOST in single-node)
-#   THIS_HOST         short hostname of this machine (always set)
+#   node_mode         "single-node" or "two-node" (copied from NODE_MODE)
+#   storage_host      short hostname of the storage host (= this_host in single-node)
+#   compute_host      short hostname of the compute host (= this_host in single-node)
+#   this_host         short hostname of this machine (always set)
 #
 #   Two-node only:
-#   STORAGE_IP        iSCSI portal IP on the storage network
-#   IQN_PREFIX        iSCSI target IQN prefix
-#   POOL_TARGET       associative array: pool name -> target short name
+#   storage_ip        iSCSI portal IP on the storage network
+#   iqn_prefix        iSCSI target IQN prefix
+#   pool_target       associative array: pool name -> target short name
+#                     (copied from POOL_TARGET)
+#
+#   The node config file itself uses the uppercase names NODE_MODE,
+#   STORAGE_HOST, COMPUTE_HOST, STORAGE_IP, IQN_PREFIX, POOL_TARGET.
+#   Those are externally set (config file / tests) and stay uppercase; this
+#   library exposes lowercase copies for internal use.
 #
 #   is_single_node          returns 0 in single-node mode
 #   is_two_node             returns 0 in two-node mode
 #   pool_to_target <pool>   echoes the full IQN (two-node only), returns 1 if unknown or single-node
-#   pool_list               echoes valid pool names from POOL_TARGET (two-node only)
-#   is_known_pool <pool>    returns 0 if pool is in POOL_TARGET (two-node only; always 1 in single-node)
+#   pool_list               echoes valid pool names from pool_target (two-node only)
+#   is_known_pool <pool>    two-node: returns 0 if pool is in pool_target; else 1
 #   gen_mac                 generates a Proxmox-compatible random MAC address
 #   get_json_archive_path   reads archive_path from the JSON config file
 
@@ -82,23 +88,26 @@ fi
 source "$NODE_CONF"
 
 # Backward compat: configs without NODE_MODE are legacy two-node configs
-: "${NODE_MODE:=two-node}"
+node_mode="${NODE_MODE:-two-node}"
+this_host=$(hostname -s)
 
-THIS_HOST=$(hostname -s)
-
-is_single_node() { [[ "$NODE_MODE" == "single-node" ]]; }
-is_two_node()    { [[ "$NODE_MODE" == "two-node" ]]; }
+is_single_node() { [[ "$node_mode" == "single-node" ]]; }
+is_two_node()    { [[ "$node_mode" == "two-node" ]]; }
 
 if is_single_node; then
-    : "${THIS_HOST:=$(hostname -s)}"
-    STORAGE_HOST="$THIS_HOST"
-    COMPUTE_HOST="$THIS_HOST"
-    STORAGE_IP=""
-    IQN_PREFIX=""
-    declare -A POOL_TARGET=() 2>/dev/null || true
+    storage_host="${STORAGE_HOST:-$this_host}"
+    compute_host="${COMPUTE_HOST:-$this_host}"
+    storage_ip="${STORAGE_IP:-}"
+    iqn_prefix="${IQN_PREFIX:-}"
+    declare -A pool_target=() 2>/dev/null || true
 else
-    # Two-node mode: validate required vars
-    for _v in STORAGE_HOST COMPUTE_HOST STORAGE_IP IQN_PREFIX; do
+    # Two-node mode: copy the externally set config vars to lowercase and
+    # validate the copies.
+    storage_host="${STORAGE_HOST:-}"
+    compute_host="${COMPUTE_HOST:-}"
+    storage_ip="${STORAGE_IP:-}"
+    iqn_prefix="${IQN_PREFIX:-}"
+    for _v in storage_host compute_host storage_ip iqn_prefix; do
         if [[ -z "${!_v:-}" ]]; then
             log_msg "FATAL: $NODE_CONF: $_v is empty or unset"
             exit 1
@@ -110,6 +119,11 @@ else
         log_msg "FATAL: $NODE_CONF: POOL_TARGET associative array is not declared"
         exit 1
     fi
+    declare -A pool_target=()
+    for _pool in "${!POOL_TARGET[@]}"; do
+        pool_target["$_pool"]="${POOL_TARGET[$_pool]}"
+    done
+    unset _pool
 fi
 
 # pool_to_target <pool> -> echoes the full IQN, returns 1 if pool unknown or single-node
@@ -119,24 +133,24 @@ pool_to_target() {
         log_msg "WARN: pool_to_target: iSCSI not available in single-node mode"
         return 1
     fi
-    local short="${POOL_TARGET[$pool]:-}"
+    local short="${pool_target[$pool]:-}"
     if [[ -z "$short" ]]; then
         log_msg "WARN: Unknown pool: $pool (not in POOL_TARGET in $NODE_CONF)"
         return 1
     fi
-    echo "${IQN_PREFIX}:${short}"
+    echo "${iqn_prefix}:${short}"
 }
 
 # pool_list -> echoes valid pool names, one per line (two-node only; empty in single-node)
 pool_list() {
     is_single_node && return 0
-    printf '%s\n' "${!POOL_TARGET[@]}"
+    printf '%s\n' "${!pool_target[@]}"
 }
 
 # is_known_pool <pool> -> 0 if in POOL_TARGET, 1 otherwise (always 1 in single-node)
 is_known_pool() {
     is_single_node && return 1
-    [[ -n "${POOL_TARGET[$1]:-}" ]]
+    [[ -n "${pool_target[$1]:-}" ]]
 }
 
 # remote_zfsutilities_bin <host>
@@ -147,7 +161,9 @@ remote_zfsutilities_bin() {
     local host="$1"
     local bin_path
     bin_path=$(ssh -o ConnectTimeout=10 "root@${host}" \
-        'realpath /usr/local/lib/zfsutilities/current/bin 2>/dev/null || readlink -f /usr/local/lib/zfsutilities/current/bin 2>/dev/null' 2>/dev/null)
+        'realpath /usr/local/lib/zfsutilities/current/bin 2>/dev/null' \
+        '|| readlink -f /usr/local/lib/zfsutilities/current/bin 2>/dev/null' \
+        2>/dev/null)
     if [[ -n "$bin_path" ]]; then
         printf '%s\n' "$bin_path"
         return 0
@@ -187,7 +203,8 @@ gen_mac() {
 
 # Read the archive_path value from the JSON config file.
 get_json_archive_path() {
-    local config_file="${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
+    local config_file=\
+"${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
     # Legacy fallback: use the old path if the new one has not been migrated yet.
     local legacy_config="${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
     if [[ ! -e "$config_file" && -f "$legacy_config" ]]; then

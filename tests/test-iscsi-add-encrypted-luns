@@ -30,7 +30,7 @@ _run_iscsi_add_encrypted_luns() {
     cat > "$node_lib" <<'EOF'
 is_single_node() { return 1; }
 is_two_node() { return 0; }
-IQN_PREFIX="iqn.2026-02.local.stewie"
+iqn_prefix="iqn.2026-02.local.stewie"
 EOF
 
     cat > "$tmpdir/safe-iscsi-save" <<'EOF'

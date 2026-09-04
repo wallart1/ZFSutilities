@@ -744,12 +744,86 @@ class TestHealthIcon(unittest.TestCase):
         self.assertIn("#FF8C00", dp._health_icon("UNKNOWN"))
 
 
-class TestResultIcon(unittest.TestCase):
-    def test_success(self):
-        self.assertIn("#00AA00", dp._result_icon("success"))
+class TestOutcomeMarkup(unittest.TestCase):
+    """_outcome_markup shows the highest message level, not just failed/✗."""
 
-    def test_failure(self):
-        self.assertIn("#CC0000", dp._result_icon("failure"))
+    def test_fatal_is_red(self):
+        markup = dp._outcome_markup({"result": "failed", "highest_level": "FATAL"})
+        self.assertIn("#CC0000", markup)
+        self.assertIn("FATAL", markup)
+
+    def test_warn_is_amber(self):
+        markup = dp._outcome_markup({"result": "failed", "highest_level": "WARN"})
+        self.assertIn("#FF8C00", markup)
+        self.assertIn("WARN", markup)
+
+    def test_warn_is_not_failed(self):
+        markup = dp._outcome_markup({"result": "failed", "highest_level": "WARN"})
+        self.assertNotIn("✗", markup)
+        self.assertNotIn("failed", markup)
+
+    def test_info_is_green(self):
+        markup = dp._outcome_markup({"result": "success", "highest_level": "INFO"})
+        self.assertIn("#00AA00", markup)
+        self.assertIn("INFO", markup)
+
+    def test_no_level_falls_back_to_success(self):
+        markup = dp._outcome_markup({"result": "success"})
+        self.assertIn("#00AA00", markup)
+        self.assertIn("success", markup)
+
+    def test_no_level_falls_back_to_failure(self):
+        markup = dp._outcome_markup({"result": "failed"})
+        self.assertIn("#CC0000", markup)
+        self.assertIn("failed", markup)
+
+
+class TestAttachHighestLevels(unittest.TestCase):
+    """_attach_highest_levels annotates recent entries from the log index."""
+
+    def test_attaches_level_and_saves_index(self):
+        recent = [
+            {"result": "success", "log_file": "/var/log/zfsutilities/sessions/a.log"},
+            {"result": "failed", "log_file": "/var/log/zfsutilities/sessions/b.log"},
+            {"result": "success"},
+        ]
+        index = MagicMock()
+        index.update.side_effect = [
+            {"highest_level": "WARN"},
+            {"highest_level": "FATAL"},
+        ]
+        with patch.object(dp, "LogIndex") as mock_log_index:
+            mock_log_index.load.return_value = index
+            dp._attach_highest_levels(recent)
+        mock_log_index.load.assert_called_once()
+        self.assertEqual(recent[0]["highest_level"], "WARN")
+        self.assertEqual(recent[1]["highest_level"], "FATAL")
+        self.assertIsNone(recent[2]["highest_level"])
+        index.save.assert_called_once()
+
+    def test_load_failure_still_annotates_none(self):
+        recent = [{"result": "success", "log_file": "/x.log"}]
+        with patch.object(dp, "LogIndex") as mock_log_index:
+            mock_log_index.load.side_effect = OSError("no index")
+            with capture_logs() as logs:
+                dp._attach_highest_levels(recent)
+        self.assertIsNone(recent[0]["highest_level"])
+        self.assertTrue(any("Could not load log index" in m for m in logs))
+
+    def test_scan_failure_annotates_none_and_continues(self):
+        recent = [
+            {"result": "success", "log_file": "/bad.log"},
+            {"result": "success", "log_file": "/good.log"},
+        ]
+        index = MagicMock()
+        index.update.side_effect = [OSError("bad log"), {"highest_level": "INFO"}]
+        with patch.object(dp, "LogIndex") as mock_log_index:
+            mock_log_index.load.return_value = index
+            with capture_logs() as logs:
+                dp._attach_highest_levels(recent)
+        self.assertIsNone(recent[0]["highest_level"])
+        self.assertEqual(recent[1]["highest_level"], "INFO")
+        self.assertTrue(any("Could not scan log file" in m for m in logs))
 
 
 class TestCapRe(unittest.TestCase):
@@ -1101,6 +1175,89 @@ class TestCollectRunningTasks(unittest.TestCase):
         self.assertNotIn("fivebays", queue.active)
         self.assertIn("fivebays", queue.finished)
         self.assertIn("threeamigos", queue.active)
+
+
+class TestCollectScheduledTasks(unittest.TestCase):
+    """Section 4 of _collect_running_tasks: legacy pgrep/ps profile detection."""
+
+    def _idle_app(self):
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        app.scrub_queue = None
+        return app
+
+    def _pgrep_side_effect(self, pid, args):
+        """Mock subprocess.run answering pgrep and ps for one PID."""
+
+        def _run(cmd, *a, **kw):
+            result = MagicMock()
+            if cmd[0] == "pgrep":
+                result.returncode = 0
+                result.stdout = f"{pid}\n"
+            elif cmd[0] == "ps":
+                result.returncode = 0
+                result.stdout = args
+            return result
+
+        return _run
+
+    def test_cron_wrapper_is_folded_into_profile_row(self):
+        """A cron sh -c wrapper resolves its profile name and is deduped."""
+        app = self._idle_app()
+        wrapper_args = (
+            "/bin/sh -c root mkdir -p /var/log/zfsutilities "
+            "/run/lock/zfsutilities/profiles && "
+            "python3 /usr/local/lib/zfsutilities/current/python/profile_runner.py "
+            "run root-backup-dailybackup >> /var/log/zfsutilities/cron.log 2>&1"
+        )
+        with patch.object(
+            dp,
+            "list_running_profiles",
+            return_value=[
+                {
+                    "name": "root-backup-dailybackup",
+                    "pid": 2040790,
+                    "started": "2026-09-02T06:00:00",
+                    "log_file": None,
+                }
+            ],
+        ):
+            with patch(
+                "subprocess.run", side_effect=self._pgrep_side_effect(2040788, wrapper_args)
+            ):
+                tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["type"], "Profile")
+        self.assertEqual(tasks[0]["name"], "root-backup-dailybackup")
+
+    def test_legacy_runner_shows_real_profile_name(self):
+        """A runner without a lock file is listed with its resolved name."""
+        app = self._idle_app()
+        runner_args = (
+            "python3 /usr/local/lib/zfsutilities/current/python/profile_runner.py "
+            "run root-backup-dailybackup"
+        )
+        with patch.object(dp, "list_running_profiles", return_value=[]):
+            with patch("subprocess.run", side_effect=self._pgrep_side_effect(2040788, runner_args)):
+                tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["type"], "Scheduled")
+        self.assertEqual(tasks[0]["name"], "Scheduled: root-backup-dailybackup")
+        self.assertEqual(tasks[0]["status"], "PID 2040788")
+
+    def test_unparseable_args_get_informative_fallback(self):
+        """When the profile name cannot be resolved, the row still says what ran."""
+        app = self._idle_app()
+        weird_args = "python3 /usr/local/lib/zfsutilities/current/python/profile_runner.py"
+        with patch.object(dp, "list_running_profiles", return_value=[]):
+            with patch("subprocess.run", side_effect=self._pgrep_side_effect(2040788, weird_args)):
+                tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["type"], "Scheduled")
+        self.assertEqual(tasks[0]["name"], "Scheduled: profile_runner.py (PID 2040788)")
 
 
 class TestListRunningProfiles(unittest.TestCase):
@@ -2235,8 +2392,16 @@ class TestRefreshConfigSection(unittest.TestCase):
         the labels that were created.
         """
         os_infos = os_infos or {}
+        created_labels = []
+
+        def _make_label(*args, **kwargs):
+            lbl = MagicMock()
+            created_labels.append((lbl, kwargs.get("label")))
+            return lbl
+
         with mock_gtk() as gtk_mock:
-            gtk_mock.Label.side_effect = lambda *args, **kwargs: MagicMock()
+            gtk_mock.Label.side_effect = _make_label
+            gtk_mock._created_labels = created_labels
             with patch.object(dp, "Gtk", gtk_mock):
                 with patch.object(dp, "_get_node_config", return_value=cfg):
                     with patch.object(dp, "_get_host_version", side_effect=versions.get):
@@ -2277,6 +2442,37 @@ class TestRefreshConfigSection(unittest.TestCase):
         )
         # The grid attach method should have been called for the ZFS value.
         self.assertTrue(self._find_label_with_text(gtk_mock, "zfs-2.2.2"))
+
+    def test_versions_row_precedes_operating_systems_row(self):
+        """The Version(s) item renders immediately before Operating system(s)."""
+        cfg = {
+            "mode": "single-node",
+            "this_host": "myhost",
+            "storage_host": "",
+            "compute_host": "",
+        }
+        app, gtk_mock = self._run_refresh(
+            cfg,
+            versions={"myhost": "1.2.3"},
+            zfs_versions={"myhost": "zfs-2.2.2"},
+            os_infos={"myhost": ("Debian GNU/Linux", "12 (bookworm)")},
+        )
+        rows = {}
+        attach_calls = app.dashboard_config_grid.attach.call_args_list
+        for lbl_mock, text in gtk_mock._created_labels:
+            if text is not None or not lbl_mock.set_markup.called:
+                continue
+            markup = lbl_mock.set_markup.call_args[0][0]
+            for name in ("Version(s)", "Operating system(s)"):
+                if markup == f"<b>{name}:</b>":
+                    for call in attach_calls:
+                        if call[0][0] is lbl_mock and call[0][1] == 0:
+                            rows[name] = call[0][2]
+        self.assertEqual(
+            rows.get("Version(s)"),
+            rows.get("Operating system(s)", 0) - 1,
+            f"Version(s) row must immediately precede Operating system(s) row, got {rows}",
+        )
 
     def test_two_node_shows_zfs_version_per_unique_host(self):
         cfg = {

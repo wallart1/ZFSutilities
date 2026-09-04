@@ -6,9 +6,9 @@
 # It provides interactive prompts, explanations, safe remediation
 # helpers, and prerequisite-failure parsing for the prerequisite phase.
 
-# Associative array: INSTALLER_FAILURES[name]=apt_package
+# Associative array: installer_failures[name]=apt_package
 # Populated by parse_check_prerequisites_failures.
-declare -A INSTALLER_FAILURES
+declare -A installer_failures
 
 # ------------------------------------------------------------------
 # Prompts
@@ -136,13 +136,13 @@ install_doc_server() {
 # ------------------------------------------------------------------
 
 # Parse failures from check-prerequisites --list-failures output.
-# Populates the associative array INSTALLER_FAILURES[name]=package.
+# Populates the associative array installer_failures[name]=package.
 parse_check_prerequisites_failures() {
     local output="$1"
     local line name package
 
     # Clear any existing entries
-    INSTALLER_FAILURES=()
+    installer_failures=()
 
     while IFS= read -r line; do
         [[ -n "$line" ]] || continue
@@ -151,7 +151,7 @@ parse_check_prerequisites_failures() {
         name="${line%%|*}"; line="${line#*|}"
         package="${line%%|*}"; line="${line#*|}"
         # message is the remainder; we only need name→package
-        INSTALLER_FAILURES["$name"]="$package"
+        installer_failures["$name"]="$package"
     done <<< "$output"
 }
 
@@ -174,7 +174,10 @@ prerequisite_description() {
         targetcli)            echo "LIO target configuration CLI" ;;
         rtslib-fb-targetctl)  echo "LIO target systemd service" ;;
         iscsiadm)             echo "iSCSI initiator administration tool" ;;
-        pip3)                 echo "Python package installer used to install MkDocs when distribution packages are unavailable" ;;
+        pip3)
+            echo "Python package installer used to install MkDocs when" \
+                "distribution packages are unavailable"
+            ;;
         *)                    echo "$name" ;;
     esac
 }
@@ -198,7 +201,8 @@ prerequisite_why_needed() {
             echo "Required on the compute host to connect to the storage host's iSCSI targets"
             ;;
         pip3)
-            echo "Required to build the ZFSutilities documentation site (used as a fallback by the documentation-server installer)"
+            echo "Required to build the ZFSutilities documentation site" \
+                "(used as a fallback by the documentation-server installer)"
             ;;
         *)
             echo "Required by ZFSutilities"
@@ -225,11 +229,11 @@ prerequisite_remediation() {
     esac
 }
 
-# Explain every failure currently in INSTALLER_FAILURES.
+# Explain every failure currently in installer_failures.
 explain_all_failures() {
     local name package
-    for name in "${!INSTALLER_FAILURES[@]}"; do
-        package="${INSTALLER_FAILURES[$name]}"
+    for name in "${!installer_failures[@]}"; do
+        package="${installer_failures[$name]}"
         explain_prerequisite \
             "$name" \
             "$(prerequisite_description "$name")" \
@@ -238,11 +242,11 @@ explain_all_failures() {
     done
 }
 
-# Collect unique apt packages from INSTALLER_FAILURES.
+# Collect unique apt packages from installer_failures.
 collect_apt_packages() {
     local name package packages=()
-    for name in "${!INSTALLER_FAILURES[@]}"; do
-        package="${INSTALLER_FAILURES[$name]}"
+    for name in "${!installer_failures[@]}"; do
+        package="${installer_failures[$name]}"
         [[ -n "$package" ]] || continue
         # Avoid duplicates
         local found=0
@@ -511,8 +515,10 @@ check_partial_uninstall() {
         return 0
     fi
 
+    local _warning_bar
+    _warning_bar=$(printf '%.0s━' {1..204})
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "$_warning_bar"
     echo "  ⚠  WARNING: Remnants of a previous ZFSutilities installation detected"
     echo ""
     echo "  This usually means a previous uninstall was interrupted or incomplete."
@@ -520,7 +526,7 @@ check_partial_uninstall() {
     echo "  cron entries behind."
     echo ""
     echo "  It is strongly recommended to run uninstall-zfsutilities first."
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "$_warning_bar"
     echo ""
 
     if ! ask_yn "Run uninstall-zfsutilities now to clean up remnants?" "Y"; then
@@ -585,7 +591,8 @@ ensure_zfsutilities_dirs() {
 # On a new install this also removes any pool-specific policies so only
 # `default` remains. Existing user-entered profiles are preserved.
 ensure_retention_profiles() {
-    local config_path="${ZFSCONFIG_PATH:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
+    local config_path=\
+"${ZFSCONFIG_PATH:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
     local new_install="false"
     if [[ ! -f "$config_path" ]]; then
         new_install="true"

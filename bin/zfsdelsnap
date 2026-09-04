@@ -59,7 +59,7 @@ function delsnap {
         log_msg "INFO: Skipping $snaptoremove (lock conflict)."
         return 0
     fi
-    local delsnap_lock="$ZFSLOCK_ID"
+    local delsnap_lock="$zfslock_id"
 
     if [[ "$2" != '' ]]; then
         minage=$2
@@ -129,9 +129,9 @@ function delsnap {
 
     if [[ $releaseholds = 'Y' ]]; then
         delallholds "$snaptoremove" "${releaseholds_tags[@]}"
-        if [[ -n "$ZFS_DELALLHOLDS_REMAINING_TAGS" ]]; then
+        if [[ -n "$zfs_delallholds_remaining_tags" ]]; then
             log_msg "WARN: Snapshot $snaptoremove still has holds" \
-                "($ZFS_DELALLHOLDS_REMAINING_TAGS); skipping deletion."
+                "($zfs_delallholds_remaining_tags); skipping deletion."
             zfslock_release "$delsnap_lock"
             return 1
         fi

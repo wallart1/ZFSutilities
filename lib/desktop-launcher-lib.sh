@@ -6,14 +6,14 @@
 # Sourced by switch-version and the installers.
 
 # Names of launcher symlinks created in the desktop user's home directory.
-DESKTOP_LAUNCHER_NAMES=(
+desktop_launcher_names=(
     "ZFSutilities GUI"
     "ZFSutilities Documentation"
 )
 
 # Names of launcher symlinks that are no longer used.  switch-version removes
 # these when wiring or unwiring a version so stale shortcuts do not accumulate.
-OBSOLETE_DESKTOP_LAUNCHER_NAMES=()
+obsolete_desktop_launcher_names=()
 
 # Return the username that owns the current desktop session, or empty string.
 # Prefers SUDO_USER, then falls back to the owner of the X11 display socket.
@@ -117,7 +117,7 @@ remove_desktop_symlinks() {
     fi
 
     local name link
-    for name in "${DESKTOP_LAUNCHER_NAMES[@]}" "${OBSOLETE_DESKTOP_LAUNCHER_NAMES[@]}"; do
+    for name in "${desktop_launcher_names[@]}" "${obsolete_desktop_launcher_names[@]}"; do
         link="${home}/${name}"
         if [[ -L "${link}" ]]; then
             rm -f "${link}"

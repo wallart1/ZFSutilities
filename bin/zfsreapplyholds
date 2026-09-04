@@ -47,7 +47,7 @@ reapplyholds_capture() {
         log_msg "WARN: Could not acquire read lock on ${dataset}; aborting hold capture."
         return 1
     fi
-    local _capture_lock="$ZFSLOCK_ID"
+    local _capture_lock="$zfslock_id"
 
     # Enumerate snapshots and query holds directly so the function works with
     # test mocks as well as the real zfs binary.
@@ -82,7 +82,7 @@ reapplyholds_apply() {
         log_msg "WARN: Could not acquire write lock on ${dataset}; aborting hold reapply."
         return 1
     fi
-    local _apply_lock="$ZFSLOCK_ID"
+    local _apply_lock="$zfslock_id"
 
     local _applied=0
     local _skipped=0

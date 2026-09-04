@@ -1,0 +1,274 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-repair-vm-disk-sizes — Unit tests for repair-vm-disk-sizes helpers.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Extract helper functions and globals from repair-vm-disk-sizes.
+# ------------------------------------------------------------------
+old_mydir="$mydir"
+func_text=$(sed -n '/^human_size() {/,/^}$/p' "$old_mydir/bin/repair-vm-disk-sizes")
+func_text+=$'\n'
+func_text+=$(sed -n '/^size_for_volume() {/,/^}$/p' "$old_mydir/bin/repair-vm-disk-sizes")
+func_text+=$'\n'
+func_text+=$(sed -n '/^repair_conf() {/,/^}$/p' "$old_mydir/bin/repair-vm-disk-sizes")
+eval "$func_text"
+
+# Single-node mode for the size_for_volume tests.
+is_two_node() { return 1; }
+storage_host="stewie"
+
+# Per-volume device mocks: by-path volume -> resolved device -> size in bytes.
+declare -A _mock_readlink_targets=()
+declare -A _mock_blockdev_sizes=()
+readlink() {
+    if [[ "${1:-}" == "-f" ]]; then
+        echo "${_mock_readlink_targets[${2:-}]:-}"
+    fi
+    return 0
+}
+blockdev() {
+    echo "${_mock_blockdev_sizes[${2:-}]:-}"
+}
+
+# zfs volsize mock: records the zvol asked for (via file, since callers
+# capture zfs output through command substitution subshells) and returns
+# _mock_volsize.
+_mock_volsize=""
+_mock_zfs_last_zvol_file="$_mock_zfs_state_dir/zfs-last-zvol"
+zfs() {
+    local -a args=("$@")
+    echo "${args[-1]}" > "$_mock_zfs_last_zvol_file"
+    echo "$_mock_volsize"
+}
+
+reset_counters() {
+    dry_run=false
+    checked=0
+    fixed=0
+    skipped=0
+    _mock_readlink_targets=()
+    _mock_blockdev_sizes=()
+    _mock_volsize=""
+    : > "$_mock_zfs_last_zvol_file"
+}
+
+BY_PATH_LUN8="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-8"
+BY_PATH_LUN13="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13"
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_human_size_units() {
+    test_start "human_size converts bytes to largest exact binary unit"
+    assert_equals "4M" "$(human_size 4194304)"
+    assert_equals "8K" "$(human_size 8192)"
+    assert_equals "50G" "$(human_size 53687091200)"
+    assert_equals "100G" "$(human_size 107374182400)"
+    assert_equals "1T" "$(human_size 1099511627776)"
+    assert_equals "2T" "$(human_size 2199023255552)"
+    # Not a whole multiple of 1024: falls back to raw bytes.
+    assert_equals "1000" "$(human_size 1000)"
+}
+
+test_size_for_volume_by_path() {
+    test_start "size_for_volume reads block device size for by-path volume"
+    reset_counters
+    _mock_readlink_targets["$BY_PATH_LUN8"]="/dev/sdX"
+    _mock_blockdev_sizes["/dev/sdX"]="53687091200"
+    local size
+    size=$(size_for_volume "$BY_PATH_LUN8")
+    assert_equals "50G" "$size"
+}
+
+test_size_for_volume_by_path_missing_device() {
+    test_start "size_for_volume fails when by-path device cannot be resolved"
+    reset_counters
+    local size rc
+    size=$(size_for_volume "$BY_PATH_LUN8")
+    rc=$?
+    assert_equals "1" "$rc"
+    assert_equals "" "$size"
+}
+
+test_size_for_volume_by_path_bad_blockdev() {
+    test_start "size_for_volume fails when blockdev returns no size"
+    reset_counters
+    _mock_readlink_targets["$BY_PATH_LUN8"]="/dev/sdX"
+    _mock_blockdev_sizes["/dev/sdX"]=""
+    local size rc
+    size=$(size_for_volume "$BY_PATH_LUN8")
+    rc=$?
+    assert_equals "1" "$rc"
+    assert_equals "" "$size"
+}
+
+test_size_for_volume_storage_ref() {
+    test_start "size_for_volume reads zvol volsize for storage reference"
+    reset_counters
+    _mock_volsize="32G"
+    local out_file="$_mock_zfs_state_dir/volsize.out"
+    # Called directly (not via $()) so the zfs mock's recorded zvol survives.
+    size_for_volume "threeamigos:vm-105-disk-0" > "$out_file"
+    assert_equals "32G" "$(cat "$out_file")"
+    assert_equals "threeamigos/proxmox/vm-105-disk-0" \
+        "$(cat "$_mock_zfs_last_zvol_file")"
+}
+
+test_size_for_volume_storage_ref_missing() {
+    test_start "size_for_volume fails when zvol volsize is unavailable"
+    reset_counters
+    _mock_volsize=""
+    local size rc
+    size=$(size_for_volume "threeamigos:vm-105-disk-0")
+    rc=$?
+    assert_equals "1" "$rc"
+    assert_equals "" "$size"
+}
+
+test_size_for_volume_unknown_format() {
+    test_start "size_for_volume rejects an unrecognized volume identifier"
+    reset_counters
+    local rc
+    size_for_volume "something-else" >/dev/null 2>&1
+    rc=$?
+    assert_equals "1" "$rc"
+}
+
+test_repair_conf_by_path_rewrite() {
+    test_start "repair_conf fixes clobbered data disk size from block device"
+    reset_counters
+    local conf_file="$_mock_zfs_state_dir/301.conf"
+    cat > "$conf_file" << EOF
+bios: ovmf
+efidisk0: $BY_PATH_LUN13,format=raw,efitype=4m,pre-enrolled-keys=1,size=4M
+scsi0: $BY_PATH_LUN8,format=raw,discard=on,iothread=1,size=4M
+EOF
+    _mock_readlink_targets["$BY_PATH_LUN13"]="/dev/efi"
+    _mock_blockdev_sizes["/dev/efi"]="4194304"
+    _mock_readlink_targets["$BY_PATH_LUN8"]="/dev/data"
+    _mock_blockdev_sizes["/dev/data"]="53687091200"
+
+    repair_conf "$conf_file" "301"
+
+    assert_equals "2" "$checked"
+    assert_equals "1" "$fixed"
+    assert_equals "0" "$skipped"
+    # EFI disk was already correct; data disk repaired.
+    assert_contains "$(grep '^efidisk0:' "$conf_file")" "size=4M"
+    assert_contains "$(grep '^scsi0:' "$conf_file")" "size=50G"
+}
+
+test_repair_conf_already_correct() {
+    test_start "repair_conf leaves a correct size= unchanged"
+    reset_counters
+    local conf_file="$_mock_zfs_state_dir/302.conf"
+    cat > "$conf_file" << EOF
+scsi0: $BY_PATH_LUN8,format=raw,discard=on,iothread=1,size=50G
+EOF
+    _mock_readlink_targets["$BY_PATH_LUN8"]="/dev/data"
+    _mock_blockdev_sizes["/dev/data"]="53687091200"
+
+    repair_conf "$conf_file" "302"
+
+    assert_equals "1" "$checked"
+    assert_equals "0" "$fixed"
+    assert_equals "0" "$skipped"
+    assert_contains "$(grep '^scsi0:' "$conf_file")" "size=50G"
+}
+
+test_repair_conf_unresolvable_skips() {
+    test_start "repair_conf skips lines whose volume cannot be resolved"
+    reset_counters
+    local conf_file="$_mock_zfs_state_dir/303.conf"
+    cat > "$conf_file" << EOF
+scsi0: $BY_PATH_LUN8,format=raw,discard=on,iothread=1,size=4M
+EOF
+    # No readlink target: LUN not logged in.
+
+    repair_conf "$conf_file" "303"
+
+    assert_equals "1" "$checked"
+    assert_equals "0" "$fixed"
+    assert_equals "1" "$skipped"
+    assert_contains "$(grep '^scsi0:' "$conf_file")" "size=4M"
+}
+
+test_repair_conf_dry_run() {
+    test_start "repair_conf dry-run reports but does not edit"
+    reset_counters
+    dry_run=true
+    local conf_file="$_mock_zfs_state_dir/304.conf"
+    cat > "$conf_file" << EOF
+scsi0: $BY_PATH_LUN8,format=raw,discard=on,iothread=1,size=4M
+EOF
+    _mock_readlink_targets["$BY_PATH_LUN8"]="/dev/data"
+    _mock_blockdev_sizes["/dev/data"]="53687091200"
+
+    repair_conf "$conf_file" "304"
+
+    assert_equals "1" "$fixed"
+    assert_contains "$(grep '^scsi0:' "$conf_file")" "size=4M"
+}
+
+test_repair_conf_ignores_non_disk_lines() {
+    test_start "repair_conf touches only disk lines with a size= parameter"
+    reset_counters
+    local conf_file="$_mock_zfs_state_dir/305.conf"
+    cat > "$conf_file" << EOF
+bootdisk: scsi0
+net0: virtio=52:54:00:12:34:56,bridge=vmbr0
+unused0: threeamigos:vm-105-disk-9,size=8G
+scsi0: $BY_PATH_LUN8,format=raw,discard=on,iothread=1,size=4M
+EOF
+    _mock_readlink_targets["$BY_PATH_LUN8"]="/dev/data"
+    _mock_blockdev_sizes["/dev/data"]="53687091200"
+
+    repair_conf "$conf_file" "305"
+
+    assert_equals "1" "$checked"
+    assert_equals "1" "$fixed"
+    assert_contains "$(grep '^net0:' "$conf_file")" "bridge=vmbr0"
+    assert_contains "$(grep '^unused0:' "$conf_file")" "size=8G"
+    assert_contains "$(grep '^scsi0:' "$conf_file")" "size=50G"
+}
+
+test_repair_conf_storage_ref() {
+    test_start "repair_conf fixes storage-reference disk from zvol volsize"
+    reset_counters
+    local conf_file="$_mock_zfs_state_dir/306.conf"
+    cat > "$conf_file" << EOF
+scsi0: threeamigos:vm-105-disk-0,format=raw,discard=on,iothread=1,size=4M
+EOF
+    _mock_volsize="32G"
+
+    repair_conf "$conf_file" "306"
+
+    assert_equals "1" "$checked"
+    assert_equals "1" "$fixed"
+    assert_equals "0" "$skipped"
+    assert_contains "$(grep '^scsi0:' "$conf_file")" "size=32G"
+    assert_contains "$(grep '^scsi0:' "$conf_file")" "threeamigos:vm-105-disk-0"
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_human_size_units
+test_size_for_volume_by_path
+test_size_for_volume_by_path_missing_device
+test_size_for_volume_by_path_bad_blockdev
+test_size_for_volume_storage_ref
+test_size_for_volume_storage_ref_missing
+test_size_for_volume_unknown_format
+test_repair_conf_by_path_rewrite
+test_repair_conf_already_correct
+test_repair_conf_unresolvable_skips
+test_repair_conf_dry_run
+test_repair_conf_ignores_non_disk_lines
+test_repair_conf_storage_ref
+
+test_summary

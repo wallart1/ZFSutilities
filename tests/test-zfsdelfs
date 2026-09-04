@@ -143,15 +143,15 @@ test_teardown_removes_encrypted_conf() {
 
 test_teardown_records_encrypted_flag() {
     reset_mocks
-    test_start "Teardown records encrypted flag in ISCSI_TEARDOWN"
+    test_start "Teardown records encrypted flag in iscsi_teardown"
 
     iscsi_teardown_zvol "threeamigos/proxmox/vm-100-disk-0"
 
-    local value="${ISCSI_TEARDOWN["threeamigos/proxmox/vm-100-disk-0"]}"
+    local value="${iscsi_teardown["threeamigos/proxmox/vm-100-disk-0"]}"
     if [[ "$value" == *":Y" ]]; then
         test_pass
     else
-        test_fail "Expected ISCSI_TEARDOWN value ending in :Y, got '$value'"
+        test_fail "Expected iscsi_teardown value ending in :Y, got '$value'"
     fi
 }
 
@@ -162,11 +162,11 @@ test_teardown_records_unencrypted_flag() {
 
     iscsi_teardown_zvol "threeamigos/proxmox/vm-100-disk-0"
 
-    local value="${ISCSI_TEARDOWN["threeamigos/proxmox/vm-100-disk-0"]}"
+    local value="${iscsi_teardown["threeamigos/proxmox/vm-100-disk-0"]}"
     if [[ "$value" == *":N" ]]; then
         test_pass
     else
-        test_fail "Expected ISCSI_TEARDOWN value ending in :N, got '$value'"
+        test_fail "Expected iscsi_teardown value ending in :N, got '$value'"
     fi
 }
 
@@ -247,7 +247,7 @@ zfslock_init() { true; }
 zfslock_wait_or_resolve() {
     echo "\$1 \$2" >> "$_state_dir/lock.log"
     if [[ "\${_mock_lock_conflict:-}" == "\$1" ]]; then return 1; fi
-    ZFSLOCK_ID="$_state_dir/lock_\${1//\\//_}"
+    zfslock_id="$_state_dir/lock_\${1//\\//_}"
     return 0
 }
 zfslock_release() { true; }
@@ -325,7 +325,7 @@ run_delfs_subprocess() {
     ln -sfn "$mydir/bin/bashinit" "$_mock_home/bashinit"
 
     cat > "$_mock_bin/node-lib.sh" <<'EOF'
-NODE_MODE=single-node
+node_mode=single-node
 is_single_node() { return 0; }
 is_two_node() { return 1; }
 EOF
@@ -344,7 +344,7 @@ EOF
     cat > "$_mock_bin/zfslockmanager" <<EOF
 zfslock_init() { true; }
 zfslock_wait_or_resolve() {
-    ZFSLOCK_ID="$_state_dir/lock_\${1//\\//_}"
+    zfslock_id="$_state_dir/lock_\${1//\\//_}"
     return 0
 }
 zfslock_release() { true; }
@@ -354,7 +354,7 @@ EOF
 rootcheck() { true; }
 EOF
     cat > "$_mock_bin/iscsi-lib.sh" <<'EOF'
-declare -A ISCSI_TEARDOWN
+declare -A iscsi_teardown
 iscsi_teardown_zvol() { return 0; }
 EOF
     cat > "$_state_dir/node.conf" <<'EOF'

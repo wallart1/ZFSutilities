@@ -30,14 +30,14 @@ bashinit
 unset _local_bashinit
 
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_dir="$(cd "$script_dir/.." && pwd)"
 
 NODE_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/node.conf"
 
-INSTALLER_LIB="$SCRIPT_DIR/installer-lib.sh"
-[[ -f "$INSTALLER_LIB" ]] || die "Missing: $INSTALLER_LIB"
-source "$INSTALLER_LIB"
+installer_lib="$script_dir/installer-lib.sh"
+[[ -f "$installer_lib" ]] || die "Missing: $installer_lib"
+source "$installer_lib"
 
 ensure_zfsutilities_dirs
 
@@ -73,14 +73,14 @@ echo ""
 # ------------------------------------------------------------------
 # Check for partial uninstall remnants
 # ------------------------------------------------------------------
-check_partial_uninstall "$REPO_DIR" || true
+check_partial_uninstall "$repo_dir" || true
 
 # ------------------------------------------------------------------
 # Prerequisites check (interactive)
 # ------------------------------------------------------------------
-CHECK_PREREQS="$REPO_DIR/check-prerequisites"
-if [[ -f "$CHECK_PREREQS" ]]; then
-    if ! run_interactive_prerequisites --single-node "$CHECK_PREREQS"; then
+check_prereqs="$repo_dir/check-prerequisites"
+if [[ -f "$check_prereqs" ]]; then
+    if ! run_interactive_prerequisites --single-node "$check_prereqs"; then
         exit 1
     fi
 fi
@@ -98,22 +98,22 @@ echo ""
 echo "=== Step 2: Configuration ==="
 echo ""
 
-EXISTING_MODE=""
+existing_mode=""
 if [[ -f "$NODE_CONF" ]]; then
     source "$NODE_CONF"
-    EXISTING_MODE="${NODE_MODE:-two-node}"
-    if [[ "$EXISTING_MODE" == "single-node" ]]; then
+    existing_mode="${NODE_MODE:-two-node}"
+    if [[ "$existing_mode" == "single-node" ]]; then
         echo "Existing single-node configuration found."
-        echo "  Hostname: ${THIS_HOST:-$(hostname -s)}"
+        echo "  Hostname: ${this_host:-$(hostname -s)}"
         echo ""
         read -rp "Reconfigure? (y/N): " reconf
         if [[ ! "$reconf" =~ ^[Yy]$ ]]; then
             echo "Keeping existing configuration. Proceeding to script installation."
             echo ""
             # Skip to step 4
-            SKIP_CONFIG=true
+            skip_config=true
         fi
-    elif [[ "$EXISTING_MODE" == "two-node" ]]; then
+    elif [[ "$existing_mode" == "two-node" ]]; then
         echo "⚠ Existing TWO-NODE configuration found."
         echo "  Storage host: ${STORAGE_HOST:-?}"
         echo "  Compute host: ${COMPUTE_HOST:-?}"
@@ -139,7 +139,7 @@ elif [[ -f "${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}" ]]; then
     echo ""
 fi
 
-if [[ "${SKIP_CONFIG:-}" != "true" ]]; then
+if [[ "${skip_config:-}" != "true" ]]; then
     # ------------------------------------------------------------------
     # Step 2: Prompt for settings and generate config
     # ------------------------------------------------------------------
@@ -148,14 +148,16 @@ if [[ "${SKIP_CONFIG:-}" != "true" ]]; then
     echo "Single-node mode: all ZFS pools are on this host, no iSCSI."
     echo ""
     read -rp "Hostname [${default_host}]: " input_host
-    THIS_HOST="${input_host:-$default_host}"
+    this_host="${input_host:-$default_host}"
 
     echo ""
     echo "Generating configuration..."
 
-    # Build the config file from template
-    sed "s/@@THIS_HOST@@/${THIS_HOST}/g" \
-        "$REPO_DIR/share/installer/node.conf.template" > "$NODE_CONF"
+    # Build the config file from template, replacing the fixed-string
+    # placeholder with the chosen hostname (bash substitution, no sed).
+    while IFS= read -r _template_line || [[ -n "$_template_line" ]]; do
+        printf '%s\n' "${_template_line//@@THIS_HOST@@/${this_host}}"
+    done < "$repo_dir/share/installer/node.conf.template" > "$NODE_CONF"
     chmod 0644 "$NODE_CONF"
 
     echo ""
@@ -182,14 +184,14 @@ echo "=== Step 3: Deploying Versioned Installation ==="
 echo ""
 
 # Run deploy-version from the repo root
-DEPLOY_VERSION="$REPO_DIR/bin/deploy-version"
-[[ -f "$DEPLOY_VERSION" ]] || die "Missing: $DEPLOY_VERSION"
-"$DEPLOY_VERSION"
+deploy_version="$repo_dir/bin/deploy-version"
+[[ -f "$deploy_version" ]] || die "Missing: $deploy_version"
+"$deploy_version"
 
 # Activate the deployed version.  switch-version creates all production
 # wiring, including the desktop shortcuts.
-VERSION=$(cat "$REPO_DIR/VERSION")
-"$REPO_DIR/bin/switch-version" "$VERSION"
+version=$(cat "$repo_dir/VERSION")
+"$repo_dir/bin/switch-version" "$version"
 
 # Initialize retention profiles: new installs get only the default policy;
 # existing user-entered per-pool policies are preserved.
@@ -207,7 +209,7 @@ echo ""
 echo "  Mode:       single-node"
 echo "  Hostname:   $(hostname -s)"
 echo "  Config:     $NODE_CONF"
-echo "  Version:    $(cat "$REPO_DIR/VERSION")"
+echo "  Version:    $(cat "$repo_dir/VERSION")"
 echo ""
 echo "  Installed versions:"
 sudo /usr/local/lib/zfsutilities/bin/switch-version --list
@@ -218,6 +220,6 @@ echo "  • Launch the documentation viewer from the 'ZFSutilities Documentation
 echo "  • Add panel or desktop launchers by pointing them at those shortcuts."
 echo ""
 echo "  To switch to two-node mode later:"
-echo "    sudo $REPO_DIR/bin/install-two-node"
+echo "    sudo $repo_dir/bin/install-two-node"
 echo ""
 

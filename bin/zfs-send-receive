@@ -41,7 +41,7 @@ function send-receive {
     # Callers use: zfslock_release "$lock_source"; zfslock_release "$lock_dest"
 
     # Exit code used when the user aborts the entire operation from the lock manager.
-    local ZFSLOCK_RC_ABORT_OPERATION=9
+    local zfslock_rc_abort_operation=9
 
     abort_resume_token() {
         local dest="$1"
@@ -449,15 +449,16 @@ function send-receive {
     [[ $dointermediates = "" ]] && dointermediates="Y"
     [[ $releaseholds = "" ]] && releaseholds="N"
     [[ $autoproceed = "" ]] && autoproceed='Y'
-    # Regex: ^declare\ -[aA]
-    # Purpose: Check if a bash variable is an indexed or associative array.
-    # Group 1: None.
-    # Examples:
-    #   "declare -a arr"  -> match
-    #   "declare -A hash" -> match
-    #   "declare -x var"  -> no match
-    [[ "$(declare -p includes 2>/dev/null)" =~ ^declare\ -[aA] ]] || includes=()
-    [[ "$(declare -p excludes 2>/dev/null)" =~ ^declare\ -[aA] ]] || excludes=()
+    # Glob prefix check on declare -p output: test whether a variable is an
+    # indexed or associative array.
+    #   "declare -a arr"  -> array
+    #   "declare -A hash" -> array
+    #   "declare -x var"  -> not an array
+    local _decl
+    _decl=$(declare -p includes 2>/dev/null)
+    [[ "$_decl" == 'declare -a'* || "$_decl" == 'declare -A'* ]] || includes=()
+    _decl=$(declare -p excludes 2>/dev/null)
+    [[ "$_decl" == 'declare -a'* || "$_decl" == 'declare -A'* ]] || excludes=()
     [[ $force = "" ]] && force="N"
     [[ $allow_destructive = "" ]] && allow_destructive="N"
     [[ $receive_F_option != 'F' ]] && receive_F_option=''
@@ -506,11 +507,11 @@ function send-receive {
         lock_rc=$?
         if [[ $lock_rc -eq 1 ]]; then
             log_msg "WARN: Backup operation aborted by user due to lock conflict on source '$fs'."
-            exit "$ZFSLOCK_RC_ABORT_OPERATION"
+            exit "$zfslock_rc_abort_operation"
         elif [[ $lock_rc -eq 2 ]]; then
             log_msg "INFO: Skipping dataset $fs (lock conflict on source)."; continue
         fi
-        lock_source="$ZFSLOCK_ID"
+        lock_source="$zfslock_id"
 
         zfslock_wait_or_resolve "$destfs$restorefs" "w" \
             "send-receive dest: $fs -> $destfs$restorefs"
@@ -519,13 +520,13 @@ function send-receive {
             log_msg "WARN: Backup operation aborted by user due to lock conflict on destination" \
                 "'$destfs$restorefs'."
             zfslock_release "$lock_source"
-            exit "$ZFSLOCK_RC_ABORT_OPERATION"
+            exit "$zfslock_rc_abort_operation"
         elif [[ $lock_rc -eq 2 ]]; then
             log_msg "INFO: Skipping dataset $fs (lock conflict on destination)."
             zfslock_release "$lock_source"
             continue
         fi
-        lock_dest="$ZFSLOCK_ID"
+        lock_dest="$zfslock_id"
 
         if [[ "$nextsnap" == 'notneeded' ]]; then
             local _newest_snap
@@ -778,14 +779,14 @@ function send-receive {
                         log_msg "WARN: Backup operation aborted by user due to" \
                             "lock conflict on destination '$destfs$restorefs'."
                         zfslock_release "$lock_source"
-                        exit "$ZFSLOCK_RC_ABORT_OPERATION"
+                        exit "$zfslock_rc_abort_operation"
                     elif [[ $lock_rc -eq 2 ]]; then
                         log_msg "INFO: Skipping dataset $fs" \
                             "(lock conflict on destination after preparation)."
                         zfslock_release "$lock_source"
                         continue
                     fi
-                    lock_dest="$ZFSLOCK_ID"
+                    lock_dest="$zfslock_id"
                 fi
             fi
         fi
