@@ -7,6 +7,7 @@ No GTK and no direct subprocess calls. All ZFS I/O is delegated to callers via
 from __future__ import annotations
 
 import os
+from collections.abc import Container
 from dataclasses import dataclass
 from math import ceil
 
@@ -223,7 +224,7 @@ def validate_vdev_selection(selected: list[DiskInfo]) -> list[str]:
     return problems
 
 
-def validate_pool_name(name: str, existing_names) -> tuple[bool, str]:
+def validate_pool_name(name: str, existing_names: Container[str]) -> tuple[bool, str]:
     """Return ``(ok, error)`` for a candidate pool name.
 
     *error* is "" when *name* is valid. Implements the OpenZFS 2.4.4 libzfs

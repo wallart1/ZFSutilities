@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+## 0.97.0
+
+*Released 2026-09-05*
+
+### Added
+
+- **Disks page create-pool wizard** — Build a new pool from unused disks in a
+  four-step wizard (disk selection, topology, pool settings, review). Disk
+  eligibility filtering greys out pool members, zvol-backed devices, disks
+  without a `/dev/disk/by-id` path, and (for rotating disks) partitions;
+  partitions of solid-state disks remain selectable with a destroy-data
+  warning, and USB-attached disks warn about redundancy risk. Topology
+  choices (`stripe`, `mirror`, `raidz1`/`2`/`3`) enforce OpenZFS minimum disk
+  counts and device separation within a vdev. A width-aware RAIDZ capacity
+  estimator shows raw and effective capacity at the workload profile's block
+  size. Pool names are validated against the verified OpenZFS 2.4.4 libzfs
+  rules plus a 32-character project cap and collision checks against imported
+  and importable pools.
+- **Exact-command review with typed confirmation** — The review step shows
+  the exact `zpool create` argv plus live `zpool create -n` dry-run output;
+  the Create button stays insensitive until the pool name is typed in full.
+  Execution runs through the Dataset action runner (session-logged) under a
+  pool-name `zlm` write lock, and the new pool is offered for registration in
+  the pool registry so backups and retention include it. Storage host only on
+  two-node systems.
+- **New modules `pool_create.py` and `pool_create_wizard.py`** — Pure
+  decision logic (eligibility, name validation, ashift suggestion, capacity
+  estimation, profile-to-`-O` option mapping) is separated from the GTK
+  wizard; all ZFS I/O stays behind `ZfsRepository`
+  (`list_importable_pool_devices`, `build_create_pool_command`,
+  `create_pool_dry_run`, `create_pool`).
+- **Test coverage** — New suites `test_pool_create` (44 tests) and
+  `test_pool_create_wizard` (39 tests); `test_zfs_repository` gains 22 tests
+  for importable-pool config parsing and `zpool create` command
+  building/execution; `test_action_dispatch` covers the new button wiring.
+
+### Changed
+
+- **Documentation** — User guide gains a "Creating Pools" section (wizard
+  steps, safety model, two-node gating) and a Create Pool row in the Disks
+  tab feature-requirements table; installation and user-guide prerequisites
+  note that pools can be created afterward from the Disks page wizard; the
+  developer architecture module table lists the new modules. AGENTS.md test
+  tables updated for the new suites.
+
+### Fixed
+
+- **User guide eligibility description** — The wizard docs now correctly
+  state that partitions of solid-state disks are eligible candidates while
+  partitions of rotating disks are not.
+- **Type-annotation consistency** — `validate_pool_name()` and the wizard's
+  settings-page problem helper annotate the `existing_names` parameter
+  (`Container[str]`) like the rest of the new modules.
+
 ## 0.96.0
 
 *Released 2026-09-04*

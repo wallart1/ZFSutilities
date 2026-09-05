@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import shlex
+from collections.abc import Container
 from dataclasses import dataclass, field
 
 import gi
@@ -176,7 +177,7 @@ def _topology_problems(state: _WizardState) -> list[str]:
     return problems
 
 
-def _settings_problems(state: _WizardState, existing_names) -> list[str]:
+def _settings_problems(state: _WizardState, existing_names: Container[str]) -> list[str]:
     ok, error = validate_pool_name(state.pool_name, existing_names)
     return [] if ok else [error]
 

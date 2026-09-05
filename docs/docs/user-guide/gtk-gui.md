@@ -191,8 +191,10 @@ typed confirmation.
 The wizard has four steps:
 
 1. **Disks** — select the member disks. Only eligible disks can be selected:
-   whole disks (`TYPE=disk`) with no partitions, not a member of any imported
-   or importable pool, and with a `/dev/disk/by-id` path (the command is built
+   whole disks (`TYPE=disk`) with no partitions, or individual partitions of
+   solid-state disks (partitions of rotating disks are not eligible). A disk
+   that is a member of any imported or importable pool is ineligible, and a
+   disk without a `/dev/disk/by-id` path cannot be used (the command is built
    from by-id paths so it survives device-name changes). Ineligible disks are
    listed greyed out with the reason. USB-attached disks produce a warning —
    USB storage can drop out under load, which is dangerous for redundancy
@@ -291,6 +293,7 @@ profiles stored in the JSON config.
 | Read-only Disks views | 2.1+ |
 | Apply Profile (live property changes) | 2.1+ |
 | Rewrite Data | 2.3+ |
+| Create Pool | 2.1+ (standard `zpool create`; no separate feature gate) |
 
 ## Startup Version Check (Two-Node)
 

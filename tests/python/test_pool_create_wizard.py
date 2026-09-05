@@ -661,6 +661,33 @@ class TestHandlerGuards(unittest.TestCase):
             pass
         self.assertEqual(app.dataset_runner.steps, [])
 
+    def test_no_filesystem_profiles_bails(self):
+        pcw = _import_wizard()
+        app = _make_app()
+        nc = MagicMock()
+        nc.is_two_node.return_value = False
+        with (
+            patch.object(pcw, "node_config", nc),
+            patch.object(pcw, "get_workload_profiles", return_value={}),
+            patch.object(pcw, "show_create_pool_wizard") as wiz,
+            capture_logs() as logs,
+        ):
+            pcw.on_disks_create_pool(app)
+        wiz.assert_not_called()
+        self.assertTrue(
+            any("No filesystem workload profiles" in line for line in logs),
+            logs,
+        )
+
+    def test_wizard_requires_profiles(self):
+        pcw = _import_wizard()
+        with capture_logs() as logs:
+            result = pcw.show_create_pool_wizard(
+                MagicMock(), eligibility=[], profiles={}, existing_names=set()
+            )
+        self.assertIsNone(result)
+        self.assertTrue(any("WARN" in line for line in logs), logs)
+
 
 class TestCreatePoolButtonSensitivity(unittest.TestCase):
     """update_disks_button_sensitivity gates the Create Pool button."""
@@ -915,6 +942,41 @@ class TestWizardFlow(unittest.TestCase):
         with _wizard_session(pcw, app, driver):
             pass
         self.assertEqual(app.dataset_runner.steps, [])
+
+    def test_prepare_review_command_build_failure(self):
+        pcw = _import_wizard()
+        state = _state(pcw, pool_name="newpool", topology="bogus")
+        ctx = pcw._WizardContext(
+            app=MagicMock(),
+            profiles={"general": GENERAL_PROFILE},
+            existing_names=set(),
+            repository=MagicMock(),
+        )
+        pcw._prepare_review(state, ctx)
+        self.assertEqual(state.dry_run_rc, 1)
+        self.assertIn("could not build command", state.dry_run_output)
+        ctx.repository.create_pool_dry_run.assert_not_called()
+
+    def test_registration_skipped_when_already_registered(self):
+        pcw = _import_wizard()
+        app = _make_app()
+        app.known_pools = [{"name": "newpool", "offsite_candidate": False}]
+        driver = _WizardDriver(
+            pcw,
+            [
+                lambda state: (_select_all(state), NEXT)[1],
+                NEXT,
+                lambda state: (_name_pool(state), NEXT)[1],
+                lambda state: (_confirm(state), CREATE)[1],
+            ],
+        )
+        with _wizard_session(pcw, app, driver):
+            with patch.object(pcw.Gtk, "MessageDialog") as msg_dialog:
+                app.dataset_runner.finish()
+        msg_dialog.assert_not_called()
+        self.assertEqual(
+            app.known_pools, [{"name": "newpool", "offsite_candidate": False}]
+        )
 
     def test_real_lock_acquire_and_release(self):
         pcw = _import_wizard()

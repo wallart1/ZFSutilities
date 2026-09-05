@@ -566,7 +566,7 @@ tests/run-tests test-zfsretain test_backup_config
 
 | Suite                     | Tests | Description                                                                                                    |
 | ------------------------- | ----- | -------------------------------------------------------------------------------------------------------------- |
-| `test_action_dispatch`    | 44     | Page button specs, action dispatch table, and Logs tab button wiring                                           |
+| `test_action_dispatch`    | 46     | Page button specs, action dispatch table, and Logs tab button wiring                                           |
 | `test_app_context`        | 9     | Shared operational state (app context) helpers for GUI pages                                                    |
 | `test_backup_config`      | 32    | Config load/save, defaults, pools, retention, UI state, snapshot name generation, log pruning, message level   |
 | `test_backup_history`     | 36    | History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting       |
@@ -607,6 +607,8 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_path_utils`         | 28    | Shared path helpers mirroring bash `$mydir` / `find_zfsutility_script` behavior                                |
 | `test_paths`              | 35    | Centralized path-resolution module (local and remote deployed layouts)                                          |
 | `test_pool_actions`       | 15    | Pool registry add/remove/save/revert action handlers                                                            |
+| `test_pool_create`        | 44    | `pool_create.py` — disk eligibility and partition policy, vdev separation, pool-name validation, ashift suggestion, RAIDZ capacity estimator, profile -O options |
+| `test_pool_create_wizard` | 39    | `pool_create_wizard.py` — wizard page gating, exact command building, handler guards, Create Pool button sensitivity, scripted end-to-end flow with lock acquire/release and registry offer |
 | `test_pool_watch`         | 6     | Per-pool dataset watch window                                                                                   |
 | `test_pools_page`         | 50    | Pools tab registry UI                                                                                           |
 | `test_profile_dialogs`    | 14    | Add/Recall profile dialogs, duplicate-name overwrite handling                                                  |
@@ -628,7 +630,7 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_zfs_capabilities`   | 12    | OpenZFS release-variation gating                                                                                |
 | `test_zfs_diagnostics`    | 8     | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run`                     |
 | `test_zfs_lock_manager`   | 6     | `zfs_lock_manager` two-node lock behavior                                                                       |
-| `test_zfs_repository`     | 71    | `zfs_repository.py` — ZFS/zpool subprocess isolation                                                            |
+| `test_zfs_repository`     | 93    | `zfs_repository.py` — ZFS/zpool subprocess isolation, importable-pool config parsing, `zpool create` command building and execution |
 | `test_zfsinfo`            | 10    | Pool/dataset/snapshot info gathering with mocked `subprocess`                                                  |
 | `test_zfsutilities_gui`   | 44    | Main GUI window behavior                                                                                        |
 
