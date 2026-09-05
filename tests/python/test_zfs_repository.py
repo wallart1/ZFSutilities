@@ -20,6 +20,7 @@ from zfs_repository import (
     PoolRow,
     SnapshotRow,
     ZfsRepository,
+    build_create_pool_command,
     is_dataset_encrypted,
 )
 
@@ -404,6 +405,222 @@ class TestListImportablePoolNames(unittest.TestCase):
     def test_empty_output_returns_empty_set(self):
         repo = self._repo("")
         self.assertEqual(repo.list_importable_pool_names(), set())
+
+
+class TestListImportablePoolDevices(unittest.TestCase):
+    """list_importable_pool_devices returns leaf device paths per pool."""
+
+    def _repo(self, stdout):
+        result = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: result
+        return repo
+
+    def test_stripe_pool_returns_leaf_device(self):
+        stdout = (
+            "   pool: tank\n"
+            "     id: 1\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\ttank        ONLINE       0     0     0\n"
+            "\t  sda       ONLINE       0     0     0\n"
+        )
+        self.assertEqual(self._repo(stdout).list_importable_pool_devices(), {"tank": ["sda"]})
+
+    def test_mirror_group_header_is_not_a_leaf(self):
+        stdout = (
+            "   pool: tank\n"
+            "     id: 1\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\ttank        ONLINE       0     0     0\n"
+            "\t  mirror-0  ONLINE       0     0     0\n"
+            "\t    sda     ONLINE       0     0     0\n"
+            "\t    sdb     ONLINE       0     0     0\n"
+        )
+        self.assertEqual(
+            self._repo(stdout).list_importable_pool_devices(), {"tank": ["sda", "sdb"]}
+        )
+
+    def test_raidz_with_spares_lists_spare_leaf(self):
+        stdout = (
+            "   pool: rz\n"
+            "     id: 2\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\trz          ONLINE       0     0     0\n"
+            "\t  raidz2-0  ONLINE       0     0     0\n"
+            "\t    sda     ONLINE       0     0     0\n"
+            "\t    sdb     ONLINE       0     0     0\n"
+            "\t    sdc     ONLINE       0     0     0\n"
+            "\t    sdd     ONLINE       0     0     0\n"
+            "\tspares\n"
+            "\t  sde       AVAIL\n"
+        )
+        self.assertEqual(
+            self._repo(stdout).list_importable_pool_devices(),
+            {"rz": ["sda", "sdb", "sdc", "sdd", "sde"]},
+        )
+
+    def test_zvol_backed_pool_excluded(self):
+        stdout = (
+            "   pool: nested\n"
+            "     id: 1\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\tnested      ONLINE       0     0     0\n"
+            "\t  zd0       ONLINE       0     0     0\n"
+            "   pool: normal\n"
+            "     id: 2\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\tnormal      ONLINE       0     0     0\n"
+            "\t  sda       ONLINE       0     0     0\n"
+        )
+        repo = self._repo(stdout)
+        self.assertEqual(repo.list_importable_pool_devices(), {"normal": ["sda"]})
+        self.assertEqual(repo.list_importable_pool_names(), {"normal"})
+
+    def test_pool_without_config_section_has_empty_path_list(self):
+        stdout = (
+            "   pool: tank\n"
+            "     id: 1\n"
+            "  state: ONLINE\n"
+            " config:\n"
+            "\ttank        ONLINE       0     0     0\n"
+            "   pool: archive\n"
+            "     id: 2\n"
+            "  state: ONLINE\n"
+        )
+        self.assertEqual(
+            self._repo(stdout).list_importable_pool_devices(),
+            {"tank": [], "archive": []},
+        )
+
+    def test_empty_output_returns_empty_dict(self):
+        self.assertEqual(self._repo("").list_importable_pool_devices(), {})
+
+
+class TestBuildCreatePoolCommand(unittest.TestCase):
+    """build_create_pool_command produces exact, validated zpool create argv."""
+
+    def test_stripe_has_no_topology_keyword(self):
+        cmd = build_create_pool_command("tank", "stripe", ["/dev/disk/by-id/ata-X"])
+        self.assertEqual(cmd, ["zpool", "create", "tank", "/dev/disk/by-id/ata-X"])
+
+    def test_mirror_places_keyword_before_paths(self):
+        paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
+        cmd = build_create_pool_command("tank", "mirror", paths)
+        self.assertEqual(cmd, ["zpool", "create", "tank", "mirror"] + paths)
+
+    def test_raidz2_with_ashift_and_profile_options(self):
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d")]
+        options = [("recordsize", "1M"), ("compression", "zstd")]
+        cmd = build_create_pool_command("backup", "raidz2", paths, ashift=12, options=options)
+        self.assertEqual(
+            cmd,
+            [
+                "zpool",
+                "create",
+                "-o",
+                "ashift=12",
+                "-O",
+                "recordsize=1M",
+                "-O",
+                "compression=zstd",
+                "backup",
+                "raidz2",
+            ]
+            + paths,
+        )
+
+    def test_defaults_emit_no_ashift_or_options(self):
+        paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
+        cmd = build_create_pool_command("tank", "mirror", paths, ashift=None, options=None)
+        self.assertEqual(cmd, ["zpool", "create", "tank", "mirror"] + paths)
+
+    def test_rejects_unknown_topology(self):
+        with self.assertRaises(ValueError):
+            build_create_pool_command("tank", "draid", ["/dev/disk/by-id/ata-X"])
+
+    def test_rejects_too_few_disks(self):
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d")]
+        with self.assertRaises(ValueError):
+            build_create_pool_command("tank", "raidz3", paths)
+
+    def test_rejects_non_by_id_path(self):
+        with self.assertRaises(ValueError):
+            build_create_pool_command("tank", "stripe", ["/dev/sda"])
+
+    def test_rejects_out_of_range_ashift(self):
+        for ashift in (8, 17):
+            with self.assertRaises(ValueError):
+                build_create_pool_command("tank", "stripe", ["/dev/disk/by-id/ata-X"], ashift=ashift)
+
+    def test_rejects_empty_pool_name(self):
+        with self.assertRaises(ValueError):
+            build_create_pool_command("", "stripe", ["/dev/disk/by-id/ata-X"])
+
+    def test_rejects_invalid_option_property(self):
+        with self.assertRaises(ValueError):
+            build_create_pool_command(
+                "tank",
+                "stripe",
+                ["/dev/disk/by-id/ata-X"],
+                options=[("recordsize=evil", "1M")],
+            )
+
+
+class TestCreatePoolExecution(unittest.TestCase):
+    """create_pool_dry_run and create_pool execute built argv via _run."""
+
+    def _recording_repo(self, rc=0, stdout="", stderr="", sudo=False):
+        calls = []
+        result = subprocess.CompletedProcess(args=[], returncode=rc, stdout=stdout, stderr=stderr)
+        repo = ZfsRepository(sudo=sudo)
+
+        def _run(cmd, **kwargs):
+            calls.append((list(cmd), kwargs))
+            return result
+
+        repo._run = _run
+        return repo, calls
+
+    def test_dry_run_injects_n_after_create(self):
+        repo, calls = self._recording_repo(rc=0, stdout="would create 'tank'")
+        rc, output = repo.create_pool_dry_run(["zpool", "create", "tank", "/dev/disk/by-id/ata-X"])
+        self.assertEqual(calls[0][0], ["zpool", "create", "-n", "tank", "/dev/disk/by-id/ata-X"])
+        self.assertEqual((rc, output), (0, "would create 'tank'"))
+
+    def test_dry_run_failure_returns_stderr_when_stdout_empty(self):
+        repo, _ = self._recording_repo(rc=1, stdout="", stderr="invalid vdev specification")
+        rc, output = repo.create_pool_dry_run(["zpool", "create", "tank", "/dev/disk/by-id/ata-X"])
+        self.assertEqual((rc, output), (1, "invalid vdev specification"))
+
+    def test_create_pool_returns_true_on_success(self):
+        repo, calls = self._recording_repo(rc=0)
+        cmd = build_create_pool_command("tank", "stripe", ["/dev/disk/by-id/ata-X"])
+        self.assertTrue(repo.create_pool(cmd))
+        self.assertEqual(calls[0][0], cmd)
+
+    def test_create_pool_returns_false_and_logs_warning_on_failure(self):
+        repo, _ = self._recording_repo(rc=1, stderr="device busy")
+        cmd = build_create_pool_command("tank", "stripe", ["/dev/disk/by-id/ata-X"])
+        with capture_logs() as logs:
+            self.assertFalse(repo.create_pool(cmd))
+        self.assertTrue(any("zpool create failed" in e for e in logs))
+
+    def test_sudo_repository_prefixes_sudo(self):
+        repo, calls = self._recording_repo(rc=0, sudo=True)
+        repo.create_pool_dry_run(["zpool", "create", "tank", "/dev/disk/by-id/ata-X"])
+        self.assertEqual(calls[0][0][:3], ["sudo", "zpool", "create"])
+
+    def test_rejects_non_create_command(self):
+        repo, _ = self._recording_repo()
+        with self.assertRaises(ValueError):
+            repo.create_pool_dry_run(["zpool", "list"])
+        with self.assertRaises(ValueError):
+            repo.create_pool(["zpool", "list"])
 
 
 class TestImportablePoolCache(unittest.TestCase):

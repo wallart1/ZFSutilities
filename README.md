@@ -91,7 +91,8 @@ cron syntax:
 
 - Root privileges for all ZFS operations
 
-- ZFS pools already created and online (may be imported on the Pools tab)
+- ZFS pools already created and online (may be imported on the Pools tab, or
+  created afterward from the Disks page wizard on the storage host)
 
 - Proxmox VE is **required** only on two-node compute hosts and on single-node
   hosts that run VMs. It is **optional** on single-node hosts that only use ZFS

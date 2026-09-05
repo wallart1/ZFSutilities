@@ -17,7 +17,14 @@ with mock_gtk():
 
 
 class TestDisksPageSpec(unittest.TestCase):
-    """Disks page exposes SMART Details and Refresh buttons."""
+    """Disks page exposes Create Pool, SMART Details and Refresh buttons."""
+
+    def test_create_pool_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
+        self.assertIn(
+            ("Create Pool…", "list-add", "_disks_create_pool_btn"),
+            buttons,
+        )
 
     def test_smart_details_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
@@ -37,6 +44,10 @@ class TestDisksPageSpec(unittest.TestCase):
 
 class TestDisksHandlers(unittest.TestCase):
     """Disks action handlers are wired correctly."""
+
+    def test_create_pool_handler_registered(self):
+        handler = action_dispatch.ACTION_HANDLERS["disks"]["Create Pool…"]
+        self.assertIs(handler, action_dispatch.on_disks_create_pool)
 
     def test_smart_details_handler_registered(self):
         handler = action_dispatch.ACTION_HANDLERS["disks"]["SMART Details"]

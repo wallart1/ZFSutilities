@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from logging_config import log_msg
+from pool_create import TOPOLOGIES
 
 
 def is_dataset_encrypted(path):
@@ -164,6 +165,110 @@ _TOPOLOGY_LINE_RE = re.compile(
 # Purpose: Extract the effective ashift value from `zdb -C` output.
 # Group 1: the ashift value as a decimal integer.
 _ASHIFT_RE = re.compile(r"^\s*ashift:\s*(\d+)\s*$", re.MULTILINE)
+
+_BY_ID_PREFIX = "/dev/disk/by-id/"
+
+# First tokens of vdev group header lines in a `zpool import` config section.
+# Leaf device lines are everything else (paths or short kernel names).
+_IMPORT_VDEV_KEYWORDS = (
+    "mirror",
+    "raidz",
+    "draid",
+    "spare",
+    "spares",
+    "log",
+    "logs",
+    "cache",
+    "special",
+    "replacing",
+)
+
+
+def _parse_importable_pools_config(raw: str) -> dict[str, list[str]]:
+    """Parse `zpool import` output into {pool_name: [leaf device paths]}.
+
+    Pools whose config names any zvol-backed device (first token starting
+    with 'zd') are excluded entirely. The pool root line (first config line,
+    whose name equals the pool name) and vdev group headers (mirror-N,
+    raidzN-M, spare/log/cache/special section headings) are not leaves; every
+    other config line's first token is a leaf device path. Pools with no
+    config section appear with an empty path list.
+    """
+    pools: dict[str, list[str]] = {}
+    current_name: str | None = None
+    in_config = False
+    root_seen = False
+    is_zvol_backed = False
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("pool:"):
+            if current_name is not None and not is_zvol_backed:
+                pools.setdefault(current_name, [])
+            current_name = stripped.split(":", 1)[1].strip()
+            in_config = False
+            root_seen = False
+            is_zvol_backed = False
+        elif stripped == "config:":
+            in_config = True
+        elif in_config and stripped:
+            token = stripped.split()[0]
+            if token.startswith("zd"):
+                is_zvol_backed = True
+            elif not root_seen:
+                # First config line is the pool root itself.
+                root_seen = True
+            elif token != current_name and not token.startswith(_IMPORT_VDEV_KEYWORDS):
+                pools.setdefault(current_name, []).append(token)
+    if current_name is not None and not is_zvol_backed:
+        pools.setdefault(current_name, [])
+    return pools
+
+
+def build_create_pool_command(
+    pool_name: str,
+    topology: str,
+    by_id_paths: list[str],
+    ashift: int | None = None,
+    options: list[tuple[str, str]] | None = None,
+) -> list[str]:
+    """Build the exact `zpool create` argv for a new pool.
+
+    Pure function: no subprocess. Argument order:
+    ``zpool create [-o ashift=N] [-O prop=value ...] <pool> <mirror|raidzN>
+    <paths…>`` (stripe emits no topology keyword). All paths must live under
+    /dev/disk/by-id/ (mandatory for stable naming, and the command destroys
+    data on the named devices). Raises ValueError on unknown topology,
+    membership below the topology minimum, non-by-id paths, or invalid
+    ashift/options; full pool-name rules live in
+    ``pool_create.validate_pool_name``.
+    """
+    spec = TOPOLOGIES.get(topology)
+    if spec is None:
+        raise ValueError(f"unknown topology: {topology!r}")
+    if not pool_name:
+        raise ValueError("pool name must not be empty")
+    if len(by_id_paths) < spec.min_disks:
+        raise ValueError(f"{topology} requires at least {spec.min_disks} disks")
+    for path in by_id_paths:
+        if not path.startswith(_BY_ID_PREFIX) or ".." in path or any(
+            c.isspace() for c in path
+        ):
+            raise ValueError(f"path must be an absolute /dev/disk/by-id path: {path!r}")
+    if ashift is not None and not 9 <= ashift <= 16:
+        raise ValueError(f"ashift must be between 9 and 16, got {ashift}")
+
+    cmd = ["zpool", "create"]
+    if ashift is not None:
+        cmd += ["-o", f"ashift={ashift}"]
+    for prop, value in options or []:
+        if not prop or "=" in prop or any(c.isspace() for c in prop):
+            raise ValueError(f"invalid property name: {prop!r}")
+        cmd += ["-O", f"{prop}={value}"]
+    cmd.append(pool_name)
+    if topology != "stripe":
+        cmd.append(topology)
+    cmd += list(by_id_paths)
+    return cmd
 
 
 class ZfsRepository:
@@ -344,28 +449,16 @@ class ZfsRepository:
         zvol-backed (device names starting with `zd`). These are normally
         VM-attached pools that should not be touched by this tool.
         """
-        raw = self.importable_pools_raw()
-        names: set[str] = set()
-        current_name: str | None = None
-        in_config = False
-        is_zvol_backed = False
-        for line in raw.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("pool:"):
-                if current_name and not is_zvol_backed:
-                    names.add(current_name)
-                current_name = stripped.split(":", 1)[1].strip()
-                in_config = False
-                is_zvol_backed = False
-            elif stripped == "config:":
-                in_config = True
-            elif in_config and stripped:
-                parts = stripped.split()
-                if parts and parts[0].startswith("zd"):
-                    is_zvol_backed = True
-        if current_name and not is_zvol_backed:
-            names.add(current_name)
-        return names
+        return set(_parse_importable_pools_config(self.importable_pools_raw()))
+
+    def list_importable_pool_devices(self) -> dict[str, list[str]]:
+        """Return importable pool names mapped to their leaf vdev device paths.
+
+        Same parsing and zvol-backed filtering as `list_importable_pool_names`.
+        Feeds `pool_create.disk_eligibility`'s importable_member_paths so
+        member disks of not-yet-imported pools are ineligible for pool creation.
+        """
+        return _parse_importable_pools_config(self.importable_pools_raw())
 
     def import_pool(self, pool: str) -> bool:
         """Import one pool by name."""
@@ -376,6 +469,32 @@ class ZfsRepository:
         """Export one pool by name."""
         result = self._run(self._zpool("export", pool), check=False)
         return result.returncode == 0
+
+    def create_pool_dry_run(self, cmd: list[str]) -> tuple[int, str]:
+        """Run a `zpool create` argv as a dry run, injecting `-n` after `create`.
+
+        Returns (returncode, output) where output is stdout when non-empty,
+        else stderr, so failures surface zpool's error text.
+        """
+        if len(cmd) < 2 or cmd[0] != "zpool" or cmd[1] != "create":
+            raise ValueError(f"not a zpool create command: {cmd!r}")
+        result = self._run(self._zpool("create", "-n", *cmd[2:]), check=False)
+        output = result.stdout if result.stdout.strip() else result.stderr
+        return result.returncode, output
+
+    def create_pool(self, cmd: list[str]) -> bool:
+        """Execute a `zpool create` argv. Returns True on success."""
+        if len(cmd) < 2 or cmd[0] != "zpool" or cmd[1] != "create":
+            raise ValueError(f"not a zpool create command: {cmd!r}")
+        log_msg(f"INFO: creating pool: {shlex.join(cmd)}")
+        result = self._run(self._zpool(*cmd[1:]), check=False)
+        if result.returncode != 0:
+            log_msg(
+                f"WARN: zpool create failed (rc={result.returncode}): "
+                f"{result.stderr.strip()}"
+            )
+            return False
+        return True
 
     def start_scrub(self, pool: str, timeout: int | None = None) -> bool:
         """Start a scrub on *pool*."""

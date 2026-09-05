@@ -194,6 +194,12 @@ GUI pages and action handlers receive the repository from `app.ctx.zfs_repositor
 straightforward: Python tests patch `subprocess.run` and the repository methods
 pass the mocked calls through.
 
+Pool creation lives in `pool_create.py` (pure logic: eligibility, name
+validation, capacity estimator) and `pool_create_wizard.py` (GTK wizard on the
+Disks page). The wizard executes `zpool create` as one `BashStep` through
+`app.dataset_runner` (session-logged) under a pool-name `zlm` write lock, and
+only on the storage host in two-node configurations.
+
 ### Session Log Utilities
 
 Per-run session log helpers live in `python/session_log.py`.

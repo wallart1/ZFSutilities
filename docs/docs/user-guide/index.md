@@ -29,7 +29,8 @@ before reading the task pages.
 ## Prerequisites
 
 - Root (or `sudo`) access on the backup server
-- ZFS pools must be imported and online (`zpool status` to check)
+- ZFS pools must be imported and online (`zpool status` to check) — or create
+  a pool afterward from the Disks page wizard (GUI, storage host)
 - Scripts are installed to `PATH` and can be run from any directory (handled by the installer scripts)
 
 ## Getting Help

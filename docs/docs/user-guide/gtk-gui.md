@@ -181,6 +181,55 @@ tree also selects the corresponding row in the inventory:
 | Read / Write / Cksum | Error counters from `zpool status` |
 | Ashift | Effective ashift for the vdev |
 
+### Creating Pools
+
+Click **Create Pool…** to open the create-pool wizard, which builds a new pool
+from unused disks with the project's signature safety: you always see the
+exact command and a live dry-run before anything runs, and execution requires
+typed confirmation.
+
+The wizard has four steps:
+
+1. **Disks** — select the member disks. Only eligible disks can be selected:
+   whole disks (`TYPE=disk`) with no partitions, not a member of any imported
+   or importable pool, and with a `/dev/disk/by-id` path (the command is built
+   from by-id paths so it survives device-name changes). Ineligible disks are
+   listed greyed out with the reason. USB-attached disks produce a warning —
+   USB storage can drop out under load, which is dangerous for redundancy
+   groups. SMR cannot be detected reliably, so an informational note reminds
+   you to verify drive specs before building RAIDZ from rotational disks.
+2. **Topology** — choose `stripe`, `mirror`, `raidz1`, `raidz2`, or `raidz3`.
+   Minimum disk counts are enforced (mirror ≥ 2, raidz1 ≥ 3, raidz2 ≥ 4,
+   raidz3 ≥ 5). A mixed-size selection warns that vdev capacity is limited by
+   its smallest member. A live capacity estimate shows both raw and effective
+   capacity for the selected workload profile's block size — RAIDZ padding is
+   modelled width-aware, so small-block workloads show their real efficiency,
+   not just the (N−P)/N asymptote.
+3. **Pool settings** — enter the pool name (validated against `zpool` naming
+   rules and checked for collisions with imported and importable pools),
+   choose `ashift` (auto, 9, 12, or 13; a hint suggests the value from the
+   worst-case physical sector size of the selected disks), and pick a workload
+   profile whose live filesystem properties are written explicitly as `-O`
+   options — never left to `zpool create` defaults, which drift between
+   releases.
+4. **Review** — the exact `zpool create` command plus the live output of
+   `zpool create -n` (a dry run that validates the command without creating
+   anything). The **Create** button stays insensitive until you type the pool
+   name — stronger than the usual YES/NO dialog, because a mistaken create can
+   destroy data on reused disks.
+
+Execution runs through the Dataset action runner, so it is session-logged like
+any other dataset action, and the new pool name is write-locked against
+concurrent operations. Afterwards the Disks and Pools tabs refresh
+automatically, and you are offered the chance to register the new pool in the
+pool registry so backups and retention include it.
+
+On a two-node configuration the wizard is available only on the storage host;
+on the compute host the button is disabled with an explanatory tooltip. The
+wizard uses standard `zpool create`, so it works with any OpenZFS version that
+supports the Disks tab inventory (2.1+); there is no separate version
+requirement.
+
 ### Dataset Tuning
 
 The lower pane shows a read-only grid of live ZFS properties for every dataset
@@ -227,6 +276,9 @@ profiles stored in the JSON config.
 - **Rewrite Data** — run `zfs rewrite` on a single selected dataset. Requires
   OpenZFS 2.3+.
 - **Advanced: Manage Profiles…** — open the workload profile manager.
+- **Create Pool…** — open the create-pool wizard to build a new pool from
+  unused disks (see [Creating Pools](#creating-pools)). Storage host only on
+  two-node systems; disabled while a dataset action is running.
 - **SMART Details** — dumps `smartctl -a` output for the selected disk to the
   GUI log panel. Requires a single disk to be selected and `smartctl` to be
   installed; otherwise a warning is logged.

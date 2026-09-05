@@ -86,6 +86,7 @@ from pool_actions import (
     on_scrub_start,
     on_scrub_stop,
 )
+from pool_create_wizard import on_disks_create_pool
 from pools_page import on_pools_refresh, update_pools_button_sensitivity
 from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
 from restore_page import (
@@ -180,6 +181,7 @@ PAGE_SPECS = {
     },
     "disks": {
         "buttons": [
+            ("Create Pool…", "list-add", "_disks_create_pool_btn"),
             ("Apply Profile…", "dialog-apply", "_disks_apply_profile_btn"),
             ("Rewrite Data", "document-edit", "_disks_rewrite_data_btn"),
             ("Advanced: Manage Profiles…", "preferences-system", "_disks_manage_profiles_btn"),
@@ -419,6 +421,7 @@ ACTION_HANDLERS = {
         ),
     },
     "disks": {
+        "Create Pool…": on_disks_create_pool,
         "Apply Profile…": on_disks_apply_profile,
         "Rewrite Data": on_disks_rewrite_data,
         "Advanced: Manage Profiles…": on_disks_manage_profiles,

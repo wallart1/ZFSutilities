@@ -436,6 +436,8 @@ improve testability while keeping the same bash orchestration contract:
 | `logging_config.py` | `log_msg`, message levels, GUI sink, `session_log_context()`. |
 | `runner_factory.py` | Creates `BackupRunner` instances with shared GUI callbacks; removes runner ownership from `gui_helpers.py`. |
 | `zfs_repository.py` | Repository pattern wrapper for all direct `zfs`/`zpool` subprocess calls; returns typed dataclasses (`PoolRow`, `DatasetRow`, `SnapshotRow`, `HoldRow`). |
+| `pool_create.py` | Pure create-pool logic: disk eligibility, pool-name validation, ashift suggestion, width-aware RAIDZ capacity estimator, profile→`-O` option mapping. No GTK, no subprocess. |
+| `pool_create_wizard.py` | GTK create-pool wizard (Disks page): four-step modal dialog with exact-command review and typed confirmation; executes via the Dataset action runner under a pool-name `zlm` write lock and offers to register the new pool in the pool registry. |
 | `command_builders.py` | Builds bash commands and returns `BashStep` dataclasses instead of loose tuples. |
 
 `backup_config.py` remains as a compatibility shim that re-exports the public

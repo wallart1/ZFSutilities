@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import gi
+import node_config
 import zfs_lock_manager as zlm
 
 gi.require_version("Gtk", "3.0")
@@ -760,9 +761,13 @@ def update_disks_button_sensitivity(app):
     else:
         ds_count = 0
 
+    runner_busy = bool(
+        getattr(app, "dataset_runner", None)
+        and getattr(app.dataset_runner, "running", False)
+    )
+
     apply_btn = getattr(app, "_disks_apply_profile_btn", None)
     if apply_btn:
-        runner_busy = bool(app.dataset_runner and getattr(app.dataset_runner, "running", False))
         apply_btn.set_sensitive(ds_count > 0 and not runner_busy)
 
     rewrite_btn = getattr(app, "_disks_rewrite_data_btn", None)
@@ -778,6 +783,19 @@ def update_disks_button_sensitivity(app):
     manage_btn = getattr(app, "_disks_manage_profiles_btn", None)
     if manage_btn:
         manage_btn.set_sensitive(True)
+
+    create_btn = getattr(app, "_disks_create_pool_btn", None)
+    if create_btn:
+        compute_host = node_config.is_two_node() and not node_config.is_storage_host()
+        if compute_host:
+            create_btn.set_sensitive(False)
+            create_btn.set_tooltip_text("Pool creation is available only on the storage host")
+        elif runner_busy:
+            create_btn.set_sensitive(False)
+            create_btn.set_tooltip_text("A dataset action is already running")
+        else:
+            create_btn.set_sensitive(True)
+            create_btn.set_tooltip_text("")
 
 
 def _highlight_pool_disks(app, pool_name):

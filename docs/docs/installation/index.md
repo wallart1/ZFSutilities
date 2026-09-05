@@ -18,7 +18,8 @@ For an overview of all documentation sections, return to the
 
 - **Debian-based Linux** (e.g., Linux Mint, Ubuntu, Proxmox VE)
 
-- **ZFS pools already created** (`zpool create`)
+- **ZFS pools already created** (`zpool create`) — or create one afterward
+  from the GUI's Disks page wizard (storage host)
 
 - **Root access**
 
@@ -178,7 +179,7 @@ To switch from two-node to single-node, run `install-single-node`. It
 rewrites the config for single-node mode. iSCSI scripts remain installed
 but their operations are skipped.
 
-The install scripts assume that storage devices and ZFS pools are already active on the new system configuration. The scripts do not assist with this. 
+The install scripts assume that storage devices and ZFS pools are already active on the new system configuration. The install scripts themselves do not assist with this; after installation, the GUI's Disks page wizard can create pools from unused disks on the storage host.
 
 ## Uninstalling ZFSutilities
 
