@@ -93,7 +93,7 @@ The sidebar tabs are:
 | [Offsite](#offsite-tab) | Configure and run offsite backups |
 | [Restore](#restore-tab) | Restore datasets from backups |
 | [Schedule](#schedule-tab) | Manage scheduled profiles |
-| [Disks](#disks-tab) | Physical disk inventory and pool topology |
+| [Disks](#disks-tab) | Physical disk inventory, pool topology, and pool growth |
 | [Pools](#pools-tab) | Register pools and manage scrubs |
 | [Datasets](#datasets-tab) | Browse datasets and manage snapshots/holds |
 | [Retention](#retention-tab) | Per-pool retention policies and pruning |
@@ -143,7 +143,11 @@ The **Disks** tab shows the physical storage layer underneath your ZFS pools.
 ### Disk inventory
 
 The upper pane lists every physical block device detected on the system, plus
-any partitions that belong to those devices:
+any partitions that belong to those devices. The system boot disk — the disk
+hosting the root filesystem, however it is layered (plain partition, LVM,
+BTRFS subvolume, or ZFS) — and all of its partitions are always hidden, so
+they can never be offered by the create-pool wizard or any of the pool-growth
+pickers:
 
 | Column | Meaning |
 | --- | --- |
@@ -204,9 +208,7 @@ The wizard has four steps:
    Minimum disk counts are enforced (mirror ≥ 2, raidz1 ≥ 3, raidz2 ≥ 4,
    raidz3 ≥ 5). A mixed-size selection warns that vdev capacity is limited by
    its smallest member. A live capacity estimate shows both raw and effective
-   capacity for the selected workload profile's block size — RAIDZ padding is
-   modelled width-aware, so small-block workloads show their real efficiency,
-   not just the (N−P)/N asymptote.
+   capacity for the selected workload profile's block size.
 3. **Pool settings** — enter the pool name (validated against `zpool` naming
    rules and checked for collisions with imported and importable pools),
    choose `ashift` (auto, 9, 12, or 13; a hint suggests the value from the
@@ -220,17 +222,97 @@ The wizard has four steps:
    name — stronger than the usual YES/NO dialog, because a mistaken create can
    destroy data on reused disks.
 
-Execution runs through the Dataset action runner, so it is session-logged like
-any other dataset action, and the new pool name is write-locked against
-concurrent operations. Afterwards the Disks and Pools tabs refresh
+After execution, the Disks and Pools tabs refresh
 automatically, and you are offered the chance to register the new pool in the
-pool registry so backups and retention include it.
+pool registry so backups and retention can include it.
 
 On a two-node configuration the wizard is available only on the storage host;
-on the compute host the button is disabled with an explanatory tooltip. The
-wizard uses standard `zpool create`, so it works with any OpenZFS version that
-supports the Disks tab inventory (2.1+); there is no separate version
-requirement.
+on the compute host the button is disabled with an explanatory tooltip.
+
+### Growing and Maintaining Pools
+
+Five actions grow or maintain an existing pool. Every one of them follows the
+same safety pattern as the create-pool wizard: you pick the pool (it defaults to
+the pool selected in the topology pane) and the disks or members involved, then
+a review page shows the exact command that will run, warnings tailored to how
+dangerous the operation is, and a confirmation step matched to that danger.
+Disk eligibility uses the same rules as create-pool, and an operation is refused while
+the pool's scrub is running or paused — pause or stop the scrub from the Pools
+tab Scrub Manager first. On two-node systems the buttons are available only on
+the storage host, and all five are disabled while a dataset action is running.
+
+#### Add Data Vdev
+
+Pick the disks for a new data vdev from the eligible-disk picker (members of
+imported or importable pools are greyed out, as in the create-pool wizard) and
+choose the topology: `stripe`, `mirror`, `raidz1`, `raidz2`, or `raidz3`, with
+the same minimum disk counts and mixed-size warning as pool creation. A
+mixed-size selection warns that vdev capacity is limited to the smallest member.
+Because growing the wrong pool is hard to undo, the action requires typed
+confirmation of the pool name. The exact command is
+`zpool add <pool> <topology> <by-id…>`.
+
+#### Expand Vdev
+
+Expand an existing vdev by attaching a new device: convert a stripe to a
+mirror, grow a mirror by one member, or expand a raidz vdev. Pick the target
+in the pool's topology tree, then one eligible disk:
+
+- A **stripe member** — the attach converts the stripe vdev into a mirror. A
+  YES/NO warning dialog explains that the new device becomes a redundant copy
+  of the existing one.
+- A **mirror member** — the attach grows the mirror by one member, with a note
+  showing the new member count.
+- A **raidz group** — the attach offers a RAIDZ expansion
+  (`zpool attach <pool> <raidzN> <new>`). This requires OpenZFS 2.3+; on older
+  versions the target is disabled with an explanatory tooltip. The warnings
+  explain that existing data keeps its old data:parity ratio until rewritten —
+  afterwards use the **Rewrite Data** action per dataset to restripe existing
+  data at the new ratio. RAIDZ expansion confirms with typed confirmation of
+  the pool name.
+
+#### Replace
+
+Pick the pool member to replace in the topology tree — each row shows the
+member or group size — then an eligible replacement disk (the source device
+is excluded from the picker). If the
+replacement is smaller than the source, a prominent warning says the replace
+may fail or reduce available space; typed confirmation of the pool name is required. After the replace starts, the topology pane shows `resilvering` in the
+pool state column — watch live progress in the Pools tab Watch window. The
+exact command is `zpool replace <pool> <old-by-id> <new-by-id>`.
+
+#### Detach
+
+Detach removes a member from a **mirror** vdev — nothing else. In the
+topology tree only disk members of a mirror vdev are selectable; raidz
+members, stripe (single-disk) members, groups, and special/log/cache devices
+are greyed out. When no imported pool has a mirror member at all, the action
+explains that and does not open the dialog. The warnings state that detaching
+reduces redundancy and is not undoable without re-attaching a device, and
+that detaching one leg of a 2-member mirror leaves a single non-redundant
+disk. Because the operation is irreversible, it confirms with typed
+confirmation of the pool name. The exact command is `zpool detach <pool> <by-id>`.
+
+#### Add Infrastructure Vdev
+
+Adds a `special`, `log`, or `cache` vdev from the kind selector. Two or more
+selected disks form a mirror; one disk is a single device:
+
+- **special** (metadata) — must be a mirror of at least 2 devices. The warning
+  is blunt: losing the special vdev loses the entire pool, because metadata
+  lives only there. Typed confirmation of the pool name is required.
+- **log** (SLOG) — only accelerates synchronous writes; it holds no pool data.
+  A single device is allowed, with a warning that losing it may lose a narrow
+  window of already-acknowledged synchronous writes (application data, not
+  metadata). Mirror the SLOG on separate physical
+  devices if that cannot be tolerated. The warnings also note that an SLOG
+  only needs to hold ~5 seconds of synchronous writes (max pool write speed
+  × 5 s), so oversized devices gain nothing. An acknowledgment checkbox
+  replaces the typed confirmation.
+- **cache** (L2ARC) — a read cache that needs no
+  redundancy. A YES/NO question confirms the addition.
+
+The exact command is `zpool add <pool> <special|log|cache> [mirror] <by-id…>`.
 
 ### Dataset Tuning
 
@@ -266,7 +348,7 @@ After applying a profile, existing data still has the old block layout. Select a
 single dataset and click **Rewrite Data** to run `zfs rewrite`, which rewrites
 existing blocks in place so they match the current properties. This requires
 OpenZFS 2.3+; on older versions a guidance label explains that you can create a
-new dataset with the desired profile and migrate with send/receive instead.
+new dataset with the desired profile and migrate using the Restore page instead.
 
 Use **Advanced: Manage Profiles…** to add, edit, delete, or reset the workload
 profiles stored in the JSON config.
@@ -280,6 +362,25 @@ profiles stored in the JSON config.
 - **Advanced: Manage Profiles…** — open the workload profile manager.
 - **Create Pool…** — open the create-pool wizard to build a new pool from
   unused disks (see [Creating Pools](#creating-pools)). Storage host only on
+  two-node systems; disabled while a dataset action is running. The system
+  boot disk and its partitions never appear in the disk picker.
+- **Add Data Vdev…** — add a new data vdev to an existing pool (see
+  [Add Data Vdev](#add-data-vdev)). Storage host only on two-node systems;
+  disabled while a dataset action is running.
+- **Expand Vdev…** — expand a pool vdev by attaching a device: convert a
+  stripe to a mirror, grow a mirror, or expand a raidz vdev (see
+  [Expand Vdev](#expand-vdev)). Storage host only on two-node systems;
+  disabled while a dataset action is running. Raidz expansion additionally
+  requires OpenZFS 2.3+ in the running kernel module — without it, raidz
+  rows are greyed and only the mirror-related tasks are available.
+- **Replace…** — replace a pool member with an eligible disk and watch the
+  resilver (see [Replace](#replace)). Storage host only on two-node systems;
+  disabled while a dataset action is running.
+- **Detach…** — detach a member from a mirror vdev (see [Detach](#detach)).
+  Storage host only on two-node systems; disabled while a dataset action is
+  running.
+- **Add Infra Vdev…** — add a special, log (SLOG), or cache (L2ARC) vdev (see
+  [Add Infrastructure Vdev](#add-infrastructure-vdev)). Storage host only on
   two-node systems; disabled while a dataset action is running.
 - **SMART Details** — dumps `smartctl -a` output for the selected disk to the
   GUI log panel. Requires a single disk to be selected and `smartctl` to be
@@ -294,6 +395,8 @@ profiles stored in the JSON config.
 | Apply Profile (live property changes) | 2.1+ |
 | Rewrite Data | 2.3+ |
 | Create Pool | 2.1+ (standard `zpool create`; no separate feature gate) |
+| Add Data Vdev / Expand Vdev (mirror tasks) / Replace / Detach / Add Infra Vdev | 2.1+ (standard `zpool add`/`attach`/`replace`/`detach`; no separate feature gate) |
+| RAIDZ expansion (Expand Vdev on a raidz group) | 2.3+ |
 
 ## Startup Version Check (Two-Node)
 
@@ -324,7 +427,7 @@ active state is obvious at a glance.
 | **Restore**   | Skips ZFS send/receive (logs what it would do) for both Part 1 and Part 2                                                 |
 | **Retention** | Logs what snapshots would be pruned without deleting them                                                                 |
 
-The toggle state persists while the GUI is running and is reset on restart.
+The toggle state persists while the GUI is running and is reset by clicking it again or on GUI restart.
 
 When you click **Add Profile to Schedule** in a tab, the current dry-run state
 is captured in the profile. Scheduled executions of that profile then run in
@@ -362,14 +465,14 @@ for details on the priority tokens.
     [Logs tab](#logs-tab) to browse and search them.
 
     When multiple GUI runners are active at the same time (for example, a Backup
-    and an Offsite job running concurrently), each runner writes its Python-level
+    and an Offsite job running concurrently), each runner writes its
     messages to its own session log so the logs do not cross-write.
 
     Scheduled backup profiles also stream rsync pull-step output (both remote
     pulls and local pulls that resolve to the current host) to
     `/var/log/zfsutilities/rsync-pull.log` instead of the session log, so the
     GUI Logs tab is not flooded with file-list progress from routine rsync jobs.
-    
+
     For how the single-writer log mechanism works, see
     [Architecture — Session logging](../developer-guide/architecture.md#session-logging).
 
@@ -459,7 +562,7 @@ rewritten to `index.html` before loading.
 #### Fallback Mode
 
 If WebKit2 is not installed or the pre-built site is missing, the viewer shows
-a plain-text message instead of the rendered page.
+a plain-text markdown instead of the rendered page.
 
 For how the embedded server and edit links are implemented, see
 [Documentation Server](../developer-guide/doc-server.md).
@@ -471,16 +574,6 @@ The GUI's **View** menu contains global display actions.
 | Item                  | Purpose                                                                                                                                  |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | **Minimize Width...** | Reset every resizable table column to its own minimum width, clear saved column widths, and shrink the main window as narrow as possible |
-
-Column widths across the GUI are normally restored from the saved `ui_state`
-when the window opens. Each resizable column's width is stored by its header
-title, so adding, removing, or renaming a column does not silently misapply old
-widths. Widths are saved as the user's set width rather than GTK's allocated
-width, and they are not scaled against the saved window size, so maximized
-sessions no longer shrink columns based on a stale non-maximized window width.
-All tables use fixed-width, resizable columns hosted inside scrollable
-viewports, so the main window can always be shrunk horizontally even when
-columns were previously widened.
 
 Choosing **Minimize Width...** flushes any pending save, discards saved widths,
 and resets every resizable column to its own minimum width. The action asks for
@@ -497,7 +590,7 @@ The sidebar exposes these pages:
 | [Offsite](#offsite-tab)           | Configure and run [`zfssendoffsite`](../commands-and-modules/commands.md#zfssendoffsite) |
 | [Restore](#restore-tab)           | Configure and run [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore)         |
 | [Schedule](#schedule-tab)         | Manage scheduled jobs                                                                    |
-| [Disks](#disks-tab)               | Physical disk inventory, pool topology, and dataset tuning                               |
+| [Disks](#disks-tab)               | Physical disk inventory, pool topology, pool growth, and dataset tuning                  |
 | [Pools](#pools-tab)               | Pool registry + live `zpool list` status + scrub manager                                 |
 | [Datasets](#datasets-tab)         | Collapsible dataset tree with inline snapshot/hold management (pool root datasets at top level) |
 | [Retention](#retention-tab)       | Per-pool retention policies + prune runner                                               |
@@ -653,7 +746,7 @@ A live table from `zpool list` showing:
 
 A **Low-space warning threshold** spin button sits above the pool table. It
 sets the capacity percentage at which the Dashboard warns about low space.
-The default is **80 %** (range 50–95 %). 
+The default is **80 %** (range 50–95 %).
 
 ### Running Tasks
 
@@ -762,12 +855,12 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
 ### Layout
 
 - **Pre-Backup** — One checkbox and a command entry:
-  **Run pre-backup command** — Enable a custom command that runs before all backup steps. If it fails, the backup aborts. 
+  **Run pre-backup command** — Enable a custom command that runs before all backup steps. If it fails, the backup aborts.
 
 - **Pull Steps** — Editable list of rsync pull operations. The frame header has
   an **Active** checkbox; unchecking it bypasses every pull step while still
   running the other backup steps. Each row has three columns:
-  
+
   - **Source** — the remote hostname or IP and file path to pull from. Examples:
     `proxmox1:/etc`, `192.168.1.50:/root`, `backup-server.local:/home`.
   - **Destination path** — the local directory where pulled files are placed.
@@ -777,9 +870,9 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
     quoting for patterns that contain spaces. See
     [Daily Backup — Rsync Exclude Patterns](daily-backup.md#rsync-exclude-patterns)
     for details and examples.
-  
+
   Add or remove rows with the buttons; reorder by dragging rows.
-  
+
   A pull-step failure is **non-fatal**: it is logged as a warning, the backup
   continues with the remaining steps, and the job returns the failing pull's
   return code at the end. When an rsync step fails, a short human-readable
@@ -799,7 +892,7 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
   [dataset-selection criteria](#dataset-selection-criteria)
   (`includes`, `excludes`, `depth`, `startwith`, `endwith`), [advanced options](#advanced-options),
   and:
-  
+
   - **ZFS Keys Backup** — Two entries:
     - **ZFS keys source** — rsync endpoint where the key files currently live
       (e.g. `/mnt/ZFSkeys/` or `storage-host:/backups/zfs-keys/`)
@@ -809,7 +902,7 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
       for the security implications.
 
 - **Post-Backup Steps** — Three checkboxes and a command entry:
-  
+
   - **Clear snapshot name memory** after sending
   - **Prune snapshots** when the backup finishes
   - **Run post-backup command** — Enable a custom command that runs after all
@@ -910,14 +1003,14 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   [dataset-selection criteria](#dataset-selection-criteria)
   (`depth`, `includes`, `excludes`, `startwith`, `endwith`), the snapshot
   **label**, and:
-  
+
   | Option                            | Purpose                                                                                  |
   | --------------------------------- | ---------------------------------------------------------------------------------------- |
   | **label**                         | Snapshot label for matching. Only snapshots with this label are considered as source candidates. |
   | **Pause scrubs during each step** | Pause ZFS scrubs on the source and destination pools while the restore step is running.  |
 
 - **Restore Steps** — Two checkboxes:
-  
+
   - **Part 1** — Full copy of the oldest available source snapshot
   - **Part 2** — Incremental copy of remaining snapshots
 
@@ -1133,7 +1226,7 @@ Scheduled jobs run in the background and execute the same commands the GUI would
     To change the tab-related parameters of a profile
     (pull steps, send/receive steps, pool lists, etc.), go to the appropriate
     tab, recall the profile, make your changes and click **Add Profile to Schedule**.
-    
+
     The **Save** button on the Schedule tab commits only the items whose **Active** checkbox is selected. Others are removed from cron.
 
 ---
@@ -1581,7 +1674,7 @@ Right-click any row to open a context menu:
   size, position, and popped-out state across GUI restarts and release updates.
 
 - **Search bar** — above the text view:
-  
+
   - **Search entry** — type a query and press Enter (or click **Search**)
   - **Search** button — finds and highlights every occurrence. The current
     match is highlighted in **orange**; all other matches are highlighted in

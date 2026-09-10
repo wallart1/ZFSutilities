@@ -762,9 +762,9 @@ def update_disks_button_sensitivity(app):
         ds_count = 0
 
     runner_busy = bool(
-        getattr(app, "dataset_runner", None)
-        and getattr(app.dataset_runner, "running", False)
+        getattr(app, "dataset_runner", None) and getattr(app.dataset_runner, "running", False)
     )
+    compute_host = node_config.is_two_node() and not node_config.is_storage_host()
 
     apply_btn = getattr(app, "_disks_apply_profile_btn", None)
     if apply_btn:
@@ -786,7 +786,6 @@ def update_disks_button_sensitivity(app):
 
     create_btn = getattr(app, "_disks_create_pool_btn", None)
     if create_btn:
-        compute_host = node_config.is_two_node() and not node_config.is_storage_host()
         if compute_host:
             create_btn.set_sensitive(False)
             create_btn.set_tooltip_text("Pool creation is available only on the storage host")
@@ -796,6 +795,29 @@ def update_disks_button_sensitivity(app):
         else:
             create_btn.set_sensitive(True)
             create_btn.set_tooltip_text("")
+
+    # Phase 4 pool-growth/maintenance buttons share the Create Pool gating:
+    # compute-host disable (taking precedence) then runner-busy disable.
+    growth_attrs = (
+        ("_disks_add_vdev_btn", "Pool growth is available only on the storage host"),
+        ("_disks_attach_btn", "Pool growth is available only on the storage host"),
+        ("_disks_add_infra_vdev_btn", "Pool growth is available only on the storage host"),
+        ("_disks_replace_btn", "Pool maintenance is available only on the storage host"),
+        ("_disks_detach_btn", "Pool maintenance is available only on the storage host"),
+    )
+    for attr, host_tooltip in growth_attrs:
+        btn = getattr(app, attr, None)
+        if btn is None:
+            continue
+        if compute_host:
+            btn.set_sensitive(False)
+            btn.set_tooltip_text(host_tooltip)
+        elif runner_busy:
+            btn.set_sensitive(False)
+            btn.set_tooltip_text("A dataset action is already running")
+        else:
+            btn.set_sensitive(True)
+            btn.set_tooltip_text("")
 
 
 def _highlight_pool_disks(app, pool_name):

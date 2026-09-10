@@ -20,7 +20,11 @@ from zfs_repository import (
     PoolRow,
     SnapshotRow,
     ZfsRepository,
+    build_add_vdev_command,
+    build_attach_command,
     build_create_pool_command,
+    build_detach_command,
+    build_replace_command,
     is_dataset_encrypted,
 )
 
@@ -555,7 +559,9 @@ class TestBuildCreatePoolCommand(unittest.TestCase):
     def test_rejects_out_of_range_ashift(self):
         for ashift in (8, 17):
             with self.assertRaises(ValueError):
-                build_create_pool_command("tank", "stripe", ["/dev/disk/by-id/ata-X"], ashift=ashift)
+                build_create_pool_command(
+                    "tank", "stripe", ["/dev/disk/by-id/ata-X"], ashift=ashift
+                )
 
     def test_rejects_empty_pool_name(self):
         with self.assertRaises(ValueError):
@@ -621,6 +627,221 @@ class TestCreatePoolExecution(unittest.TestCase):
             repo.create_pool_dry_run(["zpool", "list"])
         with self.assertRaises(ValueError):
             repo.create_pool(["zpool", "list"])
+
+
+class TestBuildAddVdevCommand(unittest.TestCase):
+    """build_add_vdev_command produces exact, validated zpool add argv."""
+
+    def test_stripe_data_vdev_has_no_keyword(self):
+        cmd = build_add_vdev_command("tank", "stripe", ["/dev/disk/by-id/ata-X"])
+        self.assertEqual(cmd, ["zpool", "add", "tank", "/dev/disk/by-id/ata-X"])
+
+    def test_mirror_data_vdev_places_keyword_before_paths(self):
+        paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
+        cmd = build_add_vdev_command("tank", "mirror", paths)
+        self.assertEqual(cmd, ["zpool", "add", "tank", "mirror"] + paths)
+
+    def test_raidz2_data_vdev(self):
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d")]
+        cmd = build_add_vdev_command("tank", "raidz2", paths)
+        self.assertEqual(cmd, ["zpool", "add", "tank", "raidz2"] + paths)
+
+    def test_cache_single_disk_has_no_keyword(self):
+        cmd = build_add_vdev_command("tank", "stripe", ["/dev/disk/by-id/ata-X"], kind="cache")
+        self.assertEqual(cmd, ["zpool", "add", "tank", "cache", "/dev/disk/by-id/ata-X"])
+
+    def test_cache_multiple_disks_are_not_mirrored(self):
+        paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
+        cmd = build_add_vdev_command("tank", "stripe", paths, kind="cache")
+        self.assertEqual(cmd, ["zpool", "add", "tank", "cache"] + paths)
+
+    def test_log_mirror_places_keyword_after_kind(self):
+        paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
+        cmd = build_add_vdev_command("tank", "mirror", paths, kind="log")
+        self.assertEqual(cmd, ["zpool", "add", "tank", "log", "mirror"] + paths)
+
+    def test_special_mirror_places_keyword_after_kind(self):
+        paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
+        cmd = build_add_vdev_command("tank", "mirror", paths, kind="special")
+        self.assertEqual(cmd, ["zpool", "add", "tank", "special", "mirror"] + paths)
+
+    def test_log_single_disk_has_no_keyword(self):
+        cmd = build_add_vdev_command("tank", "stripe", ["/dev/disk/by-id/ata-X"], kind="log")
+        self.assertEqual(cmd, ["zpool", "add", "tank", "log", "/dev/disk/by-id/ata-X"])
+
+    def test_rejects_unknown_kind(self):
+        with self.assertRaises(ValueError):
+            build_add_vdev_command("tank", "stripe", ["/dev/disk/by-id/ata-X"], kind="dedup")
+
+    def test_rejects_mirror_cache_vdev(self):
+        paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
+        with self.assertRaises(ValueError):
+            build_add_vdev_command("tank", "mirror", paths, kind="cache")
+
+    def test_rejects_raidz_as_infra_topology(self):
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c")]
+        with self.assertRaises(ValueError):
+            build_add_vdev_command("tank", "raidz1", paths, kind="log")
+
+    def test_rejects_too_few_data_vdev_disks(self):
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d")]
+        with self.assertRaises(ValueError):
+            build_add_vdev_command("tank", "raidz3", paths)
+
+    def test_rejects_infra_mirror_with_one_disk(self):
+        with self.assertRaises(ValueError):
+            build_add_vdev_command("tank", "mirror", ["/dev/disk/by-id/ata-X"], kind="special")
+
+    def test_rejects_non_by_id_path(self):
+        with self.assertRaises(ValueError):
+            build_add_vdev_command("tank", "stripe", ["/dev/sda"])
+
+    def test_rejects_empty_pool_name(self):
+        with self.assertRaises(ValueError):
+            build_add_vdev_command("", "stripe", ["/dev/disk/by-id/ata-X"])
+
+
+class TestBuildAttachCommand(unittest.TestCase):
+    """build_attach_command produces exact, validated zpool attach argv."""
+
+    def test_stripe_to_mirror_attach(self):
+        cmd = build_attach_command("tank", "/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y")
+        self.assertEqual(
+            cmd,
+            [
+                "zpool",
+                "attach",
+                "tank",
+                "/dev/disk/by-id/ata-X",
+                "/dev/disk/by-id/ata-Y",
+            ],
+        )
+
+    def test_raidz_expansion_targets_vdev_group_name(self):
+        cmd = build_attach_command("tank", "raidz2-0", "/dev/disk/by-id/ata-Z")
+        self.assertEqual(cmd, ["zpool", "attach", "tank", "raidz2-0", "/dev/disk/by-id/ata-Z"])
+
+    def test_accepts_mirror_vdev_group_name(self):
+        cmd = build_attach_command("tank", "mirror-0", "/dev/disk/by-id/ata-Z")
+        self.assertEqual(cmd, ["zpool", "attach", "tank", "mirror-0", "/dev/disk/by-id/ata-Z"])
+
+    def test_rejects_stripe_vdev_group_name(self):
+        with self.assertRaises(ValueError):
+            build_attach_command("tank", "stripe-0", "/dev/disk/by-id/ata-Z")
+
+    def test_rejects_vdev_name_without_index(self):
+        with self.assertRaises(ValueError):
+            build_attach_command("tank", "raidz2", "/dev/disk/by-id/ata-Z")
+
+    def test_rejects_vdev_name_with_non_numeric_index(self):
+        with self.assertRaises(ValueError):
+            build_attach_command("tank", "mirror-x", "/dev/disk/by-id/ata-Z")
+
+    def test_rejects_replacing_vdev_group_name(self):
+        with self.assertRaises(ValueError):
+            build_attach_command("tank", "replacing-0", "/dev/disk/by-id/ata-Z")
+
+    def test_rejects_non_by_id_target(self):
+        with self.assertRaises(ValueError):
+            build_attach_command("tank", "sda", "/dev/disk/by-id/ata-Z")
+
+    def test_rejects_non_by_id_new_disk(self):
+        with self.assertRaises(ValueError):
+            build_attach_command("tank", "/dev/disk/by-id/ata-X", "/dev/sdb")
+
+    def test_rejects_empty_pool_name(self):
+        with self.assertRaises(ValueError):
+            build_attach_command("", "/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y")
+
+
+class TestBuildReplaceCommand(unittest.TestCase):
+    """build_replace_command produces exact, validated zpool replace argv."""
+
+    def test_exact_argv(self):
+        cmd = build_replace_command("tank", "/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y")
+        self.assertEqual(
+            cmd,
+            [
+                "zpool",
+                "replace",
+                "tank",
+                "/dev/disk/by-id/ata-X",
+                "/dev/disk/by-id/ata-Y",
+            ],
+        )
+
+    def test_rejects_non_by_id_source(self):
+        with self.assertRaises(ValueError):
+            build_replace_command("tank", "/dev/sda", "/dev/disk/by-id/ata-Y")
+
+    def test_rejects_non_by_id_replacement(self):
+        with self.assertRaises(ValueError):
+            build_replace_command("tank", "/dev/disk/by-id/ata-X", "/dev/sdb")
+
+    def test_rejects_empty_pool_name(self):
+        with self.assertRaises(ValueError):
+            build_replace_command("", "/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y")
+
+
+class TestBuildDetachCommand(unittest.TestCase):
+    """build_detach_command produces exact, validated zpool detach argv."""
+
+    def test_exact_argv(self):
+        cmd = build_detach_command("tank", "/dev/disk/by-id/ata-X")
+        self.assertEqual(cmd, ["zpool", "detach", "tank", "/dev/disk/by-id/ata-X"])
+
+    def test_rejects_non_by_id_member(self):
+        with self.assertRaises(ValueError):
+            build_detach_command("tank", "/dev/sda")
+
+    def test_rejects_empty_pool_name(self):
+        with self.assertRaises(ValueError):
+            build_detach_command("", "/dev/disk/by-id/ata-X")
+
+
+class TestRunPoolCommand(unittest.TestCase):
+    """run_pool_command executes pre-built growth argv via _run."""
+
+    def _recording_repo(self, rc=0, stdout="", stderr="", sudo=False):
+        calls = []
+        result = subprocess.CompletedProcess(args=[], returncode=rc, stdout=stdout, stderr=stderr)
+        repo = ZfsRepository(sudo=sudo)
+
+        def _run(cmd, **kwargs):
+            calls.append((list(cmd), kwargs))
+            return result
+
+        repo._run = _run
+        return repo, calls
+
+    def test_returns_true_and_passes_argv_verbatim(self):
+        repo, calls = self._recording_repo(rc=0)
+        cmd = build_attach_command("tank", "raidz2-0", "/dev/disk/by-id/ata-Z")
+        self.assertTrue(repo.run_pool_command(cmd))
+        self.assertEqual(calls[0][0], cmd)
+
+    def test_returns_false_and_logs_warning_on_failure(self):
+        repo, _ = self._recording_repo(rc=1, stderr="device busy")
+        cmd = build_detach_command("tank", "/dev/disk/by-id/ata-X")
+        with capture_logs() as logs:
+            self.assertFalse(repo.run_pool_command(cmd))
+        self.assertTrue(any("zpool detach failed" in e for e in logs))
+
+    def test_sudo_repository_prefixes_sudo(self):
+        repo, calls = self._recording_repo(rc=0, sudo=True)
+        cmd = build_replace_command("tank", "/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y")
+        self.assertTrue(repo.run_pool_command(cmd))
+        self.assertEqual(calls[0][0][:3], ["sudo", "zpool", "replace"])
+
+    def test_rejects_non_growth_commands(self):
+        repo, _ = self._recording_repo()
+        for cmd in (
+            ["zpool", "list"],
+            ["zfs", "set", "recordsize=1M", "tank/data"],
+            ["zpool", "create", "tank", "/dev/disk/by-id/ata-X"],
+        ):
+            with self.assertRaises(ValueError):
+                repo.run_pool_command(cmd)
 
 
 class TestImportablePoolCache(unittest.TestCase):

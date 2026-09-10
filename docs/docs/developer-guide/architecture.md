@@ -438,6 +438,8 @@ improve testability while keeping the same bash orchestration contract:
 | `zfs_repository.py` | Repository pattern wrapper for all direct `zfs`/`zpool` subprocess calls; returns typed dataclasses (`PoolRow`, `DatasetRow`, `SnapshotRow`, `HoldRow`). |
 | `pool_create.py` | Pure create-pool logic: disk eligibility, pool-name validation, ashift suggestion, width-aware RAIDZ capacity estimator, profile→`-O` option mapping. No GTK, no subprocess. |
 | `pool_create_wizard.py` | GTK create-pool wizard (Disks page): four-step modal dialog with exact-command review and typed confirmation; executes via the Dataset action runner under a pool-name `zlm` write lock and offers to register the new pool in the pool registry. |
+| `pool_growth.py` | Pure pool-growth policy (Phase 4): attach/replace/detach target classification, infra-vdev validation, scrub-block check. No GTK; the only live-state reader takes the repository as a parameter. |
+| `pool_growth_dialogs.py` | GTK dialogs and Disks-page handlers for the five pool-growth operations; shared review scaffold (exact command, warnings, confirmation matched to the danger); executes via the Dataset action runner under a pool-scope `zlm` write lock. |
 | `command_builders.py` | Builds bash commands and returns `BashStep` dataclasses instead of loose tuples. |
 
 `backup_config.py` remains as a compatibility shim that re-exports the public

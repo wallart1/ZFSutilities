@@ -168,6 +168,17 @@ _ASHIFT_RE = re.compile(r"^\s*ashift:\s*(\d+)\s*$", re.MULTILINE)
 
 _BY_ID_PREFIX = "/dev/disk/by-id/"
 
+# Infrastructure vdev kinds accepted by build_add_vdev_command's `kind`.
+_INFRA_VDEV_KINDS = ("special", "log", "cache")
+
+# Vdev group-name prefixes build_attach_command accepts as an attach target
+# (per zpool-attach(8): mirror or raidz group names such as "raidz2-0").
+_ATTACHABLE_VDEV_PREFIXES = ("mirror", "raidz1", "raidz2", "raidz3")
+
+# Subcommands executed by ZfsRepository.run_pool_command; `zpool create`
+# remains exclusive to create_pool.
+_POOL_GROWTH_SUBCOMMANDS = ("add", "attach", "replace", "detach")
+
 # First tokens of vdev group header lines in a `zpool import` config section.
 # Leaf device lines are everything else (paths or short kernel names).
 _IMPORT_VDEV_KEYWORDS = (
@@ -224,6 +235,23 @@ def _parse_importable_pools_config(raw: str) -> dict[str, list[str]]:
     return pools
 
 
+def _validate_by_id_path(path: str) -> None:
+    """Raise ValueError unless *path* is an absolute /dev/disk/by-id path."""
+    if not path.startswith(_BY_ID_PREFIX) or ".." in path or any(c.isspace() for c in path):
+        raise ValueError(f"path must be an absolute /dev/disk/by-id path: {path!r}")
+
+
+def _is_vdev_group_name(name: str) -> bool:
+    """Return True for a `zpool status` vdev group name (mirror-0, raidz2-0, …).
+
+    Validated without a regex: the part before the last '-' must be an
+    attachable vdev keyword and the part after it a numeric index, so
+    "stripe-0", "raidz2", "mirror-x", and "replacing-0" are all rejected.
+    """
+    prefix, sep, index = name.rpartition("-")
+    return bool(sep) and prefix in _ATTACHABLE_VDEV_PREFIXES and index.isdigit()
+
+
 def build_create_pool_command(
     pool_name: str,
     topology: str,
@@ -250,10 +278,7 @@ def build_create_pool_command(
     if len(by_id_paths) < spec.min_disks:
         raise ValueError(f"{topology} requires at least {spec.min_disks} disks")
     for path in by_id_paths:
-        if not path.startswith(_BY_ID_PREFIX) or ".." in path or any(
-            c.isspace() for c in path
-        ):
-            raise ValueError(f"path must be an absolute /dev/disk/by-id path: {path!r}")
+        _validate_by_id_path(path)
     if ashift is not None and not 9 <= ashift <= 16:
         raise ValueError(f"ashift must be between 9 and 16, got {ashift}")
 
@@ -269,6 +294,106 @@ def build_create_pool_command(
         cmd.append(topology)
     cmd += list(by_id_paths)
     return cmd
+
+
+def build_add_vdev_command(
+    pool_name: str,
+    topology: str,
+    by_id_paths: list[str],
+    kind: str | None = None,
+) -> list[str]:
+    """Build the exact `zpool add` argv for a new vdev on an existing pool.
+
+    Pure function: no subprocess. Without *kind* this builds a data vdev:
+    ``zpool add <pool> <mirror|raidzN> <paths…>`` (stripe emits no keyword),
+    reusing ``pool_create.TOPOLOGIES`` for the minimum member counts. With
+    *kind* one of "special", "log", or "cache" it builds an infrastructure
+    vdev: ``zpool add <pool> <kind> [mirror] <paths…>`` accepting only the
+    "stripe" (single device, no keyword) and "mirror" topologies —
+    zpoolconcepts(7) states cache vdevs cannot be mirrored, so "cache" with
+    "mirror" is rejected here. All paths must live under /dev/disk/by-id/.
+    Raises ValueError on unknown topology/kind, membership below the
+    minimum, or non-by-id paths. Policy-level rules (e.g. a special vdev
+    should be mirrored) live in ``pool_growth.validate_infra_vdev``.
+    """
+    if not pool_name:
+        raise ValueError("pool name must not be empty")
+    spec = TOPOLOGIES.get(topology)
+    if spec is None:
+        raise ValueError(f"unknown topology: {topology!r}")
+    for path in by_id_paths:
+        _validate_by_id_path(path)
+    if len(by_id_paths) < spec.min_disks:
+        raise ValueError(f"{topology} requires at least {spec.min_disks} disks")
+
+    cmd = ["zpool", "add", pool_name]
+    if kind is not None:
+        if kind not in _INFRA_VDEV_KINDS:
+            raise ValueError(f"unknown infrastructure vdev kind: {kind!r}")
+        if topology not in ("stripe", "mirror"):
+            raise ValueError(
+                f"infrastructure vdev kind {kind!r} only supports "
+                f"stripe or mirror, not {topology!r}"
+            )
+        if kind == "cache" and topology == "mirror":
+            raise ValueError("cache vdevs cannot be mirrored")
+        cmd.append(kind)
+        if topology == "mirror":
+            cmd.append("mirror")
+    elif topology != "stripe":
+        cmd.append(topology)
+    cmd += list(by_id_paths)
+    return cmd
+
+
+def build_attach_command(pool_name: str, target: str, new_path: str) -> list[str]:
+    """Build the exact `zpool attach` argv.
+
+    Pure function: no subprocess. *target* is either the by-id path of an
+    existing leaf member (converting a stripe/plain vdev into a mirror) or a
+    vdev group name from ``zpool status`` such as "raidz2-0" (RAIDZ
+    expansion, per zpool-attach(8)). *new_path* must be a disk under
+    /dev/disk/by-id/. Raises ValueError on invalid input; capability gating
+    for RAIDZ expansion (``zfs_capabilities.supports("raidz_expansion")``)
+    is the caller's responsibility.
+    """
+    if not pool_name:
+        raise ValueError("pool name must not be empty")
+    if not target.startswith(_BY_ID_PREFIX) and not _is_vdev_group_name(target):
+        raise ValueError(
+            f"target must be a /dev/disk/by-id path or a vdev name (mirror-N, raidzN-N): {target!r}"
+        )
+    _validate_by_id_path(new_path)
+    return ["zpool", "attach", pool_name, target, new_path]
+
+
+def build_replace_command(pool_name: str, source_path: str, new_path: str) -> list[str]:
+    """Build the exact `zpool replace` argv.
+
+    Pure function: no subprocess. Both devices must be absolute
+    /dev/disk/by-id paths. zpool itself requires the replacement to be at
+    least as large as the source; ``pool_growth.validate_replace_pair``
+    flags a smaller replacement in advance.
+    """
+    if not pool_name:
+        raise ValueError("pool name must not be empty")
+    _validate_by_id_path(source_path)
+    _validate_by_id_path(new_path)
+    return ["zpool", "replace", pool_name, source_path, new_path]
+
+
+def build_detach_command(pool_name: str, member_path: str) -> list[str]:
+    """Build the exact `zpool detach` argv.
+
+    Pure function: no subprocess. *member_path* must be an absolute
+    /dev/disk/by-id path. Per zpool-detach(8), detach applies to mirror
+    members (and spare/replacing leaves) only; that policy is enforced by
+    ``pool_growth.assess_detach`` before this builder is called.
+    """
+    if not pool_name:
+        raise ValueError("pool name must not be empty")
+    _validate_by_id_path(member_path)
+    return ["zpool", "detach", pool_name, member_path]
 
 
 class ZfsRepository:
@@ -489,9 +614,24 @@ class ZfsRepository:
         log_msg(f"INFO: creating pool: {shlex.join(cmd)}")
         result = self._run(self._zpool(*cmd[1:]), check=False)
         if result.returncode != 0:
+            log_msg(f"WARN: zpool create failed (rc={result.returncode}): {result.stderr.strip()}")
+            return False
+        return True
+
+    def run_pool_command(self, cmd: list[str]) -> bool:
+        """Execute a pre-built pool-growth argv. Returns True on success.
+
+        Accepts only ``zpool add/attach/replace/detach`` argv produced by the
+        build_* helpers; ``zpool create`` remains exclusive to
+        ``create_pool``.
+        """
+        if len(cmd) < 2 or cmd[0] != "zpool" or cmd[1] not in _POOL_GROWTH_SUBCOMMANDS:
+            raise ValueError(f"not a zpool add/attach/replace/detach command: {cmd!r}")
+        log_msg(f"INFO: pool operation: {shlex.join(cmd)}")
+        result = self._run(self._zpool(*cmd[1:]), check=False)
+        if result.returncode != 0:
             log_msg(
-                f"WARN: zpool create failed (rc={result.returncode}): "
-                f"{result.stderr.strip()}"
+                f"WARN: zpool {cmd[1]} failed (rc={result.returncode}): {result.stderr.strip()}"
             )
             return False
         return True

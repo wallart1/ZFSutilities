@@ -344,6 +344,27 @@ class TestDiskInventoryCache(unittest.TestCase):
         self.assertEqual(len(data.disks), 1)
         self.assertEqual(data.disks[0].pools, ["pool1"])
 
+    def test_load_passes_through_repository_filtering(self):
+        """The cache must not re-add disks the repository filtered out.
+
+        Boot-disk hiding lives in DiskRepository.list_disks(); the cache has
+        no inventory of its own, so whatever the repository returns is what
+        the Disks page shows.
+        """
+        dp = _import_disks_page()
+        disk_repo = MagicMock()
+        disk_repo.disk_inventory.return_value = MagicMock(
+            disks=[_disk(path="/dev/sdb")],
+            by_path={"/dev/sdb": _disk(path="/dev/sdb")},
+        )
+        zfs_repo = MagicMock()
+        zfs_repo.list_pools_full.return_value = []
+
+        cache = dp.DiskInventoryCache(disk_repo, zfs_repo)
+        data = cache._load()
+
+        self.assertEqual([d.path for d in data.disks], ["/dev/sdb"])
+
 
 class TestRefreshDisksPage(unittest.TestCase):
     """refresh_disks_page() repopulates stores from cached inventory data."""

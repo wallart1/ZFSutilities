@@ -48,6 +48,23 @@ class DiskInventory:
 _SMART_HEALTH_RE = re.compile(r"^\s*SMART overall-health self-assessment test result:\s*(\S+).*$")
 
 
+def _flatten_blockdevices(devices) -> dict:
+    """Index lsblk JSON rows by name, recursing through nested "children".
+
+    Some lsblk column sets flatten the tree, others nest it; index both
+    shapes so PKNAME chains of any depth (e.g. lvm on a partition) resolve.
+    """
+    by_name = {}
+    stack = list(devices)
+    while stack:
+        dev = stack.pop()
+        name = dev.get("name")
+        if name:
+            by_name[name] = dev
+        stack.extend(dev.get("children") or [])
+    return by_name
+
+
 def _format_bytes(size: int) -> str:
     """Return a compact human-readable representation of *size* bytes."""
     if size <= 0:
@@ -74,12 +91,14 @@ class DiskRepository:
         lsblk_bin: str = "lsblk",
         smartctl_bin: str = "smartctl",
         find_bin: str = "find",
+        findmnt_bin: str = "findmnt",
         udevadm_bin: str = "udevadm",
     ):
         self.sudo = sudo
         self.lsblk_bin = lsblk_bin
         self.smartctl_bin = smartctl_bin
         self.find_bin = find_bin
+        self.findmnt_bin = findmnt_bin
         self.udevadm_bin = udevadm_bin
 
     def _run(self, cmd: list[str], check: bool = True, timeout: int | None = None):
@@ -94,7 +113,9 @@ class DiskRepository:
 
         Whole disks are classified as HDD/SSD/NVMe; partitions are typed
         ``part`` and carry ``parent_path`` so callers can relate them to
-        their underlying device.
+        their underlying device. The system boot disk (the disk hosting the
+        root filesystem) and all of its partitions are always removed, so no
+        Disks-page list ever offers them.
         """
         cmd = self._prefix(
             [
@@ -192,7 +213,140 @@ class DiskRepository:
                 part = _process_device(child, parent=disk)
                 if part is not None:
                     disks.append(part)
-        return disks
+        return self._without_boot_disk(disks)
+
+    def _find_boot_disk_path(self) -> str | None:
+        """Return the /dev path of the disk hosting the root filesystem, or None.
+
+        The root may sit on a plain partition, an LVM/dm volume, a BTRFS
+        subvolume, or a ZFS dataset, so the block-device source from findmnt(8)
+        is walked up its lsblk PKNAME chain to the top-level disk. Every
+        failure mode returns None — the caller then does not filter anything.
+        """
+        source = self._root_source()
+        if source is None:
+            return self._boot_disk_from_mountpoints()
+        return self._toplevel_disk_path(source)
+
+    def _root_source(self) -> str | None:
+        """Return the block-device path behind the root mount, or None.
+
+        findmnt(8) prints e.g. ``/dev/sda2``, ``/dev/mapper/pve-root`` or, for
+        BTRFS, ``/dev/sda3[/@]`` — the subvolume suffix is stripped here.
+        ZFS datasets come back as a dataset name rather than a /dev path and
+        return None so the caller can fall back to the mountpoint scan.
+        """
+        cmd = self._prefix([self.findmnt_bin, "-n", "-o", "SOURCE", "/"])
+        try:
+            result = self._run(cmd, check=False)
+        except (FileNotFoundError, OSError) as exc:
+            log_msg(f"WARN: could not probe for the boot disk: {exc}")
+            return None
+        if result.returncode != 0:
+            log_msg(f"WARN: boot-disk probe failed: {result.stderr.strip()}")
+            return None
+        source = ""
+        if result.stdout.strip():
+            source = result.stdout.splitlines()[0].strip().split("[", 1)[0]
+        if not source.startswith("/dev/"):
+            log_msg(f"DEBUG: root source {source!r} is not a block-device path")
+            return None
+        return source
+
+    def _toplevel_disk_path(self, source: str) -> str | None:
+        """Walk *source* up its lsblk PKNAME chain; return the top disk path."""
+        cmd = self._prefix([self.lsblk_bin, "--json", "-n", "-o", "NAME,PATH,PKNAME"])
+        try:
+            result = self._run(cmd, check=False)
+        except (FileNotFoundError, OSError) as exc:
+            log_msg(f"WARN: could not resolve the boot disk: {exc}")
+            return None
+        if result.returncode != 0:
+            log_msg(f"WARN: boot-disk resolution failed: {result.stderr.strip()}")
+            return None
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            log_msg(f"WARN: could not parse boot-disk resolution output: {exc}")
+            return None
+        by_name = _flatten_blockdevices(data.get("blockdevices", []))
+        name = os.path.basename(source)
+        if name not in by_name:
+            log_msg(f"WARN: could not resolve boot disk from {source!r}")
+            return None
+        top = by_name[name]
+        while top.get("pkname"):
+            parent = by_name.get(top["pkname"])
+            if parent is None:
+                break
+            top = parent
+        path = top.get("path") or ""
+        if not path.startswith("/dev/"):
+            log_msg(f"WARN: could not resolve a boot-disk path from {top.get('name')!r}")
+            return None
+        return path
+
+    def _boot_disk_from_mountpoints(self) -> str | None:
+        """Fallback: find the disk holding ``/`` via lsblk MOUNTPOINT rows.
+
+        BTRFS systems may report a different subvolume's mountpoint per
+        device (findmnt is preferred there); this fallback covers ZFS roots,
+        where findmnt reports the dataset instead of a /dev path.
+        """
+        cmd = self._prefix([self.lsblk_bin, "--json", "-n", "-o", "PATH,TYPE,PKNAME,MOUNTPOINT"])
+        try:
+            result = self._run(cmd, check=False)
+        except (FileNotFoundError, OSError) as exc:
+            log_msg(f"WARN: could not probe for the boot disk: {exc}")
+            return None
+        if result.returncode != 0:
+            log_msg(f"WARN: boot-disk probe failed: {result.stderr.strip()}")
+            return None
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            log_msg(f"WARN: could not parse boot-disk probe output: {exc}")
+            return None
+
+        by_name = _flatten_blockdevices(data.get("blockdevices", []))
+        root = next((dev for dev in by_name.values() if dev.get("mountpoint") == "/"), None)
+        if root is None:
+            log_msg("DEBUG: no root-filesystem device found; boot disk not hidden")
+            return None
+        top = root
+        while top.get("pkname"):
+            parent = by_name.get(top["pkname"])
+            if parent is None:
+                break
+            top = parent
+        path = top.get("path") or ""
+        if not path.startswith("/dev/"):
+            log_msg(f"WARN: could not resolve a boot-disk path from {top.get('name')!r}")
+            return None
+        return path
+
+    def _without_boot_disk(self, disks: list[DiskInfo]) -> list[DiskInfo]:
+        """Drop the system boot disk and all of its partitions from *disks*."""
+        boot_path = self._find_boot_disk_path()
+        if not boot_path:
+            return disks
+        boot_real = os.path.realpath(boot_path)
+        kept: list[DiskInfo] = []
+        hidden_parts = 0
+        for disk in disks:
+            if os.path.realpath(disk.path) == boot_real:
+                continue  # the boot disk itself
+            if disk.parent_path is not None and os.path.realpath(disk.parent_path) == boot_real:
+                hidden_parts += 1
+                continue
+            kept.append(disk)
+        if len(kept) == len(disks):
+            return disks
+        log_msg(
+            f"INFO: hiding system boot disk {boot_path} "
+            f"({hidden_parts} partitions) from the disk inventory"
+        )
+        return kept
 
     def resolve_by_id(self) -> dict[str, str]:
         """Map kernel device paths to the best `/dev/disk/by-id` symlink name."""

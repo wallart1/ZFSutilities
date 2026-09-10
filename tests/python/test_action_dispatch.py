@@ -58,6 +58,43 @@ class TestDisksHandlers(unittest.TestCase):
         self.assertIs(handler, action_dispatch.on_disks_refresh)
 
 
+class TestDisksGrowthButtons(unittest.TestCase):
+    """Phase 4 pool-growth buttons and handlers are wired correctly."""
+
+    _SPECS = (
+        ("Add Data Vdev…", "list-add", "_disks_add_vdev_btn", "on_disks_add_vdev"),
+        ("Expand Vdev…", "drive-multidisk", "_disks_attach_btn", "on_disks_attach_device"),
+        ("Replace…", "edit-find-replace", "_disks_replace_btn", "on_disks_replace_device"),
+        ("Detach…", "media-eject", "_disks_detach_btn", "on_disks_detach_device"),
+        (
+            "Add Infra Vdev…",
+            "drive-harddisk",
+            "_disks_add_infra_vdev_btn",
+            "on_disks_add_infra_vdev",
+        ),
+    )
+
+    def test_growth_buttons_present(self):
+        buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
+        for label, icon, attr, _handler in self._SPECS:
+            with self.subTest(label=label):
+                self.assertIn((label, icon, attr), buttons)
+
+    def test_growth_handlers_registered(self):
+        handlers = action_dispatch.ACTION_HANDLERS["disks"]
+        for label, _icon, _attr, handler_name in self._SPECS:
+            with self.subTest(label=label):
+                self.assertIs(getattr(action_dispatch, handler_name), handlers[label])
+
+    def test_growth_buttons_between_create_pool_and_apply_profile(self):
+        buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
+        labels = [label for label, _icon, _attr in buttons if label is not None]
+        first_growth = labels.index("Add Data Vdev…")
+        last_growth = labels.index("Add Infra Vdev…")
+        self.assertLess(labels.index("Create Pool…"), first_growth)
+        self.assertLess(last_growth, labels.index("Apply Profile…"))
+
+
 class TestCollectScrubConfig(unittest.TestCase):
     """_collect_scrub_config() gathers the current scrub-manager settings."""
 

@@ -320,7 +320,7 @@ SMART.
 
 | Method | Purpose |
 | ------ | ------- |
-| `list_disks()` | Return physical disks, excluding partitions, loops, and zvols |
+| `list_disks()` | Return disks and their partitions, excluding loops, zvols, and the system boot disk (plus its partitions) |
 | `resolve_by_id()` | Map kernel device paths to the best `/dev/disk/by-id` name |
 | `smart_health(path)` | Return `PASSED`, `FAILED`, or `n/a` for a device |
 | `smart_details(path)` | Return raw `smartctl -a` text or `n/a` |
@@ -402,6 +402,43 @@ methods directly for troubleshooting.
 | Module | Purpose in this module |
 | ------ | ------------------------ |
 | `zfs_repository` | `ZfsRepository` |
+
+---
+
+### `pool_growth.py`
+
+Pure policy logic for the Disks-page pool-growth operations (Phase 4): attach,
+replace, detach, and infrastructure-vdev additions. No GTK and no direct
+subprocess calls — the only function that reads live ZFS state,
+`scrub_blocks_pool_op`, takes the repository as a parameter (mirroring how
+`pool_create.py` is pure logic). Complements the pure argv builders in
+`zfs_repository` (`build_add_vdev_command`, `build_attach_command`,
+`build_replace_command`, `build_detach_command`), which enforce by-id paths and
+topology minimums.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `classify_attach_target()` | Classify a topology-tree selection: stripe-to-mirror, mirror grow, or RAIDZ expansion |
+| `classify_replace_source()` | Classify a topology-tree selection as a replaceable disk member |
+| `assess_detach()` | Mirror-leaf-only detach assessment with redundancy/irreversibility warnings |
+| `validate_replace_pair()` | Replace validation; flags a smaller-than-source replacement |
+| `validate_infra_vdev()` | special/log/cache rules: special must be a mirror, cache cannot be |
+| `scrub_blocks_pool_op()` | Refuse a pool operation while the pool's scrub is SCANNING or PAUSED |
+| `resolve_member_by_id()` | Map a `zpool status -P` leaf path to its `/dev/disk/by-id` form |
+| `mixed_size_warning()` | Warn when vdev members differ in size |
+| `infra_vdev_notes()` | Tailored explainer lines per infrastructure vdev kind |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `pool_create` | `TOPOLOGIES`, `validate_vdev_selection` (eligibility reuse) |
+| `scrub_manager` | Pool scrub state reads |
+| `zfs_repository` | `TopologyNode` |
+| `disk_repository` | `DiskInfo` |
+| `backup_config` | `log_msg` |
 
 ---
 
@@ -792,6 +829,47 @@ a background loader following the `ImportablePoolCache` pattern.
 | `feature_config` | Workload profile getters/setters |
 | `workload_profiles` | Profile matching, apply plan, and command builders |
 | `zfs_lock_manager` | Advisory locks for dataset actions |
+| `logging_config` | `log_msg` |
+
+---
+
+### `pool_growth_dialogs.py`
+
+GTK dialogs and Disks-page execution handlers for the five Phase 4 pool-growth
+operations: Add Data Vdev, Expand Vdev, Replace, Detach, and Add Infrastructure
+Vdev. All dialogs share the `_ReviewScaffold` (exact-command preview, tailored
+warnings, and a confirmation step matched to the danger: typed pool-name
+confirmation, an acknowledgment checkbox, or a YES/NO question). Every
+operation refuses to run while the pool's scrub is SCANNING or PAUSED, executes
+as one session-logged `BashStep` through the Dataset action runner, and holds a
+pool-scope `zlm` write lock until completion. Decision logic stays in pure,
+unit-tested helpers; capability gating uses `ctx.zfs_caps` exclusively.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `show_add_vdev_dialog()` | Add-Data-Vdev dialog: pool selector, disk picker, topology choice, typed confirmation |
+| `show_attach_dialog()` | Attach dialog: topology-tree target, per-kind warnings, RAIDZ-expansion gating |
+| `show_replace_dialog()` | Replace dialog: source member, eligible replacement, smaller-disk warning |
+| `show_detach_dialog()` | Detach dialog: mirror-leaf-only target tree, typed confirmation |
+| `show_add_infra_vdev_dialog()` | Infra-vdev dialog: special/log/cache kind selector with per-kind confirmation |
+| `on_disks_add_vdev()` / `on_disks_attach_device()` / `on_disks_replace_device()` / `on_disks_detach_device()` / `on_disks_add_infra_vdev()` | Disks-page action handlers: guards, dialog, pool-scope lock, one fatal `BashStep`, refresh |
+| `_ReviewScaffold` | Shared review area: command preview, warnings, typed entry, acknowledgment checkbox |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `pool_growth` | Pure validation, classification, warnings, scrub gate |
+| `pool_create` | `TOPOLOGIES`, `disk_eligibility` |
+| `zfs_repository` | Pure argv builders, `TopologyNode` |
+| `command_builders` | `BashStep` |
+| `zfs_lock_manager` | Pool-scope write locks |
+| `disks_page` | Page refresh and button sensitivity |
+| `pools_page` | Pools tab refresh |
+| `node_config` | Two-node storage-host guard |
+| `gui_helpers` | `create_dialog`, `configure_treeview_column` |
 | `logging_config` | `log_msg` |
 
 ---

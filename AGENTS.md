@@ -43,9 +43,13 @@ You are a meticulous and expert coding agent. For every task:
 11. If you run across pre-existing errors or bugs that are unrelated to the immediate task, identify them with a clear messages so that I can put them on my TODO list.
 12. When I give you a plan file to execute, as in "Please execute the plan file ...," that means that I just want you to execute the plan. Do not modify the plan. Do not enter plan mode. Just execute the plan.
 13. You may see uncommitted changed files that you did not change. Do not be alarmed by this. They are either the user's manual changes or were changed by Kimi in an earlier session. These changes will be included when I instruct you to perform a commit.
-14. Avoid ad hoc workarounds. Make the existing architecture work and use it.
-15. Do not limit or reduce the scope of a task just because it "might take a long time" or "might be tedious."
-16. Always remember to update the documentaion before you finish.
+14. ACTIVE NOTICE (until further notice): The user is editing the documentation
+    (`docs/`) by hand. If you come across documentation changes you did not
+    make, do not be alarmed and leave them alone — do not revert, reword, or
+    "fix" them.
+15. Avoid ad hoc workarounds. Make the existing architecture work and use it.
+16. Do not limit or reduce the scope of a task just because it "might take a long time" or "might be tedious."
+17. Always remember to update the documentaion before you finish.
 
 ## Hard Rules
 
@@ -194,11 +198,29 @@ GUI pages and action handlers receive the repository from `app.ctx.zfs_repositor
 straightforward: Python tests patch `subprocess.run` and the repository methods
 pass the mocked calls through.
 
+The Disks tab inventory comes from `python/disk_repository.py`
+(`DiskRepository.list_disks()`, cached by `DiskInventoryCache` in
+`disks_page.py`). `list_disks()` always removes the system boot disk — the
+disk hosting the root filesystem, found by resolving the root source with
+findmnt (handles plain partitions, LVM, and BTRFS subvolumes) and walking the
+lsblk PKNAME chain to the top-level disk, with an lsblk MOUNTPOINT-scan
+fallback for ZFS roots — and all of its partitions, so no Disks-page list
+(inventory tree or any action-dialog disk picker) ever offers them.
+
 Pool creation lives in `pool_create.py` (pure logic: eligibility, name
 validation, capacity estimator) and `pool_create_wizard.py` (GTK wizard on the
 Disks page). The wizard executes `zpool create` as one `BashStep` through
 `app.dataset_runner` (session-logged) under a pool-name `zlm` write lock, and
 only on the storage host in two-node configurations.
+
+Phase 4 pool growth and maintenance live in `pool_growth.py` (pure logic:
+attach/replace/detach classification, infra-vdev validation, scrub-block check)
+and `pool_growth_dialogs.py` (GTK dialogs + Disks-page handlers for Add Data
+Vdev, Attach, Replace, Detach, and Add Infra Vdev; shared review scaffold with
+confirmation matched to each operation's danger). The pure argv builders
+`build_add_vdev_command` (also infrastructure vdevs via `kind=`),
+`build_attach_command`, `build_replace_command`, and `build_detach_command`
+live in `zfs_repository.py` next to `build_create_pool_command`.
 
 ### Session Log Utilities
 
@@ -566,7 +588,7 @@ tests/run-tests test-zfsretain test_backup_config
 
 | Suite                     | Tests | Description                                                                                                    |
 | ------------------------- | ----- | -------------------------------------------------------------------------------------------------------------- |
-| `test_action_dispatch`    | 46     | Page button specs, action dispatch table, and Logs tab button wiring                                           |
+| `test_action_dispatch`    | 49     | Page button specs, action dispatch table, Logs tab button wiring, and Disks tab pool-growth button wiring      |
 | `test_app_context`        | 9     | Shared operational state (app context) helpers for GUI pages                                                    |
 | `test_backup_config`      | 32    | Config load/save, defaults, pools, retention, UI state, snapshot name generation, log pruning, message level   |
 | `test_backup_history`     | 36    | History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting       |
@@ -583,10 +605,11 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_datasets_page`      | 52    | Datasets tab UI, dataset tree, and mounted-state refresh                                                        |
 | `test_datasets_tree`      | 13    | Lazy dataset-tree loading in `gui_helpers`                                                                      |
 | `test_diagnose_zfs_repository` | 6 | `diagnose_zfs_repository.py` — diagnostic main() output for pools, datasets, snapshots, and error paths        |
-| `test_disk_repository`    | 9     | `disk_repository.py` — lsblk, by-id, and smartctl subprocess isolation                                          |
+| `test_disk_repository`    | 14    | `disk_repository.py` — lsblk, by-id, and smartctl subprocess isolation, boot-disk filtering                                          |
 | `test_disk_actions`       | 6     | `disk_actions.py` — Disks tab SMART-details action and selected-disk path resolution (name/by-id fallback)    |
 | `test_disks_page`         | 14    | Disks tab UI                                                                                                    |
 | `test_disks_page_phase2`  | 36    | Disks tab dataset-tuning pane, Apply Profile dialog/execution, Rewrite Data gating, workload profile manager   |
+| `test_disks_page_phase4`  | 7     | Disks tab Phase 4 pool-growth button sensitivity gating (compute-host, runner-busy, tooltip precedence)        |
 | `test_docs_integrity`     | 14    | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability  |
 | `test_docs_viewer`        | 9     | Standalone documentation viewer launcher                                                                        |
 | `test_feature_config`     | 64    | Per-feature config getters/setters and snapshot name generation                                                 |
@@ -609,6 +632,8 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_pool_actions`       | 15    | Pool registry add/remove/save/revert action handlers                                                            |
 | `test_pool_create`        | 44    | `pool_create.py` — disk eligibility and partition policy, vdev separation, pool-name validation, ashift suggestion, RAIDZ capacity estimator, profile -O options |
 | `test_pool_create_wizard` | 39    | `pool_create_wizard.py` — wizard page gating, exact command building, handler guards, Create Pool button sensitivity, scripted end-to-end flow with lock acquire/release and registry offer |
+| `test_pool_growth`        | 70    | `pool_growth.py` — attach/replace/detach classification, replace-pair and infra-vdev validation, scrub-block check |
+| `test_pool_growth_dialogs` | 130 | `pool_growth_dialogs.py` — Add Vdev/Attach/Replace/Detach/Infra-Vdev pure helpers, handler guards, and dialog flows |
 | `test_pool_watch`         | 6     | Per-pool dataset watch window                                                                                   |
 | `test_pools_page`         | 50    | Pools tab registry UI                                                                                           |
 | `test_profile_dialogs`    | 14    | Add/Recall profile dialogs, duplicate-name overwrite handling                                                  |
@@ -630,7 +655,7 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_zfs_capabilities`   | 12    | OpenZFS release-variation gating                                                                                |
 | `test_zfs_diagnostics`    | 8     | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run`                     |
 | `test_zfs_lock_manager`   | 6     | `zfs_lock_manager` two-node lock behavior                                                                       |
-| `test_zfs_repository`     | 93    | `zfs_repository.py` — ZFS/zpool subprocess isolation, importable-pool config parsing, `zpool create` command building and execution |
+| `test_zfs_repository`     | 129   | `zfs_repository.py` — ZFS/zpool subprocess isolation, importable-pool config parsing, `zpool create` and pool-growth command building and execution |
 | `test_zfsinfo`            | 10    | Pool/dataset/snapshot info gathering with mocked `subprocess`                                                  |
 | `test_zfsutilities_gui`   | 44    | Main GUI window behavior                                                                                        |
 

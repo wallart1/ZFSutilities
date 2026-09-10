@@ -181,9 +181,7 @@ def _make_app(disks=None, topologies=None):
     app.enable_treeview_copy = MagicMock()
 
     data = MagicMock()
-    data.disks = (
-        disks if disks is not None else [_disk("/dev/sda"), _disk("/dev/sdb")]
-    )
+    data.disks = disks if disks is not None else [_disk("/dev/sda"), _disk("/dev/sdb")]
     data.topologies = topologies or {}
     app._disks_inventory_cache = MagicMock()
     app._disks_inventory_cache.get.return_value = data
@@ -785,9 +783,7 @@ class TestWizardFlow(unittest.TestCase):
             ],
         )
         with _wizard_session(pcw, app, driver) as mock_zlm:
-            self.assertEqual(
-                driver.pages_seen, ["disks", "topology", "settings", "review"]
-            )
+            self.assertEqual(driver.pages_seen, ["disks", "topology", "settings", "review"])
             expected = _expected_general_command()
             self.assertEqual(len(app.dataset_runner.steps), 1)
             step = app.dataset_runner.steps[0]
@@ -823,9 +819,7 @@ class TestWizardFlow(unittest.TestCase):
             ):
                 app.dataset_runner.finish()
 
-        self.assertEqual(
-            app.known_pools, [{"name": "newpool", "offsite_candidate": False}]
-        )
+        self.assertEqual(app.known_pools, [{"name": "newpool", "offsite_candidate": False}])
 
     def test_registration_offer_no_leaves_registry_empty(self):
         pcw = _import_wizard()
@@ -863,9 +857,7 @@ class TestWizardFlow(unittest.TestCase):
         )
         with _wizard_session(pcw, app, driver):
             pass
-        self.assertEqual(
-            driver.pages_seen, ["disks", "topology", "topology"]
-        )
+        self.assertEqual(driver.pages_seen, ["disks", "topology", "topology"])
         self.assertEqual(app.dataset_runner.steps, [])
 
     def test_typed_confirmation_mismatch_blocks_create(self):
@@ -974,9 +966,7 @@ class TestWizardFlow(unittest.TestCase):
             with patch.object(pcw.Gtk, "MessageDialog") as msg_dialog:
                 app.dataset_runner.finish()
         msg_dialog.assert_not_called()
-        self.assertEqual(
-            app.known_pools, [{"name": "newpool", "offsite_candidate": False}]
-        )
+        self.assertEqual(app.known_pools, [{"name": "newpool", "offsite_candidate": False}])
 
     def test_real_lock_acquire_and_release(self):
         pcw = _import_wizard()
