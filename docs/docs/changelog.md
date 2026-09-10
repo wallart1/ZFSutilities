@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+## 0.99.0
+
+*Released 2026-09-10*
+
+### Added
+
+- **Disks page pool growth and maintenance (Phase 4)** — Five new actions
+  grow or maintain an existing pool from the Disks tab: **Add Data Vdev**
+  (`zpool add` with stripe/mirror/raidz1/2/3 topology and minimum disk
+  counts), **Expand Vdev** (`zpool attach` to convert a stripe to a mirror,
+  grow a mirror by one member, or expand a raidz vdev via RAIDZ expansion on
+  OpenZFS 2.3+), **Replace** (`zpool replace` with a smaller-device warning
+  and resilver pointer), **Detach** (mirror members only, with
+  redundancy-loss and irreversibility warnings), and **Add Infrastructure
+  Vdev** (special/log/cache with per-kind rules: special must be a mirror,
+  cache cannot be). Every operation shows the exact command that will run,
+  tailored warnings, and a confirmation step matched to its danger (typed
+  pool-name confirmation, acknowledgment checkbox, or YES/NO question), runs
+  as one session-logged `BashStep` under a pool-scope `zlm` write lock, and
+  is refused while the pool's scrub is scanning or paused.
+- **New modules `pool_growth.py` and `pool_growth_dialogs.py`** — Pure
+  policy logic (attach/replace/detach target classification, infra-vdev
+  validation, scrub gate) is separated from the GTK dialogs, which share a
+  `_ReviewScaffold` (command preview, warnings, typed confirmation). Pure
+  argv builders `build_add_vdev_command` (also infrastructure vdevs via
+  `kind=`), `build_attach_command`, `build_replace_command`, and
+  `build_detach_command` live in `zfs_repository.py` next to
+  `build_create_pool_command`; growth commands execute through the new
+  `ZfsRepository.run_pool_command`.
+- **Boot disk hidden from the disk inventory** — The disk hosting the root
+  filesystem (however layered: plain partition, LVM, BTRFS subvolume, or
+  ZFS) and all of its partitions are always removed from the Disks-page
+  inventory, so no create-pool or pool-growth picker can ever offer them.
+  The root source is resolved with findmnt and walked up its lsblk PKNAME
+  chain, with an lsblk MOUNTPOINT-scan fallback for ZFS roots.
+- **Button wiring and gating** — The five actions appear between Create Pool
+  and Apply Profile on the Disks tab; all are disabled on the compute host of
+  a two-node configuration and while a dataset action is running.
+- **Test coverage** — New suites `test_pool_growth` (76 tests),
+  `test_pool_growth_dialogs` (138 tests), and `test_disks_page_phase4`
+  (7 tests); `test_disk_repository` gains boot-disk filtering tests;
+  `test_zfs_repository` gains the growth argv builders and
+  `run_pool_command` tests.
+
+### Changed
+
+- `DiskRepository.list_disks()` now always excludes the system boot disk and
+  its partitions (see above); `ZfsRepository.create_pool` failure logging
+  refactored alongside the new `run_pool_command`.
+
 ## 0.97.0
 
 *Released 2026-09-05*
