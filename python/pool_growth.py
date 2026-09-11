@@ -401,7 +401,8 @@ def raidz_expansion_notes() -> list[str]:
         ),
         (
             "after the expansion, use the Rewrite Data action on the Disks "
-            "page per dataset to restripe existing data at the new ratio"
+            "page per filesystem dataset to restripe existing data at the "
+            "new ratio"
         ),
     ]
 

@@ -305,7 +305,7 @@ def on_retention_prune(app, ctx):
                 )
             )
 
-    def _on_prune_complete(cancelled=False):
+    def _on_prune_complete(cancelled=False, rc=None):
         if hasattr(app, "update_action_buttons"):
             app.update_action_buttons("retention")
 

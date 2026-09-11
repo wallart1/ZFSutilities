@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from logging_config import log_msg
-from pool_create import TOPOLOGIES
+from pool_create import TOPOLOGIES, validate_raid10_count
 
 
 def is_dataset_encrypted(path):
@@ -263,20 +263,28 @@ def build_create_pool_command(
 
     Pure function: no subprocess. Argument order:
     ``zpool create [-o ashift=N] [-O prop=value ...] <pool> <mirror|raidzN>
-    <paths…>`` (stripe emits no topology keyword). All paths must live under
+    <paths…>`` (stripe emits no topology keyword). The special topology
+    "raid10" requires an even count of at least 4 disks and emits striped
+    mirrors: ``<pool> mirror d1 d2 mirror d3 d4 …``. All paths must live under
     /dev/disk/by-id/ (mandatory for stable naming, and the command destroys
     data on the named devices). Raises ValueError on unknown topology,
-    membership below the topology minimum, non-by-id paths, or invalid
+    membership below the topology minimum (or an odd/below-minimum raid10
+    count), non-by-id paths, or invalid
     ashift/options; full pool-name rules live in
     ``pool_create.validate_pool_name``.
     """
-    spec = TOPOLOGIES.get(topology)
-    if spec is None:
-        raise ValueError(f"unknown topology: {topology!r}")
+    if topology == "raid10":
+        problems = validate_raid10_count(len(by_id_paths))
+        if problems:
+            raise ValueError("; ".join(problems))
+    else:
+        spec = TOPOLOGIES.get(topology)
+        if spec is None:
+            raise ValueError(f"unknown topology: {topology!r}")
+        if len(by_id_paths) < spec.min_disks:
+            raise ValueError(f"{topology} requires at least {spec.min_disks} disks")
     if not pool_name:
         raise ValueError("pool name must not be empty")
-    if len(by_id_paths) < spec.min_disks:
-        raise ValueError(f"{topology} requires at least {spec.min_disks} disks")
     for path in by_id_paths:
         _validate_by_id_path(path)
     if ashift is not None and not 9 <= ashift <= 16:
@@ -290,9 +298,17 @@ def build_create_pool_command(
             raise ValueError(f"invalid property name: {prop!r}")
         cmd += ["-O", f"{prop}={value}"]
     cmd.append(pool_name)
-    if topology != "stripe":
-        cmd.append(topology)
-    cmd += list(by_id_paths)
+    if topology == "raid10":
+        # ZFS has no raid10 keyword: striped mirrors are emitted as
+        # consecutive "mirror d1 d2 mirror d3 d4 …" vdev groups.
+        paths = list(by_id_paths)
+        for i in range(0, len(paths), 2):
+            cmd.append("mirror")
+            cmd += paths[i:i + 2]
+    else:
+        if topology != "stripe":
+            cmd.append(topology)
+        cmd += list(by_id_paths)
     return cmd
 
 
@@ -394,6 +410,107 @@ def build_detach_command(pool_name: str, member_path: str) -> list[str]:
         raise ValueError("pool name must not be empty")
     _validate_by_id_path(member_path)
     return ["zpool", "detach", pool_name, member_path]
+
+
+def build_recursive_snapshot_command(target: str, snap_name: str) -> list[str]:
+    """Build the exact `zfs snapshot -r` argv for a migration snapshot.
+
+    Pure function: no subprocess. *target* is a pool name or dataset whose
+    whole subtree is snapshotted (pool root or one top-level dataset).
+    *snap_name* is the part after ``@`` (no ``@``, no ``/``); it must not be
+    empty. Migration snapshots use a bucket-less name (label ``migrate``) so
+    retention policies, which prune only their own label's d/w/m/s buckets,
+    never touch them.
+    """
+    if not target:
+        raise ValueError("snapshot target must not be empty")
+    if not snap_name or "@" in snap_name or "/" in snap_name:
+        raise ValueError(f"invalid snapshot name: {snap_name!r}")
+    return ["zfs", "snapshot", "-r", f"{target}@{snap_name}"]
+
+
+def build_migration_send_receive_command(
+    source_fs: str,
+    dest_fs: str,
+    snap_name: str,
+) -> list[str]:
+    """Build the argv for one migration copy step.
+
+    Pure function: no subprocess. Returns a ``bash -c`` argv running
+    ``zfs send -Rw <source>@<snap> | zfs receive -u -F <dest>`` under
+    ``pipefail``. ``-R`` makes a replication stream (descendants, snapshots,
+    properties); ``-w`` sends raw so encrypted datasets survive; ``-u``
+    keeps received datasets unmounted so their (preserved) mountpoints do
+    not collide with the still-mounted source; ``-F`` lets a re-run roll the
+    destination back to the stream. Raises ValueError on empty/invalid
+    names; callers enforce policy (locks, capacity, cutover ordering).
+    """
+    if not source_fs:
+        raise ValueError("source dataset must not be empty")
+    if not dest_fs:
+        raise ValueError("destination dataset must not be empty")
+    if not snap_name or "@" in snap_name or "/" in snap_name:
+        raise ValueError(f"invalid snapshot name: {snap_name!r}")
+    send = shlex.join(["zfs", "send", "-Rw", f"{source_fs}@{snap_name}"])
+    receive = shlex.join(["zfs", "receive", "-u", "-F", dest_fs])
+    return ["bash", "-c", f"set -o pipefail; {send} | {receive}"]
+
+
+def build_pool_export_command(pool_name: str) -> list[str]:
+    """Build the exact `zpool export` argv.
+
+    Pure function: no subprocess. Export refuses while datasets are busy
+    (mounted shares, running VMs on zvols); that is the cutover gate.
+    """
+    if not pool_name:
+        raise ValueError("pool name must not be empty")
+    return ["zpool", "export", pool_name]
+
+
+def build_pool_import_rename_command(temp_name: str, new_name: str) -> list[str]:
+    """Build the exact `zpool import` argv that renames a pool at import.
+
+    Pure function: no subprocess. Importing the migrated pool under the
+    source pool's old name restores every dataset path (`pool/dataset`), so
+    consumers that reference datasets by name survive the migration.
+    Raises ValueError on empty names or when both names are identical.
+    Full pool-name validation lives in ``pool_create.validate_pool_name``.
+    """
+    if not temp_name:
+        raise ValueError("current pool name must not be empty")
+    if not new_name:
+        raise ValueError("new pool name must not be empty")
+    if temp_name == new_name:
+        raise ValueError("new pool name must differ from the current name")
+    return ["zpool", "import", temp_name, new_name]
+
+
+def build_pool_destroy_command(pool_name: str) -> list[str]:
+    """Build the exact `zpool destroy` argv.
+
+    Pure function: no subprocess. Destroys a pool and all its data — the
+    migration wizard gates this behind typed confirmation (holding-pool
+    mode only, after the copy to the holding pool has been verified).
+    """
+    if not pool_name:
+        raise ValueError("pool name must not be empty")
+    return ["zpool", "destroy", pool_name]
+
+
+def build_destroy_dataset_command(dataset: str, recursive: bool = True) -> list[str]:
+    """Build the exact `zfs destroy` argv for one dataset tree.
+
+    Pure function: no subprocess. With *recursive* True (the default) the
+    command is `zfs destroy -r <dataset>`, removing the dataset and its
+    descendants — used to drop migration copies from a holding pool.
+    """
+    if not dataset:
+        raise ValueError("dataset must not be empty")
+    cmd = ["zfs", "destroy"]
+    if recursive:
+        cmd.append("-r")
+    cmd.append(dataset)
+    return cmd
 
 
 class ZfsRepository:

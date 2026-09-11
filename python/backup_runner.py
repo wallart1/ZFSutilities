@@ -665,7 +665,10 @@ class BackupRunner:
             self.set_stdin_enabled(False)
             if self.progress:
                 self.progress(None, None)
-            self._log(f"INFO: {self.label} complete")
+            if rc:
+                self._log(f"WARN: {self.label} failed (rc={rc})")
+            else:
+                self._log(f"INFO: {self.label} complete")
         except Exception as exc:
             self._log(f"WARN: Error during finish UI cleanup: {exc}")
 
@@ -700,6 +703,6 @@ class BackupRunner:
         self._session_start_time = None
         if self._on_complete:
             try:
-                self._on_complete(cancelled=False)
+                self._on_complete(cancelled=False, rc=rc)
             except Exception as exc:
                 self._log(f"WARN: on_complete callback failed: {exc}")

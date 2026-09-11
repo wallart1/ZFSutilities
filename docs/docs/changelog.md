@@ -1,6 +1,93 @@
 # Changelog
 
-## Unreleased
+## 0.100.0
+
+*Released 2026-09-11*
+
+### Added
+
+- **Stripe-grow hint in Expand Vdev** — Attaching a disk to a stripe member
+  always creates a mirror (ZFS cannot grow a stripe vdev in place). The
+  stripe-to-mirror warning now says so explicitly and points at Add Data
+  Vdev with the stripe topology as the capacity-growth path, which adds a new
+  top-level stripe vdev.
+
+- **RAID10 (striped mirrors) in the Create Pool wizard** — The topology step
+  now offers `raid10`: an even count of at least 4 disks, built as
+  consecutive mirrored pairs (`zpool create <pool> mirror d1 d2 mirror d3
+  d4 …`). The capacity estimate shows the 50%-of-raw figure with no padding
+  loss, and the wizard enforces the even-count rule before the build. RAID10
+  is create-wizard only — it is not offered by Add Data Vdev, because an
+  existing pool grows toward it one mirror vdev at a time (the Add Data Vdev
+  dialog notes this). New pure helpers `pool_create.validate_raid10_count`
+  and `RAID10_MIN_DISKS`; `zfs_repository.build_create_pool_command` and
+  `pool_create.estimate_effective_capacity` accept `topology="raid10"`.
+
+- **Disks page Migrate Pool (copy-based expansion)** — A new **Migrate
+  Pool…** action copies a pool to new disks (or via an existing holding
+  pool) to change its topology when ZFS cannot expand in place (stripe to
+  raidz, width or ashift changes). The wizard plans the run step by step:
+  recursive `@migrate-…` snapshot (bucket-less, so retention never prunes
+  it), one `zfs send -Rw | zfs receive -u -F` replication step per top-level
+  dataset (snapshots, descendants, and properties included; encrypted
+  datasets sent raw), and per-dataset tree verification. Typed confirmation
+  of the source pool name starts the copy phase; a second typed
+  confirmation gates the cutover, which exports the source pool and
+  re-imports the migrated pool under the source pool's name so every
+  `pool/dataset` path survives. Holding-pool mode additionally destroys the
+  source pool, rebuilds it with the chosen topology on its freed disks, and
+  copies the data back before the swap. The pool hosting the root filesystem
+  is never offered; both phases run in the session log under a `zlm` write
+  lock on the source pool. New modules `pool_migrate.py` (pure step
+  planning, capacity checks, tree verification) and
+  `pool_migrate_dialogs.py` (wizard, cutover gate, execution handler); new
+  pure argv builders `build_recursive_snapshot_command`,
+  `build_migration_send_receive_command`, `build_pool_export_command`,
+  `build_pool_import_rename_command`, `build_pool_destroy_command`, and
+  `build_destroy_dataset_command` in `zfs_repository.py`.
+
+### Changed
+
+- **Rewrite Data now rewrites multiple datasets physically** — The Disks-tab
+  Rewrite Data action accepts any number of selected filesystem datasets and
+  rewrites them sequentially, each under its own write lock. The command is
+  now `zfs rewrite -P -r -x -v <mountpoint>`: physical rewrite preserves
+  block birth times so rewritten data is not re-sent by later incremental
+  send streams; recursion never crosses mount points, so child datasets are
+  not rewritten unintentionally. Volumes cannot be rewritten (a zvol is a
+  block device with no file paths) and the button is insensitive when a
+  volume is selected. The pool's `physical_rewrite` feature must be enabled,
+  and a dataset that is not mounted is mounted temporarily and returned to
+  its prior state afterwards.
+
+- **Runner completion now reports failures** — `BackupRunner._finish()` logs
+  `WARN: <label> failed (rc=N)` instead of `INFO: <label> complete` when a
+  run ends with a non-zero result, and the `on_complete` callback receives
+  `rc=<result code>` (cancel/abort paths still pass only `cancelled=True`).
+  All Disks-page action handlers (Create Pool, Add Vdev, Expand Vdev,
+  Replace, Detach, Add Infra Vdev, Migrate Pool, Apply Profile, Rewrite
+  Data) check `rc` and log a targeted WARN — including Migrate Pool, which
+  distinguishes a failed copy (no destructive step ran) from a failed
+  cutover (the pool may be left exported).
+
+- **Disks page view polish** — The dataset-tuning pane gains a **Size**
+  column (dataset `used` bytes), and refreshing the same pool restores the
+  previous dataset selection and scroll position instead of resetting the
+  view. In the pool-topology pane the tree is shown fully expanded on
+  refresh, and selecting a pool or vdev node highlights all of its member
+  disks in the inventory (previously only device nodes highlighted).
+  **Apply Profile…** now picks the profile from a treeview listing every
+  profile with its applies-to types and a description, instead of a bare
+  combo box.
+
+### Fixed
+
+- **Pool-feature detection with space-padded `zpool get all` output** —
+  `ZfsCapabilities.supports_pool_feature()` previously split the output on
+  tabs, but plain `zpool get all` columns are space-padded, so feature
+  cross-checks (such as the `physical_rewrite` gate on Rewrite Data) never
+  matched. The parser now locates the `feature@<name>` token in
+  whitespace-separated columns and reads the value that follows it.
 
 ## 0.99.0
 

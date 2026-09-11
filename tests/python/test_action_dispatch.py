@@ -72,6 +72,7 @@ class TestDisksGrowthButtons(unittest.TestCase):
             "_disks_add_infra_vdev_btn",
             "on_disks_add_infra_vdev",
         ),
+        ("Migrate Pool…", "edit-copy", "_disks_migrate_pool_btn", "on_disks_migrate_pool"),
     )
 
     def test_growth_buttons_present(self):
@@ -90,7 +91,7 @@ class TestDisksGrowthButtons(unittest.TestCase):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
         labels = [label for label, _icon, _attr in buttons if label is not None]
         first_growth = labels.index("Add Data Vdev…")
-        last_growth = labels.index("Add Infra Vdev…")
+        last_growth = labels.index("Migrate Pool…")
         self.assertLess(labels.index("Create Pool…"), first_growth)
         self.assertLess(last_growth, labels.index("Apply Profile…"))
 

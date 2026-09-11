@@ -37,6 +37,7 @@ from pool_create import (
     pool_filesystem_options,
     suggest_ashift,
     validate_pool_name,
+    validate_raid10_count,
     validate_vdev_selection,
 )
 from pools_page import on_pools_refresh, refresh_pools_page
@@ -169,10 +170,13 @@ def _disks_problems(state: _WizardState) -> list[str]:
 
 
 def _topology_problems(state: _WizardState) -> list[str]:
-    spec = TOPOLOGIES[state.topology]
     problems: list[str] = []
-    if len(state.selected) < spec.min_disks:
-        problems.append(f"{state.topology} requires at least {spec.min_disks} disks")
+    if state.topology == "raid10":
+        problems.extend(validate_raid10_count(len(state.selected)))
+    else:
+        spec = TOPOLOGIES[state.topology]
+        if len(state.selected) < spec.min_disks:
+            problems.append(f"{state.topology} requires at least {spec.min_disks} disks")
     problems.extend(validate_vdev_selection(state.selected))
     return problems
 
@@ -427,7 +431,7 @@ def _build_topology_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
 
     info = Gtk.Label(
-        label="Choose the redundancy layout for the new pool's single data vdev."
+        label="Choose the redundancy layout for the new pool's data vdevs."
     )
     info.set_halign(Gtk.Align.START)
     info.set_line_wrap(True)
@@ -446,6 +450,28 @@ def _build_topology_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
         radio.connect("toggled", _on_topology_toggled, name, state, on_change)
         page.pack_start(radio, False, False, 0)
         radios[name] = radio
+
+    # RAID10 is not a TOPOLOGIES entry (the Add-Vdev/migrate radios iterate
+    # TOPOLOGIES and must not offer it); add its radio separately.
+    raid10_radio = Gtk.RadioButton.new_from_widget(group)
+    raid10_radio.set_label("raid10 (striped mirrors, 4+ disks, even)")
+    raid10_radio.connect("toggled", _on_topology_toggled, "raid10", state, on_change)
+    page.pack_start(raid10_radio, False, False, 0)
+    radios["raid10"] = raid10_radio
+
+    raid10_info = Gtk.Label(
+        label=(
+            "RAID10: pairs of mirrored disks striped together "
+            "(mirror d1 d2 mirror d3 d4 …). Any single disk — plus one disk "
+            "from each other mirror — may fail without data loss. Capacity is "
+            "50% of raw at 2×2. Grow it later one mirror vdev at a time via "
+            "Add Data Vdev."
+        )
+    )
+    raid10_info.set_halign(Gtk.Align.START)
+    raid10_info.set_line_wrap(True)
+    page.pack_start(raid10_info, False, False, 0)
+
     radios[state.topology].set_active(True)
 
     estimate_label = Gtk.Label()
@@ -835,7 +861,7 @@ def on_disks_create_pool(app) -> None:
     lock_id = zlm.acquire(pool_name, "w", f"Create pool {pool_name}")
     step = BashStep(cmd, f"Create pool {pool_name}", is_rsync=False, fatal=True)
 
-    def _on_complete(cancelled=False):
+    def _on_complete(cancelled=False, rc=None):
         zlm.release(lock_id)
         update_disks_button_sensitivity(app)
         app._disks_inventory_cache.invalidate()
@@ -843,6 +869,9 @@ def on_disks_create_pool(app) -> None:
         on_pools_refresh(app)
         if cancelled:
             log_msg(f"INFO: Create Pool cancelled for {pool_name}")
+            return
+        if rc:
+            log_msg(f"WARN: Create Pool failed for '{pool_name}' (rc={rc})")
             return
         log_msg(f"INFO: Pool '{pool_name}' created")
         _offer_register_pool(app, pool_name)

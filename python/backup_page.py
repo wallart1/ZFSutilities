@@ -665,11 +665,13 @@ def on_backup_run(app, ctx):
     log_msg(f"INFO: Snapshot: {nextsnap}")
     app.backup_runner.set_steps(steps)
     app.backup_runner.set_step_success_callback(lambda md: _maybe_seed_checkagainst(app, md))
-    app.backup_runner.start(on_complete=lambda cancelled=False: _on_backup_complete(app, cancelled))
+    app.backup_runner.start(
+        on_complete=lambda cancelled=False, rc=None: _on_backup_complete(app, cancelled, rc)
+    )
     app.update_action_buttons("backup")
 
 
-def _on_backup_complete(app, cancelled=False):
+def _on_backup_complete(app, cancelled=False, rc=None):
     """Called when backup finishes or is cancelled."""
     if not cancelled and app.backup_post_snapfile.get_active():
         if getattr(app, "_dry_run_active", False):

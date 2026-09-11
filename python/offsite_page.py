@@ -516,12 +516,12 @@ def on_offsite_run(app, ctx):
     app.offsite_runner.set_steps(steps)
     app.offsite_runner.set_step_success_callback(lambda md: _maybe_seed_checkagainst(app, md))
     app.offsite_runner.start(
-        on_complete=lambda cancelled=False: _on_offsite_complete(app, cancelled)
+        on_complete=lambda cancelled=False, rc=None: _on_offsite_complete(app, cancelled, rc)
     )
     app.update_action_buttons("offsite")
 
 
-def _on_offsite_complete(app, cancelled=False):
+def _on_offsite_complete(app, cancelled=False, rc=None):
     """Called when offsite backup finishes or is cancelled."""
     app.update_action_buttons("offsite")
 

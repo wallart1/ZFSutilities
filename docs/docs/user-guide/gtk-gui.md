@@ -167,15 +167,17 @@ Device scans and SMART probes can be slow, so the inventory is loaded in a
 background thread and cached for a few seconds. Selecting a disk or partition
 selects the matching device in the Pool Topology pane, and selecting a device
 in the topology pane selects the matching disk or partition in the inventory.
-When the selected device belongs to a pool, every other member of that pool is
-also highlighted in the inventory.
 
 ### Pool topology
 
 The middle pane shows the vdev topology of the pool selected in the drop-down.
-Select a pool to highlight all of its member disks and partitions in the
-inventory view (their text is drawn in teal).  Selecting a device node in the
-tree also selects the corresponding row in the inventory:
+The tree is shown fully expanded every time it is refreshed (Refresh button or
+pool change). Selecting a node highlights the corresponding member disks and partitions in
+the inventory view (their text is drawn in teal): the pool node highlights
+every device in the pool, a vdev node highlights every device in that vdev,
+and a device node highlights just that device. Clearing the topology selection
+restores the pool-wide highlight. Selecting a device node in the tree also
+selects the corresponding row in the inventory:
 
 | Column | Meaning |
 | --- | --- |
@@ -204,9 +206,13 @@ The wizard has four steps:
    USB storage can drop out under load, which is dangerous for redundancy
    groups. SMR cannot be detected reliably, so an informational note reminds
    you to verify drive specs before building RAIDZ from rotational disks.
-2. **Topology** — choose `stripe`, `mirror`, `raidz1`, `raidz2`, or `raidz3`.
-   Minimum disk counts are enforced (mirror ≥ 2, raidz1 ≥ 3, raidz2 ≥ 4,
-   raidz3 ≥ 5). A mixed-size selection warns that vdev capacity is limited by
+2. **Topology** — choose `stripe`, `mirror`, `raidz1`, `raidz2`, `raidz3`,
+   or `raid10` (striped mirrors). Minimum disk counts are enforced (mirror ≥
+   2, raidz1 ≥ 3, raidz2 ≥ 4, raidz3 ≥ 5). `raid10` requires an even count of
+   at least 4 disks and builds `mirror d1 d2 mirror d3 d4 …` — pairs of
+   mirrored disks striped together. Any single disk, plus one disk from each
+   other mirror, may fail without data loss; capacity is 50% of raw at 2×2.
+   A mixed-size selection warns that vdev capacity is limited by
    its smallest member. A live capacity estimate shows both raw and effective
    capacity for the selected workload profile's block size.
 3. **Pool settings** — enter the pool name (validated against `zpool` naming
@@ -239,7 +245,7 @@ dangerous the operation is, and a confirmation step matched to that danger.
 Disk eligibility uses the same rules as create-pool, and an operation is refused while
 the pool's scrub is running or paused — pause or stop the scrub from the Pools
 tab Scrub Manager first. On two-node systems the buttons are available only on
-the storage host, and all five are disabled while a dataset action is running.
+the storage host, and all six are disabled while a dataset action is running.
 
 #### Add Data Vdev
 
@@ -248,7 +254,9 @@ imported or importable pools are greyed out, as in the create-pool wizard) and
 choose the topology: `stripe`, `mirror`, `raidz1`, `raidz2`, or `raidz3`, with
 the same minimum disk counts and mixed-size warning as pool creation. A
 mixed-size selection warns that vdev capacity is limited to the smallest member.
-Because growing the wrong pool is hard to undo, the action requires typed
+Adding a **mirror** vdev to a pool of mirror vdevs extends a RAID10
+(striped-mirror) layout — that is how a RAID10 pool grows. Because growing the
+wrong pool is hard to undo, the action requires typed
 confirmation of the pool name. The exact command is
 `zpool add <pool> <topology> <by-id…>`.
 
@@ -260,7 +268,10 @@ in the pool's topology tree, then one eligible disk:
 
 - A **stripe member** — the attach converts the stripe vdev into a mirror. A
   YES/NO warning dialog explains that the new device becomes a redundant copy
-  of the existing one.
+  of the existing one. ZFS cannot attach a disk to an existing stripe vdev:
+  if the goal is more capacity without mirroring, the warning points you at
+  **Add Data Vdev** with the stripe topology, which adds a new top-level
+  stripe vdev instead.
 - A **mirror member** — the attach grows the mirror by one member, with a note
   showing the new member count.
 - A **raidz group** — the attach offers a RAIDZ expansion
@@ -314,6 +325,32 @@ selected disks form a mirror; one disk is a single device:
 
 The exact command is `zpool add <pool> <special|log|cache> [mirror] <by-id…>`.
 
+#### Migrate Pool
+
+Copy-based expansion for changes ZFS cannot perform in place — converting a
+stripe to raidz (or mirror to raidz), changing vdev width, or changing ashift.
+Pick the source pool and one of two destination modes:
+
+- **New disks** — select eligible disks and a topology for a new pool (built
+  under a temporary name like `<pool>_mig`), or
+- **Holding pool** — pick another imported pool with free space at least equal
+  to the source pool's allocated data; the source pool is then destroyed and
+  rebuilt with the chosen topology on its own freed disks before the data is
+  copied back.
+
+The review page lists every step that will run, from the recursive migration
+snapshot through one `zfs send -Rw | zfs receive -u -F` replication step per
+top-level dataset (snapshots, descendants, and properties included; encrypted
+datasets are sent raw) to a dataset-tree verification. Typed confirmation of
+the source pool name starts the copy phase. When the copy finishes, a second
+typed confirmation gates the cutover: the source pool is exported and the
+migrated pool is re-imported under the source pool's name, so every
+`pool/dataset` path — and everything that references it — survives the swap.
+If cutover is deferred, the migration snapshot and copies remain in place and
+rerunning Migrate Pool finishes the job. Cutover refuses to start while the
+pool's scrub is running or paused. The pool hosting the root filesystem is
+never offered for migration.
+
 ### Dataset Tuning
 
 The lower pane shows a read-only grid of live ZFS properties for every dataset
@@ -323,6 +360,7 @@ and zvol in the selected pool:
 | --- | --- |
 | Name | Dataset path |
 | Type | `filesystem` or `volume` |
+| Size | Space consumed by the dataset and its descendants (`used`) |
 | Recordsize / Volblocksize | Logical block size (live or creation-only) |
 | Compression | Compression algorithm |
 | Atime | Access-time behavior |
@@ -333,7 +371,10 @@ and zvol in the selected pool:
 | Profile match | First seeded profile whose live properties match the dataset |
 
 Select one or more datasets and click **Apply Profile…** to change live
-properties with `zfs set` so they match a workload profile. A preview lists the
+properties with `zfs set` so they match a workload profile. A treeview lists
+every profile with its applies-to types and a wrapped description of what it
+is for; the profile matching the first selected dataset is pre-selected
+(single selection). A preview lists the
 exact commands that will run. Profiles that may be unsafe (for example,
 `sync=disabled`) show a warning and require explicit confirmation.
 
@@ -344,11 +385,31 @@ volblocksize only takes effect on zvols created later. The pool's root dataset
 appears in the list: applying a profile there changes the values that children
 inherit by default, so it is the place to set pool-wide defaults.
 
-After applying a profile, existing data still has the old block layout. Select a
-single dataset and click **Rewrite Data** to run `zfs rewrite`, which rewrites
-existing blocks in place so they match the current properties. This requires
-OpenZFS 2.3+; on older versions a guidance label explains that you can create a
-new dataset with the desired profile and migrate using the Restore page instead.
+After applying a profile, existing data still has the old block layout. Select one
+or more filesystem datasets and click **Rewrite Data** to run `zfs rewrite -P -r
+-x -v <mountpoint>` on each in turn, which physically rewrites existing blocks in
+place so they match the current properties. Requirements and behavior:
+
+- **OpenZFS 2.3.4+/2.4+** — the `zfs rewrite` command did not exist earlier; on
+  older versions a guidance label explains that you can create a new dataset
+  with the desired profile and migrate using the Restore page instead.
+- **The pool's `physical_rewrite` feature must be enabled** (`zpool set
+  feature@physical_rewrite=enabled <pool>`). The action always uses physical
+  rewrite (`-P`), which preserves block birth times so rewritten data is not
+  re-sent by later incremental send streams (important for the daily backup and
+  offsite flows).
+- **Filesystem datasets only.** `zfs rewrite` rewrites files by path inside a
+  mounted filesystem; a zvol is a block device with no file paths, so volumes
+  cannot be rewritten (the zfs(8) tool silently ignores block-device paths).
+  The Rewrite Data button is insensitive when a volume is selected.
+- **Mount handling.** `zfs rewrite` operates on paths, so the dataset must be
+  mounted. If it is not mounted, the action mounts it temporarily, rewrites,
+  and unmounts it afterwards; a dataset that was already mounted is left
+  mounted. Recursion (`-r`) never crosses mount points (`-x`), so child datasets
+  mounted beneath the selected one are not rewritten — rewrite each dataset
+  individually.
+
+This may take a long time and cannot be undone.
 
 Use **Advanced: Manage Profiles…** to add, edit, delete, or reset the workload
 profiles stored in the JSON config.
@@ -357,8 +418,13 @@ profiles stored in the JSON config.
 
 - **Apply Profile…** — apply the selected workload profile to the selected
   dataset(s).
-- **Rewrite Data** — run `zfs rewrite` on a single selected dataset. Requires
-  OpenZFS 2.3+.
+- **Rewrite Data** — run `zfs rewrite -P -r -x -v <mountpoint>` on one or more
+  selected filesystem datasets (volumes cannot be rewritten; the button is
+  insensitive when a volume is in the selection). The datasets are rewritten
+  sequentially, each with its own write lock. Requires OpenZFS 2.3.4+/2.4+ and
+  the pool's physical_rewrite feature. An unmounted dataset is mounted
+  temporarily and returned to its prior state afterwards; recursion never
+  crosses mount points.
 - **Advanced: Manage Profiles…** — open the workload profile manager.
 - **Create Pool…** — open the create-pool wizard to build a new pool from
   unused disks (see [Creating Pools](#creating-pools)). Storage host only on
@@ -382,6 +448,9 @@ profiles stored in the JSON config.
 - **Add Infra Vdev…** — add a special, log (SLOG), or cache (L2ARC) vdev (see
   [Add Infrastructure Vdev](#add-infrastructure-vdev)). Storage host only on
   two-node systems; disabled while a dataset action is running.
+- **Migrate Pool…** — copy a pool to new disks (or via a holding pool) to
+  change its topology, then swap (see [Migrate Pool](#migrate-pool)). Storage
+  host only on two-node systems; disabled while a dataset action is running.
 - **SMART Details** — dumps `smartctl -a` output for the selected disk to the
   GUI log panel. Requires a single disk to be selected and `smartctl` to be
   installed; otherwise a warning is logged.
@@ -393,10 +462,11 @@ profiles stored in the JSON config.
 | --- | --- |
 | Read-only Disks views | 2.1+ |
 | Apply Profile (live property changes) | 2.1+ |
-| Rewrite Data | 2.3+ |
+| Rewrite Data | 2.3.4+/2.4+ (`zfs rewrite`), plus the pool's `physical_rewrite` feature |
 | Create Pool | 2.1+ (standard `zpool create`; no separate feature gate) |
 | Add Data Vdev / Expand Vdev (mirror tasks) / Replace / Detach / Add Infra Vdev | 2.1+ (standard `zpool add`/`attach`/`replace`/`detach`; no separate feature gate) |
 | RAIDZ expansion (Expand Vdev on a raidz group) | 2.3+ |
+| Migrate Pool | 2.1+ (standard `zfs snapshot`/`send`/`receive` and `zpool export`/`import`; no separate feature gate) |
 
 ## Startup Version Check (Two-Node)
 

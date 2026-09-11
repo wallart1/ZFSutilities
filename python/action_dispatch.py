@@ -94,6 +94,7 @@ from pool_growth_dialogs import (
     on_disks_detach_device,
     on_disks_replace_device,
 )
+from pool_migrate_dialogs import on_disks_migrate_pool
 from pools_page import on_pools_refresh, update_pools_button_sensitivity
 from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
 from restore_page import (
@@ -194,6 +195,7 @@ PAGE_SPECS = {
             ("Replace…", "edit-find-replace", "_disks_replace_btn"),
             ("Detach…", "media-eject", "_disks_detach_btn"),
             ("Add Infra Vdev…", "drive-harddisk", "_disks_add_infra_vdev_btn"),
+            ("Migrate Pool…", "edit-copy", "_disks_migrate_pool_btn"),
             ("Apply Profile…", "dialog-apply", "_disks_apply_profile_btn"),
             ("Rewrite Data", "document-edit", "_disks_rewrite_data_btn"),
             ("Advanced: Manage Profiles…", "preferences-system", "_disks_manage_profiles_btn"),
@@ -439,6 +441,7 @@ ACTION_HANDLERS = {
         "Replace…": on_disks_replace_device,
         "Detach…": on_disks_detach_device,
         "Add Infra Vdev…": on_disks_add_infra_vdev,
+        "Migrate Pool…": on_disks_migrate_pool,
         "Apply Profile…": on_disks_apply_profile,
         "Rewrite Data": on_disks_rewrite_data,
         "Advanced: Manage Profiles…": on_disks_manage_profiles,

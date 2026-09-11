@@ -119,6 +119,35 @@ class TestZfsCapabilitiesPoolFeature(unittest.TestCase):
         caps = ZfsCapabilities(_MockRepo("zfs-2.4.0-1\nzfs-kmod-2.4.0-1\n", ""))
         self.assertFalse(caps.supports_pool_feature("tank", "raidz_expansion"))
 
+    def test_space_padded_active_feature_supported(self):
+        # Plain (non -H) `zpool get all` output is space-padded, not tabbed.
+        stdout = (
+            "NAME     PROPERTY                       VALUE                        SOURCE\n"
+            "tank     size                           7.25T                        -\n"
+            "tank     feature@physical_rewrite       active                       local\n"
+        )
+        caps = ZfsCapabilities(_MockRepo("zfs-2.4.0-1\nzfs-kmod-2.4.0-1\n", stdout))
+        self.assertTrue(caps.supports_pool_feature("tank", "physical_rewrite"))
+
+    def test_space_padded_enabled_feature_supported(self):
+        stdout = "tank  feature@physical_rewrite       enabled                      local\n"
+        caps = ZfsCapabilities(_MockRepo("zfs-2.4.0-1\nzfs-kmod-2.4.0-1\n", stdout))
+        self.assertTrue(caps.supports_pool_feature("tank", "physical_rewrite"))
+
+    def test_space_padded_disabled_feature_not_supported(self):
+        stdout = "tank  feature@physical_rewrite       disabled                     local\n"
+        caps = ZfsCapabilities(_MockRepo("zfs-2.4.0-1\nzfs-kmod-2.4.0-1\n", stdout))
+        self.assertFalse(caps.supports_pool_feature("tank", "physical_rewrite"))
+
+    def test_space_padded_other_features_ignored(self):
+        stdout = (
+            "tank  feature@block_cloning           enabled                      local\n"
+            "tank  feature@raidz_expansion         disabled                     local\n"
+        )
+        caps = ZfsCapabilities(_MockRepo("zfs-2.4.0-1\nzfs-kmod-2.4.0-1\n", stdout))
+        self.assertFalse(caps.supports_pool_feature("tank", "physical_rewrite"))
+        self.assertTrue(caps.supports_pool_feature("tank", "block_cloning"))
+
 
 if __name__ == "__main__":
     unittest.main()

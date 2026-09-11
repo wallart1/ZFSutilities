@@ -222,6 +222,21 @@ confirmation matched to each operation's danger). The pure argv builders
 `build_attach_command`, `build_replace_command`, and `build_detach_command`
 live in `zfs_repository.py` next to `build_create_pool_command`.
 
+Copy-based pool migration (Migrate Pool) lives in `pool_migrate.py` (pure
+logic: migration snapshot/temp-pool naming, step planning, capacity checks,
+tree verification) and `pool_migrate_dialogs.py` (GTK wizard + Disks-page
+handler). It copies a pool to new disks or via a holding pool when ZFS
+cannot expand in place: recursive `@migrate-…` snapshot, one
+`zfs send -Rw | zfs receive -u -F` step per top-level dataset, tree
+verification, then a typed-confirmation-gated cutover that exports the
+source pool and re-imports the migrated pool under the source pool's name
+(holding mode rebuilds on the freed disks first). The migration argv
+builders (`build_recursive_snapshot_command`,
+`build_migration_send_receive_command`, `build_pool_export_command`,
+`build_pool_import_rename_command`, `build_pool_destroy_command`,
+`build_destroy_dataset_command`) live in `zfs_repository.py`; the root-boot
+pool is never offered for migration.
+
 ### Session Log Utilities
 
 Per-run session log helpers live in `python/session_log.py`.
@@ -593,7 +608,7 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_backup_config`      | 32    | Config load/save, defaults, pools, retention, UI state, snapshot name generation, log pruning, message level   |
 | `test_backup_history`     | 36    | History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting       |
 | `test_backup_page`        | 23     | Backup tab UI labels (including pre/post command labels), config load/collect helpers, and frame header widget support |
-| `test_backup_runner`      | 59    | Session log creation, subprocess output parsing, byte counting, trailer formatting, fatal step messages, and log size cap |
+| `test_backup_runner`      | 63    | Session log creation, subprocess output parsing, byte counting, trailer formatting, completion-callback rc/failure reporting, fatal step messages, and log size cap |
 | `test_checkagainst_derivation` | 24 | Checkagainst derived-row generation, merge, and source/dest-root helpers                                     |
 | `test_checkagainst_page`  | 59    | Checkagainst tab table editing and config persistence                                                           |
 | `test_command_builders`   | 51    | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
@@ -605,10 +620,10 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_datasets_page`      | 52    | Datasets tab UI, dataset tree, and mounted-state refresh                                                        |
 | `test_datasets_tree`      | 13    | Lazy dataset-tree loading in `gui_helpers`                                                                      |
 | `test_diagnose_zfs_repository` | 6 | `diagnose_zfs_repository.py` — diagnostic main() output for pools, datasets, snapshots, and error paths        |
-| `test_disk_repository`    | 14    | `disk_repository.py` — lsblk, by-id, and smartctl subprocess isolation, boot-disk filtering                                          |
+| `test_disk_repository`    | 16    | `disk_repository.py` — lsblk, by-id, and smartctl subprocess isolation, boot-disk filtering                                          |
 | `test_disk_actions`       | 6     | `disk_actions.py` — Disks tab SMART-details action and selected-disk path resolution (name/by-id fallback)    |
-| `test_disks_page`         | 14    | Disks tab UI                                                                                                    |
-| `test_disks_page_phase2`  | 36    | Disks tab dataset-tuning pane, Apply Profile dialog/execution, Rewrite Data gating, workload profile manager   |
+| `test_disks_page`         | 30    | Disks tab UI, including topology-selection highlighting in the inventory                                        |
+| `test_disks_page_phase2`  | 58    | Disks tab dataset-tuning pane (including the Size column), Apply Profile picker treeview/dialog/execution, Rewrite Data gating, workload profile manager |
 | `test_disks_page_phase4`  | 7     | Disks tab Phase 4 pool-growth button sensitivity gating (compute-host, runner-busy, tooltip precedence)        |
 | `test_docs_integrity`     | 14    | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability  |
 | `test_docs_viewer`        | 9     | Standalone documentation viewer launcher                                                                        |
@@ -630,10 +645,12 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_path_utils`         | 28    | Shared path helpers mirroring bash `$mydir` / `find_zfsutility_script` behavior                                |
 | `test_paths`              | 35    | Centralized path-resolution module (local and remote deployed layouts)                                          |
 | `test_pool_actions`       | 15    | Pool registry add/remove/save/revert action handlers                                                            |
-| `test_pool_create`        | 44    | `pool_create.py` — disk eligibility and partition policy, vdev separation, pool-name validation, ashift suggestion, RAIDZ capacity estimator, profile -O options |
-| `test_pool_create_wizard` | 39    | `pool_create_wizard.py` — wizard page gating, exact command building, handler guards, Create Pool button sensitivity, scripted end-to-end flow with lock acquire/release and registry offer |
-| `test_pool_growth`        | 70    | `pool_growth.py` — attach/replace/detach classification, replace-pair and infra-vdev validation, scrub-block check |
-| `test_pool_growth_dialogs` | 130 | `pool_growth_dialogs.py` — Add Vdev/Attach/Replace/Detach/Infra-Vdev pure helpers, handler guards, and dialog flows |
+| `test_pool_create`        | 50    | `pool_create.py` — disk eligibility and partition policy, vdev separation, pool-name validation, ashift suggestion, RAIDZ capacity estimator, RAID10 count validation, profile -O options |
+| `test_pool_create_wizard` | 42    | `pool_create_wizard.py` — wizard page gating, exact command building (incl. RAID10 mirror pairs), handler guards, Create Pool button sensitivity, scripted end-to-end flow with lock acquire/release and registry offer |
+| `test_pool_growth`        | 76    | `pool_growth.py` — attach/replace/detach classification, replace-pair and infra-vdev validation, scrub-block check |
+| `test_pool_growth_dialogs` | 141 | `pool_growth_dialogs.py` — Add Vdev/Attach/Replace/Detach/Infra-Vdev pure helpers, handler guards, and dialog flows |
+| `test_pool_migrate`       | 41    | `pool_migrate.py` — migration snapshot/temp-pool naming, step planning, capacity checks, tree verification, migration argv builders |
+| `test_pool_migrate_dialogs` | 37 | `pool_migrate_dialogs.py` — Migrate Pool dialog problems/warnings/plan, scrub-block gate, handler guards, two-phase copy/cutover execution |
 | `test_pool_watch`         | 6     | Per-pool dataset watch window                                                                                   |
 | `test_pools_page`         | 50    | Pools tab registry UI                                                                                           |
 | `test_profile_dialogs`    | 14    | Add/Recall profile dialogs, duplicate-name overwrite handling                                                  |
@@ -652,10 +669,10 @@ tests/run-tests test-zfsretain test_backup_config
 | `test_scrub_page`         | 8     | Scrub page store schema, flicker-free refresh logic, and drag-and-drop priority ordering                         |
 | `test_session_log`        | 16    | Per-run session log helpers (create, append, trailer, size cap)                                                 |
 | `test_workload_profiles`  | 30    | Workload profile property filtering, profile matching, apply plan, `zfs set` command building, warnings        |
-| `test_zfs_capabilities`   | 12    | OpenZFS release-variation gating                                                                                |
+| `test_zfs_capabilities`   | 16    | OpenZFS release-variation gating, pool-feature cross-check parsing                                              |
 | `test_zfs_diagnostics`    | 8     | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run`                     |
 | `test_zfs_lock_manager`   | 6     | `zfs_lock_manager` two-node lock behavior                                                                       |
-| `test_zfs_repository`     | 129   | `zfs_repository.py` — ZFS/zpool subprocess isolation, importable-pool config parsing, `zpool create` and pool-growth command building and execution |
+| `test_zfs_repository`     | 133   | `zfs_repository.py` — ZFS/zpool subprocess isolation, importable-pool config parsing, `zpool create` (incl. RAID10 mirror pairs) and pool-growth command building and execution |
 | `test_zfsinfo`            | 10    | Pool/dataset/snapshot info gathering with mocked `subprocess`                                                  |
 | `test_zfsutilities_gui`   | 44    | Main GUI window behavior                                                                                        |
 

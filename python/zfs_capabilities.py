@@ -133,15 +133,20 @@ class ZfsCapabilities:
         """Check whether *pool* has the named feature flag active/enabled.
 
         This is an optional cross-check for pool-scoped decisions; it consults
-        `zpool get all <pool>` for the `feature@<name>` property.
+        `zpool get all <pool>` for the `feature@<name>` property. The output
+        is parsed as whitespace-separated columns, since plain
+        (non-``-H``) `zpool get all` output is space-padded rather than
+        tab-separated.
         """
         raw = self.repository.pool_get_all(pool)
         marker = f"feature@{feature}"
         for line in raw.splitlines():
-            parts = line.split("\t")
-            if len(parts) < 3:
+            parts = line.split()
+            if marker not in parts:
                 continue
-            if parts[1] == marker:
-                value = parts[2].strip().lower()
-                return value in ("active", "enabled")
+            idx = parts.index(marker)
+            if idx + 1 >= len(parts):
+                continue
+            value = parts[idx + 1].strip().lower()
+            return value in ("active", "enabled")
         return False

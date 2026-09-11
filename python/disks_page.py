@@ -83,12 +83,13 @@ POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
 ) = range(7)
 
 # Dataset tuning pane ListStore columns:
-#   0 name, 1 type, 2 recordsize, 3 compression, 4 atime, 5 logbias,
-#   6 sync, 7 primarycache, 8 special_small_blocks, 9 volblocksize,
-#   10 profile_match
+#   0 name, 1 type, 2 used (size), 3 recordsize, 4 compression, 5 atime,
+#   6 logbias, 7 sync, 8 primarycache, 9 special_small_blocks, 10 volblocksize,
+#   11 profile_match
 (
     COL_DS_NAME,
     COL_DS_TYPE,
+    COL_DS_USED,
     COL_DS_RECORDSIZE,
     COL_DS_COMPRESSION,
     COL_DS_ATIME,
@@ -98,7 +99,7 @@ POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
     COL_DS_SPECIAL_SMALL_BLOCKS,
     COL_DS_VOLBLOCKSIZE,
     COL_DS_PROFILE_MATCH,
-) = range(11)
+) = range(12)
 
 
 @dataclass
@@ -423,15 +424,21 @@ def create_disks_page(app):
 
     bottom_box.pack_start(Gtk.Separator(), False, False, 0)
 
-    app.disks_dataset_store = Gtk.ListStore(str, str, str, str, str, str, str, str, str, str, str)
+    app.disks_dataset_store = Gtk.ListStore(
+        str, str, str, str, str, str, str, str, str, str, str, str
+    )
     app.disks_dataset_view = Gtk.TreeView(model=app.disks_dataset_store)
     app.disks_dataset_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.disks_dataset_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
     app.disks_dataset_view.get_selection().connect("changed", _on_dataset_selection_changed, app)
+    # Pool whose datasets are currently shown in the store; used to restore
+    # selection and scroll position across refreshes of the same pool.
+    app._disks_dataset_view_pool = None
 
     ds_cols = [
         (COL_DS_NAME, "Name", 250),
         (COL_DS_TYPE, "Type", 80),
+        (COL_DS_USED, "Size", 90),
         (COL_DS_RECORDSIZE, "Recordsize", 90),
         (COL_DS_COMPRESSION, "Compression", 100),
         (COL_DS_ATIME, "Atime", 60),
@@ -458,8 +465,10 @@ def create_disks_page(app):
 
     app._disks_rewrite_guidance_label = Gtk.Label(
         label=(
-            "Rewrite Data requires OpenZFS 2.3+. On older versions, rewrite existing data "
-            "by creating a new dataset with the desired profile and using send/receive."
+            "Rewrite Data requires OpenZFS 2.3.4+, the pool's physical_rewrite feature, and a "
+            "filesystem dataset (volumes cannot be rewritten). On older versions, rewrite "
+            "existing data by creating a new dataset with the desired profile and using "
+            "send/receive."
         )
     )
     app._disks_rewrite_guidance_label.set_halign(Gtk.Align.START)
@@ -636,15 +645,29 @@ def _select_topology_node_by_name(app, name: str) -> bool:
 
 
 def _on_topology_selection_changed(selection, app):
-    """When a topology device node is selected, highlight it in the inventory."""
+    """When a topology node is selected, highlight its devices in the inventory.
+
+    A device node highlights that device, a vdev node highlights every device
+    in the vdev, and the pool node highlights every device in the pool. An
+    empty selection (or a node with no devices) restores the pool-wide
+    highlight. Device nodes additionally keep the existing behavior of
+    selecting the matching inventory row.
+    """
     if getattr(app, "_disks_syncing_selection", False):
         return
     model, pathlist = selection.get_selected_rows()
     if pathlist:
         tree_iter = model.get_iter(pathlist[0])
+        device_paths = _topology_subtree_device_paths(model, tree_iter)
+        if device_paths:
+            _highlight_topology_devices(app, device_paths)
+        else:
+            _highlight_pool_disks(app, app._disks_pool_selector.get_active_text())
         node_name = model.get_value(tree_iter, COL_T_NAME)
         if node_name and node_name.startswith("/dev/"):
             _select_disk_row_by_path(app, node_name)
+    else:
+        _highlight_pool_disks(app, app._disks_pool_selector.get_active_text())
     update_disks_button_sensitivity(app)
 
 
@@ -661,6 +684,7 @@ def _repopulate_topology_for_selected_pool(app):
     pool_name = app._disks_pool_selector.get_active_text()
     if pool_name and pool_name in data.topologies:
         _populate_topology_store(app.disks_topology_store, None, data.topologies[pool_name])
+        app.disks_topology_view.expand_all()
     _highlight_pool_disks(app, pool_name)
 
 
@@ -693,6 +717,7 @@ def _load_dataset_tuning(app, pool_name):
             [
                 row.name,
                 row.ds_type,
+                row.used,
                 props.get("recordsize", "-"),
                 props.get("compression", "-"),
                 props.get("atime", "-"),
@@ -706,12 +731,69 @@ def _load_dataset_tuning(app, pool_name):
         )
 
 
+def _dataset_view_state(app):
+    """Capture the dataset view's selection (dataset names) and scroll offset."""
+    names = [row["name"] for row in _selected_dataset_rows(app)]
+    vpos = 0.0
+    get_adj = getattr(app.disks_dataset_view, "get_vadjustment", None)
+    if callable(get_adj):
+        adj = get_adj()
+        if adj is not None:
+            vpos = adj.get_value()
+    return names, vpos
+
+
+def _restore_dataset_view_state(app, names, vpos):
+    """Re-select the named datasets and restore the vertical scroll offset.
+
+    The scroll value is applied from an idle callback because the adjustment's
+    ``upper`` is not recalculated until the view lays out the refilled model;
+    setting it synchronously would clamp back to the top.
+    """
+    if names:
+        selection = app.disks_dataset_view.get_selection()
+        selection.unselect_all()
+        store = app.disks_dataset_store
+        it = store.get_iter_first()
+        while it is not None:
+            if store.get_value(it, COL_DS_NAME) in names:
+                selection.select_iter(it)
+            it = store.iter_next(it)
+        update_disks_button_sensitivity(app)
+
+    get_adj = getattr(app.disks_dataset_view, "get_vadjustment", None)
+    if not callable(get_adj):
+        return
+    adj = get_adj()
+    if adj is None:
+        return
+
+    def _apply_scroll():
+        upper = adj.get_upper()
+        page = adj.get_page_size()
+        adj.set_value(max(0.0, min(float(vpos), max(0.0, upper - page))))
+        return False
+
+    GLib.idle_add(_apply_scroll)
+
+
 def _repopulate_dataset_tuning_for_selected_pool(app):
-    """Clear and refill the dataset tuning store for the currently selected pool."""
-    app.disks_dataset_store.clear()
+    """Clear and refill the dataset tuning store for the currently selected pool.
+
+    When the same pool is refreshed, the previous selection (matched by
+    dataset name, not row path) and vertical scroll position are restored so
+    refreshes do not reset the view. Switching pools starts fresh.
+    """
     pool_name = app._disks_pool_selector.get_active_text()
+    saved_state = None
+    if pool_name and getattr(app, "_disks_dataset_view_pool", None) == pool_name:
+        saved_state = _dataset_view_state(app)
+    app.disks_dataset_store.clear()
     if pool_name:
         _load_dataset_tuning(app, pool_name)
+    app._disks_dataset_view_pool = pool_name
+    if saved_state is not None:
+        _restore_dataset_view_state(app, *saved_state)
 
 
 def _on_dataset_selection_changed(selection, app):
@@ -773,10 +855,20 @@ def update_disks_button_sensitivity(app):
     rewrite_btn = getattr(app, "_disks_rewrite_data_btn", None)
     if rewrite_btn:
         caps = app.ctx.zfs_caps
-        can_rewrite = ds_count == 1 and caps.supports("zfs_rewrite")
+        dataset_view = getattr(app, "disks_dataset_view", None)
+        ds_rows = _selected_dataset_rows(app) if dataset_view is not None else []
+        all_filesystems = bool(ds_rows) and all(
+            row["type"] == "filesystem" for row in ds_rows
+        )
+        can_rewrite = all_filesystems and caps.supports("zfs_rewrite")
         rewrite_btn.set_sensitive(can_rewrite)
         if not can_rewrite:
-            rewrite_btn.set_tooltip_text(caps.requires("zfs_rewrite"))
+            if not caps.supports("zfs_rewrite"):
+                rewrite_btn.set_tooltip_text(caps.requires("zfs_rewrite"))
+            elif ds_rows and not all_filesystems:
+                rewrite_btn.set_tooltip_text("Rewrite Data supports filesystem datasets only")
+            else:
+                rewrite_btn.set_tooltip_text("")
         else:
             rewrite_btn.set_tooltip_text("")
 
@@ -802,6 +894,7 @@ def update_disks_button_sensitivity(app):
         ("_disks_add_vdev_btn", "Pool growth is available only on the storage host"),
         ("_disks_attach_btn", "Pool growth is available only on the storage host"),
         ("_disks_add_infra_vdev_btn", "Pool growth is available only on the storage host"),
+        ("_disks_migrate_pool_btn", "Pool migration is available only on the storage host"),
         ("_disks_replace_btn", "Pool maintenance is available only on the storage host"),
         ("_disks_detach_btn", "Pool maintenance is available only on the storage host"),
     )
@@ -848,6 +941,57 @@ def _disk_cell_highlight_func(column, renderer, model, tree_iter, data=None):
         renderer.set_property("foreground", None)
 
 
+def _topology_subtree_device_paths(model, tree_iter) -> set[str]:
+    """Collect ``/dev/`` device paths from the topology subtree at *tree_iter*."""
+    paths = set()
+    name = model.get_value(tree_iter, COL_T_NAME)
+    if isinstance(name, str) and name.startswith("/dev/"):
+        paths.add(name)
+    child = model.iter_children(tree_iter)
+    while child is not None:
+        paths.update(_topology_subtree_device_paths(model, child))
+        child = model.iter_next(child)
+    return paths
+
+
+def _path_matches_any_device(row_path: str, device_paths: set[str]) -> bool:
+    """Return True if inventory *row_path* is one of the topology *device_paths*.
+
+    Matches exact paths, basenames, realpath-resolved paths (so a by-id
+    topology leaf matches the kernel device node), and whole-disk prefixes —
+    a whole-disk inventory row matches a partition leaf (``/dev/sda`` matches
+    ``/dev/sda1``; ``/dev/nvme0n1`` matches ``/dev/nvme0n1p1``). The prefix
+    remainder must be digits or ``p``+digits so ``/dev/sda`` does not match
+    ``/dev/sdaa``.
+    """
+    if row_path in device_paths:
+        return True
+    row_base = os.path.basename(row_path)
+    row_real = os.path.realpath(row_path)
+    for dev in device_paths:
+        if dev == row_path or os.path.basename(dev) == row_base:
+            return True
+        if dev.startswith(row_path):
+            rest = dev[len(row_path):]
+            if rest.isdigit() or (rest.startswith("p") and rest[1:].isdigit()):
+                return True
+        try:
+            if os.path.realpath(dev) == row_real:
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _highlight_topology_devices(app, device_paths):
+    """Highlight every inventory row that matches one of *device_paths*."""
+    it = app.disks_store.get_iter_first()
+    while it:
+        path = app.disks_store.get_value(it, COL_D_NAME)
+        app.disks_store.set_value(it, COL_D_HIGHLIGHT, _path_matches_any_device(path, device_paths))
+        it = app.disks_store.iter_next(it)
+
+
 def _populate_topology_store(store, parent_iter, node: TopologyNode) -> None:
     """Recursively append *node* and its children to *store*."""
     row = [
@@ -869,23 +1013,67 @@ def _populate_topology_store(store, parent_iter, node: TopologyNode) -> None:
 # ---------------------------------------------------------------------------
 
 
-def on_disks_rewrite_data(app):
-    """Rewrite data on a single dataset using ``zfs rewrite``.
+def _build_rewrite_command(ds_name: str, mountpoint: str) -> str:
+    """Build the bash script that rewrites *ds_name* in place via its mountpoint.
 
-    Requires exactly one selected dataset, OpenZFS 2.3+, and a running
-    dataset_runner. Acquires a single write lock, runs one BashStep, and
-    refreshes the page on completion.
+    ``zfs rewrite`` operates on file/directory paths inside a mounted
+    filesystem, not on dataset names, so the script:
+
+    1. Records whether the dataset is already mounted.
+    2. Mounts it (non-recursively) only if it is not mounted; the mount must
+       succeed or the script exits non-zero.
+    3. Runs ``zfs rewrite -P -r -x -v <mountpoint>`` — physical rewrite (so
+       rewritten blocks do not inflate later incremental send streams),
+       recursive, never crossing filesystem mount points (so child datasets
+       mounted beneath this one are not rewritten), verbose for log progress.
+    4. Unmounts the dataset only if this script mounted it, restoring the
+       prior state. An unmount failure is reported but does not mask the
+       rewrite's exit code.
+    """
+    q_ds = shlex.quote(ds_name)
+    q_mp = shlex.quote(mountpoint)
+    return (
+        f'mounted_before=$(zfs get -H -o value mounted {q_ds})\n'
+        "mounted_by_us=0\n"
+        'if [[ "$mounted_before" != "yes" ]]; then\n'
+        f"    if ! zfs mount {q_ds}; then\n"
+        f'        echo "ERROR: could not mount {ds_name} to rewrite data" >&2\n'
+        "        exit 1\n"
+        "    fi\n"
+        "    mounted_by_us=1\n"
+        "fi\n"
+        f"zfs rewrite -P -r -x -v {q_mp}\n"
+        "rewrite_rc=$?\n"
+        'if [[ "$mounted_by_us" == "1" ]]; then\n'
+        f"    if ! zfs unmount {q_ds}; then\n"
+        f'        echo "WARN: could not unmount {ds_name} after rewrite" >&2\n'
+        "    fi\n"
+        "fi\n"
+        "exit $rewrite_rc\n"
+    )
+
+
+def on_disks_rewrite_data(app):
+    """Rewrite data on the selected filesystem datasets using ``zfs rewrite -P``.
+
+    Requires at least one selected filesystem dataset, OpenZFS 2.3+, the
+    pool's physical_rewrite feature, and a running dataset_runner. Unmounted
+    datasets are mounted temporarily and returned to their prior state
+    afterwards. Acquires one write lock per dataset, runs one BashStep per
+    dataset sequentially, and refreshes the page on completion.
     """
     datasets = _selected_dataset_rows(app)
-    if len(datasets) != 1:
-        log_msg("WARN: Select exactly one dataset to rewrite data")
+    if not datasets:
+        log_msg("WARN: Select at least one dataset to rewrite data")
         return
 
-    ds = datasets[0]
-    ds_name = ds["name"]
-    ds_type = ds["type"]
-    if ds_type not in ("filesystem", "volume"):
-        log_msg(f"WARN: Cannot rewrite data for dataset type {ds_type}")
+    non_filesystems = [ds["name"] for ds in datasets if ds["type"] != "filesystem"]
+    if non_filesystems:
+        log_msg(
+            "WARN: Rewrite Data supports filesystem datasets only; "
+            "zfs rewrite cannot act on a volume's block device "
+            f"({', '.join(non_filesystems)})"
+        )
         return
 
     if not app.ctx.zfs_caps.supports("zfs_rewrite"):
@@ -900,41 +1088,98 @@ def on_disks_rewrite_data(app):
         log_msg("WARN: A dataset action is already running")
         return
 
+    repo = app.ctx.zfs_repository
+    mountpoints = {}
+    for ds in datasets:
+        ds_name = ds["name"]
+        try:
+            props = repo.get_properties(ds_name, ["mountpoint"])
+        except Exception as exc:  # pragma: no cover - defensive
+            log_msg(
+                f"WARN: Could not read properties for {ds_name}: "
+                f"{_user_friendly_property_error(ds_name, exc)}"
+            )
+            return
+        mountpoint = props.get("mountpoint", "-")
+        if mountpoint in ("none", "legacy", "-"):
+            log_msg(
+                f"WARN: Cannot rewrite data for {ds_name}: "
+                f"mountpoint is '{mountpoint}'"
+            )
+            return
+        mountpoints[ds_name] = mountpoint
+
+    pools = []
+    for ds in datasets:
+        pool = ds["name"].split("/", 1)[0]
+        if pool not in pools:
+            pools.append(pool)
+    for pool in pools:
+        if not app.ctx.zfs_caps.supports_pool_feature(pool, "physical_rewrite"):
+            log_msg(
+                f"WARN: Rewrite Data requires the physical_rewrite pool feature on {pool} "
+                f"(zpool set feature@physical_rewrite=enabled {pool})"
+            )
+            return
+
+    if len(datasets) == 1:
+        dialog_text = f"Rewrite data on {datasets[0]['name']}?"
+    else:
+        dialog_text = f"Rewrite data on {len(datasets)} datasets?"
     dialog = Gtk.MessageDialog(
         transient_for=app,
         modal=True,
         message_type=Gtk.MessageType.WARNING,
         buttons=Gtk.ButtonsType.YES_NO,
-        text=f"Rewrite data on {ds_name}?",
+        text=dialog_text,
     )
-    dialog.format_secondary_text(
-        "zfs rewrite rewrites existing blocks in place so they match the current "
-        "dataset properties. This may take a long time and cannot be undone."
+    secondary = (
+        "zfs rewrite -P rewrites existing blocks in place (physical rewrite, "
+        "preserving snapshot and incremental-send boundaries) so they match "
+        "the current dataset properties. Datasets are mounted temporarily "
+        "if they are not currently mounted and returned to their prior state "
+        "afterwards. Requires the pool's physical_rewrite feature. This may "
+        "take a long time and cannot be undone."
     )
+    if len(datasets) > 1:
+        secondary += "\n\n" + "\n".join(ds["name"] for ds in datasets)
+    dialog.format_secondary_text(secondary)
     response = dialog.run()
     dialog.destroy()
     if response != Gtk.ResponseType.YES:
         return
 
-    lock_id = zlm.acquire(ds_name, "w", f"Rewrite data on {ds_name}")
+    dataset_names = [ds["name"] for ds in datasets]
+    lock_ids = zlm.acquire_multiple("w", dataset_names)
 
-    step = BashStep(
-        ["bash", "-c", f"zfs rewrite {shlex.quote(ds_name)}"],
-        f"Rewrite data on {ds_name}",
-        is_rsync=False,
-        fatal=False,
-    )
+    steps = [
+        BashStep(
+            ["bash", "-c", _build_rewrite_command(ds_name, mountpoints[ds_name])],
+            f"Rewrite data on {ds_name}",
+            is_rsync=False,
+            fatal=False,
+        )
+        for ds_name in dataset_names
+    ]
 
-    def _on_complete(cancelled=False):
-        zlm.release(lock_id)
+    def _on_complete(cancelled=False, rc=None):
+        for lock_id in lock_ids:
+            zlm.release(lock_id)
+        target = (
+            dataset_names[0]
+            if len(dataset_names) == 1
+            else f"{len(dataset_names)} datasets"
+        )
         if cancelled:
-            log_msg(f"INFO: Rewrite Data cancelled for {ds_name}")
+            log_msg(f"INFO: Rewrite Data cancelled for {target}")
+        elif rc:
+            log_msg(f"WARN: Rewrite Data failed for {target} (rc={rc})")
         else:
-            log_msg(f"INFO: Rewrite Data complete for {ds_name}")
+            log_msg(f"INFO: Rewrite Data complete for {target}")
         update_disks_button_sensitivity(app)
         refresh_disks_page(app)
 
-    runner.set_steps([step])
+    runner.set_steps(steps)
     update_disks_button_sensitivity(app)
     runner.start(on_complete=_on_complete)
 
@@ -1309,15 +1554,54 @@ def show_apply_profile_dialog(app, datasets):
     confirm_check.set_no_show_all(True)
     content.pack_start(confirm_check, False, False, 0)
 
-    selector_label = Gtk.Label(label="Profile:")
+    selector_label = Gtk.Label(label="Select a profile:")
     selector_label.set_halign(Gtk.Align.START)
     content.pack_start(selector_label, False, False, 0)
 
-    selector = Gtk.ComboBoxText()
+    picker_store = Gtk.ListStore(str, str, str)
     for name in profile_names:
-        selector.append_text(name)
-    _set_combo_active_text(selector, default_name)
-    content.pack_start(selector, False, False, 0)
+        profile = profiles.get(name, {})
+        picker_store.append(
+            [name, _profile_applies_to_text(profile), profile.get("description", "")]
+        )
+
+    picker_view = Gtk.TreeView(model=picker_store)
+    picker_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+    picker_selection = picker_view.get_selection()
+    picker_selection.set_mode(Gtk.SelectionMode.SINGLE)
+
+    name_renderer = Gtk.CellRendererText()
+    name_col = Gtk.TreeViewColumn("Profile", name_renderer, text=0)
+    configure_treeview_column(name_col, width=150)
+    picker_view.append_column(name_col)
+
+    applies_renderer = Gtk.CellRendererText()
+    applies_col = Gtk.TreeViewColumn("Applies to", applies_renderer, text=1)
+    configure_treeview_column(applies_col, width=100)
+    picker_view.append_column(applies_col)
+
+    desc_renderer = Gtk.CellRendererText()
+    desc_renderer.set_property("wrap-mode", Gtk.WrapMode.WORD)
+    desc_renderer.set_property("wrap-width", 350)
+    desc_col = Gtk.TreeViewColumn("Description", desc_renderer, text=2)
+    configure_treeview_column(desc_col, width=350)
+    picker_view.append_column(desc_col)
+
+    picker_sw = Gtk.ScrolledWindow()
+    picker_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+    picker_sw.set_min_content_height(150)
+    picker_sw.add(picker_view)
+    content.pack_start(picker_sw, False, False, 0)
+
+    def _select_profile_row(name):
+        for i, row_name in enumerate(profile_names):
+            if row_name == name:
+                picker_selection.select_path(i)
+                return True
+        return False
+
+    if not _select_profile_row(default_name):
+        _select_profile_row(profile_names[0])
 
     preview_label = Gtk.Label(label="Planned commands:")
     preview_label.set_halign(Gtk.Align.START)
@@ -1336,14 +1620,19 @@ def show_apply_profile_dialog(app, datasets):
 
     current_name = default_name
 
+    def _read_selected_name():
+        # Gtk.TreeSelection.get_selected() returns (model, iter) in real GTK.
+        # Some test mocks return MagicMocks instead; callers fall back to the
+        # tracked value in that case.
+        model, tree_iter = picker_selection.get_selected()
+        if tree_iter is not None:
+            value = model.get_value(tree_iter, 0)
+            if isinstance(value, str):
+                return value
+        return None
+
     def _get_active_profile_name():
-        # Gtk.ComboBoxText.get_active_text() returns the active text in real GTK.
-        # Some test mocks return a MagicMock instead of the string set by
-        # set_active_text(); fall back to the tracked value in that case.
-        raw = selector.get_active_text()
-        if isinstance(raw, str):
-            return raw
-        return current_name
+        return _read_selected_name() or current_name
 
     def _update_preview(*_args):
         name = _get_active_profile_name()
@@ -1380,7 +1669,14 @@ def show_apply_profile_dialog(app, datasets):
             lines.append("")
         preview_buf.set_text("\n".join(lines).rstrip("\n"))
 
-    selector.connect("changed", lambda *_args: _update_preview())
+    def _on_selection_changed(*_args):
+        nonlocal current_name
+        raw = _read_selected_name()
+        if isinstance(raw, str):
+            current_name = raw
+        _update_preview()
+
+    picker_selection.connect("changed", _on_selection_changed)
     _update_preview()
 
     dialog.show_all()
@@ -1389,7 +1685,7 @@ def show_apply_profile_dialog(app, datasets):
         if response != Gtk.ResponseType.OK:
             dialog.destroy()
             return Gtk.ResponseType.CANCEL, None, None
-        name = selector.get_active_text()
+        name = _get_active_profile_name()
         profile = profiles.get(name, {})
         if profile_has_warning(name, profile, pool_has_special) and not confirm_check.get_active():
             continue
@@ -1472,11 +1768,13 @@ def on_disks_apply_profile(app):
                 )
             )
 
-    def _on_complete(cancelled=False):
+    def _on_complete(cancelled=False, rc=None):
         for lock_id in lock_ids:
             zlm.release(lock_id)
         if cancelled:
             log_msg("INFO: Apply Profile cancelled")
+        elif rc:
+            log_msg(f"WARN: Apply Profile failed (rc={rc})")
         elif all_commands:
             log_msg(f"INFO: Apply Profile complete: {len(all_commands)} command(s)")
         update_disks_button_sensitivity(app)

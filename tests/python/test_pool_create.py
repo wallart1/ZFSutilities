@@ -13,6 +13,7 @@ if PYTHON_SRC not in sys.path:
 from disk_repository import DiskInfo
 from pool_create import (
     MAX_POOL_NAME_LEN,
+    RAID10_MIN_DISKS,
     TOPOLOGIES,
     CapacityEstimate,
     EligibilityResult,
@@ -21,6 +22,7 @@ from pool_create import (
     pool_filesystem_options,
     suggest_ashift,
     validate_pool_name,
+    validate_raid10_count,
     validate_vdev_selection,
 )
 from workload_profiles import LIVE_PROPERTIES
@@ -234,6 +236,35 @@ class TestValidateVdevSelection(unittest.TestCase):
         self.assertEqual(validate_vdev_selection([_disk("/dev/sda")]), [])
 
 
+class TestValidateRaid10Count(unittest.TestCase):
+    """validate_raid10_count enforces the even, 4+ disk-count rule."""
+
+    def test_raid10_is_not_a_topologies_entry(self):
+        # The Add-Vdev and migrate dialogs iterate TOPOLOGIES for their
+        # radios; RAID10 must never appear there (it is grown one mirror
+        # vdev at a time via Add Data Vdev).
+        self.assertNotIn("raid10", TOPOLOGIES)
+        self.assertEqual(RAID10_MIN_DISKS, 4)
+
+    def test_below_minimum_rejected(self):
+        for num in (0, 1, 2, 3):
+            with self.subTest(num=num):
+                problems = validate_raid10_count(num)
+                self.assertTrue(any("at least 4 disks" in p for p in problems))
+
+    def test_odd_count_rejected(self):
+        for num in (5, 7, 9):
+            with self.subTest(num=num):
+                problems = validate_raid10_count(num)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("even disk count", problems[0])
+
+    def test_even_counts_of_four_or_more_accepted(self):
+        for num in (4, 6, 8):
+            with self.subTest(num=num):
+                self.assertEqual(validate_raid10_count(num), [])
+
+
 class TestValidatePoolName(unittest.TestCase):
     """Name validation matrix per the verified OpenZFS 2.4.4 libzfs rules."""
 
@@ -319,6 +350,20 @@ class TestEstimateEffectiveCapacity(unittest.TestCase):
         self.assertEqual(stripe, CapacityEstimate(3 * TB, 3 * TB, 1.0))
         mirror = estimate_effective_capacity("mirror", 2, TB, 128 * 1024)
         self.assertEqual(mirror, CapacityEstimate(TB, TB, 1.0))
+
+    def test_raid10_is_half_raw_with_no_padding_loss(self):
+        est = estimate_effective_capacity("raid10", 4, TB, 128 * 1024)
+        self.assertEqual(est, CapacityEstimate(2 * TB, 2 * TB, 1.0))
+        est6 = estimate_effective_capacity("raid10", 6, TB, 128 * 1024)
+        self.assertEqual(est6, CapacityEstimate(3 * TB, 3 * TB, 1.0))
+
+    def test_raid10_rejects_odd_count_and_below_minimum(self):
+        with self.assertRaises(ValueError):
+            estimate_effective_capacity("raid10", 5, TB, 128 * 1024)
+        with self.assertRaises(ValueError):
+            estimate_effective_capacity("raid10", 3, TB, 128 * 1024)
+        with self.assertRaises(ValueError):
+            estimate_effective_capacity("raid10", 4, 0, 128 * 1024)
 
     def test_raidz2_8k_is_33_percent_of_total(self):
         # Brief anchor: raidz2 ashift=12, 8K block ≈ 33% efficient.

@@ -294,6 +294,11 @@ def _attach_warnings(state: _AttachState) -> list[str]:
     if classified is not None and not classified.error and root is not None:
         if classified.kind == ATTACH_STRIPE_TO_MIRROR:
             warnings.append("attaching a second device converts the stripe vdev into a mirror")
+            warnings.append(
+                "if the goal is more capacity without mirroring, use Add Data "
+                "Vdev with the stripe topology instead — it adds a new "
+                "top-level stripe vdev"
+            )
         elif classified.kind == ATTACH_MIRROR_GROW:
             count = count_mirror_members(root, state.target)
             if count:
@@ -931,6 +936,15 @@ def show_add_vdev_dialog(app, pools, eligibility, preselected_pool):
         if name == state.topology:
             radio.set_active(True)
     content.pack_start(topology_box, False, False, 0)
+    raid10_hint = Gtk.Label(
+        label=(
+            "Adding a mirror vdev to a pool of mirror vdevs extends a "
+            "RAID10 (striped-mirror) layout."
+        )
+    )
+    raid10_hint.set_halign(Gtk.Align.START)
+    raid10_hint.set_line_wrap(True)
+    content.pack_start(raid10_hint, False, False, 0)
     # GTK emits "toggled" from set_active during construction; connect only
     # after the initial state is set or the handler runs before the review
     # scaffold exists (NameError on the closure's free variable).
@@ -1632,7 +1646,7 @@ def on_disks_add_vdev(app) -> None:
     lock_id = zlm.acquire(pool_name, "w", f"Add vdev to {pool_name}")
     step = BashStep(cmd, f"Add vdev to pool {pool_name}", is_rsync=False, fatal=True)
 
-    def _on_complete(cancelled=False):
+    def _on_complete(cancelled=False, rc=None):
         zlm.release(lock_id)
         update_disks_button_sensitivity(app)
         app._disks_inventory_cache.invalidate()
@@ -1640,6 +1654,9 @@ def on_disks_add_vdev(app) -> None:
         on_pools_refresh(app)
         if cancelled:
             log_msg(f"INFO: Add vdev cancelled for {pool_name}")
+            return
+        if rc:
+            log_msg(f"WARN: Add vdev failed for pool '{pool_name}' (rc={rc})")
             return
         log_msg(f"INFO: Added vdev to pool '{pool_name}'")
 
@@ -1686,7 +1703,7 @@ def on_disks_detach_device(app) -> None:
     lock_id = zlm.acquire(pool_name, "w", f"Detach device from {pool_name}")
     step = BashStep(cmd, f"Detach device from pool {pool_name}", is_rsync=False, fatal=True)
 
-    def _on_complete(cancelled=False):
+    def _on_complete(cancelled=False, rc=None):
         zlm.release(lock_id)
         update_disks_button_sensitivity(app)
         app._disks_inventory_cache.invalidate()
@@ -1694,6 +1711,9 @@ def on_disks_detach_device(app) -> None:
         on_pools_refresh(app)
         if cancelled:
             log_msg(f"INFO: Detach cancelled for {pool_name}")
+            return
+        if rc:
+            log_msg(f"WARN: Detach failed for pool '{pool_name}' (rc={rc})")
             return
         log_msg(f"INFO: Detached device from pool '{pool_name}'")
 
@@ -1751,7 +1771,7 @@ def on_disks_replace_device(app) -> None:
     lock_id = zlm.acquire(pool_name, "w", f"Replace device in {pool_name}")
     step = BashStep(cmd, f"Replace device in pool {pool_name}", is_rsync=False, fatal=True)
 
-    def _on_complete(cancelled=False):
+    def _on_complete(cancelled=False, rc=None):
         zlm.release(lock_id)
         update_disks_button_sensitivity(app)
         app._disks_inventory_cache.invalidate()
@@ -1759,6 +1779,9 @@ def on_disks_replace_device(app) -> None:
         on_pools_refresh(app)
         if cancelled:
             log_msg(f"INFO: Replace cancelled for {pool_name}")
+            return
+        if rc:
+            log_msg(f"WARN: Replace failed for pool '{pool_name}' (rc={rc})")
             return
         log_msg(f"INFO: Replaced device in pool '{pool_name}'")
         log_msg(
@@ -1820,7 +1843,7 @@ def on_disks_attach_device(app) -> None:
     lock_id = zlm.acquire(pool_name, "w", f"Expand vdev in {pool_name}")
     step = BashStep(cmd, f"Expand vdev in pool {pool_name}", is_rsync=False, fatal=True)
 
-    def _on_complete(cancelled=False):
+    def _on_complete(cancelled=False, rc=None):
         zlm.release(lock_id)
         update_disks_button_sensitivity(app)
         app._disks_inventory_cache.invalidate()
@@ -1829,12 +1852,15 @@ def on_disks_attach_device(app) -> None:
         if cancelled:
             log_msg(f"INFO: Expand vdev cancelled for {pool_name}")
             return
+        if rc:
+            log_msg(f"WARN: Expand vdev failed for pool '{pool_name}' (rc={rc})")
+            return
         log_msg(f"INFO: Expanded vdev in pool '{pool_name}'")
         if kind == ATTACH_RAIDZ_EXPANSION:
             log_msg(
                 f"INFO: RAIDZ expansion of pool '{pool_name}' underway — use the "
-                "Rewrite Data action on the Disks page per dataset to restripe "
-                "existing data at the new ratio"
+                "Rewrite Data action on the Disks page per filesystem dataset "
+                "to restripe existing data at the new ratio"
             )
 
     runner.set_steps([step])
@@ -1888,7 +1914,7 @@ def on_disks_add_infra_vdev(app) -> None:
     lock_id = zlm.acquire(pool_name, "w", f"Add {kind} vdev to {pool_name}")
     step = BashStep(cmd, f"Add {kind} vdev to pool {pool_name}", is_rsync=False, fatal=True)
 
-    def _on_complete(cancelled=False):
+    def _on_complete(cancelled=False, rc=None):
         zlm.release(lock_id)
         update_disks_button_sensitivity(app)
         app._disks_inventory_cache.invalidate()
@@ -1896,6 +1922,9 @@ def on_disks_add_infra_vdev(app) -> None:
         on_pools_refresh(app)
         if cancelled:
             log_msg(f"INFO: Add {kind} vdev cancelled for {pool_name}")
+            return
+        if rc:
+            log_msg(f"WARN: Add {kind} vdev failed for pool '{pool_name}' (rc={rc})")
             return
         log_msg(f"INFO: Added {kind} vdev to pool '{pool_name}'")
 

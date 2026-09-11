@@ -452,6 +452,59 @@ class TestFinishProgress(unittest.TestCase):
         runner.progress.assert_called_once_with(None, None)
 
 
+class TestFinishResultReporting(unittest.TestCase):
+    """_finish reports success/failure and hands the rc to on_complete."""
+
+    def _runner(self):
+        runner = br.BackupRunner(MagicMock(), MagicMock())
+        runner.label = "Dataset action"
+        runner._total_bytes_received = 0
+        runner._session_start_time = time.time()
+        runner._session_log_file = None
+        return runner
+
+    @patch("backup_runner.add_history_entry")
+    def test_finish_logs_complete_on_rc_zero(self, _mock_add):
+        runner = self._runner()
+        with patch.object(runner, "_log") as mock_log:
+            runner._finish(rc=0)
+        mock_log.assert_any_call("INFO: Dataset action complete")
+
+    @patch("backup_runner.add_history_entry")
+    def test_finish_logs_failed_on_nonzero_rc(self, _mock_add):
+        runner = self._runner()
+        with patch.object(runner, "_log") as mock_log:
+            runner._finish(rc=2)
+        mock_log.assert_any_call("WARN: Dataset action failed (rc=2)")
+
+    @patch("backup_runner.add_history_entry")
+    def test_finish_passes_rc_to_on_complete(self, _mock_add):
+        runner = self._runner()
+        runner._on_complete = MagicMock()
+        runner._finish(rc=2)
+        runner._on_complete.assert_called_once_with(cancelled=False, rc=2)
+
+    @patch("backup_runner.add_history_entry")
+    def test_fatal_step_failure_reaches_on_complete_with_rc(self, _mock_add):
+        runner = self._runner()
+        runner.running = True
+        runner.current_step = 0
+        runner.steps = [BashStep([], "step1", is_rsync=False, fatal=True)]
+        runner._on_complete = MagicMock()
+        fake_process = MagicMock()
+        fake_process.poll.return_value = 2
+        fake_process.stdout.fileno.return_value = 3
+        fake_process.stdout.closed = True
+        fake_process.stderr.fileno.return_value = 4
+        fake_process.stderr.closed = True
+        runner.process = fake_process
+
+        with patch.object(runner, "_log"):
+            runner._check_process()
+
+        runner._on_complete.assert_called_once_with(cancelled=False, rc=2)
+
+
 class TestHistoryEntry(unittest.TestCase):
     """History entries record the session log path."""
 

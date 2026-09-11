@@ -547,6 +547,41 @@ class TestBuildCreatePoolCommand(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_create_pool_command("tank", "draid", ["/dev/disk/by-id/ata-X"])
 
+    def test_raid10_emits_consecutive_mirror_pairs(self):
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d")]
+        cmd = build_create_pool_command("tank", "raid10", paths)
+        self.assertEqual(
+            cmd,
+            [
+                "zpool", "create", "tank",
+                "mirror", paths[0], paths[1],
+                "mirror", paths[2], paths[3],
+            ],
+        )
+
+    def test_raid10_preserves_ashift_and_profile_options(self):
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d", "e", "f")]
+        options = [("compression", "zstd")]
+        cmd = build_create_pool_command(
+            "tank", "raid10", paths, ashift=12, options=options
+        )
+        self.assertEqual(
+            cmd,
+            [
+                "zpool", "create", "-o", "ashift=12", "-O", "compression=zstd", "tank",
+                "mirror", paths[0], paths[1],
+                "mirror", paths[2], paths[3],
+                "mirror", paths[4], paths[5],
+            ],
+        )
+
+    def test_raid10_rejects_below_minimum_and_odd_counts(self):
+        for disks in (2, 3, 5):
+            paths = [f"/dev/disk/by-id/ata-{d}" for d in "abcdef"[:disks]]
+            with self.subTest(disks=disks):
+                with self.assertRaises(ValueError):
+                    build_create_pool_command("tank", "raid10", paths)
+
     def test_rejects_too_few_disks(self):
         paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d")]
         with self.assertRaises(ValueError):
@@ -672,6 +707,13 @@ class TestBuildAddVdevCommand(unittest.TestCase):
     def test_rejects_unknown_kind(self):
         with self.assertRaises(ValueError):
             build_add_vdev_command("tank", "stripe", ["/dev/disk/by-id/ata-X"], kind="dedup")
+
+    def test_raid10_rejected_for_vdev_add(self):
+        # RAID10 is create-wizard only; an existing pool grows toward it one
+        # mirror vdev at a time, so `zpool add` must not accept it.
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d")]
+        with self.assertRaises(ValueError):
+            build_add_vdev_command("tank", "raid10", paths)
 
     def test_rejects_mirror_cache_vdev(self):
         paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]

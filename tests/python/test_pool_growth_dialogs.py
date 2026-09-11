@@ -170,10 +170,10 @@ class FakeDatasetRunner:
         self.running = True
         self._on_complete = on_complete
 
-    def finish(self, cancelled=False):
+    def finish(self, cancelled=False, rc=0):
         self.running = False
         if self._on_complete:
-            self._on_complete(cancelled=cancelled)
+            self._on_complete(cancelled=cancelled, rc=rc)
 
 
 def _make_app(disks=None, topologies=None):
@@ -567,6 +567,33 @@ class TestDialogFlow(unittest.TestCase):
         app._disks_inventory_cache.invalidate.assert_called_once()
         self.assertTrue(app._importable_pool_cache.invalidate.called)
 
+    def test_happy_path_adds_stripe_vdev_single_disk(self):
+        """Stripe-grow path: one disk + stripe topology adds a new top-level
+        stripe vdev with no topology keyword (`zpool add pool1 <disk>`)."""
+        pgd = _import_dialogs()
+        app = _make_app(disks=[_disk("/dev/sdc")])
+        driver = _AddVdevDriver(
+            pgd,
+            [
+                lambda state: (
+                    _select_all(state),
+                    setattr(state, "topology", "stripe"),
+                    _confirm(state),
+                    CONFIRM,
+                )[3],
+            ],
+        )
+        with _handler_session(pgd, app, driver) as mock_zlm:
+            self.assertEqual(len(app.dataset_runner.steps), 1)
+            step = app.dataset_runner.steps[0]
+            self.assertEqual(
+                step.command, _expected_add_command(topology="stripe", ids=("sdc",))
+            )
+            self.assertEqual(step.description, "Add vdev to pool pool1")
+            mock_zlm.acquire.assert_called_once_with("pool1", "w", "Add vdev to pool1")
+            app.dataset_runner.finish()
+            mock_zlm.release.assert_called_once_with("/lock/pool1")
+
     def test_happy_path_cancelled_logs_info(self):
         pgd = _import_dialogs()
         app = _make_app()
@@ -578,6 +605,22 @@ class TestDialogFlow(unittest.TestCase):
             app.dataset_runner.finish(cancelled=True)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
         self.assertTrue(any("cancelled" in line for line in logs), logs)
+
+    def test_failed_step_logs_failed_and_skips_success_note(self):
+        pgd = _import_dialogs()
+        app = _make_app()
+        driver = _AddVdevDriver(
+            pgd,
+            [lambda state: (_select_all(state), _confirm(state), CONFIRM)[2]],
+        )
+        with _handler_session(pgd, app, driver) as mock_zlm, capture_logs() as logs:
+            app.dataset_runner.finish(cancelled=False, rc=1)
+            mock_zlm.release.assert_called_once_with("/lock/pool1")
+        self.assertTrue(
+            any("Add vdev failed for pool 'pool1' (rc=1)" in line for line in logs),
+            logs,
+        )
+        self.assertFalse(any("Added vdev to pool" in line for line in logs), logs)
 
     def test_typed_mismatch_blocks_confirm(self):
         pgd = _import_dialogs()
@@ -1178,6 +1221,18 @@ class TestAttachPureHelpers(unittest.TestCase):
         state = _attach_state(pgd, topologies={"pool1": stripe}, target=stripe.children[0])
         warnings = pgd._attach_warnings(state)
         self.assertTrue(any("converts the stripe" in w for w in warnings), warnings)
+
+    def test_warnings_stripe_hint_points_to_add_data_vdev(self):
+        """Attaching to a stripe member always mirrors it; the hint names the
+        capacity-growth path (a new top-level stripe vdev via Add Data Vdev)."""
+        pgd = _import_dialogs()
+        stripe = _stripe_topology()
+        state = _attach_state(pgd, topologies={"pool1": stripe}, target=stripe.children[0])
+        warnings = pgd._attach_warnings(state)
+        self.assertTrue(
+            any("Add Data Vdev with the stripe topology" in w for w in warnings), warnings
+        )
+        self.assertTrue(any("top-level stripe vdev" in w for w in warnings), warnings)
 
     def test_warnings_mirror_grow_counts_members(self):
         pgd = _import_dialogs()

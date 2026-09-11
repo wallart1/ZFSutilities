@@ -68,17 +68,53 @@ class FakeListStore:
 
 
 class FakeTreeSelection:
-    """TreeSelection stand-in that reports a configurable path list."""
+    """TreeSelection stand-in that reports a configurable path list.
+
+    Mirrors real GTK behavior: paths that no longer resolve to a row in the
+    model (e.g. after the store was cleared) are dropped.
+    """
 
     def __init__(self, model, paths=None):
         self.model = model
         self.paths = paths or []
 
     def get_selected_rows(self):
+        rows = getattr(self.model, "rows", None)
+        if isinstance(rows, list):
+            self.paths = [p for p in self.paths if isinstance(p, int) and p < len(rows)]
         return (self.model, self.paths)
 
     def select_path(self, path):
         pass
+
+    def select_iter(self, it):
+        index = it.index if hasattr(it, "index") else it
+        if index not in self.paths:
+            self.paths.append(index)
+
+    def unselect_all(self):
+        self.paths = []
+
+
+class FakeAdjustment:
+    """Gtk.Adjustment stand-in for scroll-position tests."""
+
+    def __init__(self, value=0.0, upper=0.0, page_size=0.0):
+        self._value = value
+        self._upper = upper
+        self._page_size = page_size
+
+    def get_value(self):
+        return self._value
+
+    def set_value(self, value):
+        self._value = value
+
+    def get_upper(self):
+        return self._upper
+
+    def get_page_size(self):
+        return self._page_size
 
 
 class FakeTreeView:
@@ -87,9 +123,13 @@ class FakeTreeView:
     def __init__(self, model=None, paths=None):
         self.model = model
         self._selection = FakeTreeSelection(model, paths)
+        self._vadjustment = None
 
     def get_selection(self):
         return self._selection
+
+    def get_vadjustment(self):
+        return self._vadjustment
 
 
 class FakeComboBoxText:
@@ -124,6 +164,64 @@ class FakeComboBoxText:
         self._handlers.append(lambda cb: handler(cb, *args))
 
 
+class FakePickerListStore:
+    """ListStore stand-in for the Apply Profile picker; keyed by row index."""
+
+    def __init__(self, *types):
+        self.types = types
+        self.rows = []
+
+    def append(self, row):
+        self.rows.append(list(row))
+
+    def get_value(self, it, col):
+        return self.rows[it][col]
+
+
+class FakeSingleSelection:
+    """Single-selection TreeSelection stand-in driven by row index."""
+
+    def __init__(self, model):
+        self.model = model
+        self.selected = None
+        self.mode = None
+        self._handlers = []
+
+    def set_mode(self, mode):
+        self.mode = mode
+
+    def get_selected(self):
+        if self.selected is None:
+            return (self.model, None)
+        return (self.model, self.selected)
+
+    def select_path(self, path):
+        self.selected = path
+        for handler in self._handlers:
+            handler()
+
+    def connect(self, signal, handler):
+        self._handlers.append(handler)
+
+
+class FakePickerTreeView:
+    """TreeView stand-in whose selection is a FakeSingleSelection."""
+
+    def __init__(self, model=None):
+        self.model = model
+        self._selection = FakeSingleSelection(model)
+        self.columns = []
+
+    def set_grid_lines(self, *_args):
+        pass
+
+    def get_selection(self):
+        return self._selection
+
+    def append_column(self, col):
+        self.columns.append(col)
+
+
 class FakeDatasetRunner:
     """BackupRunner stand-in for dataset action tests."""
 
@@ -139,10 +237,10 @@ class FakeDatasetRunner:
         self.running = True
         self._on_complete = on_complete
 
-    def finish(self, cancelled=False):
+    def finish(self, cancelled=False, rc=0):
         self.running = False
         if self._on_complete:
-            self._on_complete(cancelled=cancelled)
+            self._on_complete(cancelled=cancelled, rc=rc)
 
 
 class _Iter:
@@ -255,7 +353,8 @@ class TestDatasetTuningUI(unittest.TestCase):
     def test_dataset_tuning_store_columns_defined(self):
         dp = _import_disks_page()
         self.assertEqual(dp.COL_DS_NAME, 0)
-        self.assertEqual(dp.COL_DS_PROFILE_MATCH, 10)
+        self.assertEqual(dp.COL_DS_USED, 2)
+        self.assertEqual(dp.COL_DS_PROFILE_MATCH, 11)
 
     def test_refresh_loads_datasets_and_profile_match(self):
         dp = _import_disks_page()
@@ -287,6 +386,7 @@ class TestDatasetTuningUI(unittest.TestCase):
         row = app.disks_dataset_store.rows[0]
         self.assertEqual(row[dp.COL_DS_NAME], "pool1/data")
         self.assertEqual(row[dp.COL_DS_TYPE], "filesystem")
+        self.assertEqual(row[dp.COL_DS_USED], "10G")
         self.assertEqual(row[dp.COL_DS_COMPRESSION], "lz4")
         self.assertEqual(row[dp.COL_DS_PROFILE_MATCH], "general")
 
@@ -388,6 +488,102 @@ class TestDatasetTuningUI(unittest.TestCase):
         self.assertNotIn("ashift", requested)
 
 
+class TestDatasetViewStateRestore(unittest.TestCase):
+    """Selection and scroll restoration across dataset-view repopulation."""
+
+    def _repopulate_app(self, dp, datasets, pool="pool1"):
+        app = _make_app(
+            topologies={pool: _topology(pool)},
+            datasets=datasets,
+            properties={"compression": "lz4"},
+        )
+        app._disks_pool_selector._text = pool
+        app._disks_pool_selector._items = [pool]
+        return app
+
+    def test_repopulate_restores_selection_by_name(self):
+        dp = _import_disks_page()
+        app = self._repopulate_app(
+            dp,
+            [_dataset_row("pool1/a", "filesystem"), _dataset_row("pool1/b", "filesystem")],
+        )
+        dp._repopulate_dataset_tuning_for_selected_pool(app)
+        # User selects "pool1/b" (row 1).
+        app.disks_dataset_view._selection.paths = [1]
+        # Refresh returns the same datasets in a different order.
+        app.ctx.zfs_repository.list_datasets.return_value = [
+            _dataset_row("pool1/b", "filesystem"),
+            _dataset_row("pool1/a", "filesystem"),
+        ]
+
+        dp._repopulate_dataset_tuning_for_selected_pool(app)
+
+        selected = app.disks_dataset_view.get_selection().get_selected_rows()[1]
+        self.assertEqual(selected, [0])
+        self.assertEqual(app.disks_dataset_store.rows[0][dp.COL_DS_NAME], "pool1/b")
+
+    def test_repopulate_restores_scroll_position(self):
+        dp = _import_disks_page()
+        app = self._repopulate_app(dp, [_dataset_row("pool1/a", "filesystem")])
+        adj = FakeAdjustment(value=120.0, upper=1000.0, page_size=100.0)
+        app.disks_dataset_view._vadjustment = adj
+        dp._repopulate_dataset_tuning_for_selected_pool(app)
+
+        with patch.object(dp, "GLib") as mock_glib:
+            mock_glib.idle_add = lambda fn: fn()
+            dp._repopulate_dataset_tuning_for_selected_pool(app)
+
+        self.assertEqual(adj.get_value(), 120.0)
+
+    def test_repopulate_clamps_scroll_position(self):
+        dp = _import_disks_page()
+        app = self._repopulate_app(dp, [_dataset_row("pool1/a", "filesystem")])
+        adj = FakeAdjustment(value=500.0, upper=200.0, page_size=100.0)
+        app.disks_dataset_view._vadjustment = adj
+        dp._repopulate_dataset_tuning_for_selected_pool(app)
+
+        with patch.object(dp, "GLib") as mock_glib:
+            mock_glib.idle_add = lambda fn: fn()
+            dp._repopulate_dataset_tuning_for_selected_pool(app)
+
+        self.assertEqual(adj.get_value(), 100.0)
+
+    def test_repopulate_after_pool_switch_starts_fresh(self):
+        dp = _import_disks_page()
+        rows_by_pool = {
+            "pool1": [_dataset_row("pool1/a", "filesystem")],
+            "pool2": [_dataset_row("pool2/a", "filesystem")],
+        }
+        app = _make_app(
+            topologies={"pool1": _topology("pool1"), "pool2": _topology("pool2")},
+            properties={"compression": "lz4"},
+        )
+        app.ctx.zfs_repository.list_datasets.side_effect = (
+            lambda pool=None: rows_by_pool.get(pool, [])
+        )
+        app._disks_pool_selector._text = "pool1"
+        app._disks_pool_selector._items = ["pool1", "pool2"]
+        adj = FakeAdjustment(value=80.0, upper=1000.0, page_size=100.0)
+        app.disks_dataset_view._vadjustment = adj
+
+        dp._repopulate_dataset_tuning_for_selected_pool(app)
+        app.disks_dataset_view._selection.paths = [0]
+        adj._value = 40.0
+
+        # Switch to pool2: the previous pool's selection/scroll must not return.
+        app._disks_pool_selector._text = "pool2"
+        with patch.object(dp, "GLib") as mock_glib:
+            mock_glib.idle_add = lambda fn: fn()
+            dp._repopulate_dataset_tuning_for_selected_pool(app)
+
+        selected_paths = app.disks_dataset_view.get_selection().get_selected_rows()[1]
+        selected_names = {
+            app.disks_dataset_store.rows[p][dp.COL_DS_NAME] for p in selected_paths
+        }
+        self.assertNotIn("pool1/a", selected_names)
+        self.assertEqual(adj.get_value(), 40.0)
+
+
 class TestPoolHelpers(unittest.TestCase):
     """Standalone helper functions in disks_page."""
 
@@ -479,6 +675,7 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         dp.update_disks_button_sensitivity(app)
         self.assertFalse(app._disks_apply_profile_btn.set_sensitive.call_args[0][0])
 
+        app.disks_dataset_store.append(["pool1/data", "filesystem"] + [""] * 10)
         app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
         dp.update_disks_button_sensitivity(app)
         self.assertTrue(app._disks_apply_profile_btn.set_sensitive.call_args[0][0])
@@ -487,6 +684,7 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         dp = _import_disks_page()
         app = _make_app()
         app._disks_rewrite_data_btn = MagicMock()
+        app.disks_dataset_store.append(["pool1/data", "filesystem"] + [""] * 10)
         app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
 
         app.ctx.zfs_caps.supports.return_value = False
@@ -499,6 +697,33 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         dp.update_disks_button_sensitivity(app)
         self.assertTrue(app._disks_rewrite_data_btn.set_sensitive.call_args[0][0])
 
+    def test_update_sensitivity_rewrite_data_insensitive_for_volume(self):
+        dp = _import_disks_page()
+        app = _make_app()
+        app._disks_rewrite_data_btn = MagicMock()
+        app.ctx.zfs_caps.supports.return_value = True
+        app.disks_dataset_store.append(["pool1/vol0", "volume"] + [""] * 10)
+        app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
+
+        dp.update_disks_button_sensitivity(app)
+        self.assertFalse(app._disks_rewrite_data_btn.set_sensitive.call_args[0][0])
+        app._disks_rewrite_data_btn.set_tooltip_text.assert_called_with(
+            "Rewrite Data supports filesystem datasets only"
+        )
+
+    def test_update_sensitivity_rewrite_data_multiple_filesystems(self):
+        dp = _import_disks_page()
+        app = _make_app()
+        app._disks_rewrite_data_btn = MagicMock()
+        app.ctx.zfs_caps.supports.return_value = True
+        app.disks_dataset_store.append(["pool1/data", "filesystem"] + [""] * 10)
+        app.disks_dataset_store.append(["pool1/data2", "filesystem"] + [""] * 10)
+        app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0, 1])
+
+        dp.update_disks_button_sensitivity(app)
+        self.assertTrue(app._disks_rewrite_data_btn.set_sensitive.call_args[0][0])
+        app._disks_rewrite_data_btn.set_tooltip_text.assert_called_with("")
+
 
 class TestApplyProfileDialog(unittest.TestCase):
     """Apply Profile dialog preview and warnings."""
@@ -506,6 +731,7 @@ class TestApplyProfileDialog(unittest.TestCase):
     def _profiles(self):
         return {
             "general": {
+                "description": "General-purpose mixed files.",
                 "applies_to": ["filesystem", "volume"],
                 "properties": {
                     "recordsize": "128K",
@@ -520,6 +746,7 @@ class TestApplyProfileDialog(unittest.TestCase):
                 "notes": "General purpose.",
             },
             "scratch": {
+                "description": "Temporary data that can be lost on power loss.",
                 "applies_to": ["filesystem", "volume"],
                 "properties": {
                     "compression": "lz4",
@@ -528,6 +755,7 @@ class TestApplyProfileDialog(unittest.TestCase):
                 "notes": "Can lose data on power loss.",
             },
             "small-files": {
+                "description": "Many small files; benefits from a special vdev.",
                 "applies_to": ["filesystem"],
                 "properties": {
                     "recordsize": "16K",
@@ -547,6 +775,32 @@ class TestApplyProfileDialog(unittest.TestCase):
         app.config["workload_profiles"] = self._profiles()
         return app
 
+    def _run_dialog(self, dp, app, datasets, responses):
+        """Run the dialog with picker fakes; return (result, dialog, stores, views)."""
+        stores = []
+        views = []
+
+        def _make_store(*types):
+            store = FakePickerListStore(*types)
+            stores.append(store)
+            return store
+
+        def _make_view(model=None):
+            view = FakePickerTreeView(model)
+            views.append(view)
+            return view
+
+        with (
+            patch.object(dp, "create_dialog") as mock_create_dialog,
+            patch.object(dp.Gtk, "ListStore", side_effect=_make_store),
+            patch.object(dp.Gtk, "TreeView", side_effect=_make_view),
+        ):
+            mock_dialog = MagicMock()
+            mock_dialog.run.side_effect = responses
+            mock_create_dialog.return_value = mock_dialog
+            result = dp.show_apply_profile_dialog(app, datasets)
+        return result, mock_dialog, stores, views
+
     def test_apply_profile_dialog_builds_preview(self):
         dp = _import_disks_page()
 
@@ -564,55 +818,110 @@ class TestApplyProfileDialog(unittest.TestCase):
         }
         app = self._dialog_app(datasets, props)
 
-        with patch.object(dp, "create_dialog") as mock_create_dialog:
-            mock_dialog = MagicMock()
-            mock_dialog.run.return_value = dp.Gtk.ResponseType.CANCEL
-            mock_create_dialog.return_value = mock_dialog
+        _result, mock_dialog, _stores, views = self._run_dialog(
+            dp, app, datasets, [dp.Gtk.ResponseType.CANCEL]
+        )
 
-            dp.show_apply_profile_dialog(app, datasets)
+        content = mock_dialog.get_content_area.return_value
+        # The last packed widget is the preview scrolled window.
+        self.assertGreaterEqual(content.pack_start.call_count, 2)
+        self.assertTrue(views, "Expected the profile picker treeview to be built")
 
-            content = mock_dialog.get_content_area.return_value
-            # The first packed widget is the warning label; the last is the preview scrolled window.
-            self.assertGreaterEqual(content.pack_start.call_count, 2)
+    def test_apply_profile_picker_lists_profiles_with_descriptions(self):
+        dp = _import_disks_page()
+
+        datasets = [{"name": "pool1/data", "type": "filesystem", "profile_match": "custom"}]
+        app = self._dialog_app(datasets, {})
+
+        _result, _dialog, stores, _views = self._run_dialog(
+            dp, app, datasets, [dp.Gtk.ResponseType.CANCEL]
+        )
+
+        self.assertEqual(
+            stores[0].rows,
+            [
+                ["general", "filesystem, volume", "General-purpose mixed files."],
+                ["scratch", "filesystem, volume", "Temporary data that can be lost on power loss."],
+                ["small-files", "filesystem", "Many small files; benefits from a special vdev."],
+            ],
+        )
+
+    def test_apply_profile_picker_preselects_first_dataset_match(self):
+        dp = _import_disks_page()
+
+        datasets = [{"name": "pool1/data", "type": "filesystem", "profile_match": "small-files"}]
+        app = self._dialog_app(datasets, {})
+
+        _result, _dialog, _stores, views = self._run_dialog(
+            dp, app, datasets, [dp.Gtk.ResponseType.CANCEL]
+        )
+
+        # "small-files" is the third profile in the picker.
+        self.assertEqual(views[0].get_selection().selected, 2)
+
+    def test_apply_profile_picker_uses_single_selection(self):
+        dp = _import_disks_page()
+
+        datasets = [{"name": "pool1/data", "type": "filesystem", "profile_match": "custom"}]
+        app = self._dialog_app(datasets, {})
+
+        _result, _dialog, _stores, views = self._run_dialog(
+            dp, app, datasets, [dp.Gtk.ResponseType.CANCEL]
+        )
+
+        self.assertEqual(views[0].get_selection().mode, dp.Gtk.SelectionMode.SINGLE)
+
+    def test_apply_profile_picker_description_renderer_wraps(self):
+        dp = _import_disks_page()
+        renderers = []
+
+        def _make_renderer(*_args, **_kwargs):
+            renderer = MagicMock()
+            renderers.append(renderer)
+            return renderer
+
+        datasets = [{"name": "pool1/data", "type": "filesystem", "profile_match": "custom"}]
+        app = self._dialog_app(datasets, {})
+
+        with patch.object(dp.Gtk, "CellRendererText", side_effect=_make_renderer):
+            self._run_dialog(dp, app, datasets, [dp.Gtk.ResponseType.CANCEL])
+
+        properties = [
+            call.args for renderer in renderers for call in renderer.set_property.call_args_list
+        ]
+        self.assertIn(("wrap-mode", dp.Gtk.WrapMode.WORD), properties)
+        self.assertIn(("wrap-width", 350), properties)
 
     def test_apply_profile_warns_for_scratch(self):
         dp = _import_disks_page()
 
         datasets = [{"name": "pool1/data", "type": "filesystem", "profile_match": "scratch"}]
         app = self._dialog_app(datasets, {})
-        app.config["workload_profiles"] = self._profiles()
 
-        with patch.object(dp, "create_dialog") as mock_create_dialog:
-            mock_dialog = MagicMock()
-            mock_dialog.run.return_value = dp.Gtk.ResponseType.CANCEL
-            mock_create_dialog.return_value = mock_dialog
+        _result, mock_dialog, _stores, _views = self._run_dialog(
+            dp, app, datasets, [dp.Gtk.ResponseType.CANCEL]
+        )
 
-            dp.show_apply_profile_dialog(app, datasets)
-
-            content = mock_dialog.get_content_area.return_value
-            warning_label = content.pack_start.call_args_list[0][0][0]
-            texts = [str(call.args[0]) for call in warning_label.set_text.call_args_list]
-            self.assertTrue(any("Can lose data" in text for text in texts), texts)
+        content = mock_dialog.get_content_area.return_value
+        warning_label = content.pack_start.call_args_list[0][0][0]
+        texts = [str(call.args[0]) for call in warning_label.set_text.call_args_list]
+        self.assertTrue(any("Can lose data" in text for text in texts), texts)
 
     def test_apply_profile_warns_for_small_files_without_special_vdev(self):
         dp = _import_disks_page()
 
         datasets = [{"name": "pool1/data", "type": "filesystem", "profile_match": "small-files"}]
         app = self._dialog_app(datasets, {})
-        app.config["workload_profiles"] = self._profiles()
         # Default topology has no special vdev.
 
-        with patch.object(dp, "create_dialog") as mock_create_dialog:
-            mock_dialog = MagicMock()
-            mock_dialog.run.return_value = dp.Gtk.ResponseType.CANCEL
-            mock_create_dialog.return_value = mock_dialog
+        _result, mock_dialog, _stores, _views = self._run_dialog(
+            dp, app, datasets, [dp.Gtk.ResponseType.CANCEL]
+        )
 
-            dp.show_apply_profile_dialog(app, datasets)
-
-            content = mock_dialog.get_content_area.return_value
-            warning_label = content.pack_start.call_args_list[0][0][0]
-            texts = [str(call.args[0]) for call in warning_label.set_text.call_args_list]
-            self.assertTrue(any("special_small_blocks" in text for text in texts), texts)
+        content = mock_dialog.get_content_area.return_value
+        warning_label = content.pack_start.call_args_list[0][0][0]
+        texts = [str(call.args[0]) for call in warning_label.set_text.call_args_list]
+        self.assertTrue(any("special_small_blocks" in text for text in texts), texts)
 
     def test_apply_profile_dialog_returns_cancel_when_no_profiles(self):
         dp = _import_disks_page()
@@ -634,36 +943,21 @@ class TestApplyProfileDialog(unittest.TestCase):
         dp = _import_disks_page()
         datasets = [{"name": "pool1/data", "type": "filesystem", "profile_match": "scratch"}]
         app = self._dialog_app(datasets, {})
-        app.config["workload_profiles"] = self._profiles()
 
-        with (
-            patch.object(dp, "create_dialog") as mock_create_dialog,
-            patch.object(dp.Gtk, "CheckButton") as mock_check_button,
-            patch.object(dp.Gtk, "ComboBoxText") as mock_combo,
-        ):
-            confirm_states = [False, True]
+        confirm_states = [False, True]
 
-            def _make_check(*_args, **_kwargs):
-                btn = MagicMock()
-                btn.get_active.side_effect = lambda: confirm_states.pop(0)
-                return btn
+        def _make_check(*_args, **_kwargs):
+            btn = MagicMock()
+            btn.get_active.side_effect = lambda: confirm_states.pop(0)
+            return btn
 
-            def _make_combo(*_args, **_kwargs):
-                combo = MagicMock()
-                combo.get_active_text.return_value = "scratch"
-                return combo
+        with patch.object(dp.Gtk, "CheckButton", side_effect=_make_check):
+            _result, mock_dialog, _stores, _views = self._run_dialog(
+                dp, app, datasets, [dp.Gtk.ResponseType.OK, dp.Gtk.ResponseType.OK]
+            )
 
-            mock_check_button.side_effect = _make_check
-            mock_combo.side_effect = _make_combo
-
-            mock_dialog = MagicMock()
-            mock_dialog.run.return_value = dp.Gtk.ResponseType.OK
-            mock_create_dialog.return_value = mock_dialog
-
-            dp.show_apply_profile_dialog(app, datasets)
-
-            # The dialog should have been run twice: once without confirm, once with.
-            self.assertEqual(mock_dialog.run.call_count, 2)
+        # The dialog should have been run twice: once without confirm, once with.
+        self.assertEqual(mock_dialog.run.call_count, 2)
 
 
 class TestApplyProfileHandler(unittest.TestCase):
@@ -715,7 +1009,7 @@ class TestApplyProfileHandler(unittest.TestCase):
         app.config["workload_profiles"] = self._profiles()
         app.disks_dataset_store = FakeListStoreIterable(
             [
-                ["pool1/data", "filesystem", "", "lz4", "", "", "standard", "", "", "", "custom"],
+                ["pool1/data", "filesystem", "", "", "lz4", "", "", "standard", "", "", "", "custom"],
             ]
         )
         app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
@@ -766,7 +1060,7 @@ class TestApplyProfileHandler(unittest.TestCase):
         app.config["workload_profiles"] = self._profiles()
         app.disks_dataset_store = FakeListStoreIterable(
             [
-                ["pool1/data", "filesystem", "", "zstd", "", "", "standard", "", "", "", "general"],
+                ["pool1/data", "filesystem", "", "", "zstd", "", "", "standard", "", "", "", "general"],
             ]
         )
         app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
@@ -791,7 +1085,7 @@ class TestApplyProfileHandler(unittest.TestCase):
         app.config["workload_profiles"] = self._profiles()
         app.disks_dataset_store = FakeListStoreIterable(
             [
-                ["pool1/data", "filesystem", "", "lz4", "", "", "standard", "", "", "", "custom"],
+                ["pool1/data", "filesystem", "", "", "lz4", "", "", "standard", "", "", "", "custom"],
             ]
         )
         app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
@@ -956,8 +1250,54 @@ def _make_tree_view(store, paths):
     return view
 
 
+class TestBuildRewriteCommand(unittest.TestCase):
+    """_build_rewrite_command pins the zfs rewrite flags and mount handling."""
+
+    def test_rewrite_flags_and_mountpoint(self):
+        dp = _import_disks_page()
+        script = dp._build_rewrite_command("pool1/data", "/pool1/data")
+        self.assertIn("zfs rewrite -P -r -x -v /pool1/data", script)
+
+    def test_rewrite_flags_adjacent_and_mount_quoted(self):
+        # -P -r -x -v stay adjacent so the cross-mount guard (-x) cannot be
+        # dropped accidentally; paths with spaces must be quoted.
+        dp = _import_disks_page()
+        script = dp._build_rewrite_command("tank/a b", "/mnt/a b")
+        self.assertIn("zfs rewrite -P -r -x -v '/mnt/a b'", script)
+        self.assertIn("zfs get -H -o value mounted 'tank/a b'", script)
+
+    def test_mounts_only_when_not_already_mounted(self):
+        dp = _import_disks_page()
+        script = dp._build_rewrite_command("pool1/data", "/pool1/data")
+        self.assertIn('if [[ "$mounted_before" != "yes" ]]', script)
+        self.assertIn("zfs mount pool1/data", script)
+
+    def test_unmounts_only_when_it_mounted_and_returns_rewrite_rc(self):
+        dp = _import_disks_page()
+        script = dp._build_rewrite_command("pool1/data", "/pool1/data")
+        self.assertIn('if [[ "$mounted_by_us" == "1" ]]', script)
+        self.assertIn("zfs unmount pool1/data", script)
+        self.assertIn("exit $rewrite_rc", script)
+
+
 class TestRewriteData(unittest.TestCase):
     """Rewrite Data handler tests."""
+
+    def _select(self, app, name, ds_type):
+        app.disks_dataset_store = FakeListStoreIterable(
+            [[name, ds_type] + [""] * 10]
+        )
+        app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
+
+    def _supported_app(self, name="pool1/data", ds_type="filesystem"):
+        app = _make_app(datasets=[_dataset_row(name, ds_type)])
+        app.ctx.zfs_caps.supports.return_value = True
+        app.ctx.zfs_caps.supports_pool_feature.return_value = True
+        app.ctx.zfs_repository.get_properties.return_value = {
+            "mountpoint": f"/{name}",
+        }
+        self._select(app, name, ds_type)
+        return app
 
     def test_rewrite_data_gated_without_selection(self):
         dp = _import_disks_page()
@@ -969,21 +1309,13 @@ class TestRewriteData(unittest.TestCase):
 
         self.assertFalse(app.dataset_runner.running)
         self.assertTrue(
-            any("Select exactly one dataset" in line for line in logs),
+            any("Select at least one dataset" in line for line in logs),
             logs,
         )
 
     def test_rewrite_data_runs_runner_when_supported(self):
         dp = _import_disks_page()
-
-        app = _make_app(datasets=[_dataset_row("pool1/data", "filesystem")])
-        app.ctx.zfs_caps.supports.return_value = True
-        app.disks_dataset_store = FakeListStoreIterable(
-            [
-                ["pool1/data", "filesystem", "", "", "", "", "", "", "", "", ""],
-            ]
-        )
-        app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
+        app = self._supported_app()
 
         with (
             patch.object(
@@ -994,34 +1326,23 @@ class TestRewriteData(unittest.TestCase):
             patch.object(dp, "zlm") as mock_zlm,
             patch("feature_config.save_config"),
         ):
-            mock_zlm.acquire.return_value = "/lock/rewrite"
+            mock_zlm.acquire_multiple.return_value = ["/lock/rewrite"]
 
             with capture_logs():
                 dp.on_disks_rewrite_data(app)
 
-            mock_zlm.acquire.assert_called_once_with(
-                "pool1/data", "w", "Rewrite data on pool1/data"
-            )
+            mock_zlm.acquire_multiple.assert_called_once_with("w", ["pool1/data"])
             self.assertEqual(len(app.dataset_runner.steps), 1)
-            self.assertEqual(
-                app.dataset_runner.steps[0].command,
-                ["bash", "-c", "zfs rewrite pool1/data"],
-            )
+            command = app.dataset_runner.steps[0].command
+            self.assertEqual(command[0:2], ["bash", "-c"])
+            self.assertIn("zfs rewrite -P -r -x -v /pool1/data", command[2])
 
             app.dataset_runner.finish(cancelled=False)
             mock_zlm.release.assert_called_once_with("/lock/rewrite")
 
     def test_rewrite_data_releases_lock_on_cancel(self):
         dp = _import_disks_page()
-
-        app = _make_app(datasets=[_dataset_row("pool1/data", "filesystem")])
-        app.ctx.zfs_caps.supports.return_value = True
-        app.disks_dataset_store = FakeListStoreIterable(
-            [
-                ["pool1/data", "filesystem", "", "", "", "", "", "", "", "", ""],
-            ]
-        )
-        app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
+        app = self._supported_app()
 
         with (
             patch.object(
@@ -1032,7 +1353,7 @@ class TestRewriteData(unittest.TestCase):
             patch.object(dp, "zlm") as mock_zlm,
             patch("feature_config.save_config"),
         ):
-            mock_zlm.acquire.return_value = "/lock/rewrite"
+            mock_zlm.acquire_multiple.return_value = ["/lock/rewrite"]
 
             with capture_logs() as logs:
                 dp.on_disks_rewrite_data(app)
@@ -1044,17 +1365,64 @@ class TestRewriteData(unittest.TestCase):
                 logs,
             )
 
+    def test_rewrite_data_logs_failed_on_nonzero_rc(self):
+        dp = _import_disks_page()
+        app = self._supported_app()
+
+        with (
+            patch.object(
+                dp.Gtk,
+                "MessageDialog",
+                return_value=MagicMock(run=MagicMock(return_value=dp.Gtk.ResponseType.YES)),
+            ),
+            patch.object(dp, "zlm") as mock_zlm,
+            patch("feature_config.save_config"),
+        ):
+            mock_zlm.acquire_multiple.return_value = ["/lock/rewrite"]
+
+            with capture_logs() as logs:
+                dp.on_disks_rewrite_data(app)
+                app.dataset_runner.finish(cancelled=False, rc=2)
+
+            mock_zlm.release.assert_called_once_with("/lock/rewrite")
+            self.assertTrue(
+                any("Rewrite Data failed for pool1/data (rc=2)" in line for line in logs),
+                logs,
+            )
+            self.assertFalse(
+                any("Rewrite Data complete" in line for line in logs),
+                logs,
+            )
+
+    def test_rewrite_data_logs_complete_on_rc_zero(self):
+        dp = _import_disks_page()
+        app = self._supported_app()
+
+        with (
+            patch.object(
+                dp.Gtk,
+                "MessageDialog",
+                return_value=MagicMock(run=MagicMock(return_value=dp.Gtk.ResponseType.YES)),
+            ),
+            patch.object(dp, "zlm") as mock_zlm,
+            patch("feature_config.save_config"),
+        ):
+            mock_zlm.acquire_multiple.return_value = ["/lock/rewrite"]
+
+            with capture_logs() as logs:
+                dp.on_disks_rewrite_data(app)
+                app.dataset_runner.finish(cancelled=False, rc=0)
+
+            mock_zlm.release.assert_called_once_with("/lock/rewrite")
+            self.assertTrue(
+                any("Rewrite Data complete for pool1/data" in line for line in logs),
+                logs,
+            )
+
     def test_rewrite_data_noop_when_unsupported(self):
         dp = _import_disks_page()
-
-        app = _make_app(datasets=[_dataset_row("pool1/data", "filesystem")])
+        app = self._supported_app()
         app.ctx.zfs_caps.supports.return_value = False
-        app.disks_dataset_store = FakeListStoreIterable(
-            [
-                ["pool1/data", "filesystem", "", "", "", "", "", "", "", "", ""],
-            ]
-        )
-        app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
 
         with capture_logs() as logs:
             dp.on_disks_rewrite_data(app)
@@ -1064,6 +1432,138 @@ class TestRewriteData(unittest.TestCase):
             any("Rewrite Data requires OpenZFS 2.3+" in line for line in logs),
             logs,
         )
+
+    def test_rewrite_data_rejects_volume(self):
+        dp = _import_disks_page()
+        app = self._supported_app("pool1/vol0", "volume")
+
+        with capture_logs() as logs:
+            dp.on_disks_rewrite_data(app)
+
+        self.assertFalse(app.dataset_runner.running)
+        self.assertTrue(
+            any("filesystem datasets only" in line for line in logs),
+            logs,
+        )
+
+    def test_rewrite_data_rejects_unmountable_mountpoint(self):
+        dp = _import_disks_page()
+        app = self._supported_app()
+        app.ctx.zfs_repository.get_properties.return_value = {"mountpoint": "none"}
+
+        with capture_logs() as logs:
+            dp.on_disks_rewrite_data(app)
+
+        self.assertFalse(app.dataset_runner.running)
+        self.assertTrue(
+            any("mountpoint is 'none'" in line for line in logs),
+            logs,
+        )
+
+    def test_rewrite_data_requires_physical_rewrite_feature(self):
+        dp = _import_disks_page()
+        app = self._supported_app()
+        app.ctx.zfs_caps.supports_pool_feature.return_value = False
+
+        with capture_logs() as logs:
+            dp.on_disks_rewrite_data(app)
+
+        self.assertFalse(app.dataset_runner.running)
+        self.assertTrue(
+            any("physical_rewrite pool feature" in line for line in logs),
+            logs,
+        )
+        app.ctx.zfs_caps.supports_pool_feature.assert_called_once_with(
+            "pool1", "physical_rewrite"
+        )
+
+    def _select_rows(self, app, rows):
+        app.disks_dataset_store = FakeListStoreIterable(
+            [[name, ds_type] + [""] * 10 for name, ds_type in rows]
+        )
+        app.disks_dataset_view = FakeTreeView(
+            app.disks_dataset_store, list(range(len(rows)))
+        )
+
+    def _supported_multi_app(self):
+        app = _make_app(
+            datasets=[
+                _dataset_row("pool1/data", "filesystem"),
+                _dataset_row("pool1/data2", "filesystem"),
+            ]
+        )
+        app.ctx.zfs_caps.supports.return_value = True
+        app.ctx.zfs_caps.supports_pool_feature.return_value = True
+        app.ctx.zfs_repository.get_properties.return_value = {
+            "mountpoint": "/pool1/data",
+        }
+        self._select_rows(
+            app, [("pool1/data", "filesystem"), ("pool1/data2", "filesystem")]
+        )
+        return app
+
+    def test_rewrite_data_multiple_datasets_runs_sequential_steps(self):
+        dp = _import_disks_page()
+        app = self._supported_multi_app()
+
+        with (
+            patch.object(
+                dp.Gtk,
+                "MessageDialog",
+                return_value=MagicMock(run=MagicMock(return_value=dp.Gtk.ResponseType.YES)),
+            ),
+            patch.object(dp, "zlm") as mock_zlm,
+            patch("feature_config.save_config"),
+        ):
+            mock_zlm.acquire_multiple.return_value = ["/lock/1", "/lock/2"]
+
+            with capture_logs():
+                dp.on_disks_rewrite_data(app)
+
+            mock_zlm.acquire_multiple.assert_called_once_with(
+                "w", ["pool1/data", "pool1/data2"]
+            )
+            self.assertEqual(len(app.dataset_runner.steps), 2)
+            first, second = app.dataset_runner.steps
+            self.assertEqual(first.description, "Rewrite data on pool1/data")
+            self.assertEqual(second.description, "Rewrite data on pool1/data2")
+            self.assertIn("zfs rewrite -P -r -x -v /pool1/data", first.command[2])
+
+            app.dataset_runner.finish(cancelled=False)
+            self.assertEqual(mock_zlm.release.call_count, 2)
+            mock_zlm.release.assert_any_call("/lock/1")
+            mock_zlm.release.assert_any_call("/lock/2")
+
+    def test_rewrite_data_rejects_mixed_filesystem_volume_selection(self):
+        dp = _import_disks_page()
+        app = self._supported_multi_app()
+        self._select_rows(
+            app, [("pool1/data", "filesystem"), ("pool1/vol0", "volume")]
+        )
+
+        with patch.object(dp, "zlm") as mock_zlm, capture_logs() as logs:
+            dp.on_disks_rewrite_data(app)
+
+        self.assertFalse(app.dataset_runner.running)
+        mock_zlm.acquire_multiple.assert_not_called()
+        self.assertTrue(
+            any("filesystem datasets only" in line and "pool1/vol0" in line for line in logs),
+            logs,
+        )
+
+    def test_rewrite_data_multiple_datasets_confirmation_lists_names(self):
+        dp = _import_disks_page()
+        app = self._supported_multi_app()
+
+        with patch.object(dp.Gtk, "MessageDialog") as mock_dialog:
+            mock_dialog.return_value.run.return_value = dp.Gtk.ResponseType.NO
+            dp.on_disks_rewrite_data(app)
+
+        kwargs = mock_dialog.call_args.kwargs
+        self.assertIn("2 datasets", kwargs["text"])
+        secondary = mock_dialog.return_value.format_secondary_text.call_args[0][0]
+        self.assertIn("pool1/data", secondary)
+        self.assertIn("pool1/data2", secondary)
 
 
 class TestManageProfilesDialog(unittest.TestCase):

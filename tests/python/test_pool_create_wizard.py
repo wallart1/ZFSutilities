@@ -166,10 +166,10 @@ class FakeDatasetRunner:
         self.running = True
         self._on_complete = on_complete
 
-    def finish(self, cancelled=False):
+    def finish(self, cancelled=False, rc=0):
         self.running = False
         if self._on_complete:
-            self._on_complete(cancelled=cancelled)
+            self._on_complete(cancelled=cancelled, rc=rc)
 
 
 def _make_app(disks=None, topologies=None):
@@ -400,6 +400,38 @@ class TestPureHelpers(unittest.TestCase):
 
         state = _state(pcw, disks=two, topology="mirror")
         self.assertEqual(pcw._topology_problems(state), [])
+
+    def test_topology_problems_raid10_enforce_even_count(self):
+        pcw = _import_wizard()
+        four = [_disk(f"/dev/sd{c}") for c in "abcd"]
+        state = _state(pcw, disks=four, topology="raid10")
+        self.assertEqual(pcw._topology_problems(state), [])
+
+        five = four + [_disk("/dev/sde")]
+        state = _state(pcw, disks=five, topology="raid10")
+        problems = pcw._topology_problems(state)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("even disk count", problems[0])
+
+        two = [_disk("/dev/sda"), _disk("/dev/sdb")]
+        state = _state(pcw, disks=two, topology="raid10")
+        problems = pcw._topology_problems(state)
+        self.assertTrue(any("at least 4 disks" in p for p in problems))
+
+    def test_build_wizard_command_raid10(self):
+        pcw = _import_wizard()
+        four = [_disk(f"/dev/sd{c}") for c in "abcd"]
+        state = _state(pcw, disks=four, topology="raid10", pool_name="tank")
+        cmd = pcw.build_wizard_command(state, {})
+        pairs = [f"/dev/disk/by-id/ata-TESTsd{c}" for c in "abcd"]
+        self.assertEqual(
+            cmd,
+            [
+                "zpool", "create", "tank",
+                "mirror", pairs[0], pairs[1],
+                "mirror", pairs[2], pairs[3],
+            ],
+        )
 
     def test_topology_problems_reject_same_parent_partitions(self):
         pcw = _import_wizard()
@@ -842,6 +874,30 @@ class TestWizardFlow(unittest.TestCase):
             ):
                 app.dataset_runner.finish()
 
+        self.assertEqual(app.known_pools, [])
+
+    def test_failed_create_logs_failed_and_skips_registration_offer(self):
+        pcw = _import_wizard()
+        app = _make_app()
+        driver = _WizardDriver(
+            pcw,
+            [
+                lambda state: (_select_all(state), NEXT)[1],
+                NEXT,
+                lambda state: (_name_pool(state), NEXT)[1],
+                lambda state: (_confirm(state), CREATE)[1],
+            ],
+        )
+        with _wizard_session(pcw, app, driver), capture_logs() as logs:
+            with patch.object(pcw.Gtk, "MessageDialog") as mock_dialog:
+                app.dataset_runner.finish(cancelled=False, rc=1)
+
+        self.assertTrue(
+            any("Create Pool failed for 'newpool' (rc=1)" in line for line in logs),
+            logs,
+        )
+        self.assertFalse(any("Pool 'newpool' created" in line for line in logs), logs)
+        mock_dialog.assert_not_called()
         self.assertEqual(app.known_pools, [])
 
     def test_minimum_disk_validation_blocks_next(self):

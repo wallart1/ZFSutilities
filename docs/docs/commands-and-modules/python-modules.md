@@ -290,6 +290,17 @@ and tests easy to mock.
 | `get_properties(dataset, props)` | Values for a list of ZFS properties; missing properties return `"-"` |
 | `get_all_properties(dataset)` | All ZFS properties for *dataset* |
 | `set_property(dataset, prop, value)` | Set a ZFS property; returns success/failure |
+| `build_create_pool_command()` | Pure `zpool create` argv builder (by-id paths, topology minimums) |
+| `build_add_vdev_command()` | Pure `zpool add` argv builder for data and special/log/cache vdevs |
+| `build_attach_command()` | Pure `zpool attach` argv builder (mirror grow / RAIDZ expansion) |
+| `build_replace_command()` | Pure `zpool replace` argv builder |
+| `build_detach_command()` | Pure `zpool detach` argv builder |
+| `build_recursive_snapshot_command()` | Pure `zfs snapshot -r` argv builder for migration snapshots |
+| `build_migration_send_receive_command()` | Pure `bash -c` argv running `zfs send -Rw … \| zfs receive -u -F …` under `pipefail` |
+| `build_pool_export_command()` | Pure `zpool export` argv builder |
+| `build_pool_import_rename_command()` | Pure `zpool import <temp> <name>` argv builder (cutover rename) |
+| `build_pool_destroy_command()` | Pure `zpool destroy` argv builder (holding-mode migration only) |
+| `build_destroy_dataset_command()` | Pure `zfs destroy -r` argv builder for dropping migration copies |
 
 **Called modules / imported helpers:** none (uses `subprocess` directly).
 
@@ -345,7 +356,7 @@ warns when the two differ.
 | Class | Purpose |
 | ----- | ------- |
 | `ZfsVersion` | Parsed `(major, minor)` tuples for userland and kmod |
-| `ZfsCapabilities` | `supports(name)`, `requires(name)`, and pool-feature cross-checks |
+| `ZfsCapabilities` | `supports(name)`, `requires(name)`, and `supports_pool_feature(pool, feature)` pool-feature cross-checks (whitespace-column parsing of `zpool get all` output) |
 
 **Key constants:**
 
@@ -442,6 +453,73 @@ topology minimums.
 
 ---
 
+### `pool_migrate.py`
+
+Pure-logic helpers for copy-based pool migration (the Disks-page Migrate Pool
+wizard's logic half). No GTK and no direct subprocess calls; command
+construction is delegated to the migration argv builders in
+`zfs_repository`. Migration exists because ZFS cannot change a vdev's
+redundancy class in place (stripe to raidz, mirror to raidz, width or ashift
+changes): snapshot the source pool, replicate every top-level dataset to a
+destination (a new pool on new disks, or an existing holding pool with enough
+free space), verify the copy, then cut over by exporting the source pool and
+re-importing the migrated pool under the source pool's name so every
+`pool/dataset` path is preserved.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `migration_snapshot_name()` | Bucket-less `@migrate-<timestamp>` name (retention never prunes it) |
+| `migration_snapshot_bare_name()` | Strip the leading `@` for the zfs argv builders |
+| `generate_temp_pool_name()` | Valid unused temporary pool name (`<source>_mig`, `_mig2`, …) |
+| `plan_migration_steps()` | Ordered `MigrationStep` plan for new-disks or holding-pool mode |
+| `check_destination_capacity()` | Refuse/warn when destination free space is short of source allocated |
+| `verify_trees_match()` | Per-dataset `used`-bytes comparison between source and migrated trees |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `pool_create` | `validate_pool_name`, `MAX_POOL_NAME_LEN` (temp-name generation) |
+
+---
+
+### `pool_migrate_dialogs.py`
+
+GTK dialog and Disks-page execution handler for Migrate Pool, the copy-based
+pool-expansion path (see `pool_migrate.py`). The dialog collects the source
+pool and destination mode (new disks + topology, or an existing holding
+pool), shows the full step plan, and gates the run behind typed confirmation
+of the source pool name. Execution is two runner phases: the copy phase
+(recursive migration snapshot, one `zfs send -Rw | zfs receive -u -F` step
+per top-level dataset, then per-dataset tree verification) and the cutover
+phase, which starts only after a second typed confirmation — export the
+source pool, then re-import the migrated pool under the source pool's name
+(new disks) or destroy/rebuild/copy-back/swap (holding pool). The pool
+hosting the root filesystem is never offered; both phases hold a `zlm`
+write lock on the source pool and run in the session log.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `show_migrate_pool_dialog()` | Run the dialog; returns a `MigrationRequest` or None |
+| `build_request()` | Build the execution request from a validated dialog state |
+| `build_migration_steps()` | Build the (copy, cutover) `BashStep` lists for a request |
+| `on_disks_migrate_pool()` | Disks-page action: gates, data gathering, two-phase runner execution |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `pool_migrate` | Step planning, capacity checks, snapshot/temp-name generation |
+| `pool_growth_dialogs` | Shared disk picker and typed-entry handlers |
+| `zfs_repository` | Migration argv builders |
+| `zfs_lock_manager` | Source-pool write lock across both phases |
+
+---
+
 ## Command builders and runners
 
 ### `command_builders.py`
@@ -530,6 +608,14 @@ progress parsing, cancellation, and final history/log-index entries.
    write the `# END` trailer and update the log index.
 5. `_maybe_truncate_session_log()` uses `session_log.maybe_truncate_session_log()`
    to enforce the configured size cap.
+
+**Completion contract:** the `on_complete` callback passed to `start()` is
+invoked as `on_complete(cancelled=False, rc=<result code>)` when the run ends
+on its own — `rc` is `0` on success, non-zero when a fatal step failed or the
+runner aborted unexpectedly. Cancel/abort paths invoke it as
+`on_complete(cancelled=True)` (`rc` defaults to `None`). `_finish()` logs
+`INFO: <label> complete` only when `rc == 0` and `WARN: <label> failed (rc=N)`
+otherwise, so completion messages in the log always reflect the real result.
 
 **Called modules / imported helpers:**
 
@@ -815,7 +901,8 @@ a background loader following the `ImportablePoolCache` pattern.
 | `update_disks_button_sensitivity(app)` | Enable/disable action buttons based on selection |
 | `show_apply_profile_dialog(app, datasets)` | Preview and confirm applying a workload profile |
 | `on_disks_apply_profile(app)` | Apply the selected profile to selected datasets |
-| `on_disks_rewrite_data(app)` | Run `zfs rewrite` on a single selected dataset |
+| `on_disks_rewrite_data(app)` | Run `zfs rewrite -P -r -x -v <mountpoint>` on the selected filesystem datasets, sequentially with one write lock each (requires the pool's `physical_rewrite` feature; temporarily mounts a dataset if needed and restores its prior mount state) |
+| `_build_rewrite_command(ds_name, mountpoint)` | Bash script for one rewrite: mount-if-needed, `zfs rewrite -P -r -x -v`, restore prior mount state |
 | `show_manage_profiles_dialog(app)` | Open the workload profile manager |
 | `show_profile_editor_dialog(app, name=None)` | Add or edit a workload profile |
 
@@ -897,6 +984,7 @@ and wraps handlers that need the `AppContext`.
 | `pools_page` / `pool_actions` | Pool tab handlers |
 | `datasets_page` / `dataset_actions` | Datasets tab handlers |
 | `retention_page` / `retention_actions` | Retention tab handlers |
+| `disks_page` / `pool_growth_dialogs` / `pool_migrate_dialogs` | Disks tab handlers (SMART details, pool growth, pool migration) |
 | `checkagainst_page` | Checkagainst tab handlers |
 | `schedule_page` | Schedule tab handlers |
 | `dashboard_page` | Dashboard tab handlers |

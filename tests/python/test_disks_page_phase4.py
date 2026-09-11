@@ -57,7 +57,7 @@ class FakeDatasetRunner:
 
 
 def _make_app():
-    """Return a mocked app object with the five growth buttons attached."""
+    """Return a mocked app object with the six growth buttons attached."""
     app = MagicMock()
     app.config = {"pools": []}
     app.disks_view = FakeTreeView(None, [])
@@ -71,6 +71,7 @@ def _make_app():
         "_disks_replace_btn",
         "_disks_detach_btn",
         "_disks_add_infra_vdev_btn",
+        "_disks_migrate_pool_btn",
     ):
         setattr(app, attr, MagicMock())
     return app
@@ -78,6 +79,7 @@ def _make_app():
 
 _GROWTH_TOOLTIP = "Pool growth is available only on the storage host"
 _MAINT_TOOLTIP = "Pool maintenance is available only on the storage host"
+_MIGRATE_TOOLTIP = "Pool migration is available only on the storage host"
 _BUSY_TOOLTIP = "A dataset action is already running"
 
 _GROWTH_ATTRS = (
@@ -86,6 +88,7 @@ _GROWTH_ATTRS = (
     "_disks_add_infra_vdev_btn",
 )
 _MAINT_ATTRS = ("_disks_replace_btn", "_disks_detach_btn")
+_MIGRATE_ATTRS = ("_disks_migrate_pool_btn",)
 
 
 def _single_host(pgd):
@@ -120,7 +123,7 @@ class TestGrowthButtonSensitivity(unittest.TestCase):
         dp, app = self._make()
         with _single_host(dp):
             dp.update_disks_button_sensitivity(app)
-        for attr in _GROWTH_ATTRS + _MAINT_ATTRS:
+        for attr in _GROWTH_ATTRS + _MAINT_ATTRS + _MIGRATE_ATTRS:
             with self.subTest(attr=attr):
                 btn = getattr(app, attr)
                 btn.set_sensitive.assert_called_with(True)
@@ -136,14 +139,17 @@ class TestGrowthButtonSensitivity(unittest.TestCase):
         for attr in _MAINT_ATTRS:
             with self.subTest(attr=attr):
                 getattr(app, attr).set_tooltip_text.assert_called_with(_MAINT_TOOLTIP)
-        for attr in _GROWTH_ATTRS + _MAINT_ATTRS:
+        for attr in _MIGRATE_ATTRS:
+            with self.subTest(attr=attr):
+                getattr(app, attr).set_tooltip_text.assert_called_with(_MIGRATE_TOOLTIP)
+        for attr in _GROWTH_ATTRS + _MAINT_ATTRS + _MIGRATE_ATTRS:
             getattr(app, attr).set_sensitive.assert_called_with(False)
 
     def test_enabled_on_two_node_storage_host(self):
         dp, app = self._make()
         with _storage_host(dp):
             dp.update_disks_button_sensitivity(app)
-        for attr in _GROWTH_ATTRS + _MAINT_ATTRS:
+        for attr in _GROWTH_ATTRS + _MAINT_ATTRS + _MIGRATE_ATTRS:
             getattr(app, attr).set_sensitive.assert_called_with(True)
 
     def test_disabled_while_runner_busy(self):
@@ -151,7 +157,7 @@ class TestGrowthButtonSensitivity(unittest.TestCase):
         app.dataset_runner.running = True
         with _single_host(dp):
             dp.update_disks_button_sensitivity(app)
-        for attr in _GROWTH_ATTRS + _MAINT_ATTRS:
+        for attr in _GROWTH_ATTRS + _MAINT_ATTRS + _MIGRATE_ATTRS:
             with self.subTest(attr=attr):
                 btn = getattr(app, attr)
                 btn.set_sensitive.assert_called_with(False)
@@ -166,6 +172,8 @@ class TestGrowthButtonSensitivity(unittest.TestCase):
             getattr(app, attr).set_tooltip_text.assert_called_with(_GROWTH_TOOLTIP)
         for attr in _MAINT_ATTRS:
             getattr(app, attr).set_tooltip_text.assert_called_with(_MAINT_TOOLTIP)
+        for attr in _MIGRATE_ATTRS:
+            getattr(app, attr).set_tooltip_text.assert_called_with(_MIGRATE_TOOLTIP)
 
     def test_works_before_buttons_exist(self):
         """Regression: page creation runs before the action buttons exist."""

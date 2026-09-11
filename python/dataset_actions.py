@@ -273,7 +273,7 @@ def _delete_datasets(app, datasets):
             )
         )
 
-    def _on_delete_complete(cancelled=False):
+    def _on_delete_complete(cancelled=False, rc=None):
         refresh_datasets_page(app)
 
     runner.set_steps(steps)

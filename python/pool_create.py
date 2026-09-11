@@ -35,6 +35,14 @@ TOPOLOGIES: dict[str, TopologySpec] = {
     "raidz3": TopologySpec("raidz3", parity=3, min_disks=5),
 }
 
+# RAID10 (striped mirrors) is deliberately not a TOPOLOGIES entry: the
+# Add-Vdev and migrate dialogs iterate TOPOLOGIES for their topology radios
+# and must not offer it — an existing pool grows toward RAID10 one mirror
+# vdev at a time via Add Data Vdev. It is special-cased in the create path
+# (validate_raid10_count, estimate_effective_capacity, and
+# zfs_repository.build_create_pool_command).
+RAID10_MIN_DISKS = 4
+
 SOLID_STATE_TYPES = ("SSD", "NVMe")
 
 _BY_ID_DIR = "/dev/disk/by-id"
@@ -224,6 +232,22 @@ def validate_vdev_selection(selected: list[DiskInfo]) -> list[str]:
     return problems
 
 
+def validate_raid10_count(num_disks: int) -> list[str]:
+    """Return human-readable problems with a striped-mirrors (RAID10) disk count.
+
+    RAID10 is built from consecutive pairs of mirrored disks
+    (``mirror d1 d2 mirror d3 d4 …``), so the count must be even and at
+    least ``RAID10_MIN_DISKS``. Returns an empty list when the count is
+    usable.
+    """
+    problems: list[str] = []
+    if num_disks < RAID10_MIN_DISKS:
+        problems.append(f"raid10 requires at least {RAID10_MIN_DISKS} disks")
+    if num_disks % 2:
+        problems.append("raid10 requires an even disk count (pairs of mirrors)")
+    return problems
+
+
 def validate_pool_name(name: str, existing_names: Container[str]) -> tuple[bool, str]:
     """Return ``(ok, error)`` for a candidate pool name.
 
@@ -299,6 +323,18 @@ def estimate_effective_capacity(
     Raises ValueError for an unknown topology, a disk count below the
     topology minimum, or non-positive sizes.
     """
+    if topology == "raid10":
+        problems = validate_raid10_count(num_disks)
+        if problems:
+            raise ValueError("; ".join(problems))
+        if min_disk_bytes <= 0 or block_size_bytes <= 0 or sector_size_bytes <= 0:
+            raise ValueError("sizes must be positive")
+        # Striped 2-way mirrors: half the disks hold parity copies and there
+        # is no padding loss, so effective capacity equals raw usable.
+        raw = (num_disks // 2) * min_disk_bytes
+        return CapacityEstimate(raw_usable_bytes=raw, effective_bytes=raw,
+                                efficiency_fraction=1.0)
+
     spec = TOPOLOGIES.get(topology)
     if spec is None:
         raise ValueError(f"unknown topology: {topology!r}")
