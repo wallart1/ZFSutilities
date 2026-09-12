@@ -66,6 +66,23 @@ class TestZfsRepositoryReads(unittest.TestCase):
         self.assertEqual(pools[0]["health"], "ONLINE")
         self.assertEqual(pools[0]["frag"], "5%")
 
+    def test_all_pool_status_text_returns_stdout_on_success(self):
+        repo = self._repo("  pool: tank\n state: ONLINE\n")
+        self.assertEqual(repo.all_pool_status_text(), "  pool: tank\n state: ONLINE\n")
+
+    def test_all_pool_status_text_returns_empty_on_failure_rc(self):
+        repo = self._repo("", rc=1)
+        self.assertEqual(repo.all_pool_status_text(), "")
+
+    def test_all_pool_status_text_returns_empty_when_run_raises(self):
+        repo = ZfsRepository(sudo=False)
+
+        def _raise(*a, **k):
+            raise FileNotFoundError("zpool")
+
+        repo._run = _raise
+        self.assertEqual(repo.all_pool_status_text(), "")
+
     def test_list_datasets_parses_nine_columns(self):
         stdout = "tank/data\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\tyes\n"
         repo = self._repo(stdout)
@@ -593,7 +610,7 @@ class TestBuildCreatePoolCommand(unittest.TestCase):
 
     def test_rejects_out_of_range_ashift(self):
         for ashift in (8, 17):
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "pool blocksize"):
                 build_create_pool_command(
                     "tank", "stripe", ["/dev/disk/by-id/ata-X"], ashift=ashift
                 )
@@ -1137,6 +1154,43 @@ class TestZfsRepositoryAshift(unittest.TestCase):
             args=[], returncode=1, stdout="", stderr="boom"
         )
         self.assertEqual(repo.get_ashift("tank"), AshiftInfo(None, None))
+
+
+class TestGetDeviceLabelAshift(unittest.TestCase):
+    """get_device_label_ashift parses `zdb -l` output for prior-pool evidence."""
+
+    def _repo(self, returncode=0, stdout=""):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=returncode, stdout=stdout, stderr=""
+        )
+        return repo
+
+    def test_label_ashift_found(self):
+        repo = self._repo(stdout="vdev_tree:\n  ashift: 12\n")
+        self.assertEqual(repo.get_device_label_ashift("/dev/sda"), 12)
+
+    def test_max_wins_across_label_copies(self):
+        stdout = "label 0\n  ashift: 9\nlabel 1\n  ashift: 13\n"
+        repo = self._repo(stdout=stdout)
+        self.assertEqual(repo.get_device_label_ashift("/dev/sda"), 13)
+
+    def test_command_failure_returns_none(self):
+        repo = self._repo(returncode=1, stdout="boom")
+        self.assertIsNone(repo.get_device_label_ashift("/dev/sda"))
+
+    def test_no_labels_returns_none(self):
+        repo = self._repo(stdout="failed to unpack label block\n")
+        self.assertIsNone(repo.get_device_label_ashift("/dev/sda"))
+
+    def test_invokes_zdb_on_device(self):
+        repo = ZfsRepository(sudo=False)
+        calls = []
+        repo._run = lambda cmd, *a, **k: calls.append(cmd) or subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="ashift: 12\n"
+        )
+        self.assertEqual(repo.get_device_label_ashift("/dev/disk/by-id/ata-X"), 12)
+        self.assertEqual(calls[0], ["zdb", "-l", "/dev/disk/by-id/ata-X"])
 
 
 class TestZfsRepositoryTopology(unittest.TestCase):

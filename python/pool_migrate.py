@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from disk_repository import format_bytes
 from pool_create import MAX_POOL_NAME_LEN, validate_pool_name
 
 # Migration modes: copy onto a new pool built from unused disks, or onto an
@@ -57,18 +58,6 @@ class MigrationStep:
     kind: str
     description: str
     dataset: str = ""
-
-
-def _format_bytes(n: int) -> str:
-    """Human-readable size, matching the disk-picker formatting."""
-    value = float(n)
-    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
-        if value < 1024 or unit == "PB":
-            if unit == "B":
-                return f"{int(value)} {unit}"
-            return f"{value:.1f} {unit}"
-        value /= 1024
-    return f"{value:.1f} PB"
 
 
 def migration_snapshot_name(when: datetime | None = None) -> str:
@@ -237,14 +226,14 @@ def check_destination_capacity(
     if dest_free_bytes < source_used_bytes:
         problems.append(
             f"insufficient destination free space "
-            f"({_format_bytes(dest_free_bytes)}) for the source pool's allocated "
-            f"data ({_format_bytes(source_used_bytes)})"
+            f"({format_bytes(dest_free_bytes)}) for the source pool's allocated "
+            f"data ({format_bytes(source_used_bytes)})"
         )
     elif dest_free_bytes < source_used_bytes * _HEADROOM_FRACTION:
         warnings.append(
-            f"destination free space ({_format_bytes(dest_free_bytes)}) has less "
+            f"destination free space ({format_bytes(dest_free_bytes)}) has less "
             f"than 10% headroom over the source pool's allocated data "
-            f"({_format_bytes(source_used_bytes)})"
+            f"({format_bytes(source_used_bytes)})"
         )
     return problems, warnings
 
@@ -271,7 +260,7 @@ def verify_trees_match(
         if src > 0 and abs(dst - src) > src * _USED_TOLERANCE_FRACTION:
             mismatches.append(
                 f"used bytes differ for {name}: "
-                f"source {_format_bytes(src)}, destination {_format_bytes(dst)}"
+                f"source {format_bytes(src)}, destination {format_bytes(dst)}"
             )
     for name in sorted(dest_used):
         if name not in source_used:

@@ -157,6 +157,7 @@ class FakeDatasetRunner:
     def __init__(self):
         self.running = False
         self.steps = []
+        self.operation_detail = None
         self._on_complete = None
 
     def set_steps(self, steps):
@@ -221,7 +222,7 @@ def _expected_general_command():
     """The exact argv the happy path should produce (general profile)."""
     from feature_config import DEFAULT_WORKLOAD_PROFILES
 
-    expected = ["zpool", "create"]
+    expected = ["zpool", "create", "-o", "ashift=12"]
     for prop, value in pool_filesystem_options(DEFAULT_WORKLOAD_PROFILES["general"]):
         expected += ["-O", f"{prop}={value}"]
     expected += [
@@ -376,12 +377,13 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(pcw._recordsize_bytes({"properties": {"recordsize": "junk"}}), 128 * 1024)
 
     def test_format_bytes(self):
+        # format_bytes is shared with disk_repository (imported, not defined here).
         pcw = _import_wizard()
-        self.assertEqual(pcw._format_bytes(0), "0 B")
-        self.assertEqual(pcw._format_bytes(512), "512 B")
-        self.assertEqual(pcw._format_bytes(1024), "1.0 KiB")
-        self.assertEqual(pcw._format_bytes(1536), "1.5 KiB")
-        self.assertEqual(pcw._format_bytes(10**12), "931.3 GiB")
+        self.assertEqual(pcw.format_bytes(0), "0 B")
+        self.assertEqual(pcw.format_bytes(512), "512 B")
+        self.assertEqual(pcw.format_bytes(1024), "1.00 KiB")
+        self.assertEqual(pcw.format_bytes(1536), "1.50 KiB")
+        self.assertEqual(pcw.format_bytes(10**12), "931.32 GiB")
 
     def test_disks_problems(self):
         pcw = _import_wizard()
@@ -573,10 +575,16 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(state.typed, "newpool")
 
         ashift = MagicMock()
-        ashift.get_active_text.return_value = "12"
+        ashift.get_active_text.return_value = "4096 bytes"
         pcw._on_ashift_changed(ashift, state, on_change)
         self.assertEqual(state.ashift, 12)
-        ashift.get_active_text.return_value = "auto (recommended)"
+        ashift.get_active_text.return_value = "512 bytes"
+        pcw._on_ashift_changed(ashift, state, on_change)
+        self.assertEqual(state.ashift, 9)
+        ashift.get_active_text.return_value = "8192 bytes"
+        pcw._on_ashift_changed(ashift, state, on_change)
+        self.assertEqual(state.ashift, 13)
+        ashift.get_active_text.return_value = "auto (let ZFS decide)"
         pcw._on_ashift_changed(ashift, state, on_change)
         self.assertIsNone(state.ashift)
 
@@ -594,7 +602,29 @@ class TestPureHelpers(unittest.TestCase):
         pcw._on_topology_toggled(radio, "stripe", state, on_change)
         self.assertEqual(state.topology, "raidz2")
 
-        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(calls), 8)
+
+    def test_blocksize_choices_speak_bytes_not_ashift(self):
+        pcw = _import_wizard()
+        labels = [label for _, label in pcw._BLOCKSIZE_CHOICES]
+        self.assertEqual(
+            labels,
+            ["auto (let ZFS decide)", "512 bytes", "4096 bytes", "8192 bytes"],
+        )
+        for raw in ("9", "12", "13"):
+            self.assertNotIn(raw, labels)
+        self.assertEqual(
+            pcw._BLOCKSIZE_BY_LABEL,
+            {
+                "auto (let ZFS decide)": None,
+                "512 bytes": 9,
+                "4096 bytes": 12,
+                "8192 bytes": 13,
+            },
+        )
+        self.assertEqual(pcw._format_blocksize(9), "512 bytes")
+        self.assertEqual(pcw._format_blocksize(12), "4096 bytes")
+        self.assertEqual(pcw._format_blocksize(13), "8192 bytes")
 
     def test_disk_toggle_updates_selection(self):
         pcw = _import_wizard()
@@ -616,6 +646,128 @@ class TestPureHelpers(unittest.TestCase):
         store.set_value(_Iter(0), pcw._COL_ELIGIBLE, False)
         pcw._on_disk_toggled(None, 0, store, state, lambda: None)
         self.assertEqual(state.selected, [disks[1]])
+
+    def test_disk_toggle_clears_blocksize_override(self):
+        pcw = _import_wizard()
+        disks = [_disk("/dev/sda"), _disk("/dev/sdb")]
+        results = _eligible(disks)
+        state = pcw._WizardState(eligibility=results, blocksize_user_set=True)
+        store = FakeListStoreIterable(
+            [
+                [False, "ata-TESTsda", "10T", "", "sata", "eligible", True, None],
+                [False, "ata-TESTsdb", "10T", "", "sata", "eligible", True, None],
+            ]
+        )
+        pcw._on_disk_toggled(None, 1, store, state, lambda: None)
+        self.assertFalse(state.blocksize_user_set)
+
+
+class _FakeCombo:
+    """Records combo contents and activation for settings-page tests."""
+
+    def __init__(self):
+        self.items = []
+        self.active = -1
+        self.handlers = {}
+
+    def append_text(self, text):
+        self.items.append(text)
+
+    def set_active(self, index):
+        self.active = index
+
+    def get_active_text(self):
+        if 0 <= self.active < len(self.items):
+            return self.items[self.active]
+        return ""
+
+    def connect(self, signal, handler, *args):
+        self.handlers[signal] = (handler, args)
+
+    def fire(self, signal, *extra):
+        handler, args = self.handlers[signal]
+        handler(self, *extra, *args)
+
+
+class TestSettingsPageBlocksizeRecommendation(unittest.TestCase):
+    """_refresh_settings probes disks and defaults the combo to the recommendation."""
+
+    def _settings(self, pcw, disks, repository=None):
+        """Build the settings page; returns (state, ashift_combo, refresh)."""
+        combos = []
+        factory = MagicMock(side_effect=lambda: combos.append(_FakeCombo()) or combos[-1])
+        state = _state(pcw, disks=disks)
+        ctx = SimpleNamespace(
+            profiles={"general": GENERAL_PROFILE},
+            existing_names=set(),
+            repository=repository if repository is not None else MagicMock(),
+        )
+        with patch.object(pcw.Gtk, "ComboBoxText", factory):
+            pcw._build_settings_page(MagicMock(), state, ctx, lambda: None)
+        return state, combos[0], state.page_refresh["settings"]
+
+    def test_defaults_combo_to_recommendation(self):
+        pcw = _import_wizard()
+        disks = [_disk("/dev/sda"), _disk("/dev/sdb")]
+        repository = MagicMock()
+        repository.get_device_label_ashift.return_value = None
+        state, combo, refresh = self._settings(pcw, disks, repository)
+
+        refresh()
+
+        self.assertEqual(combo.active, 2)  # "4096 bytes"
+        self.assertEqual(state.ashift, 12)
+        repository.get_device_label_ashift.assert_called()
+        hinted = any(
+            "Recommended pool blocksize for these disks: 4096 bytes" in str(call)
+            for call in pcw.Gtk.Label.return_value.set_text.call_args_list
+        )
+        self.assertTrue(hinted)
+
+    def test_prior_pool_label_evidence_raises_recommendation(self):
+        pcw = _import_wizard()
+        disks = [_disk("/dev/sda", physical_sector=512), _disk("/dev/sdb", physical_sector=512)]
+        repository = MagicMock()
+        repository.get_device_label_ashift.return_value = 13
+        state, combo, refresh = self._settings(pcw, disks, repository)
+
+        refresh()
+
+        self.assertEqual(combo.active, 3)  # "8192 bytes"
+        self.assertEqual(state.ashift, 13)
+
+    def test_all_512n_defaults_to_4096_bytes(self):
+        # A 512 report cannot be distinguished from a lying 4K-native drive,
+        # so the wizard never pre-selects 512 bytes automatically.
+        pcw = _import_wizard()
+        disks = [_disk("/dev/sda", physical_sector=512), _disk("/dev/sdb", physical_sector=512)]
+        repository = MagicMock()
+        repository.get_device_label_ashift.return_value = None
+        state, combo, refresh = self._settings(pcw, disks, repository)
+
+        refresh()
+
+        self.assertEqual(combo.active, 2)  # "4096 bytes"
+        self.assertEqual(state.ashift, 12)
+
+    def test_user_override_survives_refresh(self):
+        pcw = _import_wizard()
+        disks = [_disk("/dev/sda"), _disk("/dev/sdb")]
+        repository = MagicMock()
+        repository.get_device_label_ashift.return_value = None
+        state, combo, refresh = self._settings(pcw, disks, repository)
+
+        refresh()
+        self.assertEqual(state.ashift, 12)
+
+        combo.active = 1  # user picks "512 bytes"
+        combo.fire("changed")
+        self.assertTrue(state.blocksize_user_set)
+        self.assertEqual(state.ashift, 9)
+
+        refresh()
+        self.assertEqual(combo.active, 1)
+        self.assertEqual(state.ashift, 9)
 
 
 class TestHandlerGuards(unittest.TestCase):
@@ -818,6 +970,7 @@ class TestWizardFlow(unittest.TestCase):
             self.assertEqual(driver.pages_seen, ["disks", "topology", "settings", "review"])
             expected = _expected_general_command()
             self.assertEqual(len(app.dataset_runner.steps), 1)
+            self.assertEqual(app.dataset_runner.operation_detail, "Create Pool: newpool")
             step = app.dataset_runner.steps[0]
             self.assertEqual(step.command, expected)
             self.assertTrue(step.fatal)
@@ -1049,6 +1202,84 @@ class TestWizardFlow(unittest.TestCase):
                     self.assertNotEqual(os.listdir(locks_dir), [])
                     app.dataset_runner.finish()
                     self.assertEqual(os.listdir(locks_dir), [])
+
+
+class TestIscsiEnrollmentOffer(unittest.TestCase):
+    """offer_iscsi_enrollment wiring in the create-pool completion callback."""
+
+    def _drive_success(self, two_node=False, storage_host=True, register_response=None):
+        """Drive a successful create to completion; return (app, offer mock)."""
+        pcw = _import_wizard()
+        app = _make_app()
+        driver = _WizardDriver(
+            pcw,
+            [
+                lambda state: (_select_all(state), NEXT)[1],
+                NEXT,
+                lambda state: (_name_pool(state), NEXT)[1],
+                lambda state: (_confirm(state), CREATE)[1],
+            ],
+        )
+        nc = MagicMock()
+        nc.is_two_node.return_value = two_node
+        nc.is_storage_host.return_value = storage_host
+        dialog_patcher = patch.object(pcw.Gtk, "MessageDialog")
+        if register_response is not None:
+            dialog_patcher = patch.object(
+                pcw.Gtk,
+                "MessageDialog",
+                return_value=MagicMock(run=MagicMock(return_value=register_response)),
+            )
+        with _wizard_session(pcw, app, driver):
+            with (
+                patch.object(pcw, "node_config", nc),
+                patch.object(pcw, "offer_iscsi_enrollment") as offer,
+                dialog_patcher,
+                capture_logs(),
+            ):
+                app.dataset_runner.finish(rc=0)
+        return app, offer
+
+    def test_enrollment_offer_invoked_on_success_two_node_storage_host(self):
+        app, offer = self._drive_success(two_node=True, storage_host=True)
+        offer.assert_called_once_with(app, "newpool")
+
+    def test_enrollment_offer_skipped_on_failed_create(self):
+        pcw = _import_wizard()
+        app = _make_app()
+        driver = _WizardDriver(
+            pcw,
+            [
+                lambda state: (_select_all(state), NEXT)[1],
+                NEXT,
+                lambda state: (_name_pool(state), NEXT)[1],
+                lambda state: (_confirm(state), CREATE)[1],
+            ],
+        )
+        nc = MagicMock()
+        nc.is_two_node.return_value = True
+        nc.is_storage_host.return_value = True
+        with _wizard_session(pcw, app, driver):
+            with (
+                patch.object(pcw, "node_config", nc),
+                patch.object(pcw, "offer_iscsi_enrollment") as offer,
+                patch.object(pcw.Gtk, "MessageDialog"),
+                capture_logs(),
+            ):
+                app.dataset_runner.finish(rc=1)
+        offer.assert_not_called()
+
+    def test_enrollment_offer_skipped_in_single_node(self):
+        _app, offer = self._drive_success(two_node=False)
+        offer.assert_not_called()
+
+    def test_enrollment_offer_invoked_when_registration_declined(self):
+        """Declining the registry offer must not suppress the iSCSI offer."""
+        app, offer = self._drive_success(
+            two_node=True, register_response=3  # Gtk.ResponseType.NO
+        )
+        self.assertEqual(app.known_pools, [])
+        offer.assert_called_once_with(app, "newpool")
 
 
 if __name__ == "__main__":

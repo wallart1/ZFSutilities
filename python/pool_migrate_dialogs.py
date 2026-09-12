@@ -6,8 +6,10 @@ dialog collects a source pool and a destination (a new pool built on
 selected disks, or an existing holding pool), shows the full step plan, and
 gates the run behind typed confirmation of the source pool name. Execution
 is two runner phases: the copy phase (recursive migration snapshot, one
-``zfs send -Rw | zfs receive -u -F`` step per top-level dataset, then a
-dataset-tree verification step), and the cutover phase (export the source
+resumable ``zfs-migrate-send`` step — ``zfs send -Rw`` received with
+``zfs receive -u -F -s``, with ``pv`` in the pipeline and an optional
+bandwidth limit — per top-level dataset, then a dataset-tree verification
+step), and the cutover phase (export the source
 pool, then — for new disks — re-import the migrated pool under the source
 pool's name, or — for holding pool — destroy the source, rebuild it on the
 freed disks with the chosen topology, copy back, and swap). The cutover
@@ -20,6 +22,7 @@ ZFS I/O is delegated to ``ZfsRepository`` via the app context.
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass, field
 
@@ -30,11 +33,13 @@ gi.require_version("Gtk", "3.0")
 import node_config
 import zfs_lock_manager as zlm
 from command_builders import BashStep
-from disk_repository import DiskInfo, _format_bytes
+from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from gi.repository import Gtk
 from gui_helpers import create_dialog
+from iscsi_enroll import is_iscsi_managed_pool, log_manual_enrollment_steps
 from logging_config import log_msg
+from path_utils import resolve_local_bin
 from pool_create import (
     TOPOLOGIES,
     EligibilityResult,
@@ -105,6 +110,7 @@ class _MigrateState:
     topology: str = "mirror"
     selected: list[DiskInfo] = field(default_factory=list)
     typed: str = ""  # review typed confirmation (source pool name)
+    rate_limit: str = ""  # optional pv -L rate; empty = unlimited
 
 
 @dataclass(frozen=True)
@@ -115,6 +121,8 @@ class MigrationRequest:
     rebuilt pool's temporary name for holding mode; ``holding_pool``,
     ``new_pool_topology``, and ``new_pool_by_id`` are holding mode only.
     ``snap_bare`` is the migration snapshot name without the leading ``@``.
+    ``rate_limit`` is an optional pv ``-L`` rate for the copy steps; empty
+    means unlimited bandwidth.
     """
 
     source_pool: str
@@ -125,6 +133,7 @@ class MigrationRequest:
     holding_pool: str = ""
     new_pool_topology: str = "mirror"
     new_pool_by_id: tuple[str, ...] = ()
+    rate_limit: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -202,9 +211,21 @@ def _capacity_problem(
         return f"could not estimate the capacity of {what}"
     if capacity_bytes < alloc_bytes:
         return (
-            f"{what} yields about {_format_bytes(capacity_bytes)} effective "
+            f"{what} yields about {format_bytes(capacity_bytes)} effective "
             f"capacity, less than the source pool's allocated data "
-            f"({_format_bytes(alloc_bytes)})"
+            f"({format_bytes(alloc_bytes)})"
+        )
+    return None
+
+
+def _rate_limit_problem(text: str) -> str | None:
+    """Refusal line when the bandwidth limit is not a valid pv -L rate."""
+    if not text:
+        return None
+    if not re.fullmatch(r"[0-9]+[kKmMgGtT]?", text):
+        return (
+            f"invalid bandwidth limit '{text}' — use digits with an "
+            "optional k/m/g/t suffix (for example 100m), or leave it blank"
         )
     return None
 
@@ -257,6 +278,10 @@ def _migrate_problems(state: _MigrateState) -> list[str]:
         )
         if problem:
             return [problem]
+
+    rate_problem = _rate_limit_problem(state.rate_limit)
+    if rate_problem:
+        return [rate_problem]
 
     if state.typed != state.pool_name:
         return [f"Type the pool name '{state.pool_name}' to confirm"]
@@ -324,6 +349,7 @@ def build_request(state: _MigrateState) -> MigrationRequest:
         holding_pool=state.holding_pool if state.mode == MIGRATE_HOLDING_POOL else "",
         new_pool_topology=state.topology,
         new_pool_by_id=by_ids,
+        rate_limit=state.rate_limit,
     )
 
 
@@ -356,7 +382,13 @@ def _build_verify_step(src: str, dest: str, dataset: str) -> BashStep:
     )
 
 
-def _copy_steps(src_pool: str, dest_pool: str, datasets, snap_bare: str) -> list[BashStep]:
+def _copy_steps(
+    src_pool: str,
+    dest_pool: str,
+    datasets,
+    snap_bare: str,
+    rate_limit: str = "",
+) -> list[BashStep]:
     """Snapshot + replicate + verify steps for one copy direction."""
     steps = [
         BashStep(
@@ -370,7 +402,10 @@ def _copy_steps(src_pool: str, dest_pool: str, datasets, snap_bare: str) -> list
         steps.append(
             BashStep(
                 build_migration_send_receive_command(
-                    f"{src_pool}/{dataset}", f"{dest_pool}/{dataset}", snap_bare
+                    f"{src_pool}/{dataset}",
+                    f"{dest_pool}/{dataset}",
+                    snap_bare,
+                    rate_limit=rate_limit,
                 ),
                 f"Migrate {src_pool}/{dataset} -> {dest_pool}/{dataset}",
                 is_rsync=False,
@@ -389,7 +424,11 @@ def build_migration_steps(
     datasets = list(request.datasets)
     if request.mode == MIGRATE_NEW_DISKS:
         copy = _copy_steps(
-            request.source_pool, request.temp_pool, datasets, request.snap_bare
+            request.source_pool,
+            request.temp_pool,
+            datasets,
+            request.snap_bare,
+            rate_limit=request.rate_limit,
         )
         cutover = [
             BashStep(
@@ -411,7 +450,11 @@ def build_migration_steps(
 
     # Holding-pool mode: copy out, then rebuild on the freed disks and swap.
     copy = _copy_steps(
-        request.source_pool, request.holding_pool, datasets, request.snap_bare
+        request.source_pool,
+        request.holding_pool,
+        datasets,
+        request.snap_bare,
+        rate_limit=request.rate_limit,
     )
     cutover = [
         BashStep(
@@ -441,7 +484,11 @@ def build_migration_steps(
     # The migration snapshot already exists on the holding pool (received
     # with the replication stream), so copy-back skips the snapshot step.
     cutover += _copy_steps(
-        request.holding_pool, request.temp_pool, datasets, request.snap_bare
+        request.holding_pool,
+        request.temp_pool,
+        datasets,
+        request.snap_bare,
+        rate_limit=request.rate_limit,
     )[1:]
     for dataset in datasets:
         cutover.append(
@@ -502,6 +549,12 @@ def _on_holding_changed(combo, state: _MigrateState, on_change) -> None:
     text = _combo_text(combo)
     if text:
         state.holding_pool = text
+    on_change()
+
+
+def _on_rate_limit_changed(entry, state: _MigrateState, on_change) -> None:
+    text = entry.get_text()
+    state.rate_limit = text if isinstance(text, str) else ""
     on_change()
 
 
@@ -613,6 +666,17 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     holding_box.pack_start(holding_hint, False, False, 0)
     content.pack_start(holding_box, True, True, 0)
 
+    rate_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    rate_label = Gtk.Label(
+        label="Bandwidth limit (optional, pv rate e.g. 100m; blank = unlimited):"
+    )
+    rate_label.set_halign(Gtk.Align.END)
+    rate_row.pack_start(rate_label, False, False, 0)
+    rate_entry = Gtk.Entry()
+    rate_entry.set_hexpand(True)
+    rate_row.pack_start(rate_entry, True, True, 0)
+    content.pack_start(rate_row, False, False, 0)
+
     plan_label = Gtk.Label(label="Steps that will run:")
     plan_label.set_halign(Gtk.Align.START)
     content.pack_start(plan_label, False, False, 0)
@@ -700,6 +764,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
             radio.set_active(True)
         radio.connect("toggled", _on_topology_toggled, name, state, _refresh)
     typed_entry.connect("changed", _on_typed_changed, state, _refresh)
+    rate_entry.connect("changed", _on_rate_limit_changed, state, _refresh)
     _populate_holding_combo()
     pool_combo.connect("changed", _on_source_pool_changed, state, _refresh)
     holding_combo.connect("changed", _on_holding_changed, state, _refresh)
@@ -938,7 +1003,45 @@ def on_disks_migrate_pool(app) -> None:
             f"INFO: Pool '{request.source_pool}' migrated successfully "
             f"(mode: {request.mode})"
         )
+        if is_iscsi_managed_pool(request.source_pool):
+            repair_step = BashStep(
+                [resolve_local_bin("repair-iscsi-luns") or "repair-iscsi-luns"],
+                "Re-register migrated pool iSCSI LUNs",
+                is_rsync=False,
+                fatal=False,
+            )
 
+            def _repair_complete(cancelled=False, rc=None):
+                if cancelled:
+                    log_msg(
+                        f"INFO: iSCSI LUN re-registration for "
+                        f"'{request.source_pool}' cancelled"
+                    )
+                elif rc:
+                    log_msg(
+                        f"WARN: iSCSI LUN re-registration for "
+                        f"'{request.source_pool}' failed (rc={rc})"
+                    )
+                else:
+                    log_msg(
+                        f"INFO: iSCSI LUNs re-registered for "
+                        f"'{request.source_pool}'"
+                    )
+                _finish_refresh(app)
+
+            runner.set_steps([repair_step])
+            update_disks_button_sensitivity(app)
+            runner.start(on_complete=_repair_complete)
+        else:
+            if node_config.is_two_node():
+                log_msg(
+                    f"INFO: Pool '{request.source_pool}' is not enrolled in two-node "
+                    "iSCSI, so VM disks on it are not available over iSCSI. "
+                    "Manual enrollment steps:"
+                )
+                log_manual_enrollment_steps(request.source_pool)
+
+    runner.operation_detail = f"Migrate Pool: {request.source_pool}"
     runner.set_steps(copy_steps)
     update_disks_button_sensitivity(app)
     runner.start(on_complete=_copy_complete)

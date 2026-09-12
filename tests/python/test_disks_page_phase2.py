@@ -36,6 +36,14 @@ def _import_action_dispatch():
         return action_dispatch
 
 
+def _compute_host(dp):
+    """Patch disks_page.node_config to look like a two-node compute host."""
+    nc = MagicMock()
+    nc.is_two_node.return_value = True
+    nc.is_storage_host.return_value = False
+    return patch.object(dp, "node_config", nc)
+
+
 class FakeListStore:
     """Minimal ListStore stand-in."""
 
@@ -680,6 +688,37 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         dp.update_disks_button_sensitivity(app)
         self.assertTrue(app._disks_apply_profile_btn.set_sensitive.call_args[0][0])
 
+    def test_update_sensitivity_apply_profile_disabled_on_compute_host(self):
+        dp = _import_disks_page()
+        app = _make_app()
+        app._disks_apply_profile_btn = MagicMock()
+        app.disks_dataset_store.append(["pool1/data", "filesystem"] + [""] * 10)
+        app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
+
+        with _compute_host(dp):
+            dp.update_disks_button_sensitivity(app)
+
+        self.assertFalse(app._disks_apply_profile_btn.set_sensitive.call_args[0][0])
+        app._disks_apply_profile_btn.set_tooltip_text.assert_called_with(
+            "Applying profiles is available only on the storage host"
+        )
+
+    def test_update_sensitivity_apply_profile_enabled_on_storage_host(self):
+        dp = _import_disks_page()
+        app = _make_app()
+        app._disks_apply_profile_btn = MagicMock()
+        app.disks_dataset_store.append(["pool1/data", "filesystem"] + [""] * 10)
+        app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
+
+        nc = MagicMock()
+        nc.is_two_node.return_value = True
+        nc.is_storage_host.return_value = True
+        with patch.object(dp, "node_config", nc):
+            dp.update_disks_button_sensitivity(app)
+
+        self.assertTrue(app._disks_apply_profile_btn.set_sensitive.call_args[0][0])
+        app._disks_apply_profile_btn.set_tooltip_text.assert_called_with("")
+
     def test_update_sensitivity_rewrite_data_gated_by_zfs_caps(self):
         dp = _import_disks_page()
         app = _make_app()
@@ -723,6 +762,22 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         dp.update_disks_button_sensitivity(app)
         self.assertTrue(app._disks_rewrite_data_btn.set_sensitive.call_args[0][0])
         app._disks_rewrite_data_btn.set_tooltip_text.assert_called_with("")
+
+    def test_update_sensitivity_rewrite_data_disabled_on_compute_host(self):
+        dp = _import_disks_page()
+        app = _make_app()
+        app._disks_rewrite_data_btn = MagicMock()
+        app.ctx.zfs_caps.supports.return_value = True
+        app.disks_dataset_store.append(["pool1/data", "filesystem"] + [""] * 10)
+        app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
+
+        with _compute_host(dp):
+            dp.update_disks_button_sensitivity(app)
+
+        self.assertFalse(app._disks_rewrite_data_btn.set_sensitive.call_args[0][0])
+        app._disks_rewrite_data_btn.set_tooltip_text.assert_called_with(
+            "Rewrite Data is available only on the storage host"
+        )
 
 
 class TestApplyProfileDialog(unittest.TestCase):
@@ -988,6 +1043,30 @@ class TestApplyProfileHandler(unittest.TestCase):
         mock_dialog.assert_not_called()
         self.assertTrue(
             any("Select at least one dataset" in line for line in logs),
+            logs,
+        )
+
+    def test_apply_profile_handler_guarded_on_compute_host(self):
+        dp = _import_disks_page()
+        app = _make_app()
+        app.disks_dataset_store = FakeListStoreIterable(
+            [
+                ["pool1/data", "filesystem", "", "", "lz4", "", "", "standard", "", "", "", "custom"],
+            ]
+        )
+        app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [0])
+
+        with (
+            _compute_host(dp),
+            patch.object(dp, "show_apply_profile_dialog") as mock_dialog,
+            capture_logs() as logs,
+        ):
+            dp.on_disks_apply_profile(app)
+
+        mock_dialog.assert_not_called()
+        self.assertFalse(app.dataset_runner.running)
+        self.assertTrue(
+            any("Applying profiles is available only on the storage host" in line for line in logs),
             logs,
         )
 
@@ -1310,6 +1389,20 @@ class TestRewriteData(unittest.TestCase):
         self.assertFalse(app.dataset_runner.running)
         self.assertTrue(
             any("Select at least one dataset" in line for line in logs),
+            logs,
+        )
+
+    def test_rewrite_data_guarded_on_compute_host(self):
+        dp = _import_disks_page()
+        app = self._supported_app()
+
+        with _compute_host(dp), capture_logs() as logs:
+            dp.on_disks_rewrite_data(app)
+
+        self.assertFalse(app.dataset_runner.running)
+        self.assertEqual(app.dataset_runner.steps, [])
+        self.assertTrue(
+            any("Rewrite Data is available only on the storage host" in line for line in logs),
             logs,
         )
 

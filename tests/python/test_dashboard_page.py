@@ -914,6 +914,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.offsite_runner = None
         app.restore_runner = None
         app.retention_runner = None
+        app.dataset_runner = None
         app.scrub_queue = None
         tasks = dp._collect_running_tasks(app)
         self.assertEqual(tasks, [])
@@ -923,6 +924,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         runner = MagicMock()
         runner.running = True
         runner.label = "Backup"
+        runner.operation_detail = None
         runner.steps = [("step1", [], False, False), ("step2", [], False, False)]
         runner._finally_step = None
         runner.current_step = 0
@@ -932,6 +934,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.offsite_runner = None
         app.restore_runner = None
         app.retention_runner = None
+        app.dataset_runner = None
         app.scrub_queue = None
         tasks = dp._collect_running_tasks(app)
         self.assertEqual(len(tasks), 1)
@@ -949,6 +952,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.offsite_runner = None
         app.restore_runner = None
         app.retention_runner = None
+        app.dataset_runner = None
         queue = MagicMock()
         queue.active = {"fivebays"}
         app.scrub_queue = queue
@@ -979,6 +983,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.offsite_runner = None
         app.restore_runner = None
         app.retention_runner = None
+        app.dataset_runner = None
         queue = MagicMock()
         queue.active = {"fivebays"}
         app.scrub_queue = queue
@@ -1002,6 +1007,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.offsite_runner = None
         app.restore_runner = None
         app.retention_runner = None
+        app.dataset_runner = None
         app.scrub_queue = None
         with patch.object(
             dp,
@@ -1032,6 +1038,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.offsite_runner = None
         app.restore_runner = None
         app.retention_runner = None
+        app.dataset_runner = None
         app.scrub_queue = None
         with patch.object(
             dp,
@@ -1063,6 +1070,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         runner = MagicMock()
         runner.running = True
         runner.label = "Backup"
+        runner.operation_detail = None
         runner.steps = [("step1", [], False, False)]
         runner._finally_step = None
         runner.current_step = 0
@@ -1072,6 +1080,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.offsite_runner = None
         app.restore_runner = None
         app.retention_runner = None
+        app.dataset_runner = None
         app.scrub_queue = None
         tasks = dp._collect_running_tasks(app)
         self.assertEqual(len(tasks), 1)
@@ -1090,6 +1099,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.offsite_runner = None
         app.restore_runner = None
         app.retention_runner = None
+        app.dataset_runner = None
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as fh:
             fh.write("{}")
@@ -1132,6 +1142,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         app.offsite_runner = None
         app.restore_runner = None
         app.retention_runner = None
+        app.dataset_runner = None
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as fh:
             fh.write("{}")
@@ -1177,8 +1188,100 @@ class TestCollectRunningTasks(unittest.TestCase):
         self.assertIn("threeamigos", queue.active)
 
 
-class TestCollectScheduledTasks(unittest.TestCase):
-    """Section 4 of _collect_running_tasks: legacy pgrep/ps profile detection."""
+class TestCollectRunningTasksDatasetRunner(unittest.TestCase):
+    """dataset_runner tasks in _collect_running_tasks (plan section 2)."""
+
+    def _dataset_app(self, operation_detail=None):
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        app.scrub_queue = None
+        runner = MagicMock()
+        runner.running = True
+        runner.label = "Dataset action"
+        runner.operation_detail = operation_detail
+        runner.steps = [("s1", [], False, False), ("s2", [], False, False), ("s3", [], False, False)]
+        runner._finally_step = None
+        runner.current_step = 1
+        runner._in_lock_wait = False
+        runner._session_log_file = "/var/log/zfsutilities/sessions/dataset.log"
+        app.dataset_runner = runner
+        return app, runner
+
+    def test_dataset_runner_task_uses_operation_detail(self):
+        app, _runner = self._dataset_app(operation_detail="Migrate Pool: tank")
+        tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["name"], "Migrate Pool: tank")
+        self.assertEqual(tasks[0]["type"], "GUI")
+        self.assertEqual(tasks[0]["status"], "Step 2/3")
+        self.assertEqual(tasks[0]["task_key"], "runner:dataset_runner")
+        self.assertEqual(
+            tasks[0]["log_file"],
+            "/var/log/zfsutilities/sessions/dataset.log",
+        )
+        self.assertFalse(tasks[0]["waiting_for_lock"])
+
+    def test_dataset_runner_task_falls_back_to_label(self):
+        app, _runner = self._dataset_app(operation_detail=None)
+        tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["name"], "Dataset action")
+
+    def test_dataset_runner_not_running_no_task(self):
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        app.scrub_queue = None
+        runner = MagicMock()
+        runner.running = False
+        app.dataset_runner = runner
+        tasks = dp._collect_running_tasks(app)
+        self.assertEqual(tasks, [])
+
+
+class TestCollectRunningTasksZfsOperations(unittest.TestCase):
+    """ZFS-native operation tasks (resilver/expand/remove) in _collect_running_tasks."""
+
+    RESILVER_RAW = """\
+  pool: tank
+ state: DEGRADED
+  scan: resilver in progress since Thu Sep 10 22:00:00 2026
+    45.20% done, 0 days 02:10:00 to go
+"""
+
+    EXPAND_RAW = """\
+  pool: tank
+ state: ONLINE
+  expand: expansion of raidz1-0 in progress since Thu Sep 10 22:00:00 2026
+    12.30% done
+"""
+
+    REMOVE_RAW = """\
+  pool: tank
+ state: ONLINE
+  remove: Removal of vdev 3 copied 12.5G in 0h5m, 42.50% done, 0B memory used
+"""
+
+    MIXED_RAW = """\
+  pool: tank
+ state: DEGRADED
+  scan: resilver in progress since Thu Sep 10 22:00:00 2026
+    45.20% done, 0 days 02:10:00 to go
+  pool: cleanpool
+ state: ONLINE
+  scan: scrub repaired 0B in 00:00:04 with 0 errors on Wed Aug 19 22:07:47 2026
+"""
+
+    NO_PERCENT_RAW = """\
+  pool: tank
+ state: ONLINE
+  expand: expansion of raidz1-0 in progress since Thu Sep 10 22:00:00 2026
+"""
 
     def _idle_app(self):
         app = MagicMock()
@@ -1186,6 +1289,77 @@ class TestCollectScheduledTasks(unittest.TestCase):
         app.offsite_runner = None
         app.restore_runner = None
         app.retention_runner = None
+        app.dataset_runner = None
+        app.scrub_queue = None
+        return app
+
+    def _collect_with_status(self, raw):
+        app = self._idle_app()
+        repo = MagicMock()
+        repo.all_pool_status_text.return_value = raw
+        app.ctx.zfs_repository = repo
+        with patch.object(dp, "get_default_repository", return_value=repo):
+            return dp._collect_running_tasks(app)
+
+    def test_resilver_yields_zfs_task(self):
+        tasks = self._collect_with_status(self.RESILVER_RAW)
+        zfs_tasks = [t for t in tasks if t["type"] == "ZFS"]
+        self.assertEqual(len(zfs_tasks), 1)
+        self.assertEqual(zfs_tasks[0]["name"], "Resilver: tank")
+        self.assertEqual(zfs_tasks[0]["status"], "45.2% done")
+        self.assertEqual(zfs_tasks[0]["task_key"], "zfsop:tank")
+        self.assertNotIn("log_file", zfs_tasks[0])
+
+    def test_expand_yields_zfs_task_with_vdev(self):
+        tasks = self._collect_with_status(self.EXPAND_RAW)
+        zfs_tasks = [t for t in tasks if t["type"] == "ZFS"]
+        self.assertEqual(len(zfs_tasks), 1)
+        self.assertEqual(zfs_tasks[0]["name"], "Expand raidz1-0: tank")
+        self.assertEqual(zfs_tasks[0]["status"], "12.3% done")
+
+    def test_remove_yields_zfs_task_with_vdev_number(self):
+        tasks = self._collect_with_status(self.REMOVE_RAW)
+        zfs_tasks = [t for t in tasks if t["type"] == "ZFS"]
+        self.assertEqual(len(zfs_tasks), 1)
+        self.assertEqual(zfs_tasks[0]["name"], "Remove vdev 3: tank")
+        self.assertEqual(zfs_tasks[0]["status"], "42.5% done")
+
+    def test_mixed_pools_only_busy_pool_yields_task(self):
+        tasks = self._collect_with_status(self.MIXED_RAW)
+        zfs_tasks = [t for t in tasks if t["type"] == "ZFS"]
+        self.assertEqual(len(zfs_tasks), 1)
+        self.assertEqual(zfs_tasks[0]["task_key"], "zfsop:tank")
+
+    def test_no_pool_operations_no_zfs_task(self):
+        clean_raw = """\
+  pool: tank
+ state: ONLINE
+  scan: scrub repaired 0B in 00:00:04 with 0 errors on Wed Aug 19 22:07:47 2026
+"""
+        tasks = self._collect_with_status(clean_raw)
+        self.assertEqual(tasks, [])
+
+    def test_missing_percent_yields_in_progress_status(self):
+        tasks = self._collect_with_status(self.NO_PERCENT_RAW)
+        zfs_tasks = [t for t in tasks if t["type"] == "ZFS"]
+        self.assertEqual(len(zfs_tasks), 1)
+        self.assertEqual(zfs_tasks[0]["status"], "In progress")
+
+    def test_empty_status_text_no_zfs_task(self):
+        tasks = self._collect_with_status("")
+        self.assertEqual(tasks, [])
+
+
+class TestCollectScheduledTasks(unittest.TestCase):
+    """Section 5 of _collect_running_tasks: legacy pgrep/ps profile detection."""
+
+    def _idle_app(self):
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        app.dataset_runner = None
         app.scrub_queue = None
         return app
 
@@ -1390,6 +1564,27 @@ class TestCancelTask(unittest.TestCase):
         app = MagicMock()
         dp._cancel_task(app, "unknown:thing")
         # Should not raise; just log a warning
+
+    def test_cancel_dataset_runner(self):
+        app = MagicMock()
+        runner = MagicMock()
+        runner.running = True
+        runner.label = "Dataset action"
+        app.dataset_runner = runner
+        dp._cancel_task(app, "runner:dataset_runner")
+        runner.cancel.assert_called_once()
+
+    def test_cancel_zfsop_key_not_cancellable(self):
+        app = MagicMock()
+        with patch("dashboard_page.log_msg") as mock_log:
+            dp._cancel_task(app, "zfsop:tank")
+        mock_log.assert_called_once()
+        self.assertIn("cannot be cancelled", mock_log.call_args[0][0])
+        app.backup_runner.cancel.assert_not_called()
+        app.offsite_runner.cancel.assert_not_called()
+        app.restore_runner.cancel.assert_not_called()
+        app.retention_runner.cancel.assert_not_called()
+        app.dataset_runner.cancel.assert_not_called()
 
 
 class TestCachedOrFresh(unittest.TestCase):

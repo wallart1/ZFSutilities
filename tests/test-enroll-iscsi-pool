@@ -1,0 +1,511 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-enroll-iscsi-pool — Unit tests for the two-node iSCSI pool enrollment script.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Mocks
+# ------------------------------------------------------------------
+
+# Mock node-lib.sh behavior
+NODE_MODE="two-node"
+storage_host="stewie"
+compute_host="tweety"
+storage_ip="192.168.100.1"
+IQN_PREFIX="iqn.2026-02.local.stewie"
+declare -A POOL_TARGET=(
+    ["threeamigos"]="threeamigos"
+    ["NVME1"]="nvme1"
+)
+is_single_node() { [[ "$NODE_MODE" == "single-node" ]]; }
+is_two_node()    { [[ "$NODE_MODE" == "two-node" ]]; }
+pool_to_target() {
+    local pool="$1"
+    local short="${POOL_TARGET[$pool]:-}"
+    [[ -n "$short" ]] && echo "${IQN_PREFIX}:${short}"
+}
+pool_list() { printf '%s\n' "${!POOL_TARGET[@]}"; }
+is_known_pool() { [[ -n "${POOL_TARGET[$1]:-}" ]]; }
+remote_zfsutility_script() { printf '/remote/bin/%s\n' "$2"; }
+
+# Mock hostname so the storage-host check is controllable
+_mock_hostname="stewie"
+hostname() { printf '%s\n' "$_mock_hostname"; }
+
+# Capture ssh invocations; controllable failure
+_mock_ssh_calls=()
+_mock_ssh_rc=0
+ssh() {
+    _mock_ssh_calls+=("$*")
+    return "$_mock_ssh_rc"
+}
+
+# Capture helper invocations and their order
+_mock_call_order=()
+setup-iscsi-targets() {
+    _mock_call_order+=("setup")
+    return 0
+}
+rescan-storage() {
+    _mock_call_order+=("rescan")
+    return 0
+}
+
+# The evaluated script calls find_zfsutility_script to locate helpers; point
+# every resolution at /dev/null (our mocks above are already in place).
+find_zfsutility_script() { echo "/dev/null"; }
+
+# ------------------------------------------------------------------
+# Temp dir for fake node.conf files
+# ------------------------------------------------------------------
+TEST_TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TEST_TMPDIR"' EXIT
+
+# Write a fake node.conf with the given content and point the script at it.
+# Output: prints the conf file path.
+make_conf() {
+    local conf="${TEST_TMPDIR}/node-$$-$RANDOM.conf"
+    printf '%s\n' "$@" > "$conf"
+    echo "$conf"
+}
+
+# Read a POOL_TARGET value from a conf file in a clean subshell.
+conf_map_value() {
+    local conf="$1" pool="$2"
+    bash -c 'source "$1"; printf "%s" "${POOL_TARGET[$2]:-}"' _ "$conf" "$pool"
+}
+
+# ------------------------------------------------------------------
+# Load the script under test into this shell with node-lib mocked.
+# The script's own TEST_MODE guard prevents main() from auto-running.
+# ------------------------------------------------------------------
+ENROLL_ISCSI_TEST_MODE="Y"
+export ENROLL_ISCSI_NODE_LIB="/dev/null"
+export ENROLL_ISCSI_SETUP_TARGETS="setup-iscsi-targets"
+export ENROLL_ISCSI_RESCAN_STORAGE="rescan-storage"
+script_text=$(cat "$mydir/bin/enroll-iscsi-pool")
+eval "$script_text"
+
+# The evaluated script re-sources bashinit, which replaces test-lib.sh's
+# log_msg mock with the real implementation. Restore a capturing mock so log
+# assertions against get_test_log_file work and test output stays quiet.
+log_msg() {
+    if [[ "${1:-}" == "--long-prefix" ]]; then
+        shift
+    fi
+    echo "$*" >> "${_TEST_LOG_FILE}" 2>/dev/null || true
+}
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+reset_mocks() {
+    _mock_ssh_calls=()
+    _mock_ssh_rc=0
+    _mock_call_order=()
+    _mock_hostname="stewie"
+    NODE_MODE="two-node"
+    # Restore the default helper mocks (individual tests may override them).
+    setup-iscsi-targets() {
+        _mock_call_order+=("setup")
+        return 0
+    }
+    rescan-storage() {
+        _mock_call_order+=("rescan")
+        return 0
+    }
+    clear_test_log_file
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_script_loads_and_defines_main() {
+    test_start "enroll-iscsi-pool sources and defines main()"
+    if declare -f main >/dev/null 2>&1 && declare -f add_pool_to_node_conf >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "main() and add_pool_to_node_conf() should be defined after sourcing"
+    fi
+}
+
+test_derive_target_short_lowercases() {
+    test_start "derive_target_short lowercases pool names"
+    assert_equals "nvme1" "$(derive_target_short NVME1)"
+}
+
+test_derive_target_short_strips_invalid() {
+    test_start "derive_target_short strips characters outside [a-z0-9.-]"
+    assert_equals "mypool" "$(derive_target_short 'My Pool!')"
+}
+
+test_derive_target_short_keeps_dot_dash() {
+    test_start "derive_target_short keeps dots and hyphens"
+    assert_equals "my-pool.v20" "$(derive_target_short 'My-Pool.v2_0')"
+}
+
+test_derive_target_short_empty_is_fatal() {
+    test_start "derive_target_short fails when nothing IQN-safe remains"
+    derive_target_short '!!!' >/dev/null 2>&1
+    assert_rc 1 $?
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "FATAL:"
+}
+
+test_add_pool_multiline_declare() {
+    reset_mocks
+    test_start "add_pool_to_node_conf inserts entry after multi-line declare block"
+    local conf
+    conf=$(make_conf \
+        '# node.conf' \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')' \
+        'STORAGE_HOST="stewie"')
+
+    add_pool_to_node_conf "$conf" scratch scratch
+    assert_rc 0 $?
+
+    assert_equals "scratch" "$(conf_map_value "$conf" scratch)"
+    # Entry lands immediately after the closing ')' of the block
+    assert_contains "$(sed -n '4,6p' "$conf")" 'POOL_TARGET[scratch]="scratch"'
+}
+
+test_add_pool_single_line_declare() {
+    reset_mocks
+    test_start "add_pool_to_node_conf inserts entry after single-line declare"
+    local conf
+    conf=$(make_conf \
+        '# node.conf' \
+        'declare -A POOL_TARGET=([threeamigos]="threeamigos")')
+
+    add_pool_to_node_conf "$conf" scratch scratch
+    assert_rc 0 $?
+
+    assert_equals "scratch" "$(conf_map_value "$conf" scratch)"
+    assert_contains "$(sed -n '2,3p' "$conf")" 'POOL_TARGET[scratch]="scratch"'
+}
+
+test_add_pool_no_declare_appends() {
+    reset_mocks
+    test_start "add_pool_to_node_conf appends a declaration when none exists"
+    local conf
+    conf=$(make_conf \
+        '# node.conf' \
+        'STORAGE_HOST="stewie"')
+
+    add_pool_to_node_conf "$conf" scratch scratch
+    assert_rc 0 $?
+
+    assert_equals "scratch" "$(conf_map_value "$conf" scratch)"
+    assert_contains "$(tail -n 1 "$conf")" 'declare -A POOL_TARGET=( [scratch]="scratch" )'
+}
+
+test_add_pool_idempotent() {
+    reset_mocks
+    test_start "add_pool_to_node_conf skips an already-enrolled pool unchanged"
+    local conf
+    conf=$(make_conf \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')')
+
+    add_pool_to_node_conf "$conf" threeamigos threeamigos
+    assert_rc 0 $?
+
+    local after_skip
+    after_skip=$(cat "$conf")
+    assert_contains "$after_skip" '[threeamigos]="threeamigos"'
+    local line_count
+    line_count=$(wc -l < "$conf")
+    assert_equals "3" "$line_count"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "already enrolled"
+}
+
+test_add_pool_ignores_same_key_in_other_map() {
+    reset_mocks
+    test_start "add_pool_to_node_conf ignores a same-named key in a different map"
+    local conf
+    conf=$(make_conf \
+        'declare -A OTHER_MAP=(' \
+        '    [threeamigos]="something-else"' \
+        ')')
+
+    add_pool_to_node_conf "$conf" threeamigos threeamigos
+    assert_rc 0 $?
+
+    # The OTHER_MAP entry must remain untouched...
+    assert_contains "$(cat "$conf")" '[threeamigos]="something-else"'
+    # ...and a real POOL_TARGET entry must have been added.
+    assert_equals "threeamigos" "$(conf_map_value "$conf" threeamigos)"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    if [[ "$log" == *"already enrolled"* ]]; then
+        test_fail "Expected no 'already enrolled' skip for a different map's key"
+    else
+        test_pass
+    fi
+}
+
+test_add_pool_creates_timestamped_backup() {
+    reset_mocks
+    test_start "add_pool_to_node_conf makes a timestamped backup before modifying"
+    local conf
+    conf=$(make_conf \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')')
+
+    add_pool_to_node_conf "$conf" scratch scratch
+
+    local backups
+    backups=$(ls "${conf}".bak-enroll-* 2>/dev/null | wc -l)
+    assert_equals "1" "$backups"
+    # Backup holds the original content
+    assert_contains "$(cat "${conf}".bak-enroll-*)" '[threeamigos]="threeamigos"'
+}
+
+test_update_config_only_updates_conf_only() {
+    reset_mocks
+    test_start "--update-config-only updates conf without ssh/setup/rescan"
+    local conf
+    conf=$(make_conf \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')')
+    ENROLL_ISCSI_NODE_CONF="$conf"
+
+    main --update-config-only scratch scratch >/dev/null 2>&1
+    assert_rc 0 $?
+
+    assert_equals "scratch" "$(conf_map_value "$conf" scratch)"
+    assert_equals "0" "${#_mock_ssh_calls[@]}"
+    assert_equals "0" "${#_mock_call_order[@]}"
+}
+
+test_full_run_invokes_peer_setup_then_rescan() {
+    reset_mocks
+    test_start "full run: peer ssh, local conf, setup-iscsi-targets then rescan-storage"
+    local conf
+    conf=$(make_conf \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')')
+    ENROLL_ISCSI_NODE_CONF="$conf"
+
+    main scratch >/dev/null 2>&1
+    assert_rc 0 $?
+
+    # Peer ssh invoked once with the delegation arguments
+    assert_equals "1" "${#_mock_ssh_calls[@]}"
+    assert_contains "${_mock_ssh_calls[0]}" "root@tweety"
+    assert_contains "${_mock_ssh_calls[0]}" "/remote/bin/enroll-iscsi-pool"
+    assert_contains "${_mock_ssh_calls[0]}" "--update-config-only scratch scratch"
+    # Test conf override propagated to the peer invocation
+    assert_contains "${_mock_ssh_calls[0]}" "ENROLL_ISCSI_NODE_CONF=$conf"
+
+    # Local conf updated
+    assert_equals "scratch" "$(conf_map_value "$conf" scratch)"
+
+    # setup-iscsi-targets runs before rescan-storage
+    assert_equals "2" "${#_mock_call_order[@]}"
+    assert_equals "setup" "${_mock_call_order[0]}"
+    assert_equals "rescan" "${_mock_call_order[1]}"
+}
+
+test_full_run_derives_short_name() {
+    reset_mocks
+    test_start "full run derives the short name when not given"
+    local conf
+    conf=$(make_conf \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')')
+    ENROLL_ISCSI_NODE_CONF="$conf"
+
+    main NVME2 >/dev/null 2>&1
+    assert_rc 0 $?
+
+    assert_equals "nvme2" "$(conf_map_value "$conf" NVME2)"
+    assert_contains "${_mock_ssh_calls[0]}" "--update-config-only NVME2 nvme2"
+}
+
+test_single_node_exits_cleanly() {
+    reset_mocks
+    test_start "single-node mode succeeds with no changes or invocations"
+    NODE_MODE="single-node"
+    local conf
+    conf="${TEST_TMPDIR}/node-$$-singlenode.conf"
+    ENROLL_ISCSI_NODE_CONF="$conf"
+
+    main scratch >/dev/null 2>&1
+    assert_rc 0 $?
+
+    if [[ ! -e "$conf" ]] && [[ ${#_mock_ssh_calls[@]} -eq 0 ]] && \
+       [[ ${#_mock_call_order[@]} -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "single-node run should make no changes and no invocations"
+    fi
+}
+
+test_non_storage_host_is_fatal() {
+    reset_mocks
+    test_start "non-storage host is refused with FATAL"
+    _mock_hostname="tweety"
+    local conf
+    conf=$(make_conf \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')')
+    ENROLL_ISCSI_NODE_CONF="$conf"
+
+    main scratch >/dev/null 2>&1
+    assert_rc 1 $?
+
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "Must run on the storage host"
+    assert_equals "0" "${#_mock_ssh_calls[@]}"
+    assert_equals "0" "${#_mock_call_order[@]}"
+}
+
+test_peer_ssh_failure_aborts_before_local_change() {
+    reset_mocks
+    test_start "peer ssh failure is FATAL and leaves local conf unmodified"
+    _mock_ssh_rc=1
+    local conf
+    conf=$(make_conf \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')')
+    local original
+    original=$(cat "$conf")
+    ENROLL_ISCSI_NODE_CONF="$conf"
+
+    main scratch >/dev/null 2>&1
+    assert_rc 1 $?
+
+    assert_equals "$original" "$(cat "$conf")"
+    assert_equals "0" "${#_mock_call_order[@]}"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "out of sync"
+}
+
+test_setup_targets_failure_is_fatal() {
+    reset_mocks
+    test_start "setup-iscsi-targets failure is FATAL after config updates"
+    setup-iscsi-targets() {
+        _mock_call_order+=("setup")
+        return 1
+    }
+    local conf
+    conf=$(make_conf \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')')
+    ENROLL_ISCSI_NODE_CONF="$conf"
+
+    main scratch >/dev/null 2>&1
+    assert_rc 1 $?
+
+    assert_equals "scratch" "$(conf_map_value "$conf" scratch)"
+    # rescan must not run after a setup failure
+    assert_equals "1" "${#_mock_call_order[@]}"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "setup-iscsi-targets failed"
+}
+
+test_rescan_failure_is_warn_only() {
+    reset_mocks
+    test_start "rescan-storage failure warns but still succeeds"
+    rescan-storage() {
+        _mock_call_order+=("rescan")
+        return 1
+    }
+    local conf
+    conf=$(make_conf \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')')
+    ENROLL_ISCSI_NODE_CONF="$conf"
+
+    main scratch >/dev/null 2>&1
+    assert_rc 0 $?
+
+    assert_equals "2" "${#_mock_call_order[@]}"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "WARN:"
+}
+
+test_dry_run_makes_no_changes() {
+    reset_mocks
+    test_start "--dry-run changes nothing, runs nothing, and logs planned actions"
+    local conf
+    conf=$(make_conf \
+        'declare -A POOL_TARGET=(' \
+        '    [threeamigos]="threeamigos"' \
+        ')')
+    local original
+    original=$(cat "$conf")
+    ENROLL_ISCSI_NODE_CONF="$conf"
+
+    main --dry-run scratch >/dev/null 2>&1
+    assert_rc 0 $?
+
+    assert_equals "$original" "$(cat "$conf")"
+    assert_equals "0" "${#_mock_ssh_calls[@]}"
+    assert_equals "0" "${#_mock_call_order[@]}"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "DRY-RUN:"
+    assert_contains "$log" "--update-config-only scratch scratch"
+    assert_contains "$log" "setup-iscsi-targets"
+    assert_contains "$log" "rescan-storage"
+}
+
+test_usage_error_when_pool_missing() {
+    reset_mocks
+    test_start "missing pool argument is a usage error"
+    main >/dev/null 2>&1
+    assert_rc 1 $?
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "Usage: enroll-iscsi-pool"
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_script_loads_and_defines_main
+test_derive_target_short_lowercases
+test_derive_target_short_strips_invalid
+test_derive_target_short_keeps_dot_dash
+test_derive_target_short_empty_is_fatal
+test_add_pool_multiline_declare
+test_add_pool_single_line_declare
+test_add_pool_no_declare_appends
+test_add_pool_idempotent
+test_add_pool_ignores_same_key_in_other_map
+test_add_pool_creates_timestamped_backup
+test_update_config_only_updates_conf_only
+test_full_run_invokes_peer_setup_then_rescan
+test_full_run_derives_short_name
+test_single_node_exits_cleanly
+test_non_storage_host_is_fatal
+test_peer_ssh_failure_aborts_before_local_change
+test_setup_targets_failure_is_fatal
+test_rescan_failure_is_warn_only
+test_dry_run_makes_no_changes
+test_usage_error_when_pool_missing
+
+test_summary

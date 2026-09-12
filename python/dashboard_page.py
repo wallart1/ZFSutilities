@@ -1687,18 +1687,47 @@ def _on_fix_iscsi_clicked(_button, app):
     refresh_dashboard_page(app)
 
 
+def _split_pool_status_sections(raw):
+    """Split `zpool status` (no pool argument) output into (pool, section) pairs.
+
+    Each pool's report begins with a "  pool: <name>" line; the section runs
+    until the next such line. Returns an empty list when raw is empty.
+    """
+    sections = []
+    current_name = None
+    current_lines = []
+    for line in raw.splitlines():
+        m = _ZPOOL_STATUS_POOL_RE.match(line)
+        if m:
+            if current_name is not None:
+                sections.append((current_name, "\n".join(current_lines)))
+            current_name = m.group(1)
+            current_lines = [line]
+        elif current_name is not None:
+            current_lines.append(line)
+    if current_name is not None:
+        sections.append((current_name, "\n".join(current_lines)))
+    return sections
+
+
 def _collect_running_tasks(app):
-    """Gather all currently running tasks: GUI runners, scrubs, profiles.
+    """Gather all currently running tasks: GUI runners, scrubs, ZFS-native ops, profiles.
 
     Returns a list of dicts with keys: name, type, status, task_key.
     """
     tasks = []
 
     # 1. GUI runners
-    for runner_name in ("backup_runner", "offsite_runner", "restore_runner", "retention_runner"):
+    for runner_name in (
+        "backup_runner",
+        "offsite_runner",
+        "restore_runner",
+        "retention_runner",
+        "dataset_runner",
+    ):
         runner = getattr(app, runner_name, None)
         if runner and getattr(runner, "running", False):
-            label = runner.label
+            label = getattr(runner, "operation_detail", None) or runner.label
             total = len(runner.steps)
             if runner._finally_step:
                 total += 1
@@ -1747,7 +1776,32 @@ def _collect_running_tasks(app):
                 }
             )
 
-    # 3. Running scheduled profiles (advisory lock files)
+    # 3. ZFS-native in-progress operations (resilver / RAIDZ expand / vdev removal)
+    from scrub_manager import parse_pool_operations
+
+    repo = getattr(app.ctx, "zfs_repository", None) or get_default_repository()
+    raw_status = repo.all_pool_status_text()
+    for pool_name, section in _split_pool_status_sections(raw_status):
+        op = parse_pool_operations(pool_name, section)
+        if op is None:
+            continue
+        if op.kind == "resilver":
+            op_name = f"Resilver: {op.pool}"
+        elif op.kind == "expand":
+            op_name = f"Expand {op.subject}: {op.pool}"
+        else:
+            op_name = f"Remove vdev {op.subject}: {op.pool}"
+        op_status = f"{op.progress_percent:.1f}% done" if op.progress_percent is not None else "In progress"
+        tasks.append(
+            {
+                "name": op_name,
+                "type": "ZFS",
+                "status": op_status,
+                "task_key": f"zfsop:{op.pool}",
+            }
+        )
+
+    # 4. Running scheduled profiles (advisory lock files)
     for profile in list_running_profiles():
         pid = profile.get("pid")
         if profile.get("waiting"):
@@ -1769,7 +1823,7 @@ def _collect_running_tasks(app):
             }
         )
 
-    # 4. Legacy scheduled tasks (profile_runner.py processes not yet using locks)
+    # 5. Legacy scheduled tasks (profile_runner.py processes not yet using locks)
     try:
         result = subprocess.run(
             ["pgrep", "-f", "profile_runner.py"],
@@ -1915,6 +1969,8 @@ def _cancel_task(app, task_key):
 
         stop_scrub(pool_name)
         log_msg(f"INFO: Stopped scrub on '{pool_name}'")
+    elif task_key.startswith("zfsop:"):
+        log_msg("INFO: ZFS-native operations cannot be cancelled from the GUI")
     elif task_key.startswith("profile:"):
         profile_name = task_key.split(":", 1)[1]
         log_msg(

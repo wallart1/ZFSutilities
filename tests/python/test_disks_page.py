@@ -670,6 +670,37 @@ def _mirror_topology(disk_names=("/dev/sda", "/dev/sdb")):
     )
 
 
+class TestTopologyBlocksizeRendering(unittest.TestCase):
+    """The topology pane shows pool blocksize in bytes, never raw ashift."""
+
+    def test_populate_topology_store_renders_bytes(self):
+        dp = _import_disks_page()
+        store = FakeTreeStore()
+        dp._populate_topology_store(
+            store,
+            None,
+            _topology(
+                "pool1",
+                children=[
+                    TopologyNode(
+                        name="/dev/sda",
+                        vdev_type="disk",
+                        state="ONLINE",
+                        read=0,
+                        write=0,
+                        cksum=0,
+                        ashift=None,
+                        children=[],
+                    )
+                ],
+            ),
+        )
+        pool_row = store.root[0]["row"]
+        self.assertEqual(pool_row[dp.COL_T_ASHIFT], "4096 bytes")
+        disk_row = store.root[0]["children"][0]["row"]
+        self.assertEqual(disk_row[dp.COL_T_ASHIFT], "-")
+
+
 class TestTopologySelectionHighlight(unittest.TestCase):
     """Topology selection highlights the matching inventory rows."""
 

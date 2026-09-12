@@ -304,6 +304,71 @@ class TestParseScrubStatus(unittest.TestCase):
         self.assertEqual(info.eta, fixed_now + timedelta(seconds=5025))
 
 
+class TestParsePoolOperations(unittest.TestCase):
+    """parse_pool_operations: resilver / RAIDZ expand / vdev removal detection."""
+
+    def test_resilver_in_progress(self):
+        raw = (
+            "  scan: resilver in progress since Thu Sep 10 22:00:00 2026\n"
+            "    45.20% done, 0 days 02:10:00 to go\n"
+        )
+        op = sm.parse_pool_operations("tank", raw)
+        self.assertIsNotNone(op)
+        self.assertEqual(op.pool, "tank")
+        self.assertEqual(op.kind, "resilver")
+        self.assertEqual(op.subject, "")
+        self.assertAlmostEqual(op.progress_percent, 45.2)
+
+    def test_expand_with_vdev_and_percent(self):
+        raw = (
+            "  expand: expansion of raidz1-0 in progress since Thu Sep 10 22:00:00 2026\n"
+            "    12.30% done\n"
+        )
+        op = sm.parse_pool_operations("tank", raw)
+        self.assertIsNotNone(op)
+        self.assertEqual(op.kind, "expand")
+        self.assertEqual(op.subject, "raidz1-0")
+        self.assertAlmostEqual(op.progress_percent, 12.3)
+
+    def test_remove_with_vdev_number(self):
+        raw = "  remove: Removal of vdev 3 copied 12.5G in 0h5m, 42.50% done, 0B memory used\n"
+        op = sm.parse_pool_operations("tank", raw)
+        self.assertIsNotNone(op)
+        self.assertEqual(op.kind, "remove")
+        self.assertEqual(op.subject, "3")
+        self.assertAlmostEqual(op.progress_percent, 42.5)
+
+    def test_scrub_in_progress_returns_none(self):
+        raw = (
+            "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
+            "    0B repaired, 12.34% done, 01:23:45 to go\n"
+        )
+        self.assertIsNone(sm.parse_pool_operations("tank", raw))
+
+    def test_clean_pool_returns_none(self):
+        raw = "  scan: scrub repaired 0B in 00:00:02 with 0 errors on Sun May 10 00:24:03 2026\n"
+        self.assertIsNone(sm.parse_pool_operations("tank", raw))
+
+    def test_empty_text_returns_none(self):
+        self.assertIsNone(sm.parse_pool_operations("tank", ""))
+
+    def test_missing_percent_yields_none_progress(self):
+        raw = "  expand: expansion of raidz1-0 in progress since Thu Sep 10 22:00:00 2026\n"
+        op = sm.parse_pool_operations("tank", raw)
+        self.assertIsNotNone(op)
+        self.assertEqual(op.kind, "expand")
+        self.assertIsNone(op.progress_percent)
+
+    def test_resilver_in_progress_still_unknown_to_scrub_parser(self):
+        """Regression: ScrubQueue reconciliation must not mistake a resilver for a scrub."""
+        raw = (
+            "  scan: resilver in progress since Thu Sep 10 22:00:00 2026\n"
+            "    45.20% done, 0 days 02:10:00 to go\n"
+        )
+        info = sm.parse_scrub_status(raw)
+        self.assertEqual(info.state, sm.ScrubState.UNKNOWN)
+
+
 class TestScrubQueue(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()

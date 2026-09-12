@@ -122,6 +122,9 @@ This initializes basic runtime variables and sources commonly-used functions.
     }
     ```
 
+  **Exception**: output variables that callers read (like `$fsarray`) are
+  intentionally global and should **not** be declared `local`.
+
 - Apply the **Single Responsibility Principle**: each function should do one
   thing.
 - For complex conditions, create named functions:
@@ -192,6 +195,62 @@ This initializes basic runtime variables and sources commonly-used functions.
 - `bashreturn` is not a general replacement for `return` inside functions.
   `bashfatal` is not a general replacement for `exit` at the top level of an
   executed script.
+
+### Project Initialization and Sourcing
+
+- Start scripts with the standard initialization, which bootstraps from the
+  script's own directory and falls back to the deployed `~/bashinit`:
+
+  ```bash
+  _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+  if [[ -f "$_local_bashinit" ]]; then
+      source "$_local_bashinit"
+  else
+      source ~/bashinit
+  fi
+  bashinit
+  unset _local_bashinit
+
+  source_helper rootcheck
+  rootcheck
+  ```
+
+- Use `source_helper <name>` (provided by `bashinit`) to load sibling helpers
+  (e.g. `rootcheck`, `zfslockmanager`) via `find_zfsutility_script`, rather than
+  `source $mydir/<name>`.
+
+- Node-aware scripts (those that interact with the storage/compute hosts) add
+  `node-lib.sh` between `bashinit` and `rootcheck`, with a `NODE_LIB`
+  environment override so tests can point at the library explicitly:
+
+  ```bash
+  NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+  source "$NODE_LIB"
+  ```
+
+- Use `usage()` for argument errors, showing help and exiting.
+
+- Use the dual-mode guard for scripts that define reusable functions, so they
+  can be sourced by the test harness without running:
+
+  ```bash
+  if calledbybash; then myfunc "$@"; fi
+  ```
+
+- **Do not `export -f log_msg`** into subshells (e.g. `xargs` or `parallel`).
+  `log_msg` depends on internal helper functions and an associative array that
+  `export -f` does not propagate. Instead, `source ~/bashinit` inside each
+  subshell so `log_msg` and its dependencies are fully initialized.
+
+### Project-Specific Patterns
+
+- Any code path that creates a ZFS snapshot must hold a `w` lock on the target
+  dataset (via `zfslockmanager` or `zfs_lock_manager`) before calling
+  `zfs snapshot`. This prevents concurrent jobs from creating out-of-sequence
+  snapshots that would force an incremental receive with `-F` to roll back.
+
+- Use arrays for include/exclude lists: `includes=('proxmox')`,
+  `excludes=('temp/temp')`; empty arrays are `includes=()`.
 
 ### Commenting and Documentation
 
@@ -308,6 +367,12 @@ log_msg("DEBUG: variable =", value)
 - Messages without a recognized `LEVEL:` prefix use the implied "(none)" level
   and are always displayed in the log viewers
 - `log_msg` always emits every message; filtering is done by the GUI log viewers
+- Default threshold is `INFO` (controlled by the `msg_level` environment
+  variable)
+- When `ZFSUTILITIES_LOG_FILE` is set, both bash and Python `log_msg` append
+  the formatted message to that file
+- `ZFSUTILITIES_LOG_INHERIT=Y` is passed to bash subprocesses so they do not
+  create a competing session log; the Python runner remains the single writer
 - In the GUI, messages route to the info panel; in CLI mode they go to `stderr`
 - Each line is prefixed with `file:line:` via `inspect`
 
@@ -334,6 +399,10 @@ log_msg("DEBUG: variable =", value)
         return target
     ```
 - **Never use absolute line numbers when editing files** Instead, use surrounding context to locate the editing target location.
+- **Single-call-site helpers**: Functions should generally have at least two
+  calling sites. Small readability helpers or functions created for direct unit
+  testing may have a single call site; avoid splitting out a helper when it
+  only wraps a single expression used once.
 
 ### Linting
 

@@ -56,6 +56,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfslockctl`](#zfslockctl)
 - [`zfslockmanager-test`](#zfslockmanager-test)
 - [`zfsmassdelsnaps`](#zfsmassdelsnaps)
+- [`zfs-migrate-send`](#zfs-migrate-send)
 - [`zfsmount`](#zfsmount)
 - [`zfsmountsnapshot`](#zfsmountsnapshot)
 - [`zfsoffsiteretain`](#zfsoffsiteretain)
@@ -1972,6 +1973,65 @@ without deleting them.
 | ---- | ------- |
 | `0`  | Completed successfully, was cancelled, or no snapshots matched |
 | `8`  | Fatal error (no pool or no label specified) |
+
+---
+
+### `zfs-migrate-send`
+
+One-shot replication copy for the Migrate Pool data-transfer steps (see the
+[GTK GUI Migrate Pool](../user-guide/gtk-gui.md#migrate-pool) reference). Sends
+one pre-created migration snapshot as a single `zfs send -Rw` stream and
+receives it with `zfs receive -u -F -s`, resuming from a receive resume token
+when the destination already has one. The Python GUI invokes it through a
+`bash -c` wrapper built by `build_migration_send_receive_command()`.
+
+```bash
+sourcefs=temp/proxmox destfs=temp_mig/proxmox snapname=migrate-… \
+    pv_rate_limit=100m zfs-migrate-send
+```
+
+**Arguments:** none (variables are assigned by the caller).
+
+**Globals:**
+
+| Variable        | Role                                                          |
+| --------------- | ------------------------------------------------------------- |
+| `$sourcefs`     | Source dataset (required)                                     |
+| `$destfs`       | Destination dataset (required)                                |
+| `$snapname`     | Bare migration snapshot name, no leading `@` (required)       |
+| `$pv_rate_limit`| Optional `pv -L` rate (e.g. `100m`); empty = unlimited        |
+
+**Behavior:**
+
+- If the destination dataset exists and has a `receive_resume_token`, the
+  token is validated (`zfs send -nP -t`). Valid → the remaining byte count is
+  logged and the transfer resumes with `zfs send -t <token> | pv | zfs
+  receive <dest>` (no `-u`/`-F`/`-s` — the token encodes the destination
+  state). Stale (`transfer_resume_token_stale`) or unexpectedly invalid →
+  the token is aborted with `zfs receive -A` and a fresh send runs.
+- Fresh send: stream-size estimate (`zfs send -nPRw`, WARN and continue when
+  unavailable), destination free-space WARN check (never aborts), then
+  `zfs send -Rw <source>@<snap> | pv … | zfs receive -u -F -s <dest>`.
+- `pv` appears in the pipeline when stderr is a terminal or the GUI runner
+  captures output (`ZFSUTILITIES_LOG_INHERIT=Y`); a rate limit is honored
+  quietly in headless mode.
+- No locking: the migration executor already holds a pool write lock for the
+  whole run.
+
+**Called modules:**
+
+| Module | Purpose in this command |
+| ------ | ----------------------- |
+| `bashinit` | Logging and `$mydir` initialization |
+| `rootcheck` | Verify root privileges |
+| [transfer-lib.sh](modules.md#transfer-libsh) | Shared resume-token, pv, pipeline, and space-check helpers |
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Transfer (or resume) completed successfully |
+| `8`  | Transfer failed — re-run Migrate Pool to resume from the receive resume token |
 
 ---
 

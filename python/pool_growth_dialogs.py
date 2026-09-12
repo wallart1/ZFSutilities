@@ -30,7 +30,7 @@ gi.require_version("Gtk", "3.0")
 import node_config
 import zfs_lock_manager as zlm
 from command_builders import BashStep
-from disk_repository import DiskInfo, _format_bytes
+from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from gi.repository import Gtk
 from gui_helpers import configure_treeview_column, create_dialog
@@ -992,7 +992,7 @@ def _node_size_text(node: TopologyNode, disks: list[DiskInfo]) -> str:
     """
     if node.vdev_type == "disk":
         disk = _find_disk(node.name, disks)
-        return _format_bytes(disk.size_bytes) if disk is not None else "-"
+        return format_bytes(disk.size_bytes) if disk is not None else "-"
     total = 0
     leaves = list(node.children)
     while leaves:
@@ -1003,7 +1003,7 @@ def _node_size_text(node: TopologyNode, disks: list[DiskInfo]) -> str:
                 total += disk.size_bytes
         else:
             leaves.extend(child.children)
-    return _format_bytes(total) if total > 0 else "-"
+    return format_bytes(total) if total > 0 else "-"
 
 
 def _populate_target_store(
@@ -1660,6 +1660,7 @@ def on_disks_add_vdev(app) -> None:
             return
         log_msg(f"INFO: Added vdev to pool '{pool_name}'")
 
+    runner.operation_detail = f"Add Data Vdev: {pool_name}"
     runner.set_steps([step])
     update_disks_button_sensitivity(app)
     runner.start(on_complete=_on_complete)
@@ -1717,6 +1718,7 @@ def on_disks_detach_device(app) -> None:
             return
         log_msg(f"INFO: Detached device from pool '{pool_name}'")
 
+    runner.operation_detail = f"Detach: {pool_name}"
     runner.set_steps([step])
     update_disks_button_sensitivity(app)
     runner.start(on_complete=_on_complete)
@@ -1789,6 +1791,7 @@ def on_disks_replace_device(app) -> None:
             "in the Pools tab Watch window"
         )
 
+    runner.operation_detail = f"Replace: {pool_name}"
     runner.set_steps([step])
     update_disks_button_sensitivity(app)
     runner.start(on_complete=_on_complete)
@@ -1863,6 +1866,7 @@ def on_disks_attach_device(app) -> None:
                 "to restripe existing data at the new ratio"
             )
 
+    runner.operation_detail = f"Attach: {pool_name}"
     runner.set_steps([step])
     update_disks_button_sensitivity(app)
     runner.start(on_complete=_on_complete)
@@ -1928,6 +1932,7 @@ def on_disks_add_infra_vdev(app) -> None:
             return
         log_msg(f"INFO: Added {kind} vdev to pool '{pool_name}'")
 
+    runner.operation_detail = f"Add Infra Vdev: {pool_name}"
     runner.set_steps([step])
     update_disks_button_sensitivity(app)
     runner.start(on_complete=_on_complete)

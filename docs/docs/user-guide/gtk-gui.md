@@ -185,7 +185,7 @@ selects the corresponding row in the inventory:
 | Type | `mirror`, `raidz1/2/3`, `stripe`, `disk`, `special`, `log`, `cache`, `spare` |
 | State | ZFS state for the vdev or device |
 | Read / Write / Cksum | Error counters from `zpool status` |
-| Ashift | Effective ashift for the vdev |
+| Blocksize | Effective pool blocksize for the vdev, shown in bytes (512 bytes, 4096 bytes, …) |
 
 ### Creating Pools
 
@@ -217,11 +217,25 @@ The wizard has four steps:
    capacity for the selected workload profile's block size.
 3. **Pool settings** — enter the pool name (validated against `zpool` naming
    rules and checked for collisions with imported and importable pools),
-   choose `ashift` (auto, 9, 12, or 13; a hint suggests the value from the
-   worst-case physical sector size of the selected disks), and pick a workload
-   profile whose live filesystem properties are written explicitly as `-O`
-   options — never left to `zpool create` defaults, which drift between
-   releases.
+   choose the pool blocksize, and pick a workload profile whose live
+   filesystem properties are written explicitly as `-O` options — never left
+   to `zpool create` defaults, which drift between releases. The pool
+   blocksize is the GUI name for the ZFS `ashift` property: `512 bytes` =
+   ashift 9, `4096 bytes` = ashift 12, and `8192 bytes` = ashift 13. The
+   wizard computes a **recommended** pool blocksize for the selected disks
+   and pre-selects it, so the review step shows `-o ashift=<value>` in the
+   exact command. The recommendation starts at `4096 bytes` and only ever
+   goes up: a blocksize above 4096 recorded in a previous pool's labels on
+   the disks (read with `zdb -l`) or a disk reporting a physical sector size
+   above 4096 (e.g. 8K-native NVMe) raises it to `8192 bytes`. It is never
+   automatically lowered to `512 bytes`, because no available probe can tell
+   an honest 512-byte-native drive apart from a 4K-native drive misreporting
+   512 — and a too-small blocksize permanently hurts the modern drive while
+   a slightly-too-large one is harmless to the old one. `512 bytes` remains
+   in the list as a manual choice for experts who know their hardware.
+   `auto (let ZFS decide)` also remains available, but ZFS trusts what the
+   drive reports — that is exactly the misreporting weakness the wizard's
+   recommendation avoids.
 4. **Review** — the exact `zpool create` command plus the live output of
    `zpool create -n` (a dry run that validates the command without creating
    anything). The **Create** button stays insensitive until you type the pool
@@ -230,7 +244,12 @@ The wizard has four steps:
 
 After execution, the Disks and Pools tabs refresh
 automatically, and you are offered the chance to register the new pool in the
-pool registry so backups and retention can include it.
+pool registry so backups and retention can include it. On a two-node
+configuration you are also offered iSCSI enrollment: accepting it adds the pool
+to the `POOL_TARGET` map in `node.conf` on both nodes (via
+`enroll-iscsi-pool`), creates the pool's iSCSI target on the storage host, and
+rescans the compute host — so VM disks created on the new pool work over iSCSI
+immediately, with nothing to configure by hand.
 
 On a two-node configuration the wizard is available only on the storage host;
 on the compute host the button is disabled with an explanatory tooltip.
@@ -328,7 +347,8 @@ The exact command is `zpool add <pool> <special|log|cache> [mirror] <by-id…>`.
 #### Migrate Pool
 
 Copy-based expansion for changes ZFS cannot perform in place — converting a
-stripe to raidz (or mirror to raidz), changing vdev width, or changing ashift.
+stripe to raidz (or mirror to raidz), changing vdev width, or changing the
+pool blocksize (the `ashift` property).
 Pick the source pool and one of two destination modes:
 
 - **New disks** — select eligible disks and a topology for a new pool (built
@@ -339,15 +359,24 @@ Pick the source pool and one of two destination modes:
   copied back.
 
 The review page lists every step that will run, from the recursive migration
-snapshot through one `zfs send -Rw | zfs receive -u -F` replication step per
-top-level dataset (snapshots, descendants, and properties included; encrypted
-datasets are sent raw) to a dataset-tree verification. Typed confirmation of
-the source pool name starts the copy phase. When the copy finishes, a second
+snapshot through one `zfs send -Rw` replication step per top-level dataset
+(received with `zfs receive -u -F -s`; snapshots, descendants, and properties
+included; encrypted datasets are sent raw) to a dataset-tree verification.
+An optional **Bandwidth limit** (a `pv` rate such as `100m`) throttles the
+copy. Every copy is resumable: an interrupted transfer leaves a receive
+resume token on the destination, and re-running Migrate Pool resumes from
+that token instead of starting over, with live `pv` progress shown in the
+status area. Typed confirmation of the source pool name starts the copy
+phase. When the copy finishes, a second
 typed confirmation gates the cutover: the source pool is exported and the
 migrated pool is re-imported under the source pool's name, so every
 `pool/dataset` path — and everything that references it — survives the swap.
 If cutover is deferred, the migration snapshot and copies remain in place and
-rerunning Migrate Pool finishes the job. Cutover refuses to start while the
+rerunning Migrate Pool finishes the job (resuming any interrupted copy).
+After a successful cutover, if the migrated pool is enrolled in two-node iSCSI
+(`POOL_TARGET`), a follow-up `repair-iscsi-luns` step rebuilds its backstores
+and LUN mappings and rescans the compute host automatically.
+Cutover refuses to start while the
 pool's scrub is running or paused. The pool hosting the root filesystem is
 never offered for migration.
 
@@ -417,14 +446,16 @@ profiles stored in the JSON config.
 ### Actions
 
 - **Apply Profile…** — apply the selected workload profile to the selected
-  dataset(s).
+  dataset(s). Storage host only on two-node systems; disabled while a dataset
+  action is running.
 - **Rewrite Data** — run `zfs rewrite -P -r -x -v <mountpoint>` on one or more
   selected filesystem datasets (volumes cannot be rewritten; the button is
   insensitive when a volume is in the selection). The datasets are rewritten
   sequentially, each with its own write lock. Requires OpenZFS 2.3.4+/2.4+ and
   the pool's physical_rewrite feature. An unmounted dataset is mounted
   temporarily and returned to its prior state afterwards; recursion never
-  crosses mount points.
+  crosses mount points. Storage host only on two-node systems; disabled while a
+  dataset action is running.
 - **Advanced: Manage Profiles…** — open the workload profile manager.
 - **Create Pool…** — open the create-pool wizard to build a new pool from
   unused disks (see [Creating Pools](#creating-pools)). Storage host only on
@@ -828,9 +859,15 @@ only when the selection contains at least one real task; selecting the
 | Task type     | Source                                                                   | Cancel behaviour                                |
 | ------------- | ------------------------------------------------------------------------ | ----------------------------------------------- |
 | **GUI**       | Backup, Offsite, Restore, or Prune started from their respective tabs    | Graceful cancel (SIGTERM the runner subprocess) |
+| **Dataset action** | Disks-page operations — Migrate Pool, Create Pool, vdev growth (Add Data Vdev, Attach, Replace, Detach, Add Infra Vdev), Apply Profile, Rewrite Data, Enroll iSCSI — started from their dialogs | Graceful cancel (SIGTERM the runner subprocess). Shown with its operation name and Step N/M status. |
 | **Scrub**     | Pool scrubs started from the Pools tab or detected as externally running | `zpool scrub -s <pool>`. While running, the progress text includes an ETA when `zpool status` reports remaining time. |
+| **ZFS-native operation** | In-progress resilver, RAIDZ expansion, or vdev removal on any pool, discovered from live `zpool status` on every refresh | Cannot be cancelled from the GUI; ZFS offers no cancel for these. The status shows percent done. |
 | **Profile**   | `profile_runner.py` jobs launched by **Run Now** in the Schedule tab       | SIGTERM the profile-runner process              |
 | **Scheduled** | `profile_runner.py` jobs launched by cron                                | SIGTERM the profile-runner process              |
+
+The operation name shown on a **Dataset action** row (for example,
+*Migrate Pool: fivebays*) is set by the dialog that started the action before
+the runner begins, so the row always names the operation you launched.
 
 Cron launches each scheduled profile through a compound shell command
 (`mkdir -p ... && python3 .../profile_runner.py run <name> ...`), so the

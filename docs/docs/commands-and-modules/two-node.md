@@ -98,6 +98,7 @@ detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
 - [`deploy-version` (repo root)](#deploy-version-repo-root)
 - [`detach-vm-disk` (both)](#detach-vm-disk-both)
 - [`enroll-efi-keys-vm` (compute node)](#enroll-efi-keys-vm-compute-node)
+- [`enroll-iscsi-pool` (storage node)](#enroll-iscsi-pool-storage-node)
 - [`iscsi-add-encrypted-luns` (storage node)](#iscsi-add-encrypted-luns-storage-node)
 - [`iscsi-restore-luns` (storage node)](#iscsi-restore-luns-storage-node)
 - [`list-vm-disks` (both)](#list-vm-disks-both)
@@ -733,6 +734,81 @@ sudo enroll-efi-keys-vm <vmid>
 Side effects: grows the EFI zvol; rewrites EFI vars; updates the VM config.
 The VM is left stopped. After starting it, watch the console — the UEFI boot
 order is reset and may need to be re-selected in the firmware setup.
+
+---
+
+### `enroll-iscsi-pool` (storage node)
+
+Enrolls a pool in two-node iSCSI export end to end:
+
+1. Adds the pool to the `POOL_TARGET` map in `/etc/zfsutilities/node.conf` on
+   **both** nodes — the peer node's config is updated first (over SSH), so a
+   peer failure aborts before the local change leaves the nodes inconsistent.
+2. Runs `setup-iscsi-targets` on the storage host to create the pool's target
+   and portal.
+3. Runs `rescan-storage` so the compute host discovers the LUNs.
+
+Idempotent — re-running for an already-enrolled pool skips the config change and
+just re-verifies the target and rescans. The Create Pool wizard offers this
+automatically after creating a pool on the storage host in two-node mode, so a
+new pool no longer needs the three manual enrollment steps.
+
+```bash
+sudo enroll-iscsi-pool [--dry-run] [--update-config-only] <pool> [short-name]
+```
+
+**Arguments:**
+
+| Argument | Meaning |
+| -------- | ------- |
+| `<pool>` | Pool name to enroll (required) |
+| `[short-name]` | Target short name (IQN suffix); derived from the pool name when omitted (lowercased, keeping only `a-z`, `0-9`, `.`, `-`) |
+| `--dry-run` | Print each planned action without changing anything |
+| `--update-config-only` | Only update node.conf on this node; skip target setup and rescan (used for the SSH peer call and for manual node.conf repair) |
+
+**Globals:** node-config globals only. Test overrides: `ENROLL_ISCSI_NODE_LIB`,
+`ENROLL_ISCSI_NODE_CONF`, `ENROLL_ISCSI_SETUP_TARGETS`,
+`ENROLL_ISCSI_RESCAN_STORAGE`, `ENROLL_ISCSI_TEST_MODE`.
+
+**Called modules / commands:**
+
+| Script | Purpose |
+| ------ | ------- |
+| `node-lib.sh` | Two-node host/target resolution |
+| `setup-iscsi-targets` | Create the pool's iSCSI target and portal |
+| `rescan-storage` | Compute-host LUN discovery rescan (delegates via SSH) |
+| `ssh` | Update the peer node's node.conf |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| `/etc/zfsutilities/node.conf` | `POOL_TARGET` entry added on both nodes (one-time backup kept as `<conf>.bak-enroll-<date>`) | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| `targetcli` iSCSI config | Target and portal created or verified | — |
+
+**Internal flow / algorithm:**
+
+1. Exit silently in single-node mode.
+2. Verify the script is running on the storage host (`--update-config-only`
+   excepted — that mode is the peer-delegation path and may run on either node).
+3. Derive the target short name if not given.
+4. Update the peer node's node.conf via SSH (`--update-config-only`); FATAL
+   with a "nodes may be out of sync" hint on failure, before touching the local
+   config.
+5. Update the local node.conf (idempotent skip when already enrolled).
+6. Run `setup-iscsi-targets` (FATAL on failure).
+7. Run `rescan-storage` (WARN on failure — the target already exists, so a
+   manual `sudo rescan-storage` on the compute host finishes the job).
+
+**Return codes / side effects:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Pool enrolled (or nothing to do); a rescan failure still returns `0` |
+| `1`  | Usage error, not the storage host, peer/local config update failed, or `setup-iscsi-targets` failed |
+
+Side effects: modifies node.conf on both nodes (with backup); creates or
+verifies the pool's iSCSI target and portal; rescans the compute host.
 
 ---
 

@@ -296,7 +296,7 @@ and tests easy to mock.
 | `build_replace_command()` | Pure `zpool replace` argv builder |
 | `build_detach_command()` | Pure `zpool detach` argv builder |
 | `build_recursive_snapshot_command()` | Pure `zfs snapshot -r` argv builder for migration snapshots |
-| `build_migration_send_receive_command()` | Pure `bash -c` argv running `zfs send -Rw … \| zfs receive -u -F …` under `pipefail` |
+| `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` for `pv -L`) |
 | `build_pool_export_command()` | Pure `zpool export` argv builder |
 | `build_pool_import_rename_command()` | Pure `zpool import <temp> <name>` argv builder (cutover rename) |
 | `build_pool_destroy_command()` | Pure `zpool destroy` argv builder (holding-mode migration only) |
@@ -355,14 +355,14 @@ warns when the two differ.
 
 | Class | Purpose |
 | ----- | ------- |
-| `ZfsVersion` | Parsed `(major, minor)` tuples for userland and kmod |
+| `ZfsVersion` | Parsed `(major, minor, patch)` tuples for userland and kmod |
 | `ZfsCapabilities` | `supports(name)`, `requires(name)`, and `supports_pool_feature(pool, feature)` pool-feature cross-checks (whitespace-column parsing of `zpool get all` output) |
 
 **Key constants:**
 
 | Constant | Purpose |
 | -------- | ------- |
-| `FEATURE_MIN_VERSION` | Mapping of feature name to minimum `(major, minor)` |
+| `FEATURE_MIN_VERSION` | Mapping of feature name to minimum `(major, minor, patch)`; patch matters for `zfs_rewrite` (2.3.4, not 2.3.0) |
 
 **Called modules / imported helpers:**
 
@@ -413,6 +413,48 @@ methods directly for troubleshooting.
 | Module | Purpose in this module |
 | ------ | ------------------------ |
 | `zfs_repository` | `ZfsRepository` |
+
+---
+
+### `pool_create.py`
+
+Pure logic for the Disks-page create-pool wizard (see
+`pool_create_wizard.py` for the GTK half): disk eligibility and partition
+policy, topology validation, pool-name validation, ashift suggestion, and the
+RAIDZ capacity estimator. No GTK and no direct subprocess calls — ZFS I/O is
+delegated to `zfs_repository` via the app context, and the actual `zpool
+create` argv is built by `zfs_repository.build_create_pool_command()`.
+
+**Key classes / constants:**
+
+| Name | Purpose |
+| ---- | ------- |
+| `TopologySpec` | One selectable topology (stripe, mirror, raidz1-3, draid, raid10): minimum disks, vdev-width rules |
+| `TOPOLOGIES` | Registry of selectable topology names to `TopologySpec` |
+| `EligibilityResult` | Why a disk or partition is usable or not (in-use pool match, partition policy) |
+| `CapacityEstimate` | Raw vs effective capacity result of `estimate_effective_capacity()` |
+| `MAX_POOL_NAME_LEN` | Pool-name length limit (temp migration names append a suffix under it) |
+| `SOLID_STATE_TYPES` | Disk rotational types that get the SSD/NVMe ashift suggestion |
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `disk_eligibility()` | Decide whether a disk/partition may be used for a new pool (in-use, boot-disk, alias matching) |
+| `_apply_partition_policy()` | Whole-disk vs partition usage rules for the selected disks |
+| `validate_vdev_selection()` | Topology-specific vdev composition checks (widths, mirrors, mixed sizes) |
+| `validate_raid10_count()` | RAID10 requires an even disk count of at least four |
+| `validate_pool_name()` | Name syntax, reserved words, length, and collision checks |
+| `recommend_ashift()` | Recommended pool blocksize (ashift): defaults to 12 (4096 bytes); prior-pool label or reported-sector evidence can only raise it, never lower it |
+| `estimate_effective_capacity()` | Effective capacity estimator for redundancy layouts |
+| `pool_filesystem_options()` | `-O` filesystem properties from a workload profile for the pool root |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `disk_repository` | `DiskInfo` |
+| `workload_profiles` | `LIVE_PROPERTIES`, `properties_for_profile` |
 
 ---
 
@@ -492,8 +534,10 @@ pool-expansion path (see `pool_migrate.py`). The dialog collects the source
 pool and destination mode (new disks + topology, or an existing holding
 pool), shows the full step plan, and gates the run behind typed confirmation
 of the source pool name. Execution is two runner phases: the copy phase
-(recursive migration snapshot, one `zfs send -Rw | zfs receive -u -F` step
-per top-level dataset, then per-dataset tree verification) and the cutover
+(recursive migration snapshot, one resumable `zfs-migrate-send` step —
+`zfs send -Rw` received with `zfs receive -u -F -s`, with `pv` in the
+pipeline and an optional bandwidth limit — per top-level dataset, then
+per-dataset tree verification) and the cutover
 phase, which starts only after a second typed confirmation — export the
 source pool, then re-import the migrated pool under the source pool's name
 (new disks) or destroy/rebuild/copy-back/swap (holding pool). The pool
@@ -1564,6 +1608,49 @@ registry entries, and scrub queue operations.
 | --------- | --------- |
 | `pools` config object | [JSON config][ds-json] |
 | Scrub state / `ScrubQueue` | [Scrub state][ds-scrub] |
+
+---
+
+### `iscsi_enroll.py`
+
+Two-node iSCSI enrollment offer for newly created or migrated pools. After
+the Create Pool wizard creates a pool on the storage host in a two-node
+configuration, this module asks whether to run the
+[`enroll-iscsi-pool`](../commands-and-modules/two-node.md#enroll-iscsi-pool-storage-node)
+script: it adds the pool to the `POOL_TARGET` map in `node.conf` on both
+nodes, creates the pool's iSCSI target on the storage host, and rescans the
+compute host. The Migrate Pool cutover also uses these helpers to decide
+whether a chained `repair-iscsi-luns` step is needed. Decision logic is kept
+in pure helpers (testable without GTK); the enrollment itself runs as a
+non-fatal `BashStep` on the dataset runner so an enrollment failure does not
+look like a pool-creation failure.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `derive_target_short(pool_name)` | Derive the iSCSI target short name (lowercase, keeping only `[a-z0-9.-]`); mirrors the bash `derive_target_short` |
+| `is_iscsi_managed_pool(pool_name, config)` | True when the config is two-node and the pool has a `POOL_TARGET` entry |
+| `build_enroll_command(pool_name, short_name, dry_run)` | Pure `enroll-iscsi-pool` argv builder |
+| `log_manual_enrollment_steps(pool_name)` | Log the three manual enrollment steps (used when the offer does not apply or is declined) |
+| `offer_iscsi_enrollment(app, pool_name, on_done)` | GTK offer dialog; hands the enrollment step to the dataset runner, or logs the manual steps and returns False |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `node_config` | Two-node/host detection, `POOL_TARGET` lookup |
+| `command_builders` | `BashStep` |
+| `path_utils` | `resolve_local_bin` |
+| `disks_page` / `pools_page` | Post-enrollment refresh |
+| `backup_config` | `log_msg` |
+
+**Data structures consumed / produced:**
+
+| Structure | Reference |
+| --------- | --------- |
+| `node.conf` `POOL_TARGET` map | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| `BashStep` | [BashStep][ds-bashstep] |
 
 ---
 

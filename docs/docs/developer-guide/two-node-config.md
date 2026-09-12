@@ -50,6 +50,12 @@ The `IQN_PREFIX` value contains the literal host string because it is part of
 the standards-based iSCSI target's persistent name — renaming the host does **not**
 rename the target.
 
+When you create a new pool that should export VM disks over iSCSI, add its
+`POOL_TARGET` entry with `sudo enroll-iscsi-pool <pool>` (or accept the Create
+Pool wizard's enrollment offer) instead of editing this file by hand — it
+updates the map on both nodes, creates the target, and rescans the compute
+host. See [`enroll-iscsi-pool`](../commands-and-modules/two-node.md#enroll-iscsi-pool-storage-node).
+
 ## Config File: `/etc/zfsutilities/deploy.conf`
 
 A separate, optional configuration file used by [`deploy-version`](../commands-and-modules/two-node.md#deploy-version-repo-root) to determine which remote hosts receive a deployment.
@@ -301,6 +307,7 @@ is unlocked; see [ZFS Key Handling](../installation/zfs-keys.md).
 | [zfsclone-vm](../commands-and-modules/two-node.md#zfsclone-vm-both)                 | Local ZFS snapshot + clone         | SSH delegation + iSCSI LUN setup               |
 | [promote-vm-clone](../commands-and-modules/two-node.md#promote-vm-clone-both)       | Local `zfs promote`                | SSH delegation to storage host                 |
 | [rescan-storage](../commands-and-modules/two-node.md#rescan-storage-both)           | N/A (exits)                        | Rescans iSCSI sessions                         |
+| [enroll-iscsi-pool](../commands-and-modules/two-node.md#enroll-iscsi-pool-storage-node) | N/A (exits)                   | POOL_TARGET on both nodes + target + rescan    |
 | [show-lun-map](../commands-and-modules/two-node.md#show-lun-map-compute-node)       | N/A (exits)                        | Shows LUN-to-device mapping                    |
 | [safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node) | N/A (exits)                        | Saves targetcli config with safety check       |
 | [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup)                | Skips compute-host pull            | Full cross-host backup                         |

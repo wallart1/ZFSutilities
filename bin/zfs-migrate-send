@@ -1,0 +1,123 @@
+#!/usr/bin/bash
+# zfs-migrate-send
+# One-shot replication copy for the Migrate Pool data-transfer steps.
+#
+# Sends one pre-created migration snapshot as a single `zfs send -Rw` stream
+# and receives it with `zfs receive -u -F -s` so an interrupted transfer
+# leaves a receive resume token on the destination: re-running Migrate Pool
+# resumes from that token instead of starting over. `pv` is placed in the
+# pipeline when useful (terminal or GUI-captured output) and can be
+# rate-limited via $pv_rate_limit.
+#
+# Usage: not intended for direct CLI use; the Migrate Pool wizard executes
+#        this script with the variables below assigned.
+# Variables assigned by the caller before sourcing/executing:
+#   $sourcefs      source dataset (e.g. temp/proxmox)
+#   $destfs        destination dataset (e.g. temp_mig/proxmox)
+#   $snapname      bare migration snapshot name (no leading @)
+#   $pv_rate_limit optional pv -L rate (e.g. 100m); empty = unlimited
+#
+# Returns: 0 on success; 8 on transfer failure (the destination resume token
+#          is kept so the transfer can be resumed by a re-run).
+
+set -euo pipefail
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+source_helper rootcheck
+rootcheck
+
+source_helper transfer-lib.sh
+
+zfs_migrate_send() {
+    local sourcefs="${sourcefs:-}" destfs="${destfs:-}" snapname="${snapname:-}"
+    if [[ -z "$sourcefs" || -z "$destfs" || -z "$snapname" ]]; then
+        log_msg "FATAL: zfs-migrate-send requires sourcefs, destfs, and" \
+            "snapname to be set."
+        return 8
+    fi
+
+    # If the destination already has a receive resume token, resume from it.
+    # No locking here: the migration executor holds a pool write lock for the
+    # whole run.
+    if zfs list "$destfs" > /dev/null 2>&1; then
+        local resumetoken
+        resumetoken=$(zfs get -H receive_resume_token -o value "$destfs" 2>/dev/null) \
+            || resumetoken=""
+        if [[ -n "$resumetoken" && "$resumetoken" != '-' ]]; then
+            log_msg "INFO: Found resume token for $destfs." \
+                "Preparing to resume transfer."
+            local resumedata
+            if ! resumedata=$(transfer_validate_resume_token "$resumetoken"); then
+                if transfer_resume_token_stale "$resumedata"; then
+                    log_msg "WARN: Resume token is invalid or stale." \
+                        "Aborting resume token."
+                    log_msg "WARN: $resumedata"
+                else
+                    log_msg "WARN: Resume token validation failed with" \
+                        "unexpected error:\n\t$resumedata"
+                    log_msg "WARN: Aborting resume token and retrying..."
+                fi
+                transfer_abort_resume_token "$destfs"
+            else
+                local datatosend=$resumedata
+                log_msg "VERB: datatosend=$datatosend"
+                log_msg "INFO: Remaining data to transfer:" \
+                    "$(echo "$datatosend" | numfmt --to=iec-i)."
+                # Mirrors zfs-send-receive's resume receive: no -u/-F/-s —
+                # the token already encodes the destination state.
+                if transfer_do "resume transfer for $destfs" "-t $resumetoken" "" \
+                        "Y" "$datatosend" "" "$destfs"; then
+                    return 0
+                fi
+                log_msg "FATAL: Migrate Pool transfer interrupted; re-run" \
+                    "Migrate Pool to resume from the receive resume token" \
+                    "on $destfs."
+                return 8
+            fi
+        fi
+    fi
+
+    # Fresh send of the migration snapshot.
+    # awk '/^size/ {print $2}' — Extract byte size from the transfer dry-run.
+    local datatosend=""
+    if ! datatosend=$(zfs send -nPRw "$sourcefs@$snapname" 2>/dev/null \
+            | awk '/^size/ {print $2}'); then
+        log_msg "WARN: Size estimate dry-run of $sourcefs@$snapname failed."
+    fi
+    if [[ -z "$datatosend" ]]; then
+        log_msg "WARN: Unable to get stream size estimate of" \
+            "$sourcefs@$snapname."
+        datatosend=0
+    else
+        log_msg "INFO: Approximately" \
+            "$(echo "$datatosend" | numfmt --to=iec-i)" "bytes to transfer."
+    fi
+    # The wizard already validated capacity; warn only, so a mid-plan abort
+    # does not leave partial state the verify step is meant to catch.
+    transfer_check_space "$datatosend" "${destfs%%/*}" \
+        || log_msg "WARN: Proceeding despite insufficient space."
+
+    # -R preserves properties/mountpoints for the cutover re-import; -w sends
+    # raw so encrypted datasets survive; -u keeps received datasets unmounted;
+    # -F lets a re-run roll the destination back; -s always, since migration
+    # transfers are full-copy-sized.
+    if transfer_do "Send/receive" "-Rw" "-u -F -s" "Y" "$datatosend" \
+            "$sourcefs@$snapname" "$destfs"; then
+        return 0
+    fi
+    log_msg "FATAL: Migrate Pool transfer interrupted; re-run Migrate Pool" \
+        "to resume from the receive resume token on $destfs."
+    return 8
+}
+
+if calledbybash; then
+    zfs_migrate_send
+fi

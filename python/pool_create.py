@@ -276,16 +276,41 @@ def validate_pool_name(name: str, existing_names: Container[str]) -> tuple[bool,
     return True, ""
 
 
-def suggest_ashift(disks: list[DiskInfo]) -> int | None:
-    """Return 12 if any selected disk reports physical sector >= 4096, else 9.
+def _sector_ashift(sector_bytes: int | None) -> int | None:
+    """Map a physical sector size to its ashift value.
 
-    Returns None when no disk reports a physical sector size. This is a hint;
-    the wizard decides whether to apply it.
+    Returns None for sizes that are not powers of two in the valid 512 B to
+    64 KiB ashift range (including missing/None).
     """
-    sectors = [disk.physical_sector for disk in disks if disk.physical_sector]
-    if not sectors:
+    if not sector_bytes or sector_bytes < 512 or sector_bytes > 65536:
         return None
-    return 12 if max(sectors) >= 4096 else 9
+    ashift = sector_bytes.bit_length() - 1
+    if (1 << ashift) != sector_bytes:
+        return None
+    return ashift
+
+
+def recommend_ashift(
+    disks: list[DiskInfo], label_ashifts: dict[str, int | None] | None = None
+) -> int:
+    """Recommended ashift for a pool built from *disks*.
+
+    Always at least 12 (4096 bytes). No available probe can positively
+    identify a 512-byte-native drive — 4K-native drives commonly misreport
+    512 — so a too-small blocksize is never recommended automatically.
+    Evidence may only *raise* the recommendation: the ashift recorded in a
+    previous pool's labels on the disk (*label_ashifts*, keyed by disk path)
+    or a reported physical sector size above 4096 bytes.
+    """
+    recommended = 12
+    for disk in disks:
+        label = (label_ashifts or {}).get(disk.path)
+        if label is not None and 9 <= label <= 16 and label > recommended:
+            recommended = label
+        sector_ashift = _sector_ashift(disk.physical_sector)
+        if sector_ashift is not None and sector_ashift > recommended:
+            recommended = sector_ashift
+    return recommended
 
 
 @dataclass(frozen=True)

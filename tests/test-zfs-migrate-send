@@ -1,0 +1,326 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfs-migrate-send — Unit tests for the Migrate Pool one-shot transfer
+# script: fresh send pipeline (zfs send -Rw | zfs receive -u -F -s), stream
+# size estimate (-nPRw), resume via receive resume token (zfs send -t),
+# stale/unexpected token handling, and the failure re-run hint.
+
+# shellcheck disable=SC2218
+# (source() override below is intentionally not active for test-lib.sh itself.)
+builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+repo_root="$mydir"
+
+# Keep test-lib's log_msg mock and rootcheck stub: skip re-sourcing bashinit,
+# rootcheck, and zfslockmanager from the script under test.
+source() {
+    local expanded="${1/#\~/$HOME}"
+    [[ "$expanded" == "$HOME/bashinit" ]] && return 0
+    [[ "$expanded" == "$repo_root/bin/bashinit" ]] && return 0
+    [[ "$expanded" == *"rootcheck" ]] && return 0
+    [[ "$expanded" == *"zfslockmanager" ]] && return 0
+    builtin source "$@"
+}
+
+source "$mydir/bin/zfs-migrate-send"
+
+# The script sets strict options at file level for direct execution; the
+# harness and mocks run relaxed.
+set +e +u +o pipefail
+
+# ---------------------------------------------------------------------------
+# Mock zfs/pv — invocations recorded to files because pipeline stages run in
+# subshells.
+# ---------------------------------------------------------------------------
+
+_zfs_capture_file="$_mock_zfs_state_dir/migrate_zfs_calls"
+_pv_capture_file="$_mock_zfs_state_dir/migrate_pv_calls"
+
+zfs() {
+    echo "zfs $*" >> "$_zfs_capture_file"
+    case "$1" in
+        list)
+            local ds="${*: -1}"
+            [[ -n "${_mock_zfs_datasets[$ds]+x}" ]]
+            return
+            ;;
+        get)
+            if [[ "$*" == *"receive_resume_token"* ]]; then
+                echo "${_mock_resume_token:--}"
+            elif [[ "$*" == *"available"* ]]; then
+                echo "${_mock_available:-100000000000}"
+            else
+                echo "-"
+            fi
+            return 0
+            ;;
+        send)
+            if [[ "$*" == *"-t"* && "$*" == *"-nP"* ]]; then
+                # Resume token validation.
+                if [[ -n "$_mock_token_error" ]]; then
+                    echo "$_mock_token_error" >&2
+                    return 1
+                fi
+                printf 'size\t%s\n' "${_mock_token_remaining:-0}"
+                return 0
+            fi
+            if [[ "$*" == *"-nP"* ]]; then
+                # Stream size estimate.
+                [[ -z "$_mock_send_size" ]] && return 1
+                printf 'size\t%s\n' "$_mock_send_size"
+                return 0
+            fi
+            return "${_mock_transfer_rc:-0}"
+            ;;
+        receive)
+            return "${_mock_transfer_rc:-0}"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+pv() {
+    echo "$*" >> "$_pv_capture_file"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+reset_state() {
+    clear_test_log_file
+    : > "$_zfs_capture_file"
+    : > "$_pv_capture_file"
+    _mock_zfs_datasets=()
+    _mock_resume_token=""
+    _mock_token_error=""
+    _mock_token_remaining="0"
+    _mock_send_size="5000000"
+    _mock_available="100000000000"
+    _mock_transfer_rc=0
+    sourcefs="pool/src/ds"
+    destfs="pool/dest/ds"
+    snapname="migrate-1"
+    pv_rate_limit=""
+    ZFSUTILITIES_LOG_INHERIT=""
+}
+
+get_log() {
+    cat "$(get_test_log_file)" 2>/dev/null
+}
+
+get_zfs_calls() {
+    cat "$_zfs_capture_file" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Fresh send
+# ---------------------------------------------------------------------------
+
+test_fresh_send_pipeline() {
+    test_start "fresh send runs zfs send -Rw | zfs receive -u -F -s"
+    reset_state
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" "zfs send -nPRw pool/src/ds@migrate-1"
+    assert_contains "$calls" "zfs send -Rw pool/src/ds@migrate-1"
+    assert_contains "$calls" "zfs receive -u -F -s pool/dest/ds"
+}
+
+test_fresh_send_estimates_size() {
+    test_start "fresh send logs the approximate transfer size"
+    reset_state
+    _mock_send_size="1073741824"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "Approximately"
+    assert_contains "$log" "1.0Gi"
+}
+
+test_fresh_send_missing_estimate_warns() {
+    test_start "fresh send warns and continues when size estimate is unavailable"
+    reset_state
+    _mock_send_size=""
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "Unable to get stream size estimate"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" "zfs send -Rw pool/src/ds@migrate-1"
+}
+
+test_fresh_send_space_short_warns_only() {
+    test_start "fresh send warns but proceeds when destination space is short"
+    reset_state
+    _mock_available="1000"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "Insufficient space on destination pool 'pool'"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" "zfs send -Rw pool/src/ds@migrate-1"
+}
+
+test_missing_vars_fails() {
+    test_start "zfs_migrate_send fails when required variables are unset"
+    reset_state
+    sourcefs=""
+    zfs_migrate_send 2>/dev/null
+    assert_rc 8 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "FATAL"
+}
+
+# ---------------------------------------------------------------------------
+# Resume path
+# ---------------------------------------------------------------------------
+
+test_resume_transfer() {
+    test_start "existing resume token resumes with zfs send -t and plain receive"
+    reset_state
+    _mock_zfs_datasets["pool/dest/ds"]=1
+    _mock_resume_token="tok-1"
+    _mock_token_remaining="12345678"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" "zfs send -nP -t tok-1"
+    assert_contains "$calls" "zfs send -t tok-1"
+    assert_contains "$calls" "zfs receive pool/dest/ds"
+    if [[ "$calls" == *"zfs receive -u -F -s pool/dest/ds"* ]]; then
+        test_fail "Resume receive must not use -u/-F/-s: $calls"
+        return
+    fi
+    local log
+    log=$(get_log)
+    assert_contains "$log" "Remaining data to transfer"
+}
+
+test_resume_transfer_failure_hint() {
+    test_start "failed resume transfer returns 8 with the re-run hint"
+    reset_state
+    _mock_zfs_datasets["pool/dest/ds"]=1
+    _mock_resume_token="tok-1"
+    _mock_transfer_rc=1
+    zfs_migrate_send 2>/dev/null
+    assert_rc 8 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "FATAL: resume transfer for pool/dest/ds failed"
+    assert_contains "$log" "re-run Migrate Pool to resume"
+}
+
+# ---------------------------------------------------------------------------
+# Stale / unexpected tokens
+# ---------------------------------------------------------------------------
+
+test_stale_token_aborts_then_fresh_send() {
+    test_start "stale resume token is aborted and a fresh send runs"
+    reset_state
+    _mock_zfs_datasets["pool/dest/ds"]=1
+    _mock_resume_token="tok-1"
+    _mock_token_error="cannot resume: snapshot no longer exists"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" "zfs receive -A pool/dest/ds"
+    assert_contains "$calls" "zfs send -Rw pool/src/ds@migrate-1"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "invalid or stale"
+}
+
+test_unexpected_token_error_aborts_then_fresh_send() {
+    test_start "unexpected token validation error aborts token and retries fresh"
+    reset_state
+    _mock_zfs_datasets["pool/dest/ds"]=1
+    _mock_resume_token="tok-1"
+    _mock_token_error="some unexpected failure"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" "zfs receive -A pool/dest/ds"
+    assert_contains "$calls" "zfs send -Rw pool/src/ds@migrate-1"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "unexpected error"
+}
+
+# ---------------------------------------------------------------------------
+# Failure of the fresh transfer
+# ---------------------------------------------------------------------------
+
+test_fresh_transfer_failure_returns_8() {
+    test_start "failed fresh transfer returns 8 with the re-run hint"
+    reset_state
+    _mock_transfer_rc=1
+    zfs_migrate_send 2>/dev/null
+    assert_rc 8 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "FATAL: Send/receive failed"
+    assert_contains "$log" "re-run Migrate Pool to resume"
+}
+
+# ---------------------------------------------------------------------------
+# pv plumbing
+# ---------------------------------------------------------------------------
+
+test_pv_args_passed_with_log_inherit() {
+    test_start "pv is inserted in the pipeline when the runner captures output"
+    reset_state
+    ZFSUTILITIES_LOG_INHERIT="Y"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local pv_args
+    pv_args=$(cat "$_pv_capture_file" 2>/dev/null)
+    assert_contains "$pv_args" "-fpterb"
+}
+
+test_pv_quiet_rate_limit_headless() {
+    test_start "pv runs quiet with -L rate limit in headless mode"
+    reset_state
+    pv_rate_limit="100m"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local pv_args
+    pv_args=$(cat "$_pv_capture_file" 2>/dev/null)
+    assert_contains "$pv_args" "-q"
+    assert_contains "$pv_args" "-L 100m"
+}
+
+# ---------------------------------------------------------------------------
+# Run all tests
+# ---------------------------------------------------------------------------
+
+test_fresh_send_pipeline
+test_fresh_send_estimates_size
+test_fresh_send_missing_estimate_warns
+test_fresh_send_space_short_warns_only
+test_missing_vars_fails
+test_resume_transfer
+test_resume_transfer_failure_hint
+test_stale_token_aborts_then_fresh_send
+test_unexpected_token_error_aborts_then_fresh_send
+test_fresh_transfer_failure_returns_8
+test_pv_args_passed_with_log_inherit
+test_pv_quiet_rate_limit_headless
+
+test_summary
+teardown_test_env

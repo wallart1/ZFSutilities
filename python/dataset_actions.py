@@ -276,6 +276,11 @@ def _delete_datasets(app, datasets):
     def _on_delete_complete(cancelled=False, rc=None):
         refresh_datasets_page(app)
 
+    runner.operation_detail = (
+        f"Destroy Dataset: {details[0]['name']}"
+        if len(details) == 1
+        else f"Destroy Datasets: {len(details)} selected"
+    )
     runner.set_steps(steps)
     runner.start(on_complete=_on_delete_complete)
 
@@ -460,6 +465,7 @@ def on_datasets_show_big_stuff(app):
         is_rsync=False,
         fatal=False,
     )
+    runner.operation_detail = f"Show Big Stuff: {pool}"
     runner.set_steps([step])
     runner.start()
 

@@ -193,6 +193,40 @@ class TestPureHelpers(unittest.TestCase):
         )
         self.assertEqual(pmd._migrate_problems(state), [])
 
+    def test_rate_limit_problem_accepts_empty_and_valid_rates(self):
+        pmd = _import_dialogs()
+        for text in ("", "100", "100k", "25M", "2g", "1T"):
+            self.assertIsNone(pmd._rate_limit_problem(text), text)
+
+    def test_rate_limit_problem_rejects_garbage(self):
+        pmd = _import_dialogs()
+        for text in ("abc", "10x", "1.5m", "-5m", "100 mb"):
+            problem = pmd._rate_limit_problem(text)
+            self.assertIsNotNone(problem, text)
+            self.assertIn("bandwidth limit", problem)
+
+    def test_problems_reject_invalid_rate_limit(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, typed="pool1", rate_limit="fast")
+        problems = pmd._migrate_problems(state)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("bandwidth limit", problems[0])
+
+    def test_valid_rate_limit_does_not_block_migration(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, typed="pool1", rate_limit="100m")
+        self.assertEqual(pmd._migrate_problems(state), [])
+
+    def test_on_rate_limit_changed_updates_state(self):
+        pmd = _import_dialogs()
+        state = _state(pmd)
+        calls = []
+        entry = MagicMock()
+        entry.get_text.return_value = "100m"
+        pmd._on_rate_limit_changed(entry, state, lambda: calls.append(1))
+        self.assertEqual(state.rate_limit, "100m")
+        self.assertEqual(calls, [1])
+
     def test_warnings_mention_cutover_and_path_preservation(self):
         pmd = _import_dialogs()
         warnings = " ".join(pmd._migrate_warnings(_state(pmd)))
@@ -239,6 +273,13 @@ class TestPureHelpers(unittest.TestCase):
             ("/dev/disk/by-id/ata-TESTsda", "/dev/disk/by-id/ata-TESTsdb"),
         )
 
+    def test_build_request_carries_rate_limit(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, typed="pool1", rate_limit="100m")
+        self.assertEqual(pmd.build_request(state).rate_limit, "100m")
+        state = _state(pmd, typed="pool1")
+        self.assertEqual(pmd.build_request(state).rate_limit, "")
+
 
 class TestBuildMigrationSteps(unittest.TestCase):
     """Execution plan composition for both migration modes."""
@@ -253,10 +294,40 @@ class TestBuildMigrationSteps(unittest.TestCase):
         )
         for step in copy[1:3]:
             self.assertEqual(step.command[0:2], ["bash", "-c"])
-            self.assertIn("zfs send -Rw", step.command[2])
-            self.assertIn("| zfs receive -u -F", step.command[2])
+            self.assertIn("zfs-migrate-send", step.command[2])
+            self.assertIn("zfs_migrate_send", step.command[2])
+            self.assertNotIn("pv_rate_limit", step.command[2])
         for step in copy[3:]:
             self.assertIn("zfs list -rH -t filesystem,volume", step.command[2])
+
+    def test_copy_steps_carry_rate_limit(self):
+        pmd = _import_dialogs()
+        request = _request(pmd, rate_limit="100m")
+        copy, cutover = pmd.build_migration_steps(request)
+        for step in copy[1:3]:
+            self.assertIn("pv_rate_limit=100m", step.command[2])
+        # Holding mode: copy-out and copy-back both honor the limit.
+        holding = _request(
+            pmd,
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+            new_pool_by_id=(
+                "/dev/disk/by-id/ata-TESTsda",
+                "/dev/disk/by-id/ata-TESTsdb",
+            ),
+            rate_limit="50m",
+        )
+        copy, cutover = pmd.build_migration_steps(holding)
+        for step in copy[1:3]:
+            self.assertIn("pv_rate_limit=50m", step.command[2])
+        copyback = [
+            s
+            for s in cutover
+            if s.command[0:2] == ["bash", "-c"] and "zfs_migrate_send" in s.command[2]
+        ]
+        self.assertTrue(copyback)
+        for step in copyback:
+            self.assertIn("pv_rate_limit=50m", step.command[2])
 
     def test_new_disks_cutover_steps(self):
         pmd = _import_dialogs()
@@ -301,9 +372,9 @@ class TestBuildMigrationSteps(unittest.TestCase):
             ],
         )
         # Copy-back steps come straight after create: no second snapshot.
-        self.assertIn("zfs send -Rw", cutover[3].command[2])
-        self.assertIn("pool2/data@migrate", cutover[3].command[2])
-        self.assertIn("| zfs receive -u -F pool1_mig/data", cutover[3].command[2])
+        self.assertIn("zfs_migrate_send", cutover[3].command[2])
+        self.assertIn("sourcefs=pool2/data", cutover[3].command[2])
+        self.assertIn("destfs=pool1_mig/data", cutover[3].command[2])
         destroy_cmds = [s.command for s in cutover if s.command[0:2] == ["zfs", "destroy"]]
         self.assertEqual(
             destroy_cmds,
@@ -396,6 +467,18 @@ class TestDialogFlow(unittest.TestCase):
         self.assertEqual(request.source_pool, "pool1")
         self.assertEqual(request.temp_pool, "pool1_mig")
 
+    def test_request_carries_dialog_rate_limit(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, rate_limit="100m")
+
+        def fill(_pmd, st):
+            st.typed = st.pool_name
+            return _pmd._RESPONSE_MIGRATE
+
+        request = self._run_dialog(pmd, state, fill)
+        self.assertIsNotNone(request)
+        self.assertEqual(request.rate_limit, "100m")
+
     def test_cancel_returns_none(self):
         pmd = _import_dialogs()
         request = self._run_dialog(
@@ -439,6 +522,7 @@ class FakeDatasetRunner:
     def __init__(self):
         self.running = False
         self.steps = []
+        self.operation_detail = None
         self._on_complete = None
 
     def set_steps(self, steps):
@@ -674,9 +758,12 @@ class TestHandlerExecution(unittest.TestCase):
             # Copy phase started.
             self.assertEqual(len(app.dataset_runner.steps), 5)
             self.assertTrue(app.dataset_runner.running)
+            self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
             app.dataset_runner.finish(rc=0)
-            # Cutover phase started after confirmation.
+            # Cutover phase started after confirmation; the detail persists
+            # across the runner restart.
             self.assertEqual(len(app.dataset_runner.steps), 2)
+            self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
             app.dataset_runner.finish(rc=0)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
             app._disks_inventory_cache.invalidate.assert_called_once()
@@ -719,6 +806,66 @@ class TestHandlerExecution(unittest.TestCase):
             self.assertEqual(len(app.dataset_runner.steps), 11)
             app.dataset_runner.finish(rc=0)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
+
+
+class TestCutoverIscsiRepair(unittest.TestCase):
+    """repair-iscsi-luns chaining after a successful cutover."""
+
+    REPAIR_BIN = "/usr/local/lib/zfsutilities/current/bin/repair-iscsi-luns"
+
+    def _run_cutover(self, managed, final_rc=0, two_node_hint=True):
+        """Drive a migration through cutover completion; return (pmd, app, logs)."""
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        _mock_zlm, stack = _drive_handler(pmd, app, request)
+        with stack:
+            # The cutover-completion hint is only logged in two-node configs.
+            pmd.node_config.is_two_node.return_value = two_node_hint
+            app.dataset_runner.finish(rc=0)  # copy phase
+            with (
+                patch.object(pmd, "is_iscsi_managed_pool", return_value=managed),
+                patch.object(pmd, "resolve_local_bin", return_value=self.REPAIR_BIN),
+                capture_logs() as logs,
+            ):
+                app.dataset_runner.finish(rc=0)  # cutover phase → chaining decision
+                if managed:
+                    app.dataset_runner.finish(rc=final_rc)  # chained repair phase
+        return pmd, app, logs
+
+    def test_managed_pool_chains_repair_step(self):
+        _pmd, app, _logs = self._run_cutover(managed=True)
+        self.assertEqual(len(app.dataset_runner.steps), 1)
+        self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
+        step = app.dataset_runner.steps[0]
+        self.assertEqual(step.command, [self.REPAIR_BIN])
+        self.assertTrue(step.command[0].endswith("repair-iscsi-luns"))
+        self.assertEqual(step.description, "Re-register migrated pool iSCSI LUNs")
+        self.assertFalse(step.is_rsync)
+        self.assertFalse(step.fatal)
+
+    def test_unmanaged_pool_skips_repair_and_logs_hint(self):
+        _pmd, app, logs = self._run_cutover(managed=False)
+        # The cutover step list (2 steps) was not replaced by a repair step.
+        self.assertEqual(len(app.dataset_runner.steps), 2)
+        self.assertTrue(
+            any("not enrolled in two-node iSCSI" in line for line in logs), logs
+        )
+        self.assertTrue(any("setup-iscsi-targets" in line for line in logs), logs)
+
+    def test_unmanaged_pool_single_node_finishes_silently(self):
+        _pmd, app, logs = self._run_cutover(managed=False, two_node_hint=False)
+        self.assertEqual(len(app.dataset_runner.steps), 2)
+        self.assertFalse(
+            any("not enrolled in two-node iSCSI" in line for line in logs), logs
+        )
+        self.assertFalse(any("setup-iscsi-targets" in line for line in logs), logs)
+
+    def test_repair_failure_logs_warn(self):
+        _pmd, _app, logs = self._run_cutover(managed=True, final_rc=4)
+        self.assertTrue(
+            any("WARN" in line and "failed (rc=4)" in line for line in logs), logs
+        )
 
 
 if __name__ == "__main__":

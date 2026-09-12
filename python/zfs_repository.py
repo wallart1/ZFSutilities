@@ -15,6 +15,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import path_utils
 from logging_config import log_msg
 from pool_create import TOPOLOGIES, validate_raid10_count
 
@@ -288,7 +289,10 @@ def build_create_pool_command(
     for path in by_id_paths:
         _validate_by_id_path(path)
     if ashift is not None and not 9 <= ashift <= 16:
-        raise ValueError(f"ashift must be between 9 and 16, got {ashift}")
+        raise ValueError(
+            f"pool blocksize must be between 512 bytes (ashift 9) and "
+            f"65536 bytes (ashift 16), got {ashift}"
+        )
 
     cmd = ["zpool", "create"]
     if ashift is not None:
@@ -433,17 +437,26 @@ def build_migration_send_receive_command(
     source_fs: str,
     dest_fs: str,
     snap_name: str,
+    rate_limit: str = "",
 ) -> list[str]:
     """Build the argv for one migration copy step.
 
-    Pure function: no subprocess. Returns a ``bash -c`` argv running
-    ``zfs send -Rw <source>@<snap> | zfs receive -u -F <dest>`` under
-    ``pipefail``. ``-R`` makes a replication stream (descendants, snapshots,
-    properties); ``-w`` sends raw so encrypted datasets survive; ``-u``
-    keeps received datasets unmounted so their (preserved) mountpoints do
-    not collide with the still-mounted source; ``-F`` lets a re-run roll the
-    destination back to the stream. Raises ValueError on empty/invalid
-    names; callers enforce policy (locks, capacity, cutover ordering).
+    Pure function: no subprocess. Returns a ``bash -c`` argv that sources
+    ``zfs-migrate-send`` (the shared transfer library wrapper) and runs
+    ``zfs_migrate_send`` with ``sourcefs``/``destfs``/``snapname`` assigned,
+    so the transfer is resumable (an interrupted copy leaves a receive
+    resume token on the destination; re-running resumes from it) and carries
+    ``pv`` in the pipeline for live progress, optionally rate-limited via
+    *rate_limit* (a ``pv -L`` value such as ``100m``; empty = unlimited).
+    The wrapper sends ``zfs send -Rw <source>@<snap>`` and receives with
+    ``zfs receive -u -F -s <dest>``: ``-R`` makes a replication stream
+    (descendants, snapshots, properties); ``-w`` sends raw so encrypted
+    datasets survive; ``-u`` keeps received datasets unmounted so their
+    (preserved) mountpoints do not collide with the still-mounted source;
+    ``-F`` lets a re-run roll the destination back to the stream; ``-s``
+    keeps the receive resumable. Raises ValueError on empty/invalid names or
+    an invalid *rate_limit*; callers enforce policy (locks, capacity,
+    cutover ordering).
     """
     if not source_fs:
         raise ValueError("source dataset must not be empty")
@@ -451,9 +464,25 @@ def build_migration_send_receive_command(
         raise ValueError("destination dataset must not be empty")
     if not snap_name or "@" in snap_name or "/" in snap_name:
         raise ValueError(f"invalid snapshot name: {snap_name!r}")
-    send = shlex.join(["zfs", "send", "-Rw", f"{source_fs}@{snap_name}"])
-    receive = shlex.join(["zfs", "receive", "-u", "-F", dest_fs])
-    return ["bash", "-c", f"set -o pipefail; {send} | {receive}"]
+    if rate_limit and not re.fullmatch(r"[0-9]+[kKmMgGtT]?", rate_limit):
+        raise ValueError(f"invalid rate limit: {rate_limit!r}")
+    script = path_utils.resolve_local_bin(
+        "zfs-migrate-send", script_dir=os.path.dirname(os.path.realpath(__file__))
+    )
+    if not script:
+        raise ValueError("zfs-migrate-send script could not be located")
+    # zfs-migrate-send bootstraps bashinit itself (and transfer-lib.sh, which
+    # it sources, loads ~/bashinit), so no pre-source is needed here.
+    parts = [
+        f"source {shlex.quote(script)}",
+        f"sourcefs={shlex.quote(source_fs)}",
+        f"destfs={shlex.quote(dest_fs)}",
+        f"snapname={shlex.quote(snap_name)}",
+    ]
+    if rate_limit:
+        parts.append(f"pv_rate_limit={shlex.quote(rate_limit)}")
+    parts.append("zfs_migrate_send")
+    return ["bash", "-c", "; ".join(parts)]
 
 
 def build_pool_export_command(pool_name: str) -> list[str]:
@@ -577,6 +606,16 @@ class ZfsRepository:
     def pool_status(self, pool: str, timeout: int | None = None) -> str:
         """Return raw `zpool status` text (empty on failure)."""
         result = self._run(self._zpool("status", pool), check=False, timeout=timeout)
+        return result.stdout
+
+    def all_pool_status_text(self, timeout: int | None = 15) -> str:
+        """Return raw `zpool status` text for all pools in one call (empty on failure)."""
+        try:
+            result = self._run(self._zpool("status"), check=False, timeout=timeout)
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            return ""
+        if result.returncode != 0:
+            return ""
         return result.stdout
 
     def pool_get_all(self, pool: str, timeout: int | None = None) -> str:
@@ -1054,6 +1093,19 @@ class ZfsRepository:
                     effective = int(match.group(1))
 
         return AshiftInfo(configured, effective)
+
+    def get_device_label_ashift(self, device_path: str) -> int | None:
+        """Max ashift recorded in any ZFS label on *device_path*, or None.
+
+        Evidence of how the device was previously used; None when the device
+        has no ZFS labels, is unreadable, or records no ashift.
+        """
+        cmd = (["sudo"] if self.sudo else []) + ["zdb", "-l", device_path]
+        result = self._run(cmd, check=False)
+        if result.returncode != 0 or not result.stdout:
+            return None
+        values = [int(m.group(1)) for m in _ASHIFT_RE.finditer(result.stdout)]
+        return max(values) if values else None
 
     def pool_topology(self, pool: str) -> TopologyNode | None:
         """Parse `zpool status -P <pool>` into a typed vdev topology tree."""

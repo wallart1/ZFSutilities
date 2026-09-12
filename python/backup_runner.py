@@ -76,6 +76,9 @@ class BackupRunner:
         self.current_step = 0
         self.process = None
         self.running = False
+        # Display-only per-operation name set by dialogs before start();
+        # never used for session-log categorization (that uses self.label).
+        self.operation_detail = None
         self._stdout_source = None
         self._stderr_source = None
         self._on_complete = None

@@ -20,7 +20,7 @@ from pool_create import (
     disk_eligibility,
     estimate_effective_capacity,
     pool_filesystem_options,
-    suggest_ashift,
+    recommend_ashift,
     validate_pool_name,
     validate_raid10_count,
     validate_vdev_selection,
@@ -321,25 +321,67 @@ class TestValidatePoolName(unittest.TestCase):
         self.assert_valid("FIVEBAYS", existing=["fivebays"])
 
 
-class TestSuggestAshift(unittest.TestCase):
-    """suggest_ashift from the worst-case physical sector size."""
+class TestRecommendAshift(unittest.TestCase):
+    """recommend_ashift: default 12; evidence may only raise, never lower."""
 
-    def test_512n_disk_suggests_9(self):
-        self.assertEqual(suggest_ashift([_disk("/dev/sda", physical_sector=512)]), 9)
+    def test_all_512n_disks_still_recommend_12(self):
+        # A 512 report cannot be distinguished from a lying 4K-native drive,
+        # so 9 is never recommended automatically.
+        disks = [
+            _disk("/dev/sda", physical_sector=512),
+            _disk("/dev/sdb", physical_sector=512),
+        ]
+        self.assertEqual(recommend_ashift(disks), 12)
 
-    def test_4kn_disk_suggests_12(self):
-        self.assertEqual(suggest_ashift([_disk("/dev/sda", physical_sector=4096)]), 12)
+    def test_4kn_disk_recommends_12(self):
+        self.assertEqual(recommend_ashift([_disk("/dev/sda", physical_sector=4096)]), 12)
 
-    def test_mixed_disks_suggest_12(self):
+    def test_8kn_disk_recommends_13(self):
+        self.assertEqual(recommend_ashift([_disk("/dev/sda", physical_sector=8192)]), 13)
+
+    def test_mixed_disks_recommend_12(self):
         disks = [
             _disk("/dev/sda", physical_sector=512),
             _disk("/dev/sdb", physical_sector=4096),
         ]
-        self.assertEqual(suggest_ashift(disks), 12)
+        self.assertEqual(recommend_ashift(disks), 12)
 
-    def test_no_sector_info_returns_none(self):
-        self.assertIsNone(suggest_ashift([_disk("/dev/sda", physical_sector=None)]))
-        self.assertIsNone(suggest_ashift([]))
+    def test_label_evidence_raises_recommendation(self):
+        disks = [
+            _disk("/dev/sda", physical_sector=512),
+            _disk("/dev/sdb", physical_sector=512),
+        ]
+        labels = {"/dev/sda": 13, "/dev/sdb": None}
+        self.assertEqual(recommend_ashift(disks, labels), 13)
+
+    def test_label_evidence_cannot_lower_recommendation(self):
+        # A prior pool's ashift-9 label may itself be the residue of a failed
+        # guess (ZFS auto on a misreporting drive); it must not drag a 8Kn
+        # report down.
+        disks = [_disk("/dev/sda", physical_sector=8192)]
+        self.assertEqual(recommend_ashift(disks, {"/dev/sda": 9}), 13)
+
+    def test_label_12_keeps_default(self):
+        disks = [_disk("/dev/sda", physical_sector=512)]
+        self.assertEqual(recommend_ashift(disks, {"/dev/sda": 12}), 12)
+
+    def test_garbage_label_ignored(self):
+        disks = [_disk("/dev/sda", physical_sector=512)]
+        self.assertEqual(recommend_ashift(disks, {"/dev/sda": 7}), 12)
+        self.assertEqual(recommend_ashift(disks, {"/dev/sda": 17}), 12)
+
+    def test_unknown_disk_counts_as_12(self):
+        disks = [
+            _disk("/dev/sda", physical_sector=512),
+            _disk("/dev/sdb", physical_sector=None),
+        ]
+        self.assertEqual(recommend_ashift(disks), 12)
+
+    def test_non_power_of_two_sector_is_unknown(self):
+        self.assertEqual(recommend_ashift([_disk("/dev/sda", physical_sector=1000)]), 12)
+
+    def test_empty_selection_recommends_12(self):
+        self.assertEqual(recommend_ashift([]), 12)
 
 
 class TestEstimateEffectiveCapacity(unittest.TestCase):

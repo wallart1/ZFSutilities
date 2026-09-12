@@ -636,18 +636,24 @@ class TestTerminateConfirmation(unittest.TestCase):
         self.assertTrue(result)
 
     def test_delete_event_includes_dataset_runner(self):
-        """The dataset runner is included even though Dashboard omits it."""
+        """The dataset runner is listed exactly once via the running-tasks collector."""
         window, gui = self._make_window()
         dialog_class = self._set_dialog_response(gui, gui.Gtk.ResponseType.YES)
         window.dataset_runner = MagicMock()
         window.dataset_runner.running = True
         window.dataset_runner.label = "Dataset action"
-        with patch.object(gui, "_collect_running_tasks", return_value=[]):
+        with patch.object(
+            gui,
+            "_collect_running_tasks",
+            return_value=[
+                {"name": "Migrate Pool: tank", "type": "GUI", "status": "Step 1/4"},
+            ],
+        ):
             window._on_delete_event(None, None)
 
         dialog = dialog_class.return_value
         secondary = dialog.format_secondary_text.call_args[0][0]
-        self.assertIn("Dataset action", secondary)
+        self.assertEqual(secondary.count("Migrate Pool: tank"), 1)
 
     def test_collect_abortable_tasks_filters_scrubs_and_remote_profiles(self):
         """Scrubs and non-GUI profiles are excluded from the warning list."""
@@ -656,6 +662,7 @@ class TestTerminateConfirmation(unittest.TestCase):
         tasks_data = [
             {"name": "Backup", "type": "GUI", "status": "Running"},
             {"name": "Scrub: pool1", "type": "Scrub", "status": "10.0% complete"},
+            {"name": "Resilver: pool1", "type": "ZFS", "status": "45.2% done"},
             {"name": "Daily", "type": "Profile", "status": "PID 1234"},
             {"name": "Nightly", "type": "Profile", "status": "PID 5678"},
         ]

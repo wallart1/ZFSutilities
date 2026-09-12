@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import subprocess
 from collections.abc import Container
 from dataclasses import dataclass, field
 
@@ -23,11 +24,12 @@ gi.require_version("Gtk", "3.0")
 import node_config
 import zfs_lock_manager as zlm
 from command_builders import BashStep
-from disk_repository import DiskInfo
+from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from feature_config import get_workload_profiles
 from gi.repository import Gtk
 from gui_helpers import configure_treeview_column, create_dialog
+from iscsi_enroll import offer_iscsi_enrollment
 from logging_config import log_msg
 from pool_create import (
     TOPOLOGIES,
@@ -35,7 +37,7 @@ from pool_create import (
     disk_eligibility,
     estimate_effective_capacity,
     pool_filesystem_options,
-    suggest_ashift,
+    recommend_ashift,
     validate_pool_name,
     validate_raid10_count,
     validate_vdev_selection,
@@ -80,6 +82,25 @@ _SIZE_SUFFIXES = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 
 _DEFAULT_RECORDSIZE = 128 * 1024
 
+# Pool-blocksize choices shown in the settings page. The GUI speaks in bytes;
+# the value stored in wizard state is the ZFS ashift (log2 of the sector size).
+_BLOCKSIZE_CHOICES = (
+    (None, "auto (let ZFS decide)"),
+    (9, "512 bytes"),
+    (12, "4096 bytes"),
+    (13, "8192 bytes"),
+)
+_BLOCKSIZE_BY_LABEL = {label: value for value, label in _BLOCKSIZE_CHOICES}
+_BLOCKSIZE_LABEL_BY_ASHIFT = {
+    value: label for value, label in _BLOCKSIZE_CHOICES if value is not None
+}
+_BLOCKSIZE_LABELS = [label for _, label in _BLOCKSIZE_CHOICES]
+
+
+def _format_blocksize(ashift: int) -> str:
+    """Render an ashift value as a byte count for display."""
+    return f"{1 << ashift} bytes"
+
 
 @dataclass
 class _WizardState:
@@ -92,6 +113,9 @@ class _WizardState:
     ashift: int | None = None  # None = auto (flag omitted from the command)
     profile_name: str = ""
     typed: str = ""  # review-page typed confirmation
+    label_ashifts: dict = field(default_factory=dict)  # disk path -> prior-pool ashift
+    blocksize_user_set: bool = False  # user overrode the recommended blocksize
+    blocksize_syncing: bool = False  # programmatic combo update in progress
     dry_run_rc: int | None = None  # None = dry run not yet executed
     dry_run_output: str = ""
     command: list[str] = field(default_factory=list)
@@ -149,18 +173,6 @@ def _recordsize_bytes(profile: dict) -> int:
         return int(raw) * multiplier
     except ValueError:
         return _DEFAULT_RECORDSIZE
-
-
-def _format_bytes(n: int) -> str:
-    """Format a byte count with binary units, one decimal for non-bytes."""
-    value = float(n)
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
-        if value < 1024 or unit == "PiB":
-            if unit == "B":
-                return f"{int(value)} {unit}"
-            return f"{value:.1f} {unit}"
-        value /= 1024
-    return f"{value:.1f} PiB"  # pragma: no cover - loop always returns
 
 
 def _disks_problems(state: _WizardState) -> list[str]:
@@ -228,17 +240,17 @@ def _estimate_text(state: _WizardState, profile: dict) -> str:
     recordsize = profile.get("properties", {}).get("recordsize", "128K")
     effective = (
         f"Effective at {recordsize} block size: "
-        f"{_format_bytes(estimate.effective_bytes)} "
+        f"{format_bytes(estimate.effective_bytes)} "
         f"({estimate.efficiency_fraction:.0%} of raw usable)"
     )
     lines = [
-        f"Raw usable capacity: {_format_bytes(estimate.raw_usable_bytes)}",
+        f"Raw usable capacity: {format_bytes(estimate.raw_usable_bytes)}",
         effective,
     ]
     if len({disk.size_bytes for disk in state.selected}) > 1:
         lines.append(
             "Mixed disk sizes: vdev usable capacity = smallest member "
-            f"({_format_bytes(min_bytes)})."
+            f"({format_bytes(min_bytes)})."
         )
     return "\n".join(lines)
 
@@ -298,6 +310,19 @@ def _combo_text(combo) -> str:
     return text if isinstance(text, str) else ""
 
 
+def _probe_label_ashift(repository, device_path: str):
+    """Prior-pool ashift recorded on *device_path*, or None.
+
+    Defensive wrapper around the repository probe: any failure or unexpected
+    return type means "no evidence", never a wizard error.
+    """
+    try:
+        value = repository.get_device_label_ashift(device_path)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return value if isinstance(value, int) else None
+
+
 # ---------------------------------------------------------------------------
 # Signal handlers
 # ---------------------------------------------------------------------------
@@ -310,6 +335,7 @@ def _on_disk_toggled(toggle, path, store, state: _WizardState, on_change) -> Non
     use = not store.get_value(tree_iter, _COL_USE)
     store.set_value(tree_iter, _COL_USE, use)
     state.selected = _selected_disks(store, state)
+    state.blocksize_user_set = False  # new selection: apply a fresh recommendation
     on_change()
 
 
@@ -330,8 +356,11 @@ def _on_ashift_changed(combo, state: _WizardState, on_change) -> None:
     text = _combo_text(combo)
     if not text:
         return
-    state.ashift = None if text.startswith("auto") else int(text)
-    on_change()
+    if not state.blocksize_syncing:
+        state.blocksize_user_set = True
+    state.ashift = _BLOCKSIZE_BY_LABEL.get(text, state.ashift)
+    if not state.blocksize_syncing:
+        on_change()
 
 
 def _on_profile_changed(combo, state: _WizardState, on_change) -> None:
@@ -505,12 +534,12 @@ def _build_settings_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
     name_feedback.set_line_wrap(True)
     grid.attach(name_feedback, 1, 1, 1, 1)
 
-    ashift_label = Gtk.Label(label="ashift:")
+    ashift_label = Gtk.Label(label="Pool blocksize:")
     ashift_label.set_halign(Gtk.Align.END)
     grid.attach(ashift_label, 0, 2, 1, 1)
     ashift_combo = Gtk.ComboBoxText()
-    for item in ("auto (recommended)", "9", "12", "13"):
-        ashift_combo.append_text(item)
+    for _, blocksize_label in _BLOCKSIZE_CHOICES:
+        ashift_combo.append_text(blocksize_label)
     ashift_combo.set_active(0)
     grid.attach(ashift_combo, 1, 2, 1, 1)
     ashift_hint = Gtk.Label()
@@ -535,13 +564,26 @@ def _build_settings_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
         name = _widget_text(name_entry, state.pool_name)
         ok, error = validate_pool_name(name, ctx.existing_names)
         name_feedback.set_text("Pool name OK" if ok else error)
-        suggested = suggest_ashift(state.selected)
-        if suggested is not None:
-            ashift_hint.set_text(f"Suggested ashift for these disks: {suggested}")
-        else:
-            ashift_hint.set_text(
-                "No physical sector-size information for the selected disks."
-            )
+        for disk in state.selected:
+            if disk.path not in state.label_ashifts:
+                state.label_ashifts[disk.path] = _probe_label_ashift(
+                    ctx.repository, disk.path
+                )
+        recommended = recommend_ashift(state.selected, state.label_ashifts)
+        ashift_hint.set_text(
+            f"Recommended pool blocksize for these disks: {_format_blocksize(recommended)}"
+        )
+        recommended_label = _BLOCKSIZE_LABEL_BY_ASHIFT.get(recommended)
+        if not state.blocksize_user_set:
+            if recommended_label is not None:
+                state.blocksize_syncing = True
+                try:
+                    ashift_combo.set_active(_BLOCKSIZE_LABELS.index(recommended_label))
+                finally:
+                    state.blocksize_syncing = False
+            # Always adopt the recommendation even when it has no combo entry
+            # (e.g. ashift 14+), so state.ashift cannot go stale.
+            state.ashift = recommended
         profile = ctx.profiles.get(state.profile_name, {})
         profile_desc.set_text(profile.get("description", ""))
 
@@ -875,7 +917,10 @@ def on_disks_create_pool(app) -> None:
             return
         log_msg(f"INFO: Pool '{pool_name}' created")
         _offer_register_pool(app, pool_name)
+        if node_config.is_two_node() and node_config.is_storage_host():
+            offer_iscsi_enrollment(app, pool_name)
 
+    runner.operation_detail = f"Create Pool: {pool_name}"
     runner.set_steps([step])
     update_disks_button_sensitivity(app)
     runner.start(on_complete=_on_complete)

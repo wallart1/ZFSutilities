@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.101.0
+
+*Released 2026-09-11*
+
+### Added
+
+- **Automated two-node iSCSI enrollment** — The new `enroll-iscsi-pool`
+  script enrolls a pool in iSCSI export end to end: it adds the pool's
+  `POOL_TARGET` entry to `node.conf` on **both** nodes (the peer node's config
+  is updated first over SSH, so a peer failure aborts before the nodes
+  diverge), runs `setup-iscsi-targets` on the storage host, and runs
+  `rescan-storage` for the compute host. The script is idempotent and supports
+  `--dry-run` and `--update-config-only`. The Create Pool wizard offers
+  enrollment through the new shared `iscsi_enroll.py` module after a
+  successful create, so a new pool no longer needs the three manual
+  enrollment steps, and the Migrate Pool cutover chains a
+  `repair-iscsi-luns` step for iSCSI-managed pools.
+
+- **Resumable Migrate Pool copies** — A new `zfs-migrate-send` script performs
+  each Migrate Pool data-transfer step as one `zfs send -Rw` stream received
+  with `zfs receive -u -F -s`, so an interrupted transfer leaves a receive
+  resume token on the destination and re-running Migrate Pool resumes from
+  that token instead of starting over. The transfer pipeline is shared with
+  the production backup path through the new `transfer-lib.sh` library
+  (`transfer_do`, `transfer_pv_args`, `transfer_validate_resume_token`,
+  `transfer_resume_token_stale`, `transfer_abort_resume_token`,
+  `transfer_check_space`), a mechanical extraction of `zfs-send-receive`'s
+  resume-token, `pv`, and space-check logic. An optional **Bandwidth limit**
+  (a `pv` rate such as `100m`) throttles the copy, and live `pv` progress
+  appears in the status area.
+
+- **ZFS-native operations in Dashboard Running Tasks** — In-progress
+  resilvers, RAIDZ expansions, and vdev removals are now listed alongside
+  GUI runs, scrubs, and profiles, with percent-done status parsed from
+  `zpool status` (new `scrub_manager.parse_pool_operations`).
+
+### Changed
+
+- **Create Pool wizard pool-blocksize recommendation** — The ashift control
+  is now labeled and displayed in bytes (pool blocksize), and the wizard
+  computes a recommendation for the selected disks: it starts at 4096 bytes
+  and only ever goes up — a larger blocksize recorded in a previous pool's
+  labels on the disks (read with `zdb -l`) or a disk reporting a physical
+  sector size above 4096 raises it. It is never automatically lowered to 512
+  bytes, because no available probe can tell an honest 512-byte-native drive
+  apart from a 4K-native drive misreporting 512.
+
+- **Apply Profile and Rewrite Data are storage-host actions** — The two
+  Disks-page dataset-tuning buttons now follow the same "storage host only"
+  policy as the other Disks-page buttons: they are disabled on the compute
+  host in two-node mode with an explanatory tooltip, and the handlers log a
+  WARN and return as defense in depth.
+
+- **OpenZFS capability gating now tracks patch levels** — `zfs_capabilities`
+  parses `(major, minor, patch)` versions, and `zfs rewrite` is correctly
+  gated at OpenZFS 2.3.4 (it first shipped in 2.3.4, not 2.3.0), so the
+  Rewrite Data button is no longer offered on 2.3.0–2.3.3 where the command
+  does not exist.
+
 ## 0.100.0
 
 *Released 2026-09-11*

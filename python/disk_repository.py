@@ -65,7 +65,7 @@ def _flatten_blockdevices(devices) -> dict:
     return by_name
 
 
-def _format_bytes(size: int) -> str:
+def format_bytes(size: int) -> str:
     """Return a compact human-readable representation of *size* bytes."""
     if size <= 0:
         return "0 B"
@@ -192,7 +192,7 @@ class DiskRepository:
                 model=model,
                 serial=serial,
                 size_bytes=size_bytes,
-                size_human=_format_bytes(size_bytes),
+                size_human=format_bytes(size_bytes),
                 disk_type=disk_type,
                 logical_sector=_int(dev.get("log-sec")),
                 physical_sector=_int(dev.get("phy-sec")),
@@ -343,7 +343,7 @@ class DiskRepository:
         if len(kept) == len(disks):
             return disks
         log_msg(
-            f"INFO: hiding system boot disk {boot_path} "
+            f"VERB: hiding system boot disk {boot_path} "
             f"({hidden_parts} partitions) from the disk inventory"
         )
         return kept

@@ -1,0 +1,311 @@
+#!/usr/bin/bash
+#
+# enroll-iscsi-pool
+# Enroll a pool in two-node iSCSI export.
+#
+# 1. Adds the pool to the POOL_TARGET map in node.conf on BOTH nodes
+#    (peer node first via ssh, so a peer failure aborts before the local
+#    change leaves the nodes inconsistent).
+# 2. Runs setup-iscsi-targets on the storage host to create the target.
+# 3. Runs rescan-storage so the compute host discovers the new LUNs
+#    (rescan-storage delegates to the compute host when run here).
+#
+# Idempotent — re-running for an already-enrolled pool only re-runs the
+# target setup and rescan steps.
+#
+# Usage: sudo enroll-iscsi-pool [--dry-run] [--update-config-only] <pool> [short-name]
+#     --dry-run             Show each planned action without making changes
+#     --update-config-only  Only update node.conf on this node; skip target
+#                           setup and rescan (used for the peer ssh call and
+#                           for manual node.conf repair)
+#     <pool>                Pool name to enroll
+#     [short-name]          Target short name (IQN suffix); derived from the
+#                           pool name when omitted
+# Environment overrides (used by the test suite):
+#     ENROLL_ISCSI_NODE_LIB         Path to node-lib.sh
+#     ENROLL_ISCSI_NODE_CONF        Path to node.conf (defaults to node-lib's
+#                                   resolved NODE_CONF)
+#     ENROLL_ISCSI_SETUP_TARGETS    Path to setup-iscsi-targets
+#     ENROLL_ISCSI_RESCAN_STORAGE   Path to rescan-storage
+#     ENROLL_ISCSI_TEST_MODE        Skip the sourced-main guard (tests only)
+# Returns: 0 on success (or nothing to do), 1 on failure
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${ENROLL_ISCSI_NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+
+source_helper rootcheck
+rootcheck
+
+# Helper scripts are resolved here so unit tests can substitute mocks via the
+# environment overrides documented in the header.
+setup_targets_script="${ENROLL_ISCSI_SETUP_TARGETS:-$(find_zfsutility_script setup-iscsi-targets)}"
+rescan_storage_script="${ENROLL_ISCSI_RESCAN_STORAGE:-$(find_zfsutility_script rescan-storage)}"
+
+usage() {
+    log_msg "INFO: Usage: enroll-iscsi-pool [--dry-run] [--update-config-only] <pool> [short-name]"
+    log_msg "INFO:   --dry-run             Show planned actions without making changes"
+    log_msg "INFO:   --update-config-only  Only update node.conf on this node (peer delegation)"
+    return 1
+}
+
+# Verify we are running on the storage host.
+require_storage_host() {
+    local my_host
+    my_host=$(hostname -s)
+    if [[ "$my_host" != "$storage_host" ]]; then
+        log_msg "FATAL: Must run on the storage host ($storage_host), not $my_host"
+        return 1
+    fi
+    return 0
+}
+
+# Derive an IQN-safe target short name from a pool name: lowercase, keeping
+# only [a-z0-9.-]. Prints the short name; returns 1 (FATAL logged) when the
+# pool name has no IQN-safe characters.
+derive_target_short() {
+    local pool="$1"
+    local short
+    short=$(printf '%s' "$pool" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9.-')
+    if [[ -z "$short" ]]; then
+        log_msg "FATAL: Pool name '$pool' has no IQN-safe characters (allowed: a-z 0-9 . -)"
+        return 1
+    fi
+    printf '%s\n' "$short"
+}
+
+# Add a pool-to-target mapping to a node.conf file, in place, atomically.
+# Arguments: conf_file pool short
+# Idempotent: if the pool is already mapped, logs "already enrolled" and
+# returns 0 without modifying the file. Handles the multi-line and
+# single-line declare -A POOL_TARGET forms, and appends a new declaration
+# when the file has none. Makes a one-time timestamped backup before the
+# first modification.
+add_pool_to_node_conf() {
+    local conf_file="$1" pool="$2" short="$3"
+
+    # Idempotence: parse the conf (as bash) and look up the pool in
+    # POOL_TARGET. A same-named key in any OTHER map must not count.
+    if [[ -f "$conf_file" ]]; then
+        local existing
+        existing=$(bash -c 'source "$1"; printf "%s" "${POOL_TARGET[$2]:-}"' \
+            _ "$conf_file" "$pool" 2>/dev/null) || existing=""
+        if [[ -n "$existing" ]]; then
+            log_msg "INFO: Pool $pool is already enrolled in $conf_file"
+            return 0
+        fi
+    fi
+
+    [[ -f "$conf_file" ]] || install -D -m 0644 /dev/null "$conf_file"
+
+    local backup
+    backup="${conf_file}.bak-enroll-$(date +%Y%m%d-%H%M%S)"
+    if ! cp -p "$conf_file" "$backup"; then
+        log_msg "WARN: Could not back up $conf_file to $backup" \
+            "— continuing without a backup"
+    else
+        log_msg "INFO: Backed up $conf_file to $backup"
+    fi
+
+    local tmp_file
+    tmp_file=$(mktemp)
+    # Insert the new entry after the POOL_TARGET declaration (after its
+    # closing ')' line for the multi-line form, after the declare line for
+    # the single-line form); append a fresh declaration if there is none.
+    if ! awk -v entry="POOL_TARGET[${pool}]=\"${short}\"" \
+        -v decl="declare -A POOL_TARGET=( [${pool}]=\"${short}\" )" '
+        BEGIN { inserted=0; inblock=0 }
+        {
+            print $0
+            if (inserted) next
+            if ($0 ~ /^declare -A POOL_TARGET=\($/) { inblock=1; next }
+            if (inblock && $0 ~ /^[[:space:]]*\)[[:space:]]*$/) {
+                print entry
+                inserted=1
+                inblock=0
+                next
+            }
+            if (!inblock && $0 ~ /^declare -A POOL_TARGET=\(/) {
+                print entry
+                inserted=1
+            }
+        }
+        END {
+            if (!inserted)
+                print decl
+        }
+    ' "$conf_file" > "$tmp_file"; then
+        log_msg "FATAL: Failed to build updated $conf_file"
+        rm -f "$tmp_file"
+        return 1
+    fi
+
+    chmod --reference="$conf_file" "$tmp_file"
+    if ! mv -f "$tmp_file" "$conf_file"; then
+        log_msg "FATAL: Failed to install updated $conf_file"
+        rm -f "$tmp_file"
+        return 1
+    fi
+    log_msg "INFO: Added POOL_TARGET[$pool]=\"$short\" to $conf_file"
+    return 0
+}
+
+# Update the peer (compute) node's node.conf first, so a failure here aborts
+# before the local change leaves the two nodes inconsistent.
+# Arguments: pool short
+enroll_peer() {
+    local pool="$1" short="$2"
+    local remote_script
+    remote_script=$(remote_zfsutility_script "$compute_host" enroll-iscsi-pool)
+
+    local ssh_argv=(ssh -o ConnectTimeout=10 "root@${compute_host}")
+    if [[ -n "${ENROLL_ISCSI_NODE_CONF:-}" ]]; then
+        # Tests point both nodes at the same temp conf; propagate the override
+        # so the peer invocation also uses it.
+        ssh_argv+=("ENROLL_ISCSI_NODE_CONF=${ENROLL_ISCSI_NODE_CONF}")
+    fi
+    ssh_argv+=("$remote_script" --update-config-only "$pool" "$short")
+
+    log_msg "INFO: Updating peer node.conf on $compute_host before local changes..."
+    if ! "${ssh_argv[@]}"; then
+        log_msg "FATAL: Failed to update node.conf on $compute_host"
+        log_msg "FATAL:   Nodes may be out of sync — check POOL_TARGET on both nodes" \
+            "before re-running"
+        return 1
+    fi
+    log_msg "INFO:   ✓ Peer node.conf updated"
+    return 0
+}
+
+# Run setup-iscsi-targets on the storage host. FATAL on failure.
+run_setup_targets() {
+    log_msg "INFO: Setting up iSCSI targets (setup-iscsi-targets)..."
+    if ! type -t "$setup_targets_script" >/dev/null 2>&1 && \
+       [[ ! -x "$setup_targets_script" ]]; then
+        log_msg "FATAL: setup-iscsi-targets not available at $setup_targets_script"
+        return 1
+    fi
+    if "$setup_targets_script"; then
+        log_msg "INFO:   ✓ setup-iscsi-targets complete"
+        return 0
+    fi
+    log_msg "FATAL: setup-iscsi-targets failed"
+    return 1
+}
+
+# Run rescan-storage (auto-delegates to the compute host). Target creation
+# has already succeeded, so a rescan failure is a WARN, not FATAL.
+run_rescan_storage() {
+    log_msg "INFO: Rescanning storage (rescan-storage)..."
+    if ! type -t "$rescan_storage_script" >/dev/null 2>&1 && \
+       [[ ! -x "$rescan_storage_script" ]]; then
+        log_msg "WARN: rescan-storage not available at $rescan_storage_script"
+        log_msg "WARN:   Run 'sudo rescan-storage' manually on $compute_host"
+        return 0
+    fi
+    if "$rescan_storage_script"; then
+        log_msg "INFO:   ✓ rescan-storage complete"
+    else
+        log_msg "WARN: rescan-storage failed — run 'sudo rescan-storage' manually" \
+            "on $compute_host"
+    fi
+    return 0
+}
+
+main() {
+
+    local dry_run=false
+    local update_config_only=false
+    local position_args=()
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run)             dry_run=true ;;
+            --update-config-only)  update_config_only=true ;;
+            -h|--help)             usage; return 0 ;;
+            --*)
+                log_msg "FATAL: Unknown option: $arg"
+                usage
+                return 1
+                ;;
+            *) position_args+=("$arg") ;;
+        esac
+    done
+
+    local pool="${position_args[0]:-}"
+    local short="${position_args[1]:-}"
+    if [[ -z "$pool" ]]; then
+        usage
+        return 1
+    fi
+
+    log_msg "INFO: === enroll-iscsi-pool: $pool ==="
+
+    # iSCSI-only utility — succeed quietly in single-node mode
+    if is_single_node; then
+        log_msg "INFO: enroll-iscsi-pool: not applicable in single-node mode (no iSCSI)"
+        return 0
+    fi
+
+    # --update-config-only may run on either node (it is the peer delegation
+    # path); full enrollment must run on the storage host.
+    if [[ "$update_config_only" != true ]] && ! require_storage_host; then
+        return 1
+    fi
+
+    if [[ -z "$short" ]]; then
+        short=$(derive_target_short "$pool") || return 1
+    fi
+    log_msg "INFO: Pool: $pool → Target: ${iqn_prefix}:${short}"
+
+    local conf_file="${ENROLL_ISCSI_NODE_CONF:-${NODE_CONF:-}}"
+    if [[ -z "$conf_file" ]]; then
+        log_msg "FATAL: node.conf path not resolved (node-lib NODE_CONF is unset)"
+        return 1
+    fi
+
+    if [[ "$dry_run" == true ]]; then
+        log_msg "INFO: DRY-RUN: would update peer node.conf on $compute_host via ssh:"
+        log_msg "INFO: DRY-RUN:   ssh root@$compute_host" \
+            "$(remote_zfsutility_script "$compute_host" enroll-iscsi-pool)" \
+            "--update-config-only $pool $short"
+        log_msg "INFO: DRY-RUN: would add POOL_TARGET[$pool]=\"$short\" to $conf_file"
+        log_msg "INFO: DRY-RUN: would run $setup_targets_script"
+        log_msg "INFO: DRY-RUN: would run $rescan_storage_script"
+        return 0
+    fi
+
+    if [[ "$update_config_only" == true ]]; then
+        add_pool_to_node_conf "$conf_file" "$pool" "$short" || return 1
+        return 0
+    fi
+
+    # Peer first: abort on peer failure before the local node.conf diverges.
+    enroll_peer "$pool" "$short" || return 1
+
+    log_msg "INFO: Updating local node.conf ($conf_file)..."
+    add_pool_to_node_conf "$conf_file" "$pool" "$short" || {
+        log_msg "FATAL: Failed to update local node.conf $conf_file"
+        return 1
+    }
+
+    run_setup_targets || return 1
+    run_rescan_storage
+
+    log_msg "INFO: === enroll-iscsi-pool complete: $pool → ${iqn_prefix}:${short} ==="
+    return 0
+
+} # end main
+
+# Run main only when executed directly, not when sourced for tests.
+if [[ -z "${ENROLL_ISCSI_TEST_MODE:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

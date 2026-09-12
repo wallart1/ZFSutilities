@@ -17,40 +17,44 @@ from zfs_repository import ZfsRepository
 class ZfsVersion:
     """Parsed OpenZFS userland and kernel-module versions."""
 
-    userland: tuple[int, int]
-    kmod: tuple[int, int]
+    userland: tuple[int, int, int]
+    kmod: tuple[int, int, int]
 
 
 # Feature minimum-version table.
 # Anything at or below the 2.1 support floor is assumed present and is not
-# listed here; read-only Disks views are the baseline.
-FEATURE_MIN_VERSION: dict[str, tuple[int, int]] = {
-    "draid": (2, 1),
-    "json_output": (2, 3),
-    "zfs_rewrite": (2, 3),
-    "raidz_expansion": (2, 3),
-    "fast_dedup": (2, 3),
-    "direct_io": (2, 3),
-    "ssb_on_zvols": (2, 4),
-    "ssb_non_power_of_two": (2, 4),
+# listed here; read-only Disks views are the baseline. The third tuple element
+# is the patch level (0 when the feature minimum is a plain major.minor).
+FEATURE_MIN_VERSION: dict[str, tuple[int, int, int]] = {
+    "draid": (2, 1, 0),
+    "json_output": (2, 3, 0),
+    # `zfs rewrite` first shipped in OpenZFS 2.3.4, not 2.3.0.
+    "zfs_rewrite": (2, 3, 4),
+    "raidz_expansion": (2, 3, 0),
+    "fast_dedup": (2, 3, 0),
+    "direct_io": (2, 3, 0),
+    "ssb_on_zvols": (2, 4, 0),
+    "ssb_non_power_of_two": (2, 4, 0),
 }
 
 
-# Regex: (?:zfs|zfs-kmod)[^\d]*(\d+)\.(\d+)
-# Purpose: Extract the major.minor OpenZFS version from a `zfs version` line.
-# The non-capturing prefix matches either the userland token (`zfs`) or the
-# kernel-module token (`zfs-kmod`) so the same pattern works for both lines.
+# Regex: (?:zfs|zfs-kmod)[^\d]*(\d+)\.(\d+)(?:\.(\d+))?
+# Purpose: Extract the major.minor(.patch) OpenZFS version from a `zfs version`
+# line. The non-capturing prefix matches either the userland token (`zfs`) or
+# the kernel-module token (`zfs-kmod`) so the same pattern works for both lines.
 # `[^\d]*` skips any separator characters (hyphens, spaces, etc.) before the
-# first digit. Groups 1 and 2 are the major and minor version numbers.
-_VERSION_RE = re.compile(r"(?:zfs|zfs-kmod)[^\d]*(\d+)\.(\d+)")
+# first digit. Groups 1, 2, and 3 are the major, minor, and patch version
+# numbers; the patch group is optional (e.g. `zfs-2.3-1`) and defaults to 0.
+_VERSION_RE = re.compile(r"(?:zfs|zfs-kmod)[^\d]*(\d+)\.(\d+)(?:\.(\d+))?")
 
 
-def _parse_version_line(line: str) -> tuple[int, int] | None:
-    """Return (major, minor) from a single `zfs version` line, or None."""
+def _parse_version_line(line: str) -> tuple[int, int, int] | None:
+    """Return (major, minor, patch) from a single `zfs version` line, or None."""
     match = _VERSION_RE.search(line)
     if match is None:
         return None
-    return int(match.group(1)), int(match.group(2))
+    patch = int(match.group(3)) if match.group(3) is not None else 0
+    return int(match.group(1)), int(match.group(2)), patch
 
 
 class ZfsCapabilities:
@@ -67,24 +71,31 @@ class ZfsCapabilities:
         self.version = self._load_version()
         if (
             self.version.userland != self.version.kmod
-            and self.version.userland != (0, 0)
-            and self.version.kmod != (0, 0)
+            and self.version.userland != (0, 0, 0)
+            and self.version.kmod != (0, 0, 0)
         ):
             log_msg(
-                f"WARN: OpenZFS userland {self.version.userland[0]}."
-                f"{self.version.userland[1]} differs from kernel module "
-                f"{self.version.kmod[0]}.{self.version.kmod[1]}"
+                f"WARN: OpenZFS userland {self._format_version(self.version.userland)} "
+                "differs from kernel module "
+                f"{self._format_version(self.version.kmod)}"
             )
+
+    @staticmethod
+    def _format_version(version: tuple[int, int, int]) -> str:
+        """Render a version tuple as 'major.minor' or 'major.minor.patch'."""
+        if version[2]:
+            return f"{version[0]}.{version[1]}.{version[2]}"
+        return f"{version[0]}.{version[1]}"
 
     def _load_version(self) -> ZfsVersion:
         """Parse `zfs version` output into userland and kmod tuples."""
         raw = self.repository.version_output()
         if not raw:
             log_msg("WARN: Unable to determine OpenZFS version")
-            return ZfsVersion((0, 0), (0, 0))
+            return ZfsVersion((0, 0, 0), (0, 0, 0))
 
-        userland: tuple[int, int] | None = None
-        kmod: tuple[int, int] | None = None
+        userland: tuple[int, int, int] | None = None
+        kmod: tuple[int, int, int] | None = None
         for line in raw.splitlines():
             stripped = line.strip()
             if not stripped:
@@ -99,7 +110,7 @@ class ZfsCapabilities:
                 userland = parsed
 
         if userland is None:
-            userland = (0, 0)
+            userland = (0, 0, 0)
             log_msg("WARN: Unable to parse OpenZFS userland version")
         if kmod is None:
             # Fall back to userland when the kernel-module line is missing;
@@ -126,8 +137,7 @@ class ZfsCapabilities:
         """
         if name not in FEATURE_MIN_VERSION:
             return ""
-        major, minor = FEATURE_MIN_VERSION[name]
-        return f"requires OpenZFS {major}.{minor}+"
+        return f"requires OpenZFS {self._format_version(FEATURE_MIN_VERSION[name])}+"
 
     def supports_pool_feature(self, pool: str, feature: str) -> bool:
         """Check whether *pool* has the named feature flag active/enabled.

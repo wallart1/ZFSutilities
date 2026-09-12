@@ -49,6 +49,16 @@ class ScrubInfo:
     eta: datetime | None = None
 
 
+@dataclass
+class PoolOperation:
+    """An in-progress ZFS-native operation on a pool (not a scrub)."""
+
+    pool: str
+    kind: str  # "resilver" | "expand" | "remove"
+    subject: str = ""  # vdev name/number for expand/remove, "" otherwise
+    progress_percent: float | None = None
+
+
 # ---------------------------------------------------------------------------
 # Regexes for zpool status parsing
 # ---------------------------------------------------------------------------
@@ -68,6 +78,15 @@ _SCAN_RESILVER_RE = re.compile(
 )
 # Stale paused summary that can appear as a continuation line after a resume.
 _STALE_PAUSED_RE = re.compile(r"^scrub\s+paused\b", re.IGNORECASE)
+# In-progress ZFS-native operations reported by `zpool status` (OpenZFS):
+#   scan: resilver in progress since <date>
+#   expand: expansion of raidz1-0 in progress since <date>   (OpenZFS 2.3+)
+#   remove: Removal of vdev 3 copied ..., 45.2% done, ...
+_RESILVER_PROGRESS_RE = re.compile(r"scan:\s*resilver\s+in\s+progress\s+since\s+", re.IGNORECASE)
+_EXPAND_PROGRESS_RE = re.compile(
+    r"expand:\s*expansion\s+of\s+(\S+)\s+in\s+progress\s+since\s+", re.IGNORECASE
+)
+_REMOVE_PROGRESS_RE = re.compile(r"remove:\s*Removal\s+of\s+vdev\s+(\S+)", re.IGNORECASE)
 # Remaining time reported on an in-progress scrub, e.g.
 #   "01:23:45 to go" or "1 days 01:23:45 to go"
 _SCAN_REMAINING_RE = re.compile(
@@ -181,6 +200,42 @@ def _extract_remaining_seconds(raw: str) -> int | None:
         return (days * 24 * 3600) + (hours * 3600) + (minutes * 60) + seconds
     except (ValueError, TypeError):
         return None
+
+
+def parse_pool_operations(pool_name: str, status_text: str) -> PoolOperation | None:
+    """Parse one pool's `zpool status` text for an in-progress ZFS-native operation.
+
+    Detects resilver, RAIDZ expansion, and vdev removal.  Scrub-in-progress is
+    deliberately NOT returned: scrubs already have queue-based Dashboard tasks,
+    and `parse_scrub_status` must keep mapping them without confusion.
+    Returns None when no such operation is in progress or the text is empty.
+    """
+    if not status_text:
+        return None
+
+    m = _RESILVER_PROGRESS_RE.search(status_text)
+    if m:
+        return PoolOperation(pool_name, "resilver", progress_percent=_extract_percent(status_text))
+
+    m = _EXPAND_PROGRESS_RE.search(status_text)
+    if m:
+        return PoolOperation(
+            pool_name,
+            "expand",
+            subject=m.group(1),
+            progress_percent=_extract_percent(status_text),
+        )
+
+    m = _REMOVE_PROGRESS_RE.search(status_text)
+    if m:
+        return PoolOperation(
+            pool_name,
+            "remove",
+            subject=m.group(1),
+            progress_percent=_extract_percent(status_text),
+        )
+
+    return None
 
 
 def get_pool_scrub_info(pool_name: str, repo=None) -> ScrubInfo:

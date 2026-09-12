@@ -1,0 +1,373 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-transfer-lib — Unit tests for the shared ZFS transfer helpers in
+# lib/transfer-lib.sh (pv argument construction, resume-token validation and
+# classification, token abort, space check, and the transfer pipeline).
+
+# shellcheck disable=SC2218
+# (source() override below is intentionally not active for test-lib.sh itself.)
+builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+repo_root="$mydir"
+
+# Keep test-lib's log_msg mock: skip re-sourcing bashinit from the library.
+source() {
+    local expanded="${1/#\~/$HOME}"
+    [[ "$expanded" == "$HOME/bashinit" ]] && return 0
+    [[ "$expanded" == "$repo_root/bin/bashinit" ]] && return 0
+    builtin source "$@"
+}
+
+source "$mydir/lib/transfer-lib.sh"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+reset_state() {
+    clear_test_log_file
+    transfer_pv_args=()
+    pv_rate_limit=""
+    ZFSUTILITIES_LOG_INHERIT=""
+    dryrun="N"
+    _mock_zfs_props=()
+    : > "$_zfs_capture_file"
+    _mock_zfs_send_size="0"
+    _mock_zfs_send_rc=0
+    _mock_zfs_send_err=""
+    _mock_zfs_cmd_rc=0
+}
+
+# Override zfs to record invocations to a file (pipeline stages run in
+# subshells, so arrays would not survive); serves `zfs get` from
+# _mock_zfs_props and `zfs send -nP` from _mock_zfs_send_size; send/receive
+# rc is controlled by _mock_zfs_cmd_rc.
+_zfs_capture_file="$_mock_zfs_state_dir/transfer_zfs_calls"
+
+zfs() {
+    echo "zfs $*" >> "$_zfs_capture_file"
+    case "$1" in
+        get)
+            local prop="" dataset="" value_only=0
+            local -a args=("${@:2}")
+            local i
+            for (( i=0; i<${#args[@]}; i++ )); do
+                case "${args[$i]}" in
+                    -H*|-p*) ;;
+                    -o)
+                        [[ "${args[$((i+1))]}" == "value" ]] && value_only=1
+                        ((i++))
+                        ;;
+                    *)
+                        if [[ -z "$prop" ]]; then
+                            prop="${args[$i]}"
+                        else
+                            dataset="${args[$i]}"
+                        fi
+                        ;;
+                esac
+            done
+            local value="${_mock_zfs_props[$dataset:$prop]:--}"
+            if [[ $value_only -eq 1 ]]; then
+                echo "$value"
+            else
+                printf '%s\t%s\t%s\n' "$dataset" "$prop" "$value"
+            fi
+            return 0
+            ;;
+        send)
+            if [[ "$*" == *"-nP"* ]]; then
+                if [[ "${_mock_zfs_send_rc:-0}" != "0" ]]; then
+                    echo "${_mock_zfs_send_err:-send failed}" >&2
+                    return "$_mock_zfs_send_rc"
+                fi
+                printf 'size\t%s\n' "$_mock_zfs_send_size"
+                return 0
+            fi
+            return "${_mock_zfs_cmd_rc:-0}"
+            ;;
+        receive)
+            return "${_mock_zfs_cmd_rc:-0}"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+get_log() {
+    cat "$(get_test_log_file)" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# transfer_pv_args
+# ---------------------------------------------------------------------------
+
+test_pv_args_headless_no_rate() {
+    test_start "transfer_pv_args empty in headless mode without rate limit"
+    reset_state
+    transfer_pv_args "5000000" "Y" 2>/dev/null
+    assert_array_len 0 "${transfer_pv_args[@]}"
+}
+
+test_pv_args_use_pv_no() {
+    test_start "transfer_pv_args empty when use_pv is not Y"
+    reset_state
+    transfer_pv_args "5000000" "N" 2>/dev/null
+    assert_array_len 0 "${transfer_pv_args[@]}"
+}
+
+test_pv_args_log_inherit() {
+    test_start "transfer_pv_args forces progress output when LOG_INHERIT=Y"
+    reset_state
+    ZFSUTILITIES_LOG_INHERIT="Y" transfer_pv_args "5000000" "Y" 2>/dev/null
+    assert_array_len 3 "${transfer_pv_args[@]}"
+    assert_equals "-fpterb" "${transfer_pv_args[0]}"
+    assert_equals "-s" "${transfer_pv_args[1]}"
+    assert_equals "5000000" "${transfer_pv_args[2]}"
+}
+
+test_pv_args_headless_rate_limit() {
+    test_start "transfer_pv_args quiet rate limit in headless mode"
+    reset_state
+    pv_rate_limit="50M"
+    transfer_pv_args "5000000" "Y" 2>/dev/null
+    assert_array_len 3 "${transfer_pv_args[@]}"
+    assert_equals "-q" "${transfer_pv_args[0]}"
+    assert_equals "-L" "${transfer_pv_args[1]}"
+    assert_equals "50M" "${transfer_pv_args[2]}"
+}
+
+test_pv_args_log_inherit_rate_limit() {
+    test_start "transfer_pv_args appends -L rate when progress is wanted"
+    reset_state
+    pv_rate_limit="50M"
+    ZFSUTILITIES_LOG_INHERIT="Y" transfer_pv_args "5000000" "Y" 2>/dev/null
+    assert_array_len 5 "${transfer_pv_args[@]}"
+    assert_equals "-fpterb" "${transfer_pv_args[0]}"
+    assert_equals "-L" "${transfer_pv_args[3]}"
+    assert_equals "50M" "${transfer_pv_args[4]}"
+}
+
+test_pv_args_no_pv_rate_limit() {
+    test_start "transfer_pv_args rate limit applies even when use_pv is not Y"
+    reset_state
+    pv_rate_limit="10m"
+    transfer_pv_args "0" "N" 2>/dev/null
+    assert_array_len 3 "${transfer_pv_args[@]}"
+    assert_equals "-q" "${transfer_pv_args[0]}"
+    assert_equals "-L" "${transfer_pv_args[1]}"
+    assert_equals "10m" "${transfer_pv_args[2]}"
+}
+
+# ---------------------------------------------------------------------------
+# transfer_resume_token_stale
+# ---------------------------------------------------------------------------
+
+test_token_stale_strings() {
+    test_start "transfer_resume_token_stale recognizes known stale strings"
+    reset_state
+    local s
+    for s in "snapshot no longer exists" "token @--head-- invalid" \
+        "Invalid argument" "stream does not match destination" \
+        "destination has been modified"; do
+        if ! transfer_resume_token_stale "$s"; then
+            test_fail "Expected stale classification for '$s'"
+            return
+        fi
+    done
+    if transfer_resume_token_stale "some other error"; then
+        test_fail "Unexpected stale classification for unrelated error"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# transfer_validate_resume_token
+# ---------------------------------------------------------------------------
+
+test_validate_token_success() {
+    test_start "transfer_validate_resume_token prints remaining byte count"
+    reset_state
+    _mock_zfs_send_size="12345678"
+    local out rc
+    out=$(transfer_validate_resume_token "test-token")
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_equals "12345678" "$out"
+}
+
+test_validate_token_failure() {
+    test_start "transfer_validate_resume_token returns error text on failure"
+    reset_state
+    _mock_zfs_send_rc=1
+    _mock_zfs_send_err="cannot resume: dataset does not exist"
+    local out rc
+    out=$(transfer_validate_resume_token "test-token")
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_contains "$out" "does not exist"
+}
+
+# ---------------------------------------------------------------------------
+# transfer_abort_resume_token
+# ---------------------------------------------------------------------------
+
+test_abort_token_live() {
+    test_start "transfer_abort_resume_token runs zfs receive -A when live"
+    reset_state
+    transfer_abort_resume_token "pool/dest" 2>/dev/null
+    local calls
+    calls=$(cat "$_zfs_capture_file" 2>/dev/null)
+    assert_contains "$calls" "zfs receive -A pool/dest"
+}
+
+test_abort_token_dryrun() {
+    test_start "transfer_abort_resume_token logs only in dry-run mode"
+    reset_state
+    dryrun="Y"
+    transfer_abort_resume_token "pool/dest" 2>/dev/null
+    local log
+    log=$(get_log)
+    assert_contains "$log" "Dry-run: Would abort resume token on pool/dest"
+    local calls
+    calls=$(cat "$_zfs_capture_file" 2>/dev/null)
+    if [[ "$calls" == *"receive -A"* ]]; then
+        test_fail "receive -A ran during dry-run: $calls"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# transfer_check_space
+# ---------------------------------------------------------------------------
+
+test_space_check_sufficient() {
+    test_start "transfer_check_space passes with ample destination space"
+    reset_state
+    _mock_zfs_props["pool:available"]="10000000000"
+    transfer_check_space "1000000" "pool" 2>/dev/null
+    assert_rc 0 "$?"
+}
+
+test_space_check_insufficient() {
+    test_start "transfer_check_space fails and warns when space is short"
+    reset_state
+    _mock_zfs_props["pool:available"]="1000"
+    transfer_check_space "1000000" "pool" 2>/dev/null
+    assert_rc 1 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "Insufficient space on destination pool 'pool'"
+}
+
+test_space_check_unknown_availability() {
+    test_start "transfer_check_space passes when availability is unknown"
+    reset_state
+    transfer_check_space "1000000" "pool" 2>/dev/null
+    assert_rc 0 "$?"
+}
+
+test_space_check_min_buffer_override() {
+    test_start "transfer_check_space honors space_check_min_buffer override"
+    reset_state
+    # 100 bytes to send: 10% margin is 10, but the default 1 GiB minimum
+    # buffer applies. Shrink the buffer so 200 bytes of headroom is enough.
+    space_check_min_buffer=200
+    _mock_zfs_props["pool:available"]="500"
+    transfer_check_space "100" "pool" 2>/dev/null
+    assert_rc 0 "$?"
+    unset space_check_min_buffer
+}
+
+# ---------------------------------------------------------------------------
+# transfer_do
+# ---------------------------------------------------------------------------
+
+test_transfer_do_pipeline_no_pv() {
+    test_start "transfer_do runs zfs send | zfs receive without pv when headless"
+    reset_state
+    transfer_do "Send/receive" "-Rw" "-u -F -s" "N" "0" "src@snap" "pool/dest" \
+        2>/dev/null
+    assert_rc 0 "$?"
+    local calls
+    calls=$(cat "$_zfs_capture_file" 2>/dev/null)
+    assert_contains "$calls" "zfs send -Rw src@snap"
+    assert_contains "$calls" "zfs receive -u -F -s pool/dest"
+}
+
+test_transfer_do_resume_omits_target() {
+    test_start "transfer_do omits send target when resuming via -t token"
+    reset_state
+    transfer_do "resume transfer" "-t test-token" "" "N" "0" "ignored" "pool/dest" \
+        2>/dev/null
+    assert_rc 0 "$?"
+    local calls
+    calls=$(cat "$_zfs_capture_file" 2>/dev/null)
+    assert_contains "$calls" "zfs send -t test-token"
+    if [[ "$calls" == *"zfs send -t test-token ignored"* ]]; then
+        test_fail "send target was not omitted in resume mode: $calls"
+    fi
+}
+
+test_transfer_do_with_pv_when_inherit() {
+    test_start "transfer_do inserts pv when the runner captures output"
+    reset_state
+    local pv_capture="$_mock_zfs_state_dir/transfer_pv_args"
+    : > "$pv_capture"
+    pv() {
+        echo "$*" >> "$pv_capture"
+        return 0
+    }
+    ZFSUTILITIES_LOG_INHERIT="Y" \
+        transfer_do "Send/receive" "-cw" "-uv" "Y" "5000000" "src@snap" "pool/dest" \
+        2>/dev/null
+    local rc=$?
+    unset -f pv
+    assert_rc 0 "$rc"
+    local pv_args
+    pv_args=$(cat "$pv_capture" 2>/dev/null)
+    assert_contains "$pv_args" "-fpterb"
+    assert_contains "$pv_args" "-s 5000000"
+}
+
+test_transfer_do_failure_logs_fatal() {
+    test_start "transfer_do logs FATAL with the pipeline rc on failure"
+    reset_state
+    _mock_zfs_cmd_rc=3
+    transfer_do "Send/receive" "-Rw" "-u" "N" "0" "src@snap" "pool/dest" 2>/dev/null
+    assert_rc 3 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "FATAL: Send/receive failed. RC=3"
+}
+
+# ---------------------------------------------------------------------------
+# Run all tests
+# ---------------------------------------------------------------------------
+
+test_pv_args_headless_no_rate
+test_pv_args_use_pv_no
+test_pv_args_log_inherit
+test_pv_args_headless_rate_limit
+test_pv_args_log_inherit_rate_limit
+test_pv_args_no_pv_rate_limit
+test_token_stale_strings
+test_validate_token_success
+test_validate_token_failure
+test_abort_token_live
+test_abort_token_dryrun
+test_space_check_sufficient
+test_space_check_insufficient
+test_space_check_unknown_availability
+test_space_check_min_buffer_override
+test_transfer_do_pipeline_no_pv
+test_transfer_do_resume_omits_target
+test_transfer_do_with_pv_when_inherit
+test_transfer_do_failure_logs_fatal
+
+test_summary
+teardown_test_env

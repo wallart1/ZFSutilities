@@ -182,8 +182,8 @@ class TestCheckDestinationCapacity(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertEqual(len(problems), 1)
         self.assertIn("insufficient", problems[0])
-        self.assertIn("100.0 GB", problems[0])
-        self.assertIn("200.0 GB", problems[0])
+        self.assertIn("100.00 GiB", problems[0])
+        self.assertIn("200.00 GiB", problems[0])
 
     def test_exact_fit_warns_on_headroom(self):
         problems, warnings = check_destination_capacity(100 * GB, 100 * GB)
@@ -250,15 +250,35 @@ class TestBuildMigrationSendReceiveCommand(unittest.TestCase):
             "temp/proxmox", "temp_mig/proxmox", "migrate-x"
         )
         self.assertEqual(argv[0:2], ["bash", "-c"])
-        self.assertIn("set -o pipefail;", argv[2])
-        self.assertIn("zfs send -Rw temp/proxmox@migrate-x", argv[2])
-        self.assertIn("| zfs receive -u -F temp_mig/proxmox", argv[2])
+        script = argv[2]
+        self.assertIn("zfs-migrate-send", script)
+        self.assertIn("sourcefs=temp/proxmox", script)
+        self.assertIn("destfs=temp_mig/proxmox", script)
+        self.assertIn("snapname=migrate-x", script)
+        self.assertIn("zfs_migrate_send", script)
+
+    def test_rate_limit_assignment_gated(self):
+        argv = build_migration_send_receive_command(
+            "temp/proxmox", "temp_mig/proxmox", "migrate-x", rate_limit="100m"
+        )
+        self.assertIn("pv_rate_limit=100m", argv[2])
+        argv = build_migration_send_receive_command(
+            "temp/proxmox", "temp_mig/proxmox", "migrate-x"
+        )
+        self.assertNotIn("pv_rate_limit", argv[2])
+
+    def test_invalid_rate_limit_rejected(self):
+        for bad in ("abc", "10x", "1.5m", "-5m"):
+            with self.assertRaises(ValueError):
+                build_migration_send_receive_command(
+                    "temp/proxmox", "temp_mig/proxmox", "migrate-x", rate_limit=bad
+                )
 
     def test_names_with_spaces_are_quoted(self):
         argv = build_migration_send_receive_command(
             "my pool/ds", "dest pool/ds", "migrate-x"
         )
-        self.assertIn("'my pool/ds@migrate-x'", argv[2])
+        self.assertIn("'my pool/ds'", argv[2])
         self.assertIn("'dest pool/ds'", argv[2])
 
     def test_empty_source_rejected(self):

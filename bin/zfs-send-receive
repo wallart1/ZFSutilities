@@ -29,6 +29,7 @@ function send-receive {
     source_helper zfsdelallholds
     source_helper zfsholds
     source_helper iscsi-lib.sh
+    source_helper transfer-lib.sh
     source_helper zfsdelfs
     source_helper zfsoverrides
     source_helper zfslockmanager
@@ -45,11 +46,7 @@ function send-receive {
 
     abort_resume_token() {
         local dest="$1"
-        if [[ $dryrun != 'N' ]]; then
-            [[ $dryrun != 'N' ]] && log_msg "INFO: Dry-run: Would abort resume token on $dest"
-        else
-            zfs receive -A "$dest"
-        fi
+        transfer_abort_resume_token "$dest"
         zfslock_release "$lock_source"
         zfslock_release "$lock_dest"; ((i--))
     }
@@ -64,75 +61,16 @@ function send-receive {
             return
         fi
 
-        local -a _pv_args=()
-        local _pv_progress_desired="N"
-        # Progress display: natural in terminal, forced in GUI, suppressed otherwise
-        if [[ "$use_pv" = 'Y' ]]; then
-            if [[ -t 2 ]]; then
-                # Terminal available — natural progress display
-                _pv_args=(-pterb -s "$datatosend")
-                _pv_progress_desired="Y"
-            elif [[ "${ZFSUTILITIES_LOG_INHERIT:-}" = "Y" ]]; then
-                # Parent runner is capturing output — force output for parser
-                _pv_args=(-fpterb -s "$datatosend")
-                _pv_progress_desired="Y"
+        # transfer_do logs the FATAL failure line; the holds hints, lock
+        # release, and exit code here are send-receive-specific.
+        if ! transfer_do "$desc" "$sendopts" "$recvopts" "$use_pv" "$datatosend" \
+                "$fs$nextsnap" "$destfs$restorefs"; then
+            if [[ "$desc" == "Send/receive"* ]]; then
+                log_msg "Are there holds on $destfs$restorefs snapshots?"
+                holds "$destfs" 1
+                holds "$destfs$restorefs" 1
             fi
-        fi
-        # Rate limit: visible in terminal/GUI, quiet in headless/non-interactive
-        if [[ -n "$pv_rate_limit" ]]; then
-            if [[ "$_pv_progress_desired" = "Y" ]]; then
-                _pv_args+=("-L" "$pv_rate_limit")
-            else
-                _pv_args=(-q -L "$pv_rate_limit")
-            fi
-        fi
-
-        # When resuming via -t <token>, the token already encodes the snapshot,
-        # so do not append "$fs$nextsnap" as an extra positional argument.
-        # Build option arrays without using read, so callers that override read
-        # (for example, test mocks that auto-answer prompts) cannot corrupt the
-        # option parsing. Briefly disable globbing and then restore the prior
-        # shell option state.
-        local _save_glob
-        _save_glob=$(shopt -p nullglob extglob failglob)
-        local _noglob_was_set=0
-        [[ "$-" == *f* ]] && _noglob_was_set=1
-        set -f
-        # shellcheck disable=SC2206
-        # Intentional word splitting: $sendopts is a space-separated option string.
-        local -a _sendopts=($sendopts)
-        local -a send_cmd=(zfs send "${_sendopts[@]}")
-        [[ "$sendopts" != *"-t"* ]] && send_cmd+=("$fs$nextsnap")
-
-        # shellcheck disable=SC2206
-        # Intentional word splitting: $recvopts is a space-separated option string.
-        local -a _recvopts=($recvopts)
-        if [[ $_noglob_was_set -eq 0 ]]; then
-            set +f
-        fi
-        eval "$_save_glob"
-
-        if [[ ${#_pv_args[@]} -gt 0 ]]; then
-            if ! "${send_cmd[@]}" | pv "${_pv_args[@]}" \
-                    | zfs receive "${_recvopts[@]}" "$destfs$restorefs"; then
-                log_msg "FATAL: $desc failed. RC=$?"
-                if [[ "$desc" == "Send/receive"* ]]; then
-                    log_msg "Are there holds on $destfs$restorefs snapshots?"
-                    holds "$destfs" 1
-                    holds "$destfs$restorefs" 1
-                fi
-                zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8
-            fi
-        else
-            if ! "${send_cmd[@]}" | zfs receive "${_recvopts[@]}" "$destfs$restorefs"; then
-                log_msg "FATAL: $desc failed. RC=$?"
-                if [[ "$desc" == "Send/receive"* ]]; then
-                    log_msg "Are there holds on $destfs$restorefs snapshots?"
-                    holds "$destfs" 1
-                    holds "$destfs$restorefs" 1
-                fi
-                zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8
-            fi
+            zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8
         fi
     }
 
@@ -200,24 +138,11 @@ function send-receive {
 
     check_space_available() {
         local datatosend="$1" dest_pool="$2"
-        [[ $datatosend -le 0 ]] && return 0
-        local dest_avail
-        dest_avail=$(zfs get -Hp -o value available "$dest_pool" 2>/dev/null)
-        # Regex: ^[0-9]+$
-        # Purpose: Validate that dest_avail is a non-negative integer.
-        # Examples: "12345678" -> match; "-1" -> no match; "" -> no match.
-        [[ -z "$dest_avail" || ! "$dest_avail" =~ ^[0-9]+$ ]] && return 0
-        local safety_margin=$(( datatosend / 10 ))
-        # The minimum buffer is configurable (e.g., for integration tests on
-        # small pools) but defaults to 1 GiB in production.
-        local min_buffer="${space_check_min_buffer:-$(( 1024 * 1024 * 1024 ))}"
-        [[ $safety_margin -lt $min_buffer ]] && safety_margin=$min_buffer
-        local space_needed=$(( datatosend + safety_margin ))
-        [[ $dest_avail -ge $space_needed ]] && return 0
-        log_msg "WARN: Insufficient space on destination pool '$dest_pool'." \
-            "\n\tData to send: $(echo "$datatosend" | numfmt --to=iec-i)" \
-            "\n\tSpace needed (with 10% margin): $(echo $space_needed | numfmt --to=iec-i)" \
-            "\n\tSpace available: $(echo "$dest_avail" | numfmt --to=iec-i)"
+        # transfer_check_space performs the math and logs the WARN; the
+        # proceed-anyway prompt here is send-receive-specific.
+        if transfer_check_space "$datatosend" "$dest_pool"; then
+            return 0
+        fi
         if [[ $autoproceed = 'Y' ]] || ! ask_yn "Do you want to attempt the transfer anyway?"; then
             log_msg "INFO: Skipping $fs (insufficient space)."; return 1
         fi
@@ -554,12 +479,8 @@ function send-receive {
             if [[ -n "$resumetoken" && "$resumetoken" != '-' ]]; then
                 log_msg "INFO: Found resume token for $destfs$restorefs." \
                     "Preparing to resume transfer."
-                if ! resumedata=$(zfs send -nP -t "$resumetoken" 2>&1); then
-                    if [[ $resumedata == *"no longer exists"* \
-                        || $resumedata == *"@--head--"* \
-                        || $resumedata == *"Invalid argument"* \
-                        || $resumedata == *"does not match"* \
-                        || $resumedata == *"destination has been modified"* ]]; then
+                if ! resumedata=$(transfer_validate_resume_token "$resumetoken"); then
+                    if transfer_resume_token_stale "$resumedata"; then
                         log_msg "WARN: Resume token is invalid or stale. Aborting resume token."
                         log_msg "WARN: $resumedata"
                         abort_resume_token "$destfs$restorefs"
@@ -617,9 +538,9 @@ function send-receive {
                     fi
                 else
                     log_msg "VERB: resumedata=$resumedata"
-                    # awk '/^size/ {print $2}'  —  Extract remaining byte count from resume
-                    # token info.
-                    datatosend=$(echo "$resumedata" | awk '/^size/ {print $2}')
+                    # transfer_validate_resume_token already extracted the
+                    # remaining byte count (awk '/^size/ {print $2}').
+                    datatosend=$resumedata
                     log_msg "VERB: datatosend=$datatosend"
                     log_msg "INFO: Remaining data to transfer:" \
                         "$(echo "$datatosend" | numfmt --to=iec-i)."

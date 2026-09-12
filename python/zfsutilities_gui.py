@@ -636,9 +636,10 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
     def _collect_abortable_tasks(self):
         """Return tasks that would be aborted if the GUI closed.
 
-        Reuses the Dashboard running-tasks collector but excludes scrubs,
-        which continue independently of the GUI, and profile/scheduled tasks
-        that were not started by this GUI instance.
+        Reuses the Dashboard running-tasks collector but excludes scrubs and
+        ZFS-native operations (resilver/expand/remove), which continue
+        independently of the GUI, and profile/scheduled tasks that were not
+        started by this GUI instance.
         """
         try:
             tasks = _collect_running_tasks(self)
@@ -651,6 +652,10 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             task_type = task.get("type")
             if task_type == "Scrub":
                 continue
+            if task_type == "ZFS":
+                # ZFS-native operations (resilver/expand/remove) continue
+                # independently of the GUI; closing cannot abort them.
+                continue
             if task_type in ("Profile", "Scheduled"):
                 status = task.get("status", "")
                 pid_token = status.split()[-1] if status else ""
@@ -659,14 +664,6 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
                 continue
             abortable.append(task)
 
-        if self.dataset_runner and getattr(self.dataset_runner, "running", False):
-            abortable.append(
-                {
-                    "name": self.dataset_runner.label,
-                    "type": "GUI",
-                    "status": "Running",
-                }
-            )
         return abortable
 
     def _confirm_terminate(self):

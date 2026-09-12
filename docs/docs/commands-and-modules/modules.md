@@ -15,6 +15,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`bashsetx`](#bashsetx)
 - [`paths.sh`](#pathssh)
 - [`rootcheck`](#rootcheck)
+- [`transfer-lib.sh`](#transfer-libsh)
 - [`zfsconfig`](#zfsconfig)
 - [`zfsbuildfsarray`](#zfsbuildfsarray)
 - [`zfscheckagainst`](#zfscheckagainst)
@@ -295,6 +296,37 @@ rootcheck
 | 1    | Not running as root      |
 
 Exits with a clear message if not running as root.
+
+---
+
+### `transfer-lib.sh`
+
+Shared ZFS send/receive transfer helpers used by
+[`zfs-send-receive`](modules.md#zfs-send-receive) and
+[`zfs-migrate-send`](commands.md#zfs-migrate-send), so both the production
+backup path and the Migrate Pool copy steps share one implementation of
+resumable, rate-limited, `pv`-instrumented transfers.
+
+```bash
+source_helper transfer-lib.sh
+```
+
+**Functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `transfer_abort_resume_token <dest>` | `zfs receive -A <dest>` (dry-run aware) |
+| `transfer_resume_token_stale <errtext>` | Classify known stale resume-token errors |
+| `transfer_validate_resume_token <token>` | `zfs send -nP -t <token>`; prints remaining bytes, or the error text with rc 1 |
+| `transfer_pv_args <datatosend> <use_pv>` | Build the pv argument array into `transfer_pv_args` (tty / `ZFSUTILITIES_LOG_INHERIT` / `-L` rate limit) |
+| `transfer_do <desc> <sendopts> <recvopts> <use_pv> <datatosend> <send_target> <recv_target>` | Run `zfs send … \| pv … \| zfs receive …` under pipefail; logs `FATAL: <desc> failed` on failure |
+| `transfer_check_space <datatosend> <dest_pool>` | Destination free-space check (10% margin, 1 GiB minimum buffer) |
+
+**Globals:** reads `$pv_rate_limit` (optional `pv -L` rate) and
+`$space_check_min_buffer` (optional minimum headroom); honors the caller's
+`$dryrun` for token aborts.
+
+**Called modules:** `bashinit`.
 
 ---
 
@@ -1376,6 +1408,7 @@ steps.
 | `zfsdelallholds`           | Release holds during rollback                    |
 | `zfsholds`                 | List holds for diagnostic output                 |
 | `iscsi-lib.sh`             | Tear down and rebuild iSCSI LUNs around VM zvols |
+| `transfer-lib.sh`          | Shared resumable/pv transfer pipeline helpers    |
 | `zfsoverrides`             | Apply runtime parameter overrides                |
 | `zfslockmanager`           | Acquire/release per-dataset write locks          |
 | `zfscheckrunningvms`       | Block restores over live VMs                     |

@@ -386,7 +386,7 @@ def create_disks_page(app):
         (COL_T_READ, "Read", 60),
         (COL_T_WRITE, "Write", 60),
         (COL_T_CKSUM, "Cksum", 60),
-        (COL_T_ASHIFT, "Ashift", 60),
+        (COL_T_ASHIFT, "Blocksize", 90),
     ]
     for col_idx, title_text, width in topo_cols:
         renderer = Gtk.CellRendererText()
@@ -850,27 +850,44 @@ def update_disks_button_sensitivity(app):
 
     apply_btn = getattr(app, "_disks_apply_profile_btn", None)
     if apply_btn:
-        apply_btn.set_sensitive(ds_count > 0 and not runner_busy)
+        if compute_host:
+            apply_btn.set_sensitive(False)
+            apply_btn.set_tooltip_text(
+                "Applying profiles is available only on the storage host"
+            )
+        else:
+            apply_btn.set_sensitive(ds_count > 0 and not runner_busy)
+            apply_btn.set_tooltip_text("")
 
     rewrite_btn = getattr(app, "_disks_rewrite_data_btn", None)
     if rewrite_btn:
-        caps = app.ctx.zfs_caps
-        dataset_view = getattr(app, "disks_dataset_view", None)
-        ds_rows = _selected_dataset_rows(app) if dataset_view is not None else []
-        all_filesystems = bool(ds_rows) and all(
-            row["type"] == "filesystem" for row in ds_rows
-        )
-        can_rewrite = all_filesystems and caps.supports("zfs_rewrite")
-        rewrite_btn.set_sensitive(can_rewrite)
-        if not can_rewrite:
-            if not caps.supports("zfs_rewrite"):
-                rewrite_btn.set_tooltip_text(caps.requires("zfs_rewrite"))
-            elif ds_rows and not all_filesystems:
-                rewrite_btn.set_tooltip_text("Rewrite Data supports filesystem datasets only")
+        if compute_host:
+            rewrite_btn.set_sensitive(False)
+            rewrite_btn.set_tooltip_text(
+                "Rewrite Data is available only on the storage host"
+            )
+        else:
+            caps = app.ctx.zfs_caps
+            dataset_view = getattr(app, "disks_dataset_view", None)
+            ds_rows = (
+                _selected_dataset_rows(app) if dataset_view is not None else []
+            )
+            all_filesystems = bool(ds_rows) and all(
+                row["type"] == "filesystem" for row in ds_rows
+            )
+            can_rewrite = all_filesystems and caps.supports("zfs_rewrite")
+            rewrite_btn.set_sensitive(can_rewrite)
+            if not can_rewrite:
+                if not caps.supports("zfs_rewrite"):
+                    rewrite_btn.set_tooltip_text(caps.requires("zfs_rewrite"))
+                elif ds_rows and not all_filesystems:
+                    rewrite_btn.set_tooltip_text(
+                        "Rewrite Data supports filesystem datasets only"
+                    )
+                else:
+                    rewrite_btn.set_tooltip_text("")
             else:
                 rewrite_btn.set_tooltip_text("")
-        else:
-            rewrite_btn.set_tooltip_text("")
 
     manage_btn = getattr(app, "_disks_manage_profiles_btn", None)
     if manage_btn:
@@ -1001,7 +1018,7 @@ def _populate_topology_store(store, parent_iter, node: TopologyNode) -> None:
         str(node.read),
         str(node.write),
         str(node.cksum),
-        str(node.ashift) if node.ashift is not None else "-",
+        f"{1 << node.ashift} bytes" if node.ashift is not None else "-",
     ]
     it = store.append(parent_iter, row)
     for child in node.children:
@@ -1062,6 +1079,9 @@ def on_disks_rewrite_data(app):
     afterwards. Acquires one write lock per dataset, runs one BashStep per
     dataset sequentially, and refreshes the page on completion.
     """
+    if node_config.is_two_node() and not node_config.is_storage_host():
+        log_msg("WARN: Rewrite Data is available only on the storage host")
+        return
     datasets = _selected_dataset_rows(app)
     if not datasets:
         log_msg("WARN: Select at least one dataset to rewrite data")
@@ -1179,6 +1199,11 @@ def on_disks_rewrite_data(app):
         update_disks_button_sensitivity(app)
         refresh_disks_page(app)
 
+    runner.operation_detail = (
+        f"Rewrite Data: {dataset_names[0]}"
+        if len(dataset_names) == 1
+        else f"Rewrite Data: {len(dataset_names)} datasets"
+    )
     runner.set_steps(steps)
     update_disks_button_sensitivity(app)
     runner.start(on_complete=_on_complete)
@@ -1418,10 +1443,10 @@ def show_profile_editor_dialog(app, name=None):
 
     ashift_entry = Gtk.Entry()
     ashift_entry.set_text(live_props.get("ashift", ""))
-    ashift_entry.set_placeholder_text("informational only, e.g. 12")
+    ashift_entry.set_placeholder_text("informational only, auto-detected")
     ashift_entry.set_editable(False)
     ashift_entry.set_can_focus(False)
-    _add_row(row, "ashift (informational):", ashift_entry)
+    _add_row(row, "pool blocksize (informational):", ashift_entry)
     row += 1
 
     notes_buf = Gtk.TextBuffer()
@@ -1695,6 +1720,9 @@ def show_apply_profile_dialog(app, datasets):
 
 def on_disks_apply_profile(app):
     """Apply the selected workload profile to the selected datasets."""
+    if node_config.is_two_node() and not node_config.is_storage_host():
+        log_msg("WARN: Applying profiles is available only on the storage host")
+        return
     datasets = _selected_dataset_rows(app)
     if not datasets:
         log_msg("WARN: Select at least one dataset to apply a profile")
@@ -1780,6 +1808,11 @@ def on_disks_apply_profile(app):
         update_disks_button_sensitivity(app)
         refresh_disks_page(app)
 
+    runner.operation_detail = (
+        f"Apply Profile: {dataset_names[0]}"
+        if len(dataset_names) == 1
+        else f"Apply Profile: {len(dataset_names)} datasets"
+    )
     runner.set_steps(steps)
     update_disks_button_sensitivity(app)
     runner.start(on_complete=_on_complete)
