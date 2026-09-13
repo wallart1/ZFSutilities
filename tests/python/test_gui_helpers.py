@@ -1,5 +1,6 @@
 """Tests for gui_helpers.py."""
 
+import re
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -99,6 +100,191 @@ class TestAddVarRow(unittest.TestCase):
         widget = widgets["doincrementals"]
         for call in widget.connect.call_args_list:
             self.assertNotEqual(call.args[0], "scroll-event")
+
+
+class _FakeIter:
+    """Minimal stand-in for Gtk.TextIter; records its character offset."""
+
+    def __init__(self, offset):
+        self.offset = offset
+
+
+class _FakeTextBuffer:
+    """String-backed stand-in for Gtk.TextBuffer recording tag operations."""
+
+    def __init__(self, text=""):
+        self.text = text
+        self.applied = []  # (tag, start_offset, end_offset)
+        self.removed = []  # (tag, start_offset, end_offset)
+        self._next_tag = 0
+
+    def set_text(self, text):
+        self.text = text
+
+    def append(self, text):
+        self.text += text
+
+    def create_tag(self, _name, **_props):
+        self._next_tag += 1
+        return self._next_tag
+
+    def get_start_iter(self):
+        return _FakeIter(0)
+
+    def get_end_iter(self):
+        return _FakeIter(len(self.text))
+
+    def get_char_count(self):
+        return len(self.text)
+
+    def get_text(self, start, end, _include_hidden_chars):
+        return self.text[start.offset : end.offset]
+
+    def get_iter_at_offset(self, offset):
+        return _FakeIter(offset)
+
+    def apply_tag(self, tag, start, end):
+        self.applied.append((tag, start.offset, end.offset))
+
+    def remove_tag(self, tag, start, end):
+        self.removed.append((tag, start.offset, end.offset))
+
+    def create_mark(self, _name, iter_, _left_gravity):
+        return _FakeIter(iter_.offset)
+
+    def delete_mark(self, _mark):
+        pass
+
+
+class TestTextViewSearch(unittest.TestCase):
+    """TextViewSearch finds, highlights, and navigates matches by offset.
+
+    Matches must be stored as character offsets, not Gtk.TextIter copies:
+    GTK invalidates every outstanding TextIter on any buffer mutation, which
+    silently disabled Previous/Next once a running log appended new text.
+    """
+
+    TEXT = (
+        "alpha needle one\n"
+        + "filler line\n" * 20
+        + "beta NEEDLE two\n"
+        + "filler line\n" * 20
+        + "gamma needle three\n"
+    )
+
+    def _make_search(self, text=None):
+        buffer = _FakeTextBuffer(self.TEXT if text is None else text)
+        view = MagicMock()
+        view.get_buffer.return_value = buffer
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+
+            with patch.object(gui_helpers, "Gtk", gtk_mock):
+                search = gui_helpers.TextViewSearch(view)
+        search.entry.get_text.return_value = "needle"
+        return search, buffer, view
+
+    def _expected_offsets(self, text):
+        return [(m.start(), m.end()) for m in re.finditer("needle", text, re.IGNORECASE)]
+
+    def test_matches_stored_as_int_offsets(self):
+        search, _buffer, _view = self._make_search()
+        search.search()
+        self.assertEqual(search.matches, self._expected_offsets(self.TEXT))
+        for match in search.matches:
+            self.assertTrue(all(isinstance(o, int) for o in match))
+
+    def test_highlights_every_match_and_marks_first_current(self):
+        search, buffer, _view = self._make_search()
+        search.search()
+        highlighted = [tuple(span) for tag, *span in buffer.applied if tag == search.tag_highlight]
+        self.assertEqual(highlighted, self._expected_offsets(self.TEXT))
+        current = [tuple(span) for tag, *span in buffer.applied if tag == search.tag_current]
+        self.assertEqual(current, [self._expected_offsets(self.TEXT)[0]])
+
+    def test_navigate_next_and_previous_updates_counter(self):
+        search, _buffer, view = self._make_search()
+        search.search()
+        search.navigate(1)
+        self.assertEqual(search.current, 1)
+        search.counter.set_text.assert_called_with("2 / 3")
+        self.assertTrue(view.scroll_to_mark.called)
+        search.navigate(-1)
+        self.assertEqual(search.current, 0)
+        search.counter.set_text.assert_called_with("1 / 3")
+
+    def test_navigate_wraps_at_both_ends(self):
+        search, _buffer, _view = self._make_search()
+        search.search()
+        search.navigate(-1)
+        self.assertEqual(search.current, 2)
+        search.counter.set_text.assert_called_with("3 / 3")
+        search.navigate(1)
+        self.assertEqual(search.current, 0)
+        search.counter.set_text.assert_called_with("1 / 3")
+
+    def test_navigate_survives_buffer_append(self):
+        """Appending text (live log tail) must not break Previous/Next."""
+        search, buffer, _view = self._make_search()
+        search.search()
+        buffer.append("delta needle four\n")
+        search.navigate(1)
+        self.assertEqual(search.current, 1)
+        search.counter.set_text.assert_called_with("2 / 3")
+        search.navigate(1)
+        search.counter.set_text.assert_called_with("3 / 3")
+
+    def test_refresh_finds_new_matches_without_scrolling(self):
+        search, buffer, view = self._make_search()
+        search.search()
+        view.scroll_to_mark.reset_mock()
+        first_offset = search.matches[0][0]
+        buffer.append("delta needle four\n")
+        search.refresh()
+        self.assertEqual(len(search.matches), 4)
+        self.assertEqual(search.matches[search.current][0], first_offset)
+        search.counter.set_text.assert_called_with("1 / 4")
+        view.scroll_to_mark.assert_not_called()
+
+    def test_refresh_without_query_is_noop(self):
+        search, _buffer, view = self._make_search()
+        search.entry.get_text.return_value = ""
+        search.refresh()
+        self.assertEqual(search.matches, [])
+        view.scroll_to_mark.assert_not_called()
+
+    def test_search_without_matches_reports_zero(self):
+        search, _buffer, _view = self._make_search()
+        search.entry.get_text.return_value = "zzz"
+        search.search()
+        self.assertEqual(search.matches, [])
+        search.counter.set_text.assert_called_with("0 matches")
+
+    def test_empty_query_clears_state(self):
+        search, _buffer, _view = self._make_search()
+        search.search()
+        search.entry.get_text.return_value = ""
+        search.search()
+        self.assertEqual(search.matches, [])
+        self.assertEqual(search.current, -1)
+        search.counter.set_text.assert_called_with("")
+
+    def test_navigate_without_matches_is_noop(self):
+        search, _buffer, view = self._make_search()
+        search.entry.get_text.return_value = "zzz"
+        search.search()
+        view.scroll_to_mark.reset_mock()
+        search.navigate(1)
+        view.scroll_to_mark.assert_not_called()
+
+    def test_offsets_clamped_after_buffer_truncation(self):
+        """Offsets beyond the buffer end (after truncation) must not error."""
+        search, buffer, _view = self._make_search()
+        search.search()
+        buffer.set_text(buffer.text[-20:])
+        search.navigate(1)
+        self.assertEqual(search.current, 1)
+        search.counter.set_text.assert_called_with("2 / 3")
 
 
 if __name__ == "__main__":

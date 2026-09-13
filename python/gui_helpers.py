@@ -1557,7 +1557,10 @@ class TextViewSearch:
 
     Provides a search entry, Search / Reset / Previous / Next buttons,
     and a match counter.  Highlights all matches in yellow and the
-    current match in orange.
+    current match in orange.  Matches are tracked as character offsets
+    (not Gtk.TextIter objects, which every buffer edit invalidates) so
+    navigation keeps working while the viewed text grows, e.g. when a
+    running log is tailed into the buffer.
     """
 
     def __init__(self, text_view):
@@ -1614,29 +1617,14 @@ class TextViewSearch:
 
     def search(self):
         """Find all occurrences of the search text and highlight them."""
-        query = self.entry.get_text()
-        if not query:
+        if not self.entry.get_text():
             self.clear()
             return
 
-        buf = self.text_view.get_buffer()
-        self.clear(keep_query=True)
-
-        start = buf.get_start_iter()
-        end = buf.get_end_iter()
-        text = buf.get_text(start, end, True)
-
-        matches = []
-        for m in re.finditer(re.escape(query), text, re.IGNORECASE):
-            match_start = buf.get_iter_at_offset(m.start())
-            match_end = buf.get_iter_at_offset(m.end())
-            buf.apply_tag(self.tag_highlight, match_start, match_end)
-            matches.append((match_start.copy(), match_end.copy()))
-
-        self.matches = matches
-        if matches:
+        self._rescan()
+        if self.matches:
             self.current = 0
-            buf.apply_tag(self.tag_current, matches[0][0], matches[0][1])
+            self._show_current()
             self._scroll_to_current()
             self._update_counter()
         else:
@@ -1659,11 +1647,9 @@ class TextViewSearch:
         """Move to the next or previous match."""
         if not self.matches:
             return
-        buf = self.text_view.get_buffer()
         old_idx = self.current
         if 0 <= old_idx < len(self.matches):
-            old_start, old_end = self.matches[old_idx]
-            buf.remove_tag(self.tag_current, old_start, old_end)
+            self._hide_current()
 
         current = old_idx + direction
         if current < 0:
@@ -1672,19 +1658,90 @@ class TextViewSearch:
             current = 0
         self.current = current
 
-        new_start, new_end = self.matches[current]
-        buf.apply_tag(self.tag_current, new_start, new_end)
+        self._show_current()
         self._scroll_to_current()
         self._update_counter()
+
+    def refresh(self):
+        """Re-run the active query against the current buffer text.
+
+        Keeps the current match selected (the match at or after the
+        previously current offset) and updates highlights and the counter
+        without scrolling, so live log appends stay searchable.
+        """
+        if not self.entry.get_text():
+            return
+        old_offset = None
+        if 0 <= self.current < len(self.matches):
+            old_offset = self.matches[self.current][0]
+
+        self._rescan()
+
+        if not self.matches:
+            return
+        if old_offset is not None:
+            self.current = len(self.matches) - 1
+            for i, (match_start, _match_end) in enumerate(self.matches):
+                if match_start >= old_offset:
+                    self.current = i
+                    break
+        else:
+            self.current = 0
+        self._show_current()
+        self._update_counter()
+
+    def _rescan(self):
+        """Recompute match offsets and highlight tags for the current query."""
+        buf = self.text_view.get_buffer()
+        self.clear(keep_query=True)
+
+        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
+
+        matches = []
+        for m in re.finditer(re.escape(self.entry.get_text()), text, re.IGNORECASE):
+            match_start = buf.get_iter_at_offset(m.start())
+            match_end = buf.get_iter_at_offset(m.end())
+            buf.apply_tag(self.tag_highlight, match_start, match_end)
+            matches.append((m.start(), m.end()))
+
+        self.matches = matches
+
+    def _iters_for(self, match):
+        """Resolve a stored (start, end) offset pair to fresh buffer iters.
+
+        GTK invalidates all Gtk.TextIter objects on any buffer mutation, so
+        matches are stored as character offsets and converted at use time.
+        Offsets past the buffer end are clamped (e.g. after a truncation).
+        """
+        buf = self.text_view.get_buffer()
+        char_count = buf.get_char_count()
+        start = buf.get_iter_at_offset(min(match[0], char_count))
+        end = buf.get_iter_at_offset(min(match[1], char_count))
+        return start, end
+
+    def _hide_current(self):
+        """Remove the current-match highlight from the current match."""
+        if not (0 <= self.current < len(self.matches)):
+            return
+        start, end = self._iters_for(self.matches[self.current])
+        self.text_view.get_buffer().remove_tag(self.tag_current, start, end)
+
+    def _show_current(self):
+        """Apply the current-match highlight to the current match."""
+        if not (0 <= self.current < len(self.matches)):
+            return
+        start, end = self._iters_for(self.matches[self.current])
+        self.text_view.get_buffer().apply_tag(self.tag_current, start, end)
 
     def _scroll_to_current(self):
         """Scroll the viewer so the current match is visible."""
         if not (0 <= self.current < len(self.matches)):
             return
-        start_iter, _ = self.matches[self.current]
-        mark = self.text_view.get_buffer().create_mark(None, start_iter, False)
+        buf = self.text_view.get_buffer()
+        start_iter, _ = self._iters_for(self.matches[self.current])
+        mark = buf.create_mark(None, start_iter, False)
         self.text_view.scroll_to_mark(mark, 0.0, True, 0.0, 0.3)
-        self.text_view.get_buffer().delete_mark(mark)
+        buf.delete_mark(mark)
 
     def _update_counter(self):
         """Update the match counter label (e.g. '3 / 12')."""

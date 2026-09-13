@@ -75,8 +75,23 @@ def _pid_file(pid: int | None = None) -> str:
 
 
 def _script_name() -> str:
-    """Return the basename of the running script, mirroring bash behavior."""
-    return os.path.basename(sys.argv[0]) if sys.argv else "python"
+    """Return the basename of the running script, mirroring bash behavior.
+
+    When launched via ``python -m <package>``, ``sys.argv[0]`` is the
+    package's ``__main__.py``, which never appears in the process cmdline;
+    stale-lock detection would then treat every such lock as stale. Return
+    the package name instead so it matches ``python -m <package>`` in
+    /proc/<pid>/cmdline.
+    """
+    if not sys.argv:
+        return "python"
+    script = os.path.basename(sys.argv[0])
+    if script == "__main__.py":
+        spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+        name = getattr(spec, "name", "") or ""
+        if name.endswith(".__main__"):
+            return name[: -len(".__main__")]
+    return script
 
 
 def _read_field(lockfile: str, field: str) -> str | None:

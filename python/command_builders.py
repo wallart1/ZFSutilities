@@ -328,11 +328,25 @@ def build_post_backup_command(script):
     )
 
 
-def build_retention_command(parent_dir, label, pools=None, dryrun=False, fatal=True):
+def build_retention_command(
+    parent_dir,
+    label,
+    pools=None,
+    dryrun=False,
+    fatal=True,
+    includes=None,
+    excludes=None,
+    startwith=None,
+    endwith=None,
+):
     """Build the command to run retention/cleanup.
 
     If *pools* is provided, prune each pool in the given order; otherwise
-    let ``zfscleanup`` use the configured pool list.
+    let ``zfscleanup`` use the configured pool list. The dataset selection
+    criteria (*includes*, *excludes*, *startwith*, *endwith*) are forwarded
+    to ``zfsbuildfsarray`` so the prune step visits the same datasets as the
+    backup step; each may be a space-separated string (parsed with
+    ``shlex.split``) or an iterable of patterns.
     """
     label_quoted = shlex.quote(label)
     dryrun_part = _dryrun_assignments(dryrun)
@@ -344,6 +358,27 @@ def build_retention_command(parent_dir, label, pools=None, dryrun=False, fatal=T
         f'releaseholds="Y"; '
         f'releaseholds_tags=("offsite-*"); '
     )
+    selection_parts = ""
+    for var_name, value in (
+        ("includes", includes),
+        ("excludes", excludes),
+        ("startwith", startwith),
+        ("endwith", endwith),
+    ):
+        if not value:
+            continue
+        if isinstance(value, str):
+            items = shlex.split(value)
+        else:
+            items = [str(item) for item in value]
+        if var_name in ("includes", "excludes"):
+            if not items:
+                continue
+            arr = " ".join(shlex.quote(i) for i in items)
+            selection_parts += f"{var_name}=({arr}); "
+        elif items:
+            selection_parts += f'{var_name}={shlex.quote(items[0])}; '
+    base_script += selection_parts
     if pools:
         pool_list = " ".join(shlex.quote(p) for p in pools)
         bash_script = (
@@ -361,6 +396,95 @@ def build_retention_command(parent_dir, label, pools=None, dryrun=False, fatal=T
     return BashStep(
         ["bash", "-c", bash_script],
         desc,
+        is_rsync=False,
+        fatal=fatal,
+    )
+
+
+def build_backup_prune_command(
+    parent_dir,
+    label,
+    sr_steps,
+    variables,
+    dryrun=False,
+    fatal=False,
+):
+    """Build a prune command that visits only the backup's datasets.
+
+    For each active send/receive step in *sr_steps* (``(sourcefs, destfs)``
+    tuples), the generated script re-runs ``zfsbuildfsarray`` on the source
+    subtree with the Advanced dataset selection criteria from *variables*
+    (the same inputs the backup step uses), maps every source dataset to its
+    destination name, and prunes exactly that deduplicated list via
+    ``zfscleanup``'s explicit ``prune_datasets`` mode. When no dataset
+    survives the mapping, the step logs a warning and exits successfully
+    (pruning stays non-fatal).
+    """
+    label_quoted = shlex.quote(label)
+
+    includes = shlex.split(variables.get("includes", "").strip())
+    excludes = shlex.split(variables.get("excludes", "").strip())
+    startwith = variables.get("startwith", "").strip()
+    endwith = variables.get("endwith", "").strip()
+    removequalifiers = variables.get("sourcefsremovequalifiers", "").strip() or "0"
+
+    def _arr_assignment(name, items):
+        if not items:
+            return f"{name}=(); "
+        arr = " ".join(shlex.quote(i) for i in items)
+        return f"{name}=({arr}); "
+
+    selection = (
+        _arr_assignment("includes", includes)
+        + _arr_assignment("excludes", excludes)
+        + (f"startwith={shlex.quote(startwith)}; " if startwith else "startwith=''; ")
+        + (f"endwith={shlex.quote(endwith)}; " if endwith else "endwith=''; ")
+    )
+
+    step_parts = ""
+    for sourcefs, destfs in sr_steps:
+        step_parts += (
+            f"sourcefs={shlex.quote(sourcefs)}; "
+            f"destfs={shlex.quote(destfs)}; "
+            f"sourcefsremovequalifiers={shlex.quote(removequalifiers)}; "
+            f"{selection}"
+            "depth=''; "
+            'buildfsarray "$sourcefs"; '
+            "if [[ ${#fsarray[@]} -eq 0 ]]; then "
+            f'log_msg "WARN: No datasets found for {shlex.quote(sourcefs)}; skipping prune mapping."; '
+            "else "
+            'for _fs in "${fsarray[@]}"; do '
+            '_restorefs=$(remove_leading_qualifiers "$sourcefsremovequalifiers" "$_fs"); '
+            '[[ $_restorefs != "" && ${_restorefs:0:1} != "/" ]] && _restorefs="/$_restorefs"; '
+            'if [[ -z ${_prune_seen["${destfs}${_restorefs}"]+x} ]]; then '
+            '_prune_seen["${destfs}${_restorefs}"]=1; '
+            'prune_datasets+=("${destfs}${_restorefs}"); '
+            "fi; "
+            "done; "
+            "fi; "
+        )
+
+    bash_script = (
+        f'source ~/bashinit; bashinit; mydir="{parent_dir}"; '
+        f'source "$mydir/zfsbuildfsarray"; '
+        f'source "$mydir/zfsremoveleadingqualifiers"; '
+        f'source "$mydir/zfscleanup"; '
+        f"{_dryrun_assignments(dryrun)}"
+        f'autoproceed="Y"; '
+        f'releaseholds="Y"; '
+        f'releaseholds_tags=("offsite-*"); '
+        "declare -A _prune_seen=(); "
+        "prune_datasets=(); "
+        f"{step_parts}"
+        'if [[ ${#prune_datasets[@]} -eq 0 ]]; then '
+        'log_msg "WARN: No backup datasets to prune; skipping prune step."; '
+        "exit 0; "
+        "fi; "
+        f'cleanup "" "" {label_quoted}'
+    )
+    return BashStep(
+        ["bash", "-c", bash_script],
+        f"Prune snapshots ({len(sr_steps)} backup steps)",
         is_rsync=False,
         fatal=fatal,
     )

@@ -520,9 +520,43 @@ def capture_stderr():
 # ---------------------------------------------------------------------------
 
 
+def _gui_module_names():
+    """Return the names of python/ modules that import gi, as a sorted tuple.
+
+    These are the modules that can be imported under ``mock_gtk()``; they form
+    a closed import graph (no non-GUI module imports one of them), so evicting
+    exactly this set from ``sys.modules`` re-imports the whole GUI layer
+    consistently.
+    """
+    names = []
+    for fname in sorted(os.listdir(PYTHON_SRC)):
+        if not fname.endswith(".py"):
+            continue
+        path = os.path.join(PYTHON_SRC, fname)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                head = fh.read(4096)
+        except OSError:
+            continue
+        if re.search(r"^\s*(import gi\b|from gi\b)", head, re.MULTILINE):
+            names.append(fname[:-3])
+    return tuple(names)
+
+
+GUI_MODULES = _gui_module_names()
+
+
 @contextlib.contextmanager
-def mock_gtk():
-    """Patch gi.repository so GUI modules can be imported without a display."""
+def mock_gtk(fresh=False):
+    """Patch gi.repository so GUI modules can be imported without a display.
+
+    When *fresh* is True, every loaded GUI module (see ``GUI_MODULES``) is
+    first evicted from ``sys.modules`` and restored on exit, so imports inside
+    the context bind this context's ``Gtk`` mock and shared ``MagicMock``
+    return-value call history does not accumulate across tests. Without
+    *fresh*, the first context that imported a GUI module keeps winning for
+    the rest of the session (its bound mocks are the ones the module uses).
+    """
     gi_mock = MagicMock()
     gtk_mock = MagicMock()
     pango_mock = MagicMock()
@@ -636,6 +670,15 @@ def mock_gtk():
     gi_mock.repository.GObject = gobject_mock
     gi_mock.repository.WebKit2 = webkit_mock
 
+    # Fresh mode: evict GUI modules so imports inside the context re-bind to
+    # this context's mocks. Previously loaded objects are restored on exit so
+    # the rest of the session keeps consistent cross-module references.
+    evicted = {}
+    if fresh:
+        for name in GUI_MODULES:
+            if name in sys.modules:
+                evicted[name] = sys.modules.pop(name)
+
     orig_modules = dict(sys.modules)
     for name, mod in modules.items():
         sys.modules[name] = mod
@@ -649,3 +692,6 @@ def mock_gtk():
                 sys.modules[name] = orig_modules[name]
             else:
                 sys.modules.pop(name, None)
+        # Restore GUI modules evicted for freshness
+        for name, mod in evicted.items():
+            sys.modules[name] = mod

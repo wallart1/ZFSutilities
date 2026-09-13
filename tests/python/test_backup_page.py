@@ -1,8 +1,15 @@
 """Tests for the Backup tab UI."""
 
+import os
+import sys
 import unittest
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
+
+REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
+PYTHON_SRC = os.path.join(REPO_ROOT, "python")
+if PYTHON_SRC not in sys.path:
+    sys.path.insert(0, PYTHON_SRC)
 
 from app_context import AppContext
 from test_support import mock_gtk, temp_config_dir
@@ -336,27 +343,29 @@ class TestBackupPageFrames(unittest.TestCase):
     """Tests for Backup page layout helpers."""
 
     def test_frame_box_uses_header_widget_when_provided(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             parent = MagicMock()
             header = MagicMock()
+            frame = backup_page.Gtk.Frame.return_value
             backup_page._frame_box(parent, "Pull Steps", header_widget=header)
-            frame = parent.pack_start.call_args_list[0][0][0]
+            self.assertIs(parent.pack_start.call_args_list[0][0][0], frame)
             frame.set_label_widget.assert_called_once()
             frame.set_label.assert_not_called()
 
     def test_frame_box_uses_plain_label_without_header_widget(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             parent = MagicMock()
+            frame = backup_page.Gtk.Frame.return_value
             backup_page._frame_box(parent, "Send/Receive")
-            frame = parent.pack_start.call_args_list[0][0][0]
+            self.assertIs(parent.pack_start.call_args_list[0][0][0], frame)
             frame.set_label.assert_not_called()
-            # The frame should have its label widget set (last call with a label)
-            last_call = frame.set_label_widget.call_args_list[-1]
-            self.assertIn("Label()", str(last_call))
+            # The frame should have its label widget set (with a label)
+            frame.set_label_widget.assert_called_once()
+            self.assertIn("Label()", str(frame.set_label_widget.call_args))
 
 
 class _FakeBackupApp:
@@ -410,6 +419,7 @@ class TestBackupRunDialog(unittest.TestCase):
             build_send_receive_command=MagicMock(),
             build_post_backup_command=MagicMock(),
             build_retention_command=MagicMock(),
+            build_backup_prune_command=MagicMock(),
             _do_generate_snap=MagicMock(),
         )
 
@@ -528,6 +538,77 @@ class TestBackupRunDialog(unittest.TestCase):
                 dryrun=False,
                 fatal=False,
             )
+
+    def test_retention_step_forwards_dataset_selection(self):
+        with mock_gtk():
+            import backup_page
+
+        app = _FakeBackupApp()
+        app.backup_nextsnap_entry.set_text("@daily-2026-06-11T12:00-d")
+        app.ctx.config = {
+            "pools": [
+                {"name": "z2", "offsite_candidate": False},
+            ]
+        }
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
+        backup_page.Gtk.MessageDialog.return_value = dialog_mock
+
+        with self._patch_run(backup_page):
+            backup_page.collect_backup_config.return_value = {
+                "variables": {
+                    "label": "dailybackup",
+                    "includes": "proxmox",
+                    "excludes": "vm-100 =z2/scratch",
+                    "startwith": "=z2/a",
+                    "endwith": "z",
+                },
+                "post_steps": {"run_retention": True, "remove_snapfile": False},
+            }
+            backup_page.on_backup_run(app, app.ctx)
+
+            backup_page.build_retention_command.assert_called_once_with(
+                app.ctx.parent_dir,
+                "dailybackup",
+                pools=["z2"],
+                dryrun=False,
+                fatal=False,
+                includes="proxmox",
+                excludes="vm-100 =z2/scratch",
+                startwith="=z2/a",
+                endwith="z",
+            )
+
+    def test_retention_step_uses_backup_dataset_list_when_sr_steps_active(self):
+        with mock_gtk():
+            import backup_page
+
+        app = _FakeBackupApp()
+        app.backup_nextsnap_entry.set_text("@daily-2026-06-11T12:00-d")
+        app.backup_sr_store.append([True, "threeamigos/proxmox", "fivebays"])
+        app.backup_sr_store.append([False, "tank/off", "fivebays/off"])
+        app.backup_sr_store.append([True, "NVME1", "fivebays"])
+        app.ctx.config = {"pools": [{"name": "z2", "offsite_candidate": False}]}
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
+        backup_page.Gtk.MessageDialog.return_value = dialog_mock
+
+        with self._patch_run(backup_page):
+            backup_page.collect_backup_config.return_value = {
+                "variables": {"label": "dailybackup", "excludes": "vm-100"},
+                "post_steps": {"run_retention": True, "remove_snapfile": False},
+            }
+            backup_page.on_backup_run(app, app.ctx)
+
+            backup_page.build_backup_prune_command.assert_called_once_with(
+                app.ctx.parent_dir,
+                "dailybackup",
+                [("threeamigos/proxmox", "fivebays"), ("NVME1", "fivebays")],
+                {"label": "dailybackup", "excludes": "vm-100"},
+                dryrun=False,
+                fatal=False,
+            )
+            backup_page.build_retention_command.assert_not_called()
 
     def test_backup_runs_while_offsite_active(self):
         """Backup should no longer bail out just because offsite is running."""

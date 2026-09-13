@@ -32,6 +32,7 @@ EOF
 
 cat > "$mock_mydir/zfsbuildfsarray" <<'EOF'
 buildfsarray() {
+    zfscleanup_selection+=("${includes[*]:-}|${excludes[*]:-}|${startwith:-}|${endwith:-}")
     local _pool_specific="_mock_fsarray_$1"
     if [[ -n "${!_pool_specific+x}" ]]; then
         eval "fsarray=(\"\${$_pool_specific[@]}\")"
@@ -68,6 +69,7 @@ source "$old_mydir/bin/zfscleanup"
 reset_state() {
     zfscleanup_processed=()
     zfscleanup_retain_tags=()
+    zfscleanup_selection=()
     zfscleanup_test_pools=()
     _mock_zpool_list=""
     _mock_fsarray=()
@@ -79,6 +81,11 @@ reset_state() {
     dryrun='N'
     releaseholds='N'
     releaseholds_tags=()
+    includes=()
+    excludes=()
+    startwith=''
+    endwith=''
+    prune_datasets=()
 }
 
 # -----------------------------------------------------------------------------
@@ -183,6 +190,65 @@ test_releaseholds_tags_default() {
     assert_contains "${zfscleanup_retain_tags[*]}" "offsite-*"
 }
 
+test_no_builtin_selection_criteria() {
+    test_start "No built-in selection criteria when caller sets none"
+    reset_state
+    zfscleanup_test_pools=(tank)
+    cleanup "" "" "dailybackup"
+    assert_equals "|||" "${zfscleanup_selection[0]}"
+}
+
+test_caller_selection_criteria_forwarded() {
+    test_start "Caller dataset selection criteria are forwarded to buildfsarray"
+    reset_state
+    zfscleanup_test_pools=(tank fivebays)
+    includes=('proxmox')
+    excludes=('vm-100' '=tank/scratch')
+    startwith='=tank/a'
+    endwith='z'
+    cleanup "" "" "dailybackup"
+    assert_equals "proxmox|vm-100 =tank/scratch|=tank/a|z" "${zfscleanup_selection[0]}"
+    assert_equals "proxmox|vm-100 =tank/scratch|=tank/a|z" "${zfscleanup_selection[1]}"
+}
+
+test_temp_pool_has_no_builtin_exclude() {
+    test_start "temp pool is processed with no built-in excludes"
+    reset_state
+    zfscleanup_test_pools=(temp)
+    cleanup "" "" "dailybackup"
+    assert_equals "|||" "${zfscleanup_selection[0]}"
+    assert_equals "temp @dailybackup" "${zfscleanup_processed[*]}"
+}
+
+test_prune_datasets_mode_skips_pool_discovery() {
+    test_start "prune_datasets mode prunes exactly the given datasets"
+    reset_state
+    zfscleanup_test_pools=(tank fivebays)
+    prune_datasets=(fivebays/a fivebays/b)
+    cleanup "" "" "dailybackup"
+    assert_equals "fivebays/a @dailybackup fivebays/b @dailybackup" "${zfscleanup_processed[*]}"
+    assert_equals "0" "${#zfscleanup_selection[@]}"
+}
+
+test_prune_datasets_mode_ignores_pool_argument() {
+    test_start "prune_datasets mode ignores the pool argument"
+    reset_state
+    zfscleanup_test_pools=(tank)
+    prune_datasets=(dest/x)
+    cleanup "tank" "" "dailybackup"
+    assert_equals "dest/x @dailybackup" "${zfscleanup_processed[*]}"
+}
+
+test_prune_datasets_mode_continues_after_retain_error() {
+    test_start "prune_datasets mode continues after a retain error"
+    reset_state
+    zfscleanup_test_pools=(tank)
+    prune_datasets=(dest/x dest/y)
+    _mock_retain_error="dest/x"
+    cleanup "" "" "dailybackup"
+    assert_equals "dest/y @dailybackup" "${zfscleanup_processed[*]}"
+}
+
 # -----------------------------------------------------------------------------
 # Run tests
 # -----------------------------------------------------------------------------
@@ -196,6 +262,12 @@ test_continues_after_retain_lock_conflict
 test_continues_after_retain_policy_error
 test_continues_to_next_pool_after_retain_error
 test_releaseholds_tags_default
+test_no_builtin_selection_criteria
+test_caller_selection_criteria_forwarded
+test_temp_pool_has_no_builtin_exclude
+test_prune_datasets_mode_skips_pool_discovery
+test_prune_datasets_mode_ignores_pool_argument
+test_prune_datasets_mode_continues_after_retain_error
 
 rm -rf "$mock_mydir"
 mydir="$old_mydir"

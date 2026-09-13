@@ -37,7 +37,13 @@ Different steps have different consequences when they fail:
 - **Send/receive steps** — fatal. A ZFS transfer failure aborts the remaining
   backup steps.
 - **Retention/prune step** — non-fatal. A per-dataset pruning failure is logged
-  as a warning and `zfscleanup` continues with the next dataset/pool.
+  as a warning and `zfscleanup` continues with the next dataset/pool. When
+  send/receive steps are active, the prune step derives the backup's dataset
+  list — each step's source subtree filtered by the Backup tab's Advanced
+  dataset-selection criteria (`includes`, `excludes`, `startwith`, `endwith`),
+  mapped to destination names — and prunes exactly those datasets. With no
+  active send/receive steps it falls back to whole-pool pruning of the
+  configured pools, filtered by the same criteria.
 
 The post-backup command, if enabled, always runs after the step list finishes,
 even when a fatal failure aborted the backup early.

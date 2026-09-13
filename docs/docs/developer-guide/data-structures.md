@@ -479,7 +479,17 @@ consumed by the Pools tab, Dashboard, and `ScrubQueue`.
 | `eta` | `str` or `None` | Estimated completion timestamp (`YYYY-MM-DD HH:MM`) computed from `remaining_seconds` |
 
 `ScrubQueue` persists pending/active/paused/finished/paused_by_user pool sets
-and a concurrency target to the JSON config under the scrub-manager section.
+and a concurrency target to `/var/lib/zfsutilities/scrub_state.json`. The
+buckets are kept disjoint: a pool appears in at most one of
+pending/active/paused/finished (`add_pending()` removes a re-queued pool from
+`finished`, and `tick()` drops `finished` entries for pools that no longer
+exist). `tick()` also heals stale `paused_by_user` entries (pools in
+`paused_by_user` must still be in `paused`). A queued pool whose scrub fails to
+start or resume is retried a few times and then dropped to the in-memory
+`given_up` set after `MAX_SCRUB_START_FAILURES` (3) consecutive failures, so a
+profile cannot spin forever on a pool that refuses to start. Long-lived
+instances (GUI Pools tab, Dashboard) call `reload()` before each `tick()` to
+pick up changes written by other processes, such as a headless scrub profile.
 
 ## iSCSI expected-backstores manifest
 

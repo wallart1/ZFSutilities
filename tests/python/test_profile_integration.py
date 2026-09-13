@@ -166,7 +166,18 @@ def _run_profile_worker(profile, runner_name, result_queue):
     # not confuse the lock manager inside this worker.
     zlm._lock_refcounts.clear()
     runner = getattr(profile_runner, runner_name)
-    with patch("profile_runner.subprocess.Popen", side_effect=_LockingPopen()):
+    # profile_runner.subprocess IS the global subprocess module, so patching
+    # profile_runner.subprocess.Popen would replace Popen process-wide in
+    # this forked child and break the child's own subprocess.run users (e.g.
+    # node_config.load_node_config during zlm.acquire). Give profile_runner a
+    # shim namespace that delegates everything to the real module except
+    # Popen.
+    import subprocess as _real_subprocess
+    import types
+
+    shim = types.SimpleNamespace(**vars(_real_subprocess))
+    shim.Popen = _LockingPopen()
+    with patch.object(profile_runner, "subprocess", shim):
         rc = runner(profile, {}, "/bin")
     result_queue.put(rc)
 

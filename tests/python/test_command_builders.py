@@ -377,6 +377,115 @@ class TestBuildRetentionCommand(unittest.TestCase):
         self.assertIn('releaseholds="Y"', bash_script)
         self.assertIn('releaseholds_tags=("offsite-*")', bash_script)
 
+    def test_no_selection_assignments_by_default(self):
+        step = command_builders.build_retention_command("/bin", "dailybackup")
+        bash_script = step.command[2]
+        self.assertNotIn("includes=", bash_script)
+        self.assertNotIn("excludes=", bash_script)
+        self.assertNotIn("startwith=", bash_script)
+        self.assertNotIn("endwith=", bash_script)
+
+    def test_selection_criteria_emitted(self):
+        step = command_builders.build_retention_command(
+            "/bin",
+            "dailybackup",
+            includes="proxmox =tank/a",
+            excludes="vm-100 scratch",
+            startwith="=tank/a",
+            endwith="z",
+        )
+        bash_script = step.command[2]
+        self.assertIn('includes=(proxmox =tank/a); ', bash_script)
+        self.assertIn('excludes=(vm-100 scratch); ', bash_script)
+        self.assertIn('startwith==tank/a; ', bash_script)
+        self.assertIn('endwith=z; ', bash_script)
+
+    def test_selection_criteria_accept_iterables_and_quote(self):
+        step = command_builders.build_retention_command(
+            "/bin",
+            "dailybackup",
+            includes=["proxmox"],
+            excludes=["vm-100 disk", "scratch"],
+        )
+        bash_script = step.command[2]
+        self.assertIn("includes=(proxmox); ", bash_script)
+        self.assertIn("excludes=('vm-100 disk' scratch); ", bash_script)
+
+
+class TestBuildBackupPruneCommand(unittest.TestCase):
+    def test_basic(self):
+        step = command_builders.build_backup_prune_command(
+            "/bin",
+            "dailybackup",
+            [("threeamigos/proxmox", "fivebays"), ("NVME1", "fivebays")],
+            {},
+        )
+        self.assertFalse(step.fatal)
+        bash_script = step.command[2]
+        self.assertEqual(step.command[0], "bash")
+        self.assertIn('source "$mydir/zfsbuildfsarray"; ', bash_script)
+        self.assertIn('source "$mydir/zfsremoveleadingqualifiers"; ', bash_script)
+        self.assertIn('source "$mydir/zfscleanup"; ', bash_script)
+        self.assertIn("sourcefs=threeamigos/proxmox; ", bash_script)
+        self.assertIn("destfs=fivebays; ", bash_script)
+        self.assertIn("sourcefs=NVME1; ", bash_script)
+        self.assertIn('buildfsarray "$sourcefs"; ', bash_script)
+        self.assertIn(
+            '_restorefs=$(remove_leading_qualifiers "$sourcefsremovequalifiers" "$_fs"); ',
+            bash_script,
+        )
+        self.assertIn('prune_datasets+=("${destfs}${_restorefs}"); ', bash_script)
+        self.assertIn('cleanup "" "" dailybackup', bash_script)
+        self.assertIn("Prune snapshots (2 backup steps)", step.description)
+
+    def test_selection_criteria_forwarded(self):
+        step = command_builders.build_backup_prune_command(
+            "/bin",
+            "dailybackup",
+            [("tank", "fivebays")],
+            {
+                "includes": "proxmox",
+                "excludes": "vm-100 =tank/scratch",
+                "startwith": "=tank/a",
+                "endwith": "z",
+            },
+        )
+        bash_script = step.command[2]
+        self.assertIn("includes=(proxmox); ", bash_script)
+        self.assertIn("excludes=(vm-100 =tank/scratch); ", bash_script)
+        self.assertIn("startwith==tank/a; ", bash_script)
+        self.assertIn("endwith=z; ", bash_script)
+
+    def test_empty_result_exits_zero(self):
+        step = command_builders.build_backup_prune_command(
+            "/bin", "dailybackup", [("tank", "fivebays")], {}
+        )
+        bash_script = step.command[2]
+        self.assertIn('if [[ ${#prune_datasets[@]} -eq 0 ]]; then ', bash_script)
+        self.assertIn("WARN: No backup datasets to prune", bash_script)
+        self.assertIn("exit 0; ", bash_script)
+
+    def test_removequalifiers_variable(self):
+        step = command_builders.build_backup_prune_command(
+            "/bin",
+            "dailybackup",
+            [("tank", "fivebays")],
+            {"sourcefsremovequalifiers": "1"},
+        )
+        self.assertIn("sourcefsremovequalifiers=1; ", step.command[2])
+
+    def test_dedup_and_dryrun(self):
+        step = command_builders.build_backup_prune_command(
+            "/bin",
+            "dailybackup",
+            [("tank", "fivebays"), ("tank", "fivebays")],
+            {},
+            dryrun=True,
+        )
+        bash_script = step.command[2]
+        self.assertIn("declare -A _prune_seen=(); ", bash_script)
+        self.assertIn("dryrun='Y'", bash_script)
+
 
 class TestRsyncFailureDiagnosis(unittest.TestCase):
     """_diagnose_rsync_failure explains common rsync failure modes."""

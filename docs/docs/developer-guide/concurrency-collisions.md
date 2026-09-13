@@ -147,7 +147,7 @@ interoperate.
 | `/var/lib/zfsutilities/config.json` | GUI (`save_config`), `zfsconfig` bash helper | Bash scripts via `zfsconfig`, `profile_runner.py` at startup | `/run/lock/zfsutilities/.config.lock` |
 | `/var/lib/zfsutilities/history.json` | `BackupRunner._finish()`, `profile_runner.py` | Logs tab, dashboard | `/run/lock/zfsutilities/.history.lock` |
 | `/var/log/zfsutilities/sessions/.log_index.json` | `BackupRunner`, `profile_runner.py`, Logs tab | Logs tab | `/run/lock/zfsutilities/.log_index.lock` |
-| `/var/lib/zfsutilities/scrub_state.json` | `ScrubQueue` | `ScrubQueue` on restart | `/run/lock/zfsutilities/.scrub_state.lock` |
+| `/var/lib/zfsutilities/scrub_state.json` | `ScrubQueue` (GUI Pools tab/Dashboard, `profile_runner.py` scrub profiles) | `ScrubQueue` on restart and via `reload()` before each GUI/Dashboard tick | `/run/lock/zfsutilities/.scrub_state.lock` |
 
 The following files are still not lock-protected because they are outside the
 scope of this phase:
@@ -173,6 +173,21 @@ each action consults the live `zpool status` scrub state and skips itself when
 the requested transition is invalid (for example, pausing a pool that is not
 currently scanning).  ZFS itself rejects invalid transitions, so the worst-case
 outcome of concurrent scrub control is a logged warning, not data loss.
+
+The persistent `ScrubQueue` state can be mutated concurrently by the GUI Pools
+tab and a headless scrub profile. Two mechanisms keep the instances from
+diverging:
+
+* Queue buckets are disjoint: re-queuing a pool (`add_pending`) removes it from
+  the `finished` bucket, and `tick()` drops `finished` entries for pools that no
+  longer exist, so the summary counts never double-count a pool.
+* Long-lived GUI/Dashboard instances call `ScrubQueue.reload()` (a locked
+  re-read of `scrub_state.json`) immediately before each `tick()`, so a headless
+  profile's pending/active changes are reflected instead of being overwritten by
+  a stale in-memory copy on the next save. The reload→tick→save sequence is not
+  transactional, so a save by the other process in that window can still be
+  overwritten; both sides reconcile against live `zpool status` on every tick,
+  so the queues converge on the next cycle.
 
 ### 7. Headless `profile_runner.py` waits for profile and dataset locks
 

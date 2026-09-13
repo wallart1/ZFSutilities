@@ -9,7 +9,7 @@ without re-entering the settings each time.
 
 | Type      | GUI tab      | What it runs                                            |
 | --------- | ------------ | ------------------------------------------------------- |
-| Backup    | Backup       | rsync pulls, ZFS send/receive, retention, pre/post scripts |
+| Backup    | Backup       | rsync pulls, ZFS send/receive, retention (prunes only the datasets the active send/receive steps back up; falls back to whole-pool pruning when none are active), pre/post scripts |
 | Offsite   | Offsite      | Copy snapshots to an offsite pool                       |
 | Restore   | Restore      | Two-step full/incremental restore                       |
 | Retention | Retention    | Prune snapshots by retention policy                     |
@@ -126,3 +126,6 @@ the offsite source/includes (for example, back up `NVME1/proxmox` instead of
   running.
 - If a scheduled profile fails with `rc=9`, another job was holding a dataset
   lock at that moment.  Check the session log for the conflicting operation.
+- A scrub profile finishes with `rc=1` when a pool's scrub could not be started
+  or resumed after a few retries (the pool is reported as "gave up on" in the
+  session log). The remaining pools in the profile are still scrubbed normally.

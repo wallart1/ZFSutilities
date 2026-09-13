@@ -31,6 +31,9 @@ from command_builders import (
     _dryrun_assignments,
 )
 from command_builders import (
+    build_backup_prune_command as _build_backup_prune_command,
+)
+from command_builders import (
     build_post_backup_command as _build_post_backup_command,
 )
 from command_builders import (
@@ -484,8 +487,42 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
 
     post = cfg.get("post_steps", {})
     if post.get("run_retention", False):
-        pools = get_pool_names(config) or None
-        steps.append(_build_retention_command(parent_dir, label, pools=pools, dryrun=dryrun))
+        active_sr = [
+            (step["source"], step["dest"])
+            for step in cfg.get("send_receive_steps", [])
+            if step.get("active")
+        ]
+        if active_sr:
+            log_msg(
+                f"INFO: Prune step restricted to the {len(active_sr)} send/receive "
+                "step(s)' datasets (derived at prune time)."
+            )
+            steps.append(
+                _build_backup_prune_command(
+                    parent_dir, label, active_sr, variables, dryrun=dryrun
+                )
+            )
+        else:
+            pools = get_pool_names(config) or None
+            prune_selection = {
+                key: variables.get(key, "")
+                for key in ("includes", "excludes", "startwith", "endwith")
+                if variables.get(key, "").strip()
+            }
+            log_msg(
+                "INFO: No active send/receive steps; prune step falls back to "
+                "whole-pool pruning of the configured pools."
+            )
+            if prune_selection:
+                log_msg(
+                    "INFO: Dataset selection forwarded to prune step: "
+                    + " ".join(f"{k}={v}" for k, v in prune_selection.items())
+                )
+            steps.append(
+                _build_retention_command(
+                    parent_dir, label, pools=pools, dryrun=dryrun, **prune_selection
+                )
+            )
 
     if not steps:
         log_msg("WARN: No active steps to run")
@@ -681,16 +718,19 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
 
     max_idle_ticks = 60  # ~10 minutes at 10s interval before giving up
     idle_ticks = 0
+    last_summary = None
 
     while True:
         states = get_all_pool_scrub_states()
         queue.tick(states)
         summary = queue.summary()
-        _scrub_log(
-            f"INFO: Scrub queue — active={summary['active']} "
-            f"pending={summary['pending']} paused={summary['paused']} "
-            f"finished={summary['finished']}"
-        )
+        if summary != last_summary:
+            _scrub_log(
+                f"INFO: Scrub queue — active={summary['active']} "
+                f"pending={summary['pending']} paused={summary['paused']} "
+                f"finished={summary['finished']}"
+            )
+            last_summary = summary
 
         if summary["active"] == 0 and summary["pending"] == 0:
             if summary["paused"] > 0:
@@ -709,6 +749,11 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
 
         time.sleep(10)
 
+    if queue.given_up:
+        _scrub_log(
+            "WARN: Scrub profile gave up on: " + ", ".join(sorted(queue.given_up))
+        )
+        return 1
     _scrub_log("INFO: Scrub profile complete")
     return 0
 

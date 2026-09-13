@@ -287,7 +287,30 @@ cd tests/python && python3 runner.py test_backup_config
 # Verbose / quiet
 cd tests/python && python3 runner.py -v
 cd tests/python && python3 runner.py -q
+
+# The suites must also pass under a single-process pytest run (definition
+# order, not unittest's alphabetical order):
+cd tests/python && python3 -m pytest -q
 ```
+
+GUI suites import their modules under `test_support.mock_gtk()`. Without
+options, the first `mock_gtk()` context that imports a GUI module wins: the
+module keeps that context's `Gtk`/`GLib` mocks for the rest of the session,
+and each `Gtk.Widget()` returns one shared per-class mock whose call history
+accumulates across every test that ran before. Tests must therefore not rely
+on unittest's alphabetical method ordering and must not assert per-test call
+counts on shared widget mocks without resetting them first; likewise, patch
+attributes on the module object the code under test actually imported (e.g.
+patch `gui_helpers.Gtk.MessageDialog` — via a module reference bound at the
+test file's own import — not a re-imported copy).
+
+For per-test module freshness, pass `fresh=True`: every loaded GUI module
+(see `test_support.GUI_MODULES`) is evicted from `sys.modules` for the
+duration of the context and restored on exit, so imports inside the context
+bind the current context's mocks and call history starts empty — without
+leaking a different module object to the rest of the session. Use it whenever
+a test asserts on widget call counts or needs to patch a GUI module it did
+not itself import.
 
 ### Writing a New Python Suite
 

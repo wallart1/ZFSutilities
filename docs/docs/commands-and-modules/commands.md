@@ -1099,6 +1099,14 @@ sudo zfscleanup <pool> only <label> [overrides]
   If the configured pool list is empty, it falls back to `zpool list -Ho name`
   so retention is not silently skipped.
 - Pools in the list that are not currently online are skipped.
+- The optional dataset selection globals (`$includes`, `$excludes`,
+  `$startwith`, `$endwith`) are forwarded to `zfsbuildfsarray`, so callers can
+  prune only the datasets a backup visited. There are no built-in exclusions;
+  callers pass any dataset-specific exclusions explicitly.
+- When `$prune_datasets` is set and non-empty, `zfscleanup` prunes exactly
+  those datasets (typically destination names derived from a backup run) and
+  skips pool discovery, `zpool list` checks, and `buildfsarray` entirely. When
+  it is unset or empty, the pool behavior above applies.
 - If `retain` returns a non-zero code for a dataset (lock conflict, missing
   policy, or other error), `zfscleanup` logs a warning and continues with the
   next dataset/pool instead of aborting the run.
@@ -1111,6 +1119,11 @@ sudo zfscleanup <pool> only <label> [overrides]
 | `$dryrun`                   | `'Y'` = report without deleting                                   | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$releaseholds`             | `'Y'` = release matching holds before deletion                    | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$releaseholds_tags`        | Array of hold tag patterns to release (default `offsite-*`)       | [Execution Control](../developer-guide/global-variables.md#execution-control) |
+| `$includes`                 | Dataset substrings to prune (prefix `=` for exact match)          | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `$excludes`                 | Dataset substrings to skip (prefix `=` for exact match)           | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `$startwith`                | Skip datasets before the first match                              | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `$endwith`                  | Stop after the first match                                        | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `$prune_datasets`           | Explicit dataset list; skips pool discovery (see Behavior)        | —                                                                             |
 
 Calls [`zfsretain`](modules.md#zfsretain) for each pool.
 

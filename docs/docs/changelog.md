@@ -1,5 +1,98 @@
 # Changelog
 
+## 0.102.0
+
+*Released 2026-09-12*
+
+### Added
+
+- **Backup prune restricted to the backup's dataset list** — The post-backup
+  prune step no longer sweeps every dataset on every configured pool. A new
+  explicit `prune_datasets` mode in `zfscleanup` prunes exactly the datasets
+  given to it (skipping pool discovery and `buildfsarray` entirely), and the
+  new `build_backup_prune_command` (`command_builders.py`) generates a script
+  that, for each active send/receive step, re-runs `zfsbuildfsarray` on the
+  step's source subtree with the Advanced dataset-selection criteria, maps
+  each dataset to its destination name with `remove_leading_qualifiers`
+  (the same rule `zfs-send-receive` uses), deduplicates, and prunes exactly
+  that list. The Backup tab and headless backup profiles use it whenever
+  send/receive steps are active; with none active, pruning falls back to the
+  previous whole-pool behavior.
+
+- **Backup Advanced dataset selection now applies to the prune step** — The
+  `includes`, `excludes`, `startwith`, and `endwith` criteria on the Backup
+  tab were previously only forwarded to `zfs-send-receive`; the prune step
+  now honors the same criteria (`build_retention_command` emits them for
+  `zfscleanup`, which forwards them to `zfsbuildfsarray`). The Advanced entry
+  widgets show a tooltip noting the prune-step effect, and the Prune checkbox
+  explains the dataset-list derivation.
+
+- **Per-test module freshness for GUI tests** — `test_support.mock_gtk()`
+  now accepts `fresh=True`: every loaded GUI module (a set derived from the
+  gi-importing modules in `python/`) is evicted from `sys.modules` for the
+  duration of the context and restored on exit, so each test imports the GUI
+  layer bound to its own `Gtk` mocks with empty call history, without leaking
+  different module objects to the rest of the session. This replaces the
+  ad-hoc `sys.modules` eviction workaround in `test_gui_infrastructure.py`
+  and the shared-mock reset/patch-instance workarounds in the backup-page and
+  profile-dialog suites.
+
+### Changed
+
+- **`zfscleanup` has no built-in dataset exclusions** — The hard-coded
+  `excludes=('temp/temp')` for the `temp` pool was removed; callers pass
+  exclusions explicitly. (`zfssendoffsite`, a user-invoked orchestrator
+  script, intentionally keeps its own hard-coded exclusion under the
+  orchestrator exemption.)
+
+- **Disks page correlation is now visual-only** — Selecting a disk or
+  partition in the Disk Inventory no longer selects a node in the Pool
+  Topology pane (and vice versa). Instead, every topology device residing on
+  the selected inventory disk is tinted teal (a whole disk tints its
+  partitions; a partition tints only itself), and topology selections tint
+  the matching inventory rows — the pool selector still follows the
+  inventory selection. The tint re-applies after every pool repopulation.
+
+- **Scrub queue give-up and cross-process reload** — A queued pool whose
+  scrub fails to start or resume three times in a row
+  (`MAX_SCRUB_START_FAILURES = 3`) is dropped into a `given_up` set instead
+  of being retried forever; a scrub profile reports the given-up pools and
+  exits `rc=1` (remaining pools are scrubbed normally), and the per-tick
+  "Scrub queue — …" summary is logged only when it changes. Long-lived GUI
+  instances (Pools tab, Dashboard) call the new `ScrubQueue.reload()` before
+  each `tick()` so state written by a headless scrub profile is picked up
+  instead of overwritten. Queue buckets are kept disjoint: re-queuing removes
+  a pool from `finished`, `tick()` drops `finished` entries for pools that no
+  longer exist, and stale `paused_by_user` entries are healed.
+
+### Fixed
+
+- **Log viewer search navigation stopped working on live logs** — The Logs
+  tab (and info panel) search Previous/Next buttons silently stopped working
+  once the viewed buffer changed after a search (most visibly while a
+  *Running* log was tailed). `TextViewSearch` stored matches as
+  `Gtk.TextIter` copies, which GTK invalidates on every buffer mutation;
+  matches are now stored as character offsets resolved to fresh iters at use
+  time (clamped past end-of-buffer). A new `refresh()` re-runs the active
+  query without scrolling, and the log tail calls it when appended text
+  contains the query, so new occurrences join the highlights and counter
+  without disturbing the scroll position.
+
+- **Locks held by `python -m <package>` processes were treated as stale** —
+  `zfs_lock_manager._script_name()` recorded `__main__.py` for processes
+  launched via `python -m <package>`, which never appears in
+  `/proc/<pid>/cmdline`, so stale-lock detection deleted live locks. It now
+  records the package name from `__main__.__spec__.name`.
+
+- **Single-process `pytest tests/python` is green** — Added
+  `tests/python/conftest.py` (sys.path bootstrap) and fixed four
+  order-dependent failures that only surfaced under pytest's definition
+  order (the per-file unittest runner's alphabetical ordering masked them).
+  The CPython "multi-threaded, use of fork()" DeprecationWarning emitted by
+  the multiprocessing-based suites in single-process runs is filtered in
+  conftest.py; it is advisory only and does not occur under the per-file
+  runner.
+
 ## 0.101.0
 
 *Released 2026-09-11*

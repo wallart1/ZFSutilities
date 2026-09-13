@@ -9,6 +9,27 @@ fi
 bashinit
 unset _local_bashinit
 
+# Apply retention to each dataset in the current global fsarray.
+# Shared by pool mode and explicit prune_datasets mode. Uses the globals
+# $autoproceed and $zfscleanup_label (set by cleanup).
+_zfscleanup_retain_loop() {
+    local retainfs
+    log_msg "INFO: About to apply snapshot retention policies to the following datasets:"
+    for retainfs in "${fsarray[@]}"; do
+        log_msg "INFO: $retainfs"
+    done
+    if [[ $autoproceed != 'Y' ]]; then
+        read -rp "$(log_msg) Press enter to continue."
+    fi
+    for retainfs in "${fsarray[@]}"; do
+        retain "$retainfs" "$zfscleanup_label"
+        local _retain_rc=$?
+        if [[ $_retain_rc -ne 0 ]]; then
+            log_msg "WARN: Skipped $retainfs (rc=$_retain_rc); continuing with next dataset."
+        fi
+    done
+}
+
 function cleanup {
     # Perform retention policies on given or all pools.
 
@@ -30,6 +51,17 @@ function cleanup {
     # $skipbusy     'Y' means a "Dataset is busy" destroy failure is logged as WARN and the
     #               script continues to the next snapshot. 'N' means treat it as fatal.
     #               Defaults to 'Y' when called via zfsretain; 'N' for direct delsnap calls.
+    # $includes     Optional array of dataset name substrings to prune (prefix '=' for exact
+    #               match). If empty, all datasets in each pool are pruned.
+    # $excludes     Optional array of dataset name substrings to skip (prefix '=' for exact
+    #               match). If empty, no datasets are excluded. There are no built-in
+    #               exclusions; callers pass any dataset-specific exclusions explicitly.
+    # $startwith    Optional substring; pruning starts at the first matching dataset.
+    # $endwith      Optional substring; pruning stops after the last matching dataset.
+    # $prune_datasets Optional array of dataset names. When non-empty, cleanup prunes
+    #               exactly these datasets (typically the destination names derived
+    #               from a backup run) and skips pool discovery/buildfsarray entirely.
+    #               When unset or empty, cleanup operates in pool mode as described above.
 
     local _local_bashinit
     _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
@@ -59,6 +91,14 @@ function cleanup {
         releaseholds_tags=('offsite-*')
     fi
 
+    # Dataset selection criteria forwarded to zfsbuildfsarray. No built-in
+    # exclusions; callers set these explicitly when they want to filter.
+    [[ ${includes+x}  ]] || includes=()
+    [[ ${excludes+x}  ]] || excludes=()
+    [[ ${startwith+x} ]] || startwith=''
+    [[ ${endwith+x}   ]] || endwith=''
+    [[ ${prune_datasets+x} ]] || prune_datasets=()
+
     if [[ $1 != "" ]]; then zfspoolarray=("$1")
     else
         poolarray        # Put list of ZFS pools into zfspoolarray
@@ -86,35 +126,24 @@ function cleanup {
 
     zfslock_init
 
+    # Explicit dataset list mode: prune exactly the given datasets (already
+    # destination names). No pool discovery, no buildfsarray.
+    if [[ ${#prune_datasets[@]} -gt 0 ]]; then
+        fsarray=("${prune_datasets[@]}")
+        echo '--------------------------------'
+        _zfscleanup_retain_loop
+        log_msg "INFO: zfscleanup completed."
+        return 0
+    fi
+
     for pool in "${zfspoolarray[@]}"; do
         if ! zpool list "$pool" >/dev/null 2>&1; then continue; fi
         echo '--------------------------------'
 
-        if [[ $pool = 'temp' ]]; then
-            # shellcheck disable=SC2034
-            # Intentionally set for sourced zfsbuildfsarray helper.
-            excludes=('temp/temp')
-        else
-            # shellcheck disable=SC2034
-            excludes=()
-        fi
         # shellcheck disable=SC2034
         depth=''
         buildfsarray "$pool"
-        log_msg "INFO: About to apply snapshot retention policies to the following datasets:"
-        for retainfs in "${fsarray[@]}"; do
-            log_msg "INFO: $retainfs"
-        done
-        if [[ $autoproceed != 'Y' ]]; then
-            read -rp "$(log_msg) Press enter to continue."
-        fi
-        for retainfs in "${fsarray[@]}"; do
-            retain "$retainfs" "$zfscleanup_label"
-            local _retain_rc=$?
-            if [[ $_retain_rc -ne 0 ]]; then
-                log_msg "WARN: Skipped $retainfs (rc=$_retain_rc); continuing with next dataset."
-            fi
-        done
+        _zfscleanup_retain_loop
     done
     log_msg "INFO: zfscleanup completed."
 }

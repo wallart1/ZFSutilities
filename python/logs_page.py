@@ -543,6 +543,19 @@ def _do_sync_log_list(app):
     return False
 
 
+def _refresh_log_search(app, new_text):
+    """Fold newly appended log text into the viewer search, if one is active.
+
+    Matches are stored as character offsets, which appends do not disturb,
+    but occurrences of the query in the new text are only highlighted and
+    counted when the refresh is run.
+    """
+    search = app.logs_search
+    query = search.entry.get_text()
+    if query and query.lower() in new_text.lower():
+        search.refresh()
+
+
 def _tail_log_file(app):
     """Periodic callback to append new lines from a running log file."""
     path = app._logs_current_path
@@ -617,6 +630,8 @@ def _tail_log_file(app):
                     scroll_mark = buf.create_mark(None, buf.get_end_iter(), False)
                     app.logs_text.scroll_to_mark(scroll_mark, 0.0, False, 0.0, 0.0)
                     buf.delete_mark(scroll_mark)
+
+                _refresh_log_search(app, filtered)
 
             _update_logs_status_label(app, _last_pv_line(text))
 

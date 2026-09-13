@@ -2040,20 +2040,11 @@ class TestGuiHelpersMisc(unittest.TestCase):
             self.assertIn(1, view._expanded)
 
 
-def _clear_cached_modules(*names):
-    """Remove named modules from sys.modules so they re-import fresh."""
-    suffixes = tuple("." + n for n in names)
-    for name in list(sys.modules.keys()):
-        if name in names or name.endswith(suffixes):
-            sys.modules.pop(name, None)
-
-
 class TestTextViewSearchIcons(unittest.TestCase):
     """Verify TextViewSearch uses icon buttons instead of text buttons."""
 
     def test_search_and_reset_are_icon_buttons(self):
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers
 
             text_view = MagicMock()
@@ -2068,8 +2059,7 @@ class TestTextViewSearchIcons(unittest.TestCase):
             self.assertEqual(label_calls, [])
 
     def test_search_and_reset_buttons_get_images(self):
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers
 
             text_view = MagicMock()
@@ -2083,8 +2073,7 @@ class TestAddVarRowEntryWidth(unittest.TestCase):
     """Verify add_var_row sets a narrow minimum width on Entry widgets."""
 
     def test_add_var_row_sets_width_chars_on_entry(self):
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers
 
             grid = MagicMock()
@@ -2097,8 +2086,7 @@ class TestAddVarRowYNCombo(unittest.TestCase):
     """Verify Y/N combo handling in add_var_row."""
 
     def _run(self, variables):
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers
 
             grid = MagicMock()
@@ -2135,8 +2123,7 @@ class TestPageLabelWrapping(unittest.TestCase):
     """Verify long description labels have line wrapping enabled."""
 
     def test_checkagainst_desc_is_wrapped(self):
-        _clear_cached_modules("checkagainst_page")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             from unittest.mock import patch
 
             import checkagainst_page as cp
@@ -2167,8 +2154,7 @@ class TestPoolsControlsLayout(unittest.TestCase):
     """Verify scrub controls are stacked vertically, not in one wide row."""
 
     def test_controls_box_is_vertical(self):
-        _clear_cached_modules("pools_page")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             from unittest.mock import patch
 
             import pools_page as pp
@@ -2198,8 +2184,7 @@ class TestPoolsControlsLayout(unittest.TestCase):
             self.assertEqual(len(vertical_spacing5), 1)
 
     def test_controls_rows_are_horizontal(self):
-        _clear_cached_modules("pools_page")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             from unittest.mock import patch
 
             import pools_page as pp
@@ -2275,8 +2260,7 @@ class TestMinimizeWidth(unittest.TestCase):
 
     def test_reset_resizable_columns_to_min_width(self):
         """Only resizable columns are reset to their own minimum width."""
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import gui_helpers as gh
 
             class FakeTreeView:
@@ -2315,8 +2299,7 @@ class TestMinimizeWidth(unittest.TestCase):
 
     def test_reset_uses_get_child_fallback(self):
         """Walk widgets that expose get_child() instead of get_children()."""
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import gui_helpers as gh
 
             class FakeTreeView:
@@ -2350,8 +2333,7 @@ class TestMinimizeWidth(unittest.TestCase):
 
     def test_confirm_and_minimize_width_cancel_does_nothing(self):
         """Cancel response leaves columns, config, and window unchanged."""
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers as gh
 
             with temp_config_dir():
@@ -2372,8 +2354,7 @@ class TestMinimizeWidth(unittest.TestCase):
 
     def test_confirm_and_minimize_width_ok_resets_and_shrinks(self):
         """OK response resets columns, clears saved widths, and resizes."""
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import backup_config
             import gui_helpers as gh
 
@@ -2409,9 +2390,9 @@ class TestMinimizeWidth(unittest.TestCase):
 
 
 @contextlib.contextmanager
-def _mock_gtk_with_app_window():
+def _mock_gtk_with_app_window(fresh=False):
     """Extend mock_gtk so Gtk.ApplicationWindow is a concrete class."""
-    with mock_gtk() as gtk_mock:
+    with mock_gtk(fresh=fresh) as gtk_mock:
 
         class FakeApplicationWindow:
             def __init__(self, *args, **kwargs):
@@ -2429,8 +2410,7 @@ class TestStatusLabel(unittest.TestCase):
 
     def _call_update_progress(self, obj, fraction, text):
         """Call ZFSUtilitiesWindow._update_progress on *obj*."""
-        _clear_cached_modules("zfsutilities_gui")
-        with _mock_gtk_with_app_window():
+        with _mock_gtk_with_app_window(fresh=True):
             import zfsutilities_gui
 
             zfsutilities_gui.ZFSUtilitiesWindow._update_progress(obj, fraction, text)
@@ -2473,8 +2453,7 @@ class TestInfoPanelFont(unittest.TestCase):
     """Main-window log panel uses a monospace font, including when popped out."""
 
     def test_info_text_uses_monospace_font(self):
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import gui_helpers as gh
 
             app = MagicMock()
@@ -2490,8 +2469,7 @@ class TestClearButton(unittest.TestCase):
     """Clear button in the log panel also clears the bottom status bar."""
 
     def test_clear_button_clears_status_bar(self):
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers as gh
 
             handlers = {}
@@ -2543,8 +2521,7 @@ class TestEnableTextviewCopy(unittest.TestCase):
         return tv, buf, start_iter, end_iter, handlers
 
     def test_right_click_shows_copy_and_select_all_items(self):
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers as gh
 
             tv, buf, _, _, handlers = self._make_textview()
@@ -2564,8 +2541,7 @@ class TestEnableTextviewCopy(unittest.TestCase):
             self.assertIn("Select All", item_labels)
 
     def test_copy_uses_selected_text_when_available(self):
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers as gh
 
             selected_text = "selected text"
@@ -2588,8 +2564,7 @@ class TestEnableTextviewCopy(unittest.TestCase):
             clipboard.set_text.assert_called_once_with(selected_text, -1)
 
     def test_copy_falls_back_to_all_text_when_nothing_selected(self):
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers as gh
 
             all_text = "entire buffer text"
@@ -2609,8 +2584,7 @@ class TestEnableTextviewCopy(unittest.TestCase):
             clipboard.set_text.assert_called_once_with(all_text, -1)
 
     def test_select_all_selects_entire_buffer(self):
-        _clear_cached_modules("gui_helpers")
-        with mock_gtk() as gtk_mock:
+        with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers as gh
 
             tv, buf, start_iter, end_iter, handlers = self._make_textview()

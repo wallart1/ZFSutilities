@@ -382,6 +382,7 @@ class TestTailLogFileBufferCap(unittest.TestCase):
         app.logs_viewer_level = "DEBUG"
         app._logs_tail_timer = None
         app._log_index = None
+        app.logs_search.entry.get_text.return_value = ""
         buf = MagicMock()
         if char_count is None:
             char_count = lp.MAX_VIEWER_BUFFER_CHARS
@@ -420,6 +421,80 @@ class TestTailLogFileBufferCap(unittest.TestCase):
             result = lp._tail_log_file(app)
             self.assertTrue(result)
             buf.delete.assert_not_called()
+
+
+class TestRefreshLogSearch(unittest.TestCase):
+    """_refresh_log_search reruns the viewer search only when the new text matches."""
+
+    def _make_app(self, query):
+        app = MagicMock()
+        app.logs_search.entry.get_text.return_value = query
+        return app
+
+    def test_refreshes_when_query_present(self):
+        app = self._make_app("needle")
+        lp._refresh_log_search(app, "a new needle line\n")
+        app.logs_search.refresh.assert_called_once_with()
+
+    def test_refresh_is_case_insensitive(self):
+        app = self._make_app("Needle")
+        lp._refresh_log_search(app, "a new NEEDLE line\n")
+        app.logs_search.refresh.assert_called_once_with()
+
+    def test_skips_when_query_absent(self):
+        app = self._make_app("needle")
+        lp._refresh_log_search(app, "ordinary log line\n")
+        app.logs_search.refresh.assert_not_called()
+
+    def test_skips_when_query_empty(self):
+        app = self._make_app("")
+        lp._refresh_log_search(app, "ordinary log line\n")
+        app.logs_search.refresh.assert_not_called()
+
+
+class TestTailLogFileSearchRefresh(unittest.TestCase):
+    """_tail_log_file keeps the viewer search current while a log is running."""
+
+    def _make_app(self, path, file_size, read_offset, query):
+        app = MagicMock()
+        app._logs_current_path = path
+        app._logs_file_size = file_size
+        app._logs_read_offset = read_offset
+        app.logs_viewer_level = "DEBUG"
+        app._logs_tail_timer = None
+        app._log_index = None
+        app.logs_search.entry.get_text.return_value = query
+        buf = MagicMock()
+        buf.get_char_count.return_value = 0
+        app.logs_text.get_buffer.return_value = buf
+        vadj = MagicMock()
+        vadj.get_value.return_value = 0
+        vadj.get_upper.return_value = 100
+        vadj.get_page_size.return_value = 20
+        app.logs_text_scroll.get_vadjustment.return_value = vadj
+        return app
+
+    def test_refreshes_search_when_new_text_matches_query(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "growing.log")
+            with open(path, "w") as fh:
+                fh.write("first line\n")
+                fh.write("second needle line\n")
+            size = os.path.getsize(path)
+            app = self._make_app(path, size - 1, 0, "needle")
+            self.assertTrue(lp._tail_log_file(app))
+            app.logs_search.refresh.assert_called_once_with()
+
+    def test_skips_search_refresh_when_query_absent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "growing.log")
+            with open(path, "w") as fh:
+                fh.write("first line\n")
+                fh.write("second line\n")
+            size = os.path.getsize(path)
+            app = self._make_app(path, size - 1, 0, "needle")
+            self.assertTrue(lp._tail_log_file(app))
+            app.logs_search.refresh.assert_not_called()
 
 
 class TestLoadFullLogClicked(unittest.TestCase):
@@ -948,6 +1023,7 @@ class TestLogViewerStatusLabel(unittest.TestCase):
         app._logs_tail_timer = None
         app._log_index = None
         app.logs_short_prefix = True
+        app.logs_search.entry.get_text.return_value = ""
         buf = MagicMock()
         buf.get_char_count.return_value = 0
         app.logs_text.get_buffer.return_value = buf

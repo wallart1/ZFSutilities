@@ -13,6 +13,10 @@ if PYTHON_SRC not in sys.path:
 from test_support import mock_gtk
 
 with mock_gtk():
+    # Bind gui_helpers here (same import context as profile_dialogs) so the
+    # test patches the exact module object whose Gtk the dialogs use, no
+    # matter which mock_gtk context first imported each module.
+    import gui_helpers
     import profile_dialogs
     import schedule_page
 
@@ -206,8 +210,11 @@ class TestShowRecallProfileDialog(unittest.TestCase):
 
         with (
             patch.object(profile_dialogs, "list_profiles", return_value=[]),
+            # The error dialog is built by gui_helpers.show_error_dialog, so
+            # patch MessageDialog on the gui_helpers instance this module
+            # imported above (the one profile_dialogs actually uses).
             patch.object(
-                profile_dialogs.Gtk, "MessageDialog", return_value=MagicMock()
+                gui_helpers.Gtk, "MessageDialog", return_value=MagicMock()
             ) as mock_error,
         ):
             profile_dialogs.show_recall_profile_dialog(app, "backup", on_select)

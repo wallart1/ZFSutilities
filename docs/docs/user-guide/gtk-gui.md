@@ -164,20 +164,26 @@ pickers:
 | SMART | Overall SMART health (`PASSED`, `FAILED`, or `n/a`) |
 
 Device scans and SMART probes can be slow, so the inventory is loaded in a
-background thread and cached for a few seconds. Selecting a disk or partition
-selects the matching device in the Pool Topology pane, and selecting a device
-in the topology pane selects the matching disk or partition in the inventory.
+background thread and cached for a few seconds. The two panes stay in sync
+visually: selecting a disk or partition tints every device that resides on it
+in the Pool Topology pane (drawn in teal), and selecting a pool, vdev, or
+device node in the topology pane tints the corresponding rows in the
+inventory. Neither pane ever changes the other's selection — the correlation
+is teal text only.
 
 ### Pool topology
 
 The middle pane shows the vdev topology of the pool selected in the drop-down.
 The tree is shown fully expanded every time it is refreshed (Refresh button or
-pool change). Selecting a node highlights the corresponding member disks and partitions in
-the inventory view (their text is drawn in teal): the pool node highlights
-every device in the pool, a vdev node highlights every device in that vdev,
-and a device node highlights just that device. Clearing the topology selection
-restores the pool-wide highlight. Selecting a device node in the tree also
-selects the corresponding row in the inventory:
+pool change). Selecting a node highlights the corresponding member disks and
+partitions in the inventory view (their text is drawn in teal): the pool node
+highlights every device in the pool, a vdev node highlights every device in
+that vdev, and a device node highlights just that device. Clearing the
+topology selection restores the pool-wide highlight. Selecting a disk or
+partition in the inventory switches the pool selector to that disk's pool and
+tints every topology device that resides on the selected disk (a whole disk
+tints all of its partitions; a partition tints just that device), no matter
+which pool's topology is being displayed:
 
 | Column | Meaning |
 | --- | --- |
@@ -705,6 +711,14 @@ and [Restore](#restore-tab) tabs controls which datasets are included in an
 operation. These settings are passed to
 [`zfsbuildfsarray`](../commands-and-modules/modules.md#zfsbuildfsarray).
 
+On the **Backup** tab, the same criteria (`includes`, `excludes`, `startwith`,
+`endwith`) define the dataset list for both the send/receive steps **and** the
+post-backup prune step: the prune step re-derives each step's source dataset
+list at run time, maps it to destination names, and prunes exactly those
+datasets (via `zfscleanup`'s explicit `prune_datasets` mode). When no
+send/receive steps are active, the prune step falls back to whole-pool pruning
+of the configured pools, filtered by these criteria.
+
 ### Execution sequence
 
 The filters are applied in this order:
@@ -1011,7 +1025,11 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
 - **Post-Backup Steps** — Three checkboxes and a command entry:
 
   - **Clear snapshot name memory** after sending
-  - **Prune snapshots** when the backup finishes
+  - **Prune snapshots** when the backup finishes — prunes only the datasets
+    the active send/receive steps back up (the backup's dataset list is
+    re-derived at prune time and mapped to destination names); falls back to
+    whole-pool pruning of the configured pools when no send/receive steps are
+    active. See [Daily Backup — Step Failure Handling](daily-backup.md#step-failure-handling).
   - **Run post-backup command** — Enable a custom command that runs after all
     backup steps finish. It executes even if a fatal error aborts the backup early.
 
@@ -1672,6 +1690,10 @@ Above the text view, a search bar provides:
   the first/last match. A counter shows the current position (e.g. `3 / 12`).
   The viewer scrolls so the current match is visible.
 - Searches are **case-insensitive**.
+- Navigation keeps working while new log lines arrive: matches are tracked by
+  character position, so appending to the log stream cannot disable the
+  **Previous / Next** buttons, and matches in newly added lines are folded into
+  the highlight set and counter automatically.
 
 A **Clear** button next to the **Input** entry empties the log buffer, clears
 search highlights, and resets the warning/error indicator.
@@ -1793,6 +1815,10 @@ Right-click any row to open a context menu:
   - Searches are **case-insensitive**.
   - The search query is **retained** when you switch to a different log file;
     the search automatically reruns against the newly loaded text.
+  - While you watch a **Running** log, the viewer keeps appending new output;
+    **Previous / Next** keep working and matches in the newly arrived lines are
+    added to the highlights and counter without disturbing your scroll
+    position.
 
 ### Retention control
 

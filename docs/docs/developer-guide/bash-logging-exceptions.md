@@ -63,7 +63,7 @@ Some scripts that otherwise use `log_msg` still emit structured data on `stdout`
 
 A few additional patterns are allowed even in scripts that otherwise use `bashinit` logging:
 
-- **Blank visual separators** — `echo ""` lines that only add whitespace between log blocks are formatting, not messages, and may remain.
+- **Blank visual separators** — `echo ""` lines that only add whitespace between log blocks are formatting, not messages, and may remain. The same applies to a printed rule line used purely as a visual break between log blocks, such as the `echo '--------------------------------'` separators in `bin/zfscleanup`.
 - **Pre-bootstrap error fallbacks** — A script may emit a plain `echo ... >&2` error if `bashinit` itself cannot be loaded (for example, `bin/uninstall-zfsutilities`).
 - **Command substitutions** — `echo` inside `$(...)` used to build strings is not direct user output.
 

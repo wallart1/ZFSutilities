@@ -438,6 +438,80 @@ class TestRunBackupProfile(unittest.TestCase):
             self.assertEqual(len(bash_scripts), 1)
             self.assertIn("for pool in z2 z1; do", bash_scripts[0])
 
+    def test_retention_step_forwards_dataset_selection(self):
+        with temp_config_dir():
+            profile = {
+                "config": {
+                    "variables": {
+                        "label": "dailybackup",
+                        "includes": "proxmox",
+                        "excludes": "vm-100 =z2/scratch",
+                        "startwith": "=z2/a",
+                        "endwith": "z",
+                    },
+                    "pull_steps": [],
+                    "send_receive_steps": [],
+                    "post_steps": {"run_retention": True, "remove_snapfile": False},
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                }
+            }
+            config = {"pools": [{"name": "z2"}]}
+            with mock_subprocess() as m:
+                m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
+                rc = profile_runner.run_backup_profile(profile, config, "/bin")
+            self.assertEqual(rc, 0)
+            bash_scripts = [
+                call[0][2]
+                for call in m.calls
+                if call[0]
+                and isinstance(call[0], list)
+                and call[0][0] == "bash"
+                and len(call[0]) > 2
+            ]
+            self.assertEqual(len(bash_scripts), 1)
+            self.assertIn("includes=(proxmox); ", bash_scripts[0])
+            self.assertIn("excludes=(vm-100 =z2/scratch); ", bash_scripts[0])
+            self.assertIn("startwith==z2/a; ", bash_scripts[0])
+            self.assertIn("endwith=z; ", bash_scripts[0])
+
+    def test_retention_step_derives_dataset_list_from_sr_steps(self):
+        with temp_config_dir():
+            profile = {
+                "config": {
+                    "variables": {"label": "dailybackup", "excludes": "vm-100"},
+                    "pull_steps": [],
+                    "send_receive_steps": [
+                        {"active": True, "source": "threeamigos/proxmox", "dest": "fivebays"},
+                        {"active": False, "source": "tank/off", "dest": "fivebays/off"},
+                    ],
+                    "post_steps": {"run_retention": True, "remove_snapfile": False},
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                }
+            }
+            config = {"pools": [{"name": "z2"}]}
+            with mock_subprocess() as m:
+                m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
+                rc = profile_runner.run_backup_profile(profile, config, "/bin")
+            self.assertEqual(rc, 0)
+            bash_scripts = [
+                call[0][2]
+                for call in m.calls
+                if call[0]
+                and isinstance(call[0], list)
+                and call[0][0] == "bash"
+                and len(call[0]) > 2
+            ]
+            self.assertEqual(len(bash_scripts), 2)
+            prune_scripts = [s for s in bash_scripts if "prune_datasets=()" in s]
+            self.assertEqual(len(prune_scripts), 1)
+            prune_script = prune_scripts[0]
+            self.assertIn("sourcefs=threeamigos/proxmox; ", prune_script)
+            self.assertIn("excludes=(vm-100); ", prune_script)
+            self.assertIn('cleanup "" "" dailybackup', prune_script)
+            self.assertNotIn("sourcefs=tank/off", prune_script)
+
 
 class TestRunOffsiteProfile(unittest.TestCase):
     def test_no_pool_returns_error(self):
@@ -720,6 +794,65 @@ class TestRunScrubProfile(unittest.TestCase):
                                 rc = profile_runner.run_scrub_profile(profile, config, "/bin")
                             self.assertEqual(rc, 0)
                             self.assertTrue(any("Scrub profile started" in msg for msg in logs))
+            finally:
+                feature_config.SCRUB_STATE_PATH = orig_path
+
+    def test_queue_summary_logged_once_per_change(self):
+        """The 'Scrub queue — …' message must appear per summary change, not per tick."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_path = feature_config.SCRUB_STATE_PATH
+            feature_config.SCRUB_STATE_PATH = os.path.join(tmpdir, "scrub_state.json")
+            try:
+                profile = {"config": {"pools": ["tank", "data"], "simultaneous": 1}}
+                config = {}
+                none = sm.ScrubInfo(state=sm.ScrubState.NONE)
+                scanning = sm.ScrubInfo(state=sm.ScrubState.SCANNING)
+                finished = sm.ScrubInfo(state=sm.ScrubState.FINISHED)
+                state_sequence = [
+                    {"tank": none, "data": none},  # first scrub starts; 1 pending
+                    {"tank": none, "data": scanning},  # unchanged summary
+                    {"tank": none, "data": scanning},  # unchanged summary
+                    {"tank": none, "data": finished},  # first done; second starts
+                    {"tank": scanning, "data": finished},  # unchanged summary
+                    {"tank": finished, "data": finished},  # all done
+                ]
+                states_iter = iter(state_sequence)
+                with patch("profile_runner.get_all_pool_scrub_states") as mock_states:
+                    mock_states.side_effect = lambda: next(states_iter)
+                    with patch.object(sm, "start_scrub", return_value=True):
+                        with patch("profile_runner.time.sleep"):
+                            with capture_logs() as logs:
+                                rc = profile_runner.run_scrub_profile(profile, config, "/bin")
+                self.assertEqual(rc, 0)
+                queue_msgs = [msg for msg in logs if "Scrub queue —" in msg]
+                self.assertEqual(len(queue_msgs), 3, msg=f"Unexpected messages: {queue_msgs}")
+                # While a pool was still waiting, finished must not be inflated.
+                self.assertIn("pending=1", queue_msgs[0])
+                self.assertIn("finished=0", queue_msgs[0])
+                self.assertIn("finished=2", queue_msgs[-1])
+            finally:
+                feature_config.SCRUB_STATE_PATH = orig_path
+
+    def test_give_up_on_start_failure_returns_rc1(self):
+        """A pool that can never start is given up (not retried forever) and rc=1."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_path = feature_config.SCRUB_STATE_PATH
+            feature_config.SCRUB_STATE_PATH = os.path.join(tmpdir, "scrub_state.json")
+            try:
+                profile = {"config": {"pools": ["tank"], "simultaneous": 1}}
+                config = {}
+                none = sm.ScrubInfo(state=sm.ScrubState.NONE)
+                state_sequence = [{"tank": none}] * (sm.MAX_SCRUB_START_FAILURES + 2)
+                states_iter = iter(state_sequence)
+                with patch("profile_runner.get_all_pool_scrub_states") as mock_states:
+                    mock_states.side_effect = lambda: next(states_iter)
+                    with patch.object(sm, "start_scrub", return_value=False):
+                        with patch("profile_runner.time.sleep"):
+                            with capture_logs() as logs:
+                                rc = profile_runner.run_scrub_profile(profile, config, "/bin")
+                self.assertEqual(rc, 1)
+                self.assertTrue(any("Giving up on scrub" in msg for msg in logs))
+                self.assertTrue(any("gave up on" in msg and "tank" in msg for msg in logs))
             finally:
                 feature_config.SCRUB_STATE_PATH = orig_path
 

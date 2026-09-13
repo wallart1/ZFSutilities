@@ -1,4 +1,4 @@
-"""Tests for python/zfs_lock_manager.py two-node behavior."""
+"""Tests for python/zfs_lock_manager.py two-node behavior and script naming."""
 
 import os
 import sys
@@ -116,6 +116,36 @@ class TestRemoteCheckAndList(unittest.TestCase):
         self.assertIn("threeamigos/pve", datasets)
         remote_lock = next(lock for lock in locks if lock["dataset"] == "threeamigos/pve")
         self.assertEqual(remote_lock["host"], "stewie")
+
+
+class TestScriptName(unittest.TestCase):
+    """_script_name() must produce a name that appears in /proc cmdlines."""
+
+    def test_plain_script_returns_basename(self):
+        with patch.object(
+            sys, "argv", ["/usr/local/lib/zfsutilities/current/bin/zfsdailybackup"]
+        ):
+            self.assertEqual(zlm._script_name(), "zfsdailybackup")
+
+    def test_python_dash_m_package_returns_package_name(self):
+        # python -m pytest sets argv[0] to .../pytest/__main__.py, which
+        # never appears in the process cmdline; the package name does.
+        spec = MagicMock()
+        spec.name = "pytest.__main__"
+        main = sys.modules["__main__"]
+        with patch.object(sys, "argv", ["/usr/lib/python3/dist-packages/pytest/__main__.py"]):
+            with patch.object(main, "__spec__", spec, create=True):
+                self.assertEqual(zlm._script_name(), "pytest")
+
+    def test_python_dash_m_without_spec_falls_back_to_basename(self):
+        main = sys.modules["__main__"]
+        with patch.object(sys, "argv", ["/opt/somepkg/__main__.py"]):
+            with patch.object(main, "__spec__", None, create=True):
+                self.assertEqual(zlm._script_name(), "__main__.py")
+
+    def test_empty_argv_returns_python(self):
+        with patch.object(sys, "argv", []):
+            self.assertEqual(zlm._script_name(), "python")
 
 
 if __name__ == "__main__":

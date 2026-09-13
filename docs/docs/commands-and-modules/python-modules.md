@@ -585,7 +585,8 @@ offsite, restore, and retention runners.
 | `build_rsync_command(source, dest, remote_log_path=None)` | Build an rsync pull/push command |
 | `build_send_receive_command(...)` | Build the `bash` command for a ZFS send/receive step |
 | `build_pre_backup_command(cmd)` / `build_post_backup_command(cmd)` | Wrap user pre/post commands |
-| `build_retention_command(...)` | Build the `zfscleanup` invocation |
+| `build_retention_command(...)` | Build the `zfscleanup` invocation (accepts the dataset selection criteria forwarded to `zfsbuildfsarray`) |
+| `build_backup_prune_command(...)` | Build a non-fatal prune `BashStep` that prunes only the datasets the backup's active send/receive steps back up (destination names re-derived at prune time via `zfscleanup`'s explicit `prune_datasets` mode) |
 
 **Called modules / imported helpers:** none (stdlib only).
 
@@ -1494,7 +1495,7 @@ Scrub state parsing, queue management, and start/pause/resume/stop actions.
 | ----- | ------- |
 | `ScrubState` | Enum: `NONE`, `PENDING`, `SCANNING`, `PAUSED`, `FINISHED`, `CANCELED`, `UNKNOWN` |
 | `ScrubInfo` | Dataclass with state, progress, remaining time, ETA, errors |
-| `ScrubQueue` | Persistent pending/active/paused/finished pool sets with concurrency target |
+| `ScrubQueue` | Persistent pending/active/paused/finished pool sets with concurrency target; buckets are disjoint, stale entries are pruned by `tick()`, and `reload()` re-reads persisted state before each GUI/Dashboard tick |
 
 **Key functions:**
 
@@ -1700,7 +1701,7 @@ Reusable GTK helpers and utility functions used by nearly every page.
 | `DirtyTracker` | Generic save/revert dirty-state tracker |
 | `EditableListView` | Reusable ListStore with Add/Remove/Move |
 | `TreeSearch` | Debounced search with prev/next for a `Gtk.TreeView` |
-| `TextViewSearch` | Search/navigation for a `Gtk.TextView` |
+| `TextViewSearch` | Search/navigation for a `Gtk.TextView`; matches are stored as character offsets (not `Gtk.TextIter`s, which buffer edits invalidate) so prev/next keeps working as the buffer grows; `refresh()` folds new text into an active search without scrolling |
 | `LogPopoutWindow` | Independent window for popping out the info panel |
 | `UIStateManager` | Debounced save/restore of window geometry |
 
@@ -1797,6 +1798,12 @@ Python and bash code.
 Python client for the same advisory-lock scheme that `zfslockmanager` uses.
 Python mutators use this module so they can interoperate with bash scripts
 without conflicting on the same lock files.
+
+Stale-lock cleanup verifies that the script recorded in each lock file still
+appears in the holder's `/proc/<pid>/cmdline`. Locks recorded by a process
+launched via `python -m <package>` are matched by package name, since
+`argv[0]` in that case is the package's `__main__.py`, which never appears in
+the process cmdline.
 
 **Key functions / context managers:**
 

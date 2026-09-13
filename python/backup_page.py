@@ -9,6 +9,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 from command_builders import (
+    build_backup_prune_command,
     build_post_backup_command,
     build_pre_backup_command,
     build_retention_command,
@@ -310,6 +311,15 @@ def create_backup_page(app, ctx):
         "with a WARN instead of silently destroying them."
     )
 
+    _prune_tooltip = (
+        "Also filters the datasets visited by the post-backup prune step "
+        "(matched against dataset names on each pruned pool)."
+    )
+    for _sel_key in ("includes", "excludes", "startwith", "endwith"):
+        _sel_widget = app.backup_var_widgets.get(_sel_key)
+        if _sel_widget is not None:
+            _sel_widget.set_tooltip_text(_prune_tooltip)
+
     app.backup_pause_scrubs = Gtk.CheckButton(
         label="Pause scrubs on source/destination pools during each step"
     )
@@ -329,6 +339,11 @@ def create_backup_page(app, ctx):
 
     app.backup_post_retention = Gtk.CheckButton(label="Prune snapshots")
     app.backup_post_retention.set_active(post_cfg.get("run_retention", True))
+    app.backup_post_retention.set_tooltip_text(
+        "Apply retention policies after the backup. Visits only the datasets "
+        "the active send/receive steps back up; falls back to whole-pool "
+        "pruning of the configured pools when no send/receive steps are active."
+    )
     post_grid.attach(app.backup_post_retention, 0, 1, 2, 1)
 
     app.backup_post_script_enabled = Gtk.CheckButton(label="Run post-backup command")
@@ -636,16 +651,48 @@ def on_backup_run(app, ctx):
     post = backup_cfg["post_steps"]
     if post.get("run_retention", False):
         label = variables.get("label", "dailybackup")
-        pools = get_pool_names(ctx.config) or None
-        steps.append(
-            build_retention_command(
-                ctx.parent_dir,
-                label,
-                pools=pools,
-                dryrun=dryrun,
-                fatal=False,
+        active_sr = [(r[1], r[2]) for r in app.backup_sr_store if r[0]]
+        if active_sr:
+            log_msg(
+                f"INFO: Prune step restricted to the {len(active_sr)} send/receive "
+                "step(s)' datasets (derived at prune time)."
             )
-        )
+            steps.append(
+                build_backup_prune_command(
+                    ctx.parent_dir,
+                    label,
+                    active_sr,
+                    variables,
+                    dryrun=dryrun,
+                    fatal=False,
+                )
+            )
+        else:
+            pools = get_pool_names(ctx.config) or None
+            prune_selection = {
+                key: variables.get(key, "")
+                for key in ("includes", "excludes", "startwith", "endwith")
+                if variables.get(key, "").strip()
+            }
+            log_msg(
+                "INFO: No active send/receive steps; prune step falls back to "
+                "whole-pool pruning of the configured pools."
+            )
+            if prune_selection:
+                log_msg(
+                    "INFO: Dataset selection forwarded to prune step: "
+                    + " ".join(f"{k}={v}" for k, v in prune_selection.items())
+                )
+            steps.append(
+                build_retention_command(
+                    ctx.parent_dir,
+                    label,
+                    pools=pools,
+                    dryrun=dryrun,
+                    fatal=False,
+                    **prune_selection,
+                )
+            )
 
     # Finally: post-backup script (runs even on fatal error)
     has_finally = False

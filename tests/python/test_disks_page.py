@@ -141,6 +141,9 @@ class FakeTreeStore:
     def get_iter(self, path):
         return _TreeIter(path)
 
+    def set_value(self, it, col, value):
+        self._row_node(it.path)["row"][col] = value
+
 
 class FakeTreeSelection:
     """TreeSelection stand-in with configurable selected paths."""
@@ -457,7 +460,7 @@ class TestRefreshDisksPage(unittest.TestCase):
 class TestSelectionAndTopology(unittest.TestCase):
     """Selection changes drive the pool selector and topology view."""
 
-    def test_selection_change_selects_pool_and_populates_topology(self):
+    def test_selection_change_selects_pool_and_tints_topology_device(self):
         dp = _import_disks_page()
         topology = _topology(
             "pool1",
@@ -500,9 +503,12 @@ class TestSelectionAndTopology(unittest.TestCase):
 
         app._disks_pool_selector.set_active.assert_called_with(0)
         self.assertTrue(len(app.disks_topology_store.root) > 0)
-        self.assertEqual(app.disks_topology_view.get_selection().selected_paths, [(0, 0)])
+        # The topology pane shows teal text only — nothing is selected.
+        self.assertEqual(app.disks_topology_view.get_selection().selected_paths, [])
+        disk_row = app.disks_topology_store.root[0]["children"][0]["row"]
+        self.assertTrue(disk_row[dp.COL_T_HIGHLIGHT])
 
-    def test_topology_selection_change_selects_disk_row(self):
+    def test_topology_selection_change_does_not_select_disk_row(self):
         dp = _import_disks_page()
         topology = _topology(
             "pool1",
@@ -534,8 +540,10 @@ class TestSelectionAndTopology(unittest.TestCase):
         selection.paths = [(0, 0)]
         dp._on_topology_selection_changed(selection, app)
 
-        self.assertEqual(disk_selection.selected_paths, [0])
-        self.assertEqual(app.disks_view.scroll_to_cell.call_args_list[-1][0][0], 0)
+        # Teal highlight is applied, but no inventory row is selected.
+        self.assertEqual(disk_selection.selected_paths, [])
+        self.assertEqual(app.disks_view.scroll_to_cell.call_args_list, [])
+        self.assertTrue(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
 
     def test_pool_selector_change_highlights_member_disks(self):
         dp = _import_disks_page()
@@ -748,13 +756,6 @@ class TestTopologySelectionHighlight(unittest.TestCase):
         self.assertFalse(rows[1][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
 
-    def test_disk_node_selection_still_selects_inventory_row(self):
-        dp = _import_disks_page()
-        app = self._highlight_app()
-        self._select(dp, app, (0, 0, 1))
-        select_path = app.disks_view.get_selection.return_value.select_path
-        self.assertTrue(select_path.called)
-
     def test_empty_topology_selection_restores_pool_highlight(self):
         dp = _import_disks_page()
         app = self._highlight_app()
@@ -777,6 +778,163 @@ class TestTopologySelectionHighlight(unittest.TestCase):
         self.assertTrue(rows[0][dp.COL_D_HIGHLIGHT])
         self.assertTrue(rows[1][dp.COL_D_HIGHLIGHT])
         self.assertFalse(rows[2][dp.COL_D_HIGHLIGHT])
+
+
+class TestDiskSelectionTopologyHighlight(unittest.TestCase):
+    """Selecting an inventory disk tints its devices teal in the topology pane."""
+
+    def _app(
+        self,
+        leaves=("/dev/sdb1", "/dev/sdb2", "/dev/sdc1"),
+        inventory_paths=("/dev/sdb", "/dev/sdb1", "/dev/sdb2", "/dev/sdc1"),
+        topologies=None,
+    ):
+        disks = [_disk(path=p, pools=["pool1"]) for p in inventory_paths]
+        if topologies is None:
+            topologies = {"pool1": _leaves_topology("pool1", leaves)}
+        app = _make_app(disks=disks, topologies=topologies)
+        app.disks_store = FakeListStore([_disk_row(p, "pool1") for p in inventory_paths])
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+        dp = _import_disks_page()
+        dp._repopulate_topology_for_selected_pool(app)
+        return dp, app
+
+    def _select_disk(self, dp, app, row):
+        selection = app.disks_view.get_selection.return_value
+        selection.get_selected_rows.return_value = (app.disks_store, [row])
+        dp._on_disk_selection_changed(selection, app)
+
+    def _leaf_rows(self, app):
+        return [c["row"] for c in app.disks_topology_store.root[0]["children"][0]["children"]]
+
+    def test_whole_disk_selection_tints_all_its_devices(self):
+        dp, app = self._app()
+        self._select_disk(dp, app, 0)  # /dev/sdb
+        leaf_flags = [row[dp.COL_T_HIGHLIGHT] for row in self._leaf_rows(app)]
+        self.assertEqual(leaf_flags, [True, True, False])
+        # Pool and vdev rows are never tinted.
+        self.assertFalse(app.disks_topology_store.root[0]["row"][dp.COL_T_HIGHLIGHT])
+        mirror_row = app.disks_topology_store.root[0]["children"][0]["row"]
+        self.assertFalse(mirror_row[dp.COL_T_HIGHLIGHT])
+
+    def test_partition_selection_tints_only_that_device(self):
+        dp, app = self._app()
+        self._select_disk(dp, app, 1)  # /dev/sdb1
+        leaf_flags = [row[dp.COL_T_HIGHLIGHT] for row in self._leaf_rows(app)]
+        self.assertEqual(leaf_flags, [True, False, False])
+
+    def test_topology_selection_is_never_modified_by_disk_selection(self):
+        dp, app = self._app()
+        self._select_disk(dp, app, 0)
+        self.assertEqual(app.disks_topology_view.get_selection().selected_paths, [])
+
+    def test_clearing_disk_selection_clears_topology_highlights(self):
+        dp, app = self._app()
+        self._select_disk(dp, app, 0)
+        self.assertTrue(any(row[dp.COL_T_HIGHLIGHT] for row in self._leaf_rows(app)))
+        selection = app.disks_view.get_selection.return_value
+        selection.get_selected_rows.return_value = (app.disks_store, [])
+        dp._on_disk_selection_changed(selection, app)
+        self.assertFalse(any(row[dp.COL_T_HIGHLIGHT] for row in self._leaf_rows(app)))
+
+    def test_pool_switch_reapplies_tint_for_selected_disk(self):
+        topologies = {
+            "pool1": _leaves_topology("pool1", ("/dev/sdb1",)),
+            "pool2": _leaves_topology("pool2", ("/dev/sdb2",)),
+        }
+        dp, app = self._app(
+            inventory_paths=("/dev/sdb",),
+            topologies=topologies,
+        )
+        self._select_disk(dp, app, 0)  # /dev/sdb
+        leaf = app.disks_topology_store.root[0]["children"][0]["children"][0]["row"]
+        self.assertTrue(leaf[dp.COL_T_HIGHLIGHT])
+
+        app._disks_pool_selector.get_active_text.return_value = "pool2"
+        dp._repopulate_topology_for_selected_pool(app)
+
+        leaf = app.disks_topology_store.root[0]["children"][0]["children"][0]["row"]
+        self.assertEqual(leaf[dp.COL_T_NAME], "/dev/sdb2")
+        self.assertTrue(leaf[dp.COL_T_HIGHLIGHT])
+
+    def test_topology_cell_highlight_func_sets_foreground(self):
+        dp = _import_disks_page()
+        renderer = MagicMock()
+        model = MagicMock()
+        tree_iter = MagicMock()
+
+        model.get_value.return_value = True
+        dp._topology_cell_highlight_func(MagicMock(), renderer, model, tree_iter)
+        renderer.set_property.assert_called_with("foreground", dp.POOL_MEMBER_HIGHLIGHT_FG)
+
+        renderer.reset_mock()
+        model.get_value.return_value = False
+        dp._topology_cell_highlight_func(MagicMock(), renderer, model, tree_iter)
+        renderer.set_property.assert_called_with("foreground", None)
+
+
+class TestTopologyNodeMatchesDisk(unittest.TestCase):
+    """_topology_node_matches_disk() inventory-to-topology path matching."""
+
+    def test_exact_match(self):
+        dp = _import_disks_page()
+        self.assertTrue(dp._topology_node_matches_disk("/dev/sda", "/dev/sda"))
+
+    def test_partition_leaf_matches_whole_disk(self):
+        dp = _import_disks_page()
+        self.assertTrue(dp._topology_node_matches_disk("/dev/sda1", "/dev/sda"))
+
+    def test_nvme_partition_leaf_matches_whole_disk(self):
+        dp = _import_disks_page()
+        self.assertTrue(dp._topology_node_matches_disk("/dev/nvme0n1p1", "/dev/nvme0n1"))
+
+    def test_basename_match(self):
+        dp = _import_disks_page()
+        self.assertTrue(dp._topology_node_matches_disk("/dev/disk/by-id/sda", "/dev/sda"))
+
+    def test_unrelated_disk_does_not_match(self):
+        dp = _import_disks_page()
+        self.assertFalse(dp._topology_node_matches_disk("/dev/sdc1", "/dev/sdb"))
+
+    def test_similar_name_does_not_match(self):
+        dp = _import_disks_page()
+        self.assertFalse(dp._topology_node_matches_disk("/dev/sdaa", "/dev/sda"))
+
+    def test_non_device_node_never_matches(self):
+        dp = _import_disks_page()
+        self.assertFalse(dp._topology_node_matches_disk("mirror-0", "/dev/sda"))
+        self.assertFalse(dp._topology_node_matches_disk("pool1", "/dev/sda"))
+
+
+def _leaves_topology(pool_name, leaves):
+    """Build a topology with a single mirror vdev holding one disk leaf per name."""
+    return _topology(
+        pool_name,
+        children=[
+            TopologyNode(
+                name="mirror-0",
+                vdev_type="mirror",
+                state="ONLINE",
+                read=0,
+                write=0,
+                cksum=0,
+                ashift=None,
+                children=[
+                    TopologyNode(
+                        name=name,
+                        vdev_type="disk",
+                        state="ONLINE",
+                        read=0,
+                        write=0,
+                        cksum=0,
+                        ashift=None,
+                        children=[],
+                    )
+                    for name in leaves
+                ],
+            )
+        ],
+    )
 
 
 class TestPathMatchesAnyDevice(unittest.TestCase):

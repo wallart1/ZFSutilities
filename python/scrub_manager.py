@@ -635,6 +635,10 @@ def attach_step_scrub_callbacks(
 # ScrubQueue — manages pending / active / paused / finished buckets
 # ---------------------------------------------------------------------------
 
+# Consecutive failed start/resume attempts on a queued pool before the queue
+# gives up on that pool (tick() runs every ~10 s in profile_runner).
+MAX_SCRUB_START_FAILURES = 3
+
 
 class ScrubQueue:
     """Manages a queue of pool scrubs with a concurrency target.
@@ -669,6 +673,16 @@ class ScrubQueue:
         )
 
     # -- Public API --
+
+    def reload(self):
+        """Re-read the persisted queue state from disk.
+
+        Long-lived instances (the GUI Pools tab, the Dashboard) call this before
+        each tick so that changes made by another process (e.g., a headless
+        scrub profile) are reflected instead of being overwritten by a stale
+        in-memory copy on the next save.
+        """
+        self._load()
 
     def set_target(self, n: int):
         """Set the desired number of simultaneous scrubs."""
@@ -706,12 +720,15 @@ class ScrubQueue:
         """Add pools to the pending queue.
 
         Active pools are left alone. Pools that are currently paused are moved
-        back to pending (re-queued) so Start Scrub can restart them.
+        back to pending (re-queued) so Start Scrub can restart them. Pools that
+        finished a previous scrub are removed from the finished bucket so the
+        buckets stay disjoint and the summary does not double-count them.
         """
         added = []
         for name in pool_names:
             if name in self.active:
                 continue
+            self.finished.discard(name)
             if name in self.paused:
                 self.paused.discard(name)
                 self.paused_by_user.discard(name)
@@ -758,6 +775,25 @@ class ScrubQueue:
         if to_resume:
             log_msg(f"INFO: Scrubs resumed: {', '.join(sorted(to_resume))}")
             self._save()
+
+    def _record_start_failure(self, pool_name: str) -> bool:
+        """Record a failed start/resume attempt for a queued pool.
+
+        Returns True when the pool has exhausted MAX_SCRUB_START_FAILURES
+        consecutive attempts and is dropped from the queue (added to
+        ``given_up``); the caller must not re-queue it.
+        """
+        count = self._start_failures.get(pool_name, 0) + 1
+        if count >= MAX_SCRUB_START_FAILURES:
+            self._start_failures.pop(pool_name, None)
+            self.given_up.add(pool_name)
+            log_msg(
+                f"WARN: Giving up on scrub for '{pool_name}' after "
+                f"{count} failed start attempts"
+            )
+            return True
+        self._start_failures[pool_name] = count
+        return False
 
     def tick(self, states: dict[str, ScrubInfo]):
         """Reconcile queue against live zpool status and target.
@@ -870,6 +906,9 @@ class ScrubQueue:
                     self.pending.discard(candidate)
                     if resume_scrub(candidate):
                         self.active.add(candidate)
+                        self._start_failures.pop(candidate, None)
+                    elif self._record_start_failure(candidate):
+                        continue  # Given up — the slot stays free for the next candidate
                     else:
                         self.pending.add(candidate)
                         break
@@ -884,6 +923,9 @@ class ScrubQueue:
                     self.pending.discard(candidate)
                     if start_scrub(candidate):
                         self.active.add(candidate)
+                        self._start_failures.pop(candidate, None)
+                    elif self._record_start_failure(candidate):
+                        continue  # Given up — the slot stays free for the next candidate
                     else:
                         # Failed to start — put back in pending for retry
                         self.pending.add(candidate)
@@ -908,6 +950,9 @@ class ScrubQueue:
                 if info and info.state == ScrubState.PAUSED:
                     if resume_scrub(candidate):
                         self.active.add(candidate)
+                        self._start_failures.pop(candidate, None)
+                    elif self._record_start_failure(candidate):
+                        pass  # Given up — the while loop tries the next paused pool
                     else:
                         self.paused.add(candidate)
                         break
@@ -935,11 +980,21 @@ class ScrubQueue:
         # 3. Prune finished entries that are no longer in any interesting state
         for pool_name in list(self.finished):
             info = states.get(pool_name)
-            if info and info.state == ScrubState.SCANNING:
+            if info is None:
+                # Pool no longer exists (or is not reported by zpool list) —
+                # drop the stale finished entry so it does not inflate counts.
+                self.finished.discard(pool_name)
+            elif info.state == ScrubState.SCANNING:
                 # A new scrub was started on this pool
                 self.finished.discard(pool_name)
                 self.active.add(pool_name)
                 log_msg(f"INFO: New scrub detected on '{pool_name}'")
+
+        # Heal stale paused_by_user entries (e.g., left behind when a pool was
+        # re-queued or finished without clearing the user-pause flag).
+        stale_user_pause = self.paused_by_user - self.paused
+        if stale_user_pause:
+            self.paused_by_user -= stale_user_pause
 
         # Synchronize start times with active set
         for pool_name in list(self._start_times):
@@ -958,6 +1013,8 @@ class ScrubQueue:
         self.paused: set[str] = set()
         self.finished: set[str] = set()
         self.paused_by_user: set[str] = set()
+        self.given_up: set[str] = set()
+        self._start_failures: dict[str, int] = {}
         self.target = max(1, target)
         self.order: list[str] = []
         self._start_times: dict[str, float] = {}

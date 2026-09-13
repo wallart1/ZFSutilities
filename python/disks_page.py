@@ -4,7 +4,6 @@ Slow block-device and ZFS calls run in a background thread so the GTK main
 thread stays responsive.
 """
 
-import contextlib
 import os
 import shlex
 import subprocess
@@ -47,8 +46,10 @@ from workload_profiles import (
 )
 from zfs_repository import TopologyNode, ZfsRepository
 
-# Foreground color used to highlight every disk that belongs to the pool
-# currently selected in the Pool Topology section.
+# Foreground color used to tint the rows in one pane that correlate with the
+# current selection in the other: disks of the selected pool (or of the
+# selected topology node) in the Disk Inventory, and the devices of the
+# selected inventory disk in the Pool Topology.
 POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
 
 # Disk pane ListStore columns:
@@ -71,7 +72,8 @@ POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
 ) = range(12)
 
 # Topology pane TreeStore columns:
-#   0 name, 1 type, 2 state, 3 read, 4 write, 5 cksum, 6 ashift
+#   0 name, 1 type, 2 state, 3 read, 4 write, 5 cksum, 6 ashift,
+#   7 highlight
 (
     COL_T_NAME,
     COL_T_TYPE,
@@ -80,7 +82,8 @@ POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
     COL_T_WRITE,
     COL_T_CKSUM,
     COL_T_ASHIFT,
-) = range(7)
+    COL_T_HIGHLIGHT,
+) = range(8)
 
 # Dataset tuning pane ListStore columns:
 #   0 name, 1 type, 2 used (size), 3 recordsize, 4 compression, 5 atime,
@@ -373,7 +376,7 @@ def create_disks_page(app):
     controls.pack_start(hint, False, False, 0)
     mid_box.pack_start(controls, False, False, 0)
 
-    app.disks_topology_store = Gtk.TreeStore(str, str, str, str, str, str, str)
+    app.disks_topology_store = Gtk.TreeStore(str, str, str, str, str, str, str, bool)
     app.disks_topology_view = Gtk.TreeView(model=app.disks_topology_store)
     app.disks_topology_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.disks_topology_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
@@ -391,6 +394,7 @@ def create_disks_page(app):
     for col_idx, title_text, width in topo_cols:
         renderer = Gtk.CellRendererText()
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
+        col.set_cell_data_func(renderer, _topology_cell_highlight_func)
         configure_treeview_column(col, width=width)
         app.disks_topology_view.append_column(col)
 
@@ -576,72 +580,27 @@ def on_disks_refresh(app):
 
 
 def _on_disk_selection_changed(selection, app):
-    """When a disk/partition is selected, select its pool and node in topology."""
+    """When a disk/partition is selected, tint its devices in the topology.
+
+    The pool selector still switches to the disk's pool, but the topology
+    pane never selects a node: the devices residing on the selected disk are
+    tinted teal instead (see _sync_topology_highlight_from_inventory).
+    """
     if getattr(app, "_disks_syncing_selection", False):
         return
     model, pathlist = selection.get_selected_rows()
     if pathlist:
         tree_iter = model.get_iter(pathlist[0])
         pools_str = model.get_value(tree_iter, COL_D_POOLS)
-        selected_path = model.get_value(tree_iter, COL_D_NAME)
         if pools_str:
             first_pool = pools_str.split(", ")[0]
             selector = app._disks_pool_selector
             if selector.get_active_text() != first_pool:
                 _set_combo_active_text(selector, first_pool)
             _repopulate_topology_for_selected_pool(app)
-            _select_topology_node_by_name(app, selected_path)
+    else:
+        _clear_topology_highlights(app)
     update_disks_button_sensitivity(app)
-
-
-@contextlib.contextmanager
-def _suppress_selection_sync(app):
-    """Prevent recursive selection synchronization between the two panes."""
-    app._disks_syncing_selection = True
-    try:
-        yield
-    finally:
-        app._disks_syncing_selection = False
-
-
-def _select_disk_row_by_path(app, path: str) -> bool:
-    """Select the inventory row whose device path matches *path*."""
-    store = app.disks_store
-    it = store.get_iter_first()
-    while it:
-        if store.get_value(it, COL_D_NAME) == path:
-            tree_path = store.get_path(it)
-            with _suppress_selection_sync(app):
-                app.disks_view.get_selection().select_path(tree_path)
-                app.disks_view.scroll_to_cell(tree_path, None, False, 0, 0)
-            return True
-        it = store.iter_next(it)
-    return False
-
-
-def _select_topology_node_by_name(app, name: str) -> bool:
-    """Select the topology node whose COL_T_NAME matches *name*."""
-    store = app.disks_topology_store
-
-    def _find(parent_iter):
-        it = store.iter_children(parent_iter)
-        while it:
-            if store.get_value(it, COL_T_NAME) == name:
-                return it
-            found = _find(it)
-            if found is not None:
-                return found
-            it = store.iter_next(it)
-        return None
-
-    it = _find(None)
-    if it is None:
-        return False
-    tree_path = store.get_path(it)
-    with _suppress_selection_sync(app):
-        app.disks_topology_view.get_selection().select_path(tree_path)
-        app.disks_topology_view.scroll_to_cell(tree_path, None, False, 0, 0)
-    return True
 
 
 def _on_topology_selection_changed(selection, app):
@@ -650,8 +609,8 @@ def _on_topology_selection_changed(selection, app):
     A device node highlights that device, a vdev node highlights every device
     in the vdev, and the pool node highlights every device in the pool. An
     empty selection (or a node with no devices) restores the pool-wide
-    highlight. Device nodes additionally keep the existing behavior of
-    selecting the matching inventory row.
+    highlight. The inventory selection is never modified; the correlation is
+    teal foreground text only.
     """
     if getattr(app, "_disks_syncing_selection", False):
         return
@@ -663,9 +622,6 @@ def _on_topology_selection_changed(selection, app):
             _highlight_topology_devices(app, device_paths)
         else:
             _highlight_pool_disks(app, app._disks_pool_selector.get_active_text())
-        node_name = model.get_value(tree_iter, COL_T_NAME)
-        if node_name and node_name.startswith("/dev/"):
-            _select_disk_row_by_path(app, node_name)
     else:
         _highlight_pool_disks(app, app._disks_pool_selector.get_active_text())
     update_disks_button_sensitivity(app)
@@ -686,6 +642,7 @@ def _repopulate_topology_for_selected_pool(app):
         _populate_topology_store(app.disks_topology_store, None, data.topologies[pool_name])
         app.disks_topology_view.expand_all()
     _highlight_pool_disks(app, pool_name)
+    _sync_topology_highlight_from_inventory(app)
 
 
 def _load_dataset_tuning(app, pool_name):
@@ -958,6 +915,88 @@ def _disk_cell_highlight_func(column, renderer, model, tree_iter, data=None):
         renderer.set_property("foreground", None)
 
 
+def _topology_cell_highlight_func(column, renderer, model, tree_iter, data=None):
+    """Tint the foreground text of topology devices residing on the selected disk."""
+    highlighted = model.get_value(tree_iter, COL_T_HIGHLIGHT)
+    if highlighted:
+        renderer.set_property("foreground", POOL_MEMBER_HIGHLIGHT_FG)
+    else:
+        renderer.set_property("foreground", None)
+
+
+def _topology_node_matches_disk(node_name: str, disk_path: str) -> bool:
+    """Return True if topology node *node_name* is *disk_path* or resides on it.
+
+    Mirrors _path_matches_any_device in the opposite direction: a whole-disk
+    inventory row matches its own leaf and any partition leaf (``/dev/sda``
+    matches ``/dev/sda1``; ``/dev/nvme0n1`` matches ``/dev/nvme0n1p1``), plus
+    basename and realpath equality for by-id leaf names. Non-device node
+    names (pool, vdev) never match.
+    """
+    if not isinstance(node_name, str) or not node_name.startswith("/dev/"):
+        return False
+    if node_name == disk_path or os.path.basename(node_name) == os.path.basename(disk_path):
+        return True
+    if node_name.startswith(disk_path):
+        rest = node_name[len(disk_path):]
+        if rest.isdigit() or (rest.startswith("p") and rest[1:].isdigit()):
+            return True
+    try:
+        return os.path.realpath(node_name) == os.path.realpath(disk_path)
+    except OSError:
+        return False
+
+
+def _highlight_topology_nodes_for_disk(app, disk_path: str) -> None:
+    """Set the teal highlight on every topology device residing on *disk_path*."""
+    store = app.disks_topology_store
+
+    def _walk(parent_iter):
+        it = store.iter_children(parent_iter)
+        while it:
+            name = store.get_value(it, COL_T_NAME)
+            store.set_value(it, COL_T_HIGHLIGHT, _topology_node_matches_disk(name, disk_path))
+            _walk(it)
+            it = store.iter_next(it)
+
+    _walk(None)
+
+
+def _clear_topology_highlights(app) -> None:
+    """Clear the teal highlight on every topology row."""
+    store = app.disks_topology_store
+
+    def _walk(parent_iter):
+        it = store.iter_children(parent_iter)
+        while it:
+            store.set_value(it, COL_T_HIGHLIGHT, False)
+            _walk(it)
+            it = store.iter_next(it)
+
+    _walk(None)
+
+
+def _sync_topology_highlight_from_inventory(app) -> None:
+    """Tint the topology devices that reside on the selected inventory disk.
+
+    Freshly repopulated topology rows are always untinted, so with no
+    inventory selection there is nothing to do; an explicit clear is only
+    needed when the disk selection is removed without repopulating (see
+    _on_disk_selection_changed). The topology pane only ever shows teal
+    text, never a selection of its own.
+    """
+    selection = app.disks_view.get_selection()
+    rows = selection.get_selected_rows()
+    if not isinstance(rows, tuple) or len(rows) != 2 or not rows[1]:
+        return
+    model, pathlist = rows
+    tree_iter = model.get_iter(pathlist[0])
+    disk_path = model.get_value(tree_iter, COL_D_NAME)
+    if not isinstance(disk_path, str):
+        return
+    _highlight_topology_nodes_for_disk(app, disk_path)
+
+
 def _topology_subtree_device_paths(model, tree_iter) -> set[str]:
     """Collect ``/dev/`` device paths from the topology subtree at *tree_iter*."""
     paths = set()
@@ -1019,6 +1058,7 @@ def _populate_topology_store(store, parent_iter, node: TopologyNode) -> None:
         str(node.write),
         str(node.cksum),
         f"{1 << node.ashift} bytes" if node.ashift is not None else "-",
+        False,
     ]
     it = store.append(parent_iter, row)
     for child in node.children:

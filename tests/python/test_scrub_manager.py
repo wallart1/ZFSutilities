@@ -398,6 +398,68 @@ class TestScrubQueue(unittest.TestCase):
         self.assertNotIn("tank", q.paused)
         self.assertNotIn("tank", q.paused_by_user)
 
+    def test_add_pending_removes_finished(self):
+        """Re-queued pools must leave the finished bucket so buckets stay disjoint."""
+        q = sm.ScrubQueue(target=1)
+        q.finished.add("tank")
+        q.add_pending(["tank"])
+        self.assertIn("tank", q.pending)
+        self.assertNotIn("tank", q.finished)
+        summary = q.summary()
+        self.assertEqual(summary["pending"], 1)
+        self.assertEqual(summary["finished"], 0)
+
+    def test_tick_prunes_finished_for_missing_pool(self):
+        """Finished entries for pools that no longer exist must not inflate counts."""
+        q = sm.ScrubQueue(target=1)
+        q.finished.add("ghost")
+        q.tick({})
+        self.assertNotIn("ghost", q.finished)
+        self.assertEqual(q.summary()["finished"], 0)
+
+    def test_reload_picks_up_external_changes(self):
+        """A long-lived instance must see state saved by another instance."""
+        q1 = sm.ScrubQueue(target=1)
+        q1.add_pending(["tank"])
+        q2 = sm.ScrubQueue(target=1)
+        q2.add_pending(["data"])
+        self.assertNotIn("data", q1.pending)
+        q1.reload()
+        self.assertIn("data", q1.pending)
+        self.assertIn("tank", q1.pending)
+
+    def test_tick_prunes_stale_paused_by_user(self):
+        """paused_by_user entries for pools not in paused are healed."""
+        q = sm.ScrubQueue(target=1)
+        q.paused_by_user.add("tank")
+        q.tick({})
+        self.assertNotIn("tank", q.paused_by_user)
+
+    def test_tick_gives_up_after_repeated_start_failures(self):
+        """A pending pool whose scrub never starts is dropped after N attempts."""
+        q = sm.ScrubQueue(target=1)
+        q.add_pending(["tank"])
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.NONE)}
+        with patch.object(sm, "start_scrub", return_value=False) as mock_start:
+            for _ in range(sm.MAX_SCRUB_START_FAILURES):
+                q.tick(states)
+        self.assertEqual(mock_start.call_count, sm.MAX_SCRUB_START_FAILURES)
+        self.assertNotIn("tank", q.pending)
+        self.assertIn("tank", q.given_up)
+
+    def test_start_failure_counter_resets_on_success(self):
+        """A successful start clears the failure counter for the pool."""
+        q = sm.ScrubQueue(target=1)
+        q.add_pending(["tank"])
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.NONE)}
+        with patch.object(sm, "start_scrub", side_effect=[False, True]):
+            q.tick(states)
+            self.assertIn("tank", q.pending)
+            self.assertNotIn("tank", q.given_up)
+            q.tick(states)
+        self.assertIn("tank", q.active)
+        self.assertEqual(q._start_failures, {})
+
     def test_set_target(self):
         q = sm.ScrubQueue(target=1)
         q.set_target(3)

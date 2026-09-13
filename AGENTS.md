@@ -383,6 +383,93 @@ For detailed coding policies, please refer to @docs/docs/developer-guide/coding-
 
 ---
 
+## Recent Session Notes (2026-09-12)
+
+- **Disks page bidirectional teal-only Inventory ↔ Topology correlation** —
+  selecting a disk/partition in the Disk Inventory now tints every topology
+  device residing on it (whole disk tints its partitions; partition tints
+  only itself) via a new `COL_T_HIGHLIGHT` column and teal cell-data function
+  in the Pool Topology pane (`_topology_node_matches_disk`,
+  `_highlight_topology_nodes_for_disk`, `_sync_topology_highlight_from_inventory`
+  in `python/disks_page.py`); the tint re-applies after every pool
+  repopulation so it follows the displayed pool, and the pool-selector
+  auto-switch to the disk's pool is kept. All cross-pane *selection* syncing
+  was removed (`_select_topology_node_by_name`, `_select_disk_row_by_path`,
+  `_suppress_selection_sync` deleted): the correlation is teal foreground
+  text only, nothing in the other pane is ever selected or scrolled. Tests in
+  `tests/python/test_disks_page.py` (28 → 43); docs updated in
+  `docs/docs/user-guide/gtk-gui.md` and `python/.disks_page_progress.md`.
+- **Single-process `pytest tests/python` is green** — fixed four order-dependent
+  failures that only surfaced under pytest's definition-order (the official
+  per-file unittest runner orders methods alphabetically and masked them):
+  `test_backup_page.py` gained its missing sys.path bootstrap and its
+  `Gtk.Frame()` call-count assertions now reset the shared mock first;
+  `test_profile_dialogs.py::test_shows_error_when_no_profiles` patches
+  `gui_helpers.Gtk.MessageDialog` on the module instance it imported (other
+  suites evict `gui_helpers` from `sys.modules`, so name-based patching can
+  hit a different object); `test_profile_integration.py`'s forked worker no
+  longer patches the global `subprocess.Popen` (it patches
+  `profile_runner.subprocess` with a namespace shim delegating to the real
+  module) so the child's own `subprocess.run` users keep working with a cold
+  node-config cache. Root-caused a real production bug along the way:
+  `zfs_lock_manager._script_name()` recorded `__main__.py` for processes
+  launched via `python -m <package>`, so `_is_stale()` treated their locks as
+  stale and deleted them; it now returns the package name. New
+  `tests/python/conftest.py` puts `tests/python` and repo `python/` on
+  `sys.path` so `python3 -m pytest tests/python` works from the repo root.
+  New `TestScriptName` suite in `tests/python/test_zfs_lock_manager.py`;
+  docs updated in `docs/docs/developer-guide/testing.md` (single-process
+  pytest expectation + mock_gtk hazards) and
+  `docs/docs/commands-and-modules/python-modules.md`.
+
+- **Prune step restricted to the backup's dataset list** — The Backup tab's
+  post-backup prune step no longer sweeps every dataset on every configured
+  pool. New `build_backup_prune_command` (`python/command_builders.py`)
+  generates a script that, for each active send/receive step, re-runs
+  `zfsbuildfsarray` on the step's source subtree with the Advanced
+  dataset-selection criteria, maps each dataset to its destination name with
+  `remove_leading_qualifiers` (same rule as `zfs-send-receive:426`), dedups,
+  and prunes exactly that list through a new explicit `prune_datasets` mode in
+  `bin/zfscleanup` (skips pool discovery/`buildfsarray` entirely). Adopted by
+  `on_backup_run` (`python/backup_page.py`) and `run_backup_profile`
+  (`python/profile_runner.py`); when no send/receive steps are active the prune
+  falls back to the previous whole-pool `build_retention_command` behavior.
+  Standalone retention profiles and the Retention tab remain pool-based. New
+  tests in `tests/test-zfscleanup`, `tests/python/test_command_builders.py`,
+  `test_backup_page.py`, `test_profile_runner.py`; docs updated in
+  `commands.md` (zfscleanup), `daily-backup.md`, `gtk-gui.md`, `profiles.md`.
+- **Backup Advanced dataset selection now applies to the prune step** — The
+  Backup tab's Advanced dataset-selection criteria (`includes`, `excludes`,
+  `startwith`, `endwith`) were previously only forwarded to `zfs-send-receive`;
+  the post-backup prune step pruned every dataset on the pruned pools.
+  `build_retention_command` (`python/command_builders.py`) now accepts all four
+  criteria and emits them for `zfscleanup`; `backup_page.on_backup_run` and
+  `profile_runner.run_backup_profile` forward them from the saved variables,
+  and the Advanced entry widgets show a tooltip noting the prune-step effect.
+  `bin/zfscleanup` honors the four globals (default-if-unset, forwarded to
+  `zfsbuildfsarray`) and its hard-coded `temp/temp` exclusion was removed — no
+  built-in dataset names remain; callers pass exclusions explicitly.
+  `bin/zfssendoffsite` keeps its hard-coded `excludes=('temp/temp')`, which is
+  intentional: as a user-invoked orchestrator script its installation-specific
+  pool names are configuration, per the orchestrator exemption in the coding
+  policies. New/updated tests in `tests/test-zfscleanup`,
+  `tests/python/test_command_builders.py`, `tests/python/test_backup_page.py`,
+  and `tests/python/test_profile_runner.py`; docs updated in
+  `commands.md` (zfscleanup), `daily-backup.md`, and `gtk-gui.md`.
+- **Log viewer search navigation fix** — The Logs-tab (and info-panel) search
+  Previous/Next buttons silently stopped working once the viewed buffer was
+  modified after a search (most visibly when a *Running* log's 1-second tail
+  appended new output while the user scrolled). `TextViewSearch`
+  (`python/gui_helpers.py`) stored matches as `Gtk.TextIter` copies, which GTK
+  invalidates on every buffer mutation. Matches are now stored as character
+  offsets resolved to fresh iters at use time (clamped past end-of-buffer),
+  and a new `refresh()` method re-runs the active query without scrolling.
+  `_tail_log_file` (`python/logs_page.py`) calls `refresh()` when appended
+  text contains the query, so new occurrences are highlighted without
+  disturbing the user's scroll position. New `TestTextViewSearch` suite in
+  `tests/python/test_gui_helpers.py` and tail-refresh tests in
+  `tests/python/test_logs_page.py`.
+
 ## Recent Session Notes (2026-09-11)
 
 - **Disks page dataset-tuning host gating** — Apply Profile and Rewrite Data
