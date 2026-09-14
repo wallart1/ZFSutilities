@@ -6,6 +6,7 @@ import re
 import signal
 import subprocess
 import threading
+import time
 from datetime import datetime
 
 import gi
@@ -292,6 +293,64 @@ def _get_pool_health(repo=None):
             }
         )
     return pools
+
+
+# SSD/NVMe wear warnings. Wear changes slowly, so the inventory (which probes
+# every SSD/NVMe with smartctl) is TTL-cached — the 30 s dashboard refresh
+# must not re-run a full smartctl sweep.
+DISK_WEAR_WARNING_THRESHOLD = 80
+_DISK_WEAR_CACHE_TTL = 300.0
+_disk_wear_cache = {"time": 0.0, "inventory": None}
+_disk_wear_lock = threading.Lock()
+
+
+def _format_disk_wear_warnings(disks):
+    """Build warning strings for disks at/above the wear threshold.
+
+    Partitions inherit the parent disk's wear, so each physical disk is
+    reported once (keyed by parent_path).
+    """
+    warnings = []
+    seen = set()
+    for disk in disks:
+        wear = disk.wear_percent
+        if wear is None or wear < DISK_WEAR_WARNING_THRESHOLD:
+            continue
+        key = disk.parent_path or disk.path
+        if key in seen:
+            continue
+        seen.add(key)
+        model = f" ({disk.model})" if disk.model else ""
+        warnings.append(f'SSD "{disk.path}"{model} wear at {wear}%')
+    return warnings
+
+
+def _get_disk_wear_warnings(app):
+    """Wear warnings from the disk inventory, TTL-cached.
+
+    Runs in the dashboard's background gather thread; smartctl probes are
+    slow, so failures keep the previous cached inventory.
+    """
+    now = time.monotonic()
+    with _disk_wear_lock:
+        fresh = (
+            _disk_wear_cache["inventory"] is not None
+            and now - _disk_wear_cache["time"] < _DISK_WEAR_CACHE_TTL
+        )
+        if fresh:
+            inventory = _disk_wear_cache["inventory"]
+        else:
+            try:
+                inventory = app.ctx.disk_repository.disk_inventory()
+            except Exception as exc:
+                log_msg(f"WARN: Could not read disk wear data: {exc}")
+                inventory = _disk_wear_cache["inventory"]
+            if inventory is not None:
+                _disk_wear_cache["inventory"] = inventory
+                _disk_wear_cache["time"] = now
+    if inventory is None:
+        return []
+    return _format_disk_wear_warnings(inventory.disks)
 
 
 def _get_scrub_date(pool_name, repo=None):
@@ -1217,6 +1276,7 @@ def _gather_dashboard_data(app):
         warnings.append("Checkagainst table is empty — configure in the Checkagainst tab")
     if stale_count > 0:
         warnings.append(f"Stale lock files: {stale_count}")
+    warnings.extend(_get_disk_wear_warnings(app))
 
     config_data = _gather_config_section_data(app)
 
@@ -1825,7 +1885,22 @@ def _collect_running_tasks(app):
             }
         )
 
-    # 5. Legacy scheduled tasks (profile_runner.py processes not yet using locks)
+    # 5. Disk surface tests (SMART self-tests running in drive firmware)
+    from disk_surface_test import load_surface_test_state, surface_cell_text
+
+    surface_state = load_surface_test_state()
+    for disk_path, entry in surface_state.get("tests", {}).items():
+        if entry.get("status") == "running":
+            tasks.append(
+                {
+                    "name": f"Surface Test: {disk_path}",
+                    "type": "Surface Test",
+                    "status": surface_cell_text(entry),
+                    "task_key": f"surfacetest:{disk_path}",
+                }
+            )
+
+    # 6. Legacy scheduled tasks (profile_runner.py processes not yet using locks)
     try:
         result = subprocess.run(
             ["pgrep", "-f", "profile_runner.py"],
@@ -1987,6 +2062,11 @@ def _cancel_task(app, task_key):
             log_msg(f"INFO: Sent SIGTERM to scheduled task PID {pid}")
         except (ValueError, OSError) as e:
             log_msg(f"WARN: Failed to cancel scheduled task {pid_str}: {e}")
+    elif task_key.startswith("surfacetest:"):
+        disk_path = task_key.split(":", 1)[1]
+        from disk_surface_test import cancel_surface_test
+
+        cancel_surface_test(app, disk_path)
     else:
         log_msg(f"WARN: Unknown task key: {task_key}")
 

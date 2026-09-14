@@ -7,6 +7,7 @@
 #   ./tests/run-python-tests -q           # Quiet: suppress PASS/SKIP lines
 #   ./tests/run-python-tests --failures-only  # Only show failures
 #   ./tests/run-python-tests -b           # Buffer stdout/stderr; only show on failure
+#   ./tests/run-python-tests --count      # Print the number of tests without running them
 
 set -euo pipefail
 

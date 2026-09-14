@@ -17,9 +17,9 @@ from command_builders import (
     build_send_receive_command,
     parse_rsync_endpoint,
 )
+from config_core import BACKUP_DEFAULTS
 from feature_config import (
     SNAPFILE,
-    _maybe_seed_checkagainst,
     _read_snapfile,
     generate_snapshot_name,
     get_backup_config,
@@ -36,6 +36,8 @@ from gui_helpers import (
     add_var_row,
     bold_label,
     show_warning_dialog,
+    style_expander_label,
+    var_widgets_differ_from_defaults,
 )
 from logging_config import log_msg
 from profile_validation import validate_gui_settings
@@ -341,7 +343,8 @@ def create_backup_page(app, ctx):
     app.backup_post_retention.set_active(post_cfg.get("run_retention", True))
     app.backup_post_retention.set_tooltip_text(
         "Apply retention policies after the backup. Visits only the datasets "
-        "the active send/receive steps back up; falls back to whole-pool "
+        "the active send/receive steps back up, on both the source and "
+        "destination sides; falls back to whole-pool "
         "pruning of the configured pools when no send/receive steps are active."
     )
     post_grid.attach(app.backup_post_retention, 0, 1, 2, 1)
@@ -379,6 +382,24 @@ def create_backup_page(app, ctx):
     app.backup_zfs_keys_dest.connect("changed", lambda _w, t=tracker: t.check())
     app.backup_pull_steps_active.connect("toggled", lambda _w, t=tracker: t.check())
     app.backup_pause_scrubs.connect("toggled", lambda _w, t=tracker: t.check())
+
+    def _update_advanced_label(*_args):
+        non_default = var_widgets_differ_from_defaults(
+            app.backup_var_widgets, BACKUP_DEFAULTS["variables"]
+        )
+        if app.backup_zfs_keys_path.get_text() or app.backup_zfs_keys_dest.get_text():
+            non_default = True
+        if app.backup_pause_scrubs.get_active():
+            non_default = True
+        style_expander_label(advanced_exp, "Advanced", non_default)
+
+    app._backup_update_advanced_label = _update_advanced_label
+    for _widget in app.backup_var_widgets.values():
+        _widget.connect("changed", _update_advanced_label)
+    app.backup_zfs_keys_path.connect("changed", _update_advanced_label)
+    app.backup_zfs_keys_dest.connect("changed", _update_advanced_label)
+    app.backup_pause_scrubs.connect("toggled", _update_advanced_label)
+    _update_advanced_label()
 
     return scrolled
 
@@ -424,6 +445,8 @@ def load_backup_config(app, config):
     app.backup_zfs_keys_dest.set_text(config.get("zfs_keys_dest", ""))
     app.backup_pull_steps_active.set_active(config.get("pull_steps_active", True))
     app.backup_pause_scrubs.set_active(config.get("pause_scrubs", False))
+    if hasattr(app, "_backup_update_advanced_label"):
+        app._backup_update_advanced_label()
 
 
 def check_backup_dirty(app):
@@ -655,7 +678,7 @@ def on_backup_run(app, ctx):
         if active_sr:
             log_msg(
                 f"INFO: Prune step restricted to the {len(active_sr)} send/receive "
-                "step(s)' datasets (derived at prune time)."
+                "step(s)' source and destination datasets (derived at prune time)."
             )
             steps.append(
                 build_backup_prune_command(
@@ -711,7 +734,6 @@ def on_backup_run(app, ctx):
 
     log_msg(f"INFO: Snapshot: {nextsnap}")
     app.backup_runner.set_steps(steps)
-    app.backup_runner.set_step_success_callback(lambda md: _maybe_seed_checkagainst(app, md))
     app.backup_runner.start(
         on_complete=lambda cancelled=False, rc=None: _on_backup_complete(app, cancelled, rc)
     )

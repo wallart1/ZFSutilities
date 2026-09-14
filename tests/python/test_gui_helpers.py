@@ -287,5 +287,83 @@ class TestTextViewSearch(unittest.TestCase):
         search.counter.set_text.assert_called_with("2 / 3")
 
 
+class _FakeValueEntry:
+    """Entry-like fake returning a fixed string value."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def get_text(self):
+        return self._value
+
+
+class _FakeValueCombo(_FakeValueEntry):
+    """ComboBoxText-like fake returning a fixed string value."""
+
+    def get_active_text(self):
+        return self._value
+
+
+class TestStyleExpanderLabel(unittest.TestCase):
+    """style_expander_label colors the label orange for non-default state."""
+
+    def _run(self, non_default):
+        import gui_helpers
+
+        expander = MagicMock()
+        gui_helpers.style_expander_label(expander, "Advanced", non_default)
+        return expander.get_label_widget.return_value.set_markup.call_args[0][0]
+
+    def test_orange_markup_when_non_default(self):
+        self.assertEqual(
+            self._run(True),
+            '<span foreground="orange"><b>Advanced</b></span>',
+        )
+
+    def test_plain_bold_markup_when_default(self):
+        self.assertEqual(self._run(False), "<b>Advanced</b>")
+
+    def test_missing_label_widget_is_noop(self):
+        import gui_helpers
+
+        expander = MagicMock()
+        expander.get_label_widget.return_value = None
+        gui_helpers.style_expander_label(expander, "Advanced", True)
+
+
+class TestVarWidgetsDifferFromDefaults(unittest.TestCase):
+    """var_widgets_differ_from_defaults compares widget values to defaults."""
+
+    def test_all_default_returns_false(self):
+        import gui_helpers
+
+        widgets = {
+            "includes": _FakeValueEntry(""),
+            "doincrementals": _FakeValueCombo("Y"),
+        }
+        defaults = {"includes": "", "doincrementals": "Y"}
+        self.assertFalse(gui_helpers.var_widgets_differ_from_defaults(widgets, defaults))
+
+    def test_differing_entry_returns_true(self):
+        import gui_helpers
+
+        widgets = {"includes": _FakeValueEntry("vm-")}
+        defaults = {"includes": ""}
+        self.assertTrue(gui_helpers.var_widgets_differ_from_defaults(widgets, defaults))
+
+    def test_differing_combo_returns_true(self):
+        import gui_helpers
+
+        widgets = {"doincrementals": _FakeValueCombo("N")}
+        defaults = {"doincrementals": "Y"}
+        self.assertTrue(gui_helpers.var_widgets_differ_from_defaults(widgets, defaults))
+
+    def test_missing_default_key_compares_to_empty(self):
+        import gui_helpers
+
+        widgets = {"unknown": _FakeValueEntry("x")}
+        self.assertTrue(gui_helpers.var_widgets_differ_from_defaults(widgets, {}))
+
+
 if __name__ == "__main__":
     unittest.main()

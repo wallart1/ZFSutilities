@@ -30,6 +30,10 @@ SCRUB_STATE_LOCK_PATH = os.environ.get(
     "ZFSUTILITIES_SCRUB_STATE_LOCK_PATH",
     os.path.join(_DEFAULT_LOCK_DIR, ".scrub_state.lock"),
 )
+SURFACE_STATE_LOCK_PATH = os.environ.get(
+    "ZFSUTILITIES_SURFACE_STATE_LOCK_PATH",
+    os.path.join(_DEFAULT_LOCK_DIR, ".surface_test_state.lock"),
+)
 
 
 @contextmanager
@@ -127,4 +131,18 @@ def scrub_state_lock_read():
 def scrub_state_lock_write():
     """Exclusive lock for writing the scrub queue state."""
     with file_lock(SCRUB_STATE_LOCK_PATH, fcntl.LOCK_EX):
+        yield
+
+
+@contextmanager
+def surface_state_lock_read():
+    """Shared lock for reading the disk surface-test state."""
+    with file_lock(SURFACE_STATE_LOCK_PATH, fcntl.LOCK_SH):
+        yield
+
+
+@contextmanager
+def surface_state_lock_write():
+    """Exclusive lock for writing the disk surface-test state."""
+    with file_lock(SURFACE_STATE_LOCK_PATH, fcntl.LOCK_EX):
         yield

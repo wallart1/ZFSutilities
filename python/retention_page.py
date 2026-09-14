@@ -36,6 +36,8 @@ from gui_helpers import (
     handle_editing_key_press,
     set_button_markup_red,
     show_error,
+    style_expander_label,
+    var_widgets_differ_from_defaults,
 )
 from logging_config import log_msg
 from offsite_runner import detect_offsite_pools
@@ -444,6 +446,20 @@ def create_retention_page(app, ctx):
         ),
     )
     _sync_releaseholds_widget(app, variables["ignore_retention_policies"])
+
+    def _update_advanced_label(*_args):
+        non_default = var_widgets_differ_from_defaults(
+            app._ret_mass_delete_widgets, MASS_DELETE_DEFAULTS
+        )
+        if app._ret_ignore_retention_check.get_active():
+            non_default = True
+        style_expander_label(advanced_exp, "Advanced Prune Options", non_default)
+
+    app._ret_update_advanced_label = _update_advanced_label
+    for _widget in app._ret_mass_delete_widgets.values():
+        _widget.connect("changed", _update_advanced_label)
+    app._ret_ignore_retention_check.connect("toggled", _update_advanced_label)
+    _update_advanced_label()
 
     reminder = Gtk.Label(label="Results and approval request will appear in the log area.")
     reminder.set_halign(Gtk.Align.START)

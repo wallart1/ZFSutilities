@@ -81,6 +81,8 @@ cron syntax:
 
 - `rsync`
 
+- `smartmontools` (SMART disk health, SSD/NVMe wear, and surface self-tests)
+
 - A GTK3-capable desktop environment or window manager (X11 or Wayland)
 
 - WebKit2 for the embedded documentation viewer:

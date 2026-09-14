@@ -434,9 +434,25 @@ class TestBuildBackupPruneCommand(unittest.TestCase):
             '_restorefs=$(remove_leading_qualifiers "$sourcefsremovequalifiers" "$_fs"); ',
             bash_script,
         )
+        # Both the source dataset and the mapped destination name are pruned.
+        self.assertIn('_prune_seen["$_fs"]=1; ', bash_script)
+        self.assertIn('prune_datasets+=("$_fs"); ', bash_script)
         self.assertIn('prune_datasets+=("${destfs}${_restorefs}"); ', bash_script)
         self.assertIn('cleanup "" "" dailybackup', bash_script)
         self.assertIn("Prune snapshots (2 backup steps)", step.description)
+
+    def test_source_entry_precedes_destination_mapping(self):
+        """Each source dataset is added before its destination mapping."""
+        step = command_builders.build_backup_prune_command(
+            "/bin",
+            "dailybackup",
+            [("threeamigos/proxmox", "fivebays")],
+            {},
+        )
+        bash_script = step.command[2]
+        source_pos = bash_script.index('prune_datasets+=("$_fs"); ')
+        dest_pos = bash_script.index('prune_datasets+=("${destfs}${_restorefs}"); ')
+        self.assertLess(source_pos, dest_pos)
 
     def test_selection_criteria_forwarded(self):
         step = command_builders.build_backup_prune_command(

@@ -301,6 +301,7 @@ they are still listed when they would be pruned by `zfscleanup`.
 - `pv` - Progress visualization for large transfers
 - `zfsutils-linux` - ZFS userspace utilities
 - `rsync` - File synchronization for pull operations
+- `smartmontools` - SMART disk health and SSD/NVMe wear data (`smartctl`)
 
 ## Common Workflows
 
@@ -383,6 +384,56 @@ For detailed coding policies, please refer to @docs/docs/developer-guide/coding-
 
 ---
 
+## Recent Session Notes (2026-09-13)
+
+- **Wrap-up review fixes** — code review of the uncommitted surface-tester /
+  prune-both-sides / workload-immutability / `--count` changes: wrapped the one
+  >100-char docstring line in `zfs_repository.py`, added the required
+  per-regex documentation comments for the new SMART self-test patterns in
+  `python/disk_repository.py`, fixed the stale running-tasks comment numbering
+  in `python/dashboard_page.py`, and fixed a real `--count` bug where
+  `tests/test-lib.sh` (the shared harness, whose `test_*` functions are
+  helpers) was counted as 5 tests. Added the missing GUI tests for the
+  Disks-tab surface-test timer (`TestDisksTimer` in
+  `tests/python/test_zfsutilities_gui.py`). Docs refreshed: README
+  Requirements gains `smartmontools`, `commands.md` documents the new
+  `smartctl` core prerequisite and the `-v` receive, and `testing.md` gains
+  the `test_disk_surface_test` row plus updated suite descriptions. All bash
+  and Python suites pass.
+- **Disks-project cleanup** — the original Disks Page project is complete;
+  removed `python/.disks_page_progress.md` and the "Disks Page Project Notes"
+  section from AGENTS.md. Disks-page work is now normal maintenance.
+- **No more hard-coded test counts** — swept stale counts out of AGENTS.md
+  session notes and the `zfslockmanager-test` docs. Use the new
+  `tests/run-tests --count` or `tests/run-python-tests --count` to print
+  current test counts without running them.
+- **Disk surface tester** — new `python/disk_surface_test.py`. A surface test
+  is a SMART self-test run by the drive firmware (`smartctl -t short|long` on
+  `DiskRepository`), so it runs independently, survives GUI restarts, and
+  supports concurrent tests on different disks. State persists in
+  `/var/lib/zfsutilities/surface_test_state.json` under a new flock
+  (`surface_state_lock_read/write` in `file_locking.py`,
+  `get_surface_test_state_path()` in `paths.py`); a 5 s Disks-tab timer
+  (`zfsutilities_gui.py`) polls `smartctl -l selftest` and finalizes entries
+  that finished while the GUI was down. The Disk Inventory's separate Wear and
+  Surface Test columns were consolidated into one **Wear/Test** column (SSD/NVMe
+  wear percentage; HDD surface-test status with percent + ETA while running,
+  then Passed/Failed/Aborted/Canceled), a **Surface Test…** action button
+  (single-HDD selection, storage host only) opens a Fast/Slow dialog that
+  becomes a Cancel Test dialog when the disk already has a running test, and
+  running tests appear as cancelable "Surface Test" entries in the Dashboard
+  Running Tasks. Docs updated in `gtk-gui.md` and `python-modules.md`.
+- **Seeded workload profiles are immutable** — `is_builtin_workload_profile()`
+  in `feature_config.py`; `delete_workload_profile()` refuses built-in names,
+  the Manage Workload Profiles dialog labels them *built-in*, disables
+  Edit/Delete on selection (with tooltips), and the profile editor refuses to
+  open for them. Reset to Defaults still restores the full seed set. Custom
+  profiles are unaffected.
+- **Migrate Pool receive is verbose** — `bin/zfs-migrate-send` now receives
+  with `-u -F -s -v` (fresh) and `-v` (resume) so each dataset is logged as
+  it is processed; docstrings and `tests/test-zfs-migrate-send` updated. The
+  boot-disk-hiding log line is VERB level (already was at HEAD).
+
 ## Recent Session Notes (2026-09-12)
 
 - **Disks page bidirectional teal-only Inventory ↔ Topology correlation** —
@@ -397,8 +448,8 @@ For detailed coding policies, please refer to @docs/docs/developer-guide/coding-
   was removed (`_select_topology_node_by_name`, `_select_disk_row_by_path`,
   `_suppress_selection_sync` deleted): the correlation is teal foreground
   text only, nothing in the other pane is ever selected or scrolled. Tests in
-  `tests/python/test_disks_page.py` (28 → 43); docs updated in
-  `docs/docs/user-guide/gtk-gui.md` and `python/.disks_page_progress.md`.
+  `tests/python/test_disks_page.py`; docs updated in
+  `docs/docs/user-guide/gtk-gui.md`.
 - **Single-process `pytest tests/python` is green** — fixed four order-dependent
   failures that only surfaced under pytest's definition-order (the official
   per-file unittest runner orders methods alphabetically and masked them):
@@ -478,7 +529,7 @@ For detailed coding policies, please refer to @docs/docs/developer-guide/coding-
   both on the compute host in two-node mode (with an explanatory tooltip,
   taking precedence over the capability/selection tooltips), and
   `on_disks_apply_profile` / `on_disks_rewrite_data` log a WARN and return as
-  defense in depth. Covered by new tests in `tests/python/test_disks_page_phase2.py`.
+  defense in depth. Covered by new tests in `tests/python/test_disks_page_dataset_tuning.py`.
 - **Automated two-node iSCSI enrollment** — New `bin/enroll-iscsi-pool`
   idempotently enrolls a pool in iSCSI export: adds its `POOL_TARGET` entry to
   `node.conf` on both nodes (peer first via SSH, so a peer failure aborts
@@ -488,7 +539,7 @@ For detailed coding policies, please refer to @docs/docs/developer-guide/coding-
   `python/iscsi_enroll.py` module after a successful create, and the Migrate
   Pool cutover (`python/pool_migrate_dialogs.py`) chains a `repair-iscsi-luns`
   step for iSCSI-managed pools. New suites: `tests/test-enroll-iscsi-pool`
-  (21 tests) and `tests/python/test_iscsi_enroll.py` (25 tests).
+  and `tests/python/test_iscsi_enroll.py`.
 
 ## Recent Session Notes (2026-08-23)
 
@@ -631,10 +682,3 @@ For detailed coding policies, please refer to @docs/docs/developer-guide/coding-
   from an `<offsite>` dataset skip the meaningless self-check against the source
   pool. The GUI Checkagainst tab notes and the documentation were updated
   accordingly; `tests/test-zfscheckagainst` was expanded to cover the new cases.
-
-## Disks Page Project Notes (active)
-
-- Design brief: `/NFS1/dan(NFS1)/zfsutilities-plan/Disks page/README.md`
-- Per-phase briefs: `/NFS1/dan(NFS1)/zfsutilities-plan/Disks page/`
-- Working progress notes: `python/.disks_page_progress.md`
-- Branch: `Disks-Page` (git does not allow spaces in branch names; the originally requested name "Disks Page" was adjusted to "Disks-Page").

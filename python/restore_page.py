@@ -9,13 +9,18 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 from feature_config import (
-    _maybe_seed_checkagainst,
+    RESTORE_DEFAULTS,
     get_pool_names,
     get_restore_config,
     save_restore_config,
 )
 from gi.repository import Gtk
-from gui_helpers import bold_label, set_button_markup
+from gui_helpers import (
+    bold_label,
+    set_button_markup,
+    style_expander_label,
+    var_widgets_differ_from_defaults,
+)
 from logging_config import log_msg
 from restore_runner import (
     build_restore_command,
@@ -239,6 +244,20 @@ def create_restore_page(app, ctx):
     app.restore_recursive_check.connect("toggled", lambda w, a=app: check_restore_dirty(a))
     app.restore_pause_scrubs.connect("toggled", lambda w, a=app: check_restore_dirty(a))
 
+    def _update_advanced_label(*_args):
+        non_default = var_widgets_differ_from_defaults(
+            app.restore_var_widgets, RESTORE_DEFAULTS["variables"]
+        )
+        if app.restore_pause_scrubs.get_active():
+            non_default = True
+        style_expander_label(adv_expander, "Advanced", non_default)
+
+    app._restore_update_advanced_label = _update_advanced_label
+    for _widget in app.restore_var_widgets.values():
+        _widget.connect("changed", _update_advanced_label)
+    app.restore_pause_scrubs.connect("toggled", _update_advanced_label)
+    _update_advanced_label()
+
     # Apply initial sensitivity state and auto-computed destination.
     _on_auto_dest_toggled(app)
 
@@ -301,6 +320,8 @@ def load_restore_config(app, config):
     app.restore_part1_check.set_active(config.get("do_part1", True))
     app.restore_part2_check.set_active(config.get("do_part2", True))
     app.restore_pause_scrubs.set_active(config.get("pause_scrubs", False))
+    if hasattr(app, "_restore_update_advanced_label"):
+        app._restore_update_advanced_label()
 
     # Ensure destination entry sensitivity matches the checkbox state.
     _on_auto_dest_toggled(app)
@@ -486,7 +507,6 @@ def on_restore_run(app, ctx):
     )
     log_msg(f"INFO: Starting restore: {source} -> {dest}")
     app.restore_runner.set_steps([step])
-    app.restore_runner.set_step_success_callback(lambda md: _maybe_seed_checkagainst(app, md))
     app.restore_runner.start(
         on_complete=lambda cancelled=False, rc=None: _on_restore_complete(app, cancelled, rc)
     )

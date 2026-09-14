@@ -122,7 +122,7 @@ get_zfs_calls() {
 # ---------------------------------------------------------------------------
 
 test_fresh_send_pipeline() {
-    test_start "fresh send runs zfs send -Rw | zfs receive -u -F -s"
+    test_start "fresh send runs zfs send -Rw | zfs receive -u -F -s -v"
     reset_state
     zfs_migrate_send 2>/dev/null
     assert_rc 0 "$?"
@@ -130,7 +130,7 @@ test_fresh_send_pipeline() {
     calls=$(get_zfs_calls)
     assert_contains "$calls" "zfs send -nPRw pool/src/ds@migrate-1"
     assert_contains "$calls" "zfs send -Rw pool/src/ds@migrate-1"
-    assert_contains "$calls" "zfs receive -u -F -s pool/dest/ds"
+    assert_contains "$calls" "zfs receive -u -F -s -v pool/dest/ds"
 }
 
 test_fresh_send_estimates_size() {
@@ -200,7 +200,7 @@ test_resume_transfer() {
     calls=$(get_zfs_calls)
     assert_contains "$calls" "zfs send -nP -t tok-1"
     assert_contains "$calls" "zfs send -t tok-1"
-    assert_contains "$calls" "zfs receive pool/dest/ds"
+    assert_contains "$calls" "zfs receive -v pool/dest/ds"
     if [[ "$calls" == *"zfs receive -u -F -s pool/dest/ds"* ]]; then
         test_fail "Resume receive must not use -u/-F/-s: $calls"
         return

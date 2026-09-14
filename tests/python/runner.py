@@ -135,6 +135,35 @@ def _load_module(path):
     return mod
 
 
+def _build_suites(start_dir, requested, loader):
+    """Load test modules and return a list of (name, suite) tuples."""
+    if requested:
+        suites = []
+        for name in requested:
+            module_name = name if name.startswith("test_") else f"test_{name}"
+            if not module_name.endswith(".py"):
+                module_name += ".py"
+            path = os.path.join(start_dir, module_name)
+            if os.path.isfile(path):
+                mod = _load_module(path)
+                suites.append((module_name[:-3], loader.loadTestsFromModule(mod)))
+            else:
+                print(f"Module not found: {path}")
+                return None
+    else:
+        # Discover all test_*.py files
+        files = sorted(
+            f
+            for f in os.listdir(start_dir)
+            if f.startswith("test_") and f.endswith(".py") and f != "test_support.py"
+        )
+        suites = []
+        for fname in files:
+            mod = _load_module(os.path.join(start_dir, fname))
+            suites.append((fname[:-3], loader.loadTestsFromModule(mod)))
+    return suites
+
+
 def run_suite(suite, name, quiet=False, failures_only=False, buffer=False):
     if not failures_only:
         print("=" * 40)
@@ -168,38 +197,27 @@ def main(argv=None):
     quiet = "--quiet" in argv or "-q" in argv
     failures_only = "--failures-only" in argv
     buffer = "--buffer" in argv or "-b" in argv
+    count_mode = "--count" in argv
     # Quiet/failures-only modes aim to reduce output; imply buffering there.
     buffer = buffer or quiet or failures_only
     requested = [a for a in argv if not a.startswith("-")]
 
-    if requested:
-        suites = []
-        for name in requested:
-            module_name = name if name.startswith("test_") else f"test_{name}"
-            if not module_name.endswith(".py"):
-                module_name += ".py"
-            path = os.path.join(start_dir, module_name)
-            if os.path.isfile(path):
-                mod = _load_module(path)
-                suites.append((module_name[:-3], loader.loadTestsFromModule(mod)))
-            else:
-                print(f"Module not found: {path}")
-                return 1
-    else:
-        # Discover all test_*.py files
-        files = sorted(
-            f
-            for f in os.listdir(start_dir)
-            if f.startswith("test_") and f.endswith(".py") and f != "test_support.py"
-        )
-        suites = []
-        for fname in files:
-            mod = _load_module(os.path.join(start_dir, fname))
-            suites.append((fname[:-3], loader.loadTestsFromModule(mod)))
+    suites = _build_suites(start_dir, requested, loader)
+    if suites is None:
+        return 1
 
     if not suites:
         print("No test suites found.")
         return 1
+
+    if count_mode:
+        total = 0
+        for name, suite in suites:
+            n = suite.countTestCases()
+            total += n
+            print(f"  {name}: {n}")
+        print(f"Total: {total}")
+        return 0
 
     total_passed = 0
     total_failed = 0

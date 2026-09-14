@@ -30,6 +30,40 @@ def bold_label(text):
     return label
 
 
+def style_expander_label(expander, label_text, non_default):
+    """Color an expander label orange when any child value is non-default."""
+    label = expander.get_label_widget()
+    if label is None:
+        return
+    if non_default:
+        label.set_markup(f'<span foreground="orange"><b>{label_text}</b></span>')
+    else:
+        label.set_markup(f"<b>{label_text}</b>")
+
+
+def _widget_value(widget):
+    """Return the current string value of a var widget (Entry or ComboBoxText)."""
+    get_active_text = getattr(widget, "get_active_text", None)
+    if callable(get_active_text):
+        value = get_active_text()
+        if isinstance(value, str):
+            return value
+    get_text = getattr(widget, "get_text", None)
+    if callable(get_text):
+        value = get_text()
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def var_widgets_differ_from_defaults(widgets, defaults):
+    """Return True if any var widget's value differs from the defaults dict."""
+    for key, widget in widgets.items():
+        if _widget_value(widget) != defaults.get(key, ""):
+            return True
+    return False
+
+
 ACTIVE_COLUMN_WIDTH = 60
 TREEVIEW_MIN_WIDTH = 100
 

@@ -40,10 +40,10 @@ Different steps have different consequences when they fail:
   as a warning and `zfscleanup` continues with the next dataset/pool. When
   send/receive steps are active, the prune step derives the backup's dataset
   list — each step's source subtree filtered by the Backup tab's Advanced
-  dataset-selection criteria (`includes`, `excludes`, `startwith`, `endwith`),
-  mapped to destination names — and prunes exactly those datasets. With no
-  active send/receive steps it falls back to whole-pool pruning of the
-  configured pools, filtered by the same criteria.
+  dataset-selection criteria (`includes`, `excludes`, `startwith`, `endwith`)
+  — and prunes it on both sides: every source dataset and its mapped
+  destination name. With no active send/receive steps it falls back to
+  whole-pool pruning of the configured pools, filtered by the same criteria.
 
 The post-backup command, if enabled, always runs after the step list finishes,
 even when a fatal failure aborted the backup early.

@@ -543,5 +543,187 @@ class TestOffsiteSaveValidation(unittest.TestCase):
         mock_refresh.assert_called_once_with(app.ctx.config)
 
 
+def _assert_changed_connected(testcase, widget, updater):
+    """Assert a widget's "changed" signal is wired to the updater.
+
+    Works both when the widget is a MagicMock (records connect calls) and
+    when it is a recording fake (stores the last callback per signal).
+    """
+    connect = widget.connect
+    if hasattr(connect, "call_args_list"):
+        connect.assert_any_call("changed", updater)
+    else:
+        testcase.assertIs(widget._callbacks.get("changed"), updater)
+
+
+class _StatefulComboBoxText:
+    """ComboBoxText stand-in that records items and the active index."""
+
+    def __init__(self, *args, **kwargs):
+        self._items = []
+        self._active = -1
+
+    def append_text(self, text):
+        self._items.append(text)
+
+    def set_active(self, index):
+        self._active = index
+
+    def get_active_text(self):
+        if 0 <= self._active < len(self._items):
+            return self._items[self._active]
+        return None
+
+    def connect(self, signal, callback, *args):
+        self._callbacks = getattr(self, "_callbacks", {})
+        self._callbacks[signal] = callback
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return lambda *args, **kwargs: None
+
+
+class _NoOpWidget:
+    """Absorbs incidental GTK setter calls during page construction."""
+
+    def connect(self, signal, callback, *args):
+        self._callbacks = getattr(self, "_callbacks", {})
+        self._callbacks[signal] = callback
+
+    def set_tooltip_text(self, *args):
+        pass
+
+    def set_hexpand(self, *args):
+        pass
+
+    def set_width_chars(self, *args):
+        pass
+
+    def set_placeholder_text(self, *args):
+        pass
+
+
+class _ValueEntry(_NoOpWidget):
+    """Entry stand-in returning a stored string value."""
+
+    def __init__(self, *args, **kwargs):
+        self._text = ""
+
+    def set_text(self, text):
+        self._text = text
+
+    def get_text(self):
+        return self._text
+
+
+class _ValueCheckButton(_NoOpWidget):
+    """CheckButton stand-in returning a stored active state."""
+
+    def __init__(self, *args, **kwargs):
+        self._active = False
+
+    def set_active(self, active):
+        self._active = active
+
+    def get_active(self):
+        return self._active
+
+
+class _AppNamespace:
+    """Real attribute bag so page-assigned callbacks are retrievable."""
+
+    _ui_state = MagicMock()
+
+    def __init__(self, config):
+        self.ctx = MagicMock()
+        self.ctx.config = config
+        self.config = config
+
+
+class TestOffsiteAdvancedLabel(unittest.TestCase):
+    """The Advanced expander label turns orange when a child value is non-default."""
+
+    def _create_page(self):
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = _StatefulComboBoxText
+        expander = MagicMock()
+        op.Gtk.Expander.side_effect = [expander]
+
+        app = _AppNamespace({"pools": []})
+
+        with (
+            patch.object(op, "_do_generate_snap"),
+            patch.object(op, "do_detect_offsite_pool"),
+        ):
+            op.create_offsite_page(app, app.ctx)
+        return op, app, expander
+
+    def _install_default_widgets(self, op, app):
+        """Replace the advanced widgets with fakes holding default values."""
+        defaults = op.OFFSITE_DEFAULTS["variables"]
+        yn_vars = op.OFFSITE_YN_VARIABLES
+        widgets = {}
+        for key in list(app.offsite_var_widgets):
+            if key in yn_vars:
+                combo = _StatefulComboBoxText()
+                combo.append_text("Y")
+                combo.append_text("N")
+                combo.set_active(0 if defaults.get(key) == "Y" else 1)
+                widgets[key] = combo
+            else:
+                widgets[key] = _ValueEntry()
+                widgets[key].set_text(defaults.get(key, ""))
+        app.offsite_var_widgets = widgets
+        app.offsite_pause_scrubs = _ValueCheckButton()
+
+    def _label_markup(self, expander):
+        return expander.get_label_widget.return_value.set_markup.call_args[0][0]
+
+    def test_changed_signals_connected_to_updater(self):
+        op, app, _expander = self._create_page()
+        original_widgets = dict(app.offsite_var_widgets)
+        self._install_default_widgets(op, app)
+        for widget in original_widgets.values():
+            _assert_changed_connected(self, widget, app._offsite_update_advanced_label)
+
+    def test_default_values_give_plain_label(self):
+        op, app, expander = self._create_page()
+        self._install_default_widgets(op, app)
+        app._offsite_update_advanced_label()
+        self.assertEqual(self._label_markup(expander), "<b>Advanced</b>")
+
+    def test_non_default_var_turns_label_orange(self):
+        op, app, expander = self._create_page()
+        self._install_default_widgets(op, app)
+        app.offsite_var_widgets["includes"].set_text("vm-")
+        app._offsite_update_advanced_label()
+        self.assertIn('foreground="orange"', self._label_markup(expander))
+
+    def test_reverting_var_restores_plain_label(self):
+        op, app, expander = self._create_page()
+        self._install_default_widgets(op, app)
+        widget = app.offsite_var_widgets["excludes"]
+        widget.set_text("tmp")
+        app._offsite_update_advanced_label()
+        widget.set_text("")
+        app._offsite_update_advanced_label()
+        self.assertEqual(self._label_markup(expander), "<b>Advanced</b>")
+
+    def test_pause_scrubs_turns_label_orange(self):
+        op, app, expander = self._create_page()
+        self._install_default_widgets(op, app)
+        app.offsite_pause_scrubs.set_active(True)
+        app._offsite_update_advanced_label()
+        self.assertIn('foreground="orange"', self._label_markup(expander))
+
+    def test_load_config_refreshes_label(self):
+        op, app, expander = self._create_page()
+        self._install_default_widgets(op, app)
+        op.Gtk.ComboBoxText = _StatefulComboBoxText
+        op.load_offsite_config(app, {"variables": {"pv_rate_limit": "50M"}})
+        self.assertIn('foreground="orange"', self._label_markup(expander))
+
+
 if __name__ == "__main__":
     unittest.main()

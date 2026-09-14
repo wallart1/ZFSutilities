@@ -562,10 +562,9 @@ merged with `user_entries` at runtime by `zfsconfig_get_checkagainst`:
 2. Active `offsite_derived` rows overlay them by `(source_root, label)`.
 3. `user_entries` overlay everything by `(source_root, label)`.
 
-Refresh the derived lists manually in the GUI with **Get Entries**, or let
-the GUI add a matching user entry automatically after a successful Backup,
-Offsite, or Restore run (auto-seeding skips destinations that contain
-`<offsite>` and never duplicates an existing row).
+Refresh the derived lists manually in the GUI with **Get Entries**. The
+`user_entries` list is maintained manually (Add pair / Add row / Remove Row);
+rows are never added or re-added automatically.
 
 #### How an entry is used
 

@@ -495,7 +495,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
         if active_sr:
             log_msg(
                 f"INFO: Prune step restricted to the {len(active_sr)} send/receive "
-                "step(s)' datasets (derived at prune time)."
+                "step(s)' source and destination datasets (derived at prune time)."
             )
             steps.append(
                 _build_backup_prune_command(

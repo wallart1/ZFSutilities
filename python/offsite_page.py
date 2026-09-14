@@ -10,8 +10,8 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 from feature_config import (
+    OFFSITE_DEFAULTS,
     OFFSITE_SNAPFILE,
-    _maybe_seed_checkagainst,
     _read_snapfile,
     generate_offsite_snapshot_name,
     get_backup_config,
@@ -33,6 +33,8 @@ from gui_helpers import (
     on_toggle,
     setup_row_scroll,
     show_warning_dialog,
+    style_expander_label,
+    var_widgets_differ_from_defaults,
 )
 from logging_config import log_msg
 from offsite_runner import build_offsite_step_command, detect_offsite_pool
@@ -301,6 +303,20 @@ def create_offsite_page(app, ctx):
     app.offsite_step_store.connect("row-deleted", lambda _m, _p, t=tracker: t.check())
     app.offsite_pause_scrubs.connect("toggled", lambda _w, t=tracker: t.check())
 
+    def _update_advanced_label(*_args):
+        non_default = var_widgets_differ_from_defaults(
+            app.offsite_var_widgets, OFFSITE_DEFAULTS["variables"]
+        )
+        if app.offsite_pause_scrubs.get_active():
+            non_default = True
+        style_expander_label(adv_exp, "Advanced", non_default)
+
+    app._offsite_update_advanced_label = _update_advanced_label
+    for _widget in app.offsite_var_widgets.values():
+        _widget.connect("changed", _update_advanced_label)
+    app.offsite_pause_scrubs.connect("toggled", _update_advanced_label)
+    _update_advanced_label()
+
     return scrolled
 
 
@@ -367,6 +383,8 @@ def load_offsite_config(app, config):
             ]
         )
     app.offsite_pause_scrubs.set_active(config.get("pause_scrubs", False))
+    if hasattr(app, "_offsite_update_advanced_label"):
+        app._offsite_update_advanced_label()
 
 
 def _do_generate_snap(app):
@@ -514,7 +532,6 @@ def on_offsite_run(app, ctx):
 
     log_msg(f"INFO: Snapshot: {nextsnap}")
     app.offsite_runner.set_steps(steps)
-    app.offsite_runner.set_step_success_callback(lambda md: _maybe_seed_checkagainst(app, md))
     app.offsite_runner.start(
         on_complete=lambda cancelled=False, rc=None: _on_offsite_complete(app, cancelled, rc)
     )

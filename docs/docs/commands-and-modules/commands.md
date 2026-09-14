@@ -123,8 +123,8 @@ sudo check-prerequisites [--single-node|--two-node] [--list-failures]
 **Globals:** none.
 
 Checks the following categories: core ZFS utilities (`bash`, `zfs`, `zpool`,
-`pv`, `rsync`), optional Proxmox VE, GTK GUI packages, two-node tools (`ssh`,
-`scp`, `iscsiadm`), and documentation tools (`pip3`, `mkdocs<2`,
+`pv`, `rsync`, `smartctl`), optional Proxmox VE, GTK GUI packages, two-node
+tools (`ssh`, `scp`, `iscsiadm`), and documentation tools (`pip3`, `mkdocs<2`,
 `mkdocs-material`). MkDocs 2.x is incompatible with this project; the installer
 and prerequisite checker both enforce `mkdocs<2`.
 
@@ -1104,9 +1104,10 @@ sudo zfscleanup <pool> only <label> [overrides]
   prune only the datasets a backup visited. There are no built-in exclusions;
   callers pass any dataset-specific exclusions explicitly.
 - When `$prune_datasets` is set and non-empty, `zfscleanup` prunes exactly
-  those datasets (typically destination names derived from a backup run) and
-  skips pool discovery, `zpool list` checks, and `buildfsarray` entirely. When
-  it is unset or empty, the pool behavior above applies.
+  those datasets (typically the source datasets and destination names derived
+  from a backup run) and skips pool discovery, `zpool list` checks, and
+  `buildfsarray` entirely. When it is unset or empty, the pool behavior above
+  applies.
 - If `retain` returns a non-zero code for a dataset (lock conflict, missing
   policy, or other error), `zfscleanup` logs a warning and continues with the
   next dataset/pool instead of aborting the run.
@@ -1884,7 +1885,7 @@ See also: [`zfslockmanager`](modules.md#zfslockmanager).
 
 ### `zfslockmanager-test`
 
-Automated test suite for [`zfslockmanager`](modules.md#zfslockmanager). Runs 33 tests covering:
+Automated test suite for [`zfslockmanager`](modules.md#zfslockmanager), covering:
 
 - Basic acquire/release
 - Same-dataset conflicts (r/w/x combinations)
@@ -1918,7 +1919,7 @@ sudo zfslockmanager-test
 | --------- | ---- | --------- |
 | Lock files | Created, read, and removed under `/run/lock/zfsutilities/.locks/` during tests | [Lock files](../developer-guide/data-structures.md#lock-files) |
 
-All 33 tests should pass.
+All tests should pass.
 
 ---
 
@@ -1994,9 +1995,11 @@ without deleting them.
 One-shot replication copy for the Migrate Pool data-transfer steps (see the
 [GTK GUI Migrate Pool](../user-guide/gtk-gui.md#migrate-pool) reference). Sends
 one pre-created migration snapshot as a single `zfs send -Rw` stream and
-receives it with `zfs receive -u -F -s`, resuming from a receive resume token
-when the destination already has one. The Python GUI invokes it through a
-`bash -c` wrapper built by `build_migration_send_receive_command()`.
+receives it with `zfs receive -u -F -s -v`, resuming from a receive resume
+token when the destination already has one. `-v` logs each dataset as it is
+received so progress through the tree is visible in the session log. The
+Python GUI invokes it through a `bash -c` wrapper built by
+`build_migration_send_receive_command()`.
 
 ```bash
 sourcefs=temp/proxmox destfs=temp_mig/proxmox snapname=migrate-… \
@@ -2019,12 +2022,12 @@ sourcefs=temp/proxmox destfs=temp_mig/proxmox snapname=migrate-… \
 - If the destination dataset exists and has a `receive_resume_token`, the
   token is validated (`zfs send -nP -t`). Valid → the remaining byte count is
   logged and the transfer resumes with `zfs send -t <token> | pv | zfs
-  receive <dest>` (no `-u`/`-F`/`-s` — the token encodes the destination
-  state). Stale (`transfer_resume_token_stale`) or unexpectedly invalid →
-  the token is aborted with `zfs receive -A` and a fresh send runs.
+  receive -v <dest>` (verbose, but no `-u`/`-F`/`-s` — the token encodes the
+  destination state). Stale (`transfer_resume_token_stale`) or unexpectedly
+  invalid → the token is aborted with `zfs receive -A` and a fresh send runs.
 - Fresh send: stream-size estimate (`zfs send -nPRw`, WARN and continue when
   unavailable), destination free-space WARN check (never aborts), then
-  `zfs send -Rw <source>@<snap> | pv … | zfs receive -u -F -s <dest>`.
+  `zfs send -Rw <source>@<snap> | pv … | zfs receive -u -F -s -v <dest>`.
 - `pv` appears in the pipeline when stderr is a terminal or the GUI runner
   captures output (`ZFSUTILITIES_LOG_INHERIT=Y`); a rate limit is honored
   quietly in headless mode.

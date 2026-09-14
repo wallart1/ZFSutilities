@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.103.0
+
+*Released 2026-09-13*
+
+### Added
+
+- **Disk surface tester** — New `python/disk_surface_test.py`. A surface test
+  is a SMART self-test run by the drive firmware (`smartctl -t short|long`),
+  so it runs independently, survives GUI restarts, and supports concurrent
+  tests on different disks. State persists in
+  `/var/lib/zfsutilities/surface_test_state.json` under a new flock
+  (`surface_state_lock_read/write` in `file_locking.py`,
+  `get_surface_test_state_path()` in `paths.py`); a 5 s Disks-tab timer
+  (`zfsutilities_gui.py`) polls `smartctl -l selftest` and finalizes entries
+  that finished while the GUI was down. The Disk Inventory's separate Wear
+  and Surface Test columns were consolidated into one **Wear/Test** column
+  (SSD/NVMe wear percentage; HDD surface-test status with percent + ETA
+  while running, then Passed/Failed/Aborted/Canceled), a **Surface Test…**
+  action button (single-HDD selection, storage host only) opens a Fast/Slow
+  dialog that becomes a Cancel Test dialog when the disk already has a
+  running test, and running tests appear as cancelable "Surface Test"
+  entries in the Dashboard Running Tasks. The Dashboard also warns about
+  SSD/NVMe disks at or above 80% wear (TTL-cached inventory). `smartctl`
+  (`smartmontools`) is now a core prerequisite checked by
+  `check-prerequisites`.
+
+- **Test runner `--count` mode** — `tests/run-tests --count` (and
+  `tests/run-python-tests --count`) print per-suite and total test counts
+  without running anything. Hard-coded test counts were removed from the
+  documentation; use `--count` for current numbers.
+
+### Changed
+
+- **Backup prune now covers both sides** — The Backup tab's post-backup
+  prune step (and headless backup profiles) now prunes every source dataset
+  in addition to its mapped destination name, so both copies are subject to
+  the same retention.
+
+- **Checkagainst entries are manual only** — The GUI no longer auto-adds
+  checkagainst rows after a successful Backup/Offsite/Restore run; the
+  `user_entries` list is maintained with Add pair / Add row / Remove Row.
+  `BackupRunner.set_step_success_callback` was removed.
+
+- **Built-in workload profiles are immutable** —
+  `is_builtin_workload_profile()` in `feature_config.py`;
+  `delete_workload_profile()` refuses built-in names, the Manage Workload
+  Profiles dialog labels them *built-in*, disables Edit/Delete on selection
+  (with tooltips), and the profile editor refuses to open for them. Reset to
+  Defaults still restores the full seed set. Custom profiles are unaffected.
+
+- **Migrate Pool receive is verbose** — `bin/zfs-migrate-send` now receives
+  with `-u -F -s -v` (fresh) and `-v` (resume) so each dataset is logged as
+  it is processed.
+
+- **Orange "Advanced" expander labels** — The Advanced expanders on the
+  Backup, Offsite, Restore, and Retention tabs turn orange when any hidden
+  value differs from its default.
+
+- **Disks tab scrolls as a whole** — The tab content is wrapped in a
+  vertical scrolled window and the Pool Topology pane keeps a minimum
+  height, so the stacked panes are no longer squashed on short windows.
+
 ## 0.102.0
 
 *Released 2026-09-12*

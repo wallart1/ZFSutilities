@@ -31,6 +31,7 @@ class DiskInfo:
     transport: str = ""
     pools: list[str] = field(default_factory=list)
     smart_health: str = "n/a"
+    wear_percent: int | None = None
     parent_path: str | None = None
 
 
@@ -46,6 +47,130 @@ class DiskInventory:
 # Purpose: Extract the pass/fail result from `smartctl -H` output.
 # Group 1: the result word, e.g. PASSED or FAILED.
 _SMART_HEALTH_RE = re.compile(r"^\s*SMART overall-health self-assessment test result:\s*(\S+).*$")
+
+# SMART attributes whose raw value is already a used-percentage, versus
+# normalized remaining-life attributes that must be inverted (100 - value).
+_WEAR_RAW_ATTRIBUTES = {"percent_lifetime_used"}
+_WEAR_INVERTED_ATTRIBUTES = {
+    "wear_leveling_count",
+    "media_wearout_indicator",
+    "ssd_life_left",
+    "wear_leveling",
+}
+
+
+def _parse_smart_wear(data) -> int | None:
+    """Extract a wear percentage (0-100) from `smartctl -j` output.
+
+    Handles the NVMe health log (`percentage_used`) and SATA SSD vendor
+    attributes. Returns None when no wear figure is reported.
+    """
+    if not isinstance(data, dict):
+        return None
+    nvme = data.get("nvme_smart_health_information_log")
+    if isinstance(nvme, dict):
+        used = nvme.get("percentage_used")
+        if isinstance(used, bool):
+            return None
+        if isinstance(used, (int, float)):
+            return int(used)
+    ata = data.get("ata_smart_attributes")
+    if not isinstance(ata, dict):
+        return None
+    table = ata.get("table")
+    if not isinstance(table, list):
+        return None
+    for entry in table:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name", "")).strip().lower()
+        raw = entry.get("raw")
+        raw = raw.get("value") if isinstance(raw, dict) else None
+        candidates = ()
+        if name in _WEAR_RAW_ATTRIBUTES:
+            candidates = (raw,)
+        elif name in _WEAR_INVERTED_ATTRIBUTES:
+            candidates = (entry.get("value"),)
+        else:
+            continue
+        for candidate in candidates:
+            if isinstance(candidate, bool):
+                continue
+            if isinstance(candidate, (int, float)):
+                value = int(candidate)
+            else:
+                try:
+                    value = int(float(str(candidate).strip()))
+                except (TypeError, ValueError):
+                    continue
+            if name in _WEAR_INVERTED_ATTRIBUTES:
+                return 100 - value
+            return value
+    return None
+
+
+# SMART self-test parsing (`smartctl -c` / `-l selftest` text output).
+# Purpose: surface-test progress, ETA, and result parsing.
+# Regex: Self-test routine in progress\.\.\.\s*(\d+)% of test remaining
+# Group 1: percent of the test still remaining (invert for progress done).
+_SELFTEST_PROGRESS_RE = re.compile(
+    r"Self-test routine in progress\.\.\.\s*(\d+)% of test remaining"
+)
+# Regex: Short self-test routine recommended polling time:\s*\(\s*(\d+)\)\s*minutes
+# Group 1: recommended polling time in minutes for a short self-test.
+_SHORT_MINUTES_RE = re.compile(
+    r"Short self-test routine recommended polling time:\s*\(\s*(\d+)\)\s*minutes", re.IGNORECASE
+)
+# Regex: Extended self-test routine recommended polling time:\s*\(\s*(\d+)\)\s*minutes
+# Group 1: recommended polling time in minutes for an extended (long) self-test.
+_EXTENDED_MINUTES_RE = re.compile(
+    r"Extended self-test routine recommended polling time:\s*\(\s*(\d+)\)\s*minutes", re.IGNORECASE
+)
+# Regex: ^#\s*\d+\s
+# Purpose: a self-test log row starts with "# <number>".
+_SELFTEST_LOG_ROW_RE = re.compile(r"^#\s*\d+\s")
+
+
+def _parse_selftest_progress(output: str) -> int | None:
+    """Return the percent remaining while a self-test runs, else None."""
+    match = _SELFTEST_PROGRESS_RE.search(output or "")
+    return int(match.group(1)) if match else None
+
+
+def _parse_test_minutes(output: str, mode: str) -> int | None:
+    """Parse the recommended polling time (minutes) for *mode* from `smartctl -c`."""
+    regex = _SHORT_MINUTES_RE if mode == "short" else _EXTENDED_MINUTES_RE
+    match = regex.search(output or "")
+    return int(match.group(1)) if match else None
+
+
+def _parse_selftest_status(output: str) -> str | None:
+    """Return the status text of the newest self-test log entry, or None.
+
+    Log rows look like: `# 1  Extended offline  Completed without error  90%  1234  -`
+    """
+    for line in (output or "").splitlines():
+        line = line.strip()
+        if not _SELFTEST_LOG_ROW_RE.match(line):
+            continue
+        parts = re.split(r"\s{2,}", line)
+        # parts[0] is "# N", parts[1] the test type, parts[2] the status text.
+        if len(parts) >= 3:
+            return parts[2].strip()
+        return None
+    return None
+
+
+def classify_selftest_status(status_text: str | None) -> str:
+    """Map a self-test log status to "passed", "failed", or "aborted"."""
+    if not status_text:
+        return "aborted"
+    text = status_text.lower()
+    if "without error" in text:
+        return "passed"
+    if "interrupted" in text or "aborted" in text:
+        return "aborted"
+    return "failed"
 
 
 def _flatten_blockdevices(devices) -> dict:
@@ -414,19 +539,132 @@ class DiskRepository:
             return "n/a"
         return result.stdout or "n/a"
 
+    def smart_wear(self, path: str) -> int | None:
+        """Return SSD/NVMe wear percentage (0-100) for *path*, or None.
+
+        HDDs and unparseable/permission-denied output yield None. This issues
+        its own `smartctl -j -A` call; disk_inventory() uses the combined
+        `_smart_health_and_wear()` instead to probe each disk only once.
+        """
+        if not path:
+            return None
+        cmd = self._prefix([self.smartctl_bin, "-j", "-A", path])
+        try:
+            result = self._run(cmd, check=False)
+        except (FileNotFoundError, OSError):
+            return None
+        if result.returncode != 0 or not result.stdout:
+            return None
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+        return _parse_smart_wear(data)
+
+    def _smart_health_and_wear(self, path: str) -> tuple[str, int | None]:
+        """One `smartctl -j -H -A` call returning (health, wear_percent)."""
+        cmd = self._prefix([self.smartctl_bin, "-j", "-H", "-A", path])
+        try:
+            result = self._run(cmd, check=False)
+        except (FileNotFoundError, OSError):
+            return "n/a", None
+        if result.returncode != 0 or not result.stdout:
+            return "n/a", None
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return "n/a", None
+        health = "n/a"
+        status = data.get("smart_status")
+        if isinstance(status, dict) and isinstance(status.get("passed"), bool):
+            health = "PASSED" if status["passed"] else "FAILED"
+        return health, _parse_smart_wear(data)
+
+    def start_self_test(self, path: str, mode: str) -> bool:
+        """Start a SMART self-test on *path* (mode "short" or "long").
+
+        The test runs in the drive firmware and smartctl returns immediately.
+        Returns False when the test could not be started.
+        """
+        if not path or mode not in ("short", "long"):
+            return False
+        cmd = self._prefix([self.smartctl_bin, "-t", mode, path])
+        try:
+            result = self._run(cmd, check=False, timeout=60)
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return False
+        return result.returncode == 0
+
+    def abort_self_test(self, path: str) -> bool:
+        """Abort the active SMART self-test on *path*. Returns False on failure."""
+        if not path:
+            return False
+        cmd = self._prefix([self.smartctl_bin, "-X", path])
+        try:
+            result = self._run(cmd, check=False, timeout=60)
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return False
+        return result.returncode == 0
+
+    def estimate_test_minutes(self, path: str, mode: str) -> int | None:
+        """Recommended polling time (minutes) for the self-test mode, or None."""
+        if not path or mode not in ("short", "long"):
+            return None
+        cmd = self._prefix([self.smartctl_bin, "-c", path])
+        try:
+            result = self._run(cmd, check=False, timeout=60)
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0 or not result.stdout:
+            return None
+        return _parse_test_minutes(result.stdout, mode)
+
+    def poll_self_test(self, path: str) -> dict:
+        """Poll the self-test log for *path*.
+
+        Returns {"running": True, "remaining_percent": N} while a test is in
+        progress, otherwise {"running": False, "status_text": <newest log
+        status or None>}. Never raises.
+        """
+        empty = {"running": False, "status_text": None}
+        if not path:
+            return empty
+        cmd = self._prefix([self.smartctl_bin, "-l", "selftest", path])
+        try:
+            result = self._run(cmd, check=False, timeout=60)
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return empty
+        if result.returncode != 0 or not result.stdout:
+            return empty
+        remaining = _parse_selftest_progress(result.stdout)
+        if remaining is not None:
+            return {"running": True, "remaining_percent": remaining}
+        return {"running": False, "status_text": _parse_selftest_status(result.stdout)}
+
     def disk_inventory(self) -> DiskInventory:
-        """Combine lsblk, by-id resolution, and SMART health into an inventory."""
+        """Combine lsblk, by-id resolution, and SMART data into an inventory."""
         disks = self.list_disks()
         by_id_map = self.resolve_by_id()
 
         parent_health: dict[str, str] = {}
+        parent_wear: dict[str, int | None] = {}
         for disk in disks:
             disk.by_id = by_id_map.get(disk.path, "")
             if disk.parent_path is None:
-                disk.smart_health = self.smart_health(disk.path)
+                if disk.disk_type in ("SSD", "NVMe"):
+                    # SSDs/NVMe get the combined JSON probe (health + wear in
+                    # one call); HDDs keep the quick -H text check since they
+                    # report no wear and extended probes can be slow.
+                    health, wear = self._smart_health_and_wear(disk.path)
+                    disk.smart_health = health
+                    disk.wear_percent = wear
+                else:
+                    disk.smart_health = self.smart_health(disk.path)
                 parent_health[disk.path] = disk.smart_health
+                parent_wear[disk.path] = disk.wear_percent
             else:
                 disk.smart_health = parent_health.get(disk.parent_path, "n/a")
+                disk.wear_percent = parent_wear.get(disk.parent_path)
 
         by_path: dict[str, DiskInfo] = {}
         for disk in disks:

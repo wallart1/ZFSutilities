@@ -11,7 +11,7 @@
 #   --list-failures    Print machine-readable failures and exit
 #
 # Categories checked:
-#   core     — bash, zfs, zpool, pv, rsync
+#   core     — bash, zfs, zpool, pv, rsync, smartctl
 #   proxmox  — pveversion (warn if absent; required only on two-node compute host)
 #   gui      — python3, python3-gi, gir1.2-gtk-3.0, DISPLAY
 #   two-node — ssh, scp, open-iscsi (only in --two-node mode)
@@ -169,6 +169,7 @@ check_cmd "core" "zfs" "zfsutils-linux"
 check_cmd "core" "zpool" "zfsutils-linux"
 check_cmd "core" "pv" "pv"
 check_cmd "core" "rsync" "rsync"
+check_cmd "core" "smartctl" "smartmontools"
 if [[ -z "$list_failures" ]]; then
     echo ""
 fi

@@ -1681,6 +1681,7 @@ class TestManageProfilesDialog(unittest.TestCase):
         dp = _import_disks_page()
         app = self._dialog_app()
         store = MagicMock()
+        view = _make_tree_view(GtkListStoreAdapter(), [])
 
         with (
             patch.object(
@@ -1689,12 +1690,13 @@ class TestManageProfilesDialog(unittest.TestCase):
                 return_value=MagicMock(run=MagicMock(return_value=dp.Gtk.ResponseType.CLOSE)),
             ),
             patch.object(dp.Gtk, "ListStore", return_value=store),
+            patch.object(dp.Gtk, "TreeView", return_value=view),
         ):
             dp.show_manage_profiles_dialog(app)
 
             self.assertTrue(store.append.called)
             appended = [call.args[0] for call in store.append.call_args_list]
-            self.assertIn(["general", "filesystem, volume", "Balanced settings."], appended)
+            self.assertIn(["general", "filesystem, volume", "Balanced settings.", "built-in"], appended)
 
     def test_manage_profiles_add_profile(self):
         dp = _import_disks_page()
@@ -1713,6 +1715,11 @@ class TestManageProfilesDialog(unittest.TestCase):
                 return_value=MagicMock(run=MagicMock(return_value=dp.Gtk.ResponseType.CLOSE)),
             ),
             patch.object(dp.Gtk, "Button", side_effect=make_button),
+            patch.object(
+                dp.Gtk,
+                "TreeView",
+                return_value=_make_tree_view(GtkListStoreAdapter(), []),
+            ),
             patch("feature_config.save_config"),
         ):
             dp.show_manage_profiles_dialog(app)
@@ -1727,7 +1734,15 @@ class TestManageProfilesDialog(unittest.TestCase):
     def test_manage_profiles_edit_profile(self):
         dp = _import_disks_page()
         app = self._dialog_app()
-        app.config["workload_profiles"]["general"]["description"] = "Updated"
+        # Custom profiles are editable; built-in ones are not.
+        app.config["workload_profiles"] = {
+            "custom": {
+                "description": "Custom settings.",
+                "applies_to": ["filesystem"],
+                "properties": {"compression": "lz4"},
+                "notes": "",
+            }
+        }
         buttons = []
 
         def make_button(*args, **kwargs):
@@ -1735,8 +1750,8 @@ class TestManageProfilesDialog(unittest.TestCase):
             buttons.append(btn)
             return btn
 
-        # Capture the store so we can set the selection to "general".
-        store = GtkListStoreAdapter([["general", "filesystem, volume", "Updated"]])
+        # Capture the store so we can set the selection to "custom".
+        store = GtkListStoreAdapter([["custom", "filesystem", "Custom settings."]])
         view = _make_tree_view(store, [0])
 
         with (
@@ -1757,9 +1772,89 @@ class TestManageProfilesDialog(unittest.TestCase):
 
             with patch.object(dp, "show_profile_editor_dialog") as mock_editor:
                 edit_handler(edit_btn)
-                mock_editor.assert_called_once_with(app, "general")
+                mock_editor.assert_called_once_with(app, "custom")
+
+    def test_manage_profiles_edit_builtin_profile_refused(self):
+        dp = _import_disks_page()
+        app = self._dialog_app()
+        buttons = []
+
+        def make_button(*args, **kwargs):
+            btn = MagicMock()
+            buttons.append(btn)
+            return btn
+
+        store = GtkListStoreAdapter([["general", "filesystem, volume", "Balanced settings."]])
+        view = _make_tree_view(store, [0])
+
+        with (
+            patch.object(
+                dp,
+                "create_dialog",
+                return_value=MagicMock(run=MagicMock(return_value=dp.Gtk.ResponseType.CLOSE)),
+            ),
+            patch.object(dp.Gtk, "Button", side_effect=make_button),
+            patch.object(dp.Gtk, "ListStore", return_value=store),
+            patch.object(dp.Gtk, "TreeView", return_value=view),
+            patch("feature_config.save_config"),
+        ):
+            dp.show_manage_profiles_dialog(app)
+
+            edit_btn = buttons[1]
+            edit_handler = edit_btn.connect.call_args[0][1]
+
+            with patch.object(dp, "show_profile_editor_dialog") as mock_editor:
+                edit_handler(edit_btn)
+                mock_editor.assert_not_called()
 
     def test_manage_profiles_delete_profile(self):
+        dp = _import_disks_page()
+        app = self._dialog_app()
+        # Custom profiles are deletable; built-in ones are not.
+        app.config["workload_profiles"] = {
+            "custom": {
+                "description": "Custom settings.",
+                "applies_to": ["filesystem"],
+                "properties": {"compression": "lz4"},
+                "notes": "",
+            }
+        }
+        buttons = []
+
+        def make_button(*args, **kwargs):
+            btn = MagicMock()
+            buttons.append(btn)
+            return btn
+
+        store = GtkListStoreAdapter([["custom", "filesystem", "Custom settings."]])
+        view = _make_tree_view(store, [0])
+
+        with (
+            patch.object(
+                dp,
+                "create_dialog",
+                return_value=MagicMock(run=MagicMock(return_value=dp.Gtk.ResponseType.CLOSE)),
+            ),
+            patch.object(dp.Gtk, "Button", side_effect=make_button),
+            patch.object(dp.Gtk, "ListStore", return_value=store),
+            patch.object(dp.Gtk, "TreeView", return_value=view),
+            patch.object(
+                dp.Gtk,
+                "MessageDialog",
+                return_value=MagicMock(run=MagicMock(return_value=dp.Gtk.ResponseType.YES)),
+            ),
+            patch("feature_config.save_config"),
+        ):
+            dp.show_manage_profiles_dialog(app)
+
+            delete_btn = buttons[2]
+            delete_handler = delete_btn.connect.call_args[0][1]
+
+            with patch.object(dp, "delete_workload_profile", return_value=True) as mock_delete:
+                delete_handler(delete_btn)
+                mock_delete.assert_called_once_with(app.config, "custom")
+
+    def test_manage_profiles_delete_builtin_profile_refused(self):
         dp = _import_disks_page()
         app = self._dialog_app()
         buttons = []
@@ -1793,9 +1888,9 @@ class TestManageProfilesDialog(unittest.TestCase):
             delete_btn = buttons[2]
             delete_handler = delete_btn.connect.call_args[0][1]
 
-            with patch.object(dp, "delete_workload_profile", return_value=True) as mock_delete:
+            with patch.object(dp, "delete_workload_profile") as mock_delete:
                 delete_handler(delete_btn)
-                mock_delete.assert_called_once_with(app.config, "general")
+                mock_delete.assert_not_called()
 
     def test_manage_profiles_reset_defaults(self):
         dp = _import_disks_page()
@@ -1814,6 +1909,11 @@ class TestManageProfilesDialog(unittest.TestCase):
                 return_value=MagicMock(run=MagicMock(return_value=dp.Gtk.ResponseType.CLOSE)),
             ),
             patch.object(dp.Gtk, "Button", side_effect=make_button),
+            patch.object(
+                dp.Gtk,
+                "TreeView",
+                return_value=_make_tree_view(GtkListStoreAdapter(), []),
+            ),
             patch.object(
                 dp.Gtk,
                 "MessageDialog",
@@ -1902,9 +2002,17 @@ class TestProfileEditorDialog(unittest.TestCase):
     def test_manage_profiles_edit_profile(self):
         dp = _import_disks_page()
         app = self._app()
+        app.config["workload_profiles"] = {
+            "custom": {
+                "description": "Balanced.",
+                "applies_to": ["filesystem", "volume"],
+                "properties": {"compression": "zstd"},
+                "notes": "",
+            },
+        }
 
         values = {
-            "name": "general",
+            "name": "custom",
             "description": "Updated description.",
             "filesystem": True,
             "volume": True,
@@ -1924,13 +2032,27 @@ class TestProfileEditorDialog(unittest.TestCase):
             _FakeProfileEditor(dp, values, [dp.Gtk.ResponseType.OK]),
             patch("feature_config.save_config"),
         ):
-            dp.show_profile_editor_dialog(app, "general")
+            dp.show_profile_editor_dialog(app, "custom")
 
         profiles = app.config["workload_profiles"]
-        self.assertEqual(profiles["general"]["description"], "Updated description.")
-        self.assertEqual(profiles["general"]["properties"]["compression"], "lz4")
-        self.assertEqual(profiles["general"]["properties"]["volblocksize"], "32K")
-        self.assertNotIn("ashift", profiles["general"]["properties"])
+        self.assertEqual(profiles["custom"]["description"], "Updated description.")
+        self.assertEqual(profiles["custom"]["properties"]["compression"], "lz4")
+        self.assertEqual(profiles["custom"]["properties"]["volblocksize"], "32K")
+        self.assertNotIn("ashift", profiles["custom"]["properties"])
+
+    def test_manage_profiles_edit_builtin_profile_refused(self):
+        """The editor refuses to open for seeded (immutable) profiles."""
+        dp = _import_disks_page()
+        app = self._app()
+
+        with (
+            _FakeProfileEditor(dp, {}, [dp.Gtk.ResponseType.OK]),
+            patch("feature_config.save_config") as mock_save,
+        ):
+            dp.show_profile_editor_dialog(app, "general")
+
+        mock_save.assert_not_called()
+        self.assertEqual(app.config["workload_profiles"]["general"]["description"], "Balanced.")
 
     def test_manage_profiles_validation(self):
         dp = _import_disks_page()

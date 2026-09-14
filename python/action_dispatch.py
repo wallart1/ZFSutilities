@@ -53,6 +53,7 @@ from disks_page import (
     on_disks_manage_profiles,
     on_disks_refresh,
     on_disks_rewrite_data,
+    on_disks_surface_test,
     update_disks_button_sensitivity,
 )
 from logs_page import (
@@ -201,6 +202,7 @@ PAGE_SPECS = {
             ("Advanced: Manage Profiles…", "preferences-system", "_disks_manage_profiles_btn"),
             (None, None, None),  # spacer
             ("SMART Details", "dialog-information", "_disks_smart_details_btn"),
+            ("Surface Test…", "drive-harddisk", "_disks_surface_test_btn"),
             ("Refresh", "view-refresh", "_disks_refresh_btn"),
         ],
         "post_setup": update_disks_button_sensitivity,
@@ -446,6 +448,7 @@ ACTION_HANDLERS = {
         "Rewrite Data": on_disks_rewrite_data,
         "Advanced: Manage Profiles…": on_disks_manage_profiles,
         "SMART Details": on_disks_smart_details,
+        "Surface Test…": on_disks_surface_test,
         "Refresh": on_disks_refresh,
     },
     "pools": {

@@ -449,14 +449,15 @@ def build_migration_send_receive_command(
     ``pv`` in the pipeline for live progress, optionally rate-limited via
     *rate_limit* (a ``pv -L`` value such as ``100m``; empty = unlimited).
     The wrapper sends ``zfs send -Rw <source>@<snap>`` and receives with
-    ``zfs receive -u -F -s <dest>``: ``-R`` makes a replication stream
+    ``zfs receive -u -F -s -v <dest>``: ``-R`` makes a replication stream
     (descendants, snapshots, properties); ``-w`` sends raw so encrypted
     datasets survive; ``-u`` keeps received datasets unmounted so their
     (preserved) mountpoints do not collide with the still-mounted source;
     ``-F`` lets a re-run roll the destination back to the stream; ``-s``
-    keeps the receive resumable. Raises ValueError on empty/invalid names or
-    an invalid *rate_limit*; callers enforce policy (locks, capacity,
-    cutover ordering).
+    keeps the receive resumable; ``-v`` logs each dataset as it is received
+    so progress through the tree is visible in the session log. Raises
+    ValueError on empty/invalid names or an invalid *rate_limit*; callers
+    enforce policy (locks, capacity, cutover ordering).
     """
     if not source_fs:
         raise ValueError("source dataset must not be empty")

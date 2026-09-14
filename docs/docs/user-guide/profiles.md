@@ -9,7 +9,7 @@ without re-entering the settings each time.
 
 | Type      | GUI tab      | What it runs                                            |
 | --------- | ------------ | ------------------------------------------------------- |
-| Backup    | Backup       | rsync pulls, ZFS send/receive, retention (prunes only the datasets the active send/receive steps back up; falls back to whole-pool pruning when none are active), pre/post scripts |
+| Backup    | Backup       | rsync pulls, ZFS send/receive, retention (prunes only the datasets the active send/receive steps back up, on both the source and destination sides; falls back to whole-pool pruning when none are active), pre/post scripts |
 | Offsite   | Offsite      | Copy snapshots to an offsite pool                       |
 | Restore   | Restore      | Two-step full/incremental restore                       |
 | Retention | Retention    | Prune snapshots by retention policy                     |

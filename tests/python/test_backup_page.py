@@ -57,8 +57,9 @@ class _FakeWidgetBase:
     def set_tooltip_text(self, *args):
         pass
 
-    def connect(self, *args):
-        pass
+    def connect(self, signal, callback, *args):
+        self._callbacks = getattr(self, "_callbacks", {})
+        self._callbacks[signal] = callback
 
 
 class _FakeEntry(_FakeWidgetBase):
@@ -715,6 +716,141 @@ class TestBackupSaveValidation(unittest.TestCase):
         self.assertIn("mismatch", mock_warn.call_args[0][1])
         mock_save.assert_called_once()
         mock_refresh.assert_called_once_with(app.ctx.config)
+
+
+def _assert_changed_connected(testcase, widget, updater):
+    """Assert a widget's "changed" signal is wired to the updater.
+
+    Works both when the widget is a MagicMock (records connect calls) and
+    when it is a recording fake (stores the last callback per signal).
+    """
+    connect = widget.connect
+    if hasattr(connect, "call_args_list"):
+        connect.assert_any_call("changed", updater)
+    else:
+        testcase.assertIs(widget._callbacks.get("changed"), updater)
+
+
+class _FakeComboBoxText(_FakeWidgetBase):
+    """ComboBoxText-like fake that records appended items and active index."""
+
+    def __init__(self, *args, **kwargs):
+        self._items = []
+        self._active = -1
+
+    def append_text(self, text):
+        self._items.append(text)
+
+    def set_active(self, index):
+        self._active = index
+
+    def get_active_text(self):
+        if 0 <= self._active < len(self._items):
+            return self._items[self._active]
+        return None
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return lambda *args, **kwargs: None
+
+
+class TestBackupAdvancedLabel(unittest.TestCase):
+    """The Advanced expander label turns orange when a child value is non-default."""
+
+    def _create_page(self):
+        with temp_config_dir(), mock_gtk():
+            import backup_page
+
+            backup_page.DirtyTracker = _NoOpDirtyTracker
+            # Real classes so the page's isinstance() checks work under mocks.
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.ComboBoxText = _FakeComboBoxText
+
+            app = _FakeApp()
+            backup_page.create_backup_page(app, app.ctx)
+            label = backup_page.Gtk.Expander.return_value.get_label_widget.return_value
+            return backup_page, app, label
+
+    def _install_default_widgets(self, backup_page, app):
+        """Replace the advanced widgets with fakes holding default values."""
+        defaults = backup_page.BACKUP_DEFAULTS["variables"]
+        widgets = {}
+        for key in list(app.backup_var_widgets):
+            if key in backup_page.YN_VARIABLES:
+                combo = _FakeComboBoxText()
+                combo.append_text("Y")
+                combo.append_text("N")
+                combo.set_active(0 if defaults.get(key) == "Y" else 1)
+                widgets[key] = combo
+            else:
+                widgets[key] = _FakeEntry()
+                widgets[key].set_text(defaults.get(key, ""))
+        app.backup_var_widgets = widgets
+        app.backup_zfs_keys_path = _FakeEntry()
+        app.backup_zfs_keys_dest = _FakeEntry()
+        app.backup_pause_scrubs = _FakeCheckButton()
+
+    def test_changed_signals_connected_to_updater(self):
+        backup_page, app, _label = self._create_page()
+        original_widgets = dict(app.backup_var_widgets)
+        self._install_default_widgets(backup_page, app)
+        for widget in original_widgets.values():
+            _assert_changed_connected(self, widget, app._backup_update_advanced_label)
+
+    def test_default_values_give_plain_label(self):
+        backup_page, app, label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        app._backup_update_advanced_label()
+        self.assertEqual(label.set_markup.call_args[0][0], "<b>Advanced</b>")
+
+    def test_non_default_var_turns_label_orange(self):
+        backup_page, app, label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        app.backup_var_widgets["includes"].set_text("vm-")
+        app._backup_update_advanced_label()
+        self.assertIn('foreground="orange"', label.set_markup.call_args[0][0])
+
+    def test_reverting_var_restores_plain_label(self):
+        backup_page, app, label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        widget = app.backup_var_widgets["includes"]
+        widget.set_text("vm-")
+        app._backup_update_advanced_label()
+        widget.set_text("")
+        app._backup_update_advanced_label()
+        self.assertEqual(label.set_markup.call_args[0][0], "<b>Advanced</b>")
+
+    def test_non_default_combo_turns_label_orange(self):
+        backup_page, app, label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        widget = app.backup_var_widgets["doincrementals"]
+        widget.set_active(1)  # "N" vs default "Y"
+        app._backup_update_advanced_label()
+        self.assertIn('foreground="orange"', label.set_markup.call_args[0][0])
+
+    def test_pause_scrubs_turns_label_orange(self):
+        backup_page, app, label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        app.backup_pause_scrubs.set_active(True)
+        app._backup_update_advanced_label()
+        self.assertIn('foreground="orange"', label.set_markup.call_args[0][0])
+
+    def test_zfs_keys_path_turns_label_orange(self):
+        backup_page, app, label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        app.backup_zfs_keys_path.set_text("host:/keys")
+        app._backup_update_advanced_label()
+        self.assertIn('foreground="orange"', label.set_markup.call_args[0][0])
+
+    def test_load_config_refreshes_label(self):
+        backup_page, app, label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        backup_page.Gtk.ComboBoxText = _FakeComboBoxText
+        backup_page.load_backup_config(
+            app, {"variables": {"pv_rate_limit": "50M"}, "pause_scrubs": False}
+        )
+        self.assertIn('foreground="orange"', label.set_markup.call_args[0][0])
 
 
 if __name__ == "__main__":

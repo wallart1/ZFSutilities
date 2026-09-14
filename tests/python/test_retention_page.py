@@ -1516,5 +1516,158 @@ class TestRetentionVerbCheckbox(unittest.TestCase):
             self.assertTrue(rp._is_dirty(app))
 
 
+def _assert_changed_connected(testcase, widget, updater):
+    """Assert a widget's "changed" signal is wired to the updater.
+
+    Works both when the widget is a MagicMock (records connect calls) and
+    when it is a recording fake (stores the last callback per signal).
+    """
+    connect = widget.connect
+    if hasattr(connect, "call_args_list"):
+        connect.assert_any_call("changed", updater)
+    else:
+        testcase.assertIs(widget._callbacks.get("changed"), updater)
+
+
+class _AppNamespace:
+    """Real attribute bag so page-assigned callbacks are retrievable."""
+
+    _ui_state = MagicMock()
+
+    def __init__(self, config):
+        self.ctx = MagicMock()
+        self.ctx.config = config
+        self.config = config
+
+
+class TestRetentionAdvancedLabel(unittest.TestCase):
+    """The Advanced Prune Options label turns orange on non-default values."""
+
+    def _create_page(self):
+        _clear_cached_modules(
+            "retention_page",
+            "retention_actions",
+            "action_dispatch",
+            "zfsutilities_gui",
+        )
+        with temp_config_dir(), mock_gtk():
+            import retention_page as rp
+
+            # Avoid filesystem / subprocess side effects during page creation
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+
+            expanders = []
+            rp.Gtk.Expander.side_effect = (
+                lambda *a, **k: expanders.append(MagicMock()) or expanders[-1]
+            )
+
+            app = _AppNamespace({"retention": {"default": []}})
+            app.ctx = AppContext(
+                config=app.config,
+                script_dir="",
+                parent_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                version="dev",
+            )
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+            return rp, app, expanders[0]
+
+    def _install_default_widgets(self, rp, app):
+        """Replace the mass-delete widgets with fakes holding default values."""
+        defaults = rp.MASS_DELETE_DEFAULTS
+        widgets = {}
+        for key in list(app._ret_mass_delete_widgets):
+            if key == "releaseholds":
+                combo = _StatefulComboBoxText()
+                combo.append_text("Y")
+                combo.append_text("N")
+                combo.set_active(0 if defaults.get(key) == "Y" else 1)
+                widgets[key] = combo
+            else:
+                widgets[key] = _FakeEntry(defaults.get(key, ""))
+        app._ret_mass_delete_widgets = widgets
+        app._ret_ignore_retention_check = _FakeCheckButton()
+        return app
+
+    def _label_markup(self, expander):
+        return expander.get_label_widget.return_value.set_markup.call_args[0][0]
+
+    def test_changed_signals_connected_to_updater(self):
+        rp, app, _expander = self._create_page()
+        original_widgets = dict(app._ret_mass_delete_widgets)
+        self._install_default_widgets(rp, app)
+        for widget in original_widgets.values():
+            _assert_changed_connected(self, widget, app._ret_update_advanced_label)
+
+    def test_default_values_give_plain_label(self):
+        rp, app, expander = self._create_page()
+        self._install_default_widgets(rp, app)
+        app._ret_update_advanced_label()
+        self.assertEqual(self._label_markup(expander), "<b>Advanced Prune Options</b>")
+
+    def test_non_default_var_turns_label_orange(self):
+        rp, app, expander = self._create_page()
+        self._install_default_widgets(rp, app)
+        app._ret_mass_delete_widgets["includes"].set_text("vm-")
+        app._ret_update_advanced_label()
+        self.assertIn('foreground="orange"', self._label_markup(expander))
+
+    def test_reverting_var_restores_plain_label(self):
+        rp, app, expander = self._create_page()
+        self._install_default_widgets(rp, app)
+        widget = app._ret_mass_delete_widgets["excludes"]
+        widget.set_text("tmp")
+        app._ret_update_advanced_label()
+        widget.set_text("")
+        app._ret_update_advanced_label()
+        self.assertEqual(self._label_markup(expander), "<b>Advanced Prune Options</b>")
+
+    def test_ignore_retention_policies_turns_label_orange(self):
+        rp, app, expander = self._create_page()
+        self._install_default_widgets(rp, app)
+        app._ret_ignore_retention_check.set_active(True)
+        app._ret_update_advanced_label()
+        self.assertIn('foreground="orange"', self._label_markup(expander))
+
+
+class _StatefulComboBoxText:
+    """ComboBoxText stand-in that records items and the active index."""
+
+    def __init__(self, *args, **kwargs):
+        self._items = []
+        self._active = -1
+
+    def append_text(self, text):
+        self._items.append(text)
+
+    def set_active(self, index):
+        self._active = index
+
+    def get_active_text(self):
+        if 0 <= self._active < len(self._items):
+            return self._items[self._active]
+        return None
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return lambda *args, **kwargs: None
+
+
+class _FakeCheckButton:
+    """CheckButton stand-in that records its active state."""
+
+    def __init__(self, active=False):
+        self._active = active
+
+    def set_active(self, active):
+        self._active = active
+
+    def get_active(self):
+        return self._active
+
+
 if __name__ == "__main__":
     unittest.main()

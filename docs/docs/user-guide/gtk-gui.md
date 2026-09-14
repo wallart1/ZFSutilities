@@ -139,6 +139,9 @@ warnings for each missing section. Configure them through the relevant tabs:
 ## Disks Tab
 
 The **Disks** tab shows the physical storage layer underneath your ZFS pools.
+The tab content scrolls vertically as a whole when the window is too short to
+show all three panes at once; the Pool Topology pane in the center also keeps
+a minimum height so it stays usable instead of being squashed.
 
 ### Disk inventory
 
@@ -162,9 +165,12 @@ pickers:
 | Transport | Transport type (e.g. `sata`, `nvme`, `sas`) |
 | Pools | Pool membership determined from vdev topology |
 | SMART | Overall SMART health (`PASSED`, `FAILED`, or `n/a`) |
+| Wear/Test | For SSD/NVMe, the wear percentage from SMART data (`85%`). For HDDs, the surface self-test status (see [Surface Test](#surface-test)): `-`, `42% (1h 23m)` while running, or `Passed`/`Failed`/`Aborted`/`Canceled`. `-` when neither applies. |
 
 Device scans and SMART probes can be slow, so the inventory is loaded in a
-background thread and cached for a few seconds. The two panes stay in sync
+background thread and cached for a few seconds. Only SSD/NVMe disks get the
+extended SMART query that yields wear data — HDDs keep the quick health check —
+so the sweep stays fast even with many spinning disks. The two panes stay in sync
 visually: selecting a disk or partition tints every device that resides on it
 in the Pool Topology pane (drawn in teal), and selecting a pool, vdev, or
 device node in the topology pane tints the corresponding rows in the
@@ -366,8 +372,10 @@ Pick the source pool and one of two destination modes:
 
 The review page lists every step that will run, from the recursive migration
 snapshot through one `zfs send -Rw` replication step per top-level dataset
-(received with `zfs receive -u -F -s`; snapshots, descendants, and properties
-included; encrypted datasets are sent raw) to a dataset-tree verification.
+(received with `zfs receive -u -F -s -v`; snapshots, descendants, and
+properties included; encrypted datasets are sent raw; `-v` logs each dataset
+as it is received so progress through the tree is visible in the log) to a
+dataset-tree verification.
 An optional **Bandwidth limit** (a `pv` rate such as `100m`) throttles the
 copy. Every copy is resumable: an interrupted transfer leaves a receive
 resume token on the destination, and re-running Migrate Pool resumes from
@@ -447,7 +455,10 @@ place so they match the current properties. Requirements and behavior:
 This may take a long time and cannot be undone.
 
 Use **Advanced: Manage Profiles…** to add, edit, delete, or reset the workload
-profiles stored in the JSON config.
+profiles stored in the JSON config. The seeded (built-in) profiles are
+immutable — they cannot be edited or deleted, are labelled *built-in* in the
+manager, and can only be restored together via **Reset to Defaults**; custom
+profiles you add remain fully editable and deletable.
 
 ### Actions
 
@@ -491,7 +502,24 @@ profiles stored in the JSON config.
 - **SMART Details** — dumps `smartctl -a` output for the selected disk to the
   GUI log panel. Requires a single disk to be selected and `smartctl` to be
   installed; otherwise a warning is logged.
+- **Surface Test…** — run a SMART surface self-test on the selected HDD (see
+  [Surface Test](#surface-test)). Storage host only on two-node systems.
 - **Refresh** — reloads the disk inventory and topology from cache.
+
+### Surface Test
+
+A surface test is a SMART self-test run by the drive's own firmware. **Fast**
+(`smartctl -t short`, ~2 minutes) reads a sample of the surface; **Slow**
+(`smartctl -t long`, typically hours) reads the entire disk. The test:
+
+- runs **independently** — it continues on the disk even if the GUI closes or
+  the machine reboots, and multiple disks can be tested at the same time;
+- is **cancelable** — select the disk and click Surface Test… again (Cancel
+  Test), or cancel it from the Dashboard's Running Tasks;
+- shows **live status and ETA** in the Disk Inventory's *Wear/Test* column
+  (`42% (1h 23m)` while running, then `Passed`/`Failed`/`Aborted`/`Canceled`;
+  SSDs and NVMe devices show their wear percentage in the same column);
+- adds disk load, so I/O slows while it runs (safe on pooled disks).
 
 ### Feature requirements
 
@@ -714,10 +742,10 @@ operation. These settings are passed to
 On the **Backup** tab, the same criteria (`includes`, `excludes`, `startwith`,
 `endwith`) define the dataset list for both the send/receive steps **and** the
 post-backup prune step: the prune step re-derives each step's source dataset
-list at run time, maps it to destination names, and prunes exactly those
-datasets (via `zfscleanup`'s explicit `prune_datasets` mode). When no
-send/receive steps are active, the prune step falls back to whole-pool pruning
-of the configured pools, filtered by these criteria.
+list at run time and prunes it on **both sides** — every source dataset and
+its mapped destination name (via `zfscleanup`'s explicit `prune_datasets`
+mode). When no send/receive steps are active, the prune step falls back to
+whole-pool pruning of the configured pools, filtered by these criteria.
 
 ### Execution sequence
 
@@ -801,6 +829,13 @@ Unquoted strings are split on whitespace, so `dataset a` is two separate pattern
 The **Advanced** expander on the [Backup](#backup-tab), [Offsite](#offsite-tab),
 and [Restore](#restore-tab) tabs also exposes the variables below. They control
 send/receive behaviour, holds, and verification rather than dataset selection.
+The **Advanced Prune Options** expander on the
+[Retention](#retention-tab) tab holds the mass-delete filters and the
+*Ignore retention policies* danger option.
+
+The expander label turns **orange** whenever any value inside the expander
+differs from its default, so hidden non-default parameters are visible at a
+glance even while the expander is collapsed.
 
 | Variable                  | Tabs                     | Type | Purpose                                                                                             |
 | ------------------------- | ------------------------ | ---- | --------------------------------------------------------------------------------------------------- |
@@ -843,6 +878,7 @@ Live compilation of issues that need attention:
 - Pools above the low-space threshold
 - Pools with ZFS errors (vdev or permanent data errors)
 - Pools with an active ZFS checkpoint
+- SSD/NVMe disks at or above 80% wear (e.g. `SSD "/dev/sda" (Samsung SSD 870 QVO 1TB) wear at 85%`); probed in the background and cached for a few minutes
 - Missing backup/offsite/checkagainst configuration
 - Unregistered pools
 - Stale lock files in `/run/lock/zfsutilities/.locks/`
@@ -1026,10 +1062,11 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
 
   - **Clear snapshot name memory** after sending
   - **Prune snapshots** when the backup finishes — prunes only the datasets
-    the active send/receive steps back up (the backup's dataset list is
-    re-derived at prune time and mapped to destination names); falls back to
-    whole-pool pruning of the configured pools when no send/receive steps are
-    active. See [Daily Backup — Step Failure Handling](daily-backup.md#step-failure-handling).
+    the active send/receive steps back up, on both the source and destination
+    sides (the backup's dataset list is re-derived at prune time; each source
+    dataset is pruned together with its mapped destination name); falls back
+    to whole-pool pruning of the configured pools when no send/receive steps
+    are active. See [Daily Backup — Step Failure Handling](daily-backup.md#step-failure-handling).
   - **Run post-backup command** — Enable a custom command that runs after all
     backup steps finish. It executes even if a fatal error aborts the backup early.
 
@@ -1499,19 +1536,11 @@ A status label below the table shows **orange** "Unsaved changes" while
 edits are pending, or a **red** validation error if a row is missing a
 required field (Source root, Destination root, or Snapshot label).
 
-### Auto-seeding
+### User entries
 
-After a successful Backup, Offsite, or Restore run started from the GUI,
-the corresponding source/destination pair is automatically added to the
-**User entries** table. This only happens when:
-
-- The run completed successfully.
-- The destination does **not** contain `<offsite>`.
-- An equivalent row (same source dataset, label, and destination dataset)
-  does not already exist.
-
-When a row is added this way, an `INFO` message is logged. Auto-seeding
-does not happen for scheduled profile or cron runs; it is GUI-only.
+The **User entries** table is maintained manually: use **Add pair...** or
+**Add row** to create rows, **Remove Row** to delete them, and **Save** to
+persist. Rows you delete stay deleted — nothing re-adds them automatically.
 
 ---
 

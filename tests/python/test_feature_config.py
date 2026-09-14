@@ -11,7 +11,7 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import feature_config
 from test_support import patch_environ, temp_config_dir
@@ -445,86 +445,6 @@ class TestRetentionVerbMessages(unittest.TestCase):
             self.assertIs(config["retention_verb_messages"], False)
 
 
-class TestMaybeSeedCheckagainst(unittest.TestCase):
-    """Auto-seeding checkagainst rows after successful GUI send/receive."""
-
-    def _mock_app(self, config):
-        app = MagicMock()
-        app.ctx = MagicMock()
-        app.ctx.config = config
-        return app
-
-    def test_adds_row_when_new(self):
-        with temp_config_dir():
-            config = {}
-            app = self._mock_app(config)
-            feature_config._maybe_seed_checkagainst(
-                app,
-                {
-                    "source": "threeamigos/proxmox",
-                    "dest": "fivebays/threeamigos/proxmox",
-                    "label": "dailybackup",
-                },
-            )
-            entries = feature_config.get_checkagainst(config)["user_entries"]
-            self.assertEqual(len(entries), 1)
-            self.assertEqual(entries[0]["source_root"], "threeamigos/proxmox")
-            self.assertEqual(entries[0]["dest_root"], "fivebays/threeamigos/proxmox")
-            self.assertEqual(entries[0]["label"], "dailybackup")
-
-    def test_skips_existing_row(self):
-        with temp_config_dir():
-            config = {}
-            app = self._mock_app(config)
-            metadata = {
-                "source": "threeamigos/proxmox",
-                "dest": "fivebays/threeamigos/proxmox",
-                "label": "dailybackup",
-            }
-            feature_config._maybe_seed_checkagainst(app, metadata)
-            feature_config._maybe_seed_checkagainst(app, metadata)
-            entries = feature_config.get_checkagainst(config)["user_entries"]
-            self.assertEqual(len(entries), 1)
-
-    def test_skips_offsite_placeholder(self):
-        with temp_config_dir():
-            config = {}
-            app = self._mock_app(config)
-            feature_config._maybe_seed_checkagainst(
-                app,
-                {
-                    "source": "threeamigos/proxmox",
-                    "dest": "<offsite>/threeamigos/proxmox",
-                    "label": "offsite",
-                },
-            )
-            entries = feature_config.get_checkagainst(config)["user_entries"]
-            self.assertEqual(entries, [])
-
-    def test_skips_empty_label(self):
-        with temp_config_dir():
-            config = {}
-            app = self._mock_app(config)
-            feature_config._maybe_seed_checkagainst(
-                app,
-                {
-                    "source": "threeamigos/proxmox",
-                    "dest": "fivebays/threeamigos/proxmox",
-                    "label": "",
-                },
-            )
-            entries = feature_config.get_checkagainst(config)["user_entries"]
-            self.assertEqual(entries, [])
-
-    def test_skips_none_metadata(self):
-        with temp_config_dir():
-            config = {}
-            app = self._mock_app(config)
-            feature_config._maybe_seed_checkagainst(app, None)
-            entries = feature_config.get_checkagainst(config)["user_entries"]
-            self.assertEqual(entries, [])
-
-
 class TestWorkloadProfiles(unittest.TestCase):
     """Workload profile config helpers."""
 
@@ -574,8 +494,22 @@ class TestWorkloadProfiles(unittest.TestCase):
         with temp_config_dir():
             config = {}
             feature_config.get_workload_profiles(config)
-            self.assertTrue(feature_config.delete_workload_profile(config, "general"))
+            feature_config.save_workload_profiles(
+                config, {**feature_config.get_workload_profiles(config), "custom": {}}
+            )
+            self.assertTrue(feature_config.delete_workload_profile(config, "custom"))
+            self.assertFalse(feature_config.delete_workload_profile(config, "custom"))
+
+    def test_builtin_profiles_are_immutable(self):
+        self.assertTrue(feature_config.is_builtin_workload_profile("general"))
+        self.assertFalse(feature_config.is_builtin_workload_profile("custom"))
+
+    def test_delete_builtin_profile_is_refused(self):
+        with temp_config_dir():
+            config = {}
+            feature_config.get_workload_profiles(config)
             self.assertFalse(feature_config.delete_workload_profile(config, "general"))
+            self.assertIn("general", feature_config.get_workload_profiles(config))
 
     def test_reset_workload_profiles(self):
         with temp_config_dir():

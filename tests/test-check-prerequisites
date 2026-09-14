@@ -106,7 +106,7 @@ run_check_prerequisites_with_mock_env() {
 EOF
     chmod +x "$tmp_bin/bash"
 
-    for cmd in zfs zpool pv rsync python3 pip3; do
+    for cmd in zfs zpool pv rsync smartctl python3 pip3; do
         ln -s /bin/true "$tmp_bin/$cmd"
     done
 
@@ -184,7 +184,7 @@ test_proxmox_present_pass() {
 [[ "$1" == "--version" ]] && echo "5.2.0" || true
 EOF
     chmod +x "$tmp_bin/bash"
-    for cmd in zfs zpool pv rsync python3 pip3; do
+    for cmd in zfs zpool pv rsync smartctl python3 pip3; do
         ln -s /bin/true "$tmp_bin/$cmd"
     done
     cat > "$tmp_bin/mkdocs" << 'EOF'

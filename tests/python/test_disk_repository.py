@@ -260,6 +260,84 @@ class TestDiskRepositorySmart(unittest.TestCase):
             self.assertEqual(repo.smart_details("/dev/sda"), "n/a")
 
 
+class TestDiskRepositorySmartWear(unittest.TestCase):
+    """smart_wear() parses NVMe and SATA wear from smartctl JSON."""
+
+    def _wear_with_json(self, payload, returncode=0):
+        import json
+
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"smartctl -j -A",
+                lambda _cmd, **_kw: subprocess.CompletedProcess(
+                    args=[], returncode=returncode, stdout=json.dumps(payload)
+                ),
+            )
+            repo = DiskRepository(sudo=False)
+            return repo.smart_wear("/dev/sda")
+
+    def test_nvme_percentage_used(self):
+        payload = {"nvme_smart_health_information_log": {"percentage_used": 12}}
+        self.assertEqual(self._wear_with_json(payload), 12)
+
+    def test_sata_percent_lifetime_used_raw(self):
+        payload = {
+            "ata_smart_attributes": {
+                "table": [
+                    {
+                        "id": 231,
+                        "name": "Percent_Lifetime_Used",
+                        "value": 100,
+                        "raw": {"value": 87, "string": "87"},
+                    }
+                ]
+            }
+        }
+        self.assertEqual(self._wear_with_json(payload), 87)
+
+    def test_sata_wear_leveling_count_inverted(self):
+        """Samsung-style normalized remaining life: wear = 100 - value."""
+        payload = {
+            "ata_smart_attributes": {
+                "table": [
+                    {
+                        "id": 177,
+                        "name": "Wear_Leveling_Count",
+                        "value": 96,
+                        "raw": {"value": 212, "string": "212"},
+                    }
+                ]
+            }
+        }
+        self.assertEqual(self._wear_with_json(payload), 4)
+
+    def test_no_wear_attributes_returns_none(self):
+        payload = {
+            "ata_smart_attributes": {
+                "table": [
+                    {"id": 9, "name": "Power_On_Hours", "value": 100, "raw": {"value": 1234}}
+                ]
+            }
+        }
+        self.assertIsNone(self._wear_with_json(payload))
+
+    def test_permission_denied_returns_none(self):
+        payload = {
+            "smartctl": {"exit_status": 2},
+            "messages": [{"string": "Smartctl open device: /dev/sda failed: Permission denied"}],
+        }
+        self.assertIsNone(self._wear_with_json(payload, returncode=2))
+
+    def test_missing_binary_returns_none(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"smartctl -j -A",
+                lambda _cmd, **_kw: (_ for _ in ()).throw(FileNotFoundError("smartctl")),
+            )
+            repo = DiskRepository(sudo=False)
+            self.assertIsNone(repo.smart_wear("/dev/sda"))
+
+
 class TestDiskRepositoryInventory(unittest.TestCase):
     """disk_inventory combines disks, by-id mapping, and SMART health."""
 
@@ -353,10 +431,92 @@ class TestDiskRepositoryInventory(unittest.TestCase):
         part = inventory.by_path["/dev/sda1"]
         self.assertEqual(disk.by_id, "wwn-abc")
         self.assertEqual(disk.smart_health, "PASSED")
+        self.assertIsNone(disk.wear_percent)
         self.assertEqual(part.by_id, "wwn-abc-part1")
         self.assertEqual(part.smart_health, "PASSED")
+        self.assertIsNone(part.wear_percent)
         self.assertEqual(part.parent_path, "/dev/sda")
         self.assertNotIn("/dev/sda1", smartctl_calls)
+
+    def test_disk_inventory_ssd_wear_single_call(self):
+        """An SSD is probed once (combined -j -H -A) for health and wear."""
+        import json
+
+        lsblk_data = {
+            "blockdevices": [
+                {
+                    "name": "sda",
+                    "path": "/dev/sda",
+                    "size": 1000204886016,
+                    "type": "disk",
+                    "rota": False,
+                    "tran": "sata",
+                    "model": "Samsung SSD 870 QVO 1TB",
+                    "serial": "S5SVNF0R",
+                    "log-sec": 512,
+                    "phy-sec": 512,
+                    "children": [
+                        {
+                            "name": "sda1",
+                            "path": "/dev/sda1",
+                            "size": 536870912000,
+                            "type": "part",
+                            "rota": False,
+                            "tran": "sata",
+                            "model": None,
+                            "serial": None,
+                            "log-sec": 512,
+                            "phy-sec": 512,
+                        }
+                    ],
+                }
+            ]
+        }
+        smart_json = {
+            "smart_status": {"passed": True},
+            "ata_smart_attributes": {
+                "table": [
+                    {
+                        "id": 177,
+                        "name": "Wear_Leveling_Count",
+                        "value": 15,
+                        "raw": {"value": 1234, "string": "1234"},
+                    }
+                ]
+            },
+        }
+
+        smartctl_calls = []
+
+        def _handler(cmd, **_kw):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if cmd_str.startswith("lsblk"):
+                return subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=json.dumps(lsblk_data)
+                )
+            if cmd_str.startswith("find"):
+                return subprocess.CompletedProcess(args=[], returncode=0, stdout="")
+            if "smartctl" in cmd_str:
+                smartctl_calls.append(cmd_str)
+                return subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=json.dumps(smart_json)
+                )
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="")
+
+        with mock_subprocess() as m:
+            m.set_command_handler(r".*", _handler)
+            repo = DiskRepository(sudo=False)
+            inventory = repo.disk_inventory()
+
+        disk = inventory.by_path["/dev/sda"]
+        part = inventory.by_path["/dev/sda1"]
+        self.assertEqual(disk.smart_health, "PASSED")
+        self.assertEqual(disk.wear_percent, 85)
+        self.assertEqual(part.wear_percent, 85)
+        # Exactly one smartctl call for the whole disk (partition inherits).
+        self.assertEqual(len(smartctl_calls), 1)
+        self.assertIn("-j", smartctl_calls[0])
+        self.assertIn("-A", smartctl_calls[0])
 
 
 class TestBootDiskFiltering(unittest.TestCase):

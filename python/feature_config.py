@@ -441,33 +441,6 @@ def add_checkagainst_entry(config, row_dict, source="user"):
     return True
 
 
-def _maybe_seed_checkagainst(app, step_metadata):
-    """Add a checkagainst row after a successful GUI send/receive step.
-
-    Skips rows that already exist, have an empty label, or involve the
-    <offsite> placeholder.
-    """
-    if step_metadata is None:
-        return
-    source = step_metadata.get("source", "").strip()
-    dest = step_metadata.get("dest", "").strip()
-    label = step_metadata.get("label", "").strip()
-    if not label:
-        return
-    if "<offsite>" in source or "<offsite>" in dest:
-        return
-    dest_root = _compute_destination_root(source, dest)
-    row = {
-        "source_root": source,
-        "dest_root": dest_root,
-        "label": label,
-    }
-    if add_checkagainst_entry(app.ctx.config, row):
-        from backup_config import log_msg
-
-        log_msg(f"INFO: Added checkagainst entry for {source} -> {dest_root} ({label})")
-
-
 def get_archive_path(config):
     return config.get("archive_path", "")
 
@@ -811,10 +784,26 @@ def save_workload_profiles(config, profiles):
     save_config(config)
 
 
+def is_builtin_workload_profile(name: str) -> bool:
+    """Return True for seeded profiles, which are immutable.
+
+    Built-in profiles ship with the software and cannot be edited or deleted;
+    Reset to Defaults restores them. Users can still add, edit, and delete
+    custom profiles under any other name.
+    """
+    return name in DEFAULT_WORKLOAD_PROFILES
+
+
 def delete_workload_profile(config, name):
-    """Delete a workload profile by name. Returns True if it existed."""
+    """Delete a workload profile by name. Returns True if it existed.
+
+    Built-in (seeded) profiles are immutable and are never deleted.
+    """
     profiles = get_workload_profiles(config)
     if name not in profiles:
+        return False
+    if is_builtin_workload_profile(name):
+        log_msg(f"WARN: Workload profile {name!r} is built in and cannot be deleted")
         return False
     del profiles[name]
     save_workload_profiles(config, profiles)

@@ -240,6 +240,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         initial_page = self.stack.get_visible_child_name()
         self._start_stop_dashboard_timer(initial_page)
         self._start_stop_scrub_timer(initial_page)
+        self._start_stop_disks_timer(initial_page)
 
     def add_stack_page(self, name, title, widget):
         """Add a page to the stack."""
@@ -571,6 +572,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
                 refresh_schedule_page(self)
             self._start_stop_dashboard_timer(page_name)
             self._start_stop_scrub_timer(page_name)
+            self._start_stop_disks_timer(page_name)
             self._start_stop_schedule_timer(page_name)
             if page_name == "dashboard":
                 refresh_dashboard_page(self)
@@ -611,6 +613,25 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             from pools_page import refresh_scrub_table
 
             refresh_scrub_table(self)
+        return True
+
+    def _start_stop_disks_timer(self, page_name):
+        """Start the surface-test status timer when on Disks, stop otherwise."""
+        if getattr(self, "_disks_timer", None) is not None:
+            GLib.source_remove(self._disks_timer)
+            self._disks_timer = None
+        if page_name == "disks":
+            from disks_page import refresh_surface_test_status
+
+            refresh_surface_test_status(self)
+            self._disks_timer = GLib.timeout_add_seconds(5, self._on_disks_timer_tick)
+
+    def _on_disks_timer_tick(self):
+        """Callback for surface-test status refresh. Returns True to stay alive."""
+        if self.stack.get_visible_child_name() == "disks":
+            from disks_page import refresh_surface_test_status
+
+            refresh_surface_test_status(self)
         return True
 
     def _on_dashboard_timer_tick(self):

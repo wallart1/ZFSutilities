@@ -414,11 +414,12 @@ def build_backup_prune_command(
     For each active send/receive step in *sr_steps* (``(sourcefs, destfs)``
     tuples), the generated script re-runs ``zfsbuildfsarray`` on the source
     subtree with the Advanced dataset selection criteria from *variables*
-    (the same inputs the backup step uses), maps every source dataset to its
-    destination name, and prunes exactly that deduplicated list via
-    ``zfscleanup``'s explicit ``prune_datasets`` mode. When no dataset
-    survives the mapping, the step logs a warning and exits successfully
-    (pruning stays non-fatal).
+    (the same inputs the backup step uses), then prunes **both sides** of
+    every step: each source dataset ``$_fs`` and its mapped destination name
+    ``${destfs}${_restorefs}`` (via ``remove_leading_qualifiers``) are added
+    to the deduplicated ``prune_datasets`` list consumed by ``zfscleanup``'s
+    explicit ``prune_datasets`` mode. When no dataset survives the mapping,
+    the step logs a warning and exits successfully (pruning stays non-fatal).
     """
     label_quoted = shlex.quote(label)
 
@@ -454,6 +455,10 @@ def build_backup_prune_command(
             f'log_msg "WARN: No datasets found for {shlex.quote(sourcefs)}; skipping prune mapping."; '
             "else "
             'for _fs in "${fsarray[@]}"; do '
+            'if [[ -z ${_prune_seen["$_fs"]+x} ]]; then '
+            '_prune_seen["$_fs"]=1; '
+            'prune_datasets+=("$_fs"); '
+            "fi; "
             '_restorefs=$(remove_leading_qualifiers "$sourcefsremovequalifiers" "$_fs"); '
             '[[ $_restorefs != "" && ${_restorefs:0:1} != "/" ]] && _restorefs="/$_restorefs"; '
             'if [[ -z ${_prune_seen["${destfs}${_restorefs}"]+x} ]]; then '

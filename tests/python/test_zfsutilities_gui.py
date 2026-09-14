@@ -704,5 +704,64 @@ class TestTerminateConfirmation(unittest.TestCase):
         app.quit.assert_called_once()
 
 
+class TestDisksTimer(unittest.TestCase):
+    """Tests for the Disks-tab surface-test status timer lifecycle."""
+
+    def _make_window(self):
+        """Create a ZFSUtilitiesWindow with __init__ bypassed."""
+        gui = _import_gui_under_mock()
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+            window._disks_timer = None
+            window.stack = MagicMock()
+            return window
+
+    @patch("zfsutilities_gui.GLib")
+    def test_disks_page_starts_timer(self, mock_glib):
+        """Switching to Disks refreshes status once and starts a 5 s timer."""
+        window = self._make_window()
+        mock_glib.timeout_add_seconds.return_value = 42
+        with patch("disks_page.refresh_surface_test_status") as mock_refresh:
+            window._start_stop_disks_timer("disks")
+        mock_refresh.assert_called_once_with(window)
+        mock_glib.timeout_add_seconds.assert_called_once_with(5, window._on_disks_timer_tick)
+        self.assertEqual(window._disks_timer, 42)
+
+    @patch("zfsutilities_gui.GLib")
+    def test_non_disks_page_stops_timer(self, mock_glib):
+        """Switching away from Disks removes the timer."""
+        window = self._make_window()
+        window._disks_timer = 7
+        window._start_stop_disks_timer("backup")
+        mock_glib.source_remove.assert_called_once_with(7)
+        self.assertIsNone(window._disks_timer)
+
+    @patch("zfsutilities_gui.GLib")
+    def test_disks_timer_replaces_existing_timer(self, mock_glib):
+        """Re-entering Disks cancels the old timer before starting a new one."""
+        window = self._make_window()
+        window._disks_timer = 7
+        mock_glib.timeout_add_seconds.return_value = 42
+        with patch("disks_page.refresh_surface_test_status"):
+            window._start_stop_disks_timer("disks")
+        mock_glib.source_remove.assert_called_once_with(7)
+        mock_glib.timeout_add_seconds.assert_called_once_with(5, window._on_disks_timer_tick)
+        self.assertEqual(window._disks_timer, 42)
+
+    def test_timer_tick_refreshes_only_on_disks_page(self):
+        """The tick callback refreshes status on Disks and stays alive."""
+        window = self._make_window()
+        window.stack.get_visible_child_name.return_value = "disks"
+        with patch("disks_page.refresh_surface_test_status") as mock_refresh:
+            self.assertTrue(window._on_disks_timer_tick())
+        mock_refresh.assert_called_once_with(window)
+
+        mock_refresh.reset_mock()
+        window.stack.get_visible_child_name.return_value = "backup"
+        with patch("disks_page.refresh_surface_test_status") as mock_refresh:
+            self.assertTrue(window._on_disks_timer_tick())
+        mock_refresh.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

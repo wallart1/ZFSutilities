@@ -71,10 +71,10 @@ class FakeListStore:
 
 def _disk_row(path, pools="", highlight=False):
     """Return a disk ListStore row with *path*, *pools*, and *highlight* filled in."""
-    row = [""] * 12
+    row = [""] * 13
     row[0] = path
     row[9] = pools
-    row[11] = highlight
+    row[12] = highlight
     return row
 
 
@@ -276,6 +276,29 @@ class TestCreateDisksPage(unittest.TestCase):
         self.assertIsNotNone(app.disks_topology_view)
         self.assertIsNotNone(app._disks_pool_selector)
 
+    def test_create_disks_page_is_vertically_scrollable(self):
+        """The tab is wrapped in a vertical-only ScrolledWindow like other tabs."""
+        dp = _import_disks_page()
+        app = MagicMock()
+        app.config = {"pools": []}
+        app.enable_treeview_copy = MagicMock()
+        app.ctx = MagicMock()
+
+        with patch.object(dp, "refresh_disks_page"):
+            page = dp.create_disks_page(app)
+
+        page.set_policy.assert_any_call(
+            dp.Gtk.PolicyType.NEVER,
+            dp.Gtk.PolicyType.AUTOMATIC,
+        )
+        page.add.assert_called()
+        # The center Pool Topology pane enforces a minimum height so the
+        # page-level scrollbar engages instead of squashing it.
+        dp.Gtk.Box.return_value.set_size_request.assert_any_call(
+            -1,
+            dp.DISKS_TOPOLOGY_MIN_HEIGHT,
+        )
+
 
 class TestDiskInventoryCache(unittest.TestCase):
     """DiskInventoryCache loads and maps disk inventory to pool topology."""
@@ -379,7 +402,7 @@ class TestRefreshDisksPage(unittest.TestCase):
     def test_refresh_repopulates_disk_store(self):
         dp = _import_disks_page()
         disks = [
-            _disk(path="/dev/sda", model="SSD A", smart_health="PASSED"),
+            _disk(path="/dev/sda", model="SSD A", smart_health="PASSED", wear_percent=85),
             _disk(path="/dev/sdb", model="SSD B", smart_health="PASSED"),
         ]
         app = _make_app(disks=disks, topologies={})
@@ -390,7 +413,49 @@ class TestRefreshDisksPage(unittest.TestCase):
         self.assertEqual(app.disks_store.rows[0][dp.COL_D_NAME], "/dev/sda")
         self.assertEqual(app.disks_store.rows[0][dp.COL_D_MODEL], "SSD A")
         self.assertEqual(app.disks_store.rows[0][dp.COL_D_SMART], "PASSED")
+        self.assertEqual(app.disks_store.rows[0][dp.COL_D_HEALTH], "85%")
+        self.assertEqual(app.disks_store.rows[1][dp.COL_D_HEALTH], "-")
         self.assertEqual(app.disks_store.rows[1][dp.COL_D_NAME], "/dev/sdb")
+
+    def test_refresh_health_cell_shows_hdd_surface_test(self):
+        """The combined Wear/Test cell shows surface-test status for HDDs."""
+        dp = _import_disks_page()
+        sys.modules.pop("disk_surface_test", None)
+        with mock_gtk():
+            import disk_surface_test as dst
+
+        disks = [
+            _disk(path="/dev/sdc", model="HDD C", disk_type="HDD"),
+        ]
+        app = _make_app(disks=disks, topologies={})
+        running = {
+            "status": "running",
+            "mode": "long",
+            "progress_percent": 60,
+            "eta": None,
+        }
+        with patch.object(dst, "load_surface_test_state", return_value={"tests": {"/dev/sdc": running}}):
+            dp.refresh_disks_page(app)
+        self.assertEqual(app.disks_store.rows[0][dp.COL_D_HEALTH], "60%")
+
+    def test_refresh_health_cell_inherited_for_hdd_partition(self):
+        """A partition row shows its parent disk's surface-test status."""
+        dp = _import_disks_page()
+        sys.modules.pop("disk_surface_test", None)
+        with mock_gtk():
+            import disk_surface_test as dst
+
+        disk = _disk(path="/dev/sdc1", model="", disk_type="part", parent_path="/dev/sdc")
+        app = _make_app(disks=[disk], topologies={})
+        running = {
+            "status": "running",
+            "mode": "short",
+            "progress_percent": 20,
+            "eta": None,
+        }
+        with patch.object(dst, "load_surface_test_state", return_value={"tests": {"/dev/sdc": running}}):
+            dp.refresh_disks_page(app)
+        self.assertEqual(app.disks_store.rows[0][dp.COL_D_HEALTH], "20%")
 
     def test_refresh_maps_pool_membership(self):
         dp = _import_disks_page()

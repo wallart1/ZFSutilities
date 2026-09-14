@@ -691,6 +691,84 @@ class TestGetWarnings(unittest.TestCase):
         warnings = dp._get_warnings(pools, {}, threshold=80)
         self.assertEqual(warnings, [])
 
+
+class TestDiskWearWarnings(unittest.TestCase):
+    """SSD/NVMe wear at or above 80% produces a dashboard warning."""
+
+    def _disk(self, path, wear, model="", parent=None):
+        import types
+
+        return types.SimpleNamespace(
+            path=path, model=model, wear_percent=wear, parent_path=parent
+        )
+
+    def setUp(self):
+        dp._disk_wear_cache["time"] = 0.0
+        dp._disk_wear_cache["inventory"] = None
+
+    def test_below_threshold_no_warning(self):
+        disks = [self._disk("/dev/sda", 79)]
+        self.assertEqual(dp._format_disk_wear_warnings(disks), [])
+
+    def test_at_threshold_warns(self):
+        disks = [self._disk("/dev/sda", 80, model="Samsung SSD 870 QVO 1TB")]
+        self.assertEqual(
+            dp._format_disk_wear_warnings(disks),
+            ['SSD "/dev/sda" (Samsung SSD 870 QVO 1TB) wear at 80%'],
+        )
+
+    def test_missing_wear_skipped(self):
+        disks = [self._disk("/dev/sda", None)]
+        self.assertEqual(dp._format_disk_wear_warnings(disks), [])
+
+    def test_partitions_warn_once_per_disk(self):
+        disks = [
+            self._disk("/dev/sda", 92, model="SSD A"),
+            self._disk("/dev/sda1", 92, parent="/dev/sda"),
+            self._disk("/dev/sda2", 92, parent="/dev/sda"),
+        ]
+        self.assertEqual(
+            dp._format_disk_wear_warnings(disks),
+            ['SSD "/dev/sda" (SSD A) wear at 92%'],
+        )
+
+    def test_no_model_omits_parens(self):
+        disks = [self._disk("/dev/nvme0n1", 95)]
+        self.assertEqual(
+            dp._format_disk_wear_warnings(disks),
+            ['SSD "/dev/nvme0n1" wear at 95%'],
+        )
+
+    def test_get_disk_wear_warnings_caches_inventory(self):
+        import types
+
+        disk = self._disk("/dev/sda", 85, model="SSD A")
+        inventory = types.SimpleNamespace(disks=[disk])
+        repo = MagicMock()
+        repo.disk_inventory.return_value = inventory
+        app = MagicMock()
+        app.ctx.disk_repository = repo
+
+        self.assertEqual(len(dp._get_disk_wear_warnings(app)), 1)
+        self.assertEqual(len(dp._get_disk_wear_warnings(app)), 1)
+        repo.disk_inventory.assert_called_once()
+
+    def test_get_disk_wear_warnings_failure_keeps_cache(self):
+        import types
+
+        disk = self._disk("/dev/sda", 88, model="SSD A")
+        dp._disk_wear_cache["inventory"] = types.SimpleNamespace(disks=[disk])
+        dp._disk_wear_cache["time"] = 0.0  # stale, forcing a refresh attempt
+        repo = MagicMock()
+        repo.disk_inventory.side_effect = OSError("smartctl exploded")
+        app = MagicMock()
+        app.ctx.disk_repository = repo
+
+        self.assertEqual(
+            dp._get_disk_wear_warnings(app),
+            ['SSD "/dev/sda" (SSD A) wear at 88%'],
+        )
+
     def test_active_checkpoint_warning(self):
         pools = [
             {

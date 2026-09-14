@@ -3,9 +3,11 @@
 # One-shot replication copy for the Migrate Pool data-transfer steps.
 #
 # Sends one pre-created migration snapshot as a single `zfs send -Rw` stream
-# and receives it with `zfs receive -u -F -s` so an interrupted transfer
+# and receives it with `zfs receive -u -F -s -v` so an interrupted transfer
 # leaves a receive resume token on the destination: re-running Migrate Pool
-# resumes from that token instead of starting over. `pv` is placed in the
+# resumes from that token instead of starting over. `-v` makes the receive
+# log each dataset as it is processed so progress through the tree is
+# visible in the session log. `pv` is placed in the
 # pipeline when useful (terminal or GUI-captured output) and can be
 # rate-limited via $pv_rate_limit.
 #
@@ -71,9 +73,9 @@ zfs_migrate_send() {
                 log_msg "VERB: datatosend=$datatosend"
                 log_msg "INFO: Remaining data to transfer:" \
                     "$(echo "$datatosend" | numfmt --to=iec-i)."
-                # Mirrors zfs-send-receive's resume receive: no -u/-F/-s —
-                # the token already encodes the destination state.
-                if transfer_do "resume transfer for $destfs" "-t $resumetoken" "" \
+                # Mirrors zfs-send-receive's resume receive: verbose, but no
+                # -u/-F/-s — the token already encodes the destination state.
+                if transfer_do "resume transfer for $destfs" "-t $resumetoken" "-v" \
                         "Y" "$datatosend" "" "$destfs"; then
                     return 0
                 fi
@@ -108,8 +110,9 @@ zfs_migrate_send() {
     # -R preserves properties/mountpoints for the cutover re-import; -w sends
     # raw so encrypted datasets survive; -u keeps received datasets unmounted;
     # -F lets a re-run roll the destination back; -s always, since migration
-    # transfers are full-copy-sized.
-    if transfer_do "Send/receive" "-Rw" "-u -F -s" "Y" "$datatosend" \
+    # transfers are full-copy-sized; -v logs each dataset as it is received
+    # so progress through the tree is visible in the session log.
+    if transfer_do "Send/receive" "-Rw" "-u -F -s -v" "Y" "$datatosend" \
             "$sourcefs@$snapname" "$destfs"; then
         return 0
     fi

@@ -95,7 +95,6 @@ class BackupRunner:
         self._total_bytes_received = 0
         self._in_lock_wait = False
         self._last_log_size_check = 0.0
-        self._step_success_callback = None
         self._current_rsync_stderr = []
 
     def set_steps(self, steps):
@@ -105,13 +104,6 @@ class BackupRunner:
     def set_finally_step(self, step):
         """Set a BashStep that runs even if a fatal step fails."""
         self._finally_step = step
-
-    def set_step_success_callback(self, callback):
-        """Register a callback invoked after each successful step.
-
-        The callback receives the step's metadata dict (may be None).
-        """
-        self._step_success_callback = callback
 
     def prepare_session_log(self):
         """Create the session log file early so pre-run messages are captured.
@@ -571,14 +563,6 @@ class BackupRunner:
                         return False
                 self._cleanup_io()
                 self.set_stdin_enabled(False)
-
-                if self._step_success_callback is not None and self.current_step < len(self.steps):
-                    step = self.steps[self.current_step]
-                    if step.metadata is not None:
-                        try:
-                            self._step_success_callback(step.metadata)
-                        except Exception as exc:
-                            self._log(f"WARN: Checkagainst seeding failed: {exc}")
 
                 self.current_step += 1
                 GLib.idle_add(self._run_next_step)

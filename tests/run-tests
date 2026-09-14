@@ -6,6 +6,7 @@
 #   ./tests/run-tests test-foo         # Run specific test(s)
 #   ./tests/run-tests -q               # Quiet: suppress PASS/SKIP lines
 #   ./tests/run-tests --failures-only  # Only show failures
+#   ./tests/run-tests --count          # Print the number of tests without running them
 
 set -euo pipefail
 
@@ -24,6 +25,7 @@ NC='\033[0m'
 
 quiet_mode=""
 failures_only_mode=""
+count_mode=""
 forward_python_flags=()
 
 # ---------------------------------------------------------------------------
@@ -44,6 +46,10 @@ if [[ $# -gt 0 ]]; then
         if [[ "$arg" == "--failures-only" ]]; then
             failures_only_mode=1
             forward_python_flags+=("$arg")
+            continue
+        fi
+        if [[ "$arg" == "--count" ]]; then
+            count_mode=1
             continue
         fi
         # Skip unrecognized flags
@@ -74,6 +80,38 @@ fi
 if [[ -z "$have_test_arg" ]]; then
     readarray -t bash_tests < <(find tests -maxdepth 1 -type f -name 'test-*' | sort)
     python_tests=("all")
+fi
+
+# ---------------------------------------------------------------------------
+# Count mode: report test counts without running anything
+# ---------------------------------------------------------------------------
+
+if [[ -n "$count_mode" ]]; then
+    total=0
+    if [[ ${#bash_tests[@]} -gt 0 ]]; then
+        echo "Bash test suites:"
+        for tf in "${bash_tests[@]}"; do
+            # test-lib.sh is the shared harness sourced by the suites, not a
+            # suite itself; its test_* functions are helpers, not tests.
+            [[ "$(basename "$tf")" == "test-lib.sh" ]] && continue
+            n=$(grep -cE '^test_[A-Za-z0-9_]*\(\)' "$tf" 2>/dev/null || true)
+            total=$((total + n))
+            echo "  $(basename "$tf"): $n"
+        done
+    fi
+    if [[ ${#python_tests[@]} -gt 0 ]]; then
+        echo "Python test suites:"
+        if [[ "${python_tests[0]}" == "all" ]]; then
+            py_count_output=$(python3 "$mydir/python/runner.py" --count)
+        else
+            py_count_output=$(python3 "$mydir/python/runner.py" --count "${python_tests[@]}")
+        fi
+        echo "$py_count_output" | grep -v '^Total:'
+        n=$(echo "$py_count_output" | grep -E '^Total:' | sed 's/[^0-9]//g')
+        total=$((total + n))
+    fi
+    echo "Total: $total"
+    exit 0
 fi
 
 # Propagate output-reduction settings to bash suites.

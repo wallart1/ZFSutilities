@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import gi
 import node_config
@@ -23,6 +24,7 @@ from disk_repository import DiskInfo, DiskRepository
 from feature_config import (
     delete_workload_profile,
     get_workload_profiles,
+    is_builtin_workload_profile,
     reset_workload_profiles,
     save_workload_profiles,
 )
@@ -52,10 +54,15 @@ from zfs_repository import TopologyNode, ZfsRepository
 # selected inventory disk in the Pool Topology.
 POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
 
+# Minimum height of the Pool Topology (center) pane. Keeps the topology tree
+# usable on short windows and drives the page-level vertical scrollbar instead
+# of letting the pane be squashed by its neighbors.
+DISKS_TOPOLOGY_MIN_HEIGHT = 260
+
 # Disk pane ListStore columns:
 #   0 name, 1 by-id, 2 model, 3 serial, 4 size, 5 type,
 #   6 logical_sector, 7 physical_sector, 8 transport, 9 pools, 10 smart_health,
-#   11 highlight
+#   11 health (SSD/NVMe wear %, HDD surface-test status), 12 highlight
 (
     COL_D_NAME,
     COL_D_BYID,
@@ -68,8 +75,9 @@ POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
     COL_D_TRANSPORT,
     COL_D_POOLS,
     COL_D_SMART,
+    COL_D_HEALTH,
     COL_D_HIGHLIGHT,
-) = range(12)
+) = range(13)
 
 # Topology pane TreeStore columns:
 #   0 name, 1 type, 2 state, 3 read, 4 write, 5 cksum, 6 ashift,
@@ -319,7 +327,9 @@ def create_disks_page(app):
 
     top_box.pack_start(Gtk.Separator(), False, False, 0)
 
-    app.disks_store = Gtk.ListStore(str, str, str, str, str, str, str, str, str, str, str, bool)
+    app.disks_store = Gtk.ListStore(
+        str, str, str, str, str, str, str, str, str, str, str, str, bool
+    )
     app.disks_view = Gtk.TreeView(model=app.disks_store)
     app.disks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.disks_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
@@ -337,12 +347,25 @@ def create_disks_page(app):
         (COL_D_TRANSPORT, "Transport", 80),
         (COL_D_POOLS, "Pools", 100),
         (COL_D_SMART, "SMART", 60),
+        (COL_D_HEALTH, "Wear/Test", 110),
     ]
     for col_idx, title_text, width in disk_cols:
         renderer = Gtk.CellRendererText()
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
         col.set_cell_data_func(renderer, _disk_cell_highlight_func)
         configure_treeview_column(col, width=width)
+        if col_idx == COL_D_HEALTH:
+            # TreeViewColumn is not a Gtk.Widget, so the tooltip lives on
+            # the header label instead of on the column itself.
+            header = Gtk.Label(label=title_text)
+            header.set_tooltip_text(
+                "SSD/NVMe: wear percentage from SMART data. HDD: surface "
+                "self-test status (percent and ETA while running, then "
+                "Passed/Failed/Aborted/Canceled). Select an HDD and use "
+                "Surface Test… to start one."
+            )
+            header.show_all()
+            col.set_widget(header)
         app.disks_view.append_column(col)
 
     app.enable_treeview_copy(app.disks_view)
@@ -361,6 +384,7 @@ def create_disks_page(app):
     mid_box.set_margin_end(10)
     mid_box.set_margin_top(10)
     mid_box.set_margin_bottom(10)
+    mid_box.set_size_request(-1, DISKS_TOPOLOGY_MIN_HEIGHT)
 
     topo_title = bold_label("Pool Topology")
     mid_box.pack_start(topo_title, False, False, 0)
@@ -486,7 +510,12 @@ def create_disks_page(app):
 
     refresh_disks_page(app)
 
-    return page_box
+    # Wrap the page so the whole tab scrolls vertically on short windows
+    # instead of squashing the stacked panes.
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    scrolled.add(page_box)
+    return scrolled
 
 
 def _make_disks_refresh_callback(app):
@@ -522,9 +551,20 @@ def refresh_disks_page(app):
 
     data = app._disks_inventory_cache.get(callback=_make_disks_refresh_callback(app))
 
+    from disk_surface_test import load_surface_test_state, surface_cell_text
+
+    surface_state = load_surface_test_state()
+
     # Repopulate disk inventory
     app.disks_store.clear()
     for disk in data.disks:
+        if disk.wear_percent is not None:
+            health_text = f"{disk.wear_percent}%"
+        else:
+            # HDDs (and their partitions, via parent_path) show surface-test status.
+            health_text = surface_cell_text(
+                surface_state["tests"].get(disk.parent_path or disk.path)
+            )
         app.disks_store.append(
             [
                 disk.path,
@@ -538,6 +578,7 @@ def refresh_disks_page(app):
                 disk.transport,
                 ", ".join(disk.pools),
                 disk.smart_health,
+                health_text,
                 False,
             ]
         )
@@ -577,6 +618,68 @@ def on_disks_refresh(app):
     app._disks_inventory_cache.invalidate()
     refresh_disks_page(app)
     log_msg("VERB: Disks refreshed")
+
+
+def refresh_surface_test_status(app):
+    """Poll running surface tests and update the inventory cells in place.
+
+    Runs on a timer while the Disks tab is visible (and once on tab switch).
+    Tests live in the drive firmware, so this also picks up tests started
+    before a GUI restart and finalizes those that finished while it was down.
+    """
+    from datetime import datetime
+
+    from disk_surface_test import (
+        load_surface_test_state,
+        save_surface_test_state,
+        surface_cell_text,
+        update_entries_from_polls,
+    )
+
+    store = getattr(app, "disks_store", None)
+    if store is None:
+        return
+    state = load_surface_test_state()
+    repo = app.ctx.disk_repository
+    changed = update_entries_from_polls(state, repo.poll_self_test, datetime.now().astimezone())
+    if changed:
+        save_surface_test_state(state)
+    it = store.get_iter_first()
+    while it:
+        path = store.get_value(it, COL_D_NAME)
+        if path in state["tests"]:
+            store.set_value(it, COL_D_HEALTH, surface_cell_text(state["tests"].get(path)))
+        it = store.iter_next(it)
+
+
+def on_disks_surface_test(app):
+    """Surface Test action: start (fast/slow) or cancel a test on the selected HDD."""
+    from disk_surface_test import (
+        cancel_surface_test,
+        load_surface_test_state,
+        show_surface_test_dialog,
+        start_surface_test,
+    )
+
+    selection = app.disks_view.get_selection()
+    model, pathlist = selection.get_selected_rows()
+    if len(pathlist) != 1:
+        return
+    tree_iter = model.get_iter(pathlist[0])
+    if model.get_value(tree_iter, COL_D_TYPE) != "HDD":
+        return
+    disk_path = model.get_value(tree_iter, COL_D_NAME)
+    disk = SimpleNamespace(
+        path=disk_path,
+        model=model.get_value(tree_iter, COL_D_MODEL),
+    )
+    entry = load_surface_test_state()["tests"].get(disk_path)
+    action = show_surface_test_dialog(app, disk, entry, app.ctx.disk_repository)
+    if action in ("short", "long"):
+        start_surface_test(app, disk, action)
+    elif action == "abort":
+        cancel_surface_test(app, disk_path)
+    refresh_surface_test_status(app)
 
 
 def _on_disk_selection_changed(selection, app):
@@ -885,6 +988,34 @@ def update_disks_button_sensitivity(app):
         else:
             btn.set_sensitive(True)
             btn.set_tooltip_text("")
+
+    surf_btn = getattr(app, "_disks_surface_test_btn", None)
+    if surf_btn:
+        selected_hdd = single_selection and _selected_disk_is_hdd(app)
+        if compute_host:
+            surf_btn.set_sensitive(False)
+            surf_btn.set_tooltip_text("Surface tests run on the storage host")
+        elif runner_busy:
+            surf_btn.set_sensitive(False)
+            surf_btn.set_tooltip_text("A dataset action is already running")
+        else:
+            surf_btn.set_sensitive(bool(selected_hdd))
+            surf_btn.set_tooltip_text(
+                "" if selected_hdd else "Select a single HDD to run a surface test"
+            )
+
+
+def _selected_disk_is_hdd(app) -> bool:
+    """Return True when the Disk Inventory selection is exactly one HDD row."""
+    selection = app.disks_view.get_selection()
+    model, pathlist = selection.get_selected_rows()
+    if len(pathlist) != 1:
+        return False
+    try:
+        tree_iter = model.get_iter(pathlist[0])
+        return model.get_value(tree_iter, COL_D_TYPE) == "HDD"
+    except (IndexError, ValueError):
+        return False
 
 
 def _highlight_pool_disks(app, pool_name):
@@ -1284,7 +1415,7 @@ def show_manage_profiles_dialog(app):
     )
     content = dialog.get_content_area()
 
-    store = Gtk.ListStore(str, str, str)
+    store = Gtk.ListStore(str, str, str, str)
     view = Gtk.TreeView(model=store)
     view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
@@ -1293,6 +1424,7 @@ def show_manage_profiles_dialog(app):
         (0, "Name", 180),
         (1, "Applies to", 120),
         (2, "Description", 350),
+        (3, "Kind", 80),
     ]
     for col_idx, title_text, width in cols:
         renderer = Gtk.CellRendererText()
@@ -1329,6 +1461,7 @@ def show_manage_profiles_dialog(app):
                     name,
                     _profile_applies_to_text(profile),
                     profile.get("description", ""),
+                    "built-in" if is_builtin_workload_profile(name) else "custom",
                 ]
             )
 
@@ -1340,6 +1473,23 @@ def show_manage_profiles_dialog(app):
         tree_iter = model.get_iter(pathlist[0])
         return model.get_value(tree_iter, 0)
 
+    def _selected_is_builtin() -> bool:
+        name = _selected_name()
+        return name is not None and is_builtin_workload_profile(name)
+
+    def _on_selection_changed(_selection):
+        # Seeded profiles are immutable: no editing or deleting them.
+        builtin = _selected_is_builtin()
+        edit_btn.set_sensitive(not builtin)
+        delete_btn.set_sensitive(not builtin)
+        tooltip = (
+            "Built-in profiles cannot be modified; use Reset to Defaults to restore them"
+            if builtin
+            else ""
+        )
+        edit_btn.set_tooltip_text(tooltip)
+        delete_btn.set_tooltip_text(tooltip)
+
     def _on_add(_btn):
         show_profile_editor_dialog(app)
         _refresh_list()
@@ -1348,6 +1498,9 @@ def show_manage_profiles_dialog(app):
         name = _selected_name()
         if name is None:
             log_msg("WARN: Select a profile to edit")
+            return
+        if is_builtin_workload_profile(name):
+            log_msg(f"WARN: Workload profile {name!r} is built in and cannot be edited")
             return
         profiles = get_workload_profiles(app.config)
         if name not in profiles:
@@ -1361,6 +1514,9 @@ def show_manage_profiles_dialog(app):
         name = _selected_name()
         if name is None:
             log_msg("WARN: Select a profile to delete")
+            return
+        if is_builtin_workload_profile(name):
+            log_msg(f"WARN: Workload profile {name!r} is built in and cannot be deleted")
             return
         confirm = Gtk.MessageDialog(
             transient_for=dialog,
@@ -1397,8 +1553,10 @@ def show_manage_profiles_dialog(app):
     edit_btn.connect("clicked", _on_edit)
     delete_btn.connect("clicked", _on_delete)
     reset_btn.connect("clicked", _on_reset)
+    view.get_selection().connect("changed", _on_selection_changed)
 
     _refresh_list()
+    _on_selection_changed(view.get_selection())
     dialog.show_all()
     dialog.run()
     dialog.destroy()
@@ -1408,8 +1566,12 @@ def show_profile_editor_dialog(app, name=None):
     """Show the Add/Edit Workload Profile dialog and persist on OK.
 
     When *name* is None a new profile is created. When *name* is provided the
-    existing profile is edited (the name field is read-only).
+    existing profile is edited (the name field is read-only). Built-in
+    (seeded) profiles are immutable and cannot be opened for editing.
     """
+    if name is not None and is_builtin_workload_profile(name):
+        log_msg(f"WARN: Workload profile {name!r} is built in and cannot be edited")
+        return
     profiles = get_workload_profiles(app.config)
     existing = profiles.get(name, {}) if name else {}
     is_edit = name is not None

@@ -334,8 +334,9 @@ SMART.
 | `list_disks()` | Return disks and their partitions, excluding loops, zvols, and the system boot disk (plus its partitions) |
 | `resolve_by_id()` | Map kernel device paths to the best `/dev/disk/by-id` name |
 | `smart_health(path)` | Return `PASSED`, `FAILED`, or `n/a` for a device |
+| `smart_wear(path)` | Return SSD/NVMe wear percentage (0-100) from `smartctl -j -A` JSON, or `None` |
 | `smart_details(path)` | Return raw `smartctl -a` text or `n/a` |
-| `disk_inventory()` | Combine the above into a single inventory object |
+| `disk_inventory()` | Combine the above into a single inventory object; SSD/NVMe disks get one combined `smartctl -j -H -A` probe yielding both health and `DiskInfo.wear_percent`, HDDs keep the quick `-H` check |
 
 **Called modules / imported helpers:**
 
@@ -535,7 +536,7 @@ pool and destination mode (new disks + topology, or an existing holding
 pool), shows the full step plan, and gates the run behind typed confirmation
 of the source pool name. Execution is two runner phases: the copy phase
 (recursive migration snapshot, one resumable `zfs-migrate-send` step —
-`zfs send -Rw` received with `zfs receive -u -F -s`, with `pv` in the
+`zfs send -Rw` received with `zfs receive -u -F -s -v`, with `pv` in the
 pipeline and an optional bandwidth limit — per top-level dataset, then
 per-dataset tree verification) and the cutover
 phase, which starts only after a second typed confirmation — export the
@@ -923,6 +924,41 @@ page layout and action logic can be tested independently.
 
 ---
 
+### `disk_surface_test.py`
+
+Disk surface tester for HDDs. A surface test is a SMART self-test run by the
+drive firmware (`smartctl -t short|long`), so it runs independently of the
+GUI, survives restarts, and supports concurrent tests on different disks.
+Holds the state machine, the JSON state file (`surface_test_state.json`,
+flock-protected like scrub state), Disk Inventory cell-text formatting, and
+the start/cancel dialog.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `load_surface_test_state()` / `save_surface_test_state()` | Flock-protected persistence of per-disk test entries |
+| `build_entry()` / `update_entry_from_poll()` / `update_entries_from_polls()` | State machine: running → passed/failed/aborted, with progress and ETA |
+| `surface_cell_text()` / `format_minutes()` | Disk Inventory cell rendering (`42% (1h 23m)`, `Passed`, …) |
+| `start_surface_test()` / `cancel_surface_test()` | Start (`smartctl -t`) / cancel (`smartctl -X`) plus state updates |
+| `show_surface_test_dialog()` | Fast/Slow picker, or live status + Cancel Test when already running |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
+| `disk_repository` | `classify_selftest_status` and the `smartctl` subprocess wrappers |
+| `file_locking` | Surface-state read/write locks |
+| `paths` | State-file path |
+
+The smartctl wrappers (`start_self_test`, `abort_self_test`,
+`estimate_test_minutes`, `poll_self_test`) live on `DiskRepository` next to
+the other smartctl methods; the text parsers (`_parse_selftest_progress`,
+`_parse_test_minutes`, `_parse_selftest_status`) are module-level pure
+functions in `disk_repository.py`.
+
+---
+
 ### `disks_page.py`
 
 The **Disks** tab UI: disk inventory TreeView, pool selector, vdev topology
@@ -1251,6 +1287,8 @@ background thread by default so the GTK main loop stays responsive.
 | `refresh_dashboard_page(sync=False)` | Re-gather all dashboard data asynchronously (`sync=True` to block) |
 | `_get_pool_health()` | Query `zpool list` via `ZfsRepository` |
 | `_get_warnings()` | Compile warning strings from all sources |
+| `_format_disk_wear_warnings()` | Warning strings for SSD/NVMe disks at/above `DISK_WEAR_WARNING_THRESHOLD` (80%) |
+| `_get_disk_wear_warnings()` | Wear warnings from `disk_repository.disk_inventory()`, TTL-cached 300 s so the 30 s refresh never re-runs a smartctl sweep |
 | `_get_peer_host()` / `_get_host_version()` | Two-node peer version check |
 | Dashboard action handlers | Refresh, fix locks, cancel tasks, view log |
 
@@ -1714,6 +1752,7 @@ Reusable GTK helpers and utility functions used by nearly every page.
 | `get_busy_processes()` / `diagnose_dataset_busy()` | Find and explain why a dataset is busy |
 | `get_mounted_snapshots()` | Parse `mount -t zfs` output to detect explicitly mounted snapshots (the `.zfs/snapshot` directory alone is an automount stub) |
 | `show_error_dialog()` / `show_warning_dialog()` | Modal error/warning message dialogs |
+| `style_expander_label()` / `var_widgets_differ_from_defaults()` | Color an Advanced expander label orange when any child value differs from its defaults |
 | `create_info_panel()` | Build the shared log/info panel |
 | `create_menu_bar()` | Build the application menu bar |
 | `confirm_and_minimize_width()` | Reset column widths and shrink window |
