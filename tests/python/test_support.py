@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # Disable the automatic Step-5 migration so tests do not touch production paths.
 os.environ.setdefault("ZFSUTILITIES_DISABLE_MIGRATION", "1")
 
@@ -18,6 +20,34 @@ REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
+
+
+def normalize_repo_root(text):
+    """Replace this checkout's absolute path with the literal ``REPO_ROOT``.
+
+    Golden files use ``REPO_ROOT`` so they are machine-independent, but the
+    migrate-send wrapper path is shlex-quoted only when the checkout path
+    needs it. Canonicalize to the always-quoted form so goldens match on any
+    checkout path (with or without spaces).
+    """
+    script = os.path.join(REPO_ROOT, "bin", "zfs-migrate-send")
+    text = text.replace(f"'{script}'", "\x00SCRIPT\x00")
+    text = text.replace(script, "\x00SCRIPT\x00")
+    return text.replace("\x00SCRIPT\x00", "'REPO_ROOT/bin/zfs-migrate-send'")
+
+
+@contextlib.contextmanager
+def temp_user_config_dir():
+    """Redirect the per-user config directory (``XDG_CONFIG_HOME``) to a temp dir.
+
+    Docs-viewer state and anything else under ``~/.config`` then cannot
+    read or write the developer's real home directory during a test. Use
+    around GUI-object construction that loads saved per-user UI state.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir, patch.dict(
+        os.environ, {"XDG_CONFIG_HOME": tmpdir}
+    ):
+        yield tmpdir
 
 import backup_config
 import config_core
@@ -202,6 +232,10 @@ def temp_config_dir():
             "ZFSUTILITIES_LOCK_DIR": lock_dir,
             "ZFSUTILITIES_CRON_FILE": os.path.join(tmpdir, "zfsutilities.cron"),
             "ZFSUTILITIES_PROFILE_LOCK_DIR": profile_lock_dir,
+            # Redirect per-user state (e.g. docs_viewer_state.json via
+            # XDG_CONFIG_HOME) so tests never read or write the developer's
+            # real home directory.
+            "XDG_CONFIG_HOME": os.path.join(tmpdir, "xdg-config"),
         }
         orig_env = {k: os.environ.get(k) for k in env_vars}
         for k, v in env_vars.items():
@@ -544,6 +578,82 @@ def _gui_module_names():
 
 
 GUI_MODULES = _gui_module_names()
+
+
+def _detect_gi():
+    """Probe for importable GTK bindings (gi) without requiring a display."""
+    try:
+        import gi  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+# Module-level skip mark for suites that use GTK only inside test bodies —
+# via @patch decorators targeting GUI modules, or code paths that import a
+# GUI module at runtime outside a mock_gtk() context. Suites that import
+# GTK-dependent modules at module level must instead use import_or_skip_gi so
+# collection survives without gi. Both are listed in
+# tests/requirements.manifest (enforced by test_gui_infrastructure.py).
+requires_gi = pytest.mark.skipif(
+    not _detect_gi(),
+    reason="GTK bindings (gi) not available",
+)
+
+
+def import_gui_fresh(name):
+    """Import GUI module *name* bound to the caller's active mock_gtk context.
+
+    Call inside a ``mock_gtk()`` context. Pops *name* and every module in
+    ``GUI_MODULES`` from ``sys.modules`` first, so the import re-executes and
+    the module plus its whole GUI closure bind to THIS context's mocks —
+    never a stale copy cached by another suite (mock- or real-bound), which
+    produced cross-suite flakes under xdist. The closure is restored to its
+    prior bindings afterwards (only *name* keeps the fresh binding), so
+    sticky-binding suites that cached their module at collection time — for
+    example a suite whose @patch decorators resolve that module — are not
+    disturbed.
+    """
+    import importlib
+
+    saved = {n: sys.modules[n] for n in GUI_MODULES if n in sys.modules}
+    sys.modules.pop(name, None)
+    try:
+        for module_name in GUI_MODULES:
+            sys.modules.pop(module_name, None)
+        return importlib.import_module(name)
+    finally:
+        for module_name, module in saved.items():
+            if module_name != name:
+                sys.modules[module_name] = module
+
+
+def import_or_skip_gi(name):
+    """Import *name*, skipping the whole calling suite if GTK (gi) is missing.
+
+    Use at module level in suites that import GTK-dependent modules without
+    ``mock_gtk()`` (see ``tests/requirements.manifest``). Only an ImportError
+    chain rooted at gi produces a skip; any other import failure is re-raised
+    so real regressions stay red.
+
+    Pair with ``pytestmark = requires_gi``: if another suite already imported
+    *name* under ``mock_gtk()``, the sys.modules cache holds a mock-bound
+    module and this guard cannot detect the missing gi — the skipif marker
+    then keeps the suite's tests from running against mocks.
+    """
+    import importlib
+
+    try:
+        return importlib.import_module(name)
+    except ImportError as exc:
+        if (getattr(exc, "name", "") or "").split(".")[0] == "gi":
+            import pytest
+
+            pytest.skip(
+                "GTK bindings (gi) not available; skipping GUI-dependent suite",
+                allow_module_level=True,
+            )
+        raise
 
 
 @contextlib.contextmanager

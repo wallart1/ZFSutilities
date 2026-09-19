@@ -1,0 +1,5 @@
+zpool
+replace
+tank
+/dev/disk/by-id/ata-X
+/dev/disk/by-id/ata-Y

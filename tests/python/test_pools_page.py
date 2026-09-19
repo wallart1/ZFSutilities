@@ -21,7 +21,7 @@ def _import_pools_page():
     the current mock.
     """
     sys.modules.pop("pools_page", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import pools_page
 
         return pools_page

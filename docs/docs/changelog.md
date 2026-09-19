@@ -1,5 +1,111 @@
 # Changelog
 
+## 0.104.0
+
+*Released 2026-09-18*
+
+### Added
+
+- **Agent working conditions: parallel, skippable test harness** —
+  `tests/run-tests` now runs bash suites in parallel (`--jobs N`,
+  default `nproc-1`) and the Python layer under pytest-xdist with workers
+  capped by available memory. A new environment preflight compares detected
+  capabilities (`gi`, `pv`, `zfs`, `root`, `test-pools`) against
+  `tests/requirements.manifest`; suites missing requirements report
+  `SKIPPED` and never fail the run, and pytest exit 5 (all skipped) is
+  treated as clean. New flags `--with-soak`, `--slowest N`, and `--list`
+  (`--count` is now an alias that executes bash suites instead of
+  statically grep-counting); per-suite wall times print with a 5 s
+  soft-budget warning section.
+
+- **Soak suites** — Bash suites ending in `-soak` hold randomized,
+  time-dependent coverage (for example `tests/test-zfslockmanager-soak`
+  with realistic 1-second lock-conflict timings) and are excluded from
+  default runs; the deterministic `test-zfslockmanager` suite now runs at
+  millisecond scale via the env knobs. `tests/test-run-tests-preflight` is
+  a new harness self-test for the preflight, skip, soak-gating, and
+  exit-5 logic.
+
+- **Golden-file assertion framework** — `assert_golden` in
+  `tests/test-lib.sh` and a new `tests/python/golden.py`
+  (`UPDATE_GOLDEN=1` regenerates; argv one element per line) let command
+  builder suites regenerate expected output after legitimate refactors
+  instead of hand-repairing assertion clusters. Migrated suites:
+  `test_command_builders`, `test_pool_migrate`,
+  `test_pool_migrate_dialogs`, `test_zfs_repository`,
+  `tests/test-transfer-lib`.
+
+- **Lock manager timing knobs** — `bin/zfslockmanager` adds
+  `ZFSLOCK_RETRY_THROTTLE` (re-acquire throttle, default 1) and
+  `ZFSLOCK_REMOTE_POLL_INTERVAL` (remote-agent poll, default 0.1), and
+  `ZFSLOCK_WAIT_INTERVAL` now accepts positive fractional seconds;
+  invalid values fall back to the documented defaults
+  (`docs/docs/developer-guide/lock-manager.md`).
+
+- **CI and dev container** — `.github/workflows/tests.yml` runs the full
+  suite on push/PR plus a nightly soak job; `.devcontainer/` (Ubuntu
+  24.04) and `share/dev/install-test-deps.sh` (single source of truth for
+  system and Python test dependencies, consumed by both the Dockerfile
+  and CI) support one-command reproducible test environments.
+
+- **Test-environment hygiene** — `tests/python/test_support.py` gains
+  `import_gui_fresh`, `import_or_skip_gi`, `requires_gi`,
+  `temp_user_config_dir`, and `normalize_repo_root`;
+  `tests/python/test_gui_infrastructure.py` adds `TestGiImportGuards`
+  enforcing import-guard and `gi.require_version` pinning consistency
+  across suites.
+
+### Changed
+
+- **Python test runner is pytest** — `tests/python/runner.py` is now a
+  deprecated shim that translates legacy arguments and forwards to
+  `python3 -m pytest`; `tests/run-python-tests` gains `--list`.
+
+- **Docs and agent guidance** — `docs/docs/developer-guide/testing.md`
+  is rewritten for the parallel harness, preflight skips, soak suites,
+  golden files, CI, and the dev container; session notes moved from
+  `AGENTS.md` to `SESSION_NOTES.md`; new `tests/AGENTS.md` codifies test
+  workflow rules; `test_docs_integrity` validates `AGENTS.md`
+  repo-relative references and branch mentions.
+
+- **`check_partial_uninstall()` test hook** — `lib/installer-lib.sh`
+  honors `ZFSUTILITIES_ETC_PREFIX` so tests point the /etc checks at a
+  fixture root.
+
+### Fixed
+
+- **Lock manager global state** — `declare -gA` for the
+  `_zfslock_pool_target`/`_zfslock_remote_pids`/`_zfslock_remote_hosts`
+  arrays in `bin/zfslockmanager` and `iscsi_teardown` in
+  `lib/iscsi-lib.sh`: loaded through bashinit's `source_helper`, bare
+  declares became function-locals and silently broke remote/two-node
+  locking and iSCSI teardown tracking. Interval validation is now one
+  shared `_zfslock_sanitize_interval` helper.
+
+- **Stale-lock safety** — `python/zfs_lock_manager.py` no longer deletes
+  live locks held by processes whose cmdline cannot be verified
+  (e.g. `python -c` launchers); `_script_name()` returns `None` and
+  stale detection leaves those locks alone.
+
+- **GUI import crash** — `gi.require_version("Gdk", "3.0")` guards in
+  `python/gui_helpers.py` and `python/logs_page.py` prevent
+  `gi.RepositoryError` on systems with Gdk 4.0 typelibs.
+
+- **Miscellaneous** — SC2295 glob-safety in `zfslockmanager`'s JSON field
+  parsing; `migration_snapshot_name()` preserves aware-datetime offsets;
+  `tests/test-paths` subshell-scoped assertions (silently discarded)
+  moved to the parent shell.
+
+### Removed
+
+- **`bin/zfslockmanager-test`** — the shipped-to-production test script
+  with 31 real sleeps is replaced by the harness suites
+  `tests/test-zfslockmanager`, `tests/test-zfslockmanager-remote`, and
+  `tests/test-zfslockmanager-soak`.
+
+- **Custom unittest runner** — `ColoredRunner`/`run_suite` et al. in
+  `tests/python/runner.py` (~250 lines) in favor of pytest.
+
 ## 0.103.0
 
 *Released 2026-09-13*

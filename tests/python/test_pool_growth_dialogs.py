@@ -15,7 +15,9 @@ if PYTHON_SRC not in sys.path:
 
 from disk_repository import DiskInfo
 from pool_create import EligibilityResult, disk_eligibility
-from test_support import capture_logs, mock_gtk
+from test_support import capture_logs, mock_gtk, requires_gi
+
+pytestmark = requires_gi
 from zfs_repository import TopologyNode
 
 TB = 10**12
@@ -35,7 +37,7 @@ POOL1_TOPOLOGY = TopologyNode(
 def _import_dialogs():
     """Import pool_growth_dialogs under a fresh mocked GTK context."""
     sys.modules.pop("pool_growth_dialogs", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import pool_growth_dialogs
 
         return pool_growth_dialogs

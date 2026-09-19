@@ -1,0 +1,8 @@
+rsync
+--delete
+--progress
+-rav
+--exclude=**/.gvfs/
+--exclude=**/.cache/doc/
+/src
+/dst

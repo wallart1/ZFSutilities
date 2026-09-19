@@ -1,0 +1,3 @@
+bash
+-c
+source 'REPO_ROOT/bin/zfs-migrate-send'; sourcefs=temp/proxmox; destfs=temp_mig/proxmox; snapname=migrate-x; pv_rate_limit=100m; zfs_migrate_send

@@ -122,10 +122,7 @@ test_pv_args_log_inherit() {
     test_start "transfer_pv_args forces progress output when LOG_INHERIT=Y"
     reset_state
     ZFSUTILITIES_LOG_INHERIT="Y" transfer_pv_args "5000000" "Y" 2>/dev/null
-    assert_array_len 3 "${transfer_pv_args[@]}"
-    assert_equals "-fpterb" "${transfer_pv_args[0]}"
-    assert_equals "-s" "${transfer_pv_args[1]}"
-    assert_equals "5000000" "${transfer_pv_args[2]}"
+    assert_golden test_pv_args_log_inherit "$(printf '%s\n' "${transfer_pv_args[@]}")"
 }
 
 test_pv_args_headless_rate_limit() {
@@ -133,10 +130,7 @@ test_pv_args_headless_rate_limit() {
     reset_state
     pv_rate_limit="50M"
     transfer_pv_args "5000000" "Y" 2>/dev/null
-    assert_array_len 3 "${transfer_pv_args[@]}"
-    assert_equals "-q" "${transfer_pv_args[0]}"
-    assert_equals "-L" "${transfer_pv_args[1]}"
-    assert_equals "50M" "${transfer_pv_args[2]}"
+    assert_golden test_pv_args_headless_rate_limit "$(printf '%s\n' "${transfer_pv_args[@]}")"
 }
 
 test_pv_args_log_inherit_rate_limit() {
@@ -144,10 +138,7 @@ test_pv_args_log_inherit_rate_limit() {
     reset_state
     pv_rate_limit="50M"
     ZFSUTILITIES_LOG_INHERIT="Y" transfer_pv_args "5000000" "Y" 2>/dev/null
-    assert_array_len 5 "${transfer_pv_args[@]}"
-    assert_equals "-fpterb" "${transfer_pv_args[0]}"
-    assert_equals "-L" "${transfer_pv_args[3]}"
-    assert_equals "50M" "${transfer_pv_args[4]}"
+    assert_golden test_pv_args_log_inherit_rate_limit "$(printf '%s\n' "${transfer_pv_args[@]}")"
 }
 
 test_pv_args_no_pv_rate_limit() {
@@ -155,10 +146,7 @@ test_pv_args_no_pv_rate_limit() {
     reset_state
     pv_rate_limit="10m"
     transfer_pv_args "0" "N" 2>/dev/null
-    assert_array_len 3 "${transfer_pv_args[@]}"
-    assert_equals "-q" "${transfer_pv_args[0]}"
-    assert_equals "-L" "${transfer_pv_args[1]}"
-    assert_equals "10m" "${transfer_pv_args[2]}"
+    assert_golden test_pv_args_no_pv_rate_limit "$(printf '%s\n' "${transfer_pv_args[@]}")"
 }
 
 # ---------------------------------------------------------------------------
@@ -219,9 +207,7 @@ test_abort_token_live() {
     test_start "transfer_abort_resume_token runs zfs receive -A when live"
     reset_state
     transfer_abort_resume_token "pool/dest" 2>/dev/null
-    local calls
-    calls=$(cat "$_zfs_capture_file" 2>/dev/null)
-    assert_contains "$calls" "zfs receive -A pool/dest"
+    assert_golden test_abort_token_live "$(cat "$_zfs_capture_file" 2>/dev/null)"
 }
 
 test_abort_token_dryrun() {
@@ -232,6 +218,7 @@ test_abort_token_dryrun() {
     local log
     log=$(get_log)
     assert_contains "$log" "Dry-run: Would abort resume token on pool/dest"
+    assert_golden test_abort_token_dryrun "$(cat "$_zfs_capture_file" 2>/dev/null)"
     local calls
     calls=$(cat "$_zfs_capture_file" 2>/dev/null)
     if [[ "$calls" == *"receive -A"* ]]; then
@@ -293,10 +280,9 @@ test_transfer_do_pipeline_no_pv() {
     transfer_do "Send/receive" "-Rw" "-u -F -s" "N" "0" "src@snap" "pool/dest" \
         2>/dev/null
     assert_rc 0 "$?"
-    local calls
-    calls=$(cat "$_zfs_capture_file" 2>/dev/null)
-    assert_contains "$calls" "zfs send -Rw src@snap"
-    assert_contains "$calls" "zfs receive -u -F -s pool/dest"
+    # send and receive run concurrently in the transfer pipeline, so the
+    # capture order is nondeterministic — compare the sorted call set.
+    assert_golden test_transfer_do_pipeline_no_pv "$(sort "$_zfs_capture_file" 2>/dev/null)"
 }
 
 test_transfer_do_resume_omits_target() {
@@ -305,12 +291,7 @@ test_transfer_do_resume_omits_target() {
     transfer_do "resume transfer" "-t test-token" "" "N" "0" "ignored" "pool/dest" \
         2>/dev/null
     assert_rc 0 "$?"
-    local calls
-    calls=$(cat "$_zfs_capture_file" 2>/dev/null)
-    assert_contains "$calls" "zfs send -t test-token"
-    if [[ "$calls" == *"zfs send -t test-token ignored"* ]]; then
-        test_fail "send target was not omitted in resume mode: $calls"
-    fi
+    assert_golden test_transfer_do_resume_omits_target "$(sort "$_zfs_capture_file" 2>/dev/null)"
 }
 
 test_transfer_do_with_pv_when_inherit() {
@@ -328,10 +309,7 @@ test_transfer_do_with_pv_when_inherit() {
     local rc=$?
     unset -f pv
     assert_rc 0 "$rc"
-    local pv_args
-    pv_args=$(cat "$pv_capture" 2>/dev/null)
-    assert_contains "$pv_args" "-fpterb"
-    assert_contains "$pv_args" "-s 5000000"
+    assert_golden test_transfer_do_with_pv_when_inherit "$(cat "$pv_capture" 2>/dev/null)"
 }
 
 test_transfer_do_failure_logs_fatal() {

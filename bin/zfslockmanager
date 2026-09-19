@@ -41,6 +41,16 @@
 #                                          # Returns: 0=acquired, 1=aborted, 2=skipped
 #   zfslock_is_stale <lock_file>           # Check if lock is stale (0=stale, 1=active)
 #   zfslock_cleanup_stale                  # Remove all stale locks
+#
+# Environment timing knobs (production defaults shown; positive fractional
+# seconds are accepted for the sleep-based knobs; invalid values fall back to
+# the default/clamp):
+#   ZFSLOCK_WAIT_INTERVAL           # Retry interval for wait loops (default 30)
+#   ZFSLOCK_RETRY_THROTTLE          # Throttle between re-acquire attempts (default 1)
+#   ZFSLOCK_HEADLESS_WAIT_SECONDS   # Headless wait budget, integer seconds (default 0)
+#   ZFSLOCK_REMOTE_POLL_INTERVAL    # Remote acquire response poll (default 0.1)
+# Test suites override these to millisecond-scale values; the *-soak suite
+# uses realistic timings.
 
 # ==============================================================================
 # Constants and Configuration
@@ -49,7 +59,7 @@
 ZFSLOCK_DIR="${ZFSLOCK_DIR:-/run/lock/zfsutilities}"
 zfslock_locks_dir="$ZFSLOCK_DIR/.locks"
 zfslock_pids_dir="$ZFSLOCK_DIR/.pids"
-ZFSLOCK_WAIT_INTERVAL=30    # Seconds between retry attempts when waiting
+ZFSLOCK_WAIT_INTERVAL="${ZFSLOCK_WAIT_INTERVAL:-30}"    # Seconds between retry attempts when waiting
 
 # Global variables set by functions
 zfslock_id=""               # Set by zfslock_acquire on success
@@ -62,13 +72,16 @@ zfslock_conflict_info=""    # Set by zfslock_check when conflict found
 # These are populated by _zfslock_load_node_config() the first time they are
 # needed.  Tests can override the configuration by setting ZFSLOCK_REMOTE_HOST,
 # ZFSLOCK_REMOTE_POOLS, ZFSLOCK_THIS_HOST, or ZFSLOCK_REMOTE_DISABLED=1.
+# -g is required: this file is loaded through bashinit's source_helper
+# function, and a bare declare here would create function-locals that vanish
+# when source_helper returns.
 _zfslock_node_mode="single-node"
 _zfslock_storage_host=""
 _zfslock_compute_host=""
 _zfslock_this_host=""
-declare -A _zfslock_pool_target=()
-declare -A _zfslock_remote_pids=()
-declare -A _zfslock_remote_hosts=()
+declare -gA _zfslock_pool_target=()
+declare -gA _zfslock_remote_pids=()
+declare -gA _zfslock_remote_hosts=()
 _zfslock_remote_conflict_seq=0
 
 # Extract a scalar value from the right-hand side of a KEY=value line in a
@@ -272,7 +285,7 @@ _zfslock_remote_conflict_file() {
 _zfslock_json_str_field() {
     local json="$1" field="$2"
     local rest value
-    rest="${json#*\"$field\":}"
+    rest="${json#*\""$field"\":}"
     [[ "$rest" != "$json" ]] || return 1
     while :; do
         # Skip whitespace after the colon.
@@ -282,7 +295,7 @@ _zfslock_json_str_field() {
             echo "${rest%%\"*}"
             return 0
         fi
-        value="${rest#*\"$field\":}"
+        value="${rest#*\""$field"\":}"
         [[ "$value" != "$rest" ]] || return 1
         rest="$value"
     done
@@ -411,7 +424,7 @@ _zfslock_read_field() {
     content=$(<"$lockfile")
     local rest value
     # Pass 1: string values.
-    rest="${content#*\"$field\":}"
+    rest="${content#*\""$field"\":}"
     [[ "$rest" != "$content" ]] || return 1
     while :; do
         rest="${rest#"${rest%%[![:space:]]*}"}"
@@ -423,19 +436,19 @@ _zfslock_read_field() {
                 return 0
             fi
         fi
-        value="${rest#*\"$field\":}"
+        value="${rest#*\""$field"\":}"
         [[ "$value" != "$rest" ]] || break
         rest="$value"
     done
     # Pass 2: numeric values.
-    rest="${content#*\"$field\":}"
+    rest="${content#*\""$field"\":}"
     while :; do
         rest="${rest#"${rest%%[![:space:]]*}"}"
         if [[ "$rest" =~ ^[0-9]+ ]]; then
             echo "${BASH_REMATCH[0]}"
             return 0
         fi
-        value="${rest#*\"$field\":}"
+        value="${rest#*\""$field"\":}"
         [[ "$value" != "$rest" ]] || return 1
         rest="$value"
     done
@@ -589,6 +602,22 @@ zfslock_check() {
     done
 }
 
+# Validate a user-supplied timing-knob value for use as a sleep/poll argument.
+# Prints the value when it is a non-negative decimal number; otherwise prints
+# the fallback. When allow_zero is not "Y" the value must also be greater than
+# zero (it feeds a sleep duration), so zero falls back as well; the remote
+# poll knob may legitimately be 0 and is governed by numeric format alone.
+_zfslock_sanitize_interval() {
+    local value="$1" fallback="$2" allow_zero="${3:-N}"
+    if [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        if [[ "$allow_zero" == "Y" ]] || awk -v v="$value" 'BEGIN { exit !(v > 0) }'; then
+            printf '%s\n' "$value"
+            return 0
+        fi
+    fi
+    printf '%s\n' "$fallback"
+}
+
 # Acquire a lock on a dataset
 # Returns: 0=success, 1=conflict, 2=error
 # Sets: $zfslock_id on success (the lock file path)
@@ -629,6 +658,9 @@ _zfslock_remote_acquire() {
 
     # Wait for the agent to respond (up to 30 seconds).
     local elapsed=0 timeout=300
+    # Numeric format only; zero is allowed for a poll interval.
+    local _poll_interval
+    _poll_interval=$(_zfslock_sanitize_interval "${ZFSLOCK_REMOTE_POLL_INTERVAL:-0.1}" 0.1 Y)
     while [[ $elapsed -lt $timeout ]]; do
         if [[ -s "$tmpfile" ]]; then
             break
@@ -636,7 +668,7 @@ _zfslock_remote_acquire() {
         if ! kill -0 "$ssh_pid" 2>/dev/null; then
             break
         fi
-        sleep 0.1
+        sleep "$_poll_interval"
         elapsed=$((elapsed + 1))
     done
 
@@ -963,8 +995,12 @@ zfslock_wait_or_resolve() {
     local type="$2"
     local description="${3:-}"
     local _first_pass=1
-    local _wait_interval="${ZFSLOCK_WAIT_INTERVAL:-30}"
-    [[ "$_wait_interval" =~ ^[0-9]+$ && $_wait_interval -ge 1 ]] || _wait_interval=1
+    # Sleep-based knobs: positive fractional seconds are allowed; non-numeric
+    # or non-positive values fall back to the 1-second floor.
+    local _wait_interval
+    _wait_interval=$(_zfslock_sanitize_interval "${ZFSLOCK_WAIT_INTERVAL:-30}" 1)
+    local _retry_throttle
+    _retry_throttle=$(_zfslock_sanitize_interval "${ZFSLOCK_RETRY_THROTTLE:-1}" 1)
 
     # In headless mode, optionally wait up to this many seconds before aborting.
     # A value of 0 (the default) keeps the legacy immediate-abort behavior.
@@ -979,7 +1015,7 @@ zfslock_wait_or_resolve() {
         # Throttle repeated acquisition attempts so a closed stdin or a
         # rapidly-reacquired lock cannot spin the CPU.
         if [[ $_first_pass -eq 0 ]]; then
-            sleep 1
+            sleep "$_retry_throttle"
         fi
 
         # Try to acquire the lock

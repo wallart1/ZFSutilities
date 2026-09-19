@@ -7,11 +7,23 @@ from unittest.mock import MagicMock, patch
 from test_support import mock_gtk
 
 
+def _import_gui_helpers():
+    """Import gui_helpers under a GTK mock so the suite needs no real gi.
+
+    The functions exercised in this suite are pure logic; only the module
+    import itself requires gi.
+    """
+    with mock_gtk():
+        import gui_helpers
+
+    return gui_helpers
+
+
 class TestGetMountedSnapshots(unittest.TestCase):
     """get_mounted_snapshots parses mount(8) output for snapshot mount state."""
 
     def _run_with_mount_output(self, stdout, returncode=0):
-        import gui_helpers
+        gui_helpers = _import_gui_helpers()
 
         with patch.object(
             gui_helpers.subprocess,
@@ -39,7 +51,7 @@ class TestGetMountedSnapshots(unittest.TestCase):
         self.assertEqual(self._run_with_mount_output(stdout), {"tank/a@snap1"})
 
     def test_returns_empty_set_when_command_missing(self):
-        import gui_helpers
+        gui_helpers = _import_gui_helpers()
 
         with patch.object(gui_helpers.subprocess, "run", side_effect=FileNotFoundError):
             self.assertEqual(gui_helpers.get_mounted_snapshots(), set())
@@ -308,7 +320,7 @@ class TestStyleExpanderLabel(unittest.TestCase):
     """style_expander_label colors the label orange for non-default state."""
 
     def _run(self, non_default):
-        import gui_helpers
+        gui_helpers = _import_gui_helpers()
 
         expander = MagicMock()
         gui_helpers.style_expander_label(expander, "Advanced", non_default)
@@ -324,7 +336,7 @@ class TestStyleExpanderLabel(unittest.TestCase):
         self.assertEqual(self._run(False), "<b>Advanced</b>")
 
     def test_missing_label_widget_is_noop(self):
-        import gui_helpers
+        gui_helpers = _import_gui_helpers()
 
         expander = MagicMock()
         expander.get_label_widget.return_value = None
@@ -335,7 +347,7 @@ class TestVarWidgetsDifferFromDefaults(unittest.TestCase):
     """var_widgets_differ_from_defaults compares widget values to defaults."""
 
     def test_all_default_returns_false(self):
-        import gui_helpers
+        gui_helpers = _import_gui_helpers()
 
         widgets = {
             "includes": _FakeValueEntry(""),
@@ -345,21 +357,21 @@ class TestVarWidgetsDifferFromDefaults(unittest.TestCase):
         self.assertFalse(gui_helpers.var_widgets_differ_from_defaults(widgets, defaults))
 
     def test_differing_entry_returns_true(self):
-        import gui_helpers
+        gui_helpers = _import_gui_helpers()
 
         widgets = {"includes": _FakeValueEntry("vm-")}
         defaults = {"includes": ""}
         self.assertTrue(gui_helpers.var_widgets_differ_from_defaults(widgets, defaults))
 
     def test_differing_combo_returns_true(self):
-        import gui_helpers
+        gui_helpers = _import_gui_helpers()
 
         widgets = {"doincrementals": _FakeValueCombo("N")}
         defaults = {"doincrementals": "Y"}
         self.assertTrue(gui_helpers.var_widgets_differ_from_defaults(widgets, defaults))
 
     def test_missing_default_key_compares_to_empty(self):
-        import gui_helpers
+        gui_helpers = _import_gui_helpers()
 
         widgets = {"unknown": _FakeValueEntry("x")}
         self.assertTrue(gui_helpers.var_widgets_differ_from_defaults(widgets, {}))

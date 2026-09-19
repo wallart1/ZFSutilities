@@ -1,5 +1,6 @@
 """Tests for python/zfs_lock_manager.py two-node behavior and script naming."""
 
+import json
 import os
 import sys
 import tempfile
@@ -146,6 +147,77 @@ class TestScriptName(unittest.TestCase):
     def test_empty_argv_returns_python(self):
         with patch.object(sys, "argv", []):
             self.assertEqual(zlm._script_name(), "python")
+
+    def test_python_dash_c_returns_none(self):
+        # pytest-xdist workers start as "python -c ..." and rewrite their own
+        # cmdline to "[pytest-xdist running] ...", so "-c" can never be
+        # matched against /proc/<pid>/cmdline. None tells stale-lock
+        # detection to leave such locks alone instead of deleting live ones.
+        with patch.object(sys, "argv", ["-c"]):
+            self.assertIsNone(zlm._script_name())
+
+
+class TestStaleLockUnverifiableScript(unittest.TestCase):
+    """Locks with an unverifiable holder script must survive stale cleanup."""
+
+    def setUp(self):
+        self.lock_dir = tempfile.mkdtemp()
+        self._orig_dir = zlm.ZFSLOCK_DIR
+        zlm.ZFSLOCK_DIR = self.lock_dir
+        zlm.ZFSLOCK_LOCKS_DIR = os.path.join(self.lock_dir, ".locks")
+        zlm.ZFSLOCK_PIDS_DIR = os.path.join(self.lock_dir, ".pids")
+        os.makedirs(zlm.ZFSLOCK_LOCKS_DIR, exist_ok=True)
+        os.makedirs(zlm.ZFSLOCK_PIDS_DIR, exist_ok=True)
+        zlm._node_config_cache = None
+        zlm._lock_refcounts.clear()
+
+    def tearDown(self):
+        zlm.ZFSLOCK_DIR = self._orig_dir
+        zlm.ZFSLOCK_LOCKS_DIR = os.path.join(self._orig_dir, ".locks")
+        zlm.ZFSLOCK_PIDS_DIR = os.path.join(self._orig_dir, ".pids")
+        zlm._node_config_cache = None
+        zlm._lock_refcounts.clear()
+
+    def _write_lock(self, dataset, script):
+        lockfile = zlm._lock_file(dataset)
+        data = {"dataset": dataset, "type": "w", "pid": os.getpid(), "script": script}
+        with open(lockfile, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        return lockfile
+
+    def test_null_script_with_live_pid_is_not_stale(self):
+        # "script": null means the holder's cmdline could never be verified
+        # (python -c launcher); stale detection must not touch a live lock.
+        lockfile = self._write_lock("pool/nullscript", None)
+        self.assertFalse(zlm._is_stale(lockfile))
+        self.assertEqual(zlm._cleanup_stale(), 0)
+        self.assertTrue(os.path.isfile(lockfile))
+
+    def test_missing_script_field_with_live_pid_is_not_stale(self):
+        lockfile = self._write_lock("pool/nofield", None)
+        data = {"dataset": "pool/nofield", "type": "w", "pid": os.getpid()}
+        with open(lockfile, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        self.assertFalse(zlm._is_stale(lockfile))
+        self.assertEqual(zlm._cleanup_stale(), 0)
+        self.assertTrue(os.path.isfile(lockfile))
+
+    @patch.dict(os.environ, {"ZFSLOCK_REMOTE_DISABLED": "1"})
+    def test_acquire_under_python_dash_c_round_trips_null_script(self):
+        # Real round-trip: acquiring while argv looks like "python -c ..."
+        # records "script": null in the lock JSON, and stale cleanup then
+        # leaves the (live) lock alone.
+        with patch.object(sys, "argv", ["-c"]):
+            lock_id = zlm.acquire("pool/dashc", "w")
+        try:
+            with open(lock_id, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.assertIsNone(data["script"])
+            self.assertFalse(zlm._is_stale(lock_id))
+            self.assertEqual(zlm._cleanup_stale(), 0)
+            self.assertTrue(os.path.isfile(lock_id))
+        finally:
+            zlm.release(lock_id)
 
 
 if __name__ == "__main__":

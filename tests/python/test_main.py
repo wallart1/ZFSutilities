@@ -7,8 +7,11 @@ import unittest
 from unittest.mock import ANY, MagicMock, mock_open, patch
 
 # main.py is on PYTHON_SRC via test_support
-import main as main_module
-from test_support import capture_logs
+from test_support import capture_logs, import_or_skip_gi, requires_gi
+
+pytestmark = requires_gi
+
+main_module = import_or_skip_gi("main")
 
 
 class _ExecvpCalled(Exception):

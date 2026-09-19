@@ -19,7 +19,7 @@ ENROLL_BIN = "/usr/local/lib/zfsutilities/current/bin/enroll-iscsi-pool"
 def _import_enroll():
     """Import iscsi_enroll under a fresh mocked GTK context."""
     sys.modules.pop("iscsi_enroll", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import iscsi_enroll
 
         return iscsi_enroll

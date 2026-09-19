@@ -1,0 +1,457 @@
+#!/usr/bin/bash
+# test-run-tests-preflight — Unit tests for the run-tests environment preflight.
+# shellcheck disable=SC1090,SC2034,SC2154
+
+# The preflight functions in tests/run-tests are extracted by name with sed
+# (the same convention as tests/test-check-prerequisites) and exercised against
+# fabricated environments: stub bin dirs, fixture manifests, and fabricated
+# capability states. EUID is read-only, so detect_root is only checked for
+# consistency with the actual EUID; detect_test_pools is checked in the
+# non-root/no-zfs branches and otherwise only required not to crash.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+RUN_TESTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-tests"
+
+# Load a named top-level function from run-tests without executing the script.
+load_helper_from_run_tests() {
+    local helper_name="$1"
+    local tmp_file
+    tmp_file=$(mktemp)
+    sed -n "/^${helper_name}() {/,/^}/p" "$RUN_TESTS" > "$tmp_file"
+    # shellcheck source=/dev/null
+    source "$tmp_file"
+    rm -f "$tmp_file"
+}
+
+for helper in detect_gi detect_pv detect_zfs detect_root detect_test_pools \
+              load_requirements_manifest missing_requirements pytest_jobs_auto \
+              is_skipped_soak; do
+    load_helper_from_run_tests "$helper"
+done
+
+# Globals the extracted functions operate on (normally declared by run-tests
+# itself); tests fabricate their contents.
+declare -gA cap_present=()
+declare -gA suite_requirements=()
+# is_skipped_soak state: with_soak is set by the --with-soak option and
+# explicit_suite marks suites named on the command line.
+with_soak=""
+declare -gA explicit_suite=()
+
+# ---------------------------------------------------------------------------
+# Stub bin dir helpers
+# ---------------------------------------------------------------------------
+
+make_stub_bin() {
+    local dir="$1"; shift
+    mkdir -p "$dir"
+    local name
+    for name in "$@"; do
+        printf '#!/bin/sh\nexit 0\n' > "$dir/$name"
+        chmod +x "$dir/$name"
+    done
+}
+
+# ---------------------------------------------------------------------------
+# is_skipped_soak
+# ---------------------------------------------------------------------------
+
+test_is_skipped_soak_rules() {
+    test_start "is_skipped_soak skips *-soak suites by default"
+    with_soak=""
+    explicit_suite=()
+    if is_skipped_soak test-zfslockmanager-soak; then
+        test_pass
+    else
+        test_fail "default run should skip soak suites"
+    fi
+
+    test_start "is_skipped_soak runs a soak suite named explicitly"
+    explicit_suite[test-zfslockmanager-soak]=1
+    if is_skipped_soak test-zfslockmanager-soak; then
+        test_fail "explicitly named soak suite should run"
+    else
+        test_pass
+    fi
+
+    test_start "is_skipped_soak runs soak suites under --with-soak"
+    explicit_suite=()
+    with_soak=1
+    if is_skipped_soak test-zfslockmanager-soak; then
+        test_fail "--with-soak should run soak suites"
+    else
+        test_pass
+    fi
+
+    test_start "is_skipped_soak never skips non-soak suites"
+    if is_skipped_soak test-zfslockmanager; then
+        test_fail "non-soak suite should never be skipped"
+    else
+        test_pass
+    fi
+    with_soak=""
+    explicit_suite=()
+}
+
+# ---------------------------------------------------------------------------
+# pytest exit-5-with-skips rule
+# ---------------------------------------------------------------------------
+
+# The "pytest exit 5 (no tests collected) with skips present is a clean
+# environment skip" adjustment is an inline block in run-tests, not a named
+# function, so it is extracted by content rather than by name and applied to
+# the caller's py_rc/py_skipped/py_failed.
+load_exit5_clean_skip_rule() {
+    local tmp_file
+    tmp_file=$(mktemp)
+    sed -n \
+        '/if \[\[ \$py_rc -eq 5 && \$py_skipped -gt 0 && \$py_failed -eq 0 \]\]; then/,/^ *fi$/p' \
+        "$RUN_TESTS" > "$tmp_file"
+    # shellcheck source=/dev/null
+    source "$tmp_file"
+    rm -f "$tmp_file"
+}
+
+test_pytest_exit5_with_skips_is_clean() {
+    test_start "pytest exit 5 with skips and no failures is treated as clean"
+    py_rc=5; py_skipped=3; py_failed=0
+    load_exit5_clean_skip_rule
+    if [[ $py_rc -ne 0 ]]; then
+        test_fail "exit 5 with skips was not zeroed (py_rc=$py_rc)"
+        return
+    fi
+    test_pass
+
+    test_start "bare pytest exit 5 without skips remains an error"
+    py_rc=5; py_skipped=0; py_failed=0
+    load_exit5_clean_skip_rule
+    if [[ $py_rc -eq 0 ]]; then
+        test_fail "bare exit 5 without skips was zeroed"
+        return
+    fi
+    test_pass
+
+    test_start "pytest exit 5 with failures remains an error"
+    py_rc=5; py_skipped=3; py_failed=1
+    load_exit5_clean_skip_rule
+    if [[ $py_rc -eq 0 ]]; then
+        test_fail "exit 5 with failures was zeroed"
+        return
+    fi
+    test_pass
+    py_rc=0; py_skipped=0; py_failed=0
+}
+
+test_detect_pv_with_stub_on_path() {
+    test_start "detect_pv succeeds when pv is on PATH"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    make_stub_bin "$tmpdir" pv
+    if ( PATH="$tmpdir"; detect_pv ); then
+        test_pass
+    else
+        test_fail "detect_pv returned non-zero with a pv stub on PATH"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_detect_pv_without_pv() {
+    test_start "detect_pv fails when pv is absent from PATH"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    if ( PATH="$tmpdir"; detect_pv ); then
+        test_fail "detect_pv returned zero with an empty PATH dir"
+    else
+        test_pass
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_detect_zfs_requires_zfs_and_zpool() {
+    test_start "detect_zfs requires both zfs and zpool"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    if ( PATH="$tmpdir"; detect_zfs ); then
+        test_fail "detect_zfs returned zero with an empty PATH dir"
+        rm -rf "$tmpdir"
+        return
+    fi
+    make_stub_bin "$tmpdir" zfs
+    if ( PATH="$tmpdir"; detect_zfs ); then
+        test_fail "detect_zfs returned zero with only zfs stubbed"
+        rm -rf "$tmpdir"
+        return
+    fi
+    make_stub_bin "$tmpdir" zpool
+    if ( PATH="$tmpdir:/usr/bin:/bin"; detect_zfs ); then
+        test_pass
+    else
+        test_fail "detect_zfs returned non-zero with zfs and zpool stubbed"
+    fi
+    rm -rf "$tmpdir"
+}
+
+# ---------------------------------------------------------------------------
+# detect_gi
+# ---------------------------------------------------------------------------
+
+test_detect_gi_succeeds_when_probe_succeeds() {
+    test_start "detect_gi succeeds when the python3 probe succeeds"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    # A stub python3 that exits 0 makes the probe succeed regardless of
+    # whether real gi is installed.
+    make_stub_bin "$tmpdir" python3
+    if ( PATH="$tmpdir"; detect_gi ); then
+        test_pass
+    else
+        test_fail "detect_gi returned non-zero with a succeeding python3 stub"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_detect_gi_fails_when_probe_fails() {
+    test_start "detect_gi fails when the python3 probe fails"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    make_stub_bin "$tmpdir" python3
+    printf '#!/bin/sh\nexit 1\n' > "$tmpdir/python3"
+    if ( PATH="$tmpdir"; detect_gi ); then
+        test_fail "detect_gi returned zero with a failing python3 stub"
+    else
+        test_pass
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_detect_gi_fails_without_python3() {
+    test_start "detect_gi fails when python3 is absent from PATH"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    if ( PATH="$tmpdir"; detect_gi ); then
+        test_fail "detect_gi returned zero with an empty PATH dir (no python3)"
+    else
+        test_pass
+    fi
+    rm -rf "$tmpdir"
+}
+
+# ---------------------------------------------------------------------------
+# detect_root / detect_test_pools
+# ---------------------------------------------------------------------------
+
+test_detect_root_matches_euid() {
+    test_start "detect_root agrees with EUID"
+    if [[ $EUID -eq 0 ]]; then
+        if detect_root; then test_pass; else
+            test_fail "detect_root returned non-zero as root"
+        fi
+    else
+        if detect_root; then
+            test_fail "detect_root returned zero as a non-root user"
+        else
+            test_pass
+        fi
+    fi
+}
+
+test_detect_test_pools_requires_root_and_zfs() {
+    test_start "detect_test_pools fails without root or zfs"
+    if ! detect_root || ! detect_zfs; then
+        if detect_test_pools; then
+            test_fail "detect_test_pools returned zero without root+zfs"
+        else
+            test_pass
+        fi
+    else
+        # Root with zfs present: only require the probe to run without error;
+        # whether the test pools exist is environment-dependent.
+        detect_test_pools
+        test_pass
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# load_requirements_manifest
+# ---------------------------------------------------------------------------
+
+test_manifest_parsing() {
+    test_start "manifest parsing builds suite-to-capabilities mapping"
+    local tmpdir saved_mydir
+    tmpdir=$(mktemp -d)
+    saved_mydir="$mydir"
+    cat > "$tmpdir/requirements.manifest" <<'EOF'
+# comment line
+gi tests/python/test_main.py
+
+root zfs test-pools tests/integration/test-zfs-send-receive-pools
+EOF
+    # shellcheck disable=SC2034
+    mydir="$tmpdir"
+    suite_requirements=()
+    if ! load_requirements_manifest; then
+        test_fail "load_requirements_manifest rejected a valid fixture manifest"
+        mydir="$saved_mydir"
+        rm -rf "$tmpdir"
+        return
+    fi
+    mydir="$saved_mydir"
+    local ok=1
+    [[ ${suite_requirements[tests/python/test_main.py]} == "gi " ]] || ok=0
+    [[ ${suite_requirements[tests/integration/test-zfs-send-receive-pools]} == "root zfs test-pools " ]] || ok=0
+    [[ ${#suite_requirements[@]} -eq 2 ]] || ok=0
+    if [[ $ok == 1 ]]; then
+        test_pass
+    else
+        test_fail "unexpected mapping: $(declare -p suite_requirements)"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_manifest_missing_file_fails() {
+    test_start "missing manifest is a harness error, not a skip"
+    local tmpdir saved_mydir
+    tmpdir=$(mktemp -d)
+    saved_mydir="$mydir"
+    # shellcheck disable=SC2034
+    mydir="$tmpdir"
+    if load_requirements_manifest 2>/dev/null; then
+        test_fail "load_requirements_manifest succeeded with no manifest file"
+    else
+        test_pass
+    fi
+    mydir="$saved_mydir"
+    rm -rf "$tmpdir"
+}
+
+# ---------------------------------------------------------------------------
+# missing_requirements
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# --list / --count mode
+# ---------------------------------------------------------------------------
+
+test_list_mode_counts_single_bash_suite() {
+    test_start "--list and --count print a per-suite executed count and total"
+    local out_list out_count
+    out_list=$(bash "$RUN_TESTS" --list test-paths 2>/dev/null)
+    out_count=$(bash "$RUN_TESTS" --count test-paths 2>/dev/null)
+    local ok=1
+    [[ "$out_list" == "$out_count" ]] || ok=0
+    grep -qE '^  test-paths: [0-9]+$' <<< "$out_list" || ok=0
+    grep -qE '^Total: [0-9]+$' <<< "$out_list" || ok=0
+    if [[ $ok == 1 ]]; then
+        test_pass
+    else
+        test_fail "--list output unexpected (list='$out_list' count='$out_count')"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# pytest_jobs_auto
+# ---------------------------------------------------------------------------
+
+test_pytest_jobs_capped_by_nproc_when_memory_plentiful() {
+    test_start "pytest_jobs_auto caps at nproc when memory is plentiful"
+    local jobs
+    jobs=$(pytest_jobs_auto 8000 4)
+    if [[ $jobs == 4 ]]; then
+        test_pass
+    else
+        test_fail "expected 4, got $jobs"
+    fi
+}
+
+test_pytest_jobs_capped_by_memory() {
+    test_start "pytest_jobs_auto caps by available memory"
+    local jobs
+    jobs=$(pytest_jobs_auto 2700 4)
+    if [[ $jobs == 3 ]]; then
+        test_pass
+    else
+        test_fail "expected 3, got $jobs"
+    fi
+}
+
+test_pytest_jobs_never_below_one() {
+    test_start "pytest_jobs_auto never returns less than 1"
+    local jobs
+    jobs=$(pytest_jobs_auto 100 4)
+    if [[ $jobs == 1 ]]; then
+        test_pass
+    else
+        test_fail "expected 1, got $jobs"
+    fi
+}
+
+test_pytest_jobs_scales_with_memory() {
+    test_start "pytest_jobs_auto scales worker count with memory"
+    local low high
+    low=$(pytest_jobs_auto 1000 8)
+    high=$(pytest_jobs_auto 7200 8)
+    if [[ $low == 1 && $high == 8 ]]; then
+        test_pass
+    else
+        test_fail "expected low=1 high=8, got low=$low high=$high"
+    fi
+}
+
+test_missing_requirements_with_fabricated_caps() {
+    test_start "missing_requirements reports only unmet capabilities"
+    declare -gA cap_present=([gi]=0 [pv]=1 [zfs]=1 [root]=0 [test-pools]=0)
+    declare -gA suite_requirements=(
+        [tests/python/test_main.py]="gi "
+        [tests/integration/test-zfs-send-receive-pools]="root zfs test-pools "
+    )
+    local missing
+    missing=$(missing_requirements tests/python/test_main.py)
+    if [[ $missing != "gi " ]]; then
+        test_fail "expected 'gi ', got '$missing'"
+        return
+    fi
+    missing=$(missing_requirements tests/integration/test-zfs-send-receive-pools)
+    if [[ $missing != "root test-pools " ]]; then
+        test_fail "expected 'root test-pools ', got '$missing'"
+        return
+    fi
+    # A suite with all caps present has no missing requirements.
+    cap_present[gi]=1
+    missing=$(missing_requirements tests/python/test_main.py)
+    if [[ -n $missing ]]; then
+        test_fail "expected empty missing list, got '$missing'"
+        return
+    fi
+    # A suite not in the manifest is runnable.
+    missing=$(missing_requirements tests/test-zfsretain)
+    if [[ -n $missing ]]; then
+        test_fail "expected empty missing list for unlisted suite, got '$missing'"
+        return
+    fi
+    test_pass
+}
+
+test_detect_pv_with_stub_on_path
+test_detect_pv_without_pv
+test_detect_zfs_requires_zfs_and_zpool
+test_detect_gi_succeeds_when_probe_succeeds
+test_detect_gi_fails_when_probe_fails
+test_detect_gi_fails_without_python3
+test_detect_root_matches_euid
+test_detect_test_pools_requires_root_and_zfs
+test_manifest_parsing
+test_manifest_missing_file_fails
+test_list_mode_counts_single_bash_suite
+test_pytest_jobs_capped_by_nproc_when_memory_plentiful
+test_pytest_jobs_capped_by_memory
+test_pytest_jobs_never_below_one
+test_pytest_jobs_scales_with_memory
+test_missing_requirements_with_fabricated_caps
+test_is_skipped_soak_rules
+test_pytest_exit5_with_skips_is_clean
+
+test_summary
+teardown_test_env

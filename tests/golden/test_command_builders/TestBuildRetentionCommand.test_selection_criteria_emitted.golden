@@ -1,0 +1,3 @@
+bash
+-c
+source ~/bashinit; bashinit; mydir="/bin"; source "$mydir/zfscleanup"; autoproceed="Y"; releaseholds="Y"; releaseholds_tags=("offsite-*"); includes=(proxmox =tank/a); excludes=(vm-100 scratch); startwith==tank/a; endwith=z; cleanup "" "" dailybackup

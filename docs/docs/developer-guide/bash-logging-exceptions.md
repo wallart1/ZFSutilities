@@ -45,7 +45,6 @@ Test runners intentionally format pass/fail banners for human consumption and ar
 - `tests/run-tests`
 - `tests/run-python-tests`
 - `tests/python/runner.py`
-- `bin/zfslockmanager-test`
 
 ## Structured stdout data inside otherwise-converted scripts
 

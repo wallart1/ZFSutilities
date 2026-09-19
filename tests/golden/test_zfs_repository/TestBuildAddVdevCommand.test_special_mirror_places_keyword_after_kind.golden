@@ -1,0 +1,7 @@
+zpool
+add
+tank
+special
+mirror
+/dev/disk/by-id/ata-X
+/dev/disk/by-id/ata-Y

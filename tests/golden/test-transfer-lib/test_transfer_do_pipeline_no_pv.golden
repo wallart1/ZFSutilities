@@ -1,0 +1,2 @@
+zfs receive -u -F -s pool/dest
+zfs send -Rw src@snap

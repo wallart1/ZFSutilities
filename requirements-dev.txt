@@ -1,0 +1,5 @@
+# Development/test dependencies for ZFS Utilities.
+# System dependencies (GTK/PyGObject, pv, zfsutils-linux, rsync, smartmontools)
+# are installed via the OS package manager — see docs/docs/developer-guide/testing.md.
+pytest>=7.4
+pytest-xdist>=3.0

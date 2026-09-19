@@ -1,0 +1,3 @@
+bash
+-c
+source 'REPO_ROOT/bin/zfs-migrate-send'; sourcefs='my pool/ds'; destfs='dest pool/ds'; snapname=migrate-x; zfs_migrate_send

@@ -15,15 +15,20 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-import dashboard_page as dp
 import feature_config
 from logging_config import parse_msg_level
 from test_support import (
     capture_logs,
+    import_or_skip_gi,
     mock_gtk,
     mock_subprocess,
+    requires_gi,
     temp_config_dir,
 )
+
+pytestmark = requires_gi
+
+dp = import_or_skip_gi("dashboard_page")
 
 
 def _write_lock_file(path, dataset, pid, lock_type="w"):

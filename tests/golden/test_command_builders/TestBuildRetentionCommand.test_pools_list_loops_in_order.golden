@@ -1,0 +1,3 @@
+bash
+-c
+source ~/bashinit; bashinit; mydir="/bin"; source "$mydir/zfscleanup"; autoproceed="Y"; releaseholds="Y"; releaseholds_tags=("offsite-*"); overall_rc=0; for pool in archive tank; do   cleanup "$pool" "" dailybackup || overall_rc=$?; done; exit $overall_rc

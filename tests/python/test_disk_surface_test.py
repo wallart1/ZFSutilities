@@ -23,7 +23,7 @@ def _import_surface_module():
     """Import disk_surface_test under a fresh mocked GTK context."""
     for name in ("disk_surface_test", "disk_repository"):
         sys.modules.pop(name, None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import disk_surface_test
 
         return disk_surface_test
@@ -185,9 +185,7 @@ class TestSurfaceStateMachine(unittest.TestCase):
 
     def test_running_poll_updates_progress_and_eta(self):
         dst, entry = self._entry()
-        changed = dst.update_entry_from_poll(
-            entry, {"running": True, "remaining_percent": 40}, NOW
-        )
+        changed = dst.update_entry_from_poll(entry, {"running": True, "remaining_percent": 40}, NOW)
         self.assertTrue(changed)
         self.assertEqual(entry["progress_percent"], 60)
         self.assertEqual(
@@ -226,9 +224,7 @@ class TestSurfaceStateMachine(unittest.TestCase):
     def test_finished_entry_unchanged(self):
         dst, entry = self._entry(status="passed", finished_at=NOW.isoformat())
         self.assertFalse(
-            dst.update_entry_from_poll(
-                entry, {"running": True, "remaining_percent": 10}, NOW
-            )
+            dst.update_entry_from_poll(entry, {"running": True, "remaining_percent": 10}, NOW)
         )
 
     def test_update_entries_concurrent_per_disk(self):
@@ -397,7 +393,9 @@ class TestStartCancelHelpers(unittest.TestCase):
             app = self._app()
             app.ctx.disk_repository.abort_self_test.return_value = True
             self.assertTrue(dst.cancel_surface_test(app, "/dev/sdb"))
-            self.assertEqual(dst.load_surface_test_state()["tests"]["/dev/sdb"]["status"], "canceled")
+            self.assertEqual(
+                dst.load_surface_test_state()["tests"]["/dev/sdb"]["status"], "canceled"
+            )
 
 
 class TestSurfaceTestDialog(unittest.TestCase):
@@ -540,7 +538,7 @@ def _store_row(path, disk_type, model="WD"):
 
 def _import_disks_page():
     sys.modules.pop("disks_page", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import disks_page
 
         return disks_page
@@ -583,8 +581,9 @@ class TestDisksPageSurfaceIntegration(unittest.TestCase):
         store = _FakeStore([_store_row("/dev/sdb", "HDD")])
         app = _app_with_selection(store, [0])
         app._disks_surface_test_btn = MagicMock()
-        with patch.object(dp.node_config, "is_two_node", return_value=True), patch.object(
-            dp.node_config, "is_storage_host", return_value=False
+        with (
+            patch.object(dp.node_config, "is_two_node", return_value=True),
+            patch.object(dp.node_config, "is_storage_host", return_value=False),
         ):
             dp.update_disks_button_sensitivity(app)
         app._disks_surface_test_btn.set_sensitive.assert_called_with(False)
@@ -652,7 +651,9 @@ class TestDashboardSurfaceTask(unittest.TestCase):
     """Dashboard cancel dispatch for surface tests."""
 
     def test_cancel_task_surfacetest(self):
-        import dashboard_page as dp
+        from test_support import import_or_skip_gi
+
+        dp = import_or_skip_gi("dashboard_page")
 
         dst = _import_surface_module()
         app = MagicMock()

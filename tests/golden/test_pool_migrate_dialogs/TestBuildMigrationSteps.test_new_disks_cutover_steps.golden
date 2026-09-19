@@ -1,0 +1,2 @@
+zpool export pool1
+zpool import pool1_mig pool1

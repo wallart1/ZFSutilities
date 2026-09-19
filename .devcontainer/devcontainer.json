@@ -1,0 +1,8 @@
+{
+    "name": "zfsutilities",
+    "build": {
+        "context": "..",
+        "dockerfile": "Dockerfile"
+    },
+    "workspaceFolder": "/workspace"
+}

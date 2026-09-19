@@ -114,7 +114,7 @@ class TestRetentionPagePruneLabel(unittest.TestCase):
             "action_dispatch",
             "zfsutilities_gui",
         )
-        with temp_config_dir(), mock_gtk():
+        with temp_config_dir(), mock_gtk(fresh=True):
             import retention_page as rp
 
             # Avoid filesystem / subprocess side effects during page creation
@@ -132,7 +132,10 @@ class TestRetentionPagePruneLabel(unittest.TestCase):
             with patch.object(rp, "import_legacy_retention", return_value=False):
                 rp.create_retention_page(app, app.ctx)
 
-            app._ret_prune_label_entry.set_width_chars.assert_called_once_with(20)
+            # Gtk.Entry() is a shared per-class mock, so other Entry widgets
+            # built during page creation also record set_width_chars calls;
+            # assert the prune label's 20-char sizing happened.
+            app._ret_prune_label_entry.set_width_chars.assert_any_call(20)
 
 
 class TestRetentionPagePoolLabel(unittest.TestCase):
@@ -140,7 +143,7 @@ class TestRetentionPagePoolLabel(unittest.TestCase):
 
     def _fresh_module(self):
         _clear_cached_modules("retention_page")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import retention_page as rp
 
             return rp
@@ -183,7 +186,7 @@ class TestRetentionPageLabelDirtyState(unittest.TestCase):
 
     def _fresh_module(self):
         _clear_cached_modules("retention_page")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import retention_page as rp
 
             return rp
@@ -311,7 +314,7 @@ class TestRetentionPageProfileConfig(unittest.TestCase):
 
     def _fresh_module(self):
         _clear_cached_modules("retention_page")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import retention_page as rp
 
             return rp
@@ -349,7 +352,7 @@ class TestRetentionPageMultiPoolSave(unittest.TestCase):
 
     def _fresh_module(self):
         _clear_cached_modules("retention_page")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import retention_page as rp
 
             return rp
@@ -558,7 +561,7 @@ class TestRetentionPageNewInstallCleanup(unittest.TestCase):
 
     def _fresh_module(self):
         _clear_cached_modules("retention_page")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import retention_page as rp
 
             return rp
@@ -669,7 +672,7 @@ class TestRetentionPagePruneList(unittest.TestCase):
 
     def _fresh_module(self):
         _clear_cached_modules("retention_page")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import retention_page as rp
 
             return rp
@@ -998,7 +1001,7 @@ class TestTabNavigationWiring(unittest.TestCase):
 
     def _fresh_module(self):
         _clear_cached_modules("retention_page")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import retention_page as rp
 
             return rp
@@ -1109,7 +1112,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
 
     def _fresh_module(self):
         _clear_cached_modules("retention_page")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import retention_page as rp
 
             return rp
@@ -1403,7 +1406,7 @@ class TestRetentionPageLayout(unittest.TestCase):
 
     def _fresh_module(self):
         _clear_cached_modules("retention_page")
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import retention_page as rp
 
             return rp
@@ -1450,7 +1453,7 @@ class TestRetentionVerbCheckbox(unittest.TestCase):
             "action_dispatch",
             "zfsutilities_gui",
         )
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import retention_page as rp
 
             return rp
@@ -1550,7 +1553,7 @@ class TestRetentionAdvancedLabel(unittest.TestCase):
             "action_dispatch",
             "zfsutilities_gui",
         )
-        with temp_config_dir(), mock_gtk():
+        with temp_config_dir(), mock_gtk(fresh=True):
             import retention_page as rp
 
             # Avoid filesystem / subprocess side effects during page creation

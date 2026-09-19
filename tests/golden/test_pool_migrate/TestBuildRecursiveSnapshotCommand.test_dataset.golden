@@ -1,0 +1,4 @@
+zfs
+snapshot
+-r
+temp/proxmox@migrate-x

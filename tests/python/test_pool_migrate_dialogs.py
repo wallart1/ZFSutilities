@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+import shlex
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -13,7 +14,10 @@ if PYTHON_SRC not in sys.path:
 
 from disk_repository import DiskInfo
 from pool_create import disk_eligibility
-from test_support import capture_logs, mock_gtk
+from test_support import capture_logs, mock_gtk, normalize_repo_root, requires_gi
+
+pytestmark = requires_gi
+import golden
 from zfs_repository import DatasetRow, TopologyNode
 
 TB = 10**12
@@ -24,7 +28,7 @@ SNAP = "@migrate-2026-09-10T14:30-04:00"
 def _import_dialogs():
     """Import pool_migrate_dialogs under a fresh mocked GTK context."""
     sys.modules.pop("pool_migrate_dialogs", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import pool_migrate_dialogs
 
         return pool_migrate_dialogs
@@ -108,6 +112,19 @@ def _request(pmd, mode=None, **overrides):
         **overrides,
     )
     return request
+
+
+def _norm_command(cmd):
+    # Send-step scripts resolve the zfs-migrate-send wrapper from this
+    # checkout's absolute location; normalize it (and its quoting) so
+    # goldens stay machine-independent.
+    return [normalize_repo_root(c) for c in cmd]
+
+
+def _plan_text(steps):
+    # One step per line, argv shell-quoted (verify scripts contain spaces
+    # and quotes), for readable per-step diffs.
+    return "\n".join(shlex.join(_norm_command(s.command)) for s in steps)
 
 
 class TestPureHelpers(unittest.TestCase):
@@ -288,17 +305,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
         pmd = _import_dialogs()
         copy, _cutover = pmd.build_migration_steps(_request(pmd))
         self.assertEqual(len(copy), 5)  # snapshot + 2 copies + 2 verifies
-        self.assertEqual(
-            copy[0].command,
-            ["zfs", "snapshot", "-r", "pool1@migrate-2026-09-10T14:30-04:00"],
-        )
-        for step in copy[1:3]:
-            self.assertEqual(step.command[0:2], ["bash", "-c"])
-            self.assertIn("zfs-migrate-send", step.command[2])
-            self.assertIn("zfs_migrate_send", step.command[2])
-            self.assertNotIn("pv_rate_limit", step.command[2])
-        for step in copy[3:]:
-            self.assertIn("zfs list -rH -t filesystem,volume", step.command[2])
+        golden.check(self, _plan_text(copy))
 
     def test_copy_steps_carry_rate_limit(self):
         pmd = _import_dialogs()
@@ -332,13 +339,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
     def test_new_disks_cutover_steps(self):
         pmd = _import_dialogs()
         _copy, cutover = pmd.build_migration_steps(_request(pmd))
-        self.assertEqual(
-            [step.command for step in cutover],
-            [
-                ["zpool", "export", "pool1"],
-                ["zpool", "import", "pool1_mig", "pool1"],
-            ],
-        )
+        golden.check(self, _plan_text(cutover))
 
     def test_holding_mode_cutover_sequence(self):
         pmd = _import_dialogs()
@@ -357,34 +358,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
         # export, destroy, create, 2 copy-back, 2 verify, 2 destroy-copy,
         # export holding, import-rename
         self.assertEqual(len(cutover), 11)
-        self.assertEqual(cutover[0].command, ["zpool", "export", "pool1"])
-        self.assertEqual(cutover[1].command, ["zpool", "destroy", "pool1"])
-        self.assertEqual(
-            cutover[2].command,
-            [
-                "zpool",
-                "create",
-                "pool1_mig",
-                "raidz1",
-                "/dev/disk/by-id/ata-TESTsda",
-                "/dev/disk/by-id/ata-TESTsdb",
-                "/dev/disk/by-id/ata-TESTsdc",
-            ],
-        )
-        # Copy-back steps come straight after create: no second snapshot.
-        self.assertIn("zfs_migrate_send", cutover[3].command[2])
-        self.assertIn("sourcefs=pool2/data", cutover[3].command[2])
-        self.assertIn("destfs=pool1_mig/data", cutover[3].command[2])
-        destroy_cmds = [s.command for s in cutover if s.command[0:2] == ["zfs", "destroy"]]
-        self.assertEqual(
-            destroy_cmds,
-            [
-                ["zfs", "destroy", "-r", "pool2/data"],
-                ["zfs", "destroy", "-r", "pool2/vm-100-disk-0"],
-            ],
-        )
-        self.assertEqual(cutover[-2].command, ["zpool", "export", "pool2"])
-        self.assertEqual(cutover[-1].command, ["zpool", "import", "pool1_mig", "pool1"])
+        golden.check(self, _plan_text(cutover))
 
 
 class TestRootPoolName(unittest.TestCase):
@@ -838,8 +812,7 @@ class TestCutoverIscsiRepair(unittest.TestCase):
         self.assertEqual(len(app.dataset_runner.steps), 1)
         self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
         step = app.dataset_runner.steps[0]
-        self.assertEqual(step.command, [self.REPAIR_BIN])
-        self.assertTrue(step.command[0].endswith("repair-iscsi-luns"))
+        golden.check(self, step.command)
         self.assertEqual(step.description, "Re-register migrated pool iSCSI LUNs")
         self.assertFalse(step.is_rsync)
         self.assertFalse(step.fatal)

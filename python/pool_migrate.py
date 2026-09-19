@@ -68,7 +68,12 @@ def migration_snapshot_name(when: datetime | None = None) -> str:
     whose label matches its own (``dailybackup``, ``offsite``, …), so a
     ``migrate``-labelled snapshot is never retention-eligible.
     """
-    now = (when or datetime.now()).astimezone()
+    now = when or datetime.now()
+    if now.tzinfo is None:
+        # Naive datetimes are assumed to be local time; an aware datetime
+        # keeps the offset it was given (snapshot names follow the caller's
+        # offset, not the machine's).
+        now = now.astimezone()
     datestr = now.strftime("%Y-%m-%dT%H:%M%z")
     datestr = datestr[:-2] + ":" + datestr[-2:]
     return f"@{_MIGRATION_LABEL}-{datestr}"

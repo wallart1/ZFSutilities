@@ -39,7 +39,7 @@ _start_holder() {
     # Hold the write end open with a sleeping subshell.
     (
         exec 3>"$_HOLDER_FIFO"
-        sleep 3600
+        sleep infinity
     ) &
     _HOLDER_WRITER_PID=$!
 

@@ -83,6 +83,7 @@ TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
+TESTS_UPDATED=0
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -98,6 +99,7 @@ test_start() {
     _CURRENT_TEST_NAME="$1"
     _CURRENT_TEST_COUNTED=0
     _CURRENT_TEST_FAILED=0
+    _CURRENT_TEST_GOLDEN_UPDATED=""
     if [[ -z "$_ZFSUTILITIES_TESTS_QUIET" && -z "$_ZFSUTILITIES_TESTS_FAILURES_ONLY" ]]; then
         echo -n "  Test $TESTS_RUN: $1... "
     fi
@@ -115,7 +117,10 @@ test_pass() {
 
 test_fail() {
     if [[ "${_CURRENT_TEST_FAILED:-0}" -eq 0 ]]; then
-        if [[ "$_CURRENT_TEST_COUNTED" -ne 0 ]]; then
+        # A golden update already un-counted a previously passed test; do not
+        # decrement again here.
+        if [[ "$_CURRENT_TEST_COUNTED" -ne 0 \
+            && -z "${_CURRENT_TEST_GOLDEN_UPDATED:-}" ]]; then
             # A previous assertion already counted this test as passed; correct
             # the tally because the final result is a failure.
             ((TESTS_PASSED--))
@@ -184,6 +189,66 @@ assert_array_len() {
         test_pass
     else
         test_fail "Expected array length $expected, got ${#actual[@]}"
+    fi
+}
+
+assert_golden() {
+    local name="$1" actual_text="$2"
+    local suite_dir golden_file
+    suite_dir="$mydir/tests/golden/$(basename "$0")"
+    golden_file="$suite_dir/$name.golden"
+    # Canonical form: exactly one trailing newline, so command substitution
+    # and file-round-trip differences never cause spurious mismatches.
+    while [[ "$actual_text" == *$'\n' ]]; do
+        actual_text="${actual_text%$'\n'}"
+    done
+    actual_text+=$'\n'
+    if [[ "${UPDATE_GOLDEN:-}" == "1" ]]; then
+        local existing=""
+        if [[ -f "$golden_file" ]]; then
+            existing=$(cat "$golden_file")
+            while [[ "$existing" == *$'\n' ]]; do
+                existing="${existing%$'\n'}"
+            done
+            existing+=$'\n'
+        fi
+        if [[ "$existing" != "$actual_text" ]]; then
+            mkdir -p "$suite_dir"
+            printf '%s' "$actual_text" > "$golden_file"
+            if [[ -z "${_CURRENT_TEST_GOLDEN_UPDATED:-}" ]]; then
+                # Correct the tally if an earlier assertion in this test
+                # already counted it as passed: the test's final state is
+                # "updated", not "passed".
+                _CURRENT_TEST_GOLDEN_UPDATED=1
+                if [[ "$_CURRENT_TEST_COUNTED" -ne 0 ]]; then
+                    ((TESTS_PASSED--))
+                fi
+                _CURRENT_TEST_COUNTED=1
+                ((TESTS_UPDATED++))
+            fi
+            echo "  golden updated: $name"
+        else
+            test_pass
+        fi
+        return 0
+    fi
+    if [[ ! -f "$golden_file" ]]; then
+        test_fail "golden $golden_file missing — run with UPDATE_GOLDEN=1 to create it"
+        return 1
+    fi
+    local expected_text
+    expected_text=$(cat "$golden_file")
+    while [[ "$expected_text" == *$'\n' ]]; do
+        expected_text="${expected_text%$'\n'}"
+    done
+    expected_text+=$'\n'
+    if [[ "$expected_text" == "$actual_text" ]]; then
+        test_pass
+    else
+        local diff_hint
+        diff_hint=$(diff <(printf '%s' "$expected_text") <(printf '%s' "$actual_text") | head -n 10)
+        test_fail "golden mismatch for '$name' (expected vs actual):
+$diff_hint"
     fi
 }
 
@@ -619,6 +684,7 @@ test_summary() {
     [[ $TESTS_FAILED -gt 0 ]] && echo -e "  Failed:  ${RED}$TESTS_FAILED${NC}" \
         || echo "  Failed:  0"
     [[ $TESTS_SKIPPED -gt 0 ]] && echo -e "  Skipped: ${YELLOW}$TESTS_SKIPPED${NC}" || true
+    [[ $TESTS_UPDATED -gt 0 ]] && echo "  Updated: $TESTS_UPDATED" || true
     echo ""
     local rc=0
     if [[ $TESTS_FAILED -eq 0 ]]; then

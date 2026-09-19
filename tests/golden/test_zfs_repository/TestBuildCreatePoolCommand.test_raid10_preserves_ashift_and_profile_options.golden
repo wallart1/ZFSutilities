@@ -1,0 +1,16 @@
+zpool
+create
+-o
+ashift=12
+-O
+compression=zstd
+tank
+mirror
+/dev/disk/by-id/ata-a
+/dev/disk/by-id/ata-b
+mirror
+/dev/disk/by-id/ata-c
+/dev/disk/by-id/ata-d
+mirror
+/dev/disk/by-id/ata-e
+/dev/disk/by-id/ata-f

@@ -52,7 +52,12 @@ test_paths_env_override() {
     test_start "Environment overrides are respected"
     local tmpdir
     tmpdir=$(mktemp -d)
-    (
+    # The re-source must happen in a subshell to isolate the exported
+    # overrides. Assertions run in the parent on the values the subshell
+    # prints: pass/fail accounting inside a subshell would be discarded
+    # with it, leaving the test counted as run but never passed or failed.
+    local _out
+    _out=$(
         export ZFSUTILITIES_STATE_DIR="$tmpdir/state"
         export ZFSUTILITIES_LOG_DIR="$tmpdir/log"
         export ZFSUTILITIES_RUN_DIR="$tmpdir/run"
@@ -69,31 +74,24 @@ test_paths_env_override() {
         # Re-source the library to pick up the new environment.
         # shellcheck source=../lib/paths.sh
         source "$mydir/lib/paths.sh"
-        assert_equals "$tmpdir/state/config.json" "$ZFSUTILITIES_CONFIG_PATH"
-        assert_equals "$tmpdir/log/sessions" "$ZFSUTILITIES_SESSION_LOG_DIR"
-        assert_equals "$tmpdir/run/main.pid" "$ZFSUTILITIES_PID_FILE"
-        assert_equals "$tmpdir/lock/profiles" "$ZFSUTILITIES_PROFILE_LOCK_DIR"
-        local _wrap_expected="$tmpdir/etc/node.conf"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _wrap_expected="$_wrap_expected"
-        local _pat="/etc/zfsutilities-node.conf"
-        local _replacement="$tmpdir/etc/node.conf"
-        local _node_conf="${ZFSUTILITIES_LEGACY_NODE_CONF//${_pat}/$_replacement}"
-        assert_equals "$_wrap_expected" "$_node_conf"
+        printf '%s\n' "$ZFSUTILITIES_CONFIG_PATH" \
+            "$ZFSUTILITIES_SESSION_LOG_DIR" \
+            "$ZFSUTILITIES_PID_FILE" \
+            "$ZFSUTILITIES_PROFILE_LOCK_DIR"
+        # The legacy node-conf path anchors at /etc; the override replaces
+        # that anchor the way two-node enrolment derives the composed path.
+        _pat="/etc/zfsutilities-node.conf"
+        _replacement="$tmpdir/etc/node.conf"
+        printf '%s\n' "${ZFSUTILITIES_LEGACY_NODE_CONF//${_pat}/$_replacement}"
     )
     rm -rf "$tmpdir"
+    local -a _values=()
+    mapfile -t _values <<< "$_out"
+    assert_equals "$tmpdir/state/config.json" "${_values[0]}"
+    assert_equals "$tmpdir/log/sessions" "${_values[1]}"
+    assert_equals "$tmpdir/run/main.pid" "${_values[2]}"
+    assert_equals "$tmpdir/lock/profiles" "${_values[3]}"
+    assert_equals "$tmpdir/etc/node.conf" "${_values[4]}"
 }
 
 test_paths_sourcing_is_silent() {
@@ -136,6 +134,7 @@ test_paths_legacy_defaults
 test_paths_env_override
 test_paths_sourcing_is_silent
 test_paths_loaded_by_bashinit
+test_paths_bashinit_respects_log_dir_override
 
 test_summary
 teardown_test_env

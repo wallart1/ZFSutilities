@@ -17,7 +17,7 @@ def _import_disk_actions():
     """Import disk_actions under a fresh mocked GTK context."""
     sys.modules.pop("disk_actions", None)
     sys.modules.pop("disks_page", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import disk_actions
 
         return disk_actions

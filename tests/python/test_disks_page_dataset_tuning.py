@@ -12,7 +12,9 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import capture_logs, mock_gtk
+from test_support import capture_logs, mock_gtk, requires_gi
+
+pytestmark = requires_gi
 from workload_profiles import ALL_KNOWN_PROPERTIES
 from zfs_repository import DatasetRow, TopologyNode
 
@@ -20,7 +22,7 @@ from zfs_repository import DatasetRow, TopologyNode
 def _import_disks_page():
     """Import disks_page under a fresh mocked GTK context."""
     sys.modules.pop("disks_page", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import disks_page
 
         return disks_page
@@ -30,7 +32,7 @@ def _import_action_dispatch():
     """Import action_dispatch under a fresh mocked GTK context."""
     sys.modules.pop("action_dispatch", None)
     sys.modules.pop("disks_page", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import action_dispatch
 
         return action_dispatch

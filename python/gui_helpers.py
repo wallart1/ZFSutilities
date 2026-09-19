@@ -7,6 +7,7 @@ import subprocess
 
 import gi
 
+gi.require_version("Gdk", "3.0")  # Gdk 4.0 also exists; pin before any import
 gi.require_version("Gtk", "3.0")
 from backup_config import MSG_LEVELS, log_msg, set_log_sink
 from gi.repository import Gdk, GLib, Gtk, Pango

@@ -17,7 +17,7 @@ from test_support import mock_gtk
 def _import_retention_actions():
     """Import retention_actions under a fresh mocked GTK context."""
     sys.modules.pop("retention_actions", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import retention_actions
 
         return retention_actions

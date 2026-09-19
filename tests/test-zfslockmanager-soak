@@ -1,0 +1,361 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2153,SC2154
+# test-zfslockmanager-soak — Timing-conflict soak suite for the lock manager.
+#
+# Skipped by default (tests/run-tests reports it as SKIPPED; run it with
+# --with-soak or by naming it explicitly). These scenarios exercise the
+# randomized, time-dependent lock-conflict coverage at realistic timings
+# (1-second wait intervals, whole-second headless waits). They are too slow
+# and too timing-sensitive for every-edit runs; run them on demand or
+# nightly. The deterministic protocol tests live in tests/test-zfslockmanager.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+# ---------------------------------------------------------------------------
+# Load the real lock manager (overrides the test-lib stubs).
+# ---------------------------------------------------------------------------
+
+# shellcheck source=bin/zfslockmanager
+source "$mydir/bin/zfslockmanager"
+
+# Redirect lock directory to a temp location so we do not interfere with
+# production locks.
+ZFSLOCK_DIR="$_mock_zfs_state_dir/locks-soak"
+zfslock_locks_dir="$ZFSLOCK_DIR/.locks"
+zfslock_pids_dir="$ZFSLOCK_DIR/.pids"
+mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir"
+
+# Realistic production-scale timings for the soak scenarios.
+export ZFSLOCK_WAIT_INTERVAL=1
+export ZFSLOCK_RETRY_THROTTLE=1
+export ZFSLOCK_REMOTE_POLL_INTERVAL=0.1
+
+# ---------------------------------------------------------------------------
+# Background-process helpers
+# ---------------------------------------------------------------------------
+# Lock-manager reentry logic treats same-PID acquires as re-entrant.
+# To test cross-process conflicts we start real child processes.
+# Keep in sync with the helper block in tests/test-zfslockmanager.
+# ---------------------------------------------------------------------------
+
+_BG_LOCK_PID=""
+_BG_LOCK_RCFILE=""
+
+# Start a background bash process that tries to acquire a lock.
+# Globals set: _BG_LOCK_PID, _BG_LOCK_RCFILE
+# A random startup jitter (0.00-0.99 s) varies the holder/contender
+# interleaving from run to run; this jitter is the point of the soak suite.
+_bg_lock_start() {
+    local dataset="$1" type="$2" description="$3"
+    local hold_time="${4:-infinity}"
+    local jitter="0.$((RANDOM % 10))$((RANDOM % 10))"
+    local id="${RANDOM}_$$"
+    local script="$_mock_zfs_state_dir/bg_lock_${id}.sh"
+    _BG_LOCK_RCFILE="$_mock_zfs_state_dir/bg_lock_rc_${id}"
+    cat > "$script" <<EOF
+#!/usr/bin/bash
+source "$mydir/bin/bashinit"
+export ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs"
+bashinit
+source "$mydir/bin/zfslockmanager"
+export ZFSLOCK_DIR="$ZFSLOCK_DIR"
+export zfslock_locks_dir="$zfslock_locks_dir"
+export zfslock_pids_dir="$zfslock_pids_dir"
+mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir"
+sleep $jitter
+zfslock_init
+zfslock_acquire "$dataset" "$type" "$description"
+rc=\$?
+echo \$rc > "$_BG_LOCK_RCFILE"
+[[ \$rc -eq 0 ]] && sleep $hold_time
+EOF
+    bash "$script" > /dev/null 2>&1 &
+    _BG_LOCK_PID=$!
+}
+
+# Wait up to 10 s for the background process to write its exit code,
+# then return the code (or 255 on timeout).
+_bg_lock_wait_rc() {
+    local rcfile="$_BG_LOCK_RCFILE"
+    local tries=0
+    while [[ ! -f "$rcfile" && $tries -lt 200 ]]; do
+        sleep 0.05
+        ((tries++))
+    done
+    [[ -f "$rcfile" ]] && cat "$rcfile" || echo "255"
+}
+
+# Terminate the background process and clean up its rc file.
+_bg_lock_kill() {
+    if [[ -n "$_BG_LOCK_PID" ]]; then
+        # Kill the foreground sleep child first so it is not orphaned when the
+        # parent bash process exits.
+        pkill -P "$_BG_LOCK_PID" 2>/dev/null || true
+        kill "$_BG_LOCK_PID" 2>/dev/null || true
+        wait "$_BG_LOCK_PID" 2>/dev/null || true
+    fi
+    rm -f "$_BG_LOCK_RCFILE"
+}
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+cleanup_test_locks() {
+    rm -rf "$ZFSLOCK_DIR" 2>/dev/null
+    mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir" 2>/dev/null
+}
+
+_enable_interactive() {
+    _orig_zfslock_is_interactive=$(declare -f _zfslock_is_interactive)
+    _zfslock_is_interactive() { return 0; }
+}
+
+_disable_interactive() {
+    eval "$_orig_zfslock_is_interactive"
+}
+
+# ---------------------------------------------------------------------------
+# Wait loop
+# ---------------------------------------------------------------------------
+
+test_wait_loop() {
+    echo ""
+    echo "=== Wait Loop Tests ==="
+    cleanup_test_locks
+
+    _enable_interactive
+
+    test_start "Wait choice retries until lock becomes available"
+    _bg_lock_start "test/waitloop" "w" "background lock" 3
+    _bg_lock_wait_rc > /dev/null
+    local rc
+    rc=$(zfslock_wait_or_resolve "test/waitloop" "w" "test" <<< "w" \
+        >/dev/null 2>&1;
+        echo $?)
+    _bg_lock_kill
+    if [[ "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 after lock released, got rc=$rc"
+    fi
+    zfslock_release_all
+
+    _disable_interactive
+}
+
+# ---------------------------------------------------------------------------
+# Retry option
+# ---------------------------------------------------------------------------
+
+test_retry_option() {
+    echo ""
+    echo "=== Retry Option Tests ==="
+    cleanup_test_locks
+
+    _enable_interactive
+
+    test_start "Retry option re-prompts and eventually acquires lock"
+    _bg_lock_start "test/retry" "w" "background lock" 3
+    _bg_lock_wait_rc > /dev/null
+    local rc
+    rc=$(zfslock_wait_or_resolve "test/retry" "w" "test" <<< $'r\nw\n' \
+        >/dev/null 2>&1;
+        echo $?)
+    _bg_lock_kill
+    if [[ "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 after retry/wait, got rc=$rc"
+    fi
+    zfslock_release_all
+
+    _disable_interactive
+}
+
+# ---------------------------------------------------------------------------
+# Wait-interval guard
+# ---------------------------------------------------------------------------
+
+test_wait_interval_minimum() {
+    echo ""
+    echo "=== Wait Interval Minimum Tests ==="
+    cleanup_test_locks
+
+    _enable_interactive
+
+    test_start "Zero wait interval is clamped to at least 1 second"
+    _bg_lock_start "test/zerowait" "w" "background lock" 3
+    _bg_lock_wait_rc > /dev/null
+    local start end elapsed rc
+    start=$(date +%s)
+    rc=$(ZFSLOCK_WAIT_INTERVAL=0 zfslock_wait_or_resolve "test/zerowait" "w" "test" <<< "w" \
+        >/dev/null 2>&1;
+        echo $?)
+    end=$(date +%s)
+    _bg_lock_kill
+    elapsed=$((end - start))
+    if [[ "$rc" -eq 0 && "$elapsed" -ge 1 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 and elapsed>=1s, got rc=$rc elapsed=${elapsed}s"
+    fi
+    zfslock_release_all
+
+    _disable_interactive
+}
+
+# ---------------------------------------------------------------------------
+# Headless timed wait
+# ---------------------------------------------------------------------------
+
+test_headless_wait_acquires() {
+    echo ""
+    echo "=== Headless Timed Wait Acquire Tests ==="
+    cleanup_test_locks
+
+    _bg_lock_start "test/headlesswait" "w" "holder" 2
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
+    if [[ "$bg_rc" -ne 0 ]]; then
+        _bg_lock_kill
+        test_start "Headless wait mode acquires lock after holder releases"
+        test_fail "Background lock could not be acquired (rc=$bg_rc)"
+        return
+    fi
+
+    test_start "Headless wait mode acquires lock after holder releases"
+    local rcfile="$_mock_zfs_state_dir/headless_wait_rc"
+    (
+        ZFSUTILITIES_HEADLESS=Y ZFSLOCK_HEADLESS_WAIT_SECONDS=5 \
+            zfslock_wait_or_resolve "test/headlesswait" "w" "test" </dev/null \
+            >/dev/null 2>&1
+        echo $? > "$rcfile"
+    ) &
+    local wait_pid=$!
+    wait "$wait_pid"
+    local rc
+    rc=$(cat "$rcfile")
+    _bg_lock_kill
+    if [[ "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 after lock released, got rc=$rc"
+    fi
+    zfslock_release_all
+}
+
+test_headless_wait_times_out() {
+    echo ""
+    echo "=== Headless Timed Wait Timeout Tests ==="
+    cleanup_test_locks
+
+    _bg_lock_start "test/headlesstimeout" "w" "holder" 10
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
+    if [[ "$bg_rc" -ne 0 ]]; then
+        _bg_lock_kill
+        test_start "Headless wait mode aborts after configured timeout"
+        test_fail "Background lock could not be acquired (rc=$bg_rc)"
+        return
+    fi
+
+    test_start "Headless wait mode aborts after configured timeout"
+    clear_test_log_file
+    local rcfile="$_mock_zfs_state_dir/headless_timeout_rc"
+    local start end elapsed
+    start=$(date +%s)
+    (
+        ZFSUTILITIES_HEADLESS=Y ZFSLOCK_HEADLESS_WAIT_SECONDS=2 \
+            zfslock_wait_or_resolve "test/headlesstimeout" "w" "test" </dev/null \
+            >/dev/null 2>&1
+        echo $? > "$rcfile"
+    ) &
+    local wait_pid=$!
+    wait "$wait_pid"
+    end=$(date +%s)
+    elapsed=$((end - start))
+    local rc
+    rc=$(cat "$rcfile")
+    _bg_lock_kill
+    if [[ "$rc" -eq 1 && "$elapsed" -ge 2 && "$elapsed" -le 5 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=1 and elapsed 2-5s, got rc=$rc elapsed=${elapsed}s"
+    fi
+    zfslock_release_all
+}
+
+# ---------------------------------------------------------------------------
+# Randomized hierarchy conflict stress
+# ---------------------------------------------------------------------------
+# Five background holders with random startup jitter race for overlapping
+# datasets. The interleaving varies per run; the outcome invariant must
+# hold every time:
+#   - the three read locks (ancestor + two descendants) are mutually
+#     compatible, so all three acquire;
+#   - the write and the read on stress/q conflict, so exactly one of them
+#     acquires and the other is refused.
+
+test_randomized_hierarchy_conflicts() {
+    echo ""
+    echo "=== Randomized Hierarchy Conflict Stress Tests ==="
+    cleanup_test_locks
+
+    local -a stress_pids=()
+    local rc_qw rc_qr
+    _bg_lock_start "stress/p" "r" "read parent" infinity
+    stress_pids+=("$_BG_LOCK_PID"); _bg_lock_wait_rc > /dev/null
+    _bg_lock_start "stress/p/child1" "r" "read child1" infinity
+    stress_pids+=("$_BG_LOCK_PID"); _bg_lock_wait_rc > /dev/null
+    _bg_lock_start "stress/p/child2" "r" "read child2" infinity
+    stress_pids+=("$_BG_LOCK_PID"); _bg_lock_wait_rc > /dev/null
+    _bg_lock_start "stress/q" "w" "write q" infinity
+    stress_pids+=("$_BG_LOCK_PID"); rc_qw=$(_bg_lock_wait_rc)
+    _bg_lock_start "stress/q" "r" "read q" infinity
+    stress_pids+=("$_BG_LOCK_PID"); rc_qr=$(_bg_lock_wait_rc)
+
+    test_start "Overlapping hierarchy acquisitions honor conflict rules"
+    local held=0
+    [[ -f "$zfslock_locks_dir/stress%2Fp.lock" ]] && ((held++))
+    [[ -f "$zfslock_locks_dir/stress%2Fp%2Fchild1.lock" ]] && ((held++))
+    [[ -f "$zfslock_locks_dir/stress%2Fp%2Fchild2.lock" ]] && ((held++))
+    if [[ $held -eq 3 && \
+          ( ("$rc_qw" -eq 0 && "$rc_qr" -ne 0) || \
+            ("$rc_qw" -ne 0 && "$rc_qr" -eq 0) ) ]]; then
+        test_pass
+    else
+        test_fail "held=$held rc_qw=$rc_qw rc_qr=$rc_qr"
+    fi
+
+    test_start "Destroy on ancestor conflicts with descendant read locks"
+    if ! zfslock_acquire "stress/p" "x" "destroy attempt"; then
+        test_pass
+    else
+        test_fail "Destroy should conflict with descendant read locks"
+        zfslock_release "$zfslock_id"
+    fi
+
+    local pid
+    for pid in "${stress_pids[@]}"; do
+        pkill -P "$pid" 2>/dev/null || true
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    done
+    zfslock_release_all
+    cleanup_test_locks
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+test_wait_loop
+test_retry_option
+test_wait_interval_minimum
+test_headless_wait_acquires
+test_headless_wait_times_out
+test_randomized_hierarchy_conflicts
+
+test_summary
+teardown_test_env

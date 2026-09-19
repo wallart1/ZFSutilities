@@ -1,0 +1,5 @@
+zpool
+add
+tank
+cache
+/dev/disk/by-id/ata-X

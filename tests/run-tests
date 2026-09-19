@@ -2,11 +2,33 @@
 # run-tests — Main test harness for ZFS Utilities.
 #
 # Usage:
-#   ./tests/run-tests                  # Run all tests
+#   ./tests/run-tests                  # Run all tests (*-soak suites skipped)
 #   ./tests/run-tests test-foo         # Run specific test(s)
+#   ./tests/run-tests --with-soak      # Include *-soak timing suites
 #   ./tests/run-tests -q               # Quiet: suppress PASS/SKIP lines
 #   ./tests/run-tests --failures-only  # Only show failures
-#   ./tests/run-tests --count          # Print the number of tests without running them
+#   ./tests/run-tests --list           # Print per-suite live test counts (bash suites
+#                                      #   run quietly to count them; Python collected)
+#   ./tests/run-tests --count          # Alias for --list
+#   ./tests/run-tests --jobs N         # Bash suites: run N at once (default: nproc-1,
+#                                      #   min 2; --jobs 1 is the serial debug mode)
+#   ./tests/run-tests --slowest N      # Print the N slowest bash suites at the end
+#                                      #   (default 10 when N omitted)
+#
+# Environment preflight: capabilities (gi, pv, zfs, root, test pools) are
+# detected up front; suites whose declared requirements (see
+# tests/requirements.manifest) are missing run as SKIPPED (missing: <caps>)
+# with a stated reason and never affect the exit code.
+#
+# Bash suites run in parallel by default; each suite is self-contained (mocked
+# zfs/zpool, own tmp state), so the default job count is one below nproc to
+# leave a core for the system. Per-suite wall times are always recorded; the
+# slowest list and the 5s soft-budget warning section print at the end.
+#
+# Python suites execute via pytest (python3 -m pytest tests/python -n N);
+# N is capped by available memory (each xdist worker peaks at ~600-900 MB) —
+# override with ZFSUTILITIES_PYTEST_JOBS. This script remains the single
+# entry point for both layers.
 
 set -euo pipefail
 
@@ -20,13 +42,17 @@ YELLOW='\033[0;33m'
 NC='\033[0m'
 
 # ---------------------------------------------------------------------------
-# Output-reduction flags
+# Output-reduction and harness flags
 # ---------------------------------------------------------------------------
 
 quiet_mode=""
 failures_only_mode=""
 count_mode=""
-forward_python_flags=()
+with_soak=""
+jobs=""
+slowest_mode=""
+slowest_n=10
+declare -A explicit_suite=()
 
 # ---------------------------------------------------------------------------
 # Partition arguments into bash and Python tests
@@ -37,25 +63,71 @@ python_tests=()
 have_test_arg=""
 
 if [[ $# -gt 0 ]]; then
-    for arg in "$@"; do
+    args=("$@")
+    arg_i=0
+    while [[ $arg_i -lt ${#args[@]} ]]; do
+        arg="${args[$arg_i]}"
         if [[ "$arg" == "-q" || "$arg" == "--quiet" ]]; then
             quiet_mode=1
-            forward_python_flags+=("$arg")
+            ((++arg_i))
             continue
         fi
         if [[ "$arg" == "--failures-only" ]]; then
             failures_only_mode=1
-            forward_python_flags+=("$arg")
+            ((++arg_i))
             continue
         fi
-        if [[ "$arg" == "--count" ]]; then
+        if [[ "$arg" == "--list" || "$arg" == "--count" ]]; then
             count_mode=1
+            ((++arg_i))
             continue
         fi
-        # Skip unrecognized flags
-        if [[ "$arg" == -* ]]; then
+        if [[ "$arg" == "--with-soak" ]]; then
+            with_soak=1
+            ((++arg_i))
             continue
         fi
+        # Options that take a numeric value: --jobs N / --jobs=N, --slowest N /
+        # --slowest=N. --slowest without a value defaults to 10.
+        if [[ "$arg" == "--jobs" || "$arg" == "--slowest" ]]; then
+            opt="${arg#--}"
+            if [[ $((arg_i + 1)) -lt ${#args[@]} \
+                && "${args[$((arg_i + 1))]}" =~ ^[0-9]+$ ]]; then
+                opt_n="${args[$((arg_i + 1))]}"
+                ((arg_i += 2))
+            else
+                opt_n=""
+                ((++arg_i))
+            fi
+            if [[ "$opt" == "jobs" ]]; then
+                if [[ -z "$opt_n" ]]; then
+                    echo "run-tests: --jobs requires a number (e.g. --jobs 4)" >&2
+                    exit 2
+                fi
+                jobs="$opt_n"
+            else
+                slowest_mode=1
+                [[ -n "$opt_n" ]] && slowest_n="$opt_n"
+            fi
+            continue
+        fi
+        if [[ "$arg" =~ ^--jobs=([0-9]+)$ ]]; then
+            jobs="${BASH_REMATCH[1]}"
+            ((++arg_i))
+            continue
+        fi
+        if [[ "$arg" =~ ^--slowest=([0-9]+)$ ]]; then
+            slowest_mode=1
+            slowest_n="${BASH_REMATCH[1]}"
+            ((++arg_i))
+            continue
+        fi
+        # Skip unrecognized flags and stray numbers
+        if [[ "$arg" == -* || "$arg" =~ ^[0-9]+$ ]]; then
+            ((++arg_i))
+            continue
+        fi
+        explicit_suite["$(basename "$arg")"]=1
         # Check if it looks like a Python test
         py_name="$arg"
         if [[ ! "$py_name" == test_* ]]; then
@@ -64,6 +136,7 @@ if [[ $# -gt 0 ]]; then
         if [[ -f "tests/python/${py_name}.py" ]]; then
             python_tests+=("$py_name")
             have_test_arg=1
+            ((++arg_i))
             continue
         fi
         # Otherwise treat as bash test
@@ -73,45 +146,168 @@ if [[ $# -gt 0 ]]; then
             bash_tests+=("$arg")
         fi
         have_test_arg=1
+        ((++arg_i))
     done
 fi
 
 # If no test names were given (only flags), default to the full suite.
+# test-lib.sh matches test-* but is the shared harness the suites source, not
+# a suite itself; exclude it from the default enumeration (it can still be
+# named explicitly).
 if [[ -z "$have_test_arg" ]]; then
-    readarray -t bash_tests < <(find tests -maxdepth 1 -type f -name 'test-*' | sort)
+    readarray -t bash_tests < <(find tests -maxdepth 1 -type f -name 'test-*' ! -name 'test-lib.sh' | sort)
     python_tests=("all")
 fi
 
 # ---------------------------------------------------------------------------
-# Count mode: report test counts without running anything
+# Count/list mode (--list, alias --count)
 # ---------------------------------------------------------------------------
+#
+# Counts must equal executed totals, and static source counting cannot produce
+# that: suites call test_start in loops (one call site, many tests) and some
+# call sites are conditional. So list mode runs the bash suites for real —
+# quietly, through the same parallel machinery as a normal run — and reports
+# each suite's executed Total (TESTS_RUN) from test_summary. Python counts come
+# from pytest --collect-only, which is exact without executing anything.
+# List mode forces quiet output; suite counts print in the reporting pass.
 
 if [[ -n "$count_mode" ]]; then
-    total=0
-    if [[ ${#bash_tests[@]} -gt 0 ]]; then
-        echo "Bash test suites:"
-        for tf in "${bash_tests[@]}"; do
-            # test-lib.sh is the shared harness sourced by the suites, not a
-            # suite itself; its test_* functions are helpers, not tests.
-            [[ "$(basename "$tf")" == "test-lib.sh" ]] && continue
-            n=$(grep -cE '^test_[A-Za-z0-9_]*\(\)' "$tf" 2>/dev/null || true)
-            total=$((total + n))
-            echo "  $(basename "$tf"): $n"
-        done
-    fi
-    if [[ ${#python_tests[@]} -gt 0 ]]; then
-        echo "Python test suites:"
-        if [[ "${python_tests[0]}" == "all" ]]; then
-            py_count_output=$(python3 "$mydir/python/runner.py" --count)
+    quiet_mode=1
+fi
+
+# ---------------------------------------------------------------------------
+# Environment preflight
+# ---------------------------------------------------------------------------
+#
+# Each detect_* function returns 0 when the capability is present. They are
+# self-contained (environment lookups only, no globals) so that
+# tests/test-run-tests-preflight can extract them by name and exercise them
+# against fabricated environments.
+#
+# tests/requirements.manifest declares, one per line, which suites need which
+# capabilities:
+#
+#     gi tests/python/test_main.py
+#     root zfs test-pools tests/integration/test-zfs-send-receive-pools
+#
+# A suite whose requirements are missing is reported as
+# "SKIPPED (missing: <caps>)" and never runs; skips never fail the run.
+
+detect_gi() {
+    python3 -c 'import gi' >/dev/null 2>&1
+}
+
+detect_pv() {
+    # type -P searches PATH only, ignoring shell functions/aliases: test
+    # harnesses define mock zfs/zpool/pv functions that command -v would see.
+    type -P pv >/dev/null 2>&1
+}
+
+detect_zfs() {
+    type -P zfs >/dev/null 2>&1 && type -P zpool >/dev/null 2>&1
+}
+
+detect_root() {
+    [[ $EUID -eq 0 ]]
+}
+
+detect_test_pools() {
+    detect_root || return 1
+    detect_zfs || return 1
+    local src_pool="${ZFSUTILITIES_TEST_SRC_POOL:-zfstest1}"
+    local dst_pool="${ZFSUTILITIES_TEST_DST_POOL:-zfstest2}"
+    local pools
+    pools=$(zpool list -H -o name 2>/dev/null) || return 1
+    grep -qx "$src_pool" <<< "$pools" && grep -qx "$dst_pool" <<< "$pools"
+}
+
+# Number of pytest-xdist workers for a full Python-layer run. Each worker
+# peaks at roughly 600-900 MB on this suite, so the worker count is capped by
+# available memory — an 8 GB desktop running a browser alongside the tests
+# cannot host nproc full-weight workers without risking OOM kills — and never
+# exceeds nproc. Override with ZFSUTILITIES_PYTEST_JOBS. Pure function of its
+# arguments (both optional) so tests can fabricate scenarios. Called with no
+# arguments on purpose: the defaults probe the live machine, so SC2120/SC2119
+# do not apply.
+# shellcheck disable=SC2120
+pytest_jobs_auto() {
+    local avail_mb="${1:-$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)}"
+    local n_procs="${2:-$(nproc)}"
+    local jobs=$(( avail_mb / 900 ))
+    (( jobs < 1 )) && jobs=1
+    (( jobs > n_procs )) && jobs=$n_procs
+    echo "$jobs"
+}
+
+declare -A cap_present=()
+declare -A suite_requirements=()
+
+detect_capabilities() {
+    local cap
+    for cap in gi pv zfs root test-pools; do
+        if "detect_${cap//-/_}"; then
+            cap_present[$cap]=1
         else
-            py_count_output=$(python3 "$mydir/python/runner.py" --count "${python_tests[@]}")
+            cap_present[$cap]=0
         fi
-        echo "$py_count_output" | grep -v '^Total:'
-        n=$(echo "$py_count_output" | grep -E '^Total:' | sed 's/[^0-9]//g')
-        total=$((total + n))
+    done
+}
+
+load_requirements_manifest() {
+    local manifest="$mydir/requirements.manifest" line path caps
+    if [[ ! -r $manifest ]]; then
+        echo "run-tests: cannot read $manifest" >&2
+        return 1
     fi
-    echo "Total: $total"
-    exit 0
+    while IFS= read -r line || [[ -n $line ]]; do
+        [[ $line =~ ^[[:space:]]*# ]] && continue
+        [[ -z ${line//[[:space:]]/} ]] && continue
+        # The path is the last whitespace-separated field; all fields before
+        # it are capabilities. Suite paths in this repo never contain spaces.
+        path="${line##* }"
+        caps="${line%"$path"}"
+        suite_requirements[$path]="${caps//[[:space:]]/ }"
+    done < "$manifest"
+}
+
+# Echo the missing capabilities for a suite path (empty output = runnable).
+# Pure function of cap_present and suite_requirements so the preflight suite
+# can exercise it against fabricated capability states.
+missing_requirements() {
+    local query="$1" path cap
+    query="${query#./}"
+    [[ $query != */* ]] && query="tests/$query"
+    for path in "${!suite_requirements[@]}"; do
+        [[ $path == "$query" || $(basename "$path") == "$query" ]] || continue
+        for cap in ${suite_requirements[$path]}; do
+            [[ ${cap_present[$cap]:-0} == 1 ]] || printf '%s ' "$cap"
+        done
+        return 0
+    done
+    return 0
+}
+
+detect_capabilities
+load_requirements_manifest || exit 2
+
+# Worker budget for the Python layer (full runs only; named suites run
+# serially). Exported for the preflight suite's unit tests. SC2119: the
+# no-argument call is intentional — see pytest_jobs_auto above.
+# shellcheck disable=SC2119
+py_jobs="${ZFSUTILITIES_PYTEST_JOBS:-$(pytest_jobs_auto)}"
+export py_jobs
+
+if [[ -z "$quiet_mode$failures_only_mode" ]]; then
+    env_line="Environment:"
+    for cap in gi pv zfs root test-pools; do
+        if [[ ${cap_present[$cap]} == 1 ]]; then
+            env_line+=" $cap=present"
+        else
+            env_line+=" $cap=MISSING"
+        fi
+    done
+    env_line+=" pytest-workers=$py_jobs"
+    echo "$env_line"
 fi
 
 # Propagate output-reduction settings to bash suites.
@@ -119,37 +315,178 @@ fi
 [[ -n "$failures_only_mode" ]] && export ZFSUTILITIES_TESTS_FAILURES_ONLY=1
 
 # ---------------------------------------------------------------------------
-# Run bash tests
+# Bash layer: run each suite (in parallel by default), then report in order
 # ---------------------------------------------------------------------------
+#
+# Every suite runs with stdin detached (</dev/null): at least one suite reads
+# stdin, and a suite must never consume another suite's input or block on a
+# terminal. xargs detaches stdin for its children; the serial path does the
+# same so both modes behave identically.
+#
+# Each suite writes three artifacts into a per-run state dir:
+#   <suite>.out       captured stdout+stderr
+#   <suite>.rc        exit code
+#   <suite>.duration  wall time in seconds (EPOCHREALTIME)
+# Results are always reported in the original suite order, so the visible
+# output is the same whether the suites ran serially or in parallel.
+
+state_dir="$(mktemp -d)"
+pytest_pid=""
+kill_pytest_tree() {
+    # Take the pytest-xdist tree down with the harness: workers exit when
+    # their controller dies, so terminating an in-flight pytest releases its
+    # workers too. Without this an interrupted run orphans the tree, and
+    # stacked orphans have been OOM-killed at multi-GB RSS.
+    if [[ -n "$pytest_pid" ]] && kill -0 "$pytest_pid" 2>/dev/null; then
+        kill -TERM "$pytest_pid" 2>/dev/null
+        wait "$pytest_pid" 2>/dev/null
+    fi
+    pytest_pid=""
+}
+cleanup() {
+    kill_pytest_tree
+    rm -rf "$state_dir"
+}
+trap cleanup EXIT
+
+# Default parallelism: one below nproc (min 2), leaving a core for the system.
+# The measured serial bash layer is ~61s; 3 workers on this 4-core machine
+# reach the >=3x target, while half of nproc (2) would not.
+if [[ -z "$jobs" ]]; then
+    jobs=$(( $(nproc) - 1 ))
+    (( jobs < 2 )) && jobs=2
+fi
+if [[ "$jobs" -lt 1 ]]; then
+    echo "run-tests: --jobs must be >= 1" >&2
+    exit 2
+fi
+
+run_bash_suite() {
+    local tf="$1"
+    local suite_name start end rc
+    suite_name="$(basename "$tf")"
+    start=$EPOCHREALTIME
+    if bash "$tf" < /dev/null > "$state_dir/$suite_name.out" 2>&1; then
+        rc=0
+    else
+        rc=$?
+    fi
+    end=$EPOCHREALTIME
+    printf '%d' "$rc" > "$state_dir/$suite_name.rc"
+    awk -v s="$start" -v e="$end" 'BEGIN{printf "%.3f", e-s}' \
+        > "$state_dir/$suite_name.duration"
+    # The artifact files carry the result; always succeed so xargs does not
+    # abort the remaining suites when one suite fails.
+    return 0
+}
+export -f run_bash_suite
+export state_dir
+
+# Soak suites (timing-conflict coverage) are excluded from default runs.
+# They run when named explicitly or when --with-soak is given.
+is_skipped_soak() {
+    local suite_name="$1"
+    [[ "$suite_name" == *-soak && -z "$with_soak" \
+        && -z "${explicit_suite[$suite_name]:-}" ]]
+}
 
 total_suites=0
+total_skipped=0
 total_passed=0
 total_failed=0
-total_skipped=0
+total_counted=0
 any_failed=0
 
+# Environment-preflight skips: suite path -> "missing: <caps>" reason.
+declare -A env_skip_reason=()
+
+suites_to_run=()
 for tf in "${bash_tests[@]}"; do
     suite_name="$(basename "$tf")"
+    total_suites=$((total_suites + 1))
+    if is_skipped_soak "$suite_name"; then
+        total_skipped=$((total_skipped + 1))
+        continue
+    fi
+    missing=$(missing_requirements "$tf")
+    if [[ -n $missing ]]; then
+        env_skip_reason[$tf]="missing: ${missing% }"
+        total_skipped=$((total_skipped + 1))
+        continue
+    fi
+    suites_to_run+=("$tf")
+done
+
+if [[ ${#suites_to_run[@]} -gt 0 ]]; then
+    if [[ "$jobs" -eq 1 ]]; then
+        for tf in "${suites_to_run[@]}"; do
+            run_bash_suite "$tf"
+        done
+    else
+        # Best-effort interrupt handling: stop the xargs pipeline and exit.
+        trap 'kill "$xargs_pid" 2>/dev/null; pkill -P "$xargs_pid" 2>/dev/null; exit 130' INT TERM
+        # The single-quoted child command is intentional: run_bash_suite is an
+        # exported function expanded in the xargs child shell, not here.
+        # shellcheck disable=SC2016
+        printf '%s\0' "${suites_to_run[@]}" | xargs -0 -r -P "$jobs" -n1 \
+            bash -c 'run_bash_suite "$1"' _ &
+        xargs_pid=$!
+        wait "$xargs_pid" 2>/dev/null || true
+        trap - INT TERM
+    fi
+fi
+
+# Ordered reporting pass: emit the same lines, in the same order, as a serial
+# run would have, reading each suite's captured artifacts.
+declare -A suite_duration=()
+if [[ -n "$count_mode" && ${#bash_tests[@]} -gt 0 ]]; then
+    echo "Bash test suites:"
+fi
+for tf in "${bash_tests[@]}"; do
+    suite_name="$(basename "$tf")"
+    if is_skipped_soak "$suite_name"; then
+        if [[ -z "$quiet_mode$failures_only_mode" || -n "$count_mode" ]]; then
+            echo -e "${YELLOW}  SKIPPED (soak suite — run with --with-soak or name it explicitly)${NC} ($suite_name)"
+        fi
+        continue
+    fi
+
+    if [[ -n ${env_skip_reason[$tf]:-} ]]; then
+        if [[ -z "$quiet_mode$failures_only_mode" || -n "$count_mode" ]]; then
+            echo -e "${YELLOW}  SKIPPED (${env_skip_reason[$tf]})${NC} ($suite_name)"
+        fi
+        continue
+    fi
+
+    suite_rc=$(cat "$state_dir/$suite_name.rc")
+    suite_duration["$suite_name"]=$(cat "$state_dir/$suite_name.duration")
+
+    # List mode: report the executed Total (TESTS_RUN) per suite. A suite that
+    # did not reach test_summary has no count to report — that is a real
+    # failure, surfaced as such.
+    if [[ -n "$count_mode" ]]; then
+        total_line=$(grep -E "^\s*Total:" "$state_dir/$suite_name.out" | tail -n 1 | sed 's/\x1b\[[0-9;]*m//g' || true)
+        if [[ "$total_line" =~ Total:[[:space:]]+([0-9]+) ]]; then
+            total_counted=$((total_counted + BASH_REMATCH[1]))
+            echo "  $suite_name: ${BASH_REMATCH[1]}"
+        else
+            any_failed=1
+            echo -e "${RED}  $suite_name: no count (suite did not complete)${NC}"
+        fi
+        continue
+    fi
+
     if [[ -z "$failures_only_mode" ]]; then
         echo "========================================"
         echo "Running: $suite_name"
         echo "========================================"
     fi
 
-    total_suites=$((total_suites + 1))
-
-    tmpout=$(mktemp)
-    if bash "$tf" > "$tmpout" 2>&1; then
-        suite_rc=0
-    else
-        suite_rc=$?
-    fi
-
     # In quiet/failures-only mode, suppress passing-suite output to avoid
     # truncation. Always show output for failing suites so failures can be
     # diagnosed.
     if [[ $suite_rc -ne 0 || -z "$quiet_mode$failures_only_mode" ]]; then
-        cat "$tmpout"
+        cat "$state_dir/$suite_name.out"
     fi
 
     # Parse the bash test suite's summary. test_summary() emits lines like:
@@ -160,9 +497,8 @@ for tf in "${bash_tests[@]}"; do
     #
     # Extract the Passed: and Failed: values independently so the order and
     # any ANSI color codes do not matter.
-    passed_line=$(grep -E "^\s*Passed:" "$tmpout" | tail -n 1 | sed 's/\x1b\[[0-9;]*m//g' || true)
-    failed_line=$(grep -E "^\s*Failed:" "$tmpout" | tail -n 1 | sed 's/\x1b\[[0-9;]*m//g' || true)
-    rm -f "$tmpout"
+    passed_line=$(grep -E "^\s*Passed:" "$state_dir/$suite_name.out" | tail -n 1 | sed 's/\x1b\[[0-9;]*m//g' || true)
+    failed_line=$(grep -E "^\s*Failed:" "$state_dir/$suite_name.out" | tail -n 1 | sed 's/\x1b\[[0-9;]*m//g' || true)
 
     if [[ "$passed_line" =~ Passed:[[:space:]]+([0-9]+) ]]; then
         suite_passed="${BASH_REMATCH[1]}"
@@ -192,79 +528,181 @@ done
 # ---------------------------------------------------------------------------
 
 if [[ ${#python_tests[@]} -gt 0 ]]; then
-    if [[ -z "$failures_only_mode" ]]; then
+    if [[ -z "$failures_only_mode$count_mode" ]]; then
         echo "========================================"
         echo "Running: Python test suites"
         echo "========================================"
     fi
 
-    py_tmpout=$(mktemp)
+    # Environment-preflight skips for Python modules (declared in
+    # tests/requirements.manifest). The modules also guard their own imports,
+    # so direct pytest invocations skip identically; these lines make the
+    # harness listing complete.
+    py_manifest_entries=()
+    for path in "${!suite_requirements[@]}"; do
+        [[ $path == tests/python/*.py ]] && py_manifest_entries+=("$path")
+    done
+    selected_entries=()
     if [[ "${python_tests[0]}" == "all" ]]; then
-        if python3 "$mydir/python/runner.py" "${forward_python_flags[@]}" > "$py_tmpout" 2>&1; then
+        selected_entries=("${py_manifest_entries[@]}")
+    else
+        for pt in "${python_tests[@]}"; do
+            for path in "${py_manifest_entries[@]}"; do
+                [[ $(basename "$path" .py) == "$pt" ]] && selected_entries+=("$path")
+            done
+        done
+    fi
+    py_env_skipped=()
+    for path in $(printf '%s\n' "${selected_entries[@]:-}" | sort); do
+        [[ -z $path ]] && continue
+        missing=$(missing_requirements "$path")
+        [[ -z $missing ]] && continue
+        total_skipped=$((total_skipped + 1))
+        py_env_skipped+=("$path")
+        if [[ -z "$quiet_mode$failures_only_mode" || -n "$count_mode" ]]; then
+            echo -e "${YELLOW}  SKIPPED (missing: ${missing% })${NC} ($(basename "$path" .py))"
+        fi
+    done
+
+    # List mode counts Python suites by collection only: --collect-only runs
+    # no tests, and the collected node ids are exactly what a run would
+    # execute. Env-skipped modules are excluded (they would not execute).
+    if [[ -n "$count_mode" ]]; then
+        py_targets=()
+        if [[ "${python_tests[0]}" == "all" ]]; then
+            for pf in tests/python/test_*.py; do
+                [[ "$(basename "$pf")" == "test_support.py" ]] && continue
+                skip=""
+                for sp in "${py_env_skipped[@]:-}"; do
+                    [[ -z $sp ]] && continue
+                    [[ "$pf" == "$sp" ]] && skip=1
+                done
+                [[ -n $skip ]] && continue
+                py_targets+=("$pf")
+            done
+        else
+            for pt in "${python_tests[@]}"; do
+                skip=""
+                for sp in "${py_env_skipped[@]:-}"; do
+                    [[ -z $sp ]] && continue
+                    [[ $(basename "$sp" .py) == "$pt" ]] && skip=1
+                done
+                [[ -n $skip ]] && continue
+                py_targets+=("tests/python/${pt}.py")
+            done
+        fi
+        echo "Python test suites:"
+        # pytest --collect-only prints one "tests/python/test_x.py::..." node id
+        # per test; count the node ids per target file.
+        py_collect=$(python3 -m pytest "${py_targets[@]}" --collect-only -q 2>/dev/null || true)
+        for target in "${py_targets[@]}"; do
+            n=$(grep -cF "${target}::" <<< "$py_collect" || true)
+            echo "  $(basename "$target" .py): $n"
+            total_counted=$((total_counted + n))
+        done
+    fi
+
+    # Full runs parallelize across CPUs with pytest-xdist; a single named suite
+    # runs serially with fail-fast and short tracebacks for iteration. -rs
+    # prints skip reasons when environment preflight skips apply.
+    if [[ -z "$count_mode" ]]; then
+        if [[ "${python_tests[0]}" == "all" ]]; then
+            py_cmd=(python3 -m pytest tests/python -n "$py_jobs" -q -rs)
+        else
+            py_targets=()
+            for pt in "${python_tests[@]}"; do
+                py_targets+=("tests/python/${pt}.py")
+            done
+            py_cmd=(python3 -m pytest "${py_targets[@]}" -x --tb=short -q -rs)
+        fi
+
+        py_tmpout=$(mktemp)
+        # Run in the background so the harness records the pytest PID: on
+        # interruption (EXIT trap) the harness terminates pytest, and the xdist
+        # workers die with their controller. Without this, an interrupted run
+        # leaves the whole pytest-xdist tree alive; stacked with other runs and a
+        # desktop workload, those orphans were OOM-killed at multi-GB sizes.
+        "${py_cmd[@]}" > "$py_tmpout" 2>&1 &
+        pytest_pid=$!
+        if wait "$pytest_pid"; then
             py_rc=0
         else
             py_rc=$?
         fi
-    else
-        if python3 "$mydir/python/runner.py" "${forward_python_flags[@]}" "${python_tests[@]}" > "$py_tmpout" 2>&1; then
-            py_rc=0
-        else
-            py_rc=$?
+        pytest_pid=""
+
+        # In quiet/failures-only mode, suppress passing-suite output to avoid
+        # truncation. Always show output for failing suites so failures can be
+        # diagnosed.
+        if [[ $py_rc -ne 0 || -z "$quiet_mode$failures_only_mode" ]]; then
+            cat "$py_tmpout"
         fi
-    fi
 
-    # In quiet/failures-only mode, suppress passing-suite output to avoid
-    # truncation. Always show output for failing suites so failures can be
-    # diagnosed.
-    if [[ $py_rc -ne 0 || -z "$quiet_mode$failures_only_mode" ]]; then
-        cat "$py_tmpout"
-    fi
-
-    # Parse Python runner summary lines. The custom Python runner prints
-    # colored summary lines near the end of its output, e.g.:
-    #
-    #     Total:   18
-    #     Passed:  334
-    #     Failed:  0
-    #
-    # We extract the "Passed:" and "Failed:" lines independently and then
-    # apply a regex to each to capture the trailing integer. The pattern
-    #   Passed:[[:space:]]+([0-9]+)
-    # means: the literal word "Passed:", one or more whitespace characters,
-    # then a sequence of one or more digits captured into BASH_REMATCH[1].
-    # The same structure is used for "Failed:". If a line is missing or
-    # does not match, we default to 0 so the aggregate totals remain valid.
-    py_summary=$(grep -E "^  Passed:" "$py_tmpout" | tail -n 1 || true)
-    if [[ "$py_summary" =~ Passed:[[:space:]]+([0-9]+) ]]; then
-        py_passed="${BASH_REMATCH[1]}"
-    else
+        # Parse pytest's final summary line, e.g.:
+        #
+        #     === 3420 passed, 12 skipped, 2 failed in 55.23s ===
+        #
+        # pytest -q prints exactly one "N passed/M failed/K errors/J skipped"
+        # summary line at the end; grep the last match and extract each count
+        # independently so the aggregate totals remain valid when a category is
+        # absent.
+        py_summary_line=$(grep -E "[0-9]+ (passed|failed|error|skipped)" "$py_tmpout" | tail -n 1 || true)
         py_passed=0
-    fi
-    py_failed_summary=$(grep -E "^  Failed:" "$py_tmpout" | tail -n 1 || true)
-    if [[ "$py_failed_summary" =~ Failed:[[:space:]]+([0-9]+) ]]; then
-        py_failed="${BASH_REMATCH[1]}"
-    else
         py_failed=0
+        py_skipped=0
+        if [[ "$py_summary_line" =~ ([0-9]+)\ passed ]]; then
+            py_passed="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$py_summary_line" =~ ([0-9]+)\ failed ]]; then
+            py_failed=$((py_failed + BASH_REMATCH[1]))
+        fi
+        if [[ "$py_summary_line" =~ ([0-9]+)\ error ]]; then
+            # "K errors" (collection/call errors) count as failures for the summary.
+            py_failed=$((py_failed + BASH_REMATCH[1]))
+        fi
+        if [[ "$py_summary_line" =~ ([0-9]+)\ skipped ]]; then
+            py_skipped="${BASH_REMATCH[1]}"
+        fi
+
+        # pytest exits 5 ("no tests collected") when every targeted module skipped
+        # at import; with skips present and nothing failed that is a clean
+        # environment skip, not a failure. A bare exit 5 with zero skips (e.g. a
+        # mistyped suite name) remains an error.
+        if [[ $py_rc -eq 5 && $py_skipped -gt 0 && $py_failed -eq 0 ]]; then
+            py_rc=0
+        fi
+
+        rm -f "$py_tmpout"
+
+        total_suites=$((total_suites + 1))
+        total_passed=$((total_passed + py_passed))
+        total_failed=$((total_failed + py_failed))
+
+        if [[ $py_rc -ne 0 ]]; then
+            any_failed=1
+            echo -e "${RED}  SUITE FAILED${NC} (python tests)"
+        elif [[ -z "$failures_only_mode" ]]; then
+            echo -e "${GREEN}  SUITE PASSED${NC} (python tests)"
+        fi
+        [[ -z "$failures_only_mode" ]] && echo ""
     fi
-
-    rm -f "$py_tmpout"
-
-    total_suites=$((total_suites + 1))
-    total_passed=$((total_passed + py_passed))
-    total_failed=$((total_failed + py_failed))
-
-    if [[ $py_rc -ne 0 ]]; then
-        any_failed=1
-        echo -e "${RED}  SUITE FAILED${NC} (python tests)"
-    elif [[ -z "$failures_only_mode" ]]; then
-        echo -e "${GREEN}  SUITE PASSED${NC} (python tests)"
-    fi
-    [[ -z "$failures_only_mode" ]] && echo ""
 fi
 
 # ---------------------------------------------------------------------------
 # Overall summary
 # ---------------------------------------------------------------------------
+
+if [[ -n "$count_mode" ]]; then
+    # List mode reports counts, not pass/fail. Skipped suites (soak,
+    # environment) were listed inline without counts.
+    echo ""
+    echo "Total: $total_counted"
+    if [[ $any_failed -ne 0 ]]; then
+        echo -e "${RED}Some suites did not complete their count run.${NC}"
+        exit 1
+    fi
+    exit 0
+fi
 
 echo "========================================"
 echo "Overall Summary"
@@ -272,6 +710,48 @@ echo "========================================"
 echo "  Suites:  $total_suites"
 echo -e "  Passed:  ${GREEN}$total_passed${NC}"
 [[ $total_failed -gt 0 ]] && echo -e "  Failed:  ${RED}$total_failed${NC}" || echo "  Failed:  0"
+[[ $total_skipped -gt 0 ]] && \
+    echo -e "  Skipped: ${YELLOW}$total_skipped${NC}" || echo "  Skipped: 0"
+[[ ${py_skipped:-0} -gt 0 ]] && \
+    echo -e "  Python tests skipped: ${YELLOW}$py_skipped${NC} (environment preflight)" || true
+
+# ---------------------------------------------------------------------------
+# Timing report: over-budget warning and --slowest
+# ---------------------------------------------------------------------------
+
+# Soft budget (warning only, never a failure): non-soak bash suites taking
+# more than 5s are listed so slow suites get noticed before they pile up.
+if [[ -z "$count_mode" ]]; then
+over_budget=()
+for suite_name in "${!suite_duration[@]}"; do
+    [[ "$suite_name" == *-soak ]] && continue
+    dur="${suite_duration[$suite_name]}"
+    if awk -v d="$dur" 'BEGIN{exit !(d > 5.0)}'; then
+        over_budget+=("$dur $suite_name")
+    fi
+done
+if [[ ${#over_budget[@]} -gt 0 ]]; then
+    echo ""
+    echo -e "${YELLOW}Over budget (> 5s, non-soak suites):${NC}"
+    while IFS= read -r line; do
+        dur="${line%% *}"
+        suite_name="${line#* }"
+        echo -e "  ${YELLOW}${dur}s${NC}  $suite_name"
+    done < <(printf '%s\n' "${over_budget[@]}" | sort -rn)
+fi
+
+if [[ -n "$slowest_mode" && ${#suite_duration[@]} -gt 0 ]]; then
+    echo ""
+    echo "Slowest bash suites:"
+    while IFS= read -r line; do
+        dur="${line%% *}"
+        suite_name="${line#* }"
+        printf "  %ss  %s\n" "$dur" "$suite_name"
+    done < <(for s in "${!suite_duration[@]}"; do
+                 echo "${suite_duration[$s]} $s"
+             done | sort -rn | head -n "$slowest_n")
+fi
+fi
 
 if [[ $any_failed -ne 0 ]]; then
     echo -e "${RED}Some test suites failed.${NC}"

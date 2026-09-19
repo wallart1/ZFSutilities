@@ -10,6 +10,7 @@ import re
 
 import gi
 
+gi.require_version("Gdk", "3.0")  # Gdk 4.0 also exists; pin before any import
 gi.require_version("Gtk", "3.0")
 from backup_history import format_duration, get_success_rate, load_history
 from command_builders import _PV_RATE_RE

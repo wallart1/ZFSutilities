@@ -14,7 +14,9 @@ if PYTHON_SRC not in sys.path:
 
 from disk_repository import DiskInfo
 from pool_create import disk_eligibility, pool_filesystem_options
-from test_support import capture_logs, mock_gtk, temp_lock_dir
+from test_support import capture_logs, mock_gtk, requires_gi, temp_lock_dir
+
+pytestmark = requires_gi
 from zfs_repository import TopologyNode
 
 TB = 10**12
@@ -23,7 +25,7 @@ TB = 10**12
 def _import_disks_page():
     """Import disks_page under a fresh mocked GTK context."""
     sys.modules.pop("disks_page", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import disks_page
 
         return disks_page
@@ -32,7 +34,7 @@ def _import_disks_page():
 def _import_wizard():
     """Import pool_create_wizard under a fresh mocked GTK context."""
     sys.modules.pop("pool_create_wizard", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import pool_create_wizard
 
         return pool_create_wizard

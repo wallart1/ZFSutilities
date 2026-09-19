@@ -74,7 +74,7 @@ def _pid_file(pid: int | None = None) -> str:
     return os.path.join(ZFSLOCK_PIDS_DIR, str(pid or os.getpid()))
 
 
-def _script_name() -> str:
+def _script_name() -> str | None:
     """Return the basename of the running script, mirroring bash behavior.
 
     When launched via ``python -m <package>``, ``sys.argv[0]`` is the
@@ -82,10 +82,22 @@ def _script_name() -> str:
     stale-lock detection would then treat every such lock as stale. Return
     the package name instead so it matches ``python -m <package>`` in
     /proc/<pid>/cmdline.
+
+    Returns None when the name could never be verified against
+    /proc/<pid>/cmdline (currently only the ``python -c`` launcher, whose
+    cmdline a host such as a pytest-xdist worker rewrites after startup).
+    Stale-lock detection treats None as "cannot verify; leave it alone".
     """
     if not sys.argv:
         return "python"
     script = os.path.basename(sys.argv[0])
+    if script == "-c":
+        # pytest-xdist workers and other execnet-launched processes start as
+        # "python -c ..." and then rewrite their own cmdline (e.g. to
+        # "[pytest-xdist running] ..."), so "-c" no longer appears in
+        # /proc/<pid>/cmdline. Recording it would make stale-lock detection
+        # delete live locks held by such processes.
+        return None
     if script == "__main__.py":
         spec = getattr(sys.modules.get("__main__"), "__spec__", None)
         name = getattr(spec, "name", "") or ""

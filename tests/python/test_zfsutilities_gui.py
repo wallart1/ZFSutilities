@@ -5,25 +5,51 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk, mock_subprocess
+from test_support import mock_subprocess, requires_gi
+
+pytestmark = requires_gi
 
 
-def _import_gui_under_mock():
-    """Import zfsutilities_gui while GTK is mocked.
+@pytest.fixture(autouse=True)
+def _ensure_real_gui_module():
+    """Bind the real zfsutilities_gui before @patch resolves its targets.
 
-    Importing at module level would load real gi.repository modules and
-    break other GUI tests in the same process.  This helper keeps the import
-    scoped inside mock_gtk().
+    Under pytest-xdist a worker interleaves suites, and a mock_gtk()-bound
+    copy of zfsutilities_gui can be left cached in sys.modules by another
+    suite. The @patch decorators on the tests below resolve and patch
+    whatever module object is cached at test start; if that object differs
+    from the one the test body runs against, the patches and the code under
+    test refer to different objects and a test fails intermittently. This
+    fixture runs before each test — hence before patch resolution — and
+    evicts any mock-bound copy so both sides always use the same real
+    module. The suite is skipped wholesale via pytestmark when gi is
+    unavailable, so the import below never runs without real bindings.
     """
-    with mock_gtk():
-        import zfsutilities_gui as gui
+    cached = sys.modules.get("zfsutilities_gui")
+    if cached is not None and isinstance(getattr(cached, "Gtk", None), MagicMock):
+        sys.modules.pop("zfsutilities_gui", None)
+    import zfsutilities_gui  # noqa: F401
 
-        return gui
+
+def _gui_module():
+    """Return the zfsutilities_gui module the @patch decorators patched.
+
+    The autouse fixture above guarantees the cached module is the real
+    GObject-bound import before every test starts, so this is always the
+    same object the decorators patched. Looked up rather than imported:
+    a fresh import here could bind a different module object than the one
+    the decorators patched (the flake this fixture exists to prevent), and
+    the static import guard in test_gui_infrastructure requires in-function
+    GUI imports to carry their own pop.
+    """
+    return sys.modules["zfsutilities_gui"]
 
 
 class TestCheckPeerVersionAsync(unittest.TestCase):
@@ -31,7 +57,7 @@ class TestCheckPeerVersionAsync(unittest.TestCase):
 
     def _make_window(self, version="1.2.3"):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
-        gui = _import_gui_under_mock()
+        gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window._version = version
@@ -97,7 +123,7 @@ class TestLogMessageDisplayFilter(unittest.TestCase):
     """Tests for ZFSUtilitiesWindow.log_message display filtering."""
 
     def _make_window(self):
-        gui = _import_gui_under_mock()
+        gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             buffer_mock = MagicMock()
@@ -196,7 +222,7 @@ class TestDryRunToggle(unittest.TestCase):
     """Tests for the Dry Run toggle button."""
 
     def _make_window(self):
-        gui = _import_gui_under_mock()
+        gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window.action_box = MagicMock()
@@ -234,7 +260,7 @@ class TestDatasetRunnerIntegration(unittest.TestCase):
     """Dataset action runner is created and receives forwarded stdin input."""
 
     def test_dataset_runner_created(self):
-        gui = _import_gui_under_mock()
+        gui = _gui_module()
         with (
             patch.object(gui.ZFSUtilitiesWindow, "create_sidebar_and_stack"),
             patch.object(gui.ZFSUtilitiesWindow, "create_action_panel"),
@@ -260,7 +286,7 @@ class TestDatasetRunnerIntegration(unittest.TestCase):
         self.assertEqual(window.dataset_runner.label, "Dataset action")
 
     def test_input_forwarded_to_dataset_runner(self):
-        gui = _import_gui_under_mock()
+        gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window.backup_runner = None
@@ -283,7 +309,7 @@ class TestDashboardTimer(unittest.TestCase):
 
     def _make_window(self):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
-        gui = _import_gui_under_mock()
+        gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window._dashboard_timer = None
@@ -354,7 +380,7 @@ class TestScheduleTimer(unittest.TestCase):
 
     def _make_window(self):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
-        gui = _import_gui_under_mock()
+        gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window._schedule_timer = None
@@ -405,7 +431,7 @@ class TestOnPageChanged(unittest.TestCase):
 
     def _make_window(self, config=None):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
-        gui = _import_gui_under_mock()
+        gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             cfg = config if config is not None else {"pools": []}
@@ -503,7 +529,7 @@ class TestUpdateActionButtonsGuard(unittest.TestCase):
 
     def _make_window(self, visible_page="retention"):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
-        gui = _import_gui_under_mock()
+        gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window.action_box = MagicMock()
@@ -709,7 +735,7 @@ class TestDisksTimer(unittest.TestCase):
 
     def _make_window(self):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
-        gui = _import_gui_under_mock()
+        gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window._disks_timer = None

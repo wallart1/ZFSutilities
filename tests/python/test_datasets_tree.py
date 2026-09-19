@@ -11,7 +11,11 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-import gi
+from test_support import import_or_skip_gi, requires_gi
+
+pytestmark = requires_gi
+
+gi = import_or_skip_gi("gi")
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk

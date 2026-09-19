@@ -1,0 +1,5 @@
+zpool
+attach
+tank
+mirror-0
+/dev/disk/by-id/ata-Z

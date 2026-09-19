@@ -12,6 +12,7 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
+import golden
 from test_support import capture_logs, mock_subprocess
 from zfs_repository import (
     AshiftInfo,
@@ -527,38 +528,23 @@ class TestBuildCreatePoolCommand(unittest.TestCase):
 
     def test_stripe_has_no_topology_keyword(self):
         cmd = build_create_pool_command("tank", "stripe", ["/dev/disk/by-id/ata-X"])
-        self.assertEqual(cmd, ["zpool", "create", "tank", "/dev/disk/by-id/ata-X"])
+        golden.check(self, cmd)
 
     def test_mirror_places_keyword_before_paths(self):
         paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
         cmd = build_create_pool_command("tank", "mirror", paths)
-        self.assertEqual(cmd, ["zpool", "create", "tank", "mirror"] + paths)
+        golden.check(self, cmd)
 
     def test_raidz2_with_ashift_and_profile_options(self):
         paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d")]
         options = [("recordsize", "1M"), ("compression", "zstd")]
         cmd = build_create_pool_command("backup", "raidz2", paths, ashift=12, options=options)
-        self.assertEqual(
-            cmd,
-            [
-                "zpool",
-                "create",
-                "-o",
-                "ashift=12",
-                "-O",
-                "recordsize=1M",
-                "-O",
-                "compression=zstd",
-                "backup",
-                "raidz2",
-            ]
-            + paths,
-        )
+        golden.check(self, cmd)
 
     def test_defaults_emit_no_ashift_or_options(self):
         paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
         cmd = build_create_pool_command("tank", "mirror", paths, ashift=None, options=None)
-        self.assertEqual(cmd, ["zpool", "create", "tank", "mirror"] + paths)
+        golden.check(self, cmd)
 
     def test_rejects_unknown_topology(self):
         with self.assertRaises(ValueError):
@@ -567,14 +553,7 @@ class TestBuildCreatePoolCommand(unittest.TestCase):
     def test_raid10_emits_consecutive_mirror_pairs(self):
         paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d")]
         cmd = build_create_pool_command("tank", "raid10", paths)
-        self.assertEqual(
-            cmd,
-            [
-                "zpool", "create", "tank",
-                "mirror", paths[0], paths[1],
-                "mirror", paths[2], paths[3],
-            ],
-        )
+        golden.check(self, cmd)
 
     def test_raid10_preserves_ashift_and_profile_options(self):
         paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d", "e", "f")]
@@ -582,15 +561,7 @@ class TestBuildCreatePoolCommand(unittest.TestCase):
         cmd = build_create_pool_command(
             "tank", "raid10", paths, ashift=12, options=options
         )
-        self.assertEqual(
-            cmd,
-            [
-                "zpool", "create", "-o", "ashift=12", "-O", "compression=zstd", "tank",
-                "mirror", paths[0], paths[1],
-                "mirror", paths[2], paths[3],
-                "mirror", paths[4], paths[5],
-            ],
-        )
+        golden.check(self, cmd)
 
     def test_raid10_rejects_below_minimum_and_odd_counts(self):
         for disks in (2, 3, 5):
@@ -686,40 +657,40 @@ class TestBuildAddVdevCommand(unittest.TestCase):
 
     def test_stripe_data_vdev_has_no_keyword(self):
         cmd = build_add_vdev_command("tank", "stripe", ["/dev/disk/by-id/ata-X"])
-        self.assertEqual(cmd, ["zpool", "add", "tank", "/dev/disk/by-id/ata-X"])
+        golden.check(self, cmd)
 
     def test_mirror_data_vdev_places_keyword_before_paths(self):
         paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
         cmd = build_add_vdev_command("tank", "mirror", paths)
-        self.assertEqual(cmd, ["zpool", "add", "tank", "mirror"] + paths)
+        golden.check(self, cmd)
 
     def test_raidz2_data_vdev(self):
         paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d")]
         cmd = build_add_vdev_command("tank", "raidz2", paths)
-        self.assertEqual(cmd, ["zpool", "add", "tank", "raidz2"] + paths)
+        golden.check(self, cmd)
 
     def test_cache_single_disk_has_no_keyword(self):
         cmd = build_add_vdev_command("tank", "stripe", ["/dev/disk/by-id/ata-X"], kind="cache")
-        self.assertEqual(cmd, ["zpool", "add", "tank", "cache", "/dev/disk/by-id/ata-X"])
+        golden.check(self, cmd)
 
     def test_cache_multiple_disks_are_not_mirrored(self):
         paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
         cmd = build_add_vdev_command("tank", "stripe", paths, kind="cache")
-        self.assertEqual(cmd, ["zpool", "add", "tank", "cache"] + paths)
+        golden.check(self, cmd)
 
     def test_log_mirror_places_keyword_after_kind(self):
         paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
         cmd = build_add_vdev_command("tank", "mirror", paths, kind="log")
-        self.assertEqual(cmd, ["zpool", "add", "tank", "log", "mirror"] + paths)
+        golden.check(self, cmd)
 
     def test_special_mirror_places_keyword_after_kind(self):
         paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
         cmd = build_add_vdev_command("tank", "mirror", paths, kind="special")
-        self.assertEqual(cmd, ["zpool", "add", "tank", "special", "mirror"] + paths)
+        golden.check(self, cmd)
 
     def test_log_single_disk_has_no_keyword(self):
         cmd = build_add_vdev_command("tank", "stripe", ["/dev/disk/by-id/ata-X"], kind="log")
-        self.assertEqual(cmd, ["zpool", "add", "tank", "log", "/dev/disk/by-id/ata-X"])
+        golden.check(self, cmd)
 
     def test_rejects_unknown_kind(self):
         with self.assertRaises(ValueError):
@@ -765,24 +736,15 @@ class TestBuildAttachCommand(unittest.TestCase):
 
     def test_stripe_to_mirror_attach(self):
         cmd = build_attach_command("tank", "/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y")
-        self.assertEqual(
-            cmd,
-            [
-                "zpool",
-                "attach",
-                "tank",
-                "/dev/disk/by-id/ata-X",
-                "/dev/disk/by-id/ata-Y",
-            ],
-        )
+        golden.check(self, cmd)
 
     def test_raidz_expansion_targets_vdev_group_name(self):
         cmd = build_attach_command("tank", "raidz2-0", "/dev/disk/by-id/ata-Z")
-        self.assertEqual(cmd, ["zpool", "attach", "tank", "raidz2-0", "/dev/disk/by-id/ata-Z"])
+        golden.check(self, cmd)
 
     def test_accepts_mirror_vdev_group_name(self):
         cmd = build_attach_command("tank", "mirror-0", "/dev/disk/by-id/ata-Z")
-        self.assertEqual(cmd, ["zpool", "attach", "tank", "mirror-0", "/dev/disk/by-id/ata-Z"])
+        golden.check(self, cmd)
 
     def test_rejects_stripe_vdev_group_name(self):
         with self.assertRaises(ValueError):
@@ -818,16 +780,7 @@ class TestBuildReplaceCommand(unittest.TestCase):
 
     def test_exact_argv(self):
         cmd = build_replace_command("tank", "/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y")
-        self.assertEqual(
-            cmd,
-            [
-                "zpool",
-                "replace",
-                "tank",
-                "/dev/disk/by-id/ata-X",
-                "/dev/disk/by-id/ata-Y",
-            ],
-        )
+        golden.check(self, cmd)
 
     def test_rejects_non_by_id_source(self):
         with self.assertRaises(ValueError):
@@ -847,7 +800,7 @@ class TestBuildDetachCommand(unittest.TestCase):
 
     def test_exact_argv(self):
         cmd = build_detach_command("tank", "/dev/disk/by-id/ata-X")
-        self.assertEqual(cmd, ["zpool", "detach", "tank", "/dev/disk/by-id/ata-X"])
+        golden.check(self, cmd)
 
     def test_rejects_non_by_id_member(self):
         with self.assertRaises(ValueError):

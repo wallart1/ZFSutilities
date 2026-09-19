@@ -1,8 +1,10 @@
-"""Tests for MkDocs documentation integrity — nav, links, hooks, anchors."""
+"""Tests for MkDocs documentation integrity — nav, links, hooks, anchors,
+and AGENTS.md reference integrity (repo-relative paths and branch names)."""
 
 import importlib.util
 import os
 import re
+import subprocess
 import unittest
 
 from test_support import (
@@ -19,6 +21,171 @@ from test_support import (
     list_all_md_files,
     resolve_relative_link,
 )
+
+# --- AGENTS.md reference validation -----------------------------------------
+#
+# Existence semantics: a candidate reference passes if it exists on disk under
+# REPO_ROOT. A candidate that does not exist passes only when git ignores it
+# (generated content such as docs/site/, which is absent on fresh clones);
+# everything else is a failure reported as "source:line: token". Candidates
+# starting with an AUTHOR_MACHINE_ALLOWLIST entry are reported as allowlisted,
+# never failed. Placeholder tokens (containing <...>) are validated by their
+# longest literal repo-relative parent directory.
+#
+# Candidates are extracted from inline code spans and from prose. A prose
+# token qualifies as repo-relative when it starts with a known top-level
+# directory prefix (bin/, lib/, python/, tests/, docs/, share/) or ends in a
+# known file extension; a bare token qualifies when it names a known root
+# file. This classification (not extension alone) is what keeps pool names
+# (threeamigos/proxmox), host roles (storage/compute), and generic noun pairs
+# (pool/dataset, zfs/zpool) from being treated as paths. MIN_ROOT_CANDIDATES
+# is an extraction floor so a broken regex cannot degrade the suite to a
+# vacuous pass.
+
+AGENTS_MD_FILES = [
+    os.path.join(REPO_ROOT, "AGENTS.md"),
+    os.path.join(REPO_ROOT, "tests", "AGENTS.md"),
+]
+
+KNOWN_TOP_LEVEL_PREFIXES = ("bin/", "lib/", "python/", "tests/", "docs/", "share/")
+
+KNOWN_ROOT_FILES = frozenset(
+    {
+        "AGENTS.md",
+        "README.md",
+        "VERSION",
+        "LICENSE",
+        "pyproject.toml",
+        ".shellcheckrc",
+        "SESSION_NOTES.md",
+    }
+)
+
+KNOWN_FILE_EXTENSIONS = (".md", ".py", ".sh", ".yml", ".yaml", ".toml", ".json", ".txt")
+
+MIN_ROOT_CANDIDATES = 10
+
+AUTHOR_MACHINE_ALLOWLIST = ("/NFS1/",)
+
+BRANCH_ALLOWLIST = frozenset()
+
+BRANCH_RE = re.compile(r"Branch:\s*([A-Za-z0-9._/-]+)")
+
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+
+_PROSE_TOKEN_RE = re.compile(r"(?<![\w/@.~$-])([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.+*<>-]+)+)")
+
+_PLACEHOLDER_RE = re.compile(r"[<*[]")
+
+
+def _strip_fenced_blocks(text):
+    return _FENCE_RE.sub("", text)
+
+
+def _clean_token(token):
+    return token.strip().lstrip("@").rstrip(".,);:]}>")
+
+
+def _extract_candidates(text):
+    """Extract (line_no, token) repo-relative reference candidates."""
+    text = _strip_fenced_blocks(text)
+    candidates = []
+    seen = set()
+    for line_no, line in enumerate(text.splitlines(), 1):
+        for span in re.findall(r"`([^`]+)`", line):
+            # Command strings like `tests/run-tests test-<name>` are skipped
+            # here; the prose pass below still picks up the path sub-token.
+            if re.search(r"\s", span):
+                continue
+            token = _clean_token(span)
+            if "/" in token and not token.startswith(("/", "~")):
+                candidates.append((line_no, token))
+        for match in _PROSE_TOKEN_RE.finditer(line):
+            token = _clean_token(match.group(1))
+            if token.startswith(KNOWN_TOP_LEVEL_PREFIXES) or token.endswith(
+                KNOWN_FILE_EXTENSIONS
+            ):
+                candidates.append((line_no, token))
+        for fname in KNOWN_ROOT_FILES:
+            if re.search(r"(?<![\w./-])" + re.escape(fname) + r"(?![\w/-])", line):
+                candidates.append((line_no, fname))
+    unique = []
+    for line_no, token in candidates:
+        if (line_no, token) not in seen:
+            seen.add((line_no, token))
+            unique.append((line_no, token))
+    return unique
+
+
+def _is_git_ignored(rel_path):
+    result = subprocess.run(
+        ["git", "-C", REPO_ROOT, "check-ignore", "-q", "--", rel_path],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _local_branch_exists(name):
+    result = subprocess.run(
+        ["git", "-C", REPO_ROOT, "branch", "--list", name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _resolve_candidate(token):
+    """Classify one candidate: ok / problem / ignored / allowlisted."""
+    if token.startswith(AUTHOR_MACHINE_ALLOWLIST):
+        return "allowlisted", token
+    if _PLACEHOLDER_RE.search(token):
+        # Validate the longest literal repo-relative parent directory:
+        # tests/python/test_<name>.py requires tests/python/ to exist.
+        literal = _PLACEHOLDER_RE.split(token)[0].rstrip("/")
+        parent = os.path.dirname(literal) or literal
+        full = os.path.join(REPO_ROOT, parent)
+        if os.path.isdir(full):
+            return "ok", parent + "/"
+        return "problem", f"placeholder parent directory missing: {parent}/"
+    full = os.path.join(REPO_ROOT, token)
+    if os.path.exists(full):
+        return "ok", token
+    if _is_git_ignored(token):
+        return "ignored", token
+    return "problem", "no such file or directory (and not git-ignored)"
+
+
+def _validate_agents_md_text(text, source_label):
+    """Validate one AGENTS.md text. Returns (problems, ignored, allowlisted,
+    candidates)."""
+    problems, ignored, allowlisted = [], [], []
+    candidates = _extract_candidates(text)
+    for line_no, token in candidates:
+        status, detail = _resolve_candidate(token)
+        if status == "problem":
+            problems.append(f"{source_label}:{line_no}: '{token}' -> {detail}")
+        elif status == "ignored":
+            ignored.append(token)
+        elif status == "allowlisted":
+            allowlisted.append(token)
+    return problems, ignored, allowlisted, candidates
+
+
+def _validate_branch_mentions(text, source_label):
+    """Every 'Branch: <name>' mention must name a local branch or be allowlisted."""
+    problems = []
+    for line_no, line in enumerate(_strip_fenced_blocks(text).splitlines(), 1):
+        for match in BRANCH_RE.finditer(line):
+            name = match.group(1)
+            if name not in BRANCH_ALLOWLIST and not _local_branch_exists(name):
+                problems.append(
+                    f"{source_label}:{line_no}: 'Branch: {name}' -> "
+                    "no such local branch (and not allowlisted)"
+                )
+    return problems
 
 
 class TestMkDocsYml(unittest.TestCase):
@@ -277,6 +444,88 @@ class TestMarkdownListIndentation(unittest.TestCase):
                 "Insufficiently indented nested lists found (will render as "
                 "flattened ordered lists):\n  " + "\n  ".join(failures)
             )
+
+
+class TestAgentsMdReferences(unittest.TestCase):
+    """Stale references in AGENTS.md files must fail this suite."""
+
+    def _read(self, path):
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    def test_root_agents_md_meets_extraction_floor(self):
+        text = self._read(os.path.join(REPO_ROOT, "AGENTS.md"))
+        _problems, _ignored, _allowlisted, candidates = _validate_agents_md_text(
+            text, "AGENTS.md"
+        )
+        tokens = sorted({token for _line, token in candidates})
+        self.assertGreaterEqual(
+            len(tokens),
+            MIN_ROOT_CANDIDATES,
+            f"Only {len(tokens)} reference candidates extracted from root "
+            f"AGENTS.md (floor {MIN_ROOT_CANDIDATES}); the extractor is "
+            f"probably broken. Found: {tokens}",
+        )
+
+    def test_all_references_exist(self):
+        failures = []
+        for path in AGENTS_MD_FILES:
+            label = os.path.relpath(path, REPO_ROOT)
+            text = self._read(path)
+            problems, _ignored, _allowlisted, _candidates = _validate_agents_md_text(
+                text, label
+            )
+            failures.extend(problems)
+            failures.extend(_validate_branch_mentions(text, label))
+        if failures:
+            self.fail("Stale references in AGENTS.md files:\n  " + "\n  ".join(failures))
+
+    def test_checker_flags_bogus_reference(self):
+        text = (
+            "See bin/no-such-script-here and docs/no-such-guide.md "
+            "for details.\n"
+        )
+        problems, _ignored, _allowlisted, _candidates = _validate_agents_md_text(
+            text, "synthetic"
+        )
+        joined = "\n".join(problems)
+        self.assertIn("bin/no-such-script-here", joined)
+        self.assertIn("docs/no-such-guide.md", joined)
+        # Clean text must produce no problems.
+        problems, _ignored, _allowlisted, _candidates = _validate_agents_md_text(
+            "No references here.\n", "synthetic"
+        )
+        self.assertEqual(problems, [])
+
+    def test_placeholder_token_validates_parent_dir(self):
+        text = "Run pytest tests/python/test_<name>.py -x --tb=short.\n"
+        problems, _ignored, _allowlisted, _candidates = _validate_agents_md_text(
+            text, "synthetic"
+        )
+        self.assertEqual(problems, [])
+
+    def test_git_ignored_path_is_skipped(self):
+        # docs/site/ is gitignored generated content; a missing file under it
+        # must be skipped, not failed.
+        status, _detail = _resolve_candidate("docs/site/fake-generated-page.html")
+        self.assertEqual(status, "ignored")
+
+    def test_author_machine_path_is_allowlisted(self):
+        status, _detail = _resolve_candidate("/NFS1/dan/plan/some-file.md")
+        self.assertEqual(status, "allowlisted")
+
+    def test_branch_mentions_exist(self):
+        failures = []
+        for path in AGENTS_MD_FILES:
+            label = os.path.relpath(path, REPO_ROOT)
+            failures.extend(_validate_branch_mentions(self._read(path), label))
+        if failures:
+            self.fail("Stale branch references in AGENTS.md files:\n  " + "\n  ".join(failures))
+
+    def test_branch_checker_flags_unknown_branch(self):
+        problems = _validate_branch_mentions("Branch: nope-xyz\n", "synthetic")
+        self.assertTrue(problems)
+        self.assertEqual(_validate_branch_mentions("No branch line.\n", "synthetic"), [])
 
 
 if __name__ == "__main__":

@@ -54,7 +54,6 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsholds`](#zfsholds)
 - [`zfslistkeys`](#zfslistkeys)
 - [`zfslockctl`](#zfslockctl)
-- [`zfslockmanager-test`](#zfslockmanager-test)
 - [`zfsmassdelsnaps`](#zfsmassdelsnaps)
 - [`zfs-migrate-send`](#zfs-migrate-send)
 - [`zfsmount`](#zfsmount)
@@ -580,7 +579,7 @@ for bash suites when the corresponding option is used:
 | Module | Purpose |
 | ------ | ------- |
 | `tests/run-tests` | Unified bash + Python test harness |
-| `tests/python/runner.py` | Python test discovery and execution |
+| `tests/python/runner.py` | Deprecated shim forwarding to pytest |
 
 **Data structures consumed / produced:**
 
@@ -600,8 +599,8 @@ for bash suites when the corresponding option is used:
    Python suites.
 4. Run each bash suite as a separate `bash` process, capturing stdout/stderr.
    Parse `Total:`/`Passed:`/`Failed:` lines for aggregation.
-5. Run Python suites through `tests/python/runner.py`, similarly parsing its
-   summary.
+5. Run Python suites through `python3 -m pytest tests/python -n auto -q`,
+   similarly parsing its final summary line.
 6. Print an overall pass/fail summary and exit with the overall result.
 
 **Return codes:**
@@ -1880,46 +1879,6 @@ See also: [`zfslockmanager`](modules.md#zfslockmanager).
 | Code | Meaning |
 | ---- | ------- |
 | `0` | Completed successfully. |
-
----
-
-### `zfslockmanager-test`
-
-Automated test suite for [`zfslockmanager`](modules.md#zfslockmanager), covering:
-
-- Basic acquire/release
-- Same-dataset conflicts (r/w/x combinations)
-- Hierarchy conflicts (ancestor/descendant)
-- Stale lock detection and cleanup
-- Re-entrant locking (same PID)
-- Concurrent access blocking
-- Path encoding (`%2F`, `%40`)
-- `zfslockctl` CLI commands
-- Headless/non-interactive abort behavior
-- Retry and wait polling behavior
-
-```bash
-sudo zfslockmanager-test
-```
-
-**Arguments:** none.
-
-**Globals:** none.
-
-**Called modules:**
-
-| Module | Purpose in this command |
-| ------ | ----------------------- |
-| [zfslockmanager](modules.md#zfslockmanager) | Exercises lock acquire, release, conflict detection, and stale cleanup |
-| [zfslockctl](../developer-guide/lock-manager.md#zfslockctl) | Tests the lock-manager CLI subcommands |
-
-**Data structures consumed / produced:**
-
-| Structure | Role | Reference |
-| --------- | ---- | --------- |
-| Lock files | Created, read, and removed under `/run/lock/zfsutilities/.locks/` during tests | [Lock files](../developer-guide/data-structures.md#lock-files) |
-
-All tests should pass.
 
 ---
 

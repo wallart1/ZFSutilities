@@ -1,0 +1,9 @@
+rsync
+--delete
+--progress
+-rav
+--exclude=**/.gvfs/
+--exclude=**/.cache/doc/
+--exclude=temp
+/src
+root@remote:/dst

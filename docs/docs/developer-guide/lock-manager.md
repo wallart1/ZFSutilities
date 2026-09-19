@@ -189,8 +189,29 @@ Choice [W/R/S/A/F]:
 
 **Wait (`W`)** keeps checking the lock every `ZFSLOCK_WAIT_INTERVAL` seconds and
 retries automatically as soon as the lock is free. Press `Ctrl+C` to stop waiting
-and return to the choice prompt. Values below `1` second are clamped to `1` second
-to avoid busy-waiting.
+and return to the choice prompt. Positive fractional values (for example `0.5`)
+are accepted; non-numeric or non-positive values are clamped to `1` second to avoid
+busy-waiting.
+
+### Timing Knobs (Environment Overrides)
+
+All lock-manager timings are overridable via environment variables, using the
+usual `${VAR:-default}` convention. Production defaults are unchanged when the
+variables are unset. The knobs exist so test suites can run at millisecond scale
+without real waiting; the `tests/test-zfslockmanager-soak` suite uses realistic
+timings instead and is excluded from default test runs.
+
+| Variable | Default | Granularity | Purpose |
+|----------|---------|-------------|---------|
+| `ZFSLOCK_WAIT_INTERVAL` | 30 | fractional seconds allowed | Interval between lock-availability re-checks in wait loops (interactive `W` choice and headless timed waits). |
+| `ZFSLOCK_RETRY_THROTTLE` | 1 | fractional seconds allowed | Delay between re-acquisition attempts when the conflict prompt loops (prevents CPU spinning on a closed stdin or a rapidly re-acquired lock). |
+| `ZFSLOCK_HEADLESS_WAIT_SECONDS` | 0 | **integer seconds only** | How long `zfslock_wait_or_resolve` keeps retrying in non-interactive mode before aborting; `0` (the default) preserves the legacy immediate abort. |
+| `ZFSLOCK_REMOTE_POLL_INTERVAL` | 0.1 | fractional seconds allowed | Poll interval while waiting for the remote lock agent's response during a remote (two-node) acquire. |
+
+For `ZFSLOCK_WAIT_INTERVAL` and `ZFSLOCK_RETRY_THROTTLE`, invalid or non-positive
+values fall back to `1` second. `ZFSLOCK_HEADLESS_WAIT_SECONDS` must be a whole
+number; anything else is treated as `0`. `ZFSLOCK_REMOTE_POLL_INTERVAL` falls back
+to `0.1` when invalid.
 
 **Retry now (`R`)** immediately re-checks whether the lock can be acquired. This is
 useful when you have resolved the conflict externally (for example, by stopping the

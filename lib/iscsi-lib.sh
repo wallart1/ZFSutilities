@@ -22,7 +22,10 @@ source "$NODE_LIB"
 # Key: dataset name. Value: "target:lun_num:backstore_name:encrypted_flag"
 # Populated by iscsi_teardown_zvol; consumed by iscsi_rebuild_torn_down.
 # encrypted_flag is "Y" if the backstore was listed in /etc/iscsi-encrypted-luns.conf.
-declare -A iscsi_teardown
+# -g is required: libraries are loaded through bashinit's source_helper function,
+# and a bare declare here would create a function-local that vanishes when
+# source_helper returns, silently breaking every later iscsi_teardown[...] write.
+declare -gA iscsi_teardown
 
 # iSCSI manifest paths used by teardown/rebuild helpers.
 : "${ISCSI_MANIFEST:=/etc/rtslib-fb-target/expected-backstores.txt}"

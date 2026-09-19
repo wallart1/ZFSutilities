@@ -1,0 +1,5 @@
+zpool
+add
+tank
+log
+/dev/disk/by-id/ata-X

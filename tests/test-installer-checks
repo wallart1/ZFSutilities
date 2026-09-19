@@ -403,6 +403,7 @@ test_partial_uninstall_detects_systemd_cron_remnants() {
     tmpdir=$(mktemp -d)
 
     export ZFSUTILITIES_VERSION_BASE="$tmpdir/version_base"
+    export ZFSUTILITIES_ETC_PREFIX="$tmpdir"
     mkdir -p "$tmpdir/etc/systemd/system/rtslib-fb-targetctl.service.d"
     mkdir -p "$tmpdir/etc/cron.d"
     touch "$tmpdir/etc/cron.d/zfsutilities"
@@ -411,7 +412,7 @@ test_partial_uninstall_detects_systemd_cron_remnants() {
     output=$(check_partial_uninstall "$tmpdir" 2>&1)
     local rc=$?
 
-    unset ZFSUTILITIES_VERSION_BASE
+    unset ZFSUTILITIES_VERSION_BASE ZFSUTILITIES_ETC_PREFIX
     rm -rf "$tmpdir"
 
     local failed=0

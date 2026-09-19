@@ -1,0 +1,50 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  # Nightly soak run (timing-conflict coverage; excluded from default runs).
+  schedule:
+    - cron: '17 5 * * *'
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: sudo share/dev/install-test-deps.sh
+      - name: Link bashinit
+        # Test suites bootstrap via `source ~/bashinit` (the
+        # development-machine convention).
+        run: ln -sfn "$PWD/bin/bashinit" "$HOME/bashinit"
+      - name: Run test suite
+        # Preflight skips suites whose environment (root, test pools) is
+        # unavailable here; skips never fail the run. The GUI suites
+        # instantiate real GTK widgets, so run under a virtual display.
+        run: xvfb-run -a bash tests/run-tests
+      - name: Documentation integrity
+        run: python3 -m pytest tests/python/test_docs_integrity.py -q
+
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: sudo share/dev/install-test-deps.sh
+      - name: Link bashinit
+        # Test suites bootstrap via `source ~/bashinit` (the
+        # development-machine convention).
+        run: ln -sfn "$PWD/bin/bashinit" "$HOME/bashinit"
+      - name: Run soak suites
+        # --with-soak runs the full suite (bash + Python) including soak
+        # timing suites; the Python layer needs the virtual display.
+        run: xvfb-run -a bash tests/run-tests --with-soak

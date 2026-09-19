@@ -18,7 +18,7 @@ from zfs_repository import TopologyNode
 def _import_disks_page():
     """Import disks_page under a fresh mocked GTK context."""
     sys.modules.pop("disks_page", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import disks_page
 
         return disks_page
@@ -421,7 +421,7 @@ class TestRefreshDisksPage(unittest.TestCase):
         """The combined Wear/Test cell shows surface-test status for HDDs."""
         dp = _import_disks_page()
         sys.modules.pop("disk_surface_test", None)
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import disk_surface_test as dst
 
         disks = [
@@ -442,7 +442,7 @@ class TestRefreshDisksPage(unittest.TestCase):
         """A partition row shows its parent disk's surface-test status."""
         dp = _import_disks_page()
         sys.modules.pop("disk_surface_test", None)
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import disk_surface_test as dst
 
         disk = _disk(path="/dev/sdc1", model="", disk_type="part", parent_path="/dev/sdc")

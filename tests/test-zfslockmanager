@@ -1,6 +1,8 @@
 #!/usr/bin/bash
 # shellcheck disable=SC1090,SC2034,SC2153,SC2154
-# test-zfslockmanager — Adapted from zfslockmanager-test for the test harness.
+# test-zfslockmanager — Deterministic protocol suite for the lock manager.
+# Timing-dependent conflict scenarios live in tests/test-zfslockmanager-soak
+# (skipped by default).
 # Uses a temporary lock directory so tests do not interfere with production
 # locks and do not require root.
 
@@ -21,11 +23,19 @@ zfslock_locks_dir="$ZFSLOCK_DIR/.locks"
 zfslock_pids_dir="$ZFSLOCK_DIR/.pids"
 mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir"
 
+# Millisecond-scale timing knobs so the deterministic protocol tests never
+# wait on real time. Realistic-timing conflict scenarios live in
+# tests/test-zfslockmanager-soak (skipped by default).
+export ZFSLOCK_WAIT_INTERVAL=0.05
+export ZFSLOCK_RETRY_THROTTLE=0.05
+export ZFSLOCK_REMOTE_POLL_INTERVAL=0.02
+
 # ---------------------------------------------------------------------------
 # Background-process helpers
 # ---------------------------------------------------------------------------
 # Lock-manager reentry logic treats same-PID acquires as re-entrant.
 # To test cross-process conflicts we start real child processes.
+# Keep in sync with the helper block in tests/test-zfslockmanager-soak.
 # ---------------------------------------------------------------------------
 
 _BG_LOCK_PID=""
@@ -35,7 +45,7 @@ _BG_LOCK_RCFILE=""
 # Globals set: _BG_LOCK_PID, _BG_LOCK_RCFILE
 _bg_lock_start() {
     local dataset="$1" type="$2" description="$3"
-    local hold_time="${4:-3600}"
+    local hold_time="${4:-infinity}"
     local id="${RANDOM}_$$"
     local script="$_mock_zfs_state_dir/bg_lock_${id}.sh"
     _BG_LOCK_RCFILE="$_mock_zfs_state_dir/bg_lock_rc_${id}"
@@ -64,8 +74,8 @@ EOF
 _bg_lock_wait_rc() {
     local rcfile="$_BG_LOCK_RCFILE"
     local tries=0
-    while [[ ! -f "$rcfile" && $tries -lt 20 ]]; do
-        sleep 0.5
+    while [[ ! -f "$rcfile" && $tries -lt 200 ]]; do
+        sleep 0.05
         ((tries++))
     done
     [[ -f "$rcfile" ]] && cat "$rcfile" || echo "255"
@@ -430,8 +440,10 @@ test_concurrent_access() {
     cleanup_test_locks
 
     test_start "Background process lock blocks foreground"
-    _bg_lock_start "test/concurrent" "w" "background lock" 3600
-    sleep 1
+    _bg_lock_start "test/concurrent" "w" "background lock"
+    # Wait for the holder to report its acquire result instead of sleeping a
+    # fixed interval; once the rcfile exists the lock is held.
+    _bg_lock_wait_rc > /dev/null
 
     if ! zfslock_acquire "test/concurrent" "w" "foreground attempt"; then
         test_pass
@@ -443,7 +455,8 @@ test_concurrent_access() {
     _bg_lock_kill
 
     test_start "Lock released when process exits"
-    sleep 1
+    # _bg_lock_kill already waited for the holder; stale detection removes
+    # the dead-PID lock file during the acquire below.
     zfslock_cleanup_stale > /dev/null
     if zfslock_acquire "test/concurrent" "w" "after bg exit"; then
         test_pass
@@ -606,176 +619,179 @@ test_conflict_message() {
 }
 
 # ---------------------------------------------------------------------------
-# Wait loop
+# Timing-knob sanitization (ZFSLOCK_WAIT_INTERVAL, ZFSLOCK_RETRY_THROTTLE,
+# ZFSLOCK_REMOTE_POLL_INTERVAL)
 # ---------------------------------------------------------------------------
 
-test_wait_loop() {
+test_sanitize_interval() {
     echo ""
-    echo "=== Wait Loop Tests ==="
+    echo "=== Timing Knob Sanitization Tests ==="
     cleanup_test_locks
 
-    _enable_interactive
-
-    test_start "Wait choice retries until lock becomes available"
-    _bg_lock_start "test/waitloop" "w" "background lock" 3
-    sleep 0.5
-    local rc
-    rc=$(ZFSLOCK_WAIT_INTERVAL=1 zfslock_wait_or_resolve "test/waitloop" "w" "test" <<< "w" \
-        >/dev/null 2>&1;
-        echo $?)
-    _bg_lock_kill
-    if [[ "$rc" -eq 0 ]]; then
+    test_start "Valid integer and fractional intervals pass through"
+    local v_int v_frac
+    v_int=$(_zfslock_sanitize_interval 5 1)
+    v_frac=$(_zfslock_sanitize_interval 0.05 1)
+    if [[ "$v_int" == "5" && "$v_frac" == "0.05" ]]; then
         test_pass
     else
-        test_fail "Expected rc=0 after lock released, got rc=$rc"
+        test_fail "integer='$v_int' fraction='$v_frac'"
     fi
-    zfslock_release_all
 
-    _disable_interactive
-}
-
-# ---------------------------------------------------------------------------
-# Retry option
-# ---------------------------------------------------------------------------
-
-test_retry_option() {
-    echo ""
-    echo "=== Retry Option Tests ==="
-    cleanup_test_locks
-
-    _enable_interactive
-
-    test_start "Retry option re-prompts and eventually acquires lock"
-    _bg_lock_start "test/retry" "w" "background lock" 3
-    sleep 0.5
-    local rc
-    rc=$(ZFSLOCK_WAIT_INTERVAL=1 zfslock_wait_or_resolve "test/retry" "w" "test" <<< $'r\nw\n' \
-        >/dev/null 2>&1;
-        echo $?)
-    _bg_lock_kill
-    if [[ "$rc" -eq 0 ]]; then
+    test_start "Non-numeric values fall back for sleep knobs and poll knob"
+    local ok=1
+    [[ "$(_zfslock_sanitize_interval abc 1)" == "1" ]] || ok=0
+    [[ "$(_zfslock_sanitize_interval "" 1)" == "1" ]] || ok=0
+    [[ "$(_zfslock_sanitize_interval -1 1)" == "1" ]] || ok=0
+    [[ "$(_zfslock_sanitize_interval abc 0.1 Y)" == "0.1" ]] || ok=0
+    [[ "$(_zfslock_sanitize_interval "" 0.1 Y)" == "0.1" ]] || ok=0
+    if [[ $ok == 1 ]]; then
         test_pass
     else
-        test_fail "Expected rc=0 after retry/wait, got rc=$rc"
+        test_fail "a non-numeric fallback did not apply"
     fi
-    zfslock_release_all
 
-    _disable_interactive
-}
-
-# ---------------------------------------------------------------------------
-# Wait-interval guard
-# ---------------------------------------------------------------------------
-
-test_wait_interval_minimum() {
-    echo ""
-    echo "=== Wait Interval Minimum Tests ==="
-    cleanup_test_locks
-
-    _enable_interactive
-
-    test_start "Zero wait interval is clamped to at least 1 second"
-    _bg_lock_start "test/zerowait" "w" "background lock" 3
-    sleep 0.5
-    local start end elapsed rc
-    start=$(date +%s)
-    rc=$(ZFSLOCK_WAIT_INTERVAL=0 zfslock_wait_or_resolve "test/zerowait" "w" "test" <<< "w" \
-        >/dev/null 2>&1;
-        echo $?)
-    end=$(date +%s)
-    _bg_lock_kill
-    elapsed=$((end - start))
-    if [[ "$rc" -eq 0 && "$elapsed" -ge 1 ]]; then
+    test_start "Zero falls back for sleep knobs but is allowed for the poll knob"
+    ok=1
+    [[ "$(_zfslock_sanitize_interval 0 1)" == "1" ]] || ok=0
+    [[ "$(_zfslock_sanitize_interval 0.0 1)" == "1" ]] || ok=0
+    [[ "$(_zfslock_sanitize_interval 0 0.1 Y)" == "0" ]] || ok=0
+    if [[ $ok == 1 ]]; then
         test_pass
     else
-        test_fail "Expected rc=0 and elapsed>=1s, got rc=$rc elapsed=${elapsed}s"
+        test_fail "zero handling diverged from knob semantics"
     fi
-    zfslock_release_all
-
-    _disable_interactive
 }
 
-# ---------------------------------------------------------------------------
-# Headless timed wait
-# ---------------------------------------------------------------------------
+# Run zfslock_wait_or_resolve in a subshell with sleep stubbed to record its
+# arguments (instead of waiting), so sanitized knob values can be observed at
+# the consuming sleep call without any real delays.
+# Globals set: _SLEEP_STUB_LOG (path of the recorded-args file)
 
-test_headless_wait_acquires() {
+test_wait_interval_fallback_reaches_sleep() {
     echo ""
-    echo "=== Headless Timed Wait Acquire Tests ==="
+    echo "=== Wait Interval Fallback Integration Tests ==="
     cleanup_test_locks
 
-    _bg_lock_start "test/headlesswait" "w" "holder" 2
+    _bg_lock_start "test/waitfb" "w" "holder" 3600
     local bg_rc
     bg_rc=$(_bg_lock_wait_rc)
     if [[ "$bg_rc" -ne 0 ]]; then
         _bg_lock_kill
-        test_start "Headless wait mode acquires lock after holder releases"
+        test_start "Invalid wait interval reaches sleep as the 1-second fallback"
         test_fail "Background lock could not be acquired (rc=$bg_rc)"
         return
     fi
 
-    test_start "Headless wait mode acquires lock after holder releases"
-    local rcfile="$_mock_zfs_state_dir/headless_wait_rc"
+    test_start "Invalid wait interval reaches sleep as the 1-second fallback"
+    local sleep_log="$_mock_zfs_state_dir/waitfb_sleep_log"
+    local rcfile="$_mock_zfs_state_dir/waitfb_rc"
+    rm -f "$sleep_log" "$rcfile"
     (
-        ZFSUTILITIES_HEADLESS=Y ZFSLOCK_HEADLESS_WAIT_SECONDS=5 \
-            ZFSLOCK_WAIT_INTERVAL=1 \
-            zfslock_wait_or_resolve "test/headlesswait" "w" "test" </dev/null \
-            >/dev/null 2>&1
+        _SLEEP_STUB_LOG="$sleep_log"
+        sleep() { printf '%s\n' "$*" >> "$_SLEEP_STUB_LOG"; }
+        ZFSUTILITIES_HEADLESS=Y ZFSLOCK_HEADLESS_WAIT_SECONDS=30 \
+        ZFSLOCK_WAIT_INTERVAL=abc \
+            zfslock_wait_or_resolve "test/waitfb" "w" "test" </dev/null >/dev/null 2>&1
         echo $? > "$rcfile"
     ) &
-    local wait_pid=$!
-    wait "$wait_pid"
-    local rc
-    rc=$(cat "$rcfile")
+    local waiter_pid=$!
+    # Wait until the waiter is inside its poll loop (first recorded sleep)
+    # before releasing the holder, so the conflict actually exercises the
+    # headless wait path.
+    local tries=0
+    while [[ ! -s "$sleep_log" && $tries -lt 100 ]]; do
+        sleep 0.05
+        ((tries++))
+    done
     _bg_lock_kill
-    if [[ "$rc" -eq 0 ]]; then
+    wait "$waiter_pid" 2>/dev/null || true
+    zfslock_cleanup_stale > /dev/null 2>&1 || true
+
+    local rc
+    rc=$(cat "$rcfile" 2>/dev/null || echo 255)
+    if [[ "$rc" -eq 0 ]] && grep -qx "1" "$sleep_log" && ! grep -q "abc" "$sleep_log"; then
         test_pass
     else
-        test_fail "Expected rc=0 after lock released, got rc=$rc"
+        test_fail "rc=$rc sleep_log=$(tr '\n' ' ' < "$sleep_log" 2>/dev/null)"
     fi
     zfslock_release_all
+    zfslock_cleanup_stale > /dev/null 2>&1 || true
 }
 
-test_headless_wait_times_out() {
+test_retry_throttle_fallback_reaches_sleep() {
     echo ""
-    echo "=== Headless Timed Wait Timeout Tests ==="
+    echo "=== Retry Throttle Fallback Integration Tests ==="
     cleanup_test_locks
 
-    _bg_lock_start "test/headlesstimeout" "w" "holder" 10
+    _bg_lock_start "test/throttlefb" "w" "holder" 3600
     local bg_rc
     bg_rc=$(_bg_lock_wait_rc)
     if [[ "$bg_rc" -ne 0 ]]; then
         _bg_lock_kill
-        test_start "Headless wait mode aborts after configured timeout"
+        test_start "Invalid retry throttle reaches sleep as the 1-second fallback"
         test_fail "Background lock could not be acquired (rc=$bg_rc)"
         return
     fi
 
-    test_start "Headless wait mode aborts after configured timeout"
-    clear_test_log_file
-    local rcfile="$_mock_zfs_state_dir/headless_timeout_rc"
-    local start end elapsed
-    start=$(date +%s)
+    test_start "Invalid retry throttle reaches sleep as the 1-second fallback"
+    local sleep_log="$_mock_zfs_state_dir/throttlefb_sleep_log"
+    local rcfile="$_mock_zfs_state_dir/throttlefb_rc"
+    rm -f "$sleep_log" "$rcfile"
+    _enable_interactive
     (
-        ZFSUTILITIES_HEADLESS=Y ZFSLOCK_HEADLESS_WAIT_SECONDS=2 \
-            ZFSLOCK_WAIT_INTERVAL=1 \
-            zfslock_wait_or_resolve "test/headlesstimeout" "w" "test" </dev/null \
+        _SLEEP_STUB_LOG="$sleep_log"
+        sleep() { printf '%s\n' "$*" >> "$_SLEEP_STUB_LOG"; }
+        # First choice is invalid (re-prompts without resetting the throttle
+        # pass), so the loop top runs the throttled sleep before we abort.
+        ZFSLOCK_RETRY_THROTTLE=abc \
+            zfslock_wait_or_resolve "test/throttlefb" "w" "test" <<< $'z\na\n' \
             >/dev/null 2>&1
         echo $? > "$rcfile"
-    ) &
-    local wait_pid=$!
-    wait "$wait_pid"
-    end=$(date +%s)
-    elapsed=$((end - start))
-    local rc
-    rc=$(cat "$rcfile")
+    )
+    _disable_interactive
     _bg_lock_kill
-    if [[ "$rc" -eq 1 && "$elapsed" -ge 2 && "$elapsed" -le 5 ]]; then
+
+    local rc
+    rc=$(cat "$rcfile" 2>/dev/null || echo 255)
+    if [[ "$rc" -eq 1 ]] && grep -qx "1" "$sleep_log" && ! grep -q "abc" "$sleep_log"; then
         test_pass
     else
-        test_fail "Expected rc=1 and elapsed 2-5s, got rc=$rc elapsed=${elapsed}s"
+        test_fail "rc=$rc sleep_log=$(tr '\n' ' ' < "$sleep_log" 2>/dev/null)"
     fi
     zfslock_release_all
+}
+
+# ---------------------------------------------------------------------------
+# declare -gA regression: production loads this file through bashinit's
+# source_helper, which sources it inside a function context.
+# ---------------------------------------------------------------------------
+
+test_source_helper_context_declares_global_arrays() {
+    echo ""
+    echo "=== source_helper Loading Context Tests ==="
+    test_start "declare -gA arrays survive a bashinit source_helper-style function source"
+    local out rc
+    out=$(
+        # Mirror bashinit's source_helper, which sources helper files from
+        # inside a function: without -g the declares would create
+        # function-locals that vanish when the loader returns. Unset the
+        # arrays first so the globals from the top-level source above cannot
+        # mask a missing -g.
+        unset _zfslock_pool_target _zfslock_remote_pids _zfslock_remote_hosts
+        _zfslock_source_like_helper() { source "$mydir/bin/zfslockmanager"; }
+        _zfslock_source_like_helper
+        declare -p _zfslock_pool_target _zfslock_remote_pids _zfslock_remote_hosts
+    )
+    rc=$?
+    if [[ $rc -eq 0 ]] && \
+       grep -q 'declare -A _zfslock_pool_target' <<< "$out" && \
+       grep -q 'declare -A _zfslock_remote_pids' <<< "$out" && \
+       grep -q 'declare -A _zfslock_remote_hosts' <<< "$out"; then
+        test_pass
+    else
+        test_fail "arrays not global after function-context source (rc=$rc)"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -815,7 +831,7 @@ cmd_hold() {
         exit 1
     fi
     echo "LOCKED \$zfslock_id"
-    sleep 3600
+    sleep infinity
 }
 
 cmd_check() {
@@ -936,12 +952,17 @@ bashinit
 source "$mydir/bin/zfslockmanager"
 zfslock_init
 zfslock_acquire "remotepool/conflict" "w" "holder"
-sleep 3600
+sleep infinity
 EOF
     bash "$holder_script" >/dev/null 2>&1 &
     local holder_pid=$!
-    # Give the holder a moment to acquire.
-    sleep 0.5
+    # Wait for the holder's lock file instead of sleeping a fixed interval.
+    local holder_lockfile="$_remote_lock_dir/.locks/remotepool%2Fconflict.lock"
+    local holder_tries=0
+    while [[ ! -f "$holder_lockfile" && $holder_tries -lt 100 ]]; do
+        sleep 0.05
+        ((holder_tries++))
+    done
 
     test_start "Remote acquire detects conflict on storage node"
     local rc
@@ -954,6 +975,88 @@ EOF
 
     kill "$holder_pid" 2>/dev/null
     wait "$holder_pid" 2>/dev/null
+
+    if [[ -n "$_orig_remote_exec" ]]; then
+        eval "$_orig_remote_exec"
+    else
+        unset -f _zfslock_remote_exec 2>/dev/null || true
+    fi
+    zfslock_release_all
+    cleanup_test_locks
+}
+
+test_remote_poll_interval_fallback() {
+    echo ""
+    echo "=== Remote Poll Interval Fallback Tests ==="
+    cleanup_test_locks
+    setup_remote_agent
+
+    # Same compute-side remote resolution as the other remote tests.
+    local _orig_remote_exec
+    _orig_remote_exec=$(declare -f _zfslock_remote_exec)
+    _zfslock_remote_exec() {
+        shift
+        bash -c "$*"
+    }
+
+    export ZFSLOCK_REMOTE_DISABLED=0
+    export ZFSLOCK_REMOTE_HOST="remotehost"
+    export ZFSLOCK_REMOTE_POOLS="remotepool"
+    export ZFSLOCK_REMOTE_BIN="$_remote_bin_dir"
+    export ZFSLOCK_THIS_HOST="compute"
+    _zfslock_this_host=""
+    _zfslock_load_node_config
+
+    test_start "Invalid remote poll interval reaches sleep as the 0.1 fallback"
+    local sleep_log="$_mock_zfs_state_dir/pollfb_sleep_log"
+    local response_lockfile="$_remote_lock_dir/.locks/remotepool%2Fpollfb.lock"
+    rm -f "$sleep_log" "$response_lockfile"
+
+    # Deterministically exercise exactly one poll iteration: the mocked
+    # remote session produces no output of its own; the stubbed sleep delivers
+    # the agent's LOCKED response when the poll loop calls sleep.
+    local _orig_remote_spawn _orig_sleep
+    _orig_remote_spawn=$(declare -f _zfslock_remote_spawn)
+    _orig_sleep=$(declare -f sleep)
+    _zfslock_remote_spawn() {
+        # Fake SSH session: a long-lived pid with no agent output yet.
+        command sleep infinity &
+        _zfslock_remote_ssh_pid=$!
+    }
+    sleep() {
+        printf '%s\n' "$*" >> "$sleep_log"
+        local f
+        for f in "$zfslock_locks_dir"/.remote-acquire.*; do
+            [[ -f "$f" && ! -s "$f" ]] || continue
+            printf 'LOCKED %s\n' "$response_lockfile" > "$f"
+        done
+    }
+
+    local acquired=1
+    if ZFSLOCK_REMOTE_POLL_INTERVAL=abc \
+        zfslock_acquire "remotepool/pollfb" "w" "poll fallback test" \
+        >/dev/null 2>&1; then
+        [[ "$zfslock_id" == "REMOTE:$response_lockfile" ]] || acquired=0
+    else
+        acquired=0
+    fi
+
+    # Restore the overridden functions before releasing so the remote
+    # release path (which kills the fake SSH pid) runs unstubbed.
+    eval "$_orig_remote_spawn"
+    if [[ -n "$_orig_sleep" ]]; then
+        eval "$_orig_sleep"
+    else
+        unset -f sleep 2>/dev/null || true
+    fi
+
+    if [[ $acquired == 1 ]] && grep -qx "0.1" "$sleep_log" \
+        && ! grep -q "abc" "$sleep_log"; then
+        test_pass
+    else
+        test_fail "acquired=$acquired sleep_log=$(tr '\n' ' ' < "$sleep_log" 2>/dev/null)"
+    fi
+    zfslock_release "$zfslock_id" 2>/dev/null || true
 
     if [[ -n "$_orig_remote_exec" ]]; then
         eval "$_orig_remote_exec"
@@ -977,13 +1080,13 @@ test_path_encoding
 test_noninteractive_abort
 test_stale_conflict_retry
 test_conflict_message
-test_wait_loop
-test_retry_option
-test_wait_interval_minimum
 test_multi_lock_acquisition
-test_headless_wait_acquires
-test_headless_wait_times_out
+test_sanitize_interval
+test_wait_interval_fallback_reaches_sleep
+test_retry_throttle_fallback_reaches_sleep
+test_source_helper_context_declares_global_arrays
 test_remote_acquire_and_release
 test_remote_conflict
+test_remote_poll_interval_fallback
 
 test_summary

@@ -1,0 +1,3 @@
+bash
+-c
+source ~/bashinit; bashinit; mydir="/bin"; source "$mydir/zfs-send-receive"; dryrun='Y'; sourcefs="src"; destfs="dst"; nextsnap="@snap"; doincrementals="Y"; dointermediates="Y"; autoproceed="Y"; allow_destructive="N"; receive_F_option="F"; releaseholds="N"; releaseholds_tags=("offsite-*"); autoresume="Y"; verify_after_transfer="Y"; pv_rate_limit=""; includes=(); excludes=(); send-receive

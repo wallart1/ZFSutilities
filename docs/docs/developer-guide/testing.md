@@ -28,15 +28,124 @@ tests/run-tests -q
 # Failures only
 tests/run-tests --failures-only
 
-# Count tests without running them (per suite + total)
-tests/run-tests --count
+# Include the *-soak timing suites (see "Soak suites" below)
+tests/run-tests --with-soak
+
+# List live per-suite test counts (--count is an alias for --list). Bash
+# suites run quietly once so the counts are executed totals, not estimates;
+# Python suites are counted by pytest collection, which runs no tests.
+tests/run-tests --list
+
+# Bash suites: limit parallelism (default is one below nproc, min 2)
+tests/run-tests --jobs 4
+
+# Bash suites: serial debug mode (same results, no parallelism)
+tests/run-tests --jobs 1
+
+# Show the 10 slowest bash suites at the end (N optional, default 10)
+tests/run-tests --slowest 10
 ```
 
 Test counts are intentionally not maintained in documentation — use
-`--count` whenever a current number is needed.
+`--list` whenever a current number is needed.
 
 The `tests/run-tests` harness detects whether a name starts with `test_` (Python) or
 `test-` (bash) and routes it to the correct runner.
+
+### Parallel bash runs and per-suite timing
+
+Bash suites run in parallel by default (`--jobs N`; default `nproc - 1`, min 2,
+leaving one core for the system). Suites are self-contained — mocked `zfs`/`zpool`,
+own `mktemp` state, per-suite lock dirs — so parallel runs are safe; `--jobs 1` is
+the serial debug mode and produces identical pass/fail results.
+
+Per-suite wall time is always recorded. At the end of every run:
+
+- `--slowest N` prints the N slowest bash suites with their durations.
+- A soft budget warns (never fails) about non-soak suites taking more than 5
+  seconds, listed in an `Over budget (> 5s)` section. Keep suites under the
+  budget using the env-overridable timing knobs (see "Soak suites" below), not
+  by deleting coverage.
+
+### Soak suites
+
+Bash suites whose name ends in `-soak` contain randomized, time-dependent
+timing-conflict coverage (for example `test-zfslockmanager-soak`). They run at
+realistic timings — seconds, not milliseconds — so they are excluded from default
+runs: `tests/run-tests` reports them as `SKIPPED (soak suite)` and they do not
+affect the exit code. Run them on demand or nightly, either by naming the suite
+explicitly (`tests/run-tests test-zfslockmanager-soak`) or with `--with-soak`.
+
+New tests must not use real `sleep` calls to probe timing behavior — use the
+env-overridable timing knobs the product exposes (for the lock manager see
+[lock-manager.md](lock-manager.md#timing-knobs-environment-overrides)) and keep
+genuinely time-dependent conflict scenarios in a `-soak` suite.
+
+### Environment preflight and skips
+
+A red suite must always mean a real problem, so `tests/run-tests` detects the
+environment up front — GTK (`gi`), `pv`, `zfs`/`zpool`, root, and the
+integration test pools — and compares it against the requirements declared in
+`tests/requirements.manifest` (one `capability path` line per suite).
+
+Suites whose requirements are missing are reported as
+`SKIPPED (missing: <caps>)` with the reason stated, are not executed, and never
+affect the exit code; when skips are the only non-passes the run still exits 0.
+The first line of a normal run summarizes the detection:
+
+```text
+Environment: gi=present pv=present zfs=present root=MISSING test-pools=MISSING
+```
+
+Python suites that use GTK-dependent modules without `mock_gtk()` declare the
+dependency in `tests/requirements.manifest` and guard it, so direct
+`pytest tests/python/...` invocations skip identically:
+
+- Module-level imports of GTK-dependent modules go through
+  `test_support.import_or_skip_gi("<module>")` (so collection survives
+  without gi), paired with `pytestmark = requires_gi` (so a mock-bound
+  module already in the `sys.modules` cache cannot let tests run against
+  mocks).
+- GTK used only inside test bodies — `@patch` decorators on GUI modules, or
+  runtime GUI imports outside a `mock_gtk()` context — is covered by
+  `pytestmark = requires_gi` alone.
+
+A consistency check in `test_gui_infrastructure.py` enforces both rules and
+that the manifest matches the guarded suites. Skipped Python tests are
+counted separately in the overall summary (`Python tests skipped`).
+
+The upshot: in a bare container (no GTK/ZFS/pv) the harness runs every
+environment-independent suite green and lists every skipped suite with its
+reason — nothing red that is not a real regression. Unexpected skips on a
+development machine are environment problems to report, never to work around.
+
+### CI and dev container
+
+One canonical test environment is defined in code and used by both CI and the
+dev container. `share/dev/install-test-deps.sh` installs every system and
+Python dependency the suite needs (Debian/Ubuntu); it is the single source of
+truth, consumed by both of the following.
+
+`.devcontainer/` builds an Ubuntu 24.04 image with all dependencies. To run
+the suite in it from a repo checkout:
+
+```bash
+docker build -f .devcontainer/Dockerfile -t zfsutilities-dev .
+docker run --rm --init -v "$PWD:/workspace" -w /workspace zfsutilities-dev xvfb-run -a bash tests/run-tests
+```
+
+The GUI suites instantiate real GTK widgets, so the container (which has no
+display) runs the suite under `xvfb-run`. `--init` gives the container a real
+init process (`xvfb-run` waits on a signal from `Xvfb` and misbehaves as PID
+1), and invoking the suite through `bash` keeps the command identical on any
+volume/filesystem. Inside the container the run is
+green; the only skips are the soak suite (excluded from default runs) and the
+integration suite (no test pools in a container).
+
+`.github/workflows/tests.yml` runs on every push and pull request: install
+dependencies, run the suite under `xvfb-run -a`, then run the
+documentation-integrity suite. A scheduled nightly job runs
+`tests/run-tests --with-soak`.
 
 ---
 
@@ -74,10 +183,11 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-repair-iscsi-luns` | `repair-iscsi-luns` backstore/target parsing and zvol discovery |
 | `test-repair-vm-disk-sizes` | `repair-vm-disk-sizes` size byte-to-human conversion, by-path/storage-ref size resolution, config line repair, dry-run |
 | `test-restart-iscsi-services` | VM running-state detection before iSCSI target restart and main() helper invocation |
+| `test-run-tests-preflight` | Harness self-test: run-tests environment preflight, manifest requirement skips, soak-suite gating, and the pytest exit-5 rule |
 | `test-safe-iscsi-save` | Degraded-config guard for iSCSI saveconfig and encrypted-backstore boot-config stripping |
 | `test-startdocserver` | Server health checks, PID discovery, CWD mismatch, restart logic |
 | `test-switch-version` | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, `--list`, and obsolete systemd artifact cleanup |
-| `test-test-lib` | Harness assertion helpers: pass/fail/skip counter semantics |
+| `test-test-lib` | Harness assertion helpers: pass/fail/skip counter semantics and golden assertions |
 | `test-unarchive-vm` | `--new-vmid` rewriting, UUID regeneration, conflict handling |
 | `test-uninstall-some-versions` | Bulk version uninstall from an explicit list file |
 | `test-uninstall-version` | Single-version uninstall prompting with `-y`/`--yes` |
@@ -97,8 +207,9 @@ The `tests/run-tests` harness detects whether a name starts with `test_` (Python
 | `test-zfsdelfs` | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs` |
 | `test-zfsdelsnap` | Snapshot deletion safety checks, hold release, `zfscheckagainst` dependency sourcing, user-hold blocking |
 | `test-zfsfullcopy` | `zfsfullcopy` full-copy wrapper: overrides, required parameters, single `send-receive` invocation, parameter forwarding |
-| `test-zfslockmanager` | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, wait/retry, multi-lock acquisition, headless timed wait |
+| `test-zfslockmanager` | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, multi-lock acquisition, timing-knob sanitization, `source_helper` loading context |
 | `test-zfslockmanager-remote` | Remote lock hold/check/conflict protocol |
+| `test-zfslockmanager-soak` | Randomized timing-conflict scenarios for the lock manager at realistic timings — including wait/retry loops and headless timed waits (skipped by default; see "Soak suites") |
 | `test-zfsmassdelsnaps` | Mass snapshot deletion: ignore/respect retention, dry-run, approval, releaseholds forwarding |
 | `test-zfsmount` | Lock acquisition before mount/unmount per dataset |
 | `test-zfsreapplyholds` | Capture/apply snapshot holds, CLI argument parsing, dry-run apply |
@@ -125,6 +236,12 @@ function overrides so every suite can execute as a normal user.
 3. Define test functions that call `test_start` plus any assertion helpers.
 4. Call `test_summary` at the end.
 
+If the suite genuinely needs a system binary that other suites mock (rather
+than overriding the command the way `test-lib.sh` mocks do), declare the
+requirement with a `capability tests/test-<scriptname>` line in
+`tests/requirements.manifest` so the harness skips it cleanly where the binary
+is absent.
+
 Minimal example:
 
 ```bash
@@ -149,6 +266,25 @@ test_summary
 | `assert_contains haystack needle` | Pass if haystack contains needle |
 | `assert_rc expected actual` | Pass if return codes match |
 | `assert_array_len expected "${arr[@]}"` | Pass if array length matches |
+| `assert_golden name actual` | Compare against `tests/golden/<suite>/<name>.golden` (see below) |
+
+### Golden Files
+
+Command-construction tests compare against golden files instead of
+per-argument assertion clusters. `assert_golden <name> <actual>` (bash) and
+`golden.check(testcase, actual)` (Python) compare against
+`tests/golden/<suite>/<name>.golden` in canonical form: exactly one trailing
+newline, and argv lists serialized one element per line so diffs read
+per-argument.
+
+After a legitimate refactor, run `UPDATE_GOLDEN=1 tests/run-tests <suite>`,
+then `git diff` the goldens and review them like code. Update mode rewrites
+only goldens whose content actually changed (an update run with no product
+change produces an empty `git diff`), and marks those tests "updated" (bash:
+the `Updated:` summary line; Python: skips) rather than passed. Missing
+goldens fail with the command that creates them. Regeneration runs should
+target single suites (they run serially through `run-tests`); update mode
+under a parallel full run is not the documented path.
 
 ### Bash Mock Infrastructure
 
@@ -214,10 +350,11 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_disks_page` | Disks tab UI, including topology-selection highlighting in the inventory |
 | `test_disks_page_dataset_tuning` | Disks tab dataset-tuning pane (including the Size column), Apply Profile picker treeview/dialog/execution, Rewrite Data gating, workload profile manager |
 | `test_disks_page_growth_buttons` | Disks tab pool-growth button sensitivity gating (Add Data Vdev, Expand Vdev, Replace, Detach, Add Infra Vdev, Migrate Pool): compute-host, runner-busy, tooltip precedence |
-| `test_docs_integrity` | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability |
+| `test_docs_integrity` | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability; AGENTS.md repo-relative path and `Branch:` reference validation |
 | `test_docs_viewer` | Standalone documentation viewer launcher |
 | `test_feature_config` | Per-feature config getters/setters, snapshot name generation, checkagainst entry merge, workload profile immutability |
 | `test_file_locking` | Advisory flock helpers |
+| `test_golden` | `golden.py` golden-file helper — canonical serialization, compare/update modes, missing-golden errors |
 | `test_gui_helpers` | `gui_helpers` utilities, including mounted-snapshot detection via `mount -t zfs` and orange non-default expander labels |
 | `test_gui_infrastructure` | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling |
 | `test_installer_retention` | Installer retention profile initialization: default-only on new install and preservation of existing profiles |
@@ -254,6 +391,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_retention_actions` | Retention tab action handlers |
 | `test_retention_page` | Retention Policies tab UI |
 | `test_runner_factory` | Runner factory wiring for page runners |
+| `test_runner_shim` | `runner.py` deprecation shim — legacy argument translation to pytest and deprecation notice |
 | `test_schedule_page` | Schedule page path resolution, dirty tracking, condition field, run-now child-watch handling, fatal-fallback logging, async refresh, and next-run caching |
 | `test_scrub_manager` | Scrub state parsing, queue/target management, priority ordering, tick logic, systemd timers, ZFS-native in-progress operation parsing |
 | `test_scrub_page` | Scrub page store schema, flicker-free refresh logic, and drag-and-drop priority ordering |
@@ -261,17 +399,24 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_workload_profiles` | Workload profile property filtering, profile matching, apply plan, `zfs set` command building, warnings |
 | `test_zfs_capabilities` | OpenZFS release-variation gating (incl. patch-level minimums such as `zfs_rewrite` at 2.3.4), pool-feature cross-check parsing |
 | `test_zfs_diagnostics` | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run` |
-| `test_zfs_lock_manager` | `zfs_lock_manager` two-node lock behavior |
+| `test_zfs_lock_manager` | `zfs_lock_manager` two-node lock behavior and stale-lock cleanup (including unverifiable holder scripts) |
 | `test_zfs_repository` | `zfs_repository.py` — ZFS/zpool subprocess isolation, importable-pool config parsing, `zpool create` (incl. RAID10 mirror pairs) and pool-growth/migration command building and execution |
 | `test_zfsinfo` | Pool/dataset/snapshot info gathering with mocked `subprocess` |
 | `test_zfsutilities_gui` | Main GUI window behavior, dashboard/scrub/disks timer lifecycle |
 
-Python tests run with the standard library `unittest` module (no pytest required).
-A custom coloured runner (`tests/python/runner.py`) produces output that matches
-the bash harness format.
+Most Python suites are standard `unittest.TestCase` classes executed by
+[pytest](https://docs.pytest.org/) with
+[pytest-xdist](https://pytest-xdist.readthedocs.io/) parallelism — no test
+rewrite was needed and assertion failures get pytest's expected-vs-actual
+diff output. A few suites (for example `test_golden`) use pytest fixtures
+directly. `tests/run-tests` remains the single entry point for both
+layers; `tests/python/runner.py` is a deprecated shim that forwards to
+pytest for older invocations.
 
 ### Python Dependencies
 
+- `pytest` and `pytest-xdist` — the test runner. Install both with
+  `python3 -m pip install -r requirements-dev.txt`.
 - `pyyaml` — required only for `test_docs_integrity` (parses `mkdocs.yml`).
   Install with `python3 -m pip install pyyaml`.
 - `gi` — the GTK tests mock `gi.repository` so no display server is needed.
@@ -279,26 +424,24 @@ the bash harness format.
 ### Running Python Suites Directly
 
 ```bash
-# All Python suites
+# All Python suites, parallel across CPUs (worker count auto-capped by
+# available memory — each xdist worker peaks at ~600-900 MB; override with
+# ZFSUTILITIES_PYTEST_JOBS=N)
+python3 -m pytest tests/python -n auto -q
+
+# Specific suite (fail-fast, short tracebacks)
+python3 -m pytest tests/python/test_backup_config.py -x --tb=short
+
+# Single-process run (definition order; useful for order-dependence checks)
+python3 -m pytest tests/python -q
+
+# Legacy entry points still work (runner.py prints a deprecation notice)
 ./tests/run-python-tests
-
-# Specific suite
 ./tests/run-python-tests test_backup_config
-
-# Run from inside tests/python
-cd tests/python && python3 runner.py
-
-# Specific suite
-cd tests/python && python3 runner.py test_backup_config
-
-# Verbose / quiet
-cd tests/python && python3 runner.py -v
-cd tests/python && python3 runner.py -q
-
-# The suites must also pass under a single-process pytest run (definition
-# order, not unittest's alphabetical order):
-cd tests/python && python3 -m pytest -q
 ```
+
+`--failures-only` has no exact pytest equivalent; it maps to `-q`, which
+prints only failures plus the final summary.
 
 GUI suites import their modules under `test_support.mock_gtk()`. Without
 options, the first `mock_gtk()` context that imports a GUI module wins: the
@@ -317,7 +460,25 @@ duration of the context and restored on exit, so imports inside the context
 bind the current context's mocks and call history starts empty — without
 leaking a different module object to the rest of the session. Use it whenever
 a test asserts on widget call counts or needs to patch a GUI module it did
-not itself import.
+not itself import. Helpers that re-import a GUI module (the `_import_*`
+helpers several suites use) must always pass `fresh=True`: otherwise a GUI
+dependency cached with real bindings — for example `gui_helpers` imported at
+collection time by a suite that uses real GTK — leaks real Gtk into the
+re-imported module and crashes tests that hand mock windows to real dialog
+constructors (`TypeError: could not convert value for property
+'transient_for' from MagicMock to GtkWindow`).
+
+One binding-shape rule prevents the cross-suite flakes that only appear under
+`pytest -n auto`: an in-function import of a GUI module must never run bare.
+Inside a test or helper, either import under a `mock_gtk()` context (the
+suite's own first import establishes the sticky binding), evict the module
+with `sys.modules.pop` first, or use `import_gui_fresh`. A bare import binds
+whatever the `sys.modules` cache happens to hold — real classes cached by
+another suite's decorator-driven import, or a mock copy from another context
+— and mixing the two fails in bizarre ways (`AttributeError: Attempting to
+set unsupported magic method '__init__'`, `TypeError: isinstance() arg 2
+must be a type`). `TestGiImportGuards` in `test_gui_infrastructure.py`
+enforces this statically.
 
 ### Writing a New Python Suite
 
@@ -326,6 +487,12 @@ not itself import.
 3. Define `unittest.TestCase` subclasses.
 4. Use `test_support` fixtures for config isolation, log capture, subprocess
    mocking, and GTK mocking.
+5. If the suite uses a GTK-dependent module from `python/` without
+   `mock_gtk()`, declare it in `tests/requirements.manifest` and guard it:
+   `test_support.import_or_skip_gi("<module>")` (with
+   `pytestmark = requires_gi`) for module-level imports, or
+   `pytestmark = requires_gi` alone for GTK used only inside test bodies.
+   A consistency check in `test_gui_infrastructure.py` enforces this.
 
 Minimal example:
 
@@ -347,6 +514,27 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
+### Python Golden Files
+
+The `golden` module (`tests/python/golden.py`) is the Python half of the
+golden-file workflow (see "Golden Files" above):
+
+```python
+import golden
+
+golden.check(self, step.command)   # list: one element per line
+```
+
+`golden.check(testcase, actual, name=None)` resolves the golden as
+`tests/golden/<module>/<Class>.<test>.golden` (an explicit `name` overrides
+the default) and raises `AssertionError` with a unified diff on mismatch.
+With `UPDATE_GOLDEN=1` a differing golden is rewritten and the test is
+skipped; identical content passes and leaves the file untouched.
+
+In update mode, updated tests appear as skips; the harness 'skipped' total
+then includes golden updates in addition to any environment skips.
+Compare-mode skips are environment or marker skips only.
+
 ### Python Test Support Fixtures
 
 `tests/python/test_support.py` provides shared infrastructure:
@@ -358,6 +546,9 @@ if __name__ == "__main__":
 | `capture_logs()` | Captures `log_msg` output to a list for assertions |
 | `capture_stderr()` | Captures `sys.stderr` to a string |
 | `mock_gtk()` | Patches `gi.repository` with `MagicMock` so GUI modules import without a display |
+| `import_gui_fresh(name)` | Inside a `mock_gtk()` context: evicts *name* and the whole GUI closure from `sys.modules`, then imports — guarantees the module binds to the *current* context's mocks instead of a stale copy cached by another suite |
+| `import_or_skip_gi(name)` | Imports a GTK-dependent module at module level, skipping the whole suite cleanly when `gi` is unavailable |
+| `requires_gi` | Module-level `pytest.mark.skipif` for suites that use GTK only inside test bodies |
 | `check_pyyaml()` | Skips the current test if `pyyaml` is not installed |
 
 ### Python Mock Subprocess
@@ -449,6 +640,14 @@ by setting an artificially large buffer.
 sudo tests/integration/test-zfs-send-receive-pools
 ```
 
+The suite skips cleanly with a stated reason when named via the harness on a
+machine that lacks root or the test pools:
+
+```bash
+tests/run-tests tests/integration/test-zfs-send-receive-pools
+# SKIPPED (missing: root test-pools) (test-zfs-send-receive-pools)
+```
+
 The suite:
 
 - Skips cleanly with a message if not run as root.
@@ -513,6 +712,14 @@ what it needs.
 * **GTK mocking** — Use `mock_gtk()` as a context manager when importing any
 module that touches `gi.repository.Gtk`. The mock provides enough structure
 for `Window` subclasses to instantiate without a display.
+* **Memory footprint** — Each pytest-xdist worker peaks at roughly 600-900 MB
+(the full serial layer peaks under 1 GB). `tests/run-tests` caps the worker
+count by `MemAvailable` (banner line `pytest-workers=N`; override with
+`ZFSUTILITIES_PYTEST_JOBS=N`) so a full run cannot crowd a desktop browser
+into an OOM kill. If a run dies to the OOM killer anyway, check for leftover
+trees first: interrupting the harness terminates its pytest tree, but runs
+started directly with `pytest -n` leave nothing to clean up either — an
+`execnet` worker exits when its controller dies.
 * **Subprocess in background** — Some code spawns subprocesses with `&`.
 Capturing output from a mock requires writing to a temp file from the mock
 function and calling `wait` before reading it back.

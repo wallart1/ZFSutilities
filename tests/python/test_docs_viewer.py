@@ -14,8 +14,7 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 
 def _import_docs_viewer_fresh():
     """Import docs_viewer with GTK mocked; always return a fresh module."""
-    if "docs_viewer" in sys.modules:
-        del sys.modules["docs_viewer"]
+    sys.modules.pop("docs_viewer", None)
     import docs_viewer as dv
 
     return dv

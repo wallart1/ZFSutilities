@@ -1,0 +1,8 @@
+zpool
+add
+tank
+raidz2
+/dev/disk/by-id/ata-a
+/dev/disk/by-id/ata-b
+/dev/disk/by-id/ata-c
+/dev/disk/by-id/ata-d

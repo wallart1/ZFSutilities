@@ -15,6 +15,7 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
+import golden
 from pool_migrate import (
     MIGRATE_HOLDING_POOL,
     MIGRATE_NEW_DISKS,
@@ -35,6 +36,7 @@ from pool_migrate import (
     plan_migration_steps,
     verify_trees_match,
 )
+from test_support import normalize_repo_root
 from zfs_repository import (
     build_migration_send_receive_command,
     build_pool_export_command,
@@ -223,16 +225,10 @@ class TestVerifyTreesMatch(unittest.TestCase):
 
 class TestBuildRecursiveSnapshotCommand(unittest.TestCase):
     def test_pool_root(self):
-        self.assertEqual(
-            build_recursive_snapshot_command("temp", "migrate-x"),
-            ["zfs", "snapshot", "-r", "temp@migrate-x"],
-        )
+        golden.check(self, build_recursive_snapshot_command("temp", "migrate-x"))
 
     def test_dataset(self):
-        self.assertEqual(
-            build_recursive_snapshot_command("temp/proxmox", "migrate-x"),
-            ["zfs", "snapshot", "-r", "temp/proxmox@migrate-x"],
-        )
+        golden.check(self, build_recursive_snapshot_command("temp/proxmox", "migrate-x"))
 
     def test_empty_target_rejected(self):
         with self.assertRaises(ValueError):
@@ -245,26 +241,29 @@ class TestBuildRecursiveSnapshotCommand(unittest.TestCase):
 
 
 class TestBuildMigrationSendReceiveCommand(unittest.TestCase):
+    def _normalized(self, argv):
+        # The sourced script path is resolved from this checkout's absolute
+        # location; normalize it (and its quoting) so the golden stays
+        # machine-independent.
+        return [argv[0], argv[1], normalize_repo_root(argv[2])]
+
     def test_basic_argv(self):
         argv = build_migration_send_receive_command(
             "temp/proxmox", "temp_mig/proxmox", "migrate-x"
         )
-        self.assertEqual(argv[0:2], ["bash", "-c"])
-        script = argv[2]
-        self.assertIn("zfs-migrate-send", script)
-        self.assertIn("sourcefs=temp/proxmox", script)
-        self.assertIn("destfs=temp_mig/proxmox", script)
-        self.assertIn("snapname=migrate-x", script)
-        self.assertIn("zfs_migrate_send", script)
+        golden.check(self, self._normalized(argv))
 
-    def test_rate_limit_assignment_gated(self):
+    def test_rate_limit_assignment_emitted(self):
         argv = build_migration_send_receive_command(
             "temp/proxmox", "temp_mig/proxmox", "migrate-x", rate_limit="100m"
         )
-        self.assertIn("pv_rate_limit=100m", argv[2])
+        golden.check(self, self._normalized(argv), name="TestBuildMigrationSendReceiveCommand.rate_limit")
+
+    def test_rate_limit_assignment_omitted(self):
         argv = build_migration_send_receive_command(
             "temp/proxmox", "temp_mig/proxmox", "migrate-x"
         )
+        golden.check(self, self._normalized(argv), name="TestBuildMigrationSendReceiveCommand.no_rate_limit")
         self.assertNotIn("pv_rate_limit", argv[2])
 
     def test_invalid_rate_limit_rejected(self):
@@ -278,8 +277,7 @@ class TestBuildMigrationSendReceiveCommand(unittest.TestCase):
         argv = build_migration_send_receive_command(
             "my pool/ds", "dest pool/ds", "migrate-x"
         )
-        self.assertIn("'my pool/ds'", argv[2])
-        self.assertIn("'dest pool/ds'", argv[2])
+        golden.check(self, self._normalized(argv))
 
     def test_empty_source_rejected(self):
         with self.assertRaises(ValueError):
@@ -296,7 +294,7 @@ class TestBuildMigrationSendReceiveCommand(unittest.TestCase):
 
 class TestBuildPoolExportCommand(unittest.TestCase):
     def test_basic_argv(self):
-        self.assertEqual(build_pool_export_command("temp"), ["zpool", "export", "temp"])
+        golden.check(self, build_pool_export_command("temp"))
 
     def test_empty_name_rejected(self):
         with self.assertRaises(ValueError):
@@ -305,10 +303,7 @@ class TestBuildPoolExportCommand(unittest.TestCase):
 
 class TestBuildPoolImportRenameCommand(unittest.TestCase):
     def test_basic_argv(self):
-        self.assertEqual(
-            build_pool_import_rename_command("temp_mig", "temp"),
-            ["zpool", "import", "temp_mig", "temp"],
-        )
+        golden.check(self, build_pool_import_rename_command("temp_mig", "temp"))
 
     def test_empty_names_rejected(self):
         with self.assertRaises(ValueError):

@@ -17,7 +17,7 @@ from test_support import mock_gtk
 def _import_disks_page():
     """Import disks_page under a fresh mocked GTK context."""
     sys.modules.pop("disks_page", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import disks_page
 
         return disks_page

@@ -9,8 +9,11 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-import gui_helpers
-from test_support import capture_logs, mock_subprocess
+from test_support import capture_logs, import_or_skip_gi, mock_subprocess, requires_gi
+
+pytestmark = requires_gi
+
+gui_helpers = import_or_skip_gi("gui_helpers")
 
 
 class TestDiagnoseDatasetBusy(unittest.TestCase):

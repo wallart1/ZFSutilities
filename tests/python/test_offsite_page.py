@@ -10,7 +10,9 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_gtk, mock_subprocess
+from test_support import mock_gtk, mock_subprocess, requires_gi
+
+pytestmark = requires_gi
 
 
 class _FakeComboBoxText:
@@ -21,7 +23,7 @@ class _FakeComboBoxText:
 def _import_offsite_page():
     """Import offsite_page under a fresh mocked GTK context."""
     sys.modules.pop("offsite_page", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import offsite_page
 
         return offsite_page

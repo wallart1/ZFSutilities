@@ -9,7 +9,13 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
-from test_support import REPO_ROOT, capture_logs, mock_gtk, temp_config_dir
+from test_support import (
+    REPO_ROOT,
+    capture_logs,
+    mock_gtk,
+    temp_config_dir,
+    temp_user_config_dir,
+)
 
 GUI_PY_PATH = os.path.join(REPO_ROOT, "python", "zfsutilities_gui.py")
 GTK_GUI_HTML_PATH = os.path.join(REPO_ROOT, "docs", "site", "user-guide", "gtk-gui", "index.html")
@@ -45,6 +51,374 @@ def extract_html_anchor_ids(html_path):
     with open(html_path) as f:
         content = f.read()
     return set(re.findall(r'id="([^"]+)"', content))
+
+
+class TestGiImportGuards(unittest.TestCase):
+    """Every suite that needs real GTK bindings must declare and guard that.
+
+    Two guard mechanisms exist (both recorded in tests/requirements.manifest):
+
+    - Suites importing a GUI module (see test_support.GUI_MODULES) at module
+      level must import it through test_support.import_or_skip_gi, so
+      collection survives without gi.
+    - Suites touching GUI modules only inside test bodies — via @patch
+      decorators targeting GUI modules, or runtime GUI imports outside a
+      mock_gtk() context — must set ``pytestmark = requires_gi`` so the whole
+      suite skips cleanly when gi is absent.
+
+    Imports of GUI modules inside a mock_gtk() context need no guard. An
+    import inside a helper *function* is acceptable when every call site of
+    that helper is itself inside a mock_gtk() context (proved statically).
+    """
+
+    def _annotate_parents(self, tree):
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                child._parent = node
+
+    def _under_mock_gtk(self, node):
+        """True when *node* sits inside a ``with`` block whose context manager
+        is a mock_gtk-family call (mock_gtk itself or a local wrapper such as
+        _mock_gtk_with_app_window)."""
+        parent = getattr(node, "_parent", None)
+        while parent is not None:
+            if isinstance(parent, ast.With):
+                for item in parent.items:
+                    call = item.context_expr
+                    if isinstance(call, ast.Call):
+                        func = call.func
+                        name = None
+                        if isinstance(func, ast.Name):
+                            name = func.id
+                        elif isinstance(func, ast.Attribute):
+                            name = func.attr
+                        if name and "mock_gtk" in name:
+                            return True
+            parent = getattr(parent, "_parent", None)
+        return False
+
+    def _is_marked(self, source):
+        return bool(
+            re.search(r"^\w+\s*=\s*import_or_skip_gi\(", source, re.MULTILINE)
+            or re.search(r"^pytestmark\s*=\s*requires_gi", source, re.MULTILINE)
+        )
+
+    def _top_level_imports(self, path):
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        names = set()
+        for node in tree.body:
+            if isinstance(node, ast.Import):
+                names.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names.add(node.module.split(".")[0])
+        return names
+
+    def _module_level_imports_including_blocks(self, path):
+        """Imports executed at module level, including inside module-level
+        ``with``/``try``/``if`` blocks (e.g. a module-level mock_gtk()
+        context), but not inside functions or classes."""
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        names = set()
+
+        def walk(node):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    continue
+                if isinstance(child, ast.Import):
+                    names.update(alias.name.split(".")[0] for alias in child.names)
+                elif isinstance(child, ast.ImportFrom) and child.level == 0 and child.module:
+                    names.add(child.module.split(".")[0])
+                walk(child)
+
+        walk(tree)
+        return names
+
+    def _gui_patch_decorators(self, path, gui_modules):
+        """Return GUI modules referenced by @patch/@patch.object decorators."""
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        hits = set()
+
+        def visit_decorator(dec):
+            call = dec if isinstance(dec, ast.Call) else None
+            if call is None:
+                return
+            func = call.func
+            is_patch = (isinstance(func, ast.Name) and func.id in ("patch", "patch_object")) or (
+                isinstance(func, ast.Attribute) and func.attr in ("patch", "object")
+            )
+            if not is_patch or not call.args:
+                return
+            first = call.args[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                root = first.value.split(".")[0]
+                if root in gui_modules:
+                    hits.add(root)
+            elif isinstance(first, ast.Name) and first.id in gui_modules:
+                hits.add(first.id)
+
+        for node in ast.walk(tree):
+            deco_list = getattr(node, "decorator_list", None)
+            if deco_list:
+                for dec in deco_list:
+                    visit_decorator(dec)
+        return hits
+
+    def _manifest_gi_python_suites(self):
+        entries = set()
+        manifest = os.path.join(REPO_ROOT, "tests", "requirements.manifest")
+        with open(manifest, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("#") or not line:
+                    continue
+                fields = line.split()
+                if fields[0] == "gi" and fields[-1].startswith("tests/python/"):
+                    entries.add(os.path.basename(fields[-1]))
+        return entries
+
+    def test_module_level_gui_imports_use_import_guard(self):
+        from test_support import GUI_MODULES
+
+        tests_dir = os.path.join(REPO_ROOT, "tests", "python")
+        offenders = []
+        for fname in sorted(os.listdir(tests_dir)):
+            if not fname.startswith("test_") or not fname.endswith(".py"):
+                continue
+            if fname == "test_support.py":
+                continue
+            path = os.path.join(tests_dir, fname)
+            gui_imports = self._top_level_imports(path) & set(GUI_MODULES)
+            if gui_imports:
+                with open(path, encoding="utf-8") as fh:
+                    source = fh.read()
+                if not re.search(r"import_or_skip_gi\(", source):
+                    offenders.append(f"{fname} (imports: {', '.join(sorted(gui_imports))})")
+        self.assertEqual(
+            offenders,
+            [],
+            "suites with module-level GUI imports must use import_or_skip_gi:\n  "
+            + "\n  ".join(offenders),
+        )
+
+    def test_gui_patch_decorators_use_skip_marker(self):
+        from test_support import GUI_MODULES
+
+        tests_dir = os.path.join(REPO_ROOT, "tests", "python")
+        offenders = []
+        for fname in sorted(os.listdir(tests_dir)):
+            if not fname.startswith("test_") or not fname.endswith(".py"):
+                continue
+            if fname == "test_support.py":
+                continue
+            path = os.path.join(tests_dir, fname)
+            gui_targets = self._gui_patch_decorators(path, set(GUI_MODULES))
+            if not gui_targets:
+                continue
+            with open(path, encoding="utf-8") as fh:
+                source = fh.read()
+            # Already fully guarded at collection (import guard) or module
+            # level (skipif marker): nothing more to prove.
+            if re.search(r"import_or_skip_gi\(", source) or re.search(
+                r"^pytestmark\s*=\s*requires_gi", source, re.MULTILINE
+            ):
+                continue
+            # Otherwise the patch would import the GUI module at test-call
+            # time — safe only if the module is imported at module level
+            # (e.g. inside a module-level mock_gtk() block), so the patch
+            # resolves from sys.modules instead of importing.
+            module_imports = self._module_level_imports_including_blocks(path)
+            unguarded = gui_targets - module_imports
+            if unguarded:
+                offenders.append(f"{fname} (patch targets: {', '.join(sorted(unguarded))})")
+        self.assertEqual(
+            offenders,
+            [],
+            "suites patching GUI modules via decorators must set "
+            "pytestmark = requires_gi:\n  " + "\n  ".join(offenders),
+        )
+
+    def test_manifest_matches_guarded_suites(self):
+        tests_dir = os.path.join(REPO_ROOT, "tests", "python")
+        guarded = set()
+        for fname in sorted(os.listdir(tests_dir)):
+            if not fname.startswith("test_") or not fname.endswith(".py"):
+                continue
+            if fname == "test_support.py":
+                continue
+            path = os.path.join(tests_dir, fname)
+            with open(path, encoding="utf-8") as fh:
+                source = fh.read()
+            # Module-level guards only: a guard used inside a test method
+            # (indented) skips that test alone and needs no manifest entry.
+            if re.search(r"^\w+\s*=\s*import_or_skip_gi\(", source, re.MULTILINE) or re.search(
+                r"^pytestmark\s*=\s*requires_gi", source, re.MULTILINE
+            ):
+                guarded.add(fname)
+        self.assertEqual(
+            guarded,
+            self._manifest_gi_python_suites(),
+            "tests/requirements.manifest gi entries must exactly match the "
+            "suites guarded at module level (import_or_skip_gi or "
+            "pytestmark = requires_gi)",
+        )
+
+    def test_in_function_gui_imports_are_mock_wrapped(self):
+        from test_support import GUI_MODULES
+
+        tests_dir = os.path.join(REPO_ROOT, "tests", "python")
+        offenders = []
+        for fname in sorted(os.listdir(tests_dir)):
+            if not fname.startswith("test_") or not fname.endswith(".py"):
+                continue
+            if fname == "test_support.py":
+                continue
+            path = os.path.join(tests_dir, fname)
+            with open(path, encoding="utf-8") as fh:
+                source = fh.read()
+            if self._is_marked(source):
+                continue  # marked suites skip wholesale in bare containers
+            tree = ast.parse(source)
+            self._annotate_parents(tree)
+            # Functions that import a GUI module outside a mock_gtk context.
+            flagged = {}
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                gui_names = set()
+                for stmt in ast.walk(node):
+                    if isinstance(stmt, ast.Import):
+                        targets = [a.name.split(".")[0] for a in stmt.names]
+                    elif isinstance(stmt, ast.ImportFrom) and stmt.level == 0 and stmt.module:
+                        targets = [stmt.module.split(".")[0]]
+                    else:
+                        continue
+                    hits = [t for t in targets if t in GUI_MODULES]
+                    if hits and not self._under_mock_gtk(stmt):
+                        gui_names.update(hits)
+                if gui_names:
+                    flagged[node.name] = gui_names
+            if not flagged:
+                continue
+            # Every call site of a flagged function must be under mock_gtk.
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                name = None
+                if isinstance(func, ast.Name):
+                    name = func.id
+                elif isinstance(func, ast.Attribute):
+                    name = func.attr
+                if name in flagged and not self._under_mock_gtk(node):
+                    offenders.append(f"{fname}: {name}() imports {sorted(flagged[name])}")
+                    del flagged[name]  # report each function once
+        self.assertEqual(
+            offenders,
+            [],
+            "helper functions importing GUI modules outside mock_gtk() must "
+            "only be called inside mock_gtk() contexts:\n  " + "\n  ".join(offenders),
+        )
+
+    def test_in_function_gui_imports_are_guarded(self):
+        """In-function imports of GUI modules must never bind a stale cache.
+
+        A bare ``import <gui_module>`` inside a test or helper picks up
+        whatever binding happens to be cached — real (cached by another
+        suite's collection-time or decorator-driven import) or mock-bound by
+        another context — which produced the xdist flakes where real Gtk
+        classes were mixed with mock Gtk. Allowed forms: under a mock_gtk
+        context (fresh or sticky, established by the suite's own first
+        import), after an explicit sys.modules.pop of that module in the same
+        function, or via test_support.import_gui_fresh. Bare imports with no
+        context and no pop are rejected.
+        """
+        from test_support import GUI_MODULES
+
+        tests_dir = os.path.join(REPO_ROOT, "tests", "python")
+        offenders = []
+        for fname in sorted(os.listdir(tests_dir)):
+            if not fname.startswith("test_") or not fname.endswith(".py"):
+                continue
+            if fname == "test_support.py":
+                continue
+            path = os.path.join(tests_dir, fname)
+            with open(path, encoding="utf-8") as fh:
+                tree = ast.parse(fh.read())
+            self._annotate_parents(tree)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    items = [(a.name.split(".")[0], node.lineno) for a in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    items = [(node.module.split(".")[0], node.lineno)]
+                else:
+                    continue
+                for name, lineno in items:
+                    if name not in GUI_MODULES:
+                        continue
+                    # enclosing function
+                    func = getattr(node, "_parent", None)
+                    while func is not None and not isinstance(
+                        func, (ast.FunctionDef, ast.AsyncFunctionDef)
+                    ):
+                        func = getattr(func, "_parent", None)
+                    if func is None:
+                        continue  # module-level import: R1/stickiness domain
+                    if self._under_mock_gtk(node):
+                        continue  # any mock context provides fake gi
+                    popped = any(
+                        isinstance(n, ast.Call)
+                        and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "pop"
+                        and n.args
+                        and isinstance(n.args[0], ast.Constant)
+                        and n.args[0].value == name
+                        for n in ast.walk(func)
+                    )
+                    if not popped:
+                        offenders.append(f"{fname}:{lineno} imports {name} bare")
+        self.assertEqual(
+            offenders,
+            [],
+            "in-function GUI imports need a mock_gtk context, a prior "
+            "sys.modules.pop, or import_gui_fresh:\n  " + "\n  ".join(offenders),
+        )
+
+    def test_multi_version_gi_namespaces_are_pinned(self):
+        """Gdk/WebKit2/Gtk have several parallel-installed versions (e.g.
+        Gdk 3.0 vs 4.0 on Mint), so importing them without gi.require_version
+        in the same file picks whichever loads first and can crash standalone
+        imports. Any python/ module importing one of these namespaces must pin
+        it (convention already used by main.py and docs_viewer.py)."""
+        multi_version = ("Gdk", "Gtk", "WebKit2")
+        python_dir = os.path.join(REPO_ROOT, "python")
+        offenders = []
+        for fname in sorted(os.listdir(python_dir)):
+            if not fname.endswith(".py"):
+                continue
+            path = os.path.join(python_dir, fname)
+            with open(path, encoding="utf-8") as fh:
+                source = fh.read()
+            for node in ast.walk(ast.parse(source)):
+                if not (isinstance(node, ast.ImportFrom) and node.module == "gi.repository"):
+                    continue
+                for alias in node.names:
+                    base = alias.name.split(".")[0]
+                    if base in multi_version:
+                        pinned = re.search(
+                            rf'require_version\(\s*["\']({re.escape(base)})["\']',
+                            source,
+                        )
+                        if not pinned:
+                            offenders.append(f"{fname}: imports {alias.name} unpinned")
+        self.assertEqual(
+            offenders,
+            [],
+            "gi namespaces with multiple installed versions must be pinned "
+            "with gi.require_version in the same file:\n  " + "\n  ".join(offenders),
+        )
 
 
 class TestPageAnchorMapping(unittest.TestCase):
@@ -98,7 +472,9 @@ class TestDocsViewerNavigation(unittest.TestCase):
     def _make_window(self, gtk_mock):
         from unittest.mock import MagicMock
 
-        import docs_viewer
+        from test_support import import_gui_fresh
+
+        docs_viewer = import_gui_fresh("docs_viewer")
 
         script_dir = os.path.join(REPO_ROOT, "python")
         win = docs_viewer.DocsViewerWindow(script_dir)
@@ -192,7 +568,8 @@ class TestDocsViewerNavigation(unittest.TestCase):
             importlib.reload(docs_viewer)
             gtk_mock.Image.new_from_icon_name.reset_mock()
             script_dir = os.path.join(REPO_ROOT, "python")
-            win = docs_viewer.DocsViewerWindow(script_dir)
+            with temp_user_config_dir():
+                win = docs_viewer.DocsViewerWindow(script_dir)
             try:
                 calls = gtk_mock.Image.new_from_icon_name.call_args_list
                 icon_names = {c.args[0] for c in calls}
@@ -401,10 +778,15 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
     """Verify docs viewer geometry, zoom, and theme persistence."""
 
     def _make_window(self, gtk_mock, config=None):
-        import docs_viewer
+        from test_support import import_gui_fresh
+
+        docs_viewer = import_gui_fresh("docs_viewer")
 
         script_dir = os.path.join(REPO_ROOT, "python")
-        return docs_viewer.DocsViewerWindow(script_dir, config=config)
+        # Construction loads saved per-user UI state; isolate it from the
+        # developer's real home directory.
+        with temp_user_config_dir():
+            return docs_viewer.DocsViewerWindow(script_dir, config=config)
 
     def test_loads_default_state_when_no_config(self):
         with mock_gtk() as gtk_mock:
@@ -469,12 +851,15 @@ class TestDocsViewerStatePersistence(unittest.TestCase):
             self.assertIn("dispatchEvent", js)
 
     def test_capture_theme_parses_reported_scheme(self):
-        with mock_gtk() as gtk_mock:
+        with mock_gtk() as gtk_mock, temp_config_dir():
             win = self._make_window(gtk_mock)
             win._webview = MagicMock()
             win._webview.evaluate_javascript_finish.return_value = MagicMock()
             win._webview.evaluate_javascript_finish.return_value.to_string.return_value = '"slate"'
-            win._config = None  # avoid writing config while testing parsing
+            win._config = None  # exercise the per-user state save path
+            # With no saved geometry, _do_save() would consult the mocked
+            # Gtk window; report maximized so the save skips geometry.
+            win._maximized = True
 
             win._on_theme_captured(win._webview, MagicMock(), None)
 
@@ -609,7 +994,8 @@ class TestGtkMocking(unittest.TestCase):
             import docs_viewer
 
             script_dir = os.path.join(REPO_ROOT, "python")
-            win = docs_viewer.DocsViewerWindow(script_dir)
+            with temp_user_config_dir():
+                win = docs_viewer.DocsViewerWindow(script_dir)
             self.assertIsNotNone(win)
 
     def test_docs_path_resolution(self):
@@ -689,7 +1075,8 @@ class TestDocsServer(unittest.TestCase):
             import docs_viewer
 
             script_dir = os.path.join(REPO_ROOT, "python")
-            win = docs_viewer.DocsViewerWindow(script_dir)
+            with temp_user_config_dir():
+                win = docs_viewer.DocsViewerWindow(script_dir)
             try:
                 self.assertTrue(hasattr(win, "_docs_server"))
                 self.assertIsNotNone(win._docs_server)
@@ -2212,7 +2599,10 @@ class TestPoolsControlsLayout(unittest.TestCase):
 
 class TestLogStatusClick(unittest.TestCase):
     def test_searches_latest_message_of_current_level(self):
-        import gui_helpers as gh
+        with mock_gtk():
+            from test_support import import_gui_fresh
+
+            gh = import_gui_fresh("gui_helpers")
 
         app = MagicMock()
         app._log_status_level = "WARN"
@@ -2223,7 +2613,10 @@ class TestLogStatusClick(unittest.TestCase):
         app.info_search.navigate.assert_called_once_with(-1)
 
     def test_fatal_level_searches_latest_fatal_message(self):
-        import gui_helpers as gh
+        with mock_gtk():
+            from test_support import import_gui_fresh
+
+            gh = import_gui_fresh("gui_helpers")
 
         app = MagicMock()
         app._log_status_level = "FATAL"
@@ -2234,7 +2627,10 @@ class TestLogStatusClick(unittest.TestCase):
         app.info_search.navigate.assert_called_once_with(-1)
 
     def test_does_nothing_when_no_level(self):
-        import gui_helpers as gh
+        with mock_gtk():
+            from test_support import import_gui_fresh
+
+            gh = import_gui_fresh("gui_helpers")
 
         app = MagicMock()
         app._log_status_level = None
@@ -2244,7 +2640,10 @@ class TestLogStatusClick(unittest.TestCase):
         app.info_search.navigate.assert_not_called()
 
     def test_does_not_navigate_when_no_matches(self):
-        import gui_helpers as gh
+        with mock_gtk():
+            from test_support import import_gui_fresh
+
+            gh = import_gui_fresh("gui_helpers")
 
         app = MagicMock()
         app._log_status_level = "WARN"

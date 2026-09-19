@@ -1,4 +1,8 @@
-"""Tests for command_builders.py — rsync, send/receive, retention commands."""
+"""Tests for command_builders.py — rsync, send/receive, retention commands.
+
+Command-line construction is asserted via golden files (see golden.py);
+branching, gating, metadata, ordering, and negative assertions stay here.
+"""
 
 import os
 import sys
@@ -6,10 +10,13 @@ import unittest
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
-if PYTHON_SRC not in sys.path:
-    sys.path.insert(0, PYTHON_SRC)
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+for _path in (PYTHON_SRC, TEST_DIR):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 import command_builders
+import golden
 from command_builders import BashStep
 
 
@@ -60,25 +67,21 @@ class TestBuildRsyncCommand(unittest.TestCase):
         self.assertIsInstance(step, BashStep)
         self.assertTrue(step.is_rsync)
         self.assertFalse(step.fatal)
-        self.assertEqual(step.command[0], "rsync")
-        self.assertIn("/src", step.command)
-        self.assertIn("/dst", step.command)
+        golden.check(self, step.command)
 
     def test_pull_rsync(self):
         step = command_builders.build_rsync_command("remote:/src", "/dst")
-        self.assertEqual(step.command[0], "rsync")
-        self.assertIn("root@remote:/src", step.command)
-        self.assertIn("/dst", step.command)
         self.assertIn("pull", step.description)
+        golden.check(self, step.command)
 
     def test_push_rsync(self):
         step = command_builders.build_rsync_command("/src", "remote:/dst")
-        self.assertIn("root@remote:/dst", step.command)
         self.assertIn("push", step.description)
+        golden.check(self, step.command)
 
     def test_pull_rsync_without_remote_log_uses_plain_command(self):
         step = command_builders.build_rsync_command("remote:/src", "/dst")
-        self.assertEqual(step.command[0], "rsync")
+        golden.check(self, step.command)
 
     def test_pull_rsync_with_remote_log_uses_bash_wrapper(self):
         step = command_builders.build_rsync_command(
@@ -86,15 +89,7 @@ class TestBuildRsyncCommand(unittest.TestCase):
             "/dst",
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
         )
-        self.assertEqual(step.command[0], "bash")
-        self.assertEqual(step.command[1], "-c")
-        script = step.command[2]
-        self.assertIn("ssh -q root@remote", script)
-        self.assertIn("mkdir -p /var/log/zfsutilities", script)
-        self.assertIn("rsync --delete --progress -rav", script)
-        self.assertIn("root@remote:/src /dst", script)
-        self.assertIn("cat >> $_rl", script)
-        self.assertIn("exit ${PIPESTATUS[0]}", script)
+        golden.check(self, step.command)
 
     def test_local_rsync_with_remote_log_uses_bash_wrapper(self):
         step = command_builders.build_rsync_command(
@@ -102,44 +97,30 @@ class TestBuildRsyncCommand(unittest.TestCase):
             "/dst",
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
         )
-        self.assertEqual(step.command[0], "bash")
-        self.assertEqual(step.command[1], "-c")
-        script = step.command[2]
-        self.assertIn("mkdir -p /var/log/zfsutilities", script)
-        self.assertIn("date -r /var/log/zfsutilities/rsync-pull.log", script)
-        self.assertIn(": > /var/log/zfsutilities/rsync-pull.log", script)
-        self.assertIn("rsync --delete --progress -rav", script)
-        self.assertIn(" /src /dst", script)
-        self.assertIn(">>", script)
-        self.assertIn("/var/log/zfsutilities/rsync-pull.log", script)
-        self.assertIn("2>&1", script)
+        golden.check(self, step.command)
 
     def test_local_rsync_without_remote_log_uses_plain_command(self):
         step = command_builders.build_rsync_command("/src", "/dst")
-        self.assertEqual(step.command[0], "rsync")
-        self.assertIn("/src", step.command)
-        self.assertIn("/dst", step.command)
+        golden.check(self, step.command)
 
     def test_local_rsync_log_setup_script(self):
         script = command_builders._rsync_log_setup_script("/var/log/zfsutilities/rsync-pull.log")
-        self.assertIn("mkdir -p /var/log/zfsutilities", script)
-        self.assertIn("date -r /var/log/zfsutilities/rsync-pull.log", script)
-        self.assertIn(": > /var/log/zfsutilities/rsync-pull.log", script)
+        golden.check(self, script)
 
     def test_local_host_pull_with_remote_log_uses_bash_wrapper(self):
         # Source host matching the local hostname is normalized to a local path,
         # but with remote_log_path set it should still use the log wrapper.
+        # The hostname is machine-dependent, so normalize it to a placeholder
+        # to keep the golden machine-independent.
         hn = command_builders._get_local_hostname()
         step = command_builders.build_rsync_command(
             f"{hn}:/src",
             "/dst",
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
         )
-        self.assertEqual(step.command[0], "bash")
-        script = step.command[2]
-        self.assertIn("rsync --delete --progress -rav", script)
-        self.assertIn(" /src /dst", script)
-        self.assertIn("2>&1", script)
+        command = list(step.command)
+        command[2] = command[2].replace(hn, "LOCALHOST")
+        golden.check(self, command)
 
     def test_local_rsync_with_remote_log_preserves_exit_code(self):
         step = command_builders.build_rsync_command(
@@ -148,9 +129,8 @@ class TestBuildRsyncCommand(unittest.TestCase):
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
         )
         script = step.command[2]
+        golden.check(self, step.command)
         # rsync is the last command, so the script exits with rsync's rc.
-        self.assertIn("rsync --delete --progress -rav", script)
-        self.assertIn(" /src /dst", script)
         self.assertNotIn("exit ${PIPESTATUS[0]}", script)
         self.assertNotIn("exit 0", script)
 
@@ -163,13 +143,7 @@ class TestBuildRsyncCommand(unittest.TestCase):
             f"root@{host}",
             command_builders._rsync_log_setup_script(log_path),
         ]
-        self.assertEqual(cmd[0], "ssh")
-        self.assertEqual(cmd[1], "-q")
-        self.assertEqual(cmd[2], "root@remote")
-        remote_script = cmd[3]
-        self.assertIn("mkdir -p /var/log/zfsutilities", remote_script)
-        self.assertIn("date -r /var/log/zfsutilities/rsync-pull.log", remote_script)
-        self.assertIn(": > /var/log/zfsutilities/rsync-pull.log", remote_script)
+        golden.check(self, cmd)
 
     def test_pull_rsync_with_remote_log_preserves_exit_code(self):
         step = command_builders.build_rsync_command(
@@ -177,27 +151,19 @@ class TestBuildRsyncCommand(unittest.TestCase):
             "/dst",
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
         )
-        script = step.command[2]
-        self.assertIn("exit ${PIPESTATUS[0]}", script)
+        golden.check(self, step.command)
 
     def test_local_rsync_with_excludes(self):
         step = command_builders.build_rsync_command("/src", "/dst", excludes=["*.tmp", "cache/"])
-        self.assertIn("--exclude=*.tmp", step.command)
-        self.assertIn("--exclude=cache/", step.command)
-        self.assertIn("/src", step.command)
-        self.assertIn("/dst", step.command)
+        golden.check(self, step.command)
 
     def test_pull_rsync_with_excludes(self):
         step = command_builders.build_rsync_command("remote:/src", "/dst", excludes=["*.log"])
-        self.assertIn("--exclude=*.log", step.command)
-        self.assertIn("root@remote:/src", step.command)
-        self.assertIn("/dst", step.command)
+        golden.check(self, step.command)
 
     def test_push_rsync_with_excludes(self):
         step = command_builders.build_rsync_command("/src", "remote:/dst", excludes=["temp"])
-        self.assertIn("--exclude=temp", step.command)
-        self.assertIn("/src", step.command)
-        self.assertIn("root@remote:/dst", step.command)
+        golden.check(self, step.command)
 
     def test_local_rsync_with_remote_log_and_excludes(self):
         step = command_builders.build_rsync_command(
@@ -206,10 +172,7 @@ class TestBuildRsyncCommand(unittest.TestCase):
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
             excludes=["*.tmp"],
         )
-        script = step.command[2]
-        self.assertIn("rsync --delete --progress -rav", script)
-        self.assertIn("--exclude=*.tmp", script)
-        self.assertIn(" /src /dst", script)
+        golden.check(self, step.command)
 
     def test_pull_rsync_with_remote_log_and_excludes(self):
         step = command_builders.build_rsync_command(
@@ -218,23 +181,19 @@ class TestBuildRsyncCommand(unittest.TestCase):
             remote_log_path="/var/log/zfsutilities/rsync-pull.log",
             excludes=["*.tmp"],
         )
-        script = step.command[2]
-        self.assertIn("rsync --delete --progress -rav", script)
-        self.assertIn("--exclude=*.tmp", script)
-        self.assertIn("root@remote:/src /dst", script)
+        golden.check(self, step.command)
 
     def test_default_excludes_are_included(self):
         step = command_builders.build_rsync_command("/src", "/dst")
-        self.assertIn("--exclude=**/.gvfs/", step.command)
-        self.assertIn("--exclude=**/.cache/doc/", step.command)
+        golden.check(self, step.command)
 
     def test_default_excludes_are_included_with_empty_caller_excludes(self):
         step = command_builders.build_rsync_command("/src", "/dst", excludes=[])
-        self.assertIn("--exclude=**/.gvfs/", step.command)
-        self.assertIn("--exclude=**/.cache/doc/", step.command)
+        golden.check(self, step.command)
 
     def test_user_excludes_follow_defaults(self):
         step = command_builders.build_rsync_command("/src", "/dst", excludes=["*.tmp"])
+        golden.check(self, step.command)
         gvfs_idx = step.command.index("--exclude=**/.gvfs/")
         cache_idx = step.command.index("--exclude=**/.cache/doc/")
         user_idx = step.command.index("--exclude=*.tmp")
@@ -289,97 +248,78 @@ class TestBuildSendReceiveCommand(unittest.TestCase):
         self.assertIsInstance(step, BashStep)
         self.assertFalse(step.is_rsync)
         self.assertTrue(step.fatal)
-        self.assertEqual(step.command[0], "bash")
-        bash_script = step.command[2]
-        self.assertIn('sourcefs="tank/src"', bash_script)
-        self.assertIn('destfs="tank/dst"', bash_script)
-        self.assertIn('nextsnap="@snap"', bash_script)
-        self.assertIn('doincrementals="Y"', bash_script)
-        self.assertIn('dointermediates="N"', bash_script)
+        golden.check(self, step.command)
 
     def test_includes_array(self):
         variables = {"includes": "foo bar"}
         step = command_builders.build_send_receive_command("src", "dst", variables, "/bin", "@snap")
-        bash_script = step.command[2]
-        self.assertIn('includes=("foo" "bar")', bash_script)
+        golden.check(self, step.command)
 
     def test_excludes_array(self):
         variables = {"excludes": "temp cache"}
         step = command_builders.build_send_receive_command("src", "dst", variables, "/bin", "@snap")
-        bash_script = step.command[2]
-        self.assertIn('excludes=("temp" "cache")', bash_script)
+        golden.check(self, step.command)
 
     def test_dryrun_prefix(self):
         variables = {}
         step = command_builders.build_send_receive_command(
             "src", "dst", variables, "/bin", "@snap", dryrun=True
         )
-        bash_script = step.command[2]
-        self.assertIn("dryrun='Y'", bash_script)
-        self.assertNotIn("msg_level", bash_script)
+        golden.check(self, step.command)
+        self.assertNotIn("msg_level", step.command[2])
 
     def test_releaseholds_tags_default(self):
         variables = {"releaseholds": "Y"}
         step = command_builders.build_send_receive_command("src", "dst", variables, "/bin", "@snap")
-        bash_script = step.command[2]
-        self.assertIn('releaseholds_tags=("offsite-*")', bash_script)
+        golden.check(self, step.command)
 
     def test_releaseholds_tags_custom(self):
         variables = {"releaseholds": "Y", "releaseholds_tags": "custom-*"}
         step = command_builders.build_send_receive_command("src", "dst", variables, "/bin", "@snap")
-        bash_script = step.command[2]
-        self.assertIn('releaseholds_tags=("custom-*")', bash_script)
+        golden.check(self, step.command)
 
 
 class TestBuildPrePostBackupCommands(unittest.TestCase):
     def test_pre_backup(self):
         step = command_builders.build_pre_backup_command("echo hello")
         self.assertTrue(step.fatal)
-        self.assertEqual(step.command[0], "bash")
-        self.assertIn("echo hello", step.command[2])
         self.assertEqual(step.description, "Pre-backup command")
+        golden.check(self, step.command)
 
     def test_post_backup(self):
         step = command_builders.build_post_backup_command("echo done")
         self.assertFalse(step.fatal)
-        self.assertIn("echo done", step.command[2])
         self.assertEqual(step.description, "Post-backup command")
+        golden.check(self, step.command)
 
 
 class TestBuildRetentionCommand(unittest.TestCase):
     def test_basic(self):
         step = command_builders.build_retention_command("/bin", "dailybackup")
         self.assertTrue(step.fatal)
-        self.assertEqual(step.command[0], "bash")
-        bash_script = step.command[2]
-        self.assertIn('autoproceed="Y"', bash_script)
-        self.assertIn('cleanup "" "" dailybackup', bash_script)
         self.assertEqual(step.description, "Prune snapshots")
+        golden.check(self, step.command)
 
     def test_dryrun(self):
         step = command_builders.build_retention_command("/bin", "dailybackup", dryrun=True)
-        self.assertIn("dryrun='Y'", step.command[2])
         self.assertEqual(step.description, "Prune snapshots")
+        golden.check(self, step.command)
 
     def test_pools_list_loops_in_order(self):
         step = command_builders.build_retention_command(
             "/bin", "dailybackup", pools=["archive", "tank"]
         )
-        bash_script = step.command[2]
-        self.assertIn("for pool in archive tank; do", bash_script)
-        self.assertIn('cleanup "$pool" "" dailybackup', bash_script)
-        self.assertIn("exit $overall_rc", bash_script)
         self.assertEqual(step.description, "Prune snapshots (archive, tank)")
+        golden.check(self, step.command)
 
     def test_retention_command_includes_releaseholds_tags(self):
         step = command_builders.build_retention_command("/bin", "dailybackup")
-        bash_script = step.command[2]
-        self.assertIn('releaseholds="Y"', bash_script)
-        self.assertIn('releaseholds_tags=("offsite-*")', bash_script)
+        golden.check(self, step.command)
 
     def test_no_selection_assignments_by_default(self):
         step = command_builders.build_retention_command("/bin", "dailybackup")
         bash_script = step.command[2]
+        golden.check(self, step.command)
         self.assertNotIn("includes=", bash_script)
         self.assertNotIn("excludes=", bash_script)
         self.assertNotIn("startwith=", bash_script)
@@ -394,11 +334,7 @@ class TestBuildRetentionCommand(unittest.TestCase):
             startwith="=tank/a",
             endwith="z",
         )
-        bash_script = step.command[2]
-        self.assertIn('includes=(proxmox =tank/a); ', bash_script)
-        self.assertIn('excludes=(vm-100 scratch); ', bash_script)
-        self.assertIn('startwith==tank/a; ', bash_script)
-        self.assertIn('endwith=z; ', bash_script)
+        golden.check(self, step.command)
 
     def test_selection_criteria_accept_iterables_and_quote(self):
         step = command_builders.build_retention_command(
@@ -407,9 +343,7 @@ class TestBuildRetentionCommand(unittest.TestCase):
             includes=["proxmox"],
             excludes=["vm-100 disk", "scratch"],
         )
-        bash_script = step.command[2]
-        self.assertIn("includes=(proxmox); ", bash_script)
-        self.assertIn("excludes=('vm-100 disk' scratch); ", bash_script)
+        golden.check(self, step.command)
 
 
 class TestBuildBackupPruneCommand(unittest.TestCase):
@@ -421,25 +355,8 @@ class TestBuildBackupPruneCommand(unittest.TestCase):
             {},
         )
         self.assertFalse(step.fatal)
-        bash_script = step.command[2]
-        self.assertEqual(step.command[0], "bash")
-        self.assertIn('source "$mydir/zfsbuildfsarray"; ', bash_script)
-        self.assertIn('source "$mydir/zfsremoveleadingqualifiers"; ', bash_script)
-        self.assertIn('source "$mydir/zfscleanup"; ', bash_script)
-        self.assertIn("sourcefs=threeamigos/proxmox; ", bash_script)
-        self.assertIn("destfs=fivebays; ", bash_script)
-        self.assertIn("sourcefs=NVME1; ", bash_script)
-        self.assertIn('buildfsarray "$sourcefs"; ', bash_script)
-        self.assertIn(
-            '_restorefs=$(remove_leading_qualifiers "$sourcefsremovequalifiers" "$_fs"); ',
-            bash_script,
-        )
-        # Both the source dataset and the mapped destination name are pruned.
-        self.assertIn('_prune_seen["$_fs"]=1; ', bash_script)
-        self.assertIn('prune_datasets+=("$_fs"); ', bash_script)
-        self.assertIn('prune_datasets+=("${destfs}${_restorefs}"); ', bash_script)
-        self.assertIn('cleanup "" "" dailybackup', bash_script)
         self.assertIn("Prune snapshots (2 backup steps)", step.description)
+        golden.check(self, step.command)
 
     def test_source_entry_precedes_destination_mapping(self):
         """Each source dataset is added before its destination mapping."""
@@ -449,6 +366,7 @@ class TestBuildBackupPruneCommand(unittest.TestCase):
             [("threeamigos/proxmox", "fivebays")],
             {},
         )
+        golden.check(self, step.command)
         bash_script = step.command[2]
         source_pos = bash_script.index('prune_datasets+=("$_fs"); ')
         dest_pos = bash_script.index('prune_datasets+=("${destfs}${_restorefs}"); ')
@@ -466,20 +384,13 @@ class TestBuildBackupPruneCommand(unittest.TestCase):
                 "endwith": "z",
             },
         )
-        bash_script = step.command[2]
-        self.assertIn("includes=(proxmox); ", bash_script)
-        self.assertIn("excludes=(vm-100 =tank/scratch); ", bash_script)
-        self.assertIn("startwith==tank/a; ", bash_script)
-        self.assertIn("endwith=z; ", bash_script)
+        golden.check(self, step.command)
 
     def test_empty_result_exits_zero(self):
         step = command_builders.build_backup_prune_command(
             "/bin", "dailybackup", [("tank", "fivebays")], {}
         )
-        bash_script = step.command[2]
-        self.assertIn('if [[ ${#prune_datasets[@]} -eq 0 ]]; then ', bash_script)
-        self.assertIn("WARN: No backup datasets to prune", bash_script)
-        self.assertIn("exit 0; ", bash_script)
+        golden.check(self, step.command)
 
     def test_removequalifiers_variable(self):
         step = command_builders.build_backup_prune_command(
@@ -488,7 +399,7 @@ class TestBuildBackupPruneCommand(unittest.TestCase):
             [("tank", "fivebays")],
             {"sourcefsremovequalifiers": "1"},
         )
-        self.assertIn("sourcefsremovequalifiers=1; ", step.command[2])
+        golden.check(self, step.command)
 
     def test_dedup_and_dryrun(self):
         step = command_builders.build_backup_prune_command(
@@ -498,9 +409,7 @@ class TestBuildBackupPruneCommand(unittest.TestCase):
             {},
             dryrun=True,
         )
-        bash_script = step.command[2]
-        self.assertIn("declare -A _prune_seen=(); ", bash_script)
-        self.assertIn("dryrun='Y'", bash_script)
+        golden.check(self, step.command)
 
 
 class TestRsyncFailureDiagnosis(unittest.TestCase):

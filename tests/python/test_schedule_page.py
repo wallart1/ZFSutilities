@@ -7,7 +7,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from test_support import REPO_ROOT, capture_logs, mock_gtk, temp_config_dir
+from test_support import REPO_ROOT, capture_logs, mock_gtk, requires_gi, temp_config_dir
+
+pytestmark = requires_gi
 
 SAMPLE_NEXT_RUN = datetime(2025, 6, 15, 10, 0, tzinfo=timezone(-timedelta(hours=4)))
 
@@ -16,11 +18,6 @@ if GUI_SRC not in sys.path:
     sys.path.insert(0, GUI_SRC)
 
 import cron_manager
-
-# Import schedule_page once under the GTK mock so that @patch decorators on
-# test methods do not pull in the real GTK module when they resolve names.
-with mock_gtk():
-    pass
 
 
 class TestRegenerateCronPath(unittest.TestCase):

@@ -1,0 +1,4 @@
+zpool
+create
+tank
+/dev/disk/by-id/ata-X

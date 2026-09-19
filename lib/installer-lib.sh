@@ -503,10 +503,12 @@ check_partial_uninstall() {
     fi
 
     # systemd/cron integration left behind without a deployed version also
-    # indicates a partial uninstall.
+    # indicates a partial uninstall. ZFSUTILITIES_ETC_PREFIX lets tests
+    # point these checks at a fixture root instead of the real /etc.
+    local etc_prefix="${ZFSUTILITIES_ETC_PREFIX:-}"
     if [[ ! -d "$version_base/versions" ]]; then
-        if [[ -d "$systemd_dir/rtslib-fb-targetctl.service.d" || \
-              -f "/etc/cron.d/zfsutilities" ]]; then
+        if [[ -d "$etc_prefix$systemd_dir/rtslib-fb-targetctl.service.d" || \
+              -f "$etc_prefix/etc/cron.d/zfsutilities" ]]; then
             partial=1
         fi
     fi

@@ -1,0 +1,5 @@
+zpool
+attach
+tank
+raidz2-0
+/dev/disk/by-id/ata-Z

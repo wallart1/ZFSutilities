@@ -16,7 +16,7 @@ from test_support import mock_gtk
 def _import_pool_actions():
     """Import pool_actions under a fresh mocked GTK context."""
     sys.modules.pop("pool_actions", None)
-    with mock_gtk():
+    with mock_gtk(fresh=True):
         import pool_actions
 
         return pool_actions
