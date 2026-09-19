@@ -24,6 +24,11 @@ jobs:
         # Test suites bootstrap via `source ~/bashinit` (the
         # development-machine convention).
         run: ln -sfn "$PWD/bin/bashinit" "$HOME/bashinit"
+      - name: Build documentation site
+        # Several GUI suites (docs viewer, page-anchor mapping, AGENTS.md
+        # reference checks) exercise the built site, which is gitignored
+        # generated content and absent on a fresh checkout.
+        run: mkdocs build -f docs/mkdocs.yml
       - name: Run test suite
         # Preflight skips suites whose environment (root, test pools) is
         # unavailable here; skips never fail the run. The GUI suites
