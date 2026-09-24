@@ -434,3 +434,71 @@ tests/AGENTS.md rule 4; unrelated to the changeset; recorded in
 PREEXISTING.md (2 entries remain: this, and the test-zfslockmanager
 uppercase-globals item). Everything else green: 73 suites, 1 env skip,
 test_docs_integrity 23/23, ruff check/format clean, shellcheck clean.
+
+## 2026-09-24 — Additional documentation updates
+
+- Added a Reference link for `/etc/zfsutilities-deploy.conf` in the
+  `commands.md` `deploy-version` Data structures table, pointing to
+  `developer-guide/two-node-config.md`.
+- Clarified `daily-backup.md#step-failure-handling`: send/receive steps are
+  fatal in the GTK GUI / scheduled profiles but **not fatal** in the bash
+  `zfsdailybackup` template (it does not stop on a non-zero `send-receive`
+  return code).
+- Added an explicit "acquire the new version" step to
+  `installation/index.md` Versioned Upgrades.
+- Tightened `README.md` Versioned Upgrades to open with the clone-into-a-fresh
+  directory instructions before deployment.
+- Added the two-node high-speed network prerequisite to
+  `installation/index.md`, noting that the actual network provisioning is
+  out-of-scope.
+
+Verified with `mkdocs build` (clean) and `test_docs_integrity.py` (23 passed).
+
+## 2026-09-24 — commands.md documentation audit and updates
+
+- Moved `zfsfullcopy` from Commands Reference to `modules.md` (it is a
+  sourceable helper, not a directly-executable command) and updated all
+  cross-references in `user-guide/`, `developer-guide/`, and `commands.md`.
+- Removed duplicate `zfs-diagnose-busy` entry from `commands.md`; merged the
+  better detail into the existing `modules.md` section (kept Integration table,
+  replaced Checks list with the table from commands.md).
+- Rewrote `zfsdelfs` for readability and accuracy: merged duplicate Data
+  structures tables, corrected Globals (removed misleading `$dryrun` /
+  `$releaseholds` pass-through wording), added interactive-listing and
+  filter-state-restore behavior, fixed encrypted-LUN wording, documented the
+  destroy lock failure path.
+- Fixed `zfsaddisk`: removed false "Validate ..." step, documented the Proxmox
+  (`qm`) prerequisite, softened the GUI-workaround claim to match the script's
+  own comment, added prevention guidance.
+- Created missing module doc sites in `modules.md` for `node-lib.sh`,
+  `iscsi-lib.sh`, `installer-lib.sh`, and `desktop-launcher-lib.sh`.
+- Link-consistency sweep of all Called-modules tables in `commands.md`:
+  every row now links to an existing doc site; `rsync-dailybackup` remains
+  unlinked because the referenced script does not exist in the repo.
+- Recorded the missing `rsync-dailybackup` script as a new PREEXISTING.md
+  entry (3 entries remain).
+
+## 2026-09-24 — Development-cycle wrap-up
+
+- Resolved all PREEXISTING.md entries:
+  - `tests/python/test_disk_surface_test.py` now isolates surface-test locks in
+    a temporary directory, preventing permission failures when
+    `/run/lock/zfsutilities` is root-owned. Also added `SURFACE_STATE_LOCK_PATH`
+    to `tests/python/test_support.py` `temp_config_dir()` for completeness.
+  - `tests/test-zfslockmanager` renamed `_BG_LOCK_PID` / `_BG_LOCK_RCFILE` to
+    lowercase to match the coding policy on non-exported globals.
+  - Created `bin/rsync-dailybackup` (site-specific template) and added
+    `tests/test-rsync-dailybackup` covering no-jobs, local copy, exclude,
+    malformed-job, and missing-node-config paths.
+- Coding-standards review:
+  - shellcheck clean on `bin/rsync-dailybackup` and `tests/test-zfslockmanager`.
+  - ruff check/format clean on modified Python files.
+- Test review: added `tests/test-rsync-dailybackup`; full suite passes
+  (74 suites, 3743 passed, 0 failed, 1 skipped) before and after the final
+  doc/script polish.
+- Documentation review: added `rsync-dailybackup` module documentation to
+  `docs/docs/commands-and-modules/modules.md`, linked it from
+  `commands.md#zfsdailybackup` and `two-node-config.md`, and verified with
+  `test_docs_integrity.py` (23 passed) and `mkdocs build` (clean aside from the
+  pre-existing MkDocs 2.0 incompatibility warning).
+- PREEXISTING.md is now empty; no new out-of-scope issues were discovered.

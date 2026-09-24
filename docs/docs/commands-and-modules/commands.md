@@ -38,7 +38,6 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`unroot`](#unroot)
 - [`watchall`](#watchall)
 - [`watchit`](#watchit)
-- [`zfs-diagnose-busy`](#zfs-diagnose-busy)
 - [`zfsaddisk`](#zfsaddisk)
 - [`zfsallthepools`](#zfsallthepools)
 - [`zfscleanup`](#zfscleanup)
@@ -47,7 +46,6 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsdelallsnaps`](#zfsdelallsnaps)
 - [`zfsdelfs`](#zfsdelfs)
 - [`zfsdelholds`](#zfsdelholds)
-- [`zfsfullcopy`](#zfsfullcopy)
 - [`zfsgetashift`](#zfsgetashift)
 - [`zfsgetsendsize`](#zfsgetsendsize)
 - [`zfsgetsnapage`](#zfsgetsnapage)
@@ -176,9 +174,9 @@ warning.
 **Called modules:**
 
 | Module                   | Purpose                                         |
-| ------------------------ | ----------------------------------------------- |
-| `lib/paths.sh`           | FHS-aligned path variables and migration helper |
-| `bashinit` / `rootcheck` | Standard initialization and root check          |
+| ------------------------| ----------------------------------------------- |
+| [paths.sh](modules.md#pathssh)| FHS-aligned path variables and migration helper |
+| [bashinit](modules.md#bashinit) / [rootcheck](modules.md#rootcheck)| Standard initialization and root check          |
 
 **Data structures consumed / produced:** none.
 
@@ -247,15 +245,15 @@ sudo ./bin/deploy-version [version] [group ...]
 
 **Called modules:**
 
-| Script            | Purpose                                                      |
-| ----------------- | ------------------------------------------------------------ |
-| `lib/node-lib.sh` | Two-node host/target resolution (for legacy remote fallback) |
+| Script| Purpose                                                      |
+| -----------------| ------------------------------------------------------------ |
+| [node-lib.sh](modules.md#node-libsh)| Two-node host/target resolution (for legacy remote fallback) |
 
 **Data structures consumed / produced:**
 
 | Structure                                         | Role                         | Reference                                                                                            |
 | ------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `/etc/zfsutilities-deploy.conf`                   | Deployment group definitions | —                                                                                                    |
+| `/etc/zfsutilities-deploy.conf`                   | Deployment group definitions | [Deploy config](../developer-guide/two-node-config.md#config-file-etczfsutilitiesdeployconf) |
 | Node config                                       | Legacy remote host list      | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | `/usr/local/lib/zfsutilities/versions/<version>/` | Deployed version directory   | —                                                                                                    |
 
@@ -317,11 +315,11 @@ the zvol disk number.
 **Called modules:**
 
 | Module / Script                   | Purpose                               |
-| --------------------------------- | ------------------------------------- |
-| `node-lib.sh`                     | Two-node host/target resolution       |
-| [rootcheck](modules.md#rootcheck) | Verify root privileges                |
-| `safe-iscsi-save`                 | Persist iSCSI target configuration    |
-| `rescan-storage`                  | Rescan iSCSI LUNs on the compute host |
+| ---------------------------------| ------------------------------------- |
+| [node-lib.sh](modules.md#node-libsh)| Two-node host/target resolution       |
+| [rootcheck](modules.md#rootcheck)| Verify root privileges                |
+| [safe-iscsi-save](two-node.md#safe-iscsi-save-storage-node)| Persist iSCSI target configuration    |
+| [rescan-storage](two-node.md#rescan-storage-both)| Rescan iSCSI LUNs on the compute host |
 
 **Data structures consumed / produced:** none.
 
@@ -424,8 +422,8 @@ Can also re-run on an existing two-node host to switch it to single-node mode.
 **Called modules:**
 
 | Module                 | Purpose                                                   |
-| ---------------------- | --------------------------------------------------------- |
-| `lib/installer-lib.sh` | Shared installer helpers (prereq checks, retention setup) |
+| ----------------------| --------------------------------------------------------- |
+| [installer-lib.sh](modules.md#installer-libsh)| Shared installer helpers (prereq checks, retention setup) |
 
 **Data structures consumed / produced:**
 
@@ -474,9 +472,9 @@ Can also re-run on an existing single-node host to switch it to two-node mode.
 **Called modules:**
 
 | Module                    | Purpose                                      |
-| ------------------------- | -------------------------------------------- |
-| `lib/installer-lib.sh`    | Shared installer helpers                     |
-| `bin/setup-iscsi-targets` | Creates initial iSCSI targets (when present) |
+| -------------------------| -------------------------------------------- |
+| [installer-lib.sh](modules.md#installer-libsh)| Shared installer helpers                     |
+| [setup-iscsi-targets](two-node.md#setup-iscsi-targets-storage-node)| Creates initial iSCSI targets (when present) |
 
 **Data structures consumed / produced:**
 
@@ -516,9 +514,9 @@ Sends ZFS datasets and Proxmox VM configuration to an archive file on disk using
 **Called modules:**
 
 | Module                                        | Purpose in this command                                      |
-| --------------------------------------------- | ------------------------------------------------------------ |
-| [zfsbuildfsarray](modules.md#zfsbuildfsarray) | Build filtered dataset list from `$subtrees` and `$includes` |
-| [zfscommsnap](modules.md#zfscommsnap)         | Select the most recent common snapshot for each dataset      |
+| ---------------------------------------------| ------------------------------------------------------------ |
+| [zfsbuildfsarray](modules.md#zfsbuildfsarray)| Build filtered dataset list from `$subtrees` and `$includes` |
+| [zfscommsnap](modules.md#zfscommsnap)| Select the most recent common snapshot for each dataset      |
 
 **Data structures consumed / produced:**
 
@@ -574,9 +572,9 @@ for bash suites when the corresponding option is used:
 **Called modules:**
 
 | Module                   | Purpose                              |
-| ------------------------ | ------------------------------------ |
-| `tests/run-tests`        | Unified bash + Python test harness   |
-| `tests/python/runner.py` | Deprecated shim forwarding to pytest |
+| ------------------------| ------------------------------------ |
+| [run-tests](commands.md#run-tests)| Unified bash + Python test harness   |
+| [runner.py](../developer-guide/testing.md)| Deprecated shim forwarding to pytest |
 
 **Data structures consumed / produced:**
 
@@ -631,8 +629,8 @@ live-reload site; MkDocs is required.
 **Called modules:**
 
 | Module     | Purpose                                    |
-| ---------- | ------------------------------------------ |
-| `bashinit` | Session log setup and `calledbybash` guard |
+| ----------| ------------------------------------------ |
+| [bashinit](modules.md#bashinit)| Session log setup and `calledbybash` guard |
 
 **Data structures consumed / produced:**
 
@@ -693,9 +691,9 @@ sudo switch-version <version>|previous|--list|--uninstall
 **Called modules:**
 
 | Module / Script                   | Purpose                  |
-| --------------------------------- | ------------------------ |
-| [rootcheck](modules.md#rootcheck) | Verify root privileges   |
-| `lib/desktop-launcher-lib.sh`     | Desktop shortcut helpers |
+| ---------------------------------| ------------------------ |
+| [rootcheck](modules.md#rootcheck)| Verify root privileges   |
+| [desktop-launcher-lib.sh](modules.md#desktop-launcher-libsh)| Desktop shortcut helpers |
 
 **Data structures consumed / produced:**
 
@@ -866,8 +864,8 @@ All default paths can be overridden via `ZFSUTILITIES_*` environment variables
 **Called modules:**
 
 | Module                        | Purpose                  |
-| ----------------------------- | ------------------------ |
-| `lib/desktop-launcher-lib.sh` | Remove desktop shortcuts |
+| -----------------------------| ------------------------ |
+| [desktop-launcher-lib.sh](modules.md#desktop-launcher-libsh)| Remove desktop shortcuts |
 
 **Data structures consumed / produced:**
 
@@ -979,9 +977,9 @@ Uses `bin/watchall` with `zpool list` and `zfs list` output.
 
 **Called modules:**
 
-| Script         | Purpose                                  |
-| -------------- | ---------------------------------------- |
-| `bin/watchall` | Periodically display pool/dataset status |
+| Script| Purpose                                  |
+| --------------| ---------------------------------------- |
+| [watchall](commands.md#watchall)| Periodically display pool/dataset status |
 
 **Data structures consumed / produced:** none.
 
@@ -995,8 +993,12 @@ Uses `bin/watchall` with `zpool list` and `zfs list` output.
 
 ### `zfsaddisk`
 
-Adds a virtual disk to a Proxmox VM. Works around a Proxmox GUI issue where
-incorrect disk numbers are sometimes assigned.
+Adds a virtual disk to a Proxmox VM. This script sets the scsi index
+explicitly rather than relying on the Proxmox GUI's auto-assigned disk number;
+the script header describes that as occasionally assigning the wrong disk
+number in some situations. The chosen disk number becomes part of the
+underlying zvol name (`vm-<vmid>-disk-<N>`), so picking it explicitly keeps
+that name predictable.
 
 ```bash
 sudo zfsaddisk <vmid> <disk-number> <storage-name> <size-GiB>
@@ -1013,23 +1015,39 @@ sudo zfsaddisk <vmid> <disk-number> <storage-name> <size-GiB>
 
 **Globals:** none.
 
+**Prerequisites:** Proxmox VE must be installed (`qm` command present). On a
+non-Proxmox host the script exits with a fatal message.
+
 Prompts for confirmation before issuing the `qm set` command.
 
 **Called modules:** none.
 
 **Data structures consumed / produced:** none.
 
+**Preventing incorrect disk numbers:**
+
+- Always choose the disk number explicitly (as this script does) rather than
+  letting the GUI auto-pick one.
+- Pick a number higher than every existing disk in the VM so the new
+  `vm-<vmid>-disk-<N>` zvol does not collide with or reuse an index that is
+  already in use.
+- Keep disk indexes contiguous when possible, and remove stale `unusedX:`
+  entries from the VM configuration so the next free slot is unambiguous.
+
 **Internal flow:**
 
-1. Validate the VM ID, disk number, storage name, and size.
-2. Prompt for confirmation before issuing the `qm set` command.
-3. Run `qm set <vmid> --scsi<disk-number> <storage>:<size-GiB>`.
+1. Verify Proxmox VE is available (`qm` command exists).
+2. Build the command `qm set <vmid> --scsi<disk-number> <storage>:<size-GiB>`
+   and log it.
+3. Prompt for confirmation.
+4. Run the `qm set` command.
 
 **Return codes:**
 
-| Code | Meaning                 |
-| ---- | ----------------------- |
-| `0`  | Completed successfully. |
+| Code | Meaning                                |
+| ---- | -------------------------------------- |
+| `0`  | Completed successfully.                |
+| `1`  | Proxmox VE not present (`qm` missing). |
 
 ---
 
@@ -1050,8 +1068,8 @@ source zfsallthepools
 **Called modules:**
 
 | Module                            | Purpose                                 |
-| --------------------------------- | --------------------------------------- |
-| [zfsconfig](modules.md#zfsconfig) | Read the pool list from the JSON config |
+| ---------------------------------| --------------------------------------- |
+| [zfsconfig](modules.md#zfsconfig)| Read the pool list from the JSON config |
 
 **Data structures produced:**
 
@@ -1124,13 +1142,13 @@ Calls [`zfsretain`](modules.md#zfsretain) for each pool.
 **Called modules:**
 
 | Module                                        | Purpose in this command                 |
-| --------------------------------------------- | --------------------------------------- |
-| [zfsconfig](modules.md#zfsconfig)             | Read registered pools via `poolarray()` |
-| [zfsbuildfsarray](modules.md#zfsbuildfsarray) | Build the per-pool dataset list         |
-| [zfsretain](modules.md#zfsretain)             | Apply retention policy to each dataset  |
-| [zfsoverrides](modules.md#zfsoverrides)       | Apply command-line parameter overrides  |
-| [zfslockmanager](modules.md#zfslockmanager)   | Acquire per-dataset locks               |
-| [rootcheck](modules.md#rootcheck)             | Verify root privileges                  |
+| ---------------------------------------------| --------------------------------------- |
+| [zfsconfig](modules.md#zfsconfig)| Read registered pools via `poolarray()` |
+| [zfsbuildfsarray](modules.md#zfsbuildfsarray)| Build the per-pool dataset list         |
+| [zfsretain](modules.md#zfsretain)| Apply retention policy to each dataset  |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides  |
+| [zfslockmanager](modules.md#zfslockmanager)| Acquire per-dataset locks               |
+| [rootcheck](modules.md#rootcheck)| Verify root privileges                  |
 
 **Data structures consumed / produced:**
 
@@ -1155,64 +1173,6 @@ Calls [`zfsretain`](modules.md#zfsretain) for each pool.
 | ---- | ------------------------------ |
 | `0`  | Completed normally.            |
 | `8`  | No label was provided in `$3`. |
-
----
-
-### `zfs-diagnose-busy`
-
-Diagnoses why a ZFS dataset or snapshot cannot be destroyed. Called
-automatically by `zfsdelsnap`, `zfsdelfs`, `remove-vm-disk`, `archive-vm`, and
-`clone-vm` whenever `zfs destroy` fails with a "dataset is busy" error.
-
-```bash
-source_helper zfs-diagnose-busy
-diagnose_dataset_busy <dataset_or_snapshot> [stderr_from_failed_destroy]
-```
-
-**Checks performed (in order):**
-
-| Check                | What it looks for                                             |
-| -------------------- | ------------------------------------------------------------- |
-| Clone dependents     | `zfs list -o clones` shows non-`-` values                     |
-| ZFS holds            | `zfs holds` lists tags on the snapshot                        |
-| Mounted / open files | `mounted=yes` plus `fuser`/`lsof` on the mountpoint           |
-| Active send/receive  | `receive_resume_token` present, or `zfs send` process running |
-| Bookmarks            | `zfs list -t bookmark` shows references to the snapshot       |
-| iSCSI LUN            | `targetcli` shows the zvol as a backstore/LUN                 |
-| Running VM           | `qm status` reports `running` for the VM ID                   |
-| NFS/SMB share        | `sharenfs` or `sharesmb` is not `off`                         |
-
-If no specific cause is found, a fallback message suggests checking for open
-files via `fuser` or `lsof`, or verifying whether a pool scrub/resilver is in
-progress.
-
-The Python GUI equivalent is `gui_helpers.diagnose_dataset_busy()`, used by
-dataset and snapshot delete actions.
-
-**Called modules:** none.
-
-**Data structures consumed / produced:** none.
-
-**Internal flow:**
-
-Checks are performed in order until a likely cause is found:
-
-1. Clone dependents (`zfs list -o clones`).
-2. ZFS holds (`zfs holds`).
-3. Mounted filesystem with open files (`fuser`/`lsof`).
-4. Active send/receive (`receive_resume_token` or running `zfs send`).
-5. Bookmarks referencing the snapshot.
-6. iSCSI LUN backstore.
-7. Running Proxmox VM (`qm status`).
-8. NFS/SMB share (`sharenfs`/`sharesmb`).
-
-If no cause is identified, a fallback message suggests further manual investigation.
-
-**Return codes:**
-
-| Code | Meaning                 |
-| ---- | ----------------------- |
-| `0`  | Completed successfully. |
 
 ---
 
@@ -1316,13 +1276,13 @@ sudo zfsdailybackup "dryrun='Y'"
 **Called modules:**
 
 | Module / Script                                 | Purpose in this command                                          |
-| ----------------------------------------------- | ---------------------------------------------------------------- |
-| [zfssnapbuild](modules.md#zfssnapbuild)         | Generate the shared snapshot name `$nextsnap`                    |
-| [zfs-send-receive](modules.md#zfs-send-receive) | Copy `threeamigos/proxmox` → `fivebays` and `NVME1` → `fivebays` |
-| [zfsoverrides](modules.md#zfsoverrides)         | Apply command-line parameter overrides                           |
-| [zfscleanup](commands.md#zfscleanup)            | Prune snapshots after sends                                      |
-| `backup-installed-programs`                     | Save package list on remote/local hosts                          |
-| `rsync-dailybackup`                             | Perform rsync pulls from remote/local hosts                      |
+| -----------------------------------------------| ---------------------------------------------------------------- |
+| [zfssnapbuild](modules.md#zfssnapbuild)| Generate the shared snapshot name `$nextsnap`                    |
+| [zfs-send-receive](modules.md#zfs-send-receive)| Copy `threeamigos/proxmox` → `fivebays` and `NVME1` → `fivebays` |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides                           |
+| [zfscleanup](commands.md#zfscleanup)| Prune snapshots after sends                                      |
+| [backup-installed-programs](commands.md#backup-installed-programs)| Save package list on remote/local hosts                          |
+| [rsync-dailybackup](modules.md#rsync-dailybackup)| Perform rsync pulls from remote/local hosts                      |
 
 **Data structures consumed / produced:**
 
@@ -1391,9 +1351,9 @@ is automatically called to diagnose the specific cause.
 **Called modules:**
 
 | Module                                  | Purpose in this command                 |
-| --------------------------------------- | --------------------------------------- |
-| [zfsdelsnap](modules.md#zfsdelsnap)     | Delete each snapshot with safety checks |
-| [zfsoverrides](modules.md#zfsoverrides) | Apply command-line parameter overrides  |
+| ---------------------------------------| --------------------------------------- |
+| [zfsdelsnap](modules.md#zfsdelsnap)| Delete each snapshot with safety checks |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides  |
 
 **Data structures consumed / produced:**
 
@@ -1419,16 +1379,16 @@ is automatically called to diagnose the specific cause.
 
 ### `zfsdelfs`
 
-Deletes a dataset along with all of its snapshots and holds.
+Deletes a ZFS dataset (or a filtered subtree of datasets) along with all of its
+snapshots and holds.
 
 ```bash
 sudo zfsdelfs <subtree> [includes] [excludes] [startwith] [overrides]
 ```
 
-This is the ordinary way to destroy a ZFS dataset (or a filtered subtree of
-datasets). For non-VM datasets the operation is a straightforward
-`zfs destroy`; the iSCSI handling described below only applies to zvols that
-follow the `vm-<N>-disk-<N>` naming convention in a two-node configuration.
+For ordinary filesystems the operation is a straightforward `zfs destroy`. The
+iSCSI handling described below only applies to zvols that follow the
+`vm-<N>-disk-<N>` naming convention in a two-node configuration.
 
 **Arguments:**
 
@@ -1442,48 +1402,69 @@ follow the `vm-<N>-disk-<N>` naming convention in a two-node configuration.
 
 **Globals:**
 
-| Variable                                                         | Role                                                                                   | Reference                                                                          |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `$includes`, `$excludes`, `$startwith`                           | Forwarded to `zfsbuildfsarray`; `$depth` is reset internally and not forwarded         | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
-| `$autoproceed`, `$dryrun`, `$releaseholds`, `$releaseholds_tags` | Execution control passed through to `zfsdelallsnaps`                                   | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
-| `node_mode`, `compute_host`                                      | Determines whether iSCSI teardown/rebuild is attempted, and how `qm status` is queried | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
-
-**Data structures produced:**
-
-| Structure                                                                                  | Reference                                                                                                          |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| [`iscsi_teardown`](../developer-guide/data-structures.md#iscsi_teardown-associative-array) | Populated before `zfs destroy`; consumed by `zfs-send-receive` to rebuild LUNs after the replacement `zfs receive` |
-
-Calls `zfsdelallsnaps` first to clear snapshots, then destroys the dataset.
-For VM-disk zvols in two-node mode it automatically tears down the matching
-iSCSI LUN/backstore before `zfs destroy` and records the teardown so that
-`zfs-send-receive` can rebuild the LUN afterwards. During teardown it removes
-the backstore from `/etc/rtslib-fb-target/expected-backstores.txt` and, if the
-zvol is encrypted, from `/etc/zfsutilities/iscsi-encrypted-luns.conf`. The `zfs-send-receive`
-rebuild path re-adds those entries after the replacement `zfs receive` so the
-manifests remain consistent.
-
-**Clone dependency check:** If any dataset in the deletion list has ZFS clone
-dependents (another zvol was created from one of its snapshots), `zfsdelfs`
-aborts before touching anything and displays a `[ZFS clone dependents — cannot
-delete]` annotation. Run [`promote-vm-clone`](two-node.md#promote-vm-clone-both)
-on a dependent VM first to cut the dependency, then retry.
-
-**Destroy diagnostics:** If `zfs destroy` fails (e.g. "dataset is busy"),
-`zfsdelfs` automatically calls [`zfs-diagnose-busy`](#zfs-diagnose-busy) to
-report the specific cause — holds, open files, iSCSI LUNs, running VMs, etc.
+| Variable                               | Role                                                                                   | Reference                                                                          |
+| -------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `$includes`, `$excludes`, `$startwith` | Forwarded to `zfsbuildfsarray`; `$depth` is reset internally and not forwarded         | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `$autoproceed`                         | `'Y'` skips the pre-deletion confirmation prompt                                       | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
+| `$node_mode`, `$compute_host`          | Determines whether iSCSI teardown/rebuild is attempted, and how `qm status` is queried | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
 
 **Called modules:**
 
 | Module                                            | Purpose in this command                             |
-| ------------------------------------------------- | --------------------------------------------------- |
-| [zfsbuildfsarray](modules.md#zfsbuildfsarray)     | Build bottom-up dataset list for deletion           |
-| [zfsdelallsnaps](commands.md#zfsdelallsnaps)      | Remove all snapshots before destroying each dataset |
-| [zfsoverrides](modules.md#zfsoverrides)           | Apply command-line parameter overrides              |
-| [zfs-diagnose-busy](modules.md#zfs-diagnose-busy) | Diagnose `zfs destroy` failures                     |
-| `node-lib.sh`                                     | Two-node host/target resolution                     |
-| `iscsi-lib.sh`                                    | Shared iSCSI teardown/rebuild helpers               |
-| [zfslockmanager](modules.md#zfslockmanager)       | Acquire per-dataset destroy locks                   |
+| -------------------------------------------------| --------------------------------------------------- |
+| [zfsbuildfsarray](modules.md#zfsbuildfsarray)| Build bottom-up dataset list for deletion           |
+| [zfsdelallsnaps](commands.md#zfsdelallsnaps)| Remove all snapshots before destroying each dataset |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides              |
+| [zfs-diagnose-busy](modules.md#zfs-diagnose-busy)| Diagnose `zfs destroy` failures                     |
+| [node-lib.sh](modules.md#node-libsh)| Two-node host/target resolution                     |
+| [iscsi-lib.sh](modules.md#iscsi-libsh)| Shared iSCSI teardown/rebuild helpers               |
+| [zfslockmanager](modules.md#zfslockmanager)| Acquire per-dataset destroy locks                   |
+
+**Behavior:**
+
+- **Filter handling:** Before parsing its own arguments, `zfsdelfs` saves the
+caller's `$includes`, `$excludes`, `$startwith`, and `$endwith` arrays, then
+restores them on exit. This prevents a called `delfs` from clobbering the
+caller's selection state. `$depth` is reset internally and is not forwarded.
+
+- **Interactive confirmation (unless `$autoproceed='Y'`):** Before deleting
+anything, `zfsdelfs` lists every selected dataset and annotates each line with:
+
+  - `[ZFS clone dependents — cannot delete]` if any snapshot of the dataset has
+    clone dependents.
+  - `[iSCSI LUN — will be removed from targetcli]` for `vm-<N>-disk-<N>` zvols
+    that have a matching targetcli backstore (two-node only).
+
+  If any dataset has clone dependents, the command aborts before any `zfs`
+  commands are issued. Run
+  [`promote-vm-clone`](two-node.md#promote-vm-clone-both) on a dependent VM
+  first to cut the dependency, then retry.
+
+- **Locking:** `zfsdelfs` acquires an exclusive destroy lock (`x`) on the
+source subtree before modifying anything. If the lock cannot be acquired, it
+exits with code `8`.
+
+- **Per-dataset deletion:** For each dataset in the bottom-up list:
+
+    1. Re-check for clone dependents and abort if any are found.
+    2. In two-node mode, tear down the matching iSCSI LUN/backstore for
+       `vm-<N>-disk-<N>` zvols and record the teardown in `iscsi_teardown`.
+       This includes removing the backstore from
+       `/etc/rtslib-fb-target/expected-backstores.txt` and, if the backstore was
+       listed in the encrypted-LUNs config, from
+       `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
+    3. Call `delallsnaps` in `releaseholds` mode so matching holds are released
+       and all snapshots are removed.
+    4. Run `zfs destroy`. On failure, call `diagnose_dataset_busy` and exit with
+       code `8`.
+
+  The `iscsi_teardown` record is later consumed by `zfs-send-receive` so it can
+  rebuild the iSCSI LUNs after a replacement `zfs receive`.
+
+- **Destroy diagnostics:** If `zfs destroy` fails (e.g. "dataset is busy"),
+`zfsdelfs` automatically calls
+[`zfs-diagnose-busy`](modules.md#zfs-diagnose-busy) to report the specific
+cause — holds, open files, iSCSI LUNs, running VMs, etc.
 
 **Data structures consumed / produced:**
 
@@ -1493,29 +1474,13 @@ report the specific cause — holds, open files, iSCSI LUNs, running VMs, etc.
 | `iscsi_teardown`           | Records iSCSI LUNs torn down so `zfs-send-receive` can rebuild them | [iscsi_teardown](../developer-guide/data-structures.md#iscsi_teardown-associative-array)             |
 | Node config                | Determines single-node vs two-node iSCSI behavior                   | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 
-**Internal flow:**
-
-1. Source the node config and determine `NODE_MODE`.
-2. Save the caller's filter state, then set `$includes`, `$excludes`, `$startwith` from arguments.
-3. Build `fsarray` bottom-up so descendants are destroyed before parents.
-4. For each dataset:
-   
-    - Abort if any snapshot has clone dependents.
-   
-    - In two-node mode, tear down matching iSCSI LUN/backstore for `vm-<N>-disk-<N>` zvols and record the teardown in `iscsi_teardown`.
-   
-    - Call `delallsnaps` with `releaseholds`.
-   
-    - Run `zfs destroy`; on failure call `diagnose_dataset_busy` and abort.
-5. Restore the caller's filter state.
-
 **Return codes:**
 
 | Code | Meaning                                                            |
 | ---- | ------------------------------------------------------------------ |
 | `0`  | All datasets deleted successfully.                                 |
 | `4`  | No qualifying datasets found.                                      |
-| `8`  | Missing subtree, clone dependents, running VM, or destroy failure. |
+| `8`  | Missing subtree, clone dependents, running VM, lock failure, or destroy failure. |
 
 ---
 
@@ -1545,8 +1510,8 @@ sudo zfsdelholds <subtree> [snap-prefix] [depth]
 **Called modules:**
 
 | Module                                      | Purpose in this command         |
-| ------------------------------------------- | ------------------------------- |
-| [zfsdelallholds](modules.md#zfsdelallholds) | Release all holds on a snapshot |
+| -------------------------------------------| ------------------------------- |
+| [zfsdelallholds](modules.md#zfsdelallholds)| Release all holds on a snapshot |
 
 **Data structures consumed / produced:**
 
@@ -1565,66 +1530,6 @@ sudo zfsdelholds <subtree> [snap-prefix] [depth]
 | Code | Meaning                 |
 | ---- | ----------------------- |
 | `0`  | Completed successfully. |
-
----
-
-### `zfsfullcopy`
-
-Performs a two-step full dataset restore. Intended to be called by other
-scripts (not run directly — use [`zfsrestore`](#zfsrestore) for interactive use).
-The two-step copy (full copy of the oldest snapshot followed by an incremental
-catch-up to the target) is performed internally by `zfs-send-receive`.
-
-Result: all source snapshots are restored to the destination.
-
-**Arguments:** none (configured via globals).
-
-**Globals:**
-
-| Variable                            | Required | Role                                                                     | Reference                                                                     |
-| ----------------------------------- | -------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| `$restoresourcefs`                  | yes      | Dataset to restore (source)                                              | —                                                                             |
-| `$destfs`                           | yes      | Destination pool/subpool                                                 | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
-| `$sourcefsremovequalifiers`         | no       | Leading qualifiers to strip from `$restorefs`before prepending `$destfs` | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
-| `$nextsnap`                         | no       | If set, limits copy to this snapshot                                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
-| `$label`                            | no       | Snapshot label to match                                                  | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
-| `$autoproceed`, `$force`, `$dryrun` | no       | Forwarded to `zfs-send-receive`                                          | [Execution Control](../developer-guide/global-variables.md#execution-control) |
-| `$preserve_target_holds`            | no       | `'Y'` = capture and reapply destination holds (default)                  | [Execution Control](../developer-guide/global-variables.md#zfs-sendreceive)   |
-
-**Called modules:**
-
-| Module                                          | Purpose in this command                    |
-| ----------------------------------------------- | ------------------------------------------ |
-| [zfs-send-receive](modules.md#zfs-send-receive) | Perform two-step full copy                 |
-| [zfsoverrides](modules.md#zfsoverrides)         | Apply command-line parameter overrides     |
-| [zfsreapplyholds](#zfsreapplyholds)             | Capture/reapply destination snapshot holds |
-
-**Data structures consumed / produced:**
-
-| Structure   | Role                          | Reference                                                           |
-| ----------- | ----------------------------- | ------------------------------------------------------------------- |
-| `$nextsnap` | Optional upper snapshot bound | [$nextsnap](../developer-guide/global-variables.md#zfs-sendreceive) |
-
-**Internal flow:**
-
-1. If `$nextsnap` is empty, default it to `'notneeded'` so `zfs-send-receive`
-   uses the most recent existing source snapshot.
-2. Set full-copy parameters (`doincrementals='N'`,
-   `commsnap_mostrecent='OLDEST'`, `force='Y'`, `releaseholds='Y'`,
-   `releaseholds_tags=('offsite-*')`).
-3. If `$preserve_target_holds='Y'`, capture all existing holds on `$destfs`
-   before it is destroyed.
-4. Call `send-receive` once. `zfs-send-receive` performs the full copy of the
-   oldest snapshot and the incremental catch-up to the target internally.
-5. If `$preserve_target_holds='Y'`, reapply the captured holds to the restored
-   snapshots.
-
-**Return codes:**
-
-| Code     | Meaning                           |
-| -------- | --------------------------------- |
-| `0`      | Completed successfully.           |
-| non-zero | Invalid input or command failure. |
 
 ---
 
@@ -1859,8 +1764,8 @@ See also: [`zfslockmanager`](modules.md#zfslockmanager).
 **Called modules:**
 
 | Module                                      | Purpose in this command                         |
-| ------------------------------------------- | ----------------------------------------------- |
-| [zfslockmanager](modules.md#zfslockmanager) | Acquire, release, and inspect ZFS dataset locks |
+| -------------------------------------------| ----------------------------------------------- |
+| [zfslockmanager](modules.md#zfslockmanager)| Acquire, release, and inspect ZFS dataset locks |
 
 **Data structures consumed / produced:**
 
@@ -1929,10 +1834,10 @@ without deleting them.
 **Called modules:**
 
 | Module                                        | Purpose in this command                    |
-| --------------------------------------------- | ------------------------------------------ |
-| [zfsbuildfsarray](modules.md#zfsbuildfsarray) | Build the per-pool dataset list            |
-| [zfsdelsnap](modules.md#zfsdelsnap)           | Delete individual snapshots in ignore mode |
-| [zfscleanup](commands.md#zfscleanup)          | Apply retention policy in respect mode     |
+| ---------------------------------------------| ------------------------------------------ |
+| [zfsbuildfsarray](modules.md#zfsbuildfsarray)| Build the per-pool dataset list            |
+| [zfsdelsnap](modules.md#zfsdelsnap)| Delete individual snapshots in ignore mode |
+| [zfscleanup](commands.md#zfscleanup)| Apply retention policy in respect mode     |
 
 **Return codes:**
 
@@ -1990,10 +1895,10 @@ sourcefs=temp/proxmox destfs=temp_mig/proxmox snapname=migrate-… \
 **Called modules:**
 
 | Module                                       | Purpose in this command                                    |
-| -------------------------------------------- | ---------------------------------------------------------- |
-| `bashinit`                                   | Logging and `$mydir` initialization                        |
-| `rootcheck`                                  | Verify root privileges                                     |
-| [transfer-lib.sh](modules.md#transfer-libsh) | Shared resume-token, pv, pipeline, and space-check helpers |
+| --------------------------------------------| ---------------------------------------------------------- |
+| [bashinit](modules.md#bashinit)| Logging and `$mydir` initialization                        |
+| [rootcheck](modules.md#rootcheck)| Verify root privileges                                     |
+| [transfer-lib.sh](modules.md#transfer-libsh)| Shared resume-token, pv, pipeline, and space-check helpers |
 
 **Return codes:**
 
@@ -2094,9 +1999,9 @@ sudo zfsreadthru <dataset> [overrides] [first-snapshot] [last-snapshot]
 **Called modules:**
 
 | Module                                        | Purpose in this command                |
-| --------------------------------------------- | -------------------------------------- |
-| [zfsbuildfsarray](modules.md#zfsbuildfsarray) | Build ordered snapshot list            |
-| [zfsoverrides](modules.md#zfsoverrides)       | Apply command-line parameter overrides |
+| ---------------------------------------------| -------------------------------------- |
+| [zfsbuildfsarray](modules.md#zfsbuildfsarray)| Build ordered snapshot list            |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides |
 
 **Data structures consumed / produced:**
 
@@ -2182,13 +2087,13 @@ to restore only the named dataset.
 **Called modules:**
 
 | Module                                                              | Purpose in this command                                                     |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| [zfssnapbuild](modules.md#zfssnapbuild)                             | Inhibited (`$nextsnap='notneeded'`)                                         |
-| [zfs-send-receive](modules.md#zfs-send-receive)                     | Perform full then incremental copy                                          |
-| [zfsoverrides](modules.md#zfsoverrides)                             | Apply override string(s)                                                    |
-| [zfsremoveleadingqualifiers](modules.md#zfsremoveleadingqualifiers) | Strip leading qualifiers when building destination zvol paths               |
-| [`ensure-restored-vm-iscsi`](#ensure-restored-vm-iscsi) (two-node)  | Re-export restored VM disk zvols as iSCSI LUNs after the final send-receive |
-| [zfsreapplyholds](#zfsreapplyholds)                                 | Capture/reapply destination snapshot holds                                  |
+| -------------------------------------------------------------------| --------------------------------------------------------------------------- |
+| [zfssnapbuild](modules.md#zfssnapbuild)| Inhibited (`$nextsnap='notneeded'`)                                         |
+| [zfs-send-receive](modules.md#zfs-send-receive)| Perform full then incremental copy                                          |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply override string(s)                                                    |
+| [zfsremoveleadingqualifiers](modules.md#zfsremoveleadingqualifiers)| Strip leading qualifiers when building destination zvol paths               |
+| [`ensure-restored-vm-iscsi`](#ensure-restored-vm-iscsi) (two-node)| Re-export restored VM disk zvols as iSCSI LUNs after the final send-receive |
+| [zfsreapplyholds](#zfsreapplyholds)| Capture/reapply destination snapshot holds                                  |
 
 **Data structures consumed / produced:**
 
@@ -2328,9 +2233,9 @@ State is tracked in `/run/zfsutilities/zfsscruball.state` during a run.
 **Called modules:**
 
 | Module                                              | Purpose in this command                           |
-| --------------------------------------------------- | ------------------------------------------------- |
-| [zfsoverrides](modules.md#zfsoverrides)             | Apply command-line parameter overrides            |
-| [zfsfindoffsitepool](modules.md#zfsfindoffsitepool) | Include the online offsite pool in the scrub list |
+| ---------------------------------------------------| ------------------------------------------------- |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides            |
+| [zfsfindoffsitepool](modules.md#zfsfindoffsitepool)| Include the online offsite pool in the scrub list |
 
 **Data structures consumed / produced:**
 
@@ -2372,10 +2277,10 @@ script. Primarily used for ad-hoc sends during development and testing.
 **Called modules:**
 
 | Module                                          | Purpose in this command                |
-| ----------------------------------------------- | -------------------------------------- |
-| [zfssnapbuild](modules.md#zfssnapbuild)         | Generate the snapshot name to send     |
-| [zfs-send-receive](modules.md#zfs-send-receive) | Perform the actual copy                |
-| [zfsoverrides](modules.md#zfsoverrides)         | Apply command-line parameter overrides |
+| -----------------------------------------------| -------------------------------------- |
+| [zfssnapbuild](modules.md#zfssnapbuild)| Generate the snapshot name to send     |
+| [zfs-send-receive](modules.md#zfs-send-receive)| Perform the actual copy                |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides |
 
 **Data structures consumed / produced:**
 
@@ -2451,12 +2356,12 @@ sudo zfssendoffsite "dryrun='Y'"
 **Called modules:**
 
 | Module                                              | Purpose in this command                      |
-| --------------------------------------------------- | -------------------------------------------- |
-| [zfshold](modules.md#zfshold)                       | Apply source/destination snapshot holds      |
-| [zfs-send-receive](modules.md#zfs-send-receive)     | Copy datasets across the backup chain        |
-| [zfssnapbuild](modules.md#zfssnapbuild)             | Generate the shared `@offsite` snapshot name |
-| [zfsoverrides](modules.md#zfsoverrides)             | Apply command-line parameter overrides       |
-| [zfsfindoffsitepool](modules.md#zfsfindoffsitepool) | Determine which offsite pool is online       |
+| ---------------------------------------------------| -------------------------------------------- |
+| [zfshold](modules.md#zfshold)| Apply source/destination snapshot holds      |
+| [zfs-send-receive](modules.md#zfs-send-receive)| Copy datasets across the backup chain        |
+| [zfssnapbuild](modules.md#zfssnapbuild)| Generate the shared `@offsite` snapshot name |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides       |
+| [zfsfindoffsitepool](modules.md#zfsfindoffsitepool)| Determine which offsite pool is online       |
 
 **Data structures consumed / produced:**
 
@@ -2533,9 +2438,9 @@ sudo zfsoffsiteretain "dryrun='Y'"
 **Called modules:**
 
 | Module                                  | Purpose in this command                |
-| --------------------------------------- | -------------------------------------- |
-| [zfscleanup](commands.md#zfscleanup)    | Prune `@offsite` snapshots per pool    |
-| [zfsoverrides](modules.md#zfsoverrides) | Apply command-line parameter overrides |
+| ---------------------------------------| -------------------------------------- |
+| [zfscleanup](commands.md#zfscleanup)| Prune `@offsite` snapshots per pool    |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides |
 
 **Data structures consumed / produced:**
 
@@ -2663,7 +2568,8 @@ Sorts by: `used`, `usedds`, `usedsnap`, `written`, `quota`, `refer`,
 ### `zfsreapplyholds`
 
 Capture and reapply ZFS snapshot holds for a dataset subtree. This is used
-automatically by [`zfsrestore`](#zfsrestore) and [`zfsfullcopy`](#zfsfullcopy)
+automatically by [`zfsrestore`](#zfsrestore) and
+[`zfsfullcopy`](modules.md#zfsfullcopy)
 to preserve destination holds across a restore, and can be run standalone when
 you need to manage the capture/apply steps yourself.
 
@@ -2692,8 +2598,8 @@ not lost.
 **Called modules:**
 
 | Module                                      | Purpose in this command                    |
-| ------------------------------------------- | ------------------------------------------ |
-| [zfslockmanager](modules.md#zfslockmanager) | Lock the dataset root during capture/apply |
+| -------------------------------------------| ------------------------------------------ |
+| [zfslockmanager](modules.md#zfslockmanager)| Lock the dataset root during capture/apply |
 
 **Data structures consumed / produced:** none.
 
@@ -2831,9 +2737,9 @@ zfsstatus
 
 **Called modules:**
 
-| Script         | Purpose                           |
-| -------------- | --------------------------------- |
-| `bin/watchall` | Auto-refresh pool list and status |
+| Script| Purpose                           |
+| --------------| --------------------------------- |
+| [watchall](commands.md#watchall)| Auto-refresh pool list and status |
 
 **Data structures consumed / produced:** none.
 
@@ -2963,11 +2869,11 @@ sudo archive-vm <vmid>
 
 **Called modules:**
 
-| Script                                            | Purpose in this command                       |
-| ------------------------------------------------- | --------------------------------------------- |
-| `promote-vm-clone`                                | Sever clone dependencies before removal       |
-| `remove-vm-disk`                                  | Remove VM disks in two-node mode              |
-| [zfs-diagnose-busy](modules.md#zfs-diagnose-busy) | Diagnose destroy failures in single-node mode |
+| Script| Purpose in this command                       |
+| -------------------------------------------------| --------------------------------------------- |
+| [promote-vm-clone](two-node.md#promote-vm-clone-both)| Sever clone dependencies before removal       |
+| [remove-vm-disk](two-node.md#remove-vm-disk-both)| Remove VM disks in two-node mode              |
+| [zfs-diagnose-busy](modules.md#zfs-diagnose-busy)| Diagnose destroy failures in single-node mode |
 
 **Data structures consumed / produced:**
 
@@ -3047,10 +2953,10 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 
 **Called modules:**
 
-| Script            | Purpose in this command              |
-| ----------------- | ------------------------------------ |
-| `rescan-storage`  | Trigger compute-host iSCSI rescan    |
-| `safe-iscsi-save` | Persist restored iSCSI configuration |
+| Script| Purpose in this command              |
+| -----------------| ------------------------------------ |
+| [rescan-storage](two-node.md#rescan-storage-both)| Trigger compute-host iSCSI rescan    |
+| [safe-iscsi-save](two-node.md#safe-iscsi-save-storage-node)| Persist restored iSCSI configuration |
 
 **Data structures consumed / produced:**
 
@@ -3120,11 +3026,11 @@ sudo remove-vm <vmid>
 
 **Called modules:**
 
-| Script                       | Purpose in this command                                            |
-| ---------------------------- | ------------------------------------------------------------------ |
-| `zfsdelfs`                   | Destroy each zvol and its snapshots/holds, handling iSCSI teardown |
-| `safe-iscsi-save` (two-node) | Persist iSCSI configuration after teardown                         |
-| `rescan-storage` (two-node)  | Refresh compute-host device view                                   |
+| Script| Purpose in this command                                            |
+| ----------------------------| ------------------------------------------------------------------ |
+| [zfsdelfs](commands.md#zfsdelfs)| Destroy each zvol and its snapshots/holds, handling iSCSI teardown |
+| [safe-iscsi-save](two-node.md#safe-iscsi-save-storage-node) (two-node)| Persist iSCSI configuration after teardown                         |
+| [rescan-storage](two-node.md#rescan-storage-both) (two-node)| Refresh compute-host device view                                   |
 
 **Data structures consumed / produced:**
 
@@ -3207,12 +3113,12 @@ only the `zfs rename` is performed.
 
 **Called modules:**
 
-| Script                       | Purpose in this command                              |
-| ---------------------------- | ---------------------------------------------------- |
-| `node-lib.sh`                | Single-node / two-node detection and host resolution |
-| `rootcheck`                  | Verify root privileges                               |
-| `safe-iscsi-save` (two-node) | Persist iSCSI configuration after rebuild            |
-| `rescan-storage` (two-node)  | Refresh compute-host device view                     |
+| Script| Purpose in this command                              |
+| ----------------------------| ---------------------------------------------------- |
+| [node-lib.sh](modules.md#node-libsh)| Single-node / two-node detection and host resolution |
+| [rootcheck](modules.md#rootcheck)| Verify root privileges                               |
+| [safe-iscsi-save](two-node.md#safe-iscsi-save-storage-node) (two-node)| Persist iSCSI configuration after rebuild            |
+| [rescan-storage](two-node.md#rescan-storage-both) (two-node)| Refresh compute-host device view                     |
 
 **Data structures consumed / produced:**
 

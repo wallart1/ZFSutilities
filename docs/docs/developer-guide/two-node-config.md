@@ -194,7 +194,7 @@ This applies to: [rescan-storage](../commands-and-modules/two-node.md#rescan-sto
 
 ## Repo-Root Scripts
 
-If [zfsdelfs](../commands-and-modules/commands.md#zfsdelfs), [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup), and `rsync-dailybackup` run from the
+If [zfsdelfs](../commands-and-modules/commands.md#zfsdelfs), [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup), and [rsync-dailybackup](../commands-and-modules/modules.md#rsync-dailybackup) run from the
 ZFSutilities project tree (not from the versioned installation PATH), they source
 the config directly instead of using the library. Running from the repo-root is
 supported only in a development environment. They keep the config file's

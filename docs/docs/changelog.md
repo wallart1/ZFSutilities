@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.105.1
+
+*Released 2026-09-24*
+
+### Added
+
+- **`bin/rsync-dailybackup`** — Site-specific rsync pull helper template used by
+  `zfsdailybackup`. It can be sourced by `zfsdailybackup` or executed directly
+  on remote hosts after being `scp`'d there; configure the
+  `rsync_dailybackup_jobs` array for your environment. New
+  `tests/test-rsync-dailybackup` covers no-jobs, local copy, exclude patterns,
+  malformed jobs, and missing node config handling.
+
+- **Module documentation for `rsync-dailybackup`** in
+  `docs/docs/commands-and-modules/modules.md`, with links from the
+  `zfsdailybackup` command reference and the two-node configuration guide.
+
+### Changed
+
+- **Documentation audit** — `zfsfullcopy` and `zfs-diagnose-busy` moved from the
+  Commands reference to the Modules reference (they are sourceable helpers, not
+  directly-executed commands); added missing module docs for `node-lib.sh`,
+  `iscsi-lib.sh`, `installer-lib.sh`, and `desktop-launcher-lib.sh`; corrected
+  `zfsdelfs`, `zfsaddisk`, and daily-backup failure-handling descriptions;
+  cross-reference link consistency sweep in `commands.md`.
+
+### Fixed
+
+- **`tests/python/test_disk_surface_test.py`** — Surface-test advisory locks are
+  now isolated to a temporary directory, preventing permission failures when
+  `/run/lock/zfsutilities` is root-owned. `tests/python/test_support.py`
+  `temp_config_dir()` also redirects `SURFACE_STATE_LOCK_PATH` for completeness.
+
+- **`tests/test-zfslockmanager`** — Renamed `_BG_LOCK_PID` and `_BG_LOCK_RCFILE`
+  to lowercase to comply with the coding policy on non-exported globals.
+
 ## 0.105.0
 
 *Released 2026-09-24*

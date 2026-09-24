@@ -63,6 +63,12 @@ directions** between the storage host and compute host **before** running
 the installer. The installer will verify this and fail early if either
 direction is not working.
 
+The storage and compute hosts also need a **high-speed network connection**
+between them. iSCSI VM disk traffic and ZFS send/receive streams both run over
+this link, so its bandwidth and latency directly affect VM performance and
+backup times. How to provide that connection (dedicated NICs, VLAN, bonded
+links, etc.) is outside the scope of ZFSutilities.
+
 On the **storage host**:
 
 ```bash
@@ -152,14 +158,23 @@ See [Next Steps](#next-steps) for what to do after installation.
 
 ## Versioned Upgrades
 
-After the initial install, use [deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root) from the repository root to
-install new versions without touching the running system:
+1. **Acquire the new version.** Download or clone the release you want to
+   install into a fresh directory (do not reuse an old checkout that may have
+   local changes):
 
-```bash
-cd /path/to/zfsutilities-dev
-sudo ./bin/deploy-version
-sudo switch-version 0.34.0
-```
+   ```bash
+   git clone https://github.com/wallart1/ZFSutilities.git zfsutilities-new
+   cd zfsutilities-new
+   ```
+
+2. **Deploy it** with [deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root) from that directory.
+   This copies the repository into a new version directory without touching the
+   running system:
+
+   ```bash
+   sudo ./bin/deploy-version
+   sudo switch-version 0.34.0
+   ```
 
 - [deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root) copies the current repo state into a new version directory without touching active production
 - [switch-version](../commands-and-modules/two-node.md#switch-version-any-host) wires a deployed version into active production by updating the `current` symlink, refreshing `PATH` configuration, library symlinks, and desktop shortcuts

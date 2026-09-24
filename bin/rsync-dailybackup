@@ -1,0 +1,103 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+#
+# rsync-dailybackup — Site-specific rsync pull helper for zfsdailybackup.
+#
+# This script is intentionally site-specific. Edit the rsync_dailybackup_jobs
+# array below to match your hosts, source paths, and destination datasets.
+#
+# It is both sourced by bin/zfsdailybackup (which calls the rsync-dailybackup
+# function) and executed directly on remote hosts after being scp'd there.
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+# Node configuration (single-node or two-node)
+: "${NODE_CONF:=/etc/zfsutilities-node.conf}"
+if [[ ! -r "$NODE_CONF" ]]; then
+    # Backward compat: fall back to legacy two-node.conf
+    if [[ -r /etc/two-node.conf ]]; then
+        NODE_CONF="/etc/two-node.conf"
+    else
+        log_msg "WARN: rsync-dailybackup: missing $NODE_CONF — skipping rsync pulls"
+        return 0 2>/dev/null || exit 0
+    fi
+fi
+source "$NODE_CONF"
+node_mode="${NODE_MODE:-two-node}"
+if [[ "$node_mode" == "single-node" ]]; then
+    storage_host="${THIS_HOST:-$(hostname -s)}"
+    compute_host="$storage_host"
+fi
+
+# ---------------------------------------------------------------------------
+# Site-specific rsync jobs.
+# Each entry is "source|destination|optional_exclude" using | as the delimiter.
+# Examples:
+#   "root@rocky:/home/dan/|/tank/backups/rocky/home/|"
+#   "root@tweety:/etc/|/tank/backups/tweety/etc/|*.tmp"
+# ---------------------------------------------------------------------------
+rsync_dailybackup_jobs=()
+
+function rsync-dailybackup {
+    local job src rest dest exclude
+    local log_file="/var/log/zfsutilities/rsync-dailybackup.log"
+    local log_redirect=""
+    local rc overall_rc=0
+
+    if [[ ${#rsync_dailybackup_jobs[@]} -eq 0 ]]; then
+        log_msg "INFO: rsync-dailybackup has no configured jobs; skipping."
+        return 0
+    fi
+
+    if mkdir -p "$(dirname "$log_file")" 2>/dev/null && [[ -w "$(dirname "$log_file")" ]]; then
+        log_redirect=">> \"$log_file\" 2>&1"
+    fi
+
+    for job in "${rsync_dailybackup_jobs[@]}"; do
+        src="${job%%|*}"
+        rest="${job#*|}"
+        dest="${rest%%|*}"
+        exclude="${rest##*|}"
+
+        if [[ -z "$src" || -z "$dest" || "$src" == "$dest" ]]; then
+            log_msg "WARN: rsync-dailybackup: skipping malformed job: $job"
+            continue
+        fi
+
+        log_msg "INFO: rsync-dailybackup: $src -> $dest"
+        rc=0
+        if [[ -n "$exclude" ]]; then
+            if [[ -n "$log_redirect" ]]; then
+                rsync --archive --delete --exclude="$exclude" "$src" "$dest" \
+                    >> "$log_file" 2>&1 || rc=$?
+            else
+                rsync --archive --delete --exclude="$exclude" "$src" "$dest" || rc=$?
+            fi
+        else
+            if [[ -n "$log_redirect" ]]; then
+                rsync --archive --delete "$src" "$dest" >> "$log_file" 2>&1 || rc=$?
+            else
+                rsync --archive --delete "$src" "$dest" || rc=$?
+            fi
+        fi
+        if [[ $rc -ne 0 ]]; then
+            log_msg "WARN: rsync-dailybackup: $src -> $dest failed (rc=$rc)"
+            overall_rc=$rc
+        fi
+    done
+
+    return "$overall_rc"
+}
+
+# When executed directly (e.g., on a remote host via ssh), run the function.
+# When sourced by zfsdailybackup, the guard prevents immediate execution.
+if calledbybash; then
+    rsync-dailybackup
+fi

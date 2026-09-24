@@ -1,0 +1,83 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# tests/test-rsync-dailybackup — Basic tests for the site-specific rsync helper.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+# Provide a minimal node config so the script can load without production files.
+RSYNC_TEST_DIR=$(mktemp -d)
+NODE_CONF="$RSYNC_TEST_DIR/node.conf"
+cat > "$NODE_CONF" <<'EOF'
+NODE_MODE="single-node"
+THIS_HOST="testhost"
+EOF
+
+SRC_DIR="$RSYNC_TEST_DIR/src"
+DEST_DIR="$RSYNC_TEST_DIR/dest"
+mkdir -p "$SRC_DIR/sub" "$DEST_DIR"
+echo "hello" > "$SRC_DIR/file.txt"
+echo "world" > "$SRC_DIR/sub/nested.txt"
+
+# Source the script once with the test node config so the function is available.
+# Tests that need a configured job set rsync_dailybackup_jobs after sourcing.
+# shellcheck source=bin/rsync-dailybackup
+NODE_CONF="$NODE_CONF" rsync_dailybackup_jobs=() source "$mydir/bin/rsync-dailybackup"
+
+test_no_jobs_returns_zero() {
+    test_start "No configured jobs returns 0"
+    rsync_dailybackup_jobs=()
+    rsync-dailybackup
+    assert_rc 0 "$?"
+}
+
+test_local_rsync_copies_files() {
+    test_start "Local rsync job copies files"
+    rsync_dailybackup_jobs=("$SRC_DIR/|$DEST_DIR/|")
+    rm -rf "$DEST_DIR"/*
+    rsync-dailybackup
+    local rc=$?
+    assert_rc 0 "$rc"
+    [[ -f "$DEST_DIR/file.txt" ]] && [[ -f "$DEST_DIR/sub/nested.txt" ]] && test_pass \
+        || test_fail "Expected files were not copied to $DEST_DIR"
+}
+
+test_exclude_pattern_honored() {
+    test_start "Exclude pattern skips matched files"
+    rm -rf "$DEST_DIR"/*
+    rsync_dailybackup_jobs=("$SRC_DIR/|$DEST_DIR/|*.txt")
+    rsync-dailybackup
+    local rc=$?
+    assert_rc 0 "$rc"
+    [[ -f "$DEST_DIR/sub/nested.txt" ]] && test_fail "Excluded file was copied" \
+        || test_pass
+}
+
+test_malformed_job_is_skipped() {
+    test_start "Malformed job is skipped and returns 0"
+    rsync_dailybackup_jobs=("nope")
+    rsync-dailybackup
+    assert_rc 0 "$?"
+}
+
+test_missing_node_config_is_nonfatal() {
+    test_start "Missing node config exits cleanly when sourced"
+    (
+        NODE_CONF="$RSYNC_TEST_DIR/nonexistent.conf"
+        rsync_dailybackup_jobs=()
+        # shellcheck source=bin/rsync-dailybackup
+        source "$mydir/bin/rsync-dailybackup"
+        exit 0
+    ) >/dev/null 2>&1
+    assert_rc 0 "$?"
+}
+
+test_no_jobs_returns_zero
+test_local_rsync_copies_files
+test_exclude_pattern_honored
+test_malformed_job_is_skipped
+test_missing_node_config_is_nonfatal
+
+rm -rf "$RSYNC_TEST_DIR"
+teardown_test_env
+test_summary

@@ -118,7 +118,7 @@ hold (or is otherwise busy) and cannot be deleted, a warning is logged and
 pruning continues with the next snapshot.
 
 When a destroy fails, `zfsdelsnap` automatically runs
-[`zfs-diagnose-busy`](../commands-and-modules/commands.md#zfs-diagnose-busy)
+[`zfs-diagnose-busy`](../commands-and-modules/modules.md#zfs-diagnose-busy)
 to check all known causes — holds, clone dependents, mounted snapshots, open
 files, active sends/receives, bookmarks, iSCSI LUNs, running workloads, and
 NFS/SMB shares — and prints specific guidance for whatever it finds.

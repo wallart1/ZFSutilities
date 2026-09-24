@@ -590,7 +590,7 @@ When `$verify_after_transfer='Y'`, the script compares the `guid` ZFS property o
 
 ### Automatic diagnostics
 
-Whenever a `zfs destroy` fails, [`zfs-diagnose-busy`](../commands-and-modules/commands.md#zfs-diagnose-busy) is automatically invoked. It reports the specific cause (clone dependents, holds, open files, active sends/receives, iSCSI LUNs, shares, etc.) and suggests the fix.
+Whenever a `zfs destroy` fails, [`zfs-diagnose-busy`](../commands-and-modules/modules.md#zfs-diagnose-busy) is automatically invoked. It reports the specific cause (clone dependents, holds, open files, active sends/receives, iSCSI LUNs, shares, etc.) and suggests the fix.
 
 ### Dry-run gate
 

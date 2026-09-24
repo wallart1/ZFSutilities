@@ -15,6 +15,11 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`bashsetx`](#bashsetx)
 - [`paths.sh`](#pathssh)
 - [`rootcheck`](#rootcheck)
+- [`rsync-dailybackup`](#rsync-dailybackup)
+- [`desktop-launcher-lib.sh`](#desktop-launcher-libsh)
+- [`installer-lib.sh`](#installer-libsh)
+- [`iscsi-lib.sh`](#iscsi-libsh)
+- [`node-lib.sh`](#node-libsh)
 - [`transfer-lib.sh`](#transfer-libsh)
 - [`zfsconfig`](#zfsconfig)
 - [`zfsbuildfsarray`](#zfsbuildfsarray)
@@ -26,6 +31,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsdelallholdssubtree`](#zfsdelallholdssubtree)
 - [`zfsdelsnap`](#zfsdelsnap)
 - [`zfsfindoffsitepool`](#zfsfindoffsitepool)
+- [`zfsfullcopy`](#zfsfullcopy)
 - [`zfshold`](#zfshold)
 - [`zfslockmanager`](#zfslockmanager)
 - [`zfsoverrides`](#zfsoverrides)
@@ -296,6 +302,239 @@ rootcheck
 | 1    | Not running as root |
 
 Exits with a clear message if not running as root.
+
+---
+
+### `rsync-dailybackup`
+
+Site-specific rsync pull helper used by [`zfsdailybackup`](commands.md#zfsdailybackup).
+It is both sourced by `zfsdailybackup` (which calls the `rsync-dailybackup`
+function) and copied to remote hosts via `scp` to be executed there.
+
+```bash
+# Sourced by zfsdailybackup
+source_helper rsync-dailybackup
+
+# Executed directly on a remote host after scp
+sudo /home/dan/rsync-dailybackup
+```
+
+**Arguments:** none.
+
+**Globals:**
+
+| Variable            | Role                                            | Reference                                                                                            |
+| ------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `rsync_dailybackup_jobs` | Array of `"source\|destination\|exclude"` jobs | Customize in the script                                                                              |
+| `NODE_MODE`         | Single-node vs two-node mode                    | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| `THIS_HOST`         | Short hostname of the local host                | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+
+**Called modules:**
+
+| Module   | Purpose                           |
+| -------- | --------------------------------- |
+| `bashinit` | Logging and `$mydir` initialization |
+
+**Data structures consumed / produced:**
+
+| Structure   | Role                                       | Reference                                                                                            |
+| ----------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| Node config | Required so remote hosts know `STORAGE_HOST` | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+
+**Return codes:**
+
+| Code     | Meaning                                          |
+| -------- | ------------------------------------------------ |
+| `0`      | All configured jobs completed (or none configured) |
+| non-zero | One or more rsync jobs failed                    |
+
+The script is shipped as a template with an empty `rsync_dailybackup_jobs`
+array. Edit the array to match your hosts and paths before using it in
+production.
+
+---
+
+### `desktop-launcher-lib.sh`
+
+Shared helpers for creating and removing the desktop user's home-directory
+launcher symlinks for the ZFSutilities GUI and documentation viewer.
+
+```bash
+source_helper desktop-launcher-lib.sh
+```
+
+**Arguments:** none (functions take the desktop username as a parameter).
+
+**Globals:** none.
+
+**Functions:**
+
+| Function                | Purpose                                                                 |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `get_desktop_user()`    | Return `SUDO_USER` or the owner of the current X11 display socket.      |
+| `get_user_home(<user>)` | Return a user's home directory.                                         |
+| `create_desktop_symlinks(<user>)` | Create `~/ZFSutilities GUI` and `~/ZFSutilities Documentation` symlinks. |
+| `remove_desktop_symlinks(<user>)` | Remove those symlinks (and any obsolete names).                         |
+
+**Called modules:** none.
+
+**Data structures consumed / produced:** none.
+
+**Return codes:**
+
+| Code | Meaning                                |
+| ---- | -------------------------------------- |
+| `0`  | Symlinks created/removed successfully. |
+| `1`  | Could not determine user or home dir.  |
+
+---
+
+### `installer-lib.sh`
+
+Shared helper functions for `install-single-node` and `install-two-node`:
+interactive explanations, prerequisite-failure parsing, safe remediation,
+`apt-get` wrapper, and MkDocs / documentation-server installation.
+
+```bash
+source_helper installer-lib.sh
+```
+
+**Arguments:** none.
+
+**Globals:**
+
+| Variable              | Role                                                            |
+| --------------------- | --------------------------------------------------------------- |
+| `installer_failures`  | Associative array populated by prerequisite-failure parsing.  |
+
+**Functions:**
+
+| Function                          | Purpose                                                        |
+| --------------------------------- | -------------------------------------------------------------- |
+| `explain_prerequisite()`          | Print what a missing prerequisite is and how it will be fixed. |
+| `explain_doc_server()`            | Explain the MkDocs documentation server installation steps.    |
+| `apt_install()`                   | Run `apt-get update` then install the given packages.          |
+| `install_doc_server()`            | Install `mkdocs` + `mkdocs-material` (apt or pip fallback).    |
+| `parse_check_prerequisites_failures()` | Map `check-prerequisites` output to missing apt packages. |
+
+See also [Bash logging exceptions](../developer-guide/bash-logging-exceptions.md)
+for the `installer-lib.sh` exception.
+
+**Called modules:** none (uses `ask_yn` from bashinit).
+
+**Data structures consumed / produced:** none.
+
+**Return codes:** function-specific.
+
+---
+
+### `iscsi-lib.sh`
+
+Shared iSCSI teardown/rebuild helpers used by `zfsdelfs` and
+`zfs-send-receive`. Sourced at file level so `zfsdelfs` can tear down VM zvol
+LUNs before destroying them, and `zfs-send-receive` can rebuild them after a
+successful `zfs receive`.
+
+```bash
+source_helper iscsi-lib.sh
+```
+
+**Arguments:** none.
+
+**Globals:**
+
+| Variable                    | Role                                                              |
+| --------------------------- | ----------------------------------------------------------------- |
+| `iscsi_teardown`            | Associative array recording torn-down LUNs for later rebuild.     |
+| `ISCSI_MANIFEST`            | Path to expected-backstores manifest (default `/etc/rtslib-fb-target/expected-backstores.txt`). |
+| `ISCSI_ENCRYPTED_CONF`      | Path to encrypted-LUNs config (default `/etc/zfsutilities/iscsi-encrypted-luns.conf`). |
+
+**Functions:**
+
+| Function                          | Purpose                                                        |
+| --------------------------------- | -------------------------------------------------------------- |
+| `iscsi_teardown_zvol(<dataset>)`  | Remove targetcli LUN/backstore for `vm-<N>-disk-<N>` zvols; record teardown. |
+| `iscsi_rebuild_torn_down()`       | Rebuild all recorded LUNs after a `zfs receive`.               |
+| `manifest_remove_backstore()`     | Remove a backstore from the expected-backstores manifest.      |
+| `manifest_add_backstore()`        | Add a backstore to the expected-backstores manifest.           |
+| `encrypted_conf_remove_backstore()` | Remove a backstore from the encrypted-LUNs config.           |
+| `encrypted_conf_add_backstore()`  | Add a backstore to the encrypted-LUNs config.                  |
+
+**Called modules:**
+
+| Module       | Purpose                       |
+| ------------ | ----------------------------- |
+| `bashinit`   | Logging and script resolution |
+| `node-lib.sh` | Host/mode resolution          |
+
+**Data structures consumed / produced:**
+
+| Structure      | Role                                         | Reference                                                                            |
+| -------------- | -------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `iscsi_teardown` | Records torn-down LUNs so callers can rebuild them | [iscsi_teardown](../developer-guide/data-structures.md#iscsi_teardown-associative-array) |
+
+**Return codes:** function-specific.
+
+---
+
+### `node-lib.sh`
+
+Helper library for scripts that may run in single-node or two-node mode.
+Sources the node configuration file, exposes lowercase working copies of the
+configuration variables, and provides mode-check, pool, remote-execution, and
+clone helpers.
+
+```bash
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+```
+
+**Arguments:** none.
+
+**Globals / variables exposed:**
+
+| Variable        | Role                                                            |
+| --------------- | --------------------------------------------------------------- |
+| `node_mode`     | `"single-node"` or `"two-node"` (from `NODE_MODE`).             |
+| `this_host`     | Short hostname of the current machine.                          |
+| `storage_host`  | Short hostname of the storage host.                             |
+| `compute_host`  | Short hostname of the compute host.                             |
+| `storage_ip`    | iSCSI portal IP on the storage network (two-node only).         |
+| `iqn_prefix`    | iSCSI target IQN prefix (two-node only).                        |
+| `pool_target`   | Associative array copy of `POOL_TARGET` (two-node only).        |
+
+**Functions:**
+
+| Function                          | Purpose                                                              |
+| --------------------------------- | -------------------------------------------------------------------- |
+| `is_single_node()`                | Returns 0 in single-node mode.                                       |
+| `is_two_node()`                   | Returns 0 in two-node mode.                                          |
+| `pool_to_target(<pool>)`          | Echo the full IQN for a pool (two-node only).                        |
+| `pool_list()`                     | Echo valid pool names (two-node only).                               |
+| `is_known_pool(<pool>)`           | Return 0 if pool is in `POOL_TARGET` (two-node only).                |
+| `remote_zfsutilities_bin(<host>)` | Resolve the active version's `bin/` directory on a remote host.      |
+| `remote_zfsutility_script(<host>, <name>)` | Combine the above with `find_zfsutility_script` semantics. |
+| `gen_mac()`                       | Generate a Proxmox-compatible random MAC address.                    |
+| `get_json_archive_path()`         | Read `archive_path` from the JSON config file.                       |
+
+See [Two-Node Configuration](../developer-guide/two-node-config.md#helper-library-node-libsh)
+for the full configuration reference.
+
+**Called modules:**
+
+| Module       | Purpose                                |
+| ------------ | -------------------------------------- |
+| `bashinit`   | Logging, `find_zfsutility_script`      |
+| `paths.sh`   | FHS-aligned path variables             |
+
+**Data structures consumed / produced:**
+
+| Structure     | Role                                                      | Reference                                                                                            |
+| ------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `POOL_TARGET` | Used to populate the local `pool_target` copy (two-node). | [POOL_TARGET](../developer-guide/data-structures.md#pool_target-associative-array)                   |
+| Node config   | Single-node vs two-node detection and host resolution.    | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+
+**Return codes:** none (sourced module); fatal if the node configuration is missing.
 
 ---
 
@@ -656,22 +895,25 @@ Diagnoses why a ZFS dataset or snapshot cannot be destroyed.
 
 ```bash
 source_helper zfs-diagnose-busy
-diagnose_dataset_busy <dataset_or_snapshot> [stderr_text]
+diagnose_dataset_busy <dataset_or_snapshot> [stderr_from_failed_destroy]
 ```
 
-**Checks performed:**
+**Checks performed (in order):**
 
-1. **Clone dependents** — `zfs list -H -o clones` (snapshots) or recursive snapshot clone scan (datasets)
-2. **Holds** — `zfs holds -H`
-3. **Mounted / open files** — `zfs get mounted` plus `fuser -m` / `lsof +D`
-4. **Active send/receive** — `zfs get receive_resume_token`; `pgrep` for running `zfs send`
-5. **Bookmarks** — `zfs list -t bookmark -r`
-6. **iSCSI LUN** — `targetcli` backstore/LUN lookup (zvols matching `vm-<N>-disk-<N>`)
-7. **Running VM** — `qm status` (zvols)
-8. **NFS / SMB shares** — `zfs get sharenfs,sharesmb`
+| Check                | What it looks for                                             |
+| -------------------- | ------------------------------------------------------------- |
+| Clone dependents     | `zfs list -o clones` shows non-`-` values                     |
+| ZFS holds            | `zfs holds` lists tags on the snapshot                        |
+| Mounted / open files | `mounted=yes` plus `fuser`/`lsof` on the mountpoint           |
+| Active send/receive  | `receive_resume_token` present, or `zfs send` process running |
+| Bookmarks            | `zfs list -t bookmark` shows references to the snapshot       |
+| iSCSI LUN            | `targetcli` shows the zvol as a backstore/LUN                 |
+| Running VM           | `qm status` reports `running` for the VM ID                   |
+| NFS/SMB share        | `sharenfs` or `sharesmb` is not `off`                         |
 
-If nothing specific is found, a fallback message lists common remaining causes
-and suggests `fuser` / `lsof` commands.
+If no specific cause is found, a fallback message suggests checking for open
+files via `fuser` or `lsof`, or verifying whether a pool scrub/resilver is in
+progress.
 
 **Integration:**
 
@@ -685,7 +927,7 @@ and suggests `fuser` / `lsof` commands.
 | `dataset_actions.py` | From `_run_zfs_sudo` when destroy fails |
 
 **Called modules:** none. `diagnose_dataset_busy` runs external commands
-(`zfs`, `zpool`, `fuser`, `lsof`, `targetcli`, `qm`, `pct`) directly.
+(`zfs`, `fuser`, `lsof`, `targetcli`, `qm`) directly.
 
 **Data structures consumed / produced:** none.
 
@@ -918,6 +1160,77 @@ Returns the pool name, or empty string if none are online.
 | Code | Meaning                           |
 | ---- | --------------------------------- |
 | 0    | Always; prints pool name or empty |
+
+---
+
+### `zfsfullcopy`
+
+Performs a two-step full dataset restore. This is a sourceable helper intended
+to be called by other scripts — it is not run directly (for interactive use,
+see [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore)). The
+two-step copy (full copy of the oldest snapshot followed by an incremental
+catch-up to the target) is performed internally by `zfs-send-receive`; this
+wrapper makes a single `send-receive` call with the full-copy parameters set.
+
+Result: all source snapshots are restored to the destination.
+
+```bash
+source_helper zfsfullcopy
+zfsfullcopy [overrides]
+```
+
+**Arguments:**
+
+| Argument | Description                                  |
+| -------- | -------------------------------------------- |
+| `$1`     | Optional overrides (`name='value'; …`)       |
+
+**Globals:**
+
+| Variable                            | Required | Role                                                                     | Reference                                                                     |
+| ----------------------------------- | -------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `$restoresourcefs`                  | yes      | Dataset to restore (source)                                              | —                                                                             |
+| `$destfs`                           | yes      | Destination pool/subpool                                                 | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
+| `$sourcefsremovequalifiers`         | no       | Leading qualifiers to strip from `$restoresourcefs` before prepending `$destfs` | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive) |
+| `$nextsnap`                         | no       | If set, limits copy to this snapshot                                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
+| `$label`                            | no       | Snapshot label to match                                                  | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
+| `$autoproceed`, `$force`, `$dryrun` | no       | Forwarded to `zfs-send-receive`                                          | [Execution Control](../developer-guide/global-variables.md#execution-control) |
+| `$preserve_target_holds`            | no       | `'Y'` = capture and reapply destination holds (default)                  | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
+
+**Called modules:**
+
+| Module                                          | Purpose in this command                    |
+| ----------------------------------------------- | ------------------------------------------ |
+| [zfs-send-receive](modules.md#zfs-send-receive) | Perform two-step full copy                 |
+| [zfsoverrides](modules.md#zfsoverrides)         | Apply command-line parameter overrides     |
+| [zfsreapplyholds](../commands-and-modules/commands.md#zfsreapplyholds) | Capture/reapply destination snapshot holds |
+
+**Data structures consumed / produced:**
+
+| Structure   | Role                          | Reference                                                           |
+| ----------- | ----------------------------- | ------------------------------------------------------------------- |
+| `$nextsnap` | Optional upper snapshot bound | [$nextsnap](../developer-guide/global-variables.md#zfs-sendreceive) |
+
+**Internal flow:**
+
+1. If `$nextsnap` is empty, default it to `'notneeded'` so `zfs-send-receive`
+   uses the most recent existing source snapshot.
+2. Set full-copy parameters (`doincrementals='N'`,
+   `commsnap_mostrecent='OLDEST'`, `force='Y'`, `releaseholds='Y'`,
+   `releaseholds_tags=('offsite-*')`).
+3. If `$preserve_target_holds='Y'`, capture all existing holds on `$destfs`
+   before it is destroyed.
+4. Call `send-receive` once. `zfs-send-receive` performs the full copy of the
+   oldest snapshot and the incremental catch-up to the target internally.
+5. If `$preserve_target_holds='Y'`, reapply the captured holds to the restored
+   snapshots.
+
+**Return codes:**
+
+| Code     | Meaning                           |
+| -------- | --------------------------------- |
+| `0`      | Completed successfully.           |
+| non-zero | Invalid input or command failure. |
 
 ---
 

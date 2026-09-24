@@ -1,6 +1,8 @@
 """Tests for disk_surface_test.py and the DiskRepository self-test wrappers."""
 
+import atexit
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,7 +16,16 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
+import file_locking
 from test_support import mock_gtk, mock_subprocess
+
+# Isolate surface-test advisory locks from the production lock directory so
+# non-root test runs do not fail when /run/lock/zfsutilities is root-owned.
+_test_surface_lock_dir = tempfile.mkdtemp(prefix="zfsutilities-test-surface-lock-")
+file_locking.SURFACE_STATE_LOCK_PATH = os.path.join(
+    _test_surface_lock_dir, ".surface_test_state.lock"
+)
+atexit.register(shutil.rmtree, _test_surface_lock_dir)
 
 NOW = datetime(2026, 9, 13, 12, 0, 0).astimezone()
 

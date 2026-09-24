@@ -37,8 +37,14 @@ Different steps have different consequences when they fail:
 - **ZFS keys backup (rsync)** — non-fatal. The failure is logged as a warning
   and the backup continues.
 
-- **Send/receive steps** — fatal. A ZFS transfer failure aborts the remaining
-  backup steps.
+- **Send/receive steps** — behavior depends on the runner:
+
+  - **GTK GUI / scheduled profiles:** fatal. A ZFS transfer failure aborts the
+    remaining backup steps.
+  - **Bash `zfsdailybackup` template:** not fatal. The template calls
+    `zfs-send-receive` for each configured source/destination pair but does not
+    stop on a non-zero return code, so a transfer failure is logged and the
+    script continues with the next configured backup step and retention.
 
 - **Snapshot retention/prune step** — non-fatal. A per-dataset pruning failure is logged
   as a warning and `zfscleanup` continues with the next dataset/pool. 

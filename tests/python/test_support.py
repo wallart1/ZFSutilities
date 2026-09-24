@@ -279,6 +279,7 @@ def temp_config_dir():
         orig_history_lock = file_locking.HISTORY_LOCK_PATH
         orig_log_index_lock = file_locking.LOG_INDEX_LOCK_PATH
         orig_scrub_state_lock = file_locking.SCRUB_STATE_LOCK_PATH
+        orig_surface_state_lock = file_locking.SURFACE_STATE_LOCK_PATH
         import profile_runner
 
         orig_profile_lock_dir = profile_runner.PROFILE_LOCK_DIR
@@ -304,6 +305,7 @@ def temp_config_dir():
         file_locking.HISTORY_LOCK_PATH = os.path.join(lock_dir, ".history.lock")
         file_locking.LOG_INDEX_LOCK_PATH = os.path.join(lock_dir, ".log_index.lock")
         file_locking.SCRUB_STATE_LOCK_PATH = os.path.join(lock_dir, ".scrub_state.lock")
+        file_locking.SURFACE_STATE_LOCK_PATH = os.path.join(lock_dir, ".surface_test_state.lock")
         profile_runner.PROFILE_LOCK_DIR = paths.get_profile_lock_dir()
 
         try:
@@ -329,6 +331,7 @@ def temp_config_dir():
             file_locking.HISTORY_LOCK_PATH = orig_history_lock
             file_locking.LOG_INDEX_LOCK_PATH = orig_log_index_lock
             file_locking.SCRUB_STATE_LOCK_PATH = orig_scrub_state_lock
+            file_locking.SURFACE_STATE_LOCK_PATH = orig_surface_state_lock
             profile_runner.PROFILE_LOCK_DIR = orig_profile_lock_dir
             for k, v in orig_env.items():
                 if v is None:

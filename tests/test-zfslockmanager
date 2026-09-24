@@ -38,17 +38,17 @@ export ZFSLOCK_REMOTE_POLL_INTERVAL=0.02
 # Keep in sync with the helper block in tests/test-zfslockmanager-soak.
 # ---------------------------------------------------------------------------
 
-_BG_LOCK_PID=""
-_BG_LOCK_RCFILE=""
+_bg_lock_pid=""
+_bg_lock_rcfile=""
 
 # Start a background bash process that tries to acquire a lock.
-# Globals set: _BG_LOCK_PID, _BG_LOCK_RCFILE
+# Globals set: _bg_lock_pid, _bg_lock_rcfile
 _bg_lock_start() {
     local dataset="$1" type="$2" description="$3"
     local hold_time="${4:-infinity}"
     local id="${RANDOM}_$$"
     local script="$_mock_zfs_state_dir/bg_lock_${id}.sh"
-    _BG_LOCK_RCFILE="$_mock_zfs_state_dir/bg_lock_rc_${id}"
+    _bg_lock_rcfile="$_mock_zfs_state_dir/bg_lock_rc_${id}"
     cat > "$script" <<EOF
 #!/usr/bin/bash
 source "$mydir/bin/bashinit"
@@ -62,17 +62,17 @@ mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir"
 zfslock_init
 zfslock_acquire "$dataset" "$type" "$description"
 rc=\$?
-echo \$rc > "$_BG_LOCK_RCFILE"
+echo \$rc > "$_bg_lock_rcfile"
 [[ \$rc -eq 0 ]] && sleep $hold_time
 EOF
     bash "$script" > /dev/null 2>&1 &
-    _BG_LOCK_PID=$!
+    _bg_lock_pid=$!
 }
 
 # Wait up to 10 s for the background process to write its exit code,
 # then return the code (or 255 on timeout).
 _bg_lock_wait_rc() {
-    local rcfile="$_BG_LOCK_RCFILE"
+    local rcfile="$_bg_lock_rcfile"
     local tries=0
     while [[ ! -f "$rcfile" && $tries -lt 200 ]]; do
         sleep 0.05
@@ -83,14 +83,14 @@ _bg_lock_wait_rc() {
 
 # Terminate the background process and clean up its rc file.
 _bg_lock_kill() {
-    if [[ -n "$_BG_LOCK_PID" ]]; then
+    if [[ -n "$_bg_lock_pid" ]]; then
         # Kill the foreground sleep child first so it is not orphaned when the
         # parent bash process exits.
-        pkill -P "$_BG_LOCK_PID" 2>/dev/null || true
-        kill "$_BG_LOCK_PID" 2>/dev/null || true
-        wait "$_BG_LOCK_PID" 2>/dev/null || true
+        pkill -P "$_bg_lock_pid" 2>/dev/null || true
+        kill "$_bg_lock_pid" 2>/dev/null || true
+        wait "$_bg_lock_pid" 2>/dev/null || true
     fi
-    rm -f "$_BG_LOCK_RCFILE"
+    rm -f "$_bg_lock_rcfile"
 }
 
 # ---------------------------------------------------------------------------

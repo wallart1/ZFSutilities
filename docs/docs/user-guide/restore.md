@@ -47,7 +47,8 @@ this two-step process.
 
 ### Recursive restores
 
-By default, the command-line `zfsrestore` and `zfsfullcopy` scripts restore the
+By default, the command-line `zfsrestore` and
+[`zfsfullcopy`](../commands-and-modules/modules.md#zfsfullcopy) scripts restore the
 named dataset **and all of its descendants** (they use unlimited recursion when
 building the dataset list). In the GTK GUI, the Restore tab defaults to restoring
 **only the named dataset**; enable **Restore entire subtree (recursive)** to
@@ -88,9 +89,10 @@ when the restore finishes.
 The Restore tab's **Advanced** section exposes two transfer options that are
 also available on the Backup and Offsite tabs:
 
-- `verify_after_transfer` — Verify the ZFS stream after each transfer step
-  (default **Y**). When enabled, `zfs-send-receive` re-reads the received
-  stream to detect corruption. This applies to both Part 1 (full copy) and
+- `verify_after_transfer` — Verify the received snapshot after each transfer
+  step (default **Y**). When enabled, `zfs-send-receive` compares the `guid`
+  ZFS property of the destination snapshot against the source snapshot; a
+  mismatch is treated as fatal. This applies to both Part 1 (full copy) and
   Part 2 (incremental copy).
 - `pv_rate_limit` — Optional rate limit used during the transfer,
   for example `100M` to cap throughput at 100 MB/s. Leave blank for no limit.
@@ -98,7 +100,9 @@ also available on the Backup and Offsite tabs:
 ## Preserving Target Holds During a Restore
 
 A ZFS send stream does not include snapshot holds, so a restore normally loses
-any hold tags that existed on the destination. `zfsrestore` and `zfsfullcopy`preserve those target holds automatically:
+any hold tags that existed on the destination. `zfsrestore` and
+[`zfsfullcopy`](../commands-and-modules/modules.md#zfsfullcopy) preserve those
+target holds automatically:
 
 1. Before the destination dataset is destroyed/recreated, all holds on its
    snapshots are captured to a temporary file.
@@ -133,7 +137,8 @@ sudo zfsreapplyholds --capture pool/dest /tmp/dest-holds.tsv
 sudo zfsreapplyholds --apply pool/dest /tmp/dest-holds.tsv
 ```
 
-In dry-run mode, `zfsrestore`/`zfsfullcopy` log the holds that would be
-reapplied without modifying the destination.
+In dry-run mode, `zfsrestore`/`zfsfullcopy`
+([sourceable wrapper](../commands-and-modules/modules.md#zfsfullcopy)) log the
+holds that would be reapplied without modifying the destination.
 
 # 

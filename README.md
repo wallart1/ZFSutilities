@@ -166,11 +166,16 @@ directions between the storage host and the compute host.
 
 ## Versioned Upgrades
 
-First download a new version of the repository as described above, under **Download and Install**. Use a new directory to store it.
+Acquire a new version before deploying it. Clone the repository into a fresh
+directory rather than re-using an old checkout that may contain local changes:
 
-Deploy a new version without affecting the running system:
 ```bash
-cd /path/to/newly-downloaded-ZFSutilities-repository
+git clone https://github.com/wallart1/ZFSutilities.git zfsutilities-new
+cd zfsutilities-new
+```
+
+Deploy the new version without affecting the running system:
+```bash
 sudo ./bin/deploy-version
 sudo switch-version <version>
 ```
